@@ -1,30 +1,37 @@
-// Acceptance contract: a released successful Kit admin GET document slides the
-// moderator's session — the post-release twin of Hono's admin-guard re-stamp
-// (src/admin/guard.ts: a current bearer re-stamps to a fresh 120-minute window,
-// grace reads never refresh cookies, and Hono delivers the replacement on any
-// outcome the browser keeps; this Kit twin renews only after a released
-// successful GET document), wired at the same post-response position as the event-detail
-// renewal in dispatchHookRequest. The Kit guard itself stays read-only
-// (src/admin/kit-guard.ts: never rotates, never sets cookies); renewal runs
-// only after the member-read boundary releases the response, never inside it.
+// Acceptance contract: a released successful Kit admin GET document ROTATES
+// the moderator's bearer — the post-release twin of Hono's admin-guard
+// re-stamp (src/admin/guard.ts: a current bearer mints a fresh token with a
+// fresh 120-minute window, grace reads never refresh cookies, and Hono
+// delivers the replacement on any outcome the browser keeps; this Kit twin
+// rotates only after a released successful GET document), wired at the same
+// post-response position as the event-detail rotation in dispatchHookRequest.
+// The Kit guard itself stays read-only (src/admin/kit-guard.ts: never
+// rotates, never sets cookies); rotation runs only after the member-read
+// boundary releases the response, never inside it.
 //
-// Slide, not rotate. Hono admin reads rotate since the profile/admin re-stamp;
-// this Kit twin still slides until its own rotation lands. The event-detail
-// helper is the precedent for position and failure posture only (post-release,
-// class-only warn, lost race resolves to no cookie), not for minting a
-// replacement bearer: the renewal cookie re-signs the PRESENTED bearer with a
-// fresh Max-Age, and the store call is renew(), never rotate().
+// Rotate, not slide. This file supersedes the slide pins that preceded it:
+// the renewal cookie signs a NEW token, the store call is rotate() (never
+// renew()), the presented bearer becomes predecessor-only (no status key,
+// authenticates only inside SESSION_PREDECESSOR_GRACE_SECONDS of grace via
+// src/sessions.ts lineage), and the successor keeps the lineage key.
+// Failing-first: on the slide head the rotation, replay, race and
+// store-failure tests fail because the cookie re-signs the presented
+// bearer and renew() is called instead of rotate() (so a stubbed rotate()
+// race/failure is never even reached); the pure no-rotation controls
+// (anonymous, refused, non-document and grace-helper reads) pass before
+// and after, pinning the behavior rotation must preserve.
 //
-// Seam the Builder adds (names are the contract; this file compiles before
-// they land and fails granularly until they do):
+// Seam the Builder changes (names are the contract; the export and dep names
+// do not change):
 // - src/kit-session.ts: kitAdminRenewalFor(env) -> (event) => Promise<string | null>
 //   (same shape as kitEventDetailRotationFor: re-verify the bearer, gate on a
-//   current bearer via statusHash, renew() the row, re-sign the SAME token
-//   with inline `maxAge: SESSION_TTL_SECONDS` so the pinned-lifetime guard
-//   keeps reading it from the call).
-// - src/route-ownership.ts: HookDispatchDeps.adminRenewalFor plus a released
-//   successful-GET-document gate (admin family, GET, 200, text/html,
-//   authenticated moderator), applied post-release like the event-detail gate.
+//   current bearer via statusHash so grace reads never attempt a rotation,
+//   mint a fresh token, rotate() the row, sign the REPLACEMENT token with
+//   inline `maxAge: SESSION_TTL_SECONDS` so the pinned-lifetime guard keeps
+//   reading it from the call).
+// - src/route-ownership.ts: HookDispatchDeps.adminRenewalFor plus the released
+//   successful-GET-document gate (admin family, GET, 200/404, text/html,
+//   authenticated moderator) stay as shipped, applied post-release.
 // - docs/moderator-admin-guide.md: the session/expiry section ("A moderator
 //   lost their role") states Kit admin renewal parity.
 //
@@ -186,6 +193,18 @@ function harness(options: HarnessOptions = {}) {
   const env = { ...baseEnv, SESSION_SECRET: SECRET, SESSION_STORE: store } as Env;
   const entries: AccessEntry[] = [];
   const events: string[] = [];
+  // Both writers are recorded: a correct rotation lands exactly one rotate
+  // call and zero renew calls; a slide leftover shows up as a renew call.
+  const rotateCalls: {
+    oldHash: string;
+    replacement: Parameters<SessionStore["rotate"]>[1];
+  }[] = [];
+  const rawRotate = store.rotate.bind(store);
+  store.rotate = (async (oldHash: string, replacement: Parameters<SessionStore["rotate"]>[1]) => {
+    events.push("rotate");
+    rotateCalls.push({ oldHash, replacement });
+    return rawRotate(oldHash, replacement);
+  }) as SessionStore["rotate"];
   const renewCalls: { tokenHash: string; expiresAt: Date }[] = [];
   const rawRenew = store.renew.bind(store);
   store.renew = (async (tokenHash: string, expiresAt: Date) => {
@@ -223,6 +242,7 @@ function harness(options: HarnessOptions = {}) {
     events,
     honoFetch,
     renewCalls,
+    rotateCalls,
     store,
     path,
     routeId,
@@ -280,8 +300,11 @@ function bearerOfSetCookie(setCookie: string): string {
   return value.slice(0, value.lastIndexOf("."));
 }
 
-/** The slide pin: the renewal cookie re-signs the PRESENTED bearer — never a replacement. */
-function expectSlideCookie(res: Response, priorToken: string): void {
+/**
+ * The rotation pin: the renewal cookie signs a NEW bearer — never the
+ * presented one. Returns the replacement bearer so callers can pin its row.
+ */
+function expectRotationCookie(res: Response, priorToken: string): string {
   const sets = sessionSets(res);
   expect(sets).toHaveLength(1);
   const parts = sets[0]!.split(";").map((p) => p.trim().toLowerCase());
@@ -290,8 +313,18 @@ function expectSlideCookie(res: Response, priorToken: string): void {
   expect(parts).toContain("httponly");
   expect(parts).toContain("samesite=lax");
   expect(parts).toContain(`max-age=${SESSION_TTL_SECONDS}`);
-  expect(bearerOfSetCookie(sets[0]!)).toBe(priorToken);
-  expect(isValidSessionToken(bearerOfSetCookie(sets[0]!))).toBe(true);
+  const replacement = bearerOfSetCookie(sets[0]!);
+  expect(replacement, "rotation must mint a fresh bearer, not re-sign the presented one").not.toBe(
+    priorToken,
+  );
+  expect(isValidSessionToken(replacement)).toBe(true);
+  return replacement;
+}
+
+/** No rotation and no slide: neither writer ran on this read. */
+function expectNoRotation(h: ReturnType<typeof harness>): void {
+  expect(h.rotateCalls).toEqual([]);
+  expect(h.renewCalls).toEqual([]);
 }
 
 function spyWrites(store: SessionStore) {
@@ -320,19 +353,19 @@ beforeEach(() => {
 });
 afterEach(() => vi.restoreAllMocks());
 
-describe("released Kit admin GET documents slide the session", () => {
+describe("released Kit admin GET documents rotate the session", () => {
   it.each([
     { path: LIST_PATH, routeId: "/admin/join-attempts" },
     { path: DETAIL_PATH, routeId: "/admin/join-attempts/[id]" },
   ])(
-    "renews the current bearer on GET $path: same cookie re-signed, window re-stamped",
+    "rotates the current bearer on GET $path: fresh cookie signed, window re-stamped",
     async ({ path, routeId }) => {
       const h = harness({ path, routeId });
       const { cookie, token } = await mint(h.store, MODERATOR);
       const tokenHash = await hashToken(token);
       const statusBefore = await h.store.statusHash(tokenHash);
       expect(statusBefore).not.toBeNull();
-      const rotate = vi.spyOn(h.store, "rotate");
+      const renew = vi.spyOn(h.store, "renew");
       const replace = vi.spyOn(h.store, "replace");
       const create = vi.spyOn(h.store, "create");
 
@@ -343,23 +376,40 @@ describe("released Kit admin GET documents slide the session", () => {
       expect(res.headers.get("cache-control")).toBe("private, no-store");
       expect(res.headers.get("x-two-renderer")).toBe("kit");
       expect(await res.clone().text()).toContain(ADMIN_MARKER);
-      expectSlideCookie(res, token);
-      // Renewal runs after the boundary releases: resolve, then audit, then renew.
-      expect(h.events).toEqual(["resolve", "audit", "renew"]);
-      expect(h.renewCalls).toHaveLength(1);
-      const call = h.renewCalls[0]!;
-      expect(call.tokenHash).toBe(tokenHash);
+      const replacement = expectRotationCookie(res, token);
+      const successorHash = await hashToken(replacement);
+      // Rotation runs after the boundary releases: resolve, then audit, then rotate.
+      expect(h.events).toEqual(["resolve", "audit", "rotate"]);
+      expect(h.rotateCalls).toHaveLength(1);
+      const call = h.rotateCalls[0]!;
+      expect(call.oldHash).toBe(tokenHash);
+      // The minted replacement is the row the cookie carries, with the
+      // moderator's identity bits copied from the verified session.
+      expect(call.replacement.tokenHash).toBe(successorHash);
+      expect(call.replacement).toMatchObject({
+        userId: MOD_ID,
+        username: "mod",
+        avatar: null,
+        member: true,
+        moderator: true,
+      });
       // Re-stamped from request time with the full 120-minute window.
       const now = Date.now();
-      expect(call.expiresAt.getTime()).toBeGreaterThanOrEqual(
+      expect(call.replacement.expiresAt.getTime()).toBeGreaterThanOrEqual(
         now + SESSION_TTL_SECONDS * 1000 - 60_000,
       );
-      expect(call.expiresAt.getTime()).toBeLessThanOrEqual(
+      expect(call.replacement.expiresAt.getTime()).toBeLessThanOrEqual(
         now + SESSION_TTL_SECONDS * 1000 + 60_000,
       );
-      // Slide, not rotate: lineage kept, no replacement minted.
-      expect(await h.store.statusHash(tokenHash)).toBe(statusBefore);
-      expect(rotate).not.toHaveBeenCalled();
+      // Rotate, not slide: the presented bearer is predecessor-only (no
+      // status key, grace authentication only), the successor is the live
+      // current row, and the lineage key survives on the successor.
+      expect(await h.store.statusHash(tokenHash)).toBeNull();
+      expect(await h.store.get(tokenHash)).toMatchObject({ userId: MOD_ID });
+      expect(await h.store.get(successorHash)).toMatchObject({ userId: MOD_ID });
+      expect(await h.store.statusHash(successorHash)).toBe(statusBefore);
+      expect(renew, "rotation must not slide the old row").not.toHaveBeenCalled();
+      expect(h.renewCalls).toEqual([]);
       expect(replace).not.toHaveBeenCalled();
       expect(create).not.toHaveBeenCalled();
       // The audit still ran: one row naming the moderator viewer and the subject.
@@ -367,85 +417,131 @@ describe("released Kit admin GET documents slide the session", () => {
       const entry = h.entries[0]!;
       expect(entry).toMatchObject({ viewerDiscordId: MOD_ID });
       expect(JSON.stringify(entry)).toContain(SUBJECT);
-      // The slid row outlives its original 1-hour mint, then dies at the new stamp.
+      // The successor outlives the original 1-hour mint, then dies at the new
+      // stamp; the retired bearer is long past its grace by then.
       h.advanceTime(3600_000 + 5000);
-      expect(await h.store.get(tokenHash)).toMatchObject({ userId: MOD_ID });
-      h.advanceTime(3600_000 + 5000);
+      expect(await h.store.get(successorHash)).toMatchObject({ userId: MOD_ID });
       expect(await h.store.get(tokenHash)).toBeNull();
+      h.advanceTime(3600_000 + 5000);
+      expect(await h.store.get(successorHash)).toBeNull();
     },
   );
 
-  it("signs the slid cookie with the session secret Hono verifies", async () => {
+  it("signs the replacement cookie with the session secret Hono verifies", async () => {
     const h = harness();
-    const { cookie } = await mint(h.store, MODERATOR);
+    const { cookie, token } = await mint(h.store, MODERATOR);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     const verified = await parseSigned(sessionSets(res)[0]!, SECRET);
     expect(isValidSessionToken(verified[SESSION_COOKIE])).toBe(true);
+    expect(verified[SESSION_COOKIE]).not.toBe(token);
   });
 
-  it("grace then bounce: an in-grace replay renders without renewal, a post-grace replay bounces", async () => {
+  it("replaying a rotated-out bearer follows predecessor grace: in-grace renders without rotating, post-grace bounces", async () => {
     const h = harness();
     const { cookie, token } = await mint(h.store, MODERATOR);
     const tokenHash = await hashToken(token);
 
+    // The first released read rotates: the presented bearer is now the
+    // immediate predecessor, exactly as a replayed old tab would present it.
     const first = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(first.status).toBe(200);
-    expectSlideCookie(first, token);
-    expect(h.renewCalls).toHaveLength(1);
-
-    // Another tab rotates: the presented bearer is now a predecessor in grace.
-    const successor = newSessionToken();
-    const successorHash = await hashToken(successor);
-    const rotateAt = h.nowMs();
-    expect(
-      await h.store.rotate(tokenHash, {
-        tokenHash: successorHash,
-        userId: MOD_ID,
-        username: "mod",
-        avatar: null,
-        member: true,
-        moderator: true,
-        expiresAt: new Date(rotateAt + SESSION_TTL_SECONDS * 1000),
-      }),
-    ).toBe(true);
+    const replacement = expectRotationCookie(first, token);
+    const successorHash = await hashToken(replacement);
+    expect(h.rotateCalls).toHaveLength(1);
+    const successorExpiry = h.rotateCalls[0]!.replacement.expiresAt.getTime();
     expect(await h.store.statusHash(tokenHash)).toBeNull();
     expect(await h.store.get(tokenHash)).toMatchObject({ userId: MOD_ID });
 
     // Inside grace the retired bearer still renders the moderator document,
-    // but the replay itself renews nothing: no renew call at all (Hono gates
-    // on statusHash first), no cookie, no sibling.
-    const replay = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
-    expect(replay.status).toBe(200);
-    expect(await replay.clone().text()).toContain(ADMIN_MARKER);
-    expect(sessionSets(replay)).toEqual([]);
-    expect(h.renewCalls).toHaveLength(1);
+    // but the replay itself rotates nothing: no rotate call at all (Hono
+    // gates on statusHash first), no cookie, no sibling. Run the replay
+    // near the end of grace so a grace-extending replay would be caught
+    // below: the deadline stays the one planted at rotation.
+    h.advanceTime((SESSION_PREDECESSOR_GRACE_SECONDS - 2) * 1000);
+    for (const n of [1, 2]) {
+      const replay = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
+      expect(replay.status, `in-grace replay ${n} serves`).toBe(200);
+      expect(await replay.clone().text()).toContain(ADMIN_MARKER);
+      expect(sessionSets(replay), `in-grace replay ${n} sets no cookie`).toEqual([]);
+      expect(h.rotateCalls, `in-grace replay ${n} attempts no rotation`).toHaveLength(1);
+      expect(h.renewCalls).toEqual([]);
+    }
 
-    h.advanceTime((SESSION_PREDECESSOR_GRACE_SECONDS + 1) * 1000);
+    // Three more seconds puts the original grace deadline in the past,
+    // even though the last replay was only moments ago: grace reads never
+    // extend the fixed deadline, so the retired bearer now bounces.
+    h.advanceTime(3000);
     const bounced = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(bounced.status).toBe(302);
     expect(bounced.headers.get("location")).toContain("/auth/discord");
     expect(sessionSets(bounced)).toEqual([]);
-    expect(h.renewCalls).toHaveLength(1);
+    expect(h.rotateCalls).toHaveLength(1);
+    expect(h.renewCalls).toEqual([]);
 
-    // The grace read must not renew the live successor on the old tab's behalf.
-    h.advanceTime(rotateAt + SESSION_TTL_SECONDS * 1000 - 1000 - h.nowMs());
+    // The grace reads must not extend the live successor on the old tab's
+    // behalf: it still dies at the stamp planted by the rotation.
+    h.advanceTime(successorExpiry - 1000 - h.nowMs());
     expect(await h.store.get(successorHash)).toMatchObject({ userId: MOD_ID });
-    h.advanceTime(1000);
+    h.advanceTime(1001);
     expect(await h.store.get(successorHash)).toBeNull();
   });
 
-  it("a signed-in non-moderator 403 never renews (unlike the event-detail draft 403)", async () => {
+  it("the replacement bearer rotates again on the next released read, and the grandparent is pruned", async () => {
+    const h = harness();
+    const { cookie, token } = await mint(h.store, MODERATOR);
+    const tokenHash = await hashToken(token);
+    const lineage = await h.store.statusHash(tokenHash);
+
+    const hop1 = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
+    expect(hop1.status).toBe(200);
+    const second = expectRotationCookie(hop1, token);
+    const secondHash = await hashToken(second);
+    // The Set-Cookie pair is the cookie the browser replays on the next read.
+    const secondCookie = sessionSets(hop1)[0]!.split(";")[0]!;
+
+    const hop2 = await dispatchHookRequest(eventFor(h.path, h.routeId, secondCookie), h.deps);
+    expect(hop2.status).toBe(200);
+    expect(await hop2.clone().text()).toContain(ADMIN_MARKER);
+    const third = expectRotationCookie(hop2, second);
+    expect(third).not.toBe(token);
+    const thirdHash = await hashToken(third);
+
+    expect(h.rotateCalls).toHaveLength(2);
+    expect(h.rotateCalls[0]!.oldHash).toBe(tokenHash);
+    expect(h.rotateCalls[1]!.oldHash).toBe(secondHash);
+    expect(h.rotateCalls[1]!.replacement.tokenHash).toBe(thirdHash);
+    expect(h.renewCalls).toEqual([]);
+
+    // Only the immediate predecessor keeps grace: hop two pruned the
+    // grandparent even though its own 10-second window has not elapsed.
+    expect(await h.store.get(tokenHash), "the grandparent is pruned on the next win").toBeNull();
+    expect(await h.store.statusHash(tokenHash)).toBeNull();
+    expect(
+      await h.store.get(secondHash),
+      "the immediate predecessor stays grace-valid",
+    ).toMatchObject({ userId: MOD_ID });
+    expect(await h.store.statusHash(secondHash)).toBeNull();
+    expect(await h.store.get(thirdHash)).toMatchObject({ userId: MOD_ID });
+    expect(await h.store.statusHash(thirdHash)).toBe(lineage);
+  });
+
+  it("a signed-in non-moderator 403 never rotates (unlike the event-detail draft 403)", async () => {
     const h = harness();
     const { cookie, token } = await mint(h.store, MEMBER);
+    const tokenHash = await hashToken(token);
+    const writes = spyWrites(h.store);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(403);
     expect(sessionSets(res)).toEqual([]);
-    expect(h.renewCalls).toEqual([]);
-    expect(await h.store.get(await hashToken(token))).not.toBeNull();
+    expect(writes, "a refused viewer does zero store writes").toEqual([]);
+    expectNoRotation(h);
+    // Untouched as the current bearer, not demoted to a predecessor.
+    expect(await h.store.get(tokenHash)).not.toBeNull();
+    expect(await h.store.statusHash(tokenHash)).toBe(tokenHash);
   });
 });
 
-describe("anonymous, refused and non-document reads never renew", () => {
+describe("anonymous, refused and non-document reads never rotate", () => {
   it("anonymous reads bounce without cookies or session writes", async () => {
     const h = harness();
     const writes = spyWrites(h.store);
@@ -454,11 +550,11 @@ describe("anonymous, refused and non-document reads never renew", () => {
     expect(res.headers.get("location")).toContain("/auth/discord");
     expect(sessionSets(res)).toEqual([]);
     expect(writes).toEqual([]);
-    expect(h.renewCalls).toEqual([]);
+    expectNoRotation(h);
   });
 
   it.each(["tampered signature", "unknown token", "expired row"] as const)(
-    "a %s bounces without renewal",
+    "a %s bounces without rotation",
     async (kind) => {
       const h = harness();
       let cookie: string;
@@ -478,35 +574,37 @@ describe("anonymous, refused and non-document reads never renew", () => {
       expect(res.status).toBe(302);
       expect(sessionSets(res)).toEqual([]);
       expect(writes).toEqual([]);
-      expect(h.renewCalls).toEqual([]);
+      expectNoRotation(h);
     },
   );
 
-  it("a refused audit keeps the 503 refusal and the live bearer: renewal never runs inside the boundary", async () => {
+  it("a refused audit keeps the 503 refusal and the live bearer: rotation never runs inside the boundary", async () => {
     const h = harness({ sink: async () => false });
     const { cookie, token } = await mint(h.store, MODERATOR);
+    const tokenHash = await hashToken(token);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(503);
     expect(await res.clone().text()).toBe(REFUSAL);
     expect(sessionSets(res)).toEqual([]);
-    // The boundary refused before any renewal could run: zero renew calls,
-    // and the presented bearer is still live for the retry.
-    expect(h.renewCalls).toEqual([]);
-    expect(await h.store.get(await hashToken(token))).not.toBeNull();
+    // The boundary refused before any rotation could run: zero rotate calls,
+    // and the presented bearer is still the live current row for the retry.
+    expectNoRotation(h);
+    expect(await h.store.get(tokenHash)).not.toBeNull();
+    expect(await h.store.statusHash(tokenHash)).toBe(tokenHash);
   });
 
-  it("a load outage 503 never renews", async () => {
+  it("a load outage 503 never rotates", async () => {
     const h = harness({ variant: "outage503" });
     const { cookie, token } = await mint(h.store, MODERATOR);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(503);
     expect(await res.clone().text()).toBe("Admin temporarily unavailable");
     expect(sessionSets(res)).toEqual([]);
-    expect(h.renewCalls).toEqual([]);
+    expectNoRotation(h);
     expect(await h.store.get(await hashToken(token))).not.toBeNull();
   });
 
-  it("a session-store outage 503 never renews", async () => {
+  it("a session-store outage 503 never rotates", async () => {
     const h = harness();
     const { cookie } = await mint(h.store, MODERATOR);
     h.store.get = (async () => {
@@ -515,41 +613,41 @@ describe("anonymous, refused and non-document reads never renew", () => {
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(503);
     expect(sessionSets(res)).toEqual([]);
-    expect(h.renewCalls).toEqual([]);
+    expectNoRotation(h);
   });
 
-  it("a redirect never renews", async () => {
+  it("a redirect never rotates", async () => {
     const h = harness({ variant: "redirect" });
     const { cookie, token } = await mint(h.store, MODERATOR);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(302);
     expect(res.headers.get("location")).toBe("/admin/join-attempts?page=2");
     expect(sessionSets(res)).toEqual([]);
-    expect(h.renewCalls).toEqual([]);
+    expectNoRotation(h);
     expect(await h.store.get(await hashToken(token))).not.toBeNull();
   });
 
-  it("HEAD reads do not renew", async () => {
+  it("HEAD reads do not rotate", async () => {
     const h = harness();
     const { cookie, token } = await mint(h.store, MODERATOR);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie, "HEAD"), h.deps);
     expect(res.status).toBe(200);
     expect(sessionSets(res)).toEqual([]);
-    expect(h.renewCalls).toEqual([]);
+    expectNoRotation(h);
     expect(await h.store.get(await hashToken(token))).not.toBeNull();
   });
 
-  it("a non-HTML 200 does not renew", async () => {
+  it("a non-HTML 200 does not rotate", async () => {
     const h = harness({ variant: "json" });
     const { cookie, token } = await mint(h.store, MODERATOR);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(200);
     expect(sessionSets(res)).toEqual([]);
-    expect(h.renewCalls).toEqual([]);
+    expectNoRotation(h);
     expect(await h.store.get(await hashToken(token))).not.toBeNull();
   });
 
-  it("POST stays Hono-owned: the Kit renewal path never sees it", async () => {
+  it("POST stays Hono-owned: the Kit rotation path never sees it", async () => {
     const h = harness();
     const { cookie, token } = await mint(h.store, MODERATOR);
     const writes = spyWrites(h.store);
@@ -561,32 +659,45 @@ describe("anonymous, refused and non-document reads never renew", () => {
     expect(await res.text()).toBe("hono");
     expect(sessionSets(res)).toEqual([]);
     expect(writes).toEqual([]);
-    expect(h.renewCalls).toEqual([]);
+    expectNoRotation(h);
     expect(await h.store.get(await hashToken(token))).not.toBeNull();
   });
 });
 
-describe("renewal races stay safe", () => {
-  it("a lost renewal race still delivers the released 200 without a cookie", async () => {
-    const h = harness();
-    const { cookie } = await mint(h.store, MODERATOR);
-    h.store.renew = (async () => false) as SessionStore["renew"];
-    const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
-    expect(res.status).toBe(200);
-    expect(await res.clone().text()).toContain(ADMIN_MARKER);
-    expect(sessionSets(res)).toEqual([]);
-  });
-
-  it("a renewal store error delivers the released 200 without renewal: fail-open with a class-only warn", async () => {
+describe("rotation races stay safe", () => {
+  it("a lost rotation race still delivers the released 200 without a cookie, old row live", async () => {
     const h = harness();
     const { cookie, token } = await mint(h.store, MODERATOR);
-    h.store.renew = (async () => {
-      throw new Error("renewal store down");
-    }) as SessionStore["renew"];
+    const tokenHash = await hashToken(token);
+    // rotate() resolving false is the lost race: a concurrently retired
+    // source wins, this read mints nothing and sets no cookie.
+    h.store.rotate = (async () => false) as SessionStore["rotate"];
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(200);
     expect(await res.clone().text()).toContain(ADMIN_MARKER);
     expect(sessionSets(res)).toEqual([]);
+    expect(h.renewCalls, "a lost race must not fall back to sliding").toEqual([]);
+    // The old row is left live as the current bearer for the next read.
+    expect(await h.store.get(tokenHash)).toMatchObject({ userId: MOD_ID });
+    expect(await h.store.statusHash(tokenHash)).toBe(tokenHash);
+  });
+
+  it("a rotation store error delivers the released 200 without a cookie: fail-open, old row live, class-only warn", async () => {
+    const h = harness();
+    const { cookie, token } = await mint(h.store, MODERATOR);
+    const tokenHash = await hashToken(token);
+    h.store.rotate = (async () => {
+      throw new Error("rotation store down");
+    }) as SessionStore["rotate"];
+    const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
+    expect(res.status).toBe(200);
+    expect(await res.clone().text()).toContain(ADMIN_MARKER);
+    expect(sessionSets(res)).toEqual([]);
+    expect(h.renewCalls, "a failed rotation must not fall back to sliding").toEqual([]);
+    // Rotation is one atomic statement, so a throw leaves the old row live
+    // as the current bearer: not deleted, not demoted to a predecessor.
+    expect(await h.store.get(tokenHash)).toMatchObject({ userId: MOD_ID });
+    expect(await h.store.statusHash(tokenHash)).toBe(tokenHash);
     expect(vi.mocked(console.warn)).toHaveBeenCalledTimes(1);
     const warned = vi
       .mocked(console.warn)
@@ -617,27 +728,27 @@ describe("route ownership", () => {
     });
   });
 
-  it("a shipped Hono-owned admin path never renews", async () => {
+  it("a shipped Hono-owned admin path never rotates", async () => {
     const shipped = ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/admin");
     expect(shipped?.enabled).toBe(false);
     // No manifest override: the shipped manifest owns the decision, so the
-    // renewal dep is unwired — Hono answers before any Kit renewal exists.
+    // renewal dep is unwired — Hono answers before any Kit rotation exists.
     const h = harness({ path: "/admin", routeId: "/admin", renewal: false });
     const { cookie, token } = await mint(h.store, MODERATOR);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(h.honoFetch).toHaveBeenCalledTimes(1);
     expect(await res.text()).toBe("hono");
     expect(sessionSets(res)).toEqual([]);
-    expect(h.renewCalls).toEqual([]);
+    expectNoRotation(h);
     expect(await h.store.get(await hashToken(token))).not.toBeNull();
   });
 
-  it("a manifest-enabled future admin path renews", async () => {
+  it("a manifest-enabled future admin path rotates", async () => {
     const shipped = ROUTE_MANIFEST.find((e) => e.method === "GET" && e.path === "/admin/events");
     expect(shipped?.enabled).toBe(false);
     if (!shipped) throw new Error("shipped GET /admin/events manifest entry missing");
     // The gate follows the manifest, not a hardcoded path pair: enabling a
-    // future admin route renews it with zero renewal-code changes.
+    // future admin route rotates it with zero rotation-code changes.
     const h = harness({
       path: "/admin/events",
       routeId: "/admin/events",
@@ -646,15 +757,17 @@ describe("route ownership", () => {
     const { cookie, token } = await mint(h.store, MODERATOR);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(200);
-    expectSlideCookie(res, token);
-    expect(h.renewCalls).toHaveLength(1);
+    expectRotationCookie(res, token);
+    expect(h.rotateCalls).toHaveLength(1);
+    expect(h.rotateCalls[0]!.oldHash).toBe(await hashToken(token));
+    expect(h.renewCalls).toEqual([]);
   });
 
-  it("a released non-admin member page never renews (admin-family-scoped renewal)", async () => {
+  it("a released non-admin member page never rotates (admin-family-scoped rotation)", async () => {
     // The shipped manifest already enables the member board: an authenticated
     // moderator 200 there must leave the bearer alone. Pins the admin
-    // route-family check in the renewal gate — without it, any released
-    // moderator member-read would slide the session.
+    // route-family check in the rotation gate — without it, any released
+    // moderator member-read would rotate the session.
     const h = harness({ path: "/leaderboards/members", routeId: "/leaderboards/members" });
     const { cookie, token } = await mint(h.store, MODERATOR);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
@@ -662,35 +775,63 @@ describe("route ownership", () => {
     expect(res.headers.get("content-type")).toContain("text/html");
     expect(res.headers.get("x-two-renderer")).toBe("kit");
     expect(sessionSets(res)).toEqual([]);
-    expect(h.renewCalls).toEqual([]);
+    expectNoRotation(h);
     expect(await h.store.get(await hashToken(token))).not.toBeNull();
   });
 });
 
-describe("renewal helper guards", () => {
+describe("rotation helper guards", () => {
   const helperEvent = (cookie: string | null, locals: unknown): HookEventLike => ({
     ...eventFor(LIST_PATH, "/admin/join-attempts", cookie),
     locals,
   });
 
+  it("rotates a current moderator bearer and returns the signed replacement cookie", async () => {
+    const h = harness({ renewal: false });
+    const rotate = adminRenewalFor(h.env);
+    const { cookie, token } = await mint(h.store, MODERATOR);
+    const tokenHash = await hashToken(token);
+    const lineage = await h.store.statusHash(tokenHash);
+
+    const setCookie = await rotate(helperEvent(cookie, moderatorLocals()));
+
+    expect(setCookie, "a current moderator bearer must rotate").not.toBeNull();
+    const replacement = bearerOfSetCookie(setCookie!);
+    expect(replacement, "the helper must sign a fresh bearer").not.toBe(token);
+    expect(isValidSessionToken(replacement)).toBe(true);
+    const verified = await parseSigned(setCookie!, SECRET);
+    expect(verified[SESSION_COOKIE]).toBe(replacement);
+    expect(setCookie!.toLowerCase()).toContain(`max-age=${SESSION_TTL_SECONDS}`);
+    expect(h.rotateCalls).toHaveLength(1);
+    expect(h.rotateCalls[0]!.oldHash).toBe(tokenHash);
+    expect(h.rotateCalls[0]!.replacement.tokenHash).toBe(await hashToken(replacement));
+    expect(h.renewCalls, "the helper must rotate, never slide").toEqual([]);
+    // Predecessor-only afterwards; the successor carries the lineage.
+    expect(await h.store.statusHash(tokenHash)).toBeNull();
+    expect(await h.store.get(tokenHash)).toMatchObject({ userId: MOD_ID });
+    expect(await h.store.statusHash(await hashToken(replacement))).toBe(lineage);
+  });
+
   it("returns null without an authenticated session in locals", async () => {
     const h = harness({ renewal: false });
-    const renew = adminRenewalFor(h.env);
+    const rotate = adminRenewalFor(h.env);
     const { cookie } = await mint(h.store, MODERATOR);
+    const writes = spyWrites(h.store);
     for (const locals of [
       undefined,
       { status: "guest", session: null },
       { status: "unknown", session: null },
       { status: "authenticated", session: null },
     ]) {
-      await expect(renew(helperEvent(cookie, locals))).resolves.toBeNull();
+      await expect(rotate(helperEvent(cookie, locals))).resolves.toBeNull();
     }
-    expect(h.renewCalls).toEqual([]);
+    expect(writes, "anonymous callers do zero store writes").toEqual([]);
+    expectNoRotation(h);
   });
 
-  it("returns null for a signed-in non-moderator: Hono never renews a refused viewer", async () => {
+  it("returns null for a signed-in non-moderator: Hono never rotates a refused viewer", async () => {
     const h = harness({ renewal: false });
-    const renew = adminRenewalFor(h.env);
+    const rotate = adminRenewalFor(h.env);
     const { cookie } = await mint(h.store, MEMBER);
     const locals: KitRequestSession = {
       status: "authenticated",
@@ -702,32 +843,38 @@ describe("renewal helper guards", () => {
         moderator: false,
       },
     };
-    await expect(renew(helperEvent(cookie, locals))).resolves.toBeNull();
-    expect(h.renewCalls).toEqual([]);
+    const writes = spyWrites(h.store);
+    await expect(rotate(helperEvent(cookie, locals))).resolves.toBeNull();
+    expect(writes, "a non-moderator does zero store writes").toEqual([]);
+    expectNoRotation(h);
   });
 
-  it("re-verifies the cookie: forged locals with a tampered bearer renew nothing", async () => {
+  it("re-verifies the cookie: forged locals with a tampered bearer rotate nothing", async () => {
     const h = harness({ renewal: false });
-    const renew = adminRenewalFor(h.env);
+    const rotate = adminRenewalFor(h.env);
     const { cookie } = await mint(h.store, MODERATOR, "wrong-secret");
-    await expect(renew(helperEvent(cookie, moderatorLocals()))).resolves.toBeNull();
-    expect(h.renewCalls).toEqual([]);
+    const writes = spyWrites(h.store);
+    await expect(rotate(helperEvent(cookie, moderatorLocals()))).resolves.toBeNull();
+    expect(writes).toEqual([]);
+    expectNoRotation(h);
   });
 
   it("returns null when no session secret is configured", async () => {
     const h = harness({ renewal: false });
-    const renew = adminRenewalFor({ ...h.env, SESSION_SECRET: "" });
+    const rotate = adminRenewalFor({ ...h.env, SESSION_SECRET: "" });
     const { cookie } = await mint(h.store, MODERATOR);
-    await expect(renew(helperEvent(cookie, moderatorLocals()))).resolves.toBeNull();
-    expect(h.renewCalls).toEqual([]);
+    await expect(rotate(helperEvent(cookie, moderatorLocals()))).resolves.toBeNull();
+    expectNoRotation(h);
   });
 
-  it("returns null for a grace bearer without attempting renewal", async () => {
+  it("returns null for a grace bearer without attempting rotation", async () => {
     const h = harness({ renewal: false });
-    const renew = adminRenewalFor(h.env);
+    const rotate = adminRenewalFor(h.env);
     const { cookie, token } = await mint(h.store, MODERATOR);
     const tokenHash = await hashToken(token);
     const successorHash = await hashToken(newSessionToken());
+    // Fixture rotation: another tab already rotated, so the presented
+    // bearer is a predecessor in grace. This setup call is recorded.
     expect(
       await h.store.rotate(tokenHash, {
         tokenHash: successorHash,
@@ -739,8 +886,44 @@ describe("renewal helper guards", () => {
         expiresAt: new Date(Date.now() + 3600_000),
       }),
     ).toBe(true);
-    await expect(renew(helperEvent(cookie, moderatorLocals()))).resolves.toBeNull();
+    const rotateCallsBefore = h.rotateCalls.length;
+    const writes = spyWrites(h.store);
+    await expect(rotate(helperEvent(cookie, moderatorLocals()))).resolves.toBeNull();
+    // Grace reads never rotate: the statusHash gate returns before any
+    // store write is attempted, so no sibling is minted for the old tab.
+    expect(writes).toEqual([]);
+    expect(h.rotateCalls).toHaveLength(rotateCallsBefore);
     expect(h.renewCalls).toEqual([]);
+  });
+
+  it("returns null on a lost rotation race without falling back to a slide", async () => {
+    const h = harness({ renewal: false });
+    const rotate = adminRenewalFor(h.env);
+    const { cookie, token } = await mint(h.store, MODERATOR);
+    const tokenHash = await hashToken(token);
+    h.store.rotate = (async () => false) as SessionStore["rotate"];
+    await expect(rotate(helperEvent(cookie, moderatorLocals()))).resolves.toBeNull();
+    expect(h.renewCalls).toEqual([]);
+    expect(await h.store.get(tokenHash)).toMatchObject({ userId: MOD_ID });
+    expect(await h.store.statusHash(tokenHash)).toBe(tokenHash);
+  });
+
+  it("propagates a rotation store error and leaves the old row live as current", async () => {
+    const h = harness({ renewal: false });
+    const rotate = adminRenewalFor(h.env);
+    const { cookie, token } = await mint(h.store, MODERATOR);
+    const tokenHash = await hashToken(token);
+    h.store.rotate = (async () => {
+      throw new Error("rotation store down");
+    }) as SessionStore["rotate"];
+    // Only a store failure propagates; the hook core turns it into the
+    // released page without a cookie (pinned in the race suite above).
+    await expect(rotate(helperEvent(cookie, moderatorLocals()))).rejects.toThrow(
+      "rotation store down",
+    );
+    expect(h.renewCalls).toEqual([]);
+    expect(await h.store.get(tokenHash)).toMatchObject({ userId: MOD_ID });
+    expect(await h.store.statusHash(tokenHash)).toBe(tokenHash);
   });
 });
 
@@ -767,18 +950,18 @@ describe("auth-status probe behavior unchanged", () => {
     expect(sessionSets(res)).toEqual([]);
   });
 
-  it("renewal and probe coexist: exactly the session slide plus the probe", async () => {
+  it("rotation and probe coexist: exactly the session rotation plus the probe", async () => {
     const h = harness({ probe: true });
     const { cookie, token } = await mint(h.store, MODERATOR);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(200);
-    expectSlideCookie(res, token);
+    expectRotationCookie(res, token);
     expect(probeSets(res)).toHaveLength(1);
     // No third cookie: this slice adds no new cookies.
     expect(res.headers.getSetCookie()).toHaveLength(2);
   });
 
-  it("a probe failure still delivers renewal", async () => {
+  it("a probe failure still delivers rotation", async () => {
     const h = harness();
     h.deps.authStatusCookieFor = async () => {
       throw new Error("probe store down");
@@ -786,17 +969,17 @@ describe("auth-status probe behavior unchanged", () => {
     const { cookie, token } = await mint(h.store, MODERATOR);
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(200);
-    expectSlideCookie(res, token);
+    expectRotationCookie(res, token);
     expect(probeSets(res)).toEqual([]);
     expect(vi.mocked(console.warn)).toHaveBeenCalled();
   });
 
-  it("a renewal failure still delivers the probe", async () => {
+  it("a rotation failure still delivers the probe", async () => {
     const h = harness({ probe: true });
     const { cookie } = await mint(h.store, MODERATOR);
-    h.store.renew = (async () => {
-      throw new Error("renewal store down");
-    }) as SessionStore["renew"];
+    h.store.rotate = (async () => {
+      throw new Error("rotation store down");
+    }) as SessionStore["rotate"];
     const res = await dispatchHookRequest(eventFor(h.path, h.routeId, cookie), h.deps);
     expect(res.status).toBe(200);
     expect(sessionSets(res)).toEqual([]);
@@ -814,12 +997,13 @@ describe("moderator guide states Kit admin renewal parity", () => {
     const sentences = section.split(/(?<=[.!?])\s+/);
     const parity = sentences.filter(
       (s) =>
-        /kit/i.test(s) && /(renew|slide|refresh|extend|parity|same window|like the hono)/i.test(s),
+        /kit/i.test(s) &&
+        /(renew|rotat|slide|refresh|extend|parity|same window|like the hono)/i.test(s),
     );
     expect(
       parity,
       "session/expiry section must state Kit admin renewal parity, e.g. " +
-        "'Kit-served admin pages renew the sliding session exactly like the Hono panel.'",
+        "'Kit-served admin pages rotate the session exactly like the Hono panel.'",
     ).not.toHaveLength(0);
   });
 });
