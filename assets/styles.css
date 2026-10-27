@@ -44,6 +44,7 @@ dl.facts > div { display: block; }
 
 /* Admin forms and tables share the external stylesheet with the page shells. */
 .admin-table { width: 100%; border-collapse: collapse; }
+.admin-table .admin-chronology { white-space: nowrap; }
 .admin-table :is(th, td) { text-align: left; padding: .5rem .75rem; border-bottom: 1px solid #d8cfc0; }
 .field { margin: 1rem 0; }
 .field label { display: block; font-weight: 700; margin-bottom: .25rem; }

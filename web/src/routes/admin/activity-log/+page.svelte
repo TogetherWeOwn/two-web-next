@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { formatAdminTime } from "../../../../../src/admin/chronology";
 import {
   formatActivityCauser,
   activityLogEmptyText,
@@ -12,8 +13,8 @@ import type { PageProps } from "./$types";
 // heading, the search field labels, the table testids, the scroll-region
 // wiring, the empty copy and the paging testids are shared, so the existing
 // admin E2E selectors still apply when this route owns traffic. Instants
-// arrive pre-rendered as ISO strings from the load, exactly as the Hono page
-// emits them inside <time datetime>. No island: the search is a plain GET
+// arrive as exact ISO strings (or null for unusable timestamps). The shared
+// adapter labels valid instants in UTC, like Hono. No island: the search is a plain GET
 // form, so the no-JS viewer keeps working.
 let { data }: PageProps = $props();
 const { rows, query, hasNext } = $derived(data);
@@ -35,7 +36,7 @@ const subjectOf = (row: {
   <section>
     <h1>Activity log</h1>
     <p class="hint">
-      Read-only. Who changed what, when. Views that name a member are access-logged; imported
+      Read-only. Who changed what, when (UTC). Views that name a member are access-logged; imported
       causer IDs are labeled legacy.
     </p>
     <form method="get" action="/admin/activity-log" class="filters">
@@ -77,10 +78,11 @@ const subjectOf = (row: {
             </tr>
           {:else}
             {#each rows as r (r.id)}
+              {@const time = formatAdminTime(r.createdAt)}
               <tr>
                 <td>{formatActivityCauser(r.causerId)}</td>
                 <td>{r.description}</td>
-                <td><time datetime={r.createdAt}>{r.createdAt}</time></td>
+                <td class="admin-chronology">{#if time.iso}<time datetime={time.iso}>{time.label}</time>{:else}{time.label}{/if}</td>
                 <td>{subjectOf(r)}</td>
               </tr>
             {/each}
