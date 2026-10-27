@@ -142,7 +142,10 @@ describe("event detail theme", () => {
       id: 2,
       eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
       startsAt: start,
+      endsAt: new Date(start.getTime() + 2 * 3_600_000),
       timezone: "UTC",
+      game: null,
+      rsvpOpen: true,
     };
     const html = render({
       related: [

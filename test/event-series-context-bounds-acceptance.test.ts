@@ -271,7 +271,7 @@ describe("bounded series projection from actual SQL results", () => {
       .not.toMatch(
         /description|accessibility_notes|join_url|join_instructions|created_by|agent_grant_id/,
       );
-    expect.soft(query.columns.length).toBe(9);
+    expect.soft(query.columns.length).toBe(12);
     expect.soft(query.bytes).toBeLessThanOrEqual(53 * (4096 + 128));
     traces.length = 0;
     const model = await kit(10);
@@ -311,7 +311,7 @@ describe("bounded series projection from actual SQL results", () => {
     expect(seriesReads()[0]!.rows).toHaveLength(52);
   });
 
-  it.each(["event_key", "title", "timezone", "location", "organizer_name"] as const)(
+  it.each(["event_key", "title", "timezone", "location", "game", "organizer_name"] as const)(
     "SQL nulls over-budget %s text before transport and suppresses context",
     async (field) => {
       await smallRun();
@@ -329,9 +329,9 @@ describe("bounded series projection from actual SQL results", () => {
       expect.soft(query.raw.flat()).not.toContain(huge);
       const idPosition = query.columns.indexOf("id");
       const oversized = query.rows.find((r) => r[idPosition] === 13)!;
-      // The five projected strings all go NULL together. Id/index/start and the
+      // The six projected strings all go NULL together. Id/index/times and the
       // false marker remain, so neither hosts nor unsafe links can leak through.
-      expect.soft(oversized.filter((value) => value === null)).toHaveLength(5);
+      expect.soft(oversized.filter((value) => value === null)).toHaveLength(6);
     },
   );
 
