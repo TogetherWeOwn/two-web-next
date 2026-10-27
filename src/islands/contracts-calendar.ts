@@ -97,6 +97,13 @@ export function resolveGameFilter(
   return games.find((game) => game.trim().toLowerCase() === want) ?? null;
 }
 
+/** Detail-page link copy for the committed schedule facet of one game. */
+export const moreGameNightsCopy = (game: string): string => `More ${game} nights`;
+/** The committed schedule facet URL for a canonical catalog game: one
+ * `?game=` param, percent-encoded so `&`, `#` and spaces parse back exactly. */
+export const eventsGameHref = (game: string): string =>
+  `/events?${EVENTS_GAME_PARAM}=${encodeURIComponent(game)}`;
+
 /** Logger normalization (legacy EventSearchLogger::normalize): collapse
  * whitespace, lowercase, cap at the column width, blank means "not a search". */
 export function normalizeEventSearch(raw: string | null | undefined): string | null {

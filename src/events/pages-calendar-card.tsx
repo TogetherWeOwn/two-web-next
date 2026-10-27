@@ -65,6 +65,12 @@ export const CalCard: FC<{
   // The drawer context wins over row dates: a card shown under past events
   // reads Ended even if a fixture disagrees about the instant.
   const availability = rowAvailability(e, now, isPast);
+  // Save-this-night link: canonical published rows that have not ended only.
+  // Transients, drafts, cancelled and ended rows have no calendar entry worth
+  // saving, so none is offered. Decided from the row and `availability` above:
+  // no extra read, no island.
+  const saveable =
+    !transient && e.status === "published" && !!availability && availability.state !== "past";
   // Compact host line: the trimmed public organizer, already on the row (no
   // new read). Transients carry no organizer and blank/missing renders no
   // node, so the badge and attendance never shift for unhosted cards.
@@ -224,6 +230,20 @@ export const CalCard: FC<{
               {EVENTS_EMPTY_COPY.signIn}
             </a>
           )}
+          {saveable ? (
+            <>
+              {" "}
+              {/* The visible copy repeats on every card, so the accessible name
+                  carries the title (WCAG 2.4.4). */}
+              <a
+                href={`/events/${e.eventKey}.ics`}
+                aria-label={`Add ${e.title} to calendar (.ics)`}
+                data-testid="event-card-ics"
+              >
+                Add to calendar (.ics)
+              </a>
+            </>
+          ) : null}
         </div>
       </article>
     </li>

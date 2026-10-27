@@ -20,6 +20,7 @@ import {
   getViewerRsvp,
   listGoingAttendees,
   listRelatedEvents,
+  resolveEventGameFacet,
   nextAttendeePage,
   parseAttendeePageParam,
   type EventLink,
@@ -213,14 +214,20 @@ export function registerDetailRoutes(
             (series) => series,
             (): EventSeriesContext | null => null,
           );
-          const [neighbors, related, series, attendees, position, answer] = await Promise.all([
-            neighborsSettled,
-            relatedSettled,
-            seriesSettled,
-            session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
-            session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
-            session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
-          ]);
+          // Optional "More <game> nights" link: the same bounded published-game
+          // catalog the schedule facet uses, non-sensitive and fail-open (null
+          // on any miss or outage), skipped for game-less events.
+          const gameFacetSettled = resolveEventGameFacet(db, e.game);
+          const [neighbors, related, series, gameFacet, attendees, position, answer] =
+            await Promise.all([
+              neighborsSettled,
+              relatedSettled,
+              seriesSettled,
+              gameFacetSettled,
+              session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
+              session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
+              session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
+            ]);
           // One-row lookahead probe that powers Next, only from a full page:
           // a partial page cannot have a successor, so the probe (and its
           // audit subject) is skipped there.
@@ -255,6 +262,7 @@ export function registerDetailRoutes(
               neighbors={neighbors}
               related={related}
               series={series}
+              gameFacet={gameFacet}
               attendees={attendees}
               attendeesPaging={attendeesPaging}
               archive={archive}

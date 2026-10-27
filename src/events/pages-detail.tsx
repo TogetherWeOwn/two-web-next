@@ -1,7 +1,12 @@
 // Event detail screen: hero, RSVP, share, attendees, discovery.
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
-import { isValidZone, renderGoingCount } from "../islands/contracts";
+import {
+  eventsGameHref,
+  isValidZone,
+  moreGameNightsCopy,
+  renderGoingCount,
+} from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
@@ -73,6 +78,8 @@ export const EventPage: FC<{
   related: EventLink[];
   /** Series run context; null (or omitted) for standalone events, which render exactly as today. */
   series?: EventSeriesContext | null;
+  /** Canonical schedule-facet game (`resolveEventGameFacet`); null renders no link. */
+  gameFacet?: string | null;
   attendees?: EventAttendee[];
   /** Native attendee page window; omitted renders the legacy single page. */
   attendeesPaging?: EventAttendeesPaging;
@@ -95,6 +102,7 @@ export const EventPage: FC<{
   neighbors,
   related,
   series = null,
+  gameFacet = null,
   attendees = [],
   attendeesPaging = { page: 1, prevHref: null, nextHref: null },
   archive,
@@ -443,6 +451,13 @@ export const EventPage: FC<{
         dangerouslySetInnerHTML={{ __html: jsonLd }}
       />
       <div class="event-discovery">
+        {gameFacet !== null ? (
+          <p>
+            <a href={eventsGameHref(gameFacet)} data-testid="event-more-game-nights">
+              {moreGameNightsCopy(gameFacet)}
+            </a>
+          </p>
+        ) : null}
         {series && (series.previous || series.next) ? (
           <nav class="event-pagination" aria-label="Series events" data-testid="event-series-nav">
             {series.previous ? (

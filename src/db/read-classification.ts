@@ -50,6 +50,12 @@ const featuredEditRead = `select "id", "legacy_id", "title", "body", "url", "ima
 // projection and bound-root query, never arbitrary computed event expressions.
 const seriesContextRead = `select "id", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $1 then "event_key" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $2 then "title" end, "starts_at", "ends_at", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $3 then "timezone" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $4 then "location" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $5 then "game" end, "rsvp_open", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $6 then "organizer_name" end, "recurrence_index", ( octet_length("event_key") + octet_length("title") + octet_length("timezone") + coalesce(octet_length("location"), 0) + coalesce(octet_length("game"), 0) + coalesce(octet_length("organizer_name"), 0) ) <= $7 from "events" where ("events"."status" in ($8, $9) and isfinite("events"."starts_at") and ("events"."id" = $10 or "events"."parent_event_id" = $11)) order by "events"."recurrence_index" asc, "events"."id" asc limit $12`;
 
+// The detail page's "More <game> nights" link reuses the schedule's distinct
+// published-game catalog (`listPublishedGames`). Its trimmed projection is a
+// computed field, so admit only this complete statement: published rows, one
+// trimmed non-blank game column, a bound limit, no member table.
+const publishedGamesRead = `select distinct trim("game") from "events" where ("events"."status" = 'published' and "events"."game" is not null and trim("events"."game") <> '') order by trim("game") limit $1`;
+
 export function validateNonSensitiveRead(
   classification: NonSensitiveRead,
   statement: string,
@@ -80,6 +86,7 @@ export function validateNonSensitiveRead(
   }
   if (classification === "featured" && fields?.length && query === featuredEditRead) return;
   if (classification === "events" && fields?.length && query === seriesContextRead) return;
+  if (classification === "events" && fields?.length && query === publishedGamesRead) return;
   const table =
     classification === "events"
       ? "events"

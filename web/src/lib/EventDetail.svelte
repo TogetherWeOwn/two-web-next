@@ -34,6 +34,7 @@ import {
   WAITLIST_LEAVE_TESTID,
   WAITLIST_POSITION_TESTID,
   loginUrl,
+  moreGameNightsCopy,
   renderGoingCount,
   rsvpClosedCopy,
   rsvpFullCapCopy,
@@ -447,7 +448,7 @@ const lineup = $derived(
   {@html detailIslands}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />
-  <div class="event-discovery">{@render eventPagination(model.series, true)}{@render eventPagination(model.neighbors, false)}
+  <div class="event-discovery">{#if model.moreGameNights}<p><a href={model.moreGameNights.href} data-testid="event-more-game-nights">{moreGameNightsCopy(model.moreGameNights.game)}</a></p>{/if}{@render eventPagination(model.series, true)}{@render eventPagination(model.neighbors, false)}
     {#if model.related.length > 0}
       <section aria-label="Related events" data-testid="event-related">
         <h2>More events you might like</h2>

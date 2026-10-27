@@ -21,7 +21,7 @@ import { dbFor } from "../admin/db";
 import { alertRequestError, exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import type { Env } from "../env";
-import type { RsvpClosedReason } from "../islands/contracts";
+import { eventsGameHref, type RsvpClosedReason } from "../islands/contracts";
 import type { KitRequestSession } from "../kit-session";
 import type {
   EventGoneModel,
@@ -50,6 +50,7 @@ import {
   listRelatedEvents,
   nextAttendeePage,
   parseAttendeePageParam,
+  resolveEventGameFacet,
   type EventAttendee,
   type EventLink,
   type EventNeighbors,
@@ -73,6 +74,9 @@ export interface KitEventDetailStore {
    * falls back to the shared read, which skips standalone events with zero
    * queries and fails open everywhere else. */
   seriesFn?: (db: Db, event: SeriesEventRef) => Promise<EventSeriesContext | null>;
+  /** Canonical schedule-facet game for the "More <game> nights" link. Optional
+   * so existing fakes keep compiling: absent means no link and no read. */
+  gameFacetFn?: (db: Db, game: string | null) => Promise<string | null>;
   /** Bounded attendee window for one native page: the page plus the first row
    * of the next page (lookahead, never rendered) that powers Next. */
   attendeesFn: (db: Db, eventId: number, page: number) => Promise<EventAttendee[]>;
@@ -188,6 +192,10 @@ export interface KitEventDetailModel {
   neighbors: { previous: KitEventDetailLink | null; next: KitEventDetailLink | null };
   related: KitEventDetailLink[];
   series: KitEventDetailSeries | null;
+  /** Optional "More <game> nights" link: the canonical catalog game and its committed
+   * schedule-facet href; null when the game does not resolve (or the read
+   * failed), in which case the view renders no link. */
+  moreGameNights?: { game: string; href: string } | null;
   /** Guests-only join pitch; signed-in viewers never see it. */
   showJoinPitch: boolean;
   joinReturnTo: string;
@@ -280,6 +288,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
     neighborsFn: (db, event) => getEventNeighbors(db, event),
     relatedFn: (db, event) => listRelatedEvents(db, event),
     seriesFn: (db, event) => getEventSeriesContext(db, event),
+    gameFacetFn: (db, game) => resolveEventGameFacet(db, game),
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
       // the first row of the next page (lookahead, never rendered) that
@@ -461,14 +470,26 @@ export async function resolveKitEventDetail(
         (series) => series,
         (): EventSeriesContext | null => null,
       );
-      const [neighbors, related, series, attendeeRows, position, answer] = await Promise.all([
-        neighborsSettled,
-        relatedSettled,
-        seriesSettled,
-        member ? store.attendeesFn(db, event.id, attendeePage) : Promise.resolve([]),
-        viewer ? store.waitlistFn(db, event.id, viewer.userId) : Promise.resolve(null),
-        viewer && member ? store.viewerRsvpFn(db, event.id, viewer.userId) : Promise.resolve(null),
-      ]);
+      // Non-sensitive, fail-open, skipped for game-less events; same
+      // resolver as the served page.
+      const gameFacetSettled = (
+        store.gameFacetFn ? store.gameFacetFn(db, event.game) : Promise.resolve(null)
+      ).then(
+        (game) => game,
+        (): string | null => null,
+      );
+      const [neighbors, related, series, gameFacet, attendeeRows, position, answer] =
+        await Promise.all([
+          neighborsSettled,
+          relatedSettled,
+          seriesSettled,
+          gameFacetSettled,
+          member ? store.attendeesFn(db, event.id, attendeePage) : Promise.resolve([]),
+          viewer ? store.waitlistFn(db, event.id, viewer.userId) : Promise.resolve(null),
+          viewer && member
+            ? store.viewerRsvpFn(db, event.id, viewer.userId)
+            : Promise.resolve(null),
+        ]);
       // Declare the retrieved attendee owners so the hook boundary audits
       // exactly the disclosed subjects. Non-SQL fakes declare nothing on
       // their own; the SQL reads declare through the observed adapter and
@@ -577,6 +598,7 @@ export async function resolveKitEventDetail(
                 next: series.next ? toLink(series.next, now) : null,
               }
             : null,
+          moreGameNights: gameFacet ? { game: gameFacet, href: eventsGameHref(gameFacet) } : null,
           showJoinPitch: !viewer,
           // The sign-in return keeps the query string, exactly as served;
           // the join pitch and related-join links use the bare page path.

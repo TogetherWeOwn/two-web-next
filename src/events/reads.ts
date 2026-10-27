@@ -36,6 +36,7 @@ import {
   escapeLikeTerm,
   PAST_EVENTS_PAGE_SIZE,
   type DiscordTransient,
+  resolveGameFilter,
 } from "../islands/contracts";
 import { calendarZone, canonicalIntervalDays, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
@@ -173,6 +174,24 @@ export async function listPublishedGames(db: Db): Promise<string[]> {
     .orderBy(sql`trim(${sql.identifier(events.game.name)})`)
     .limit(EVENTS_DISTINCT_GAMES_LIMIT);
   return rows.map((row) => row.game).sort((a, b) => a.localeCompare(b));
+}
+
+/** Canonical schedule-facet game for a detail page, or null. Reuses the
+ * schedule's bounded published-game catalog and resolver, so a link is offered
+ * only for a game `/events?game=` would actually select; null, blank, unknown
+ * and cap-omitted games resolve to null. Game-less events skip the read. The
+ * read is non-sensitive and fails open: an outage drops the optional link and
+ * never the page. */
+export async function resolveEventGameFacet(
+  db: Db,
+  game: string | null | undefined,
+): Promise<string | null> {
+  if ((game ?? "").trim() === "") return null;
+  try {
+    return resolveGameFilter(await nonSensitiveRead("events", () => listPublishedGames(db)), game);
+  } catch {
+    return null;
+  }
 }
 
 /** Invalid list-page numbers retain the page-one fallback, like the archive —
