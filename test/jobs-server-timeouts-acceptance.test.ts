@@ -12,7 +12,8 @@ import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 import { testDatabaseUrl } from "./helpers/member-data-db";
 
-// An explicit URL is required so this suite cannot silently skip its SQL proof.
+// DB-less runs skip this suite like every sibling live-Postgres suite; CI always
+// sets DATABASE_URL, so the SQL proof still runs there and cannot silently skip.
 const DB = process.env.DATABASE_URL;
 const BASE = { statement: "4s", lock: "0" };
 // Independent consumer-facing budget, not imported from the implementation.
@@ -58,7 +59,9 @@ async function snapshot(sql: postgres.Sql | postgres.TransactionSql): Promise<Sn
   return row!;
 }
 
-describe("jobs server-side execution budgets (disposable Postgres, acceptance)", () => {
+describe.skipIf(!process.env.DATABASE_URL)(
+  "jobs server-side execution budgets (disposable Postgres, acceptance)",
+  () => {
   let fixture: JobsFixture | undefined;
   let sql: postgres.Sql;
   let holder: postgres.Sql;
