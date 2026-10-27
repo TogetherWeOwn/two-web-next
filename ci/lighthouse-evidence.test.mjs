@@ -12,7 +12,7 @@ import { initializeConfig } from "lighthouse/core/config/config.js";
 import diagnosticsConfig from "./lighthouse-diagnostics.config.mjs";
 import { navigationMetadata } from "../test/lighthouse-navigation-fixtures.mjs";
 import DocumentTiming, { documentTiming } from "./lighthouse-document-timing.mjs";
-import { main as mobile } from "./lighthouse-origin-run.mjs";
+import { UP_TIMEOUT_MS, main as mobile } from "./lighthouse-origin-run.mjs";
 import { main as desktop, loadCollectedLhrs } from "./lighthouse-quality-run.mjs";
 
 test("diagnostic audit is additive and does not change scoring, gathers, mobile settings or existing audits", async () => {
@@ -610,6 +610,15 @@ test("cache, age and server-timing headers accept only bounded well-formed value
   for (const bad of ["-1", "1.5", "12abc", "", "99999999999"])
     assert.equal(at([["age", bad]]).ageSeconds, "unknown", bad);
   assert.equal(at([["server-timing", "cfOrigin;dur=640"]]).serverTiming, "cfOrigin;dur=640");
+  // Valid-shaped values on either side of the 256-character cap: the grammar alone
+  // accepts both, so only the length bound separates them.
+  const metrics = Array.from({ length: 21 }, () => "edge;dur=1").join(", ");
+  const atCap = `${metrics}, abcd`;
+  assert.equal(atCap.length, 256);
+  assert.equal(at([["server-timing", atCap]]).serverTiming, atCap);
+  const overCap = `${metrics}, abcde`;
+  assert.equal(overCap.length, 257);
+  assert.equal(at([["server-timing", overCap]]).serverTiming, "unknown");
   for (const good of [
     'cfL4;desc="?proto=TCP&rtt=20"',
     'edge;dur=12.5, origin;desc="origin";dur=640',
@@ -769,6 +778,17 @@ test("summary re-validates stored serving values: hostile or mistyped fields bec
   }
 });
 
+test("summary rejects a well-formed but oversized stored Server-Timing value", async (t) => {
+  const oversized = Array.from({ length: 30 }, () => "edge;dur=1").join(", ");
+  assert.ok(oversized.length > 256);
+  const { dir } = await scenario(t, [
+    { timing: () => ({ ...documentTiming(resource, []), serverTiming: oversized }) },
+  ]);
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  assert.equal(json.rows[0].serving[0].serverTiming, "unknown");
+  assert.ok(!(await readFile(join(dir, "watch-summary.md"), "utf8")).includes(oversized));
+});
+
 test("a valid quoted Server-Timing description survives from response header to summary", async (t) => {
   const value = 'cfL4;desc="?proto=TCP&rtt=20"';
   const { dir } = await scenario(t, [
@@ -836,6 +856,10 @@ test("the /up read is bounded, manual-redirect, and cannot stall or fail the col
   ]);
 });
 
+test("the shipped /up bound stays 10 seconds", () => {
+  assert.equal(UP_TIMEOUT_MS, 10_000);
+});
+
 test("each collect attempt reads /up before lhci starts and again after it ends", async (t) => {
   const seen = [];
   const mark = () => seen.push("lhci");
@@ -878,6 +902,9 @@ test("a marginal retry archives attempt 1's revision and the diagnosis carries e
   assert.deepEqual(first.servedRevision, [
     { attempt: 1, before: sha("a"), after: sha("a"), verdict: "same at both reads" },
   ]);
+  const firstMd = await readFile(join(dir, "watch-summary.attempt1.md"), "utf8");
+  assert.match(firstMd, /### Served revision/);
+  assert.match(firstMd, /same at both reads/);
   const diagnosis = await readFile(join(dir, "origin-collect-diagnosis.md"), "utf8");
   assert.match(diagnosis, /served revision, attempt 1: a{40} -> a{40} \(same at both reads\)/);
   assert.match(diagnosis, /served revision, attempt 2: a{40} -> b{40} \(changed during collect\)/);

@@ -60,7 +60,7 @@ const DIAGNOSIS_TAIL_LINES = 60;
 const ATTEMPT1_TABLE_MD = "watch-summary.attempt1.md";
 const ATTEMPT1_TABLE_JSON = "watch-summary.attempt1.json";
 const ATTEMPT1_LHR_DIR = "marginal-attempt1";
-const UP_TIMEOUT_MS = 10_000;
+export const UP_TIMEOUT_MS = 10_000;
 const FULL_SHA = /^[0-9a-f]{40}$/;
 
 // The commit the deployed Worker reports on GET /up, or "unknown". One read-only
