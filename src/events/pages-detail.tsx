@@ -119,7 +119,6 @@ export const EventPage: FC<{
   const now = new Date();
   const shareAsPast = e.status === "past" || (e.status === "published" && e.endsAt <= now);
   const accessibilityNotes = e.accessibilityNotes?.trim();
-  const now = new Date();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -270,7 +269,6 @@ export const EventPage: FC<{
           waitlistPosition={waitlistPosition}
           returnTo={returnTo ?? path}
           attendeePage={attendeePage}
-          now={now}
         />
         <script src="/islands/rsvp-button.js" defer />
         <script src="/islands/event-device-timezone.js" defer />
