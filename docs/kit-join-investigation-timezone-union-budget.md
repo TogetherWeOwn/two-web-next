@@ -137,9 +137,8 @@ output, changing **only disposable budget copies**:
 
 The unchanged checker passes its 12 selftests, and the shipping-budget suites
 `check-kit-perf.test.mjs` and `budget-fragments.test.mjs` pass 76/76 together.
-The server interval/exact/one-over literals follow the 337408 B allocation; the
-client interval fixtures from the earlier measurement still exercise the same
-client steps. Main's 1280 B CSS fixtures are retained unchanged. This does not
+Server and client interval/exact/one-over literals follow the measured maxima
+and their aligned allocations. Main's 1280 B CSS fixtures are retained unchanged. This does not
 claim a full application check, browser, visual, accessibility, Lighthouse,
 startup-latency, staging or production verification.
 

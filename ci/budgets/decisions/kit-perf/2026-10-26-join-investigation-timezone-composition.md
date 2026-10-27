@@ -72,8 +72,8 @@ freeze the second composition output (server gzip 337173 B): retained limits
 and the prior proposal reject, proposed and exact limits accept, and
 one-byte/one-step-under limits reject each axis independently. A frozen
 output's one-byte control is not evidence of byte-stable rebuilds.
-Shipping server literals follow the 337408 B step; the existing client
-interval fixtures still cover the unchanged client steps.
+Shipping server and client interval literals pin the latest measured maxima
+337174/258105/103795 B, with exact/one-over literals at the aligned ceilings.
 
 ## Undo
 
