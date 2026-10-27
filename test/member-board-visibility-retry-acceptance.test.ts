@@ -125,15 +125,19 @@ function retryHref(html: string): string | null {
   return m ? m[1]! : null;
 }
 
-/** Attribute-unescaped href for comparison against boardPath output. */
+const HREF_ENTITIES: Readonly<Record<string, string>> = {
+  "&amp;": "&",
+  "&lt;": "<",
+  "&gt;": ">",
+  "&quot;": '"',
+  "&#34;": '"',
+  "&#39;": "'",
+};
+
+/** Attribute-unescaped href for comparison against boardPath output. One
+ * pass, so an escaped entity (`&amp;lt;`) decodes once, never twice. */
 const unescapeHref = (href: string): string =>
-  href
-    .replaceAll("&amp;", "&")
-    .replaceAll("&lt;", "<")
-    .replaceAll("&gt;", ">")
-    .replaceAll("&quot;", '"')
-    .replaceAll("&#34;", '"')
-    .replaceAll("&#39;", "'");
+  href.replaceAll(/&(?:amp|lt|gt|quot|#34|#39);/g, (entity) => HREF_ENTITIES[entity]!);
 
 /** The explanation band: from the heading to the scope nav. The manage action
  * must live alongside the privacy explanation here, above the navigation —
@@ -149,10 +153,13 @@ function statusParagraphs(html: string): string[] {
   return [...html.matchAll(/<p\b[^>]*role="status"[^>]*>([\s\S]*?)<\/p>/g)].map((m) => m[1]!);
 }
 
-/** Board HTML minus the pre-existing footer island (auth tab sync, owned
- * elsewhere): what remains must carry no script of its own. */
-const withoutKnownIslands = (html: string): string =>
-  html.replaceAll(/<script\b[^>]*auth-status\.js[^>]*>\s*<\/script>/g, "");
+/** Script tags on the board beyond the pre-existing footer island (auth tab
+ * sync, owned elsewhere): the board must carry no script of its own. Counts
+ * every `<script` opener against the allowed island tags instead of stripping,
+ * so a script hidden inside or next to an island tag still counts. */
+const foreignScriptCount = (html: string): number =>
+  (html.match(/<script/gi) ?? []).length -
+  (html.match(/<script\b[^>]*auth-status\.js[^>]*>\s*<\/script>/g) ?? []).length;
 
 const viewerSession: Session = {
   id: MEMBER.userId,
@@ -265,7 +272,7 @@ describe("Hono member board manage action (page unit)", () => {
     expect(html).toMatch(
       /<a\b[^>]*href="\/profile#edit-heading"[^>]*>\s*Manage leaderboard visibility\s*<\/a>/,
     );
-    expect(withoutKnownIslands(html)).not.toMatch(/<script/i);
+    expect(foreignScriptCount(html)).toBe(0);
   });
 });
 
@@ -381,7 +388,7 @@ describe("Hono member board retry (unavailable state only)", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("Rankings are temporarily unavailable.");
-    expect(withoutKnownIslands(html)).not.toMatch(/<script/i);
+    expect(foreignScriptCount(html)).toBe(0);
     expect(html).not.toMatch(/http-equiv\s*=\s*["']?refresh/i);
     expect(html).not.toMatch(/setTimeout|setInterval|location\.reload|\.fetch\(/);
     // The recovery is one plain anchor: a GET the member chooses.
