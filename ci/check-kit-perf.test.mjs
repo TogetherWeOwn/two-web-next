@@ -401,7 +401,7 @@ test("shipping budget: client gzip still fails independently of raw", (t) => {
 const SHIPPING_BUDGET_BYTES = Buffer.from(
   JSON.stringify(loadKitBudget(fileURLToPath(new URL("../", import.meta.url)))),
 );
-// Eight explicit server-gzip allocations are supported: current 334080, the
+// Nine explicit server-gzip allocations are supported: current 334080, the
 // independently justified 335104 ceiling (combined worst 334994, margin 110;
 // lower 334848 rejects by 146), the independently justified 335360 ceiling
 // (combined worst 335338, margin 22; lower 335104 rejects by 234), and the
@@ -409,11 +409,14 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // lower 335360 rejects by 144), and the
 // independently justified 335872 ceiling (combined worst 335624, margin 248;
 // lower 335616 rejects by 8), and the independently justified 336128 ceiling
-// (combined worst 335977, margin 151; lower 335872 rejects by 105), and the
+// (combined worst 335977, margin 151; lower 335872 rejects by 105), the
 // independently justified 336384 ceiling for the admin-orientation slice (two
 // merged builds 336190 and 336192; lower 336128 rejects by 64), and the
-// independently justified 336640 ceiling for the adjacent-period slice (two
-// merged builds 336463 and 336462, margin 177; lower 336384 rejects by 79).
+// independently justified 336640 ceiling for the adjacent-period slice on
+// b69eea7d7 (two merged builds 336463 and 336462, margin 177; lower 336384
+// rejects by 79), and the independently justified 336896 ceiling for the
+// bounded homepage reads (two merged builds 336673 and 336672; margin 223;
+// lower 336640 rejects by 33).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -434,10 +437,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   336128: { intervalBytes: 335977, exactBytes: 336128, overBytes: 336129 },
   336384: { intervalBytes: 336192, exactBytes: 336384, overBytes: 336385 },
   336640: { intervalBytes: 336463, exactBytes: 336640, overBytes: 336641 },
+  336896: { intervalBytes: 336673, exactBytes: 336896, overBytes: 336897 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640`;
+  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896`;
 
 test("shipping budget: server gzip allocation is explicitly approved", () => {
   assert.ok(
@@ -447,17 +451,19 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
 });
 
 // Client js raw and gzip allocations follow the same rule: explicit ceilings
-// per axis, the 257024/103168 baseline and the 257536/103680
-// admin-orientation allocation (merged build 257039 raw / 103569 gzip on the
-// earlier base; the lower 257024/103168 ceilings reject by 15/401), plus the
-// 103424 client gzip allocation (merged-tree worst 103302, margin 122; the
-// lower 103168 ceiling rejects by 134). Any other loaded ceiling fails its
-// allocation control and its boundary cases.
+// per axis — raw 257024 (baseline), 257536 (admin-orientation; merged build
+// 257039 on the earlier base, which the lower 257024 ceiling rejects by 15)
+// and 258048 (featured editorial-limits; merged build 257638, which the lower
+// 257536 ceiling rejects by 102); gzip 103168 (baseline), 103424 (merged-tree
+// worst 103302, margin 122; the lower 103168 ceiling rejects by 134) and
+// 103680 (merged build 103569, which the lower 103168 ceiling rejects by 401).
+// Any other loaded ceiling fails its allocation control and its boundary cases.
 const SHIPPING_CLIENT_RAW_CAP = shippingClientBudget?.maxRawBytes;
 const SHIPPING_CLIENT_GZIP_CAP = shippingClientBudget?.maxGzipBytes;
 const SHIPPING_CLIENT_RAW_ALLOCATIONS = {
   257024: { intervalBytes: 255856, exactBytes: 257024, overBytes: 257025 },
   257536: { intervalBytes: 257039, exactBytes: 257536, overBytes: 257537 },
+  258048: { intervalBytes: 257638, exactBytes: 258048, overBytes: 258049 },
 };
 const SHIPPING_CLIENT_GZIP_ALLOCATIONS = {
   103168: { exactBytes: 103168, overBytes: 103169 },
@@ -466,7 +472,7 @@ const SHIPPING_CLIENT_GZIP_ALLOCATIONS = {
 };
 const SHIPPING_CLIENT_RAW_UNSUPPORTED =
   `unsupported client raw allocation ${String(SHIPPING_CLIENT_RAW_CAP)}: ` +
-  `expected one of 257024, 257536`;
+  `expected one of 257024, 257536, 258048`;
 const SHIPPING_CLIENT_GZIP_UNSUPPORTED =
   `unsupported client gzip allocation ${String(SHIPPING_CLIENT_GZIP_CAP)}: ` +
   `expected one of 103168, 103424, 103680`;
@@ -612,6 +618,71 @@ test("pending budget: 336640 server gzip cases execute before the shipping cap c
         if (check.files !== undefined) assert.ok(check.files <= check.maxFiles, entry.id);
       }
       assert.equal(result.logs.includes("kit perf budget: every Kit asset fits."), want.code === 0);
+    });
+  }
+});
+
+// Main growth superseded the earlier 336640 composition evidence. Preserve
+// that allocation and the homepage's 336896 literals; exercise the current
+// adjacent-period measurement independently before either fragment changes.
+test("pending budget: current adjacent-period server gzip requires 336896", async (t) => {
+  assert.ok(
+    Object.hasOwn(SHIPPING_SERVER_GZIP_ALLOCATIONS, "336896"),
+    "pending 336896 server gzip allocation must be explicitly approved",
+  );
+  for (const { name, bytes, ceiling, code, errors } of [
+    {
+      name: "lower aligned step rejects the measured interval",
+      bytes: 336871,
+      ceiling: 336640,
+      code: 1,
+      errors: ["kit perf budget: server js: gzip 336871B over 336640B"],
+    },
+    { name: "measured interval", bytes: 336871, ceiling: 336896, code: 0, errors: [] },
+    { name: "exact ceiling", bytes: 336896, ceiling: 336896, code: 0, errors: [] },
+    {
+      name: "one byte over",
+      bytes: 336897,
+      ceiling: 336896,
+      code: 1,
+      errors: ["kit perf budget: server js: gzip 336897B over 336896B"],
+    },
+  ]) {
+    await t.test(name, (t) => {
+      const budget = JSON.parse(SHIPPING_BUDGET_BYTES.toString("utf8"));
+      budget.server.js.maxGzipBytes = ceiling;
+      const fx = makeShippingFixture(
+        t,
+        "kit.server.js",
+        "gzip",
+        bytes,
+        Buffer.from(JSON.stringify(budget)),
+      );
+      const result = runJson(fx.root);
+      assert.equal(result.code, code, result.errors.join("\n"));
+      assert.equal(result.report.exitCode, code);
+      assert.equal(result.report.ok, code === 0);
+      assert.deepEqual(result.errors, errors);
+      assert.deepEqual(
+        result.report.groups.map((entry) => entry.id),
+        SHIPPING_GROUPS,
+      );
+      for (const entry of result.report.groups) {
+        const status = entry.id === "kit.server.js" && code === 1 ? "fail" : "pass";
+        assert.equal(entry.status, status);
+        assert.equal(entry.checks.length, 1);
+        const check = entry.checks[0];
+        assert.equal(check.status, status);
+        if (entry.id === "kit.server.js") {
+          assert.equal(check.gzipBytes, bytes);
+          assert.equal(check.maxGzipBytes, ceiling);
+        } else {
+          assert.ok(check.gzipBytes <= check.maxGzipBytes, entry.id);
+        }
+        assert.ok(check.rawBytes <= check.maxRawBytes, entry.id);
+        if (check.files !== undefined) assert.ok(check.files <= check.maxFiles, entry.id);
+      }
+      assert.equal(result.logs.includes("kit perf budget: every Kit asset fits."), code === 0);
     });
   }
 });
@@ -774,6 +845,25 @@ function shippingServerGzipCases(cap = SHIPPING_SERVER_GZIP_CAP) {
       },
     ];
   }
+  if (cap === 336896) {
+    return [
+      {
+        name: "server gzip newly allowed interval",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 336673,
+      },
+      { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 336896 },
+      {
+        name: "server gzip one byte over",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 336897,
+        ceiling: 336896,
+        breach: true,
+      },
+    ];
+  }
   return [
     { name: "server gzip newly allowed interval", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
     { name: "server gzip exact ceiling", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
@@ -815,6 +905,25 @@ function shippingClientRawCases() {
         axis: "raw",
         bytes: 257537,
         ceiling: 257536,
+        breach: true,
+      },
+    ];
+  }
+  if (SHIPPING_CLIENT_RAW_CAP === 258048) {
+    return [
+      {
+        name: "client raw newly allowed interval",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 257638,
+      },
+      { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 258048 },
+      {
+        name: "client raw one byte over",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 258049,
+        ceiling: 258048,
         breach: true,
       },
     ];

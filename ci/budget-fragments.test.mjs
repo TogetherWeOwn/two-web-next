@@ -24,9 +24,12 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // (ci/kit-perf-budget.json and ci/bundle-budget.json at the split commit),
 // plus the raise that landed on main during the split review and was
 // ported into its fragment (client.js.maxRawBytes 254976 -> 256000; see
-// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md) and the
+// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md), the
 // server.js.maxGzipBytes 335104 -> 335360 raise (see
-// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md).
+// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md), and the
+// one new-asset fragment ported from an open branch during its post-split
+// merge: public/islands/event-time-from-now.js 2048/1024 (see
+// ci/budgets/decisions/bundle/2026-10-26-event-time-from-now.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
@@ -63,6 +66,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
   "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
+  "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
 };
 
 // sha256 of the frozen legacy-history archives: header + the verbatim
@@ -126,17 +130,19 @@ function kitFixture(t, fragments) {
 // 227; lower 335872 rejects by 29; the next 256B step 336384 was
 // unsupported then); 336384 is the fifth, event-share-honesty allocation
 // (combined worst 336168, margin 216; lower 336128 rejects by 40); 336640 is
-// the sixth, adjacent-period allocation (two merged builds 336463 and 336462,
-// margin 177; lower 336384 rejects by 79). Every other pin stays exact: the
-// oracle rejects any ceiling outside this list, then deep-compares the rest of
-// the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336640];
+// sixth, earlier adjacent-period allocation on b69eea7d7 (two merged builds
+// 336463 and 336462, margin 177; lower 336384 rejects by 79); 336896 is the
+// seventh, current adjacent-period allocation on d6e9491c2 (two merged builds
+// 336871, margin 25; lower 336640 rejects by 231). Every other pin stays exact:
+// the oracle rejects any ceiling outside this list, then deep-compares the
+// rest of the plan.
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336640, 336896];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
@@ -183,8 +189,15 @@ test("shipping oracle admits the measured 336640 server gzip allocation", () => 
   });
 });
 
+test("shipping oracle admits the measured 336896 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 336896 } },
+  });
+});
+
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 336639, 336641, 336896]) {
+  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 336639, 336641, 336895, 336897]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
