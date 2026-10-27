@@ -236,11 +236,25 @@ function shareCopyOf(html: string): ShareCopy {
   };
 }
 
+// Each content leaf's own share description, as raw attribute text: the
+// renderers escape "&", so /rules arrives as "&amp;". Literals on purpose,
+// not the shared source constant, so a copy change fails here too.
+const LEAF_DESCRIPTION = {
+  "/about":
+    "About Together We Own: an adult gaming community since 1998, now open for newcomers to turn up and say hello.",
+  "/faq":
+    "Newcomer FAQ: joining, first week, ranks, events, game picker, tickets, profiles and conduct.",
+  "/rules":
+    "House rules: 18+ only, Respect the room, Voice-first, Play fair &amp; Moderators have the last word.",
+  "/privacy":
+    "Privacy policy: what the website stores, who can see it, and how to ask for deletion.",
+} as const;
+
 // The full rich-unfurl contract for one shareable page: the pre-existing tag
 // set stays intact and exactly one og:image + og:image:alt joins it.
-// description=null pins the content leaves, whose shell passes no share
-// description (og:description and twitter:description stay absent there).
-// Returns the og:image URL for the single-asset + served proofs.
+// description is the exact og:description and twitter:description attribute
+// text; null would pin both tags absent. Returns the og:image URL for the
+// single-asset + served proofs.
 function expectRichUnfurl(
   html: string,
   expected: { canonical: string; description: string | null; page: string },
@@ -630,10 +644,10 @@ describe("Hono leaves emit the brand unfurl image", () => {
   });
 
   it.each([
-    ["/about", null],
-    ["/faq", null],
-    ["/rules", null],
-    ["/privacy", null],
+    ["/about", LEAF_DESCRIPTION["/about"]],
+    ["/faq", LEAF_DESCRIPTION["/faq"]],
+    ["/rules", LEAF_DESCRIPTION["/rules"]],
+    ["/privacy", LEAF_DESCRIPTION["/privacy"]],
     ["/join", JOIN_INTRO],
   ] as const)("%s carries the brand image", async (path, description) => {
     const res = await app.request(path, {}, leafEnv);
@@ -652,7 +666,7 @@ describe("Hono unfurl URLs stay absolute on the canonical host", () => {
     const leaf = await (await app.request("/about", {}, { ...leafEnv, APP_URL: slashed })).text();
     const leafImage = expectRichUnfurl(leaf, {
       canonical: `${APP_URL}/about`,
-      description: null,
+      description: LEAF_DESCRIPTION["/about"],
       page: "Hono /about (slashed APP_URL)",
     });
     expect(leafImage.startsWith(`${APP_URL}/`), "leaf image is absolute on the host").toBe(true);
@@ -683,10 +697,10 @@ describe("Kit leaves emit the same brand unfurl image", () => {
   }, 60_000);
 
   it.each([
-    ["about", "/about", null],
-    ["faq", "/faq", null],
-    ["rules", "/rules", null],
-    ["privacy", "/privacy", null],
+    ["about", "/about", LEAF_DESCRIPTION["/about"]],
+    ["faq", "/faq", LEAF_DESCRIPTION["/faq"]],
+    ["rules", "/rules", LEAF_DESCRIPTION["/rules"]],
+    ["privacy", "/privacy", LEAF_DESCRIPTION["/privacy"]],
   ] as const)("%s carries the brand image", async (leaf, path, description) => {
     const render = {
       about: kit.renderAbout,
@@ -779,10 +793,10 @@ describe("one static brand asset across every leaf and renderer", () => {
   it("all twelve renders point at a single served image URL", async () => {
     const honoPages: Array<[string, string, string | null]> = [
       [EVENT_PATH, canonicalUrl(APP_URL, EVENT_PATH), "Bring a friend and a board."],
-      ["/about", canonicalUrl(APP_URL, "/about"), null],
-      ["/faq", canonicalUrl(APP_URL, "/faq"), null],
-      ["/rules", canonicalUrl(APP_URL, "/rules"), null],
-      ["/privacy", canonicalUrl(APP_URL, "/privacy"), null],
+      ["/about", canonicalUrl(APP_URL, "/about"), LEAF_DESCRIPTION["/about"]],
+      ["/faq", canonicalUrl(APP_URL, "/faq"), LEAF_DESCRIPTION["/faq"]],
+      ["/rules", canonicalUrl(APP_URL, "/rules"), LEAF_DESCRIPTION["/rules"]],
+      ["/privacy", canonicalUrl(APP_URL, "/privacy"), LEAF_DESCRIPTION["/privacy"]],
       ["/join", canonicalUrl(APP_URL, "/join"), JOIN_INTRO],
     ];
     const images = new Set<string>();
@@ -799,10 +813,14 @@ describe("one static brand asset across every leaf and renderer", () => {
         canonicalUrl(APP_URL, EVENT_PATH),
         "Bring a friend and a board.",
       ],
-      [kit.renderAbout(data.about!), canonicalUrl(APP_URL, "/about"), null],
-      [kit.renderFaq(data.faq!), canonicalUrl(APP_URL, "/faq"), null],
-      [kit.renderRules(data.rules!), canonicalUrl(APP_URL, "/rules"), null],
-      [kit.renderPrivacy(data.privacy!), canonicalUrl(APP_URL, "/privacy"), null],
+      [kit.renderAbout(data.about!), canonicalUrl(APP_URL, "/about"), LEAF_DESCRIPTION["/about"]],
+      [kit.renderFaq(data.faq!), canonicalUrl(APP_URL, "/faq"), LEAF_DESCRIPTION["/faq"]],
+      [kit.renderRules(data.rules!), canonicalUrl(APP_URL, "/rules"), LEAF_DESCRIPTION["/rules"]],
+      [
+        kit.renderPrivacy(data.privacy!),
+        canonicalUrl(APP_URL, "/privacy"),
+        LEAF_DESCRIPTION["/privacy"],
+      ],
       [kit.renderJoin(data.join!), canonicalUrl(APP_URL, "/join"), JOIN_INTRO],
     ];
     for (const [html, canonical, description] of kitPages) {
