@@ -265,6 +265,7 @@ export async function main(
     log = console.log,
     logFile,
     diagnosisFile,
+    discoveryOptions = {},
   } = {},
 ) {
   if (argv.length === 0) {
@@ -301,7 +302,7 @@ export async function main(
 
   let found;
   try {
-    found = await lib.discoverEventPath(origin, fetchImpl);
+    found = await lib.discoverEventPath(origin, fetchImpl, discoveryOptions);
   } catch (error) {
     // An origin that does not answer GET /events.rss is itself the finding.
     const failure = `Event discovery failed, origin not healthy: ${error.message}`;
