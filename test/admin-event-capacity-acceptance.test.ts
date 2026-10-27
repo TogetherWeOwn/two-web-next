@@ -32,7 +32,10 @@ import { runInNewContext } from "node:vm";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, it } from "vitest";
+import { resolveKitEventEdit } from "../src/admin/kit-event-edit";
+import { listRoster } from "../src/admin/reads";
 import { adminApp } from "../src/admin/routes";
+import { getEvent } from "../src/admin/store-event-reads";
 import { CAPACITY_BELOW_GOING } from "../src/events/waitlist";
 import { createMemorySessionStore } from "../src/sessions";
 import {
@@ -83,6 +86,16 @@ function adviceText(field: string): string {
   const el = field.match(/<[^>]*data-testid="capacity-advice"[^>]*>([\s\S]*?)<\/[^>]+>/)?.[1];
   expect(el, "capacity advice element is missing beside the capacity input").toBeDefined();
   return text(el!);
+}
+
+/** The capacity input's aria-describedby tokens, exactly as a screen reader
+ * resolves them. Throws when the input or the attribute is absent. */
+function describedBy(field: string): string {
+  const input = field.match(/<input\b[^>]*name="capacity"[^>]*>/)?.[0];
+  expect(input, "capacity input is missing").toBeDefined();
+  const value = input!.match(/\baria-describedby="([^"]*)"/)?.[1];
+  expect(value, "capacity input has no aria-describedby").toBeDefined();
+  return value!;
 }
 
 const FORM = {
@@ -252,6 +265,9 @@ for (const twin of ["Hono", "Kit"] as const satisfies Renderer[]) {
         const input = field.match(/<input\b[^>]*name="capacity"[^>]*>/)![0]!;
         expect(input).not.toMatch(/\bmin=|\bmax=|\bdisabled\b/);
         expect(input).toContain(opts.capacity === null ? 'value=""' : `value="${opts.capacity}"`);
+        // Focusing the input must announce the Going snapshot and the advice,
+        // in that order, on both twins.
+        expect(describedBy(field)).toBe("capacity-snapshot capacity-advice");
         expect(html).not.toMatch(/<button\b[^>]*data-testid="save-event"[^>]*disabled/);
         expect(text(field)).not.toMatch(/guarantee|reserv/i);
       },
@@ -333,6 +349,63 @@ for (const twin of ["Hono", "Kit"] as const satisfies Renderer[]) {
     });
   });
 }
+
+describe("ECC-06 error state: the capacity description keeps snapshot, advice and error together", () => {
+  const message = "Capacity is a headcount from 1 to 2147483647, or empty for unlimited.";
+
+  it("Kit keeps all three references, error last, and flags the input invalid", async () => {
+    // The Kit load never originates a field error: the 422 re-render after a
+    // refused save is Hono-owned, so the Kit page renders a refused draft from
+    // the load-shaped view (the admin validation-correction precedent). The
+    // view itself comes from the real resolver over the fixture reads.
+    const fixture = capacityDb({ capacity: 8, going: 3 });
+    const outcome = await resolveKitEventEdit(
+      key,
+      {},
+      {
+        db: fixture.db,
+        get: getEvent,
+        list: (d, k, q) => listRoster(d, k, q, { occupied: true }),
+      },
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") return;
+    const html = kit.html({
+      view: {
+        ...outcome.view,
+        values: { ...outcome.view.values, capacity: "abc" },
+        errors: { capacity: message },
+        hasErrors: true,
+        isDraft: true,
+      },
+    });
+    const field = capacityField(html);
+    expect(describedBy(field)).toBe("capacity-snapshot capacity-advice f-capacity-error");
+    const input = field.match(/<input\b[^>]*name="capacity"[^>]*>/)![0]!;
+    expect(input).toContain('aria-invalid="true"');
+    const error = field.match(/<p[^>]*data-testid="error-capacity"[^>]*>([\s\S]*?)<\/p>/)![1]!;
+    expect(text(error)).toBe(message);
+  });
+
+  it("Hono refused-save re-render resolves cleanly: the panel is absent, so only the error is described", async () => {
+    // Invariant a screen reader depends on: every token names a node that is
+    // rendered. The Hono 422 re-render carries no fresh aggregate, so it
+    // renders no panel and the field helper describes only its error. If the
+    // re-render ever grows a snapshot, this case fails first: re-pin the
+    // three-token shape here instead of describing nodes that are not on the page.
+    const fixture = capacityDb({ status: "draft", capacity: 8, going: 3 });
+    const response = await postCapacity(fixture, "abc");
+    expect(response.status).toBe(422);
+    const field = capacityField(await response.text());
+    expect(field).not.toContain('data-testid="capacity-snapshot"');
+    expect(field).not.toContain('data-testid="capacity-advice"');
+    expect(describedBy(field)).toBe("f-capacity-error");
+    const input = field.match(/<input\b[^>]*name="capacity"[^>]*>/)![0]!;
+    expect(input).toContain('aria-invalid="true"');
+    const error = field.match(/<p[^>]*data-testid="error-capacity"[^>]*>([\s\S]*?)<\/p>/)![1]!;
+    expect(text(error)).toBe(message);
+  });
+});
 
 describe("ECC Hono POST: the locked save keeps the last word", () => {
   it("ECC-C04 CONTROL an RSVP landing after the snapshot still refuses under lock with the draft kept", async () => {
@@ -504,7 +577,7 @@ describe("ECC-08 progressive island: the proposed cap explained as it is typed",
     };
   }
 
-  it("discovers one served island that both twins share and drives the typing matrix", async () => {
+  async function discoverDriver(): Promise<{ src: string; shipped: string }> {
     const hono = await readRoster("Hono", capacityDb({ capacity: 8, going: 3 }), "", kit);
     expect(hono.status).toBe(200);
     const honoHtml = await hono.text();
@@ -512,22 +585,23 @@ describe("ECC-08 progressive island: the proposed cap explained as it is typed",
       (m) => m[1]!,
     );
     expect(served.length).toBeGreaterThan(0);
-    const driver = served.find((src) => {
-      const shipped = readFileSync(join(root, "public", src), "utf8");
+    const src = served.find((candidate) => {
+      const shipped = readFileSync(join(root, "public", candidate), "utf8");
       return shipped.includes("capacity-advice") || shipped.includes("data-occupied");
     });
-    expect(
-      driver,
-      "a served island must progressively explain the proposed capacity",
-    ).toBeDefined();
+    expect(src, "a served island must progressively explain the proposed capacity").toBeDefined();
     // The Kit twin serves the same progressive enhancement.
     const kitHtml = await (
       await readRoster("Kit", capacityDb({ capacity: 8, going: 3 }), "", kit)
     ).text();
-    expect(kitHtml).toContain(driver!);
-
-    const shipped = readFileSync(join(root, "public", driver!), "utf8");
+    expect(kitHtml).toContain(src!);
+    const shipped = readFileSync(join(root, "public", src!), "utf8");
     expect(shipped).not.toContain("setInterval");
+    return { src: src!, shipped };
+  }
+
+  it("discovers one served island that both twins share and drives the typing matrix", async () => {
+    const { shipped } = await discoverDriver();
     const dom = fakeCapacityDom();
     dom.input.value = "8";
     runInNewContext(shipped, dom.sandbox());
@@ -555,5 +629,41 @@ describe("ECC-08 progressive island: the proposed cap explained as it is typed",
     }
     expect(dom.fetches).toEqual([]);
     expect(dom.intervals).toEqual([]);
+  });
+
+  it.each<[string, RegExp]>([
+    ["2", /below|already going|occupied/i],
+    ["", /unlimited/i],
+    ["10", /7 of 10|7\b.*(left|remaining)/i],
+    ["abc", /valid|headcount|2147483647/i],
+  ])(
+    "explains a restored draft %j (saved cap 8) at load, before any input event",
+    async (restored, expected) => {
+      const { shipped } = await discoverDriver();
+      const dom = fakeCapacityDom();
+      // A browser restoring form state without bfcache re-fills the input
+      // before the island runs and fires no input event. The advice must
+      // still explain the restored value as soon as the island loads.
+      dom.input.value = restored;
+      runInNewContext(shipped, dom.sandbox());
+      expect(dom.input.value).toBe(restored);
+      expect(
+        dom.advice.textContent,
+        `restored draft ${JSON.stringify(restored)} against saved cap 8`,
+      ).toMatch(expected);
+      if (restored === "2") expect(dom.advice.textContent).not.toMatch(/5 of 8/i);
+      expect(dom.advice.textContent).not.toMatch(/guarantee|reserv/i);
+      expect(dom.save.attrs["disabled"]).toBeUndefined();
+      expect(dom.fetches).toEqual([]);
+      expect(dom.intervals).toEqual([]);
+    },
+  );
+
+  it("leaves a restored value that equals the saved cap untouched at load", async () => {
+    const { shipped } = await discoverDriver();
+    const dom = fakeCapacityDom();
+    dom.input.value = "8";
+    runInNewContext(shipped, dom.sandbox());
+    expect(dom.advice.textContent).toBe("");
   });
 });
