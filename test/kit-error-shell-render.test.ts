@@ -32,7 +32,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone CI helper has no declaration file (single-line import: wrapping would detach this from TS7016).
 import { assertNoViolations as gateAssert, WCAG_AA_TAGS as gateTags } from "../ci/a11y-policy.mjs";
 import { kitErrorCopy, type KitErrorStatus } from "../src/kit-errors";
+import { registerAdminReadRetryBrowserAcceptance } from "./helpers/admin-read-retry-browser-acceptance";
 import { registerPastArchiveBrowserAcceptance } from "./helpers/past-archive-search-browser-acceptance";
+import { registerPastSearchContextAcceptance } from "./helpers/past-search-context-browser-acceptance";
 
 const WCAG_AA_TAGS = gateTags as string[];
 const assertNoViolations = gateAssert as (
@@ -102,6 +104,10 @@ const CASES: Array<{ code: KitErrorStatus; links: ExpectedLink[]; searchForm?: b
     code: 410,
     links: [{ testid: "error-events", name: "Browse all events", href: "/events" }, HOME],
     searchForm: true,
+  },
+  {
+    code: 422,
+    links: [{ testid: "error-events", name: "Back to events", href: "/events" }, HOME],
   },
   { code: 429, links: [INVITE_LINK, HOME] },
   { code: 500, links: [INVITE_LINK, HOME] },
@@ -232,6 +238,8 @@ export function renderErrorShell(code, adminBack) {
     });
 
     registerPastArchiveBrowserAcceptance(() => browser);
+    registerPastSearchContextAcceptance(() => browser);
+    registerAdminReadRetryBrowserAcceptance(() => browser);
 
     async function loadShell(
       code: KitErrorStatus,
@@ -261,6 +269,11 @@ export function renderErrorShell(code, adminBack) {
       it(`${code}: one heading, named recovery links in focus order, no echoed failure, axe clean`, async () => {
         await loadShell(code);
         const copy = kitErrorCopy(code);
+        if (code === 422) {
+          expect(copy.title).toBe("Events");
+          expect(await page.getByTestId("error-invite").count()).toBe(0);
+          expect(await page.getByTestId("error-retry").count()).toBe(0);
+        }
 
         // String evaluate (the featured-native-length pattern): the root
         // tsconfig has no DOM lib, so the callback runs untyped in the page

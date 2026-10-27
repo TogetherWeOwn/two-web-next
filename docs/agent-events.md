@@ -40,10 +40,21 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
   per credential hash (anonymous per IP) before auth and the audit write; refused hits write no hit row.
   Over-budget 429s audit on a ~1% sample (`SHIELD_REFUSAL_AUDIT_RATE`): each sampled row carries the
   refusal's own request_id, bucket class only (credential sha256 vs anonymous marker, never raw identity),
-  `denied`/`rate_limited`. Every refusal increments an in-memory per-class counter surfaced on the sampled
-  `agent-events.shield.refusal_sampled` warn (`bucket_class`, running `refusals`, `request_id`); to estimate
-  flood volume, multiply sampled rows by ~100 or read the latest warn count. Grantless (missing/unknown
-  grant) 401s write zero audit rows by contract (sampled warn only). Contention 503s keep an exact audit.
+  `denied`/`rate_limited`. Every over-budget verdict increments an in-memory per-class counter. Only final
+  429s take a token from the isolate's log bucket (burst 20, one token per 3 s): on success it warns
+  `agent-events.shield.refused` (`bucket_class`, `outcome`), otherwise it folds into the bounded
+  `agent-events.shield.refused.shed` signal (`dropped` count). Sampled audit timeouts return 503 instead
+  and emit neither refusal code. To estimate flood volume, multiply sampled rows by ~100. Refused warns
+  plus shed drops are a lower-bound signal over the isolate's lifetime, not an exact per-window total:
+  pending drops flush only on a later tokenless refusal, never on idle or a token-bearing refusal, and
+  disappear on isolate restart; a delayed shed can include drops from an earlier window. Grantless (missing/unknown
+  grant) 401s write zero audit rows by contract (sampled warn only). Contention 503s make one bounded
+  `operation_busy` audit attempt in its own short transaction with the admission's lock/statement deadlines
+  and no bucket lock. A completed attempt persists one exact audit row; a timed-out attempt rolls back and
+  persists no row, and keeps the same retryable 503 with the same request_id. Post-verdict
+  stale-hit cleanup stays capped (1000 rows, five-minute cutoff, single-flight) with a 1 ms lock bound
+  and a 250 ms statement budget; cancellation rolls back only the cleanup and defers the drain to a
+  later pass, never changing the decided verdict.
   Receipt window is the latest 50, chronological. Signer/digest/replay protocol assertions are unchanged.
   Replay bodies are bound as text then cast to JSONB objects, independent of Drizzle's client serializers;
   earlier double-encoded JSONB strings remain readable without rewriting the saved receipt.

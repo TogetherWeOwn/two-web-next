@@ -2,6 +2,7 @@ import type { FC } from "hono/jsx";
 import type { Counts } from "../counts";
 import type { Session } from "../env";
 import type { HomeUpcomingRow } from "../events/reads";
+import { groupTeaserEvents } from "../events/teaser-groups";
 import type { VisibleFeatured } from "../featured";
 import { FALLBACK_RANKS } from "../home-copy";
 import { inviteDestination } from "../invite";
@@ -71,13 +72,22 @@ export const Home: FC<{
       */}
         {joinResult ? (
           <JoinResultBanner result={joinResult} />
-        ) : (
-          notice && (
+        ) : notice ? (
+          <>
             <p class="notice" role="status" data-testid="notice">
               {NOTICES[notice]}
             </p>
-          )
-        )}
+            {(notice === "signin_failed" ||
+              notice === "signin_denied" ||
+              notice === "signin_unavailable") && (
+              <p>
+                <a href="/auth/discord" data-testid="notice-retry">
+                  Try signing in again
+                </a>
+              </p>
+            )}
+          </>
+        ) : null}
         <section class="hero" aria-labelledby="home-heading">
           <div class="hero-detail hero-detail-left" aria-hidden="true">
             <span></span>
@@ -188,57 +198,73 @@ export const Home: FC<{
           {upcomingEvents.length > 0 ? (
             <>
               <ul class="facts home-events" data-testid="home-events-list">
-                {upcomingEvents.map((event) =>
-                  event.source === "discord" ? (
-                    <li class="card" data-source="discord" key={`discord-${event.discordId}`}>
-                      <a class="home-event-link" href={inviteUrl} data-testid="home-event-discord">
-                        <p>
-                          <time datetime={event.startsAt.toISOString()}>
-                            {cardTimeLabel(event.startsAt, event.timezone)} (
-                            {isValidZone(event.timezone) ? event.timezone : "UTC"})
-                          </time>
-                        </p>
-                        <h3>{event.title}</h3>
-                        {event.location ? <p>{event.location}</p> : null}
-                        <p>RSVP in Discord</p>
-                      </a>
-                    </li>
-                  ) : (
-                    <li class="card" data-source="canonical" key={`canonical-${event.eventKey}`}>
-                      <a class="home-event-link" href={`/e/${encodeURIComponent(event.eventKey)}`}>
-                        <p>
-                          <time datetime={event.startsAt.toISOString()}>
-                            {cardTimeLabel(event.startsAt, event.timezone)} (
-                            {isValidZone(event.timezone) ? event.timezone : "UTC"})
-                          </time>
-                        </p>
-                        <h3>{event.title}</h3>
-                        {event.location ? <p>{event.location}</p> : null}
-                        <p>
-                          {goingCountText(event.goingCount, event.capacity)}
-                          {/* Full marker, same node and copy as cards and the
+                {groupTeaserEvents(upcomingEvents, new Date()).flatMap((group) => [
+                  <li
+                    class="home-events-group"
+                    data-testid={`home-events-group-${group.key}`}
+                    key={`group-${group.key}`}
+                  >
+                    <h3 class="strap">{group.label}</h3>
+                  </li>,
+                  ...group.events.map((event) =>
+                    event.source === "discord" ? (
+                      <li class="card" data-source="discord" key={`discord-${event.discordId}`}>
+                        <a
+                          class="home-event-link"
+                          href={inviteUrl}
+                          data-testid="home-event-discord"
+                        >
+                          <p>
+                            <time datetime={event.startsAt.toISOString()}>
+                              {cardTimeLabel(event.startsAt, event.timezone)} (
+                              {isValidZone(event.timezone) ? event.timezone : "UTC"})
+                            </time>
+                          </p>
+                          <h3>{event.title}</h3>
+                          {event.location ? <p>{event.location}</p> : null}
+                          <p>RSVP in Discord</p>
+                        </a>
+                      </li>
+                    ) : (
+                      <li class="card" data-source="canonical" key={`canonical-${event.eventKey}`}>
+                        <a
+                          class="home-event-link"
+                          href={`/e/${encodeURIComponent(event.eventKey)}`}
+                        >
+                          <p>
+                            <time datetime={event.startsAt.toISOString()}>
+                              {cardTimeLabel(event.startsAt, event.timezone)} (
+                              {isValidZone(event.timezone) ? event.timezone : "UTC"})
+                            </time>
+                          </p>
+                          <h3>{event.title}</h3>
+                          {event.location ? <p>{event.location}</p> : null}
+                          <p>
+                            {goingCountText(event.goingCount, event.capacity)}
+                            {/* Full marker, same node and copy as cards and the
                               detail lineup. The verdict reads seat occupancy,
                               never the attributable count alone, so the teaser
                               never offers a seat the write path cannot grant;
                               older fixtures without occupancy fall back to the
                               named count (the GoingCountState precedent). */}
-                          {event.capacity !== null &&
-                          (event.goingOccupancy ?? event.goingCount) >= event.capacity ? (
-                            <>
-                              {" · "}
-                              <span data-testid={SPOTS_LEFT_TESTID}>
-                                {spotsLeftText(
-                                  event.goingOccupancy ?? event.goingCount,
-                                  event.capacity,
-                                )}
-                              </span>
-                            </>
-                          ) : null}
-                        </p>
-                      </a>
-                    </li>
+                            {event.capacity !== null &&
+                            (event.goingOccupancy ?? event.goingCount) >= event.capacity ? (
+                              <>
+                                {" · "}
+                                <span data-testid={SPOTS_LEFT_TESTID}>
+                                  {spotsLeftText(
+                                    event.goingOccupancy ?? event.goingCount,
+                                    event.capacity,
+                                  )}
+                                </span>
+                              </>
+                            ) : null}
+                          </p>
+                        </a>
+                      </li>
+                    ),
                   ),
-                )}
+                ])}
               </ul>
               <p>
                 <a href="/events">
@@ -258,9 +284,23 @@ export const Home: FC<{
                   : "Nothing scheduled yet."}
               </h3>
               <p>
-                {eventsUnavailable
-                  ? "We couldn’t load the schedule. The Discord is still open — check there for the next game night."
-                  : "Game nights get posted here. Join the Discord and you’ll hear about the next one."}
+                {eventsUnavailable ? (
+                  <>
+                    We couldn’t load the schedule.{" "}
+                    <a href="/discord" data-testid="home-events-empty-link">
+                      The Discord
+                    </a>{" "}
+                    is still open — check there for the next game night.
+                  </>
+                ) : (
+                  <>
+                    Game nights get posted here.{" "}
+                    <a href="/join" data-testid="home-events-empty-link">
+                      Join the Discord
+                    </a>{" "}
+                    and you’ll hear about the next one.
+                  </>
+                )}
               </p>
             </div>
           )}

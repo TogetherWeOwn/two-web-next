@@ -2,7 +2,7 @@ import { env, waitUntil } from "cloudflare:workers";
 import { discordWidgetHealth, toPublicWidgetSnapshot } from "../../../../src/discord-widget";
 import { HOME_JOIN_RESULT_COPY, JOIN_INTRO } from "../../../../src/home-copy";
 import { inviteDestination } from "../../../../src/invite";
-import { applyJoinPageResponsePolicy } from "../../../../src/join/kit-page";
+import { applyJoinPageResponsePolicy, parseJoinNotice } from "../../../../src/join/kit-page";
 import { safeNext, sanitizeSource } from "../../../../src/join/service";
 import type { PageServerLoad } from "./$types";
 
@@ -37,6 +37,12 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
   // sanitizeSource pin the guards). Same inputs as the Hono handler.
   const next = safeNext(url.searchParams.get("next"));
   const source = sanitizeSource(url.searchParams.get("source"));
+  // The store-down start bounce lands here with ?notice=start-failed so the
+  // member sees why the start failed instead of a silent bounce (E1). Same
+  // exact-match allowlist as the Hono handler: anything else renders the
+  // plain page, so a hostile or mistyped value leaves no trace in the HTML
+  // or the load data.
+  const notice = parseJoinNotice(url.searchParams.get("notice"));
   // One-shot join confirmation (legacy join_result flash): the read-only
   // bridge verifies the signed cookie but never consumes it, so a Kit read
   // can never double-spend a flash. This landing is itself a consumer (like
@@ -75,5 +81,6 @@ export const load: PageServerLoad = async ({ url, request, cookies, setHeaders }
             : "/join/discord",
     appUrl: env.APP_URL,
     joinResult,
+    notice,
   };
 };

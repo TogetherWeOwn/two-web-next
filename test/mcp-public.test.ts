@@ -368,7 +368,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     for (const path of ["/mcp/extra", "/mcp/"]) {
       const res = await app.request(path, { method: "POST", headers: plain, body: "{}" }, env);
       expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({ error: "cross_origin" });
+      expect(await res.json()).toEqual({ error: "cross_origin", request_id: expect.any(String) });
     }
     // Past the guard (same-origin callers), routing still 404s non-exact paths.
     for (const path of ["/mcp/extra", "/mcp/"]) {
@@ -385,7 +385,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     for (const method of ["PUT", "PATCH", "DELETE"]) {
       const res = await app.request("/mcp", { method, headers: plain }, env);
       expect(res.status).toBe(403);
-      expect(await res.json()).toEqual({ error: "cross_origin" });
+      expect(await res.json()).toEqual({ error: "cross_origin", request_id: expect.any(String) });
     }
     const preflight = await app.request(
       "/mcp",

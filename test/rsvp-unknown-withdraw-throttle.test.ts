@@ -189,7 +189,10 @@ describe.skipIf(!process.env.DATABASE_URL)("unknown-event withdraw throttle (age
     for (let i = 0; i < BURST; i++) {
       const res = await call("DELETE", UNKNOWN_KEY, user);
       expect(res.status, `unknown DELETE #${i + 1}`).toBe(404);
-      expect(await res.json(), `unknown DELETE body #${i + 1}`).toEqual({ error: "not_found" });
+      expect(await res.json(), `unknown DELETE body #${i + 1}`).toEqual({
+        error: "not_found",
+        request_id: expect.any(String),
+      });
     }
     expect(await hits(user)).toBe(0);
 
@@ -204,7 +207,10 @@ describe.skipIf(!process.env.DATABASE_URL)("unknown-event withdraw throttle (age
     for (let i = 0; i < BURST; i++) {
       const res = await call("DELETE", "not-a-key", user);
       expect(res.status, `forged DELETE #${i + 1}`).toBe(404);
-      expect(await res.json(), `forged DELETE body #${i + 1}`).toEqual({ error: "not_found" });
+      expect(await res.json(), `forged DELETE body #${i + 1}`).toEqual({
+        error: "not_found",
+        request_id: expect.any(String),
+      });
     }
     expect(await hits(user)).toBe(0);
 

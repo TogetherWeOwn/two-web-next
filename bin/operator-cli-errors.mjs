@@ -55,6 +55,12 @@ export const OPERATOR_ERRORS = Object.freeze({
     next: "Configure verified TLS in the environment URL; do not disable verification.",
     exitCode: 2,
   },
+  E_CONFIRM: {
+    message:
+      "Refusing: --apply with --target staging or --target production requires --confirm <host>.",
+    next: "Re-run with --confirm <host> where <host> exactly matches the DATABASE_URL host; a dry-run shows the requirement.",
+    exitCode: 2,
+  },
   LOCK_TIMEOUT: {
     message: "operation failed; changes rolled back (lock timeout 55P03).",
     next: "Retry once the lock clears; verify with a dry-run first.",
