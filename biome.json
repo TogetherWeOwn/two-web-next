@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -55,7 +55,8 @@
         "public/event-theme.css",
         "ci/a11y.mjs",
         "ci/featured-proof/**",
-        "public/islands/**"
+        "public/islands/**",
+        "**/*.md"
       ],
       "formatter": { "enabled": false }
     },
