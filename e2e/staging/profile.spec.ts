@@ -1,5 +1,5 @@
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
-import { test, expect } from "./fixtures";
+import { test, expect, memberStorageState, persistRotatedStorageState } from "./fixtures";
 import { loginQaMember } from "./qa-login";
 
 // Fresh member session per file: event pages rotate the bearer on read, so a
@@ -9,6 +9,11 @@ test.beforeAll(async () => {
   // waits get their own budget (qa-login-retry.mjs), one login here.
   test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   await loginQaMember();
+});
+
+// The next test creates a fresh context from disk; keep its bearer current.
+test.afterEach(async ({ context }) => {
+  await persistRotatedStorageState(context, memberStorageState);
 });
 
 // CI keyboard flow verbatim, against the staging QA member: 1100 ms spam
