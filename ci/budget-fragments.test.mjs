@@ -27,15 +27,15 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md) and the
 // server.js.maxGzipBytes 335104 -> 335360 raise (see
 // ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md), then the
-// featured editorial-limits raises (server.js.maxGzipBytes 335360 -> 335872,
-// client.js.maxRawBytes 256000 -> 257536; see
+// featured editorial-limits raises (server.js.maxGzipBytes 335872 -> 336128,
+// client.js.maxRawBytes 257024 -> 257536; see
 // ci/budgets/decisions/kit-perf/2026-10-27-featured-editorial-limits-server-gzip.md
 // and 2026-10-27-featured-editorial-limits-client-raw.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
-  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335872, maxFiles: 126 } },
+  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 336128, maxFiles: 126 } },
   client: {
     js: { maxRawBytes: 257536, maxGzipBytes: 103168, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
@@ -120,31 +120,32 @@ function kitFixture(t, fragments) {
   return root;
 }
 
-// Admitted server.js maxGzipBytes allocations. 335104 is the historical
-// baseline; 335360 is the second, independently measured saved-review
-// allocation (combined worst 335164, margin 196; lower 335104 rejects by 60);
-// 335872 is the featured editorial-limits allocation (merged worst 335653,
-// margin 219; lower 335616 rejects by 37, so 335616 stays unsupported).
-// Admitted client.js maxRawBytes allocations: 256000 is the baseline; 257536
-// is the featured editorial-limits allocation (merged 256932, margin 604;
-// 257024 is 92B above the measurement and inside rebuild-to-rebuild churn
-// of the surrounding ladder, so it stays unsupported). The
-// SHIPPING_KIT_BUDGET pin above carries the current shipped ceilings. Every
-// other pin stays exact: the oracle rejects any ceiling outside these lists,
-// then deep-compares the rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872];
-const SHIPPING_CLIENT_RAW_ALLOCATIONS = [256000, 257536];
+// Admitted server.js maxGzipBytes allocations. The SHIPPING_KIT_BUDGET pin
+// above (335104) is the historical baseline; 335360 is the second,
+// independently measured saved-review allocation (combined worst 335164,
+// margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
+// unsupported); 335872 is the third, independently measured allocation
+// (measured 335639, margin 233; lower 335616 rejects by 23; the next 256B
+// step 336128 is supported below); 336128 is the featured editorial-limits
+// allocation (merged worst 335958, margin 170; lower 335872 rejects by 86).
+// Admitted client.js maxRawBytes allocations: 257024 is the event-detail
+// baseline; 257536 is the featured editorial-limits allocation (merged
+// 257124, margin 412; 257024 rejects by 100). Every other pin stays exact:
+// the oracle rejects any ceiling outside these lists, then deep-compares the
+// rest of the plan.
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128];
+const SHIPPING_CLIENT_RAW_ALLOCATIONS = [257024, 257536];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128`,
   );
   const raw = actual?.client?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_CLIENT_RAW_ALLOCATIONS.includes(raw),
-    `unsupported client raw allocation ${String(raw)}: expected one of 256000, 257536`,
+    `unsupported client raw allocation ${String(raw)}: expected one of 257024, 257536`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
@@ -174,8 +175,15 @@ test("shipping oracle admits the measured 335872 server gzip allocation", () => 
   });
 });
 
-test("shipping oracle admits the baseline and the measured 257536 client raw allocation", () => {
-  for (const maxRawBytes of [256000, 257536]) {
+test("shipping oracle admits the measured 336128 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 336128 } },
+  });
+});
+
+test("shipping oracle admits the event-detail baseline and the measured 257536 client raw allocation", () => {
+  for (const maxRawBytes of [257024, 257536]) {
     assertShippingKitBudget({
       ...SHIPPING_KIT_BUDGET,
       client: {
@@ -187,7 +195,7 @@ test("shipping oracle admits the baseline and the measured 257536 client raw all
 });
 
 test("shipping oracle rejects an unsupported client raw allocation", () => {
-  for (const maxRawBytes of [256001, 257024, 257535, 257537, 258048]) {
+  for (const maxRawBytes of [257025, 257535, 257537, 258048]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       client: {
@@ -207,7 +215,7 @@ test("shipping oracle rejects an unsupported client raw allocation", () => {
 });
 
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616, 335873]) {
+  for (const maxGzipBytes of [335105, 335359, 335616, 336129]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
@@ -230,8 +238,8 @@ test("shipping oracle rejects off-axis drift at an admitted allocation", () => {
     ["worker gzip", (plan) => (plan.worker["_worker.js"].maxGzipBytes += 1)],
     ["startup", (plan) => (plan.startup.maxMs += 1)],
   ];
-  // Every admitted server gzip x client raw pair, in both orders, must still
-  // pin the remaining axes exactly.
+  // Every admitted server gzip x client raw pair must still pin the
+  // remaining axes exactly.
   for (const serverGzip of SHIPPING_SERVER_GZIP_ALLOCATIONS) {
     for (const clientRaw of SHIPPING_CLIENT_RAW_ALLOCATIONS) {
       for (const [label, drift] of drifts) {
