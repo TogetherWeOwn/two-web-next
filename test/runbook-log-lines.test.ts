@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { dispatchHookRequest, type HookDispatchDeps } from "../src/route-ownership";
 // @ts-expect-error Standalone CI tooling has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 import { RECONCILE_CRON } from "../src/jobs/constants";
@@ -845,11 +846,88 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) {
       const start = source.indexOf(`console.warn("${message}"`);
       expect(start, `missing warn "${message}"`).toBeGreaterThanOrEqual(0);
-      const payload = source.slice(start, source.indexOf("});", start));
-      expect(payload).toMatch(/exception: \(err as Error\)\?\.constructor\?\.name \?\? "unknown"/);
+      const payload = source.slice(start, source.indexOf("});", start) + 3);
+      // Pin the complete call, including the closing delimiters: a safe
+      // exception alongside an added field or argument is not class-only.
+      expect(payload).toBe(
+        `console.warn("${message}", {\n        exception: (err as Error)?.constructor?.name ?? "unknown",\n      });`,
+      );
       expect(payload).not.toMatch(/\.message|String\(err|request_id/);
     }
   });
+
+  for (const { message, provider, path, route } of [
+    { message: BRIDGE, provider: "sessionFor", path: "/profile", route: "/profile" },
+    { message: PROBE, provider: "authStatusCookieFor", path: "/admin", route: "/admin" },
+    {
+      message: ROTATION,
+      provider: "eventDetailRotationFor",
+      path: "/e/:key",
+      route: "/e/[key]",
+    },
+    { message: ADMIN, provider: "adminRenewalFor", path: "/admin", route: "/admin" },
+  ] as const) {
+    it.each([
+      { failure: new Error("private-error-sentinel"), exception: "Error" },
+      { failure: new TypeError("private-error-sentinel"), exception: "TypeError" },
+      { failure: null, exception: "unknown" },
+    ])(
+      `emits only the message and exception class when ${provider} rejects ($exception)`,
+      async ({ failure, exception }) => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const appUrl = "https://next.example.test";
+          const pathname = path.replace(":key", "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+          const request = new Request(`${appUrl}${pathname}`);
+          const reject = vi.fn(async () => {
+            throw failure;
+          });
+          const deps: HookDispatchDeps = {
+            appUrl,
+            manifest: [
+              {
+                method: "GET",
+                path,
+                enabled: true,
+                reads: { resource: "runbook", action: "view", route: "runbook.warn" },
+              },
+            ],
+            honoFetch: vi.fn(async () => new Response("hono")),
+            resolve: vi.fn(
+              async () => new Response("kit", { headers: { "content-type": "text/html" } }),
+            ),
+            accessSink: async () => async () => true,
+            sessionFor: async () => ({
+              status: "authenticated",
+              session: {
+                userId: "100000000000000101",
+                username: "fixture",
+                avatar: null,
+                member: true,
+                moderator: true,
+              },
+              returnTo: null,
+              joinResult: null,
+              expiredWrite: null,
+            }),
+            [provider]: reject,
+          };
+          const response = await dispatchHookRequest(
+            { request, url: new URL(request.url), route: { id: route } },
+            deps,
+          );
+          expect(reject).toHaveBeenCalledTimes(1);
+          expect(response.status).toBe(200);
+          expect(response.headers.getSetCookie()).toEqual([]);
+          // Compare all calls and every argument, not just one safe field in an
+          // otherwise unrestricted payload (or a second, secret-bearing call).
+          expect(warn.mock.calls).toEqual([[message, { exception }]]);
+        } finally {
+          warn.mockRestore();
+        }
+      },
+    );
+  }
 
   it("documents each message as class-only in its row", () => {
     for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) {
