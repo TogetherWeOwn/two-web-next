@@ -22,7 +22,7 @@ import { buildRobots, buildSitemapUrls, crawlableEvents, renderSitemap } from ".
 
 // Pre-rendered once at module load, so the request path performs zero reads
 // of any kind (see the `/privacy` comment below).
-const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN);
+const PRIVACY_HTML = renderPolicyMarkdown(POLICY_MARKDOWN, { navigation: true });
 
 async function readSitemapEvents(c: { env: Env }) {
   let db;

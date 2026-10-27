@@ -54,7 +54,7 @@ describe("/privacy versioned policy page (N1)", () => {
     expect(html).toContain('data-testid="privacy-version"');
     expect(html).toContain("Version 6");
     expect(html).toContain('data-testid="privacy-policy"');
-    expect(html).toContain("<h2>What we store</h2>");
+    expect(html).toContain('<h2 id="policy-what-we-store">What we store ');
     expect(html).toContain("<strong>Your Discord identity</strong>");
     expect(html).toContain("<code>identify</code>");
     expect(html).toContain("<code>guilds.join</code>");
@@ -165,7 +165,7 @@ describe("policy versioning contract", () => {
     const html = renderPolicyMarkdown(
       "## Title\n\nHello **bold** and `code`.\n\n- **First item** — lead,\n  wrapped continuation.\n- Second.\n",
     );
-    expect(html).toContain("<h2>Title</h2>");
+    expect(html).toContain('<h2 id="policy-title">Title</h2>');
     expect(html).toContain("<p>Hello <strong>bold</strong> and <code>code</code>.</p>");
     expect(html).toContain("<li><strong>First item</strong> — lead, wrapped continuation.</li>");
   });

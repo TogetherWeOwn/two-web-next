@@ -109,7 +109,7 @@ describe("Kit privacy port: safe rendering and chrome", () => {
     expect(hostile).not.toContain("<a ");
     // The constructs the policy uses still render richly.
     const rich = renderPolicyMarkdown("## Title\n\nHello **bold** and `code`.\n");
-    expect(rich).toContain("<h2>Title</h2>");
+    expect(rich).toContain('<h2 id="policy-title">Title</h2>');
     expect(rich).toContain("<strong>bold</strong>");
     expect(rich).toContain("<code>code</code>");
   });
