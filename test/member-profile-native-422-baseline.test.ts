@@ -567,6 +567,75 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
           }
         });
       }
+
+      for (const activation of ["Control", "Meta", "Shift", "Alt", "middle", "right"] as const) {
+        it(`leaves ${activation} Cancel click on native ${status} to the browser without discarding the draft`, async () => {
+          const log = vi.spyOn(console, "error").mockImplementation(() => {});
+          try {
+            const failure =
+              status === 503
+                ? Object.assign(new Error("fixture connection refused"), { code: "ECONNREFUSED" })
+                : undefined;
+            const { page, writes, requests, save, store } = await openProfile(true, true, failure);
+            const timezone = status === 422 ? B.timezone : CORRECTED_TIMEZONE;
+            await reachNativeRefusal(page, timezone);
+            expect(writes).toEqual([{ method: "POST", status }]);
+            const refusedDraft = {
+              bio: B.bio,
+              games_text: B.games_text,
+              timezone,
+              checked: true,
+              departurePrevented: true,
+            };
+            expect(await formState(page)).toEqual(refusedDraft);
+            const cancel = page.getByTestId("profile-cancel");
+            expect(await cancel.evaluate((link) => link.tagName)).toBe("A");
+            expect(await cancel.getAttribute("href")).toBe(`/members/${ID}`);
+            const beforeCancel = requests.length;
+            await cancel.evaluate((link) => {
+              // Observe after the island's handler, then suppress only the browser
+              // default so the same document remains available for draft assertions.
+              link.ownerDocument.addEventListener(
+                "click",
+                (event: Event) => {
+                  link.setAttribute("data-click-default-prevented", String(event.defaultPrevented));
+                  event.preventDefault();
+                },
+                { once: true },
+              );
+            });
+            if (activation === "middle" || activation === "right") {
+              // Native non-primary input emits auxclick/contextmenu, not click.
+              // Dispatch a MouseEvent to exercise a non-primary click reaching the binder.
+              await cancel.dispatchEvent("click", { button: activation === "middle" ? 1 : 2 });
+            } else {
+              await cancel.click({ modifiers: [activation] });
+            }
+            expect.soft(await cancel.getAttribute("data-click-default-prevented")).toBe("false");
+            expect(await formState(page)).toEqual(refusedDraft);
+            expect(await page.getByTestId("profile-error").textContent()).toMatch(
+              status === 422 ? /valid IANA timezone/ : /try again/i,
+            );
+            expect(await page.locator("#profile-bio-count").textContent()).toBe(
+              "14 of 1000 characters",
+            );
+            expect(await page.locator("#profile-games-text-count").textContent()).toBe(
+              "2 of 20 games, 30 of 1700 characters",
+            );
+            expect(requests).toHaveLength(beforeCancel);
+            expect(writes).toEqual([{ method: "POST", status }]);
+            expect(save).toHaveBeenCalledTimes(status === 503 ? 1 : 0);
+            expect(await store.find(ID)).toMatchObject({
+              bio: A.bio,
+              games: A.games,
+              timezone: A.timezone,
+              leaderboardOptOut: false,
+            });
+          } finally {
+            log.mockRestore();
+          }
+        });
+      }
     }
 
     it("ordinary no-JS GET Cancel still resets every control locally without a write or navigation", async () => {
