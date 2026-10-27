@@ -978,6 +978,16 @@ describe("Kit detail presentation", () => {
       }
       if (sql.includes("row_number()")) return { rows: [] };
       if (sql.includes('from "rsvps"') && sql.includes("count(")) {
+        // Combined Hono aggregate: (event_id, named, occupied); other shapes stay two-column.
+        if (sql.includes('left join "users"') && sql.includes("group by")) {
+          return {
+            rows: [
+              [7, 2, 2],
+              [8, 1, 1],
+              [9, 0, 0],
+            ],
+          };
+        }
         return {
           rows: [
             [7, 2],

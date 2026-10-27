@@ -85,6 +85,8 @@ function publicHarness() {
     columns.map((k) => (row[k] instanceof Date ? (row[k] as Date).toISOString() : row[k]));
   const db = drizzle(async (sql, params) => {
     if (sql.includes('from "rsvps"')) {
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return { rows: [[row.id, 3, 3]] };
       if (sql.includes("count(*)")) return { rows: [[row.id, 3]] };
       return { rows: [] };
     }

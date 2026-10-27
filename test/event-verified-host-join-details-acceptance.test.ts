@@ -61,6 +61,8 @@ function fixture(over: Record<string, unknown> = {}) {
   const db = drizzle(async (sql) => {
     queries.push(sql);
     if (sql.includes('from "rsvps"') && sql.includes("count(*)")) {
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return { rows: [[row.id, 3, 3]] };
       return { rows: [[row.id, 3]] };
     }
     if (sql.includes('from "rsvps"')) return { rows: [] };

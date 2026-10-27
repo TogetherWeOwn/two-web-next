@@ -115,7 +115,11 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
             }),
           ],
         };
-      if (query.includes('from "rsvps"')) return { rows: [[1, 3]] };
+      if (query.includes('from "rsvps"')) {
+        if (query.includes('left join "users"') && query.includes("group by"))
+          return { rows: [[1, 3, 3]] };
+        return { rows: [[1, 3]] };
+      }
       if (query.includes('from "featured_contents"'))
         return { rows: [[1, "Counts fixture news", "Featured fixture", null, null, null]] };
       throw new Error("Unexpected public homepage fixture query");

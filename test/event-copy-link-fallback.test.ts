@@ -61,8 +61,11 @@ function fixture() {
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
   const db = drizzle(async (sql) => {
     if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
-    if (sql.includes('from "rsvps"'))
+    if (sql.includes('from "rsvps"')) {
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return { rows: [[row.id, 3, 3]] };
       return sql.includes("count(*)") ? { rows: [[row.id, 3]] } : { rows: [] };
+    }
     if (sql.includes('"event_key" =')) {
       return {
         rows: [

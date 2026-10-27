@@ -53,6 +53,9 @@ describe("Kit GET /events binding anonymous payload", () => {
         statements.push(sql);
         if (sql.includes('from "rsvps"')) {
           // Only counts cross the public boundary, not the stored identities.
+          // Combined aggregate: (event_id, named, occupied).
+          if (sql.includes('left join "users"') && sql.includes("group by"))
+            return { rows: [[row.id, USERS.length, USERS.length]] };
           return { rows: [[row.id, USERS.length]] };
         }
         if (!sql.includes('from "events"')) return { rows: [] };

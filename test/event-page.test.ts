@@ -68,10 +68,14 @@ function fixture(
       !sql.includes("group by")
     )
       return { rows: [] };
-    // The going-count aggregate reads two positional columns; the viewer
-    // answer read selects its own row and is empty in this fixture.
-    if (sql.includes('from "rsvps"'))
+    // The combined going-count aggregate reads three positional columns
+    // (event_id, named, occupied); the viewer answer read selects its own row
+    // and is empty in this fixture.
+    if (sql.includes('from "rsvps"')) {
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return { rows: [[row.id, 3, 3]] };
       return sql.includes("count(*)") ? { rows: [[row.id, 3]] } : { rows: [] };
+    }
     if (sql.includes('"event_key" =')) {
       return {
         rows: [
