@@ -14,6 +14,11 @@ import {
   RSVP_FULL_COPY,
   RSVP_GOING_TESTID,
   RSVP_GUEST_CTA_COPY,
+  RSVP_GUEST_FULL_HINT_COPY,
+  RSVP_GUEST_FULL_HINT_TESTID,
+  RSVP_GUEST_SIGNIN_TESTID,
+  RSVP_JOIN_SERVER_TESTID,
+  RSVP_JOIN_TO_RSVP_COPY,
   RSVP_MAYBE_COPY,
   RSVP_MAYBE_TESTID,
   RSVP_NOT_GOING_COPY,
@@ -74,6 +79,7 @@ const waitlisted = $derived(model.answer?.status === "waitlisted");
 const isMaybe = $derived(model.answer?.status === "maybe");
 const soft = $derived(isMaybe || model.answer?.status === "not_going");
 const signIn = $derived(loginUrl(model.joinReturnTo));
+const joinHref = $derived(`/join?next=${encodeURIComponent(model.joinReturnTo)}`);
 const rsvpAction = $derived(
   model.attendeesPaging.page > 1
     ? `/e/${encodeURIComponent(model.eventKey)}/rsvp?attendees=${model.attendeesPaging.page}`
@@ -268,12 +274,27 @@ const lineup = $derived(
       data-capacity={model.capacity ?? undefined}
       data-full={full ? "true" : "false"}
       data-paused={model.rsvpOpen ? "false" : "true"}
+      data-signed-in={model.viewerSignedIn ? "true" : "false"}
       aria-label="RSVP"
     >
       {#if closed}
         <p role="status" data-testid={RSVP_CLOSED_TESTID}>{rsvpClosedCopy(closed)}</p>
       {:else if !model.viewerMember}
-        <a href={signIn}>{RSVP_GUEST_CTA_COPY}</a>
+        {#if model.viewerSignedIn}
+          <a href={joinHref} data-testid={RSVP_JOIN_SERVER_TESTID}>{RSVP_JOIN_TO_RSVP_COPY}</a>
+        {:else if !model.rsvpOpen}
+          <p role="status" data-testid={RSVP_PAUSED_TESTID}>{RSVP_PAUSED_COPY}</p>
+          <a href={signIn} data-testid={RSVP_GUEST_SIGNIN_TESTID}>{RSVP_GUEST_CTA_COPY}</a>
+        {:else if full}
+          <p role="status" data-testid={EVENT_FULL_TESTID}>
+            {RSVP_FULL_COPY} {rsvpFullCapCopy(model.capacity!)}
+          </p>
+          <p data-testid={RSVP_GUEST_FULL_HINT_TESTID}>
+            <a href={signIn} data-testid={RSVP_GUEST_SIGNIN_TESTID}>{RSVP_GUEST_FULL_HINT_COPY}</a>
+          </p>
+        {:else}
+          <a href={signIn} data-testid={RSVP_GUEST_SIGNIN_TESTID}>{RSVP_GUEST_CTA_COPY}</a>
+        {/if}
       {:else}
         <form method="post" action={rsvpAction} data-rsvp-form>
           {#if !model.rsvpOpen}

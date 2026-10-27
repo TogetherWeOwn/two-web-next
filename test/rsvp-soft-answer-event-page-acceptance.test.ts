@@ -185,6 +185,7 @@ function kitModel(over: Partial<KitEventDetailModel> = {}): KitEventDetailModel 
     showJoinPitch: false,
     joinReturnTo: PATH,
     joinResult: null,
+    viewerSignedIn: true,
     viewerMember: true,
     viewerModerator: false,
     viewerUsername: "member",
@@ -420,7 +421,11 @@ describe("Hono soft-answer SSR", () => {
       expect(softLine(html, "maybe")).toBeNull();
       expect(softLine(html, "not_going")).toBeNull();
       if (state === "closed") expect(html).toContain('data-testid="rsvp-closed"');
-      else expect(html).toContain("Log in with Discord");
+      else if (state === "full") {
+        // Full-event guests keep the waitlist-hint link, not the bare CTA.
+        expect(html).toContain('data-testid="rsvp-guest-signin"');
+        expect(html).toContain("Sign in to join the waitlist");
+      } else expect(html).toContain("Log in with Discord");
     },
   );
 
@@ -665,6 +670,7 @@ describe("Kit soft-answer SSR", () => {
       const html = kit({
         ...over,
         answer: null,
+        viewerSignedIn: false,
         viewerMember: false,
         viewerUsername: null,
         showJoinPitch: true,
@@ -672,7 +678,11 @@ describe("Kit soft-answer SSR", () => {
       expect(softLine(html, "maybe")).toBeNull();
       expect(softLine(html, "not_going")).toBeNull();
       if (state === "closed") expect(html).toContain('data-testid="rsvp-closed"');
-      else expect(html).toContain("Log in with Discord");
+      else if (state === "full") {
+        // Full-event guests keep the waitlist-hint link, not the bare CTA.
+        expect(html).toContain('data-testid="rsvp-guest-signin"');
+        expect(html).toContain("Sign in to join the waitlist");
+      } else expect(html).toContain("Log in with Discord");
     },
   );
 

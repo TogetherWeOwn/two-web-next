@@ -267,6 +267,7 @@ export const EventPage: FC<{
           e={e}
           now={now}
           member={member}
+          signedIn={session != null}
           answer={answer}
           waitlistPosition={waitlistPosition}
           returnTo={returnTo ?? path}
