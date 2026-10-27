@@ -2,6 +2,53 @@
 
 ## Current decision
 
+Raise three Kit ceilings to the smallest aligned steps that cover the exact
+feature composition on current main:
+
+| Budget field | Incoming ceiling | New ceiling | Increase | Margin above worst fresh combined build |
+| --- | ---: | ---: | ---: | ---: |
+| `server.js.maxGzipBytes` | 335360 | 336384 | 1024 | 194 above 336190 |
+| `client.js.maxRawBytes` | 256000 | 257024 | 1024 | 349 above 256675 |
+| `client.js.maxGzipBytes` | 103168 | 103424 | 256 | 38 above 103386 |
+
+Main `d781cb0707ed107bb4999e37cdde1aef285d45c2` (includes #1870, which grew
+the event-detail Kit bundle) and feature
+`7d390f4b8c54e30b0da703c2085530d1876c78f4` merge cleanly to tree
+`4a0f0228960093b7a83b0c8cf3d38f86dc40f9f4`. Node 24.22.1, npm 11.19.1,
+identical locked root/web dependencies, two builds per tree through the
+canonical `node ci/check-kit-perf.mjs --format json`:
+
+| Measurement | Main build 1 / 2 | Combined build 1 / 2 |
+| --- | ---: | ---: |
+| Server JS raw | 1185175 / 1185177 | 1188819 / 1188821 |
+| Server JS gzip | 335336 / 335336 | 336190 / 336190 |
+| Client JS raw | 254926 / 254926 | 256675 / 256675 |
+| Client JS gzip | 102621 / 102621 | 103386 / 103386 |
+| Server / client JS files | 116 / 54 both | 116 / 55 both |
+
+Worker 2551/1219 B and CSS 2861/1019 B across two files are identical in all
+builds. Main fits the incoming ceilings (server margin 24 B); the combined
+output breaches server gzip (+830 B), client raw (+675 B) and client gzip
+(+218 B). Against the output without a rebuild, the new ceilings pass and each
+single step lower (336128, 256512, 103168) rejects. Steps are the repository's
+256 B gzip / 512 B raw grid, not a x1.25 allocation or speculative headroom.
+Worker, CSS, server raw, file-count and startup limits, the checker, loader,
+application, dependencies and every other fragment are unchanged; frozen legacy
+history is not edited. The matching acceptance tests were corrected
+independently by the Test Author and incorporated byte-for-byte
+(`ci/check-kit-perf.test.mjs` sha256 `02dfb4ab54ce5d04c97bc271dc1dba62d95afb3ef52ba4a6fe8e618990bb409c`,
+`ci/budget-fragments.test.mjs` sha256 `c2386e547fa6c9c6f19b482f789e1737ce79451cf5c6eb773541d48ee84981bf`).
+
+ACT: allocate these three measured steps through independent review.
+WHY: the exact feature composition exhausts them on current main; the earlier
+shared-component experiment did not recover the capacity.
+UNDO: reviewed revert of these three fragment values and the matching
+acceptance delta, retaining every earlier decision; coordinate with the
+dependent feature. This is not feature, staging, deployment or release
+approval; the feature must reverify its actual integrated head.
+
+## Superseded decision (client gzip only, main 0f8fdd17f)
+
 Raise **only client JS gzip 102912 → 103168 B** in
 [`client-js.json`](../ci/budgets/kit/client-js.json). Main already supplies
 server gzip 335104 (#1826) and client raw 256000 (#1798); neither is raised
@@ -30,7 +77,7 @@ those axes without any new allocation here.
 UNDO: reviewed revert of this gzip step and its matching acceptance delta,
 retaining all earlier decisions and coordinating with the dependent feature.
 
-## Current remeasurement after repair and fragment migration
+## Earlier remeasurement after repair and fragment migration (main 0f8fdd17f)
 
 - Main: `0f8fdd17f21abe7d0f7c015001b9415b180efe99`.
 - Feature remains `7d390f4b8c54e30b0da703c2085530d1876c78f4`.
