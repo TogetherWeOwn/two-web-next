@@ -129,8 +129,7 @@ export async function shield(
         await audit(tx, null, operation, null, null, dig, requestId, "denied", "rate_limited");
       });
     } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code === "55P03" || code === "57014") {
+      if (isIngressBusy(err)) {
         return {
           status: 503,
           body: ingressDenial(

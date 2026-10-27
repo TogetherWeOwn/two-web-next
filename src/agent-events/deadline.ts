@@ -8,6 +8,21 @@ export async function setIngressDeadlines(tx: Tx, lockWaitMs: number): Promise<v
 }
 
 export function isIngressBusy(error: unknown): boolean {
-  const code = (error as { code?: string } | null)?.code;
-  return code === "55P03" || code === "57014";
+  // Drizzle wraps driver failures (dispatch's pg-proxy update path): a real
+  // PostgreSQL 57014 arrives as DrizzleQueryError with no outer code and the
+  // PostgresError in `cause`. Walk a bounded cause chain matching structured
+  // codes only — never message text, which may contain secrets — so wrapped
+  // cancellations map to operation_busy like top-level ones. Depth 8 also
+  // terminates on cyclic causes.
+  let current: unknown = error;
+  for (let depth = 0; depth < 8; depth++) {
+    if (current === null || current === undefined) return false;
+    const code = (current as { code?: unknown }).code;
+    if (code === "55P03" || code === "57014") return true;
+    if (typeof current !== "object") return false;
+    const next = (current as { cause?: unknown }).cause;
+    if (next === undefined) return false;
+    current = next;
+  }
+  return false;
 }

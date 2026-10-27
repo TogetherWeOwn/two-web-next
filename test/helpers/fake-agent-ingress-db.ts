@@ -42,6 +42,8 @@ export type FakeAgentDb = {
   }[];
   hits: { bucket: string; at: number }[];
   addGrant: (credential: string, grant: FakeGrant) => Promise<void>;
+  /** Delete a grant by id, modelling provisioning removal between lookups. */
+  removeGrantById: (grantId: string) => void;
   seedReplay: (grantId: string, key: string, row: FakeReplayRow) => void;
   /** Spend a rate bucket past every configured budget (shield buckets untouched). */
   prespend: (bucket: string, n?: number) => void;
@@ -190,6 +192,11 @@ export function makeFakeAgentDb(): FakeAgentDb {
     hits,
     addGrant: async (credential: string, grant: FakeGrant) => {
       hashes.set(await sha256Hex(credential), grant);
+    },
+    removeGrantById: (grantId: string) => {
+      for (const [hash, grant] of hashes) {
+        if (grant.id === grantId) hashes.delete(hash);
+      }
     },
     seedReplay: (grantId: string, key: string, row: FakeReplayRow) => {
       replays.set(`${grantId}:${key}`, row);
