@@ -45,6 +45,8 @@ import { registerMcpRoutes } from "./mcp/routes";
 import { registerPublicApiRoutes } from "./public-data/routes";
 import { takeJoinResult } from "./return-journey";
 import { buildSecurityTxt } from "./security-txt";
+import { BUILD_STAMP } from "./build-stamp";
+import { deployIdentity } from "./deploy-identity";
 import {
   configReadiness,
   revisionReadiness,
@@ -737,6 +739,26 @@ app.get("/up", async (c) => {
     }
   }
 });
+
+// `GET /version` and `GET /readyz` — the deploy identity of the running
+// Version: the compiled build stamp plus the Version-scoped deploy event
+// bindings (src/deploy-identity.ts). Session-free, database-free and
+// `no-store`, answering the same fixed five-field allowlist on both paths.
+// Anything absent, malformed or contradictory answers a bare 503 that echoes
+// no binding value. `/up` is unchanged and neither path moves its status.
+const identityBody = (c: Context<{ Bindings: Env }>) => {
+  c.header("cache-control", "no-store");
+  const result = deployIdentity({
+    stamp: BUILD_STAMP,
+    deployEventId: c.env.DEPLOY_EVENT_ID,
+    deploymentEnvironment: c.env.DEPLOYMENT_ENVIRONMENT,
+    githubDeploymentId: c.env.GITHUB_DEPLOYMENT_ID,
+    cfVersionMetadata: c.env.CF_VERSION_METADATA,
+  });
+  return result.ok ? c.json(result.identity) : c.json({ status: "identity_unavailable" }, 503);
+};
+app.get("/version", identityBody);
+app.get("/readyz", identityBody);
 
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
 registerErrorHandlers(app);

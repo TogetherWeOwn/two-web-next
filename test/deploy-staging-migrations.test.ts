@@ -58,7 +58,11 @@ describe("staging deploy applies web migrations before the Worker deploy", () =>
     for (const name of migration) {
       expect(stepBlock(name)).not.toMatch(/^ {8}(?:if|continue-on-error):/m);
     }
-    expect(workflow).not.toMatch(/if: (?:always|failure|cancelled)\(\)/);
+    // The one conditional step records the failure status on the canonical
+    // Deployment after the lane has already failed; nothing else may run on
+    // failure, so a migration failure still stops the deploy.
+    expect(workflow.match(/if: (?:always|failure|cancelled)\(\)/g) ?? []).toHaveLength(1);
+    expect(stepBlock("Record failure Deployment status")).toContain("if: failure()");
     expect(workflow).not.toMatch(/continue-on-error/);
   });
 

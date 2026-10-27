@@ -150,6 +150,11 @@ jobs:
     concurrency:
       group: production-worker-mutation
       cancel-in-progress: false
+    permissions:
+      contents: read
+      actions: read
+      # The canonical GitHub Deployment record for this deploy event.
+      deployments: write
     # Required reviewers + prevent-self-review are live repo settings unless
     # vars.PRODUCTION_AUTO_APPROVE is true, in which case the gate requires green
     # staging deploy + e2e-staging on this exact SHA instead, with the e2e-staging
@@ -179,6 +184,21 @@ jobs:
       - run: npm ci --include=dev
       # No migrations, queue creation or SQL tests here: provisioning and W16
       # rehearsal are separate operator work. CI uses disposable SQL services.
+      # Build identity (source SHA, build ID, input-set digest) is generated
+      # BEFORE the compile and compiled into the payload. The environment
+      # deploy event and GitHub Deployment ID are not compiled: they are
+      # attached to the uploaded Version below as runtime bindings.
+      - name: Generate build stamp (before the compile)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t inputs < <(bash ci/build-stamp-inputs.sh)
+          args=()
+          for f in "${inputs[@]}"; do args+=(--input "$f"); done
+          node ci/deploy-identity.mjs stamp --sha "${DEPLOY_SHA:?}" --build-id "${BUILD_ID:?}" --out src/build-stamp.ts "${args[@]}"
+        env:
+          DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          BUILD_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Build production target without deploying
         run: npx wrangler deploy --dry-run --env production --outdir dist-production
       - name: Require production-only Cloudflare credentials
@@ -206,6 +226,23 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      # The deploy event ID is minted and its canonical Deployment record is
+      # created BEFORE the Version upload, because the numeric Deployment ID is
+      # a runtime binding of that Version. The production-worker-mutation
+      # group serializes the lane, so the same-day counter cannot race itself.
+      - name: Allocate deploy event ID (environment-scoped, UTC-dated)
+        id: deploy-event
+        run: node ci/deploy-identity.mjs next --environment production --sha "${DEPLOY_SHA:?}" --saved "${RUNNER_TEMP:?}/deploy-event-id.txt" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+      - name: Create canonical GitHub Deployment record
+        id: deployment
+        run: node ci/deploy-identity.mjs create --environment production --sha "${DEPLOY_SHA:?}" --deploy-event-id "${DEPLOY_EVENT_ID:?}" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          DEPLOY_EVENT_ID: ${{ steps.deploy-event.outputs.DEPLOY_EVENT_ID }}
       # Uploading a version does not mutate routes, custom domains or cron
       # triggers. The apex is already attached to this Worker; a full deploy
       # retries domain provisioning and fails with Cloudflare 100117, and the
@@ -214,11 +251,15 @@ jobs:
       # test/probe-workflows.test.ts and reconciled per docs/runbook.md
       # ("Production trigger reconciliation"), never by this workflow.
       - name: Upload reviewed production version without changing triggers
-        run: npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
+        run: npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}" --var "DEPLOY_EVENT_ID:${DEPLOY_EVENT_ID:?}" --var "DEPLOYMENT_ENVIRONMENT:${DEPLOYMENT_ENVIRONMENT:?}" --var "GITHUB_DEPLOYMENT_ID:${GITHUB_DEPLOYMENT_ID:?}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          # Version-scoped, non-secret runtime identity (never in wrangler config).
+          DEPLOY_EVENT_ID: ${{ steps.deploy-event.outputs.DEPLOY_EVENT_ID }}
+          DEPLOYMENT_ENVIRONMENT: production
+          GITHUB_DEPLOYMENT_ID: ${{ steps.deployment.outputs.GITHUB_DEPLOYMENT_ID }}
       - name: Capture pre-promote dead-letter baseline
         # Read-only GET before the central gradual-promote action runs: that
         # action's stage smokes execute this repo's bin/smoke.mjs in this job,
@@ -300,6 +341,27 @@ jobs:
         env:
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
           PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}
+      # The promoted Version must answer exactly the identity just recorded,
+      # including its Cloudflare Version ID. Same retry contract as the smoke.
+      - name: Verify deployed identity on the promoted version
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if node ci/deploy-identity.mjs verify --origin https://togetherweown.com --sha "${DEPLOY_SHA:?}" --deploy-event-id "${DEPLOY_EVENT_ID:?}" --deployment-id "${GITHUB_DEPLOYMENT_ID:?}" --version-id "${PROMOTED_VERSION_ID:?}"; then
+              exit 0
+            fi
+            if [ "$i" -lt 6 ]; then
+              echo "identity attempt $i failed, retrying in 10s..."
+              sleep 10
+            fi
+          done
+          echo "::error::promoted identity did not match the recorded deploy event; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live; recorded restoration target ${PREV_VERSION:-unknown} - restore it with the rollback-production workflow using that version id"
+          exit 1
+        env:
+          DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          DEPLOY_EVENT_ID: ${{ steps.deploy-event.outputs.DEPLOY_EVENT_ID }}
+          GITHUB_DEPLOYMENT_ID: ${{ steps.deployment.outputs.GITHUB_DEPLOYMENT_ID }}
+          PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
+          PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}
       - name: Record successful production promotion
         # Success-only and after identity-aware smoke. Write inline because the
         # selected deployment checkout can predate this receipt protocol.
@@ -335,6 +397,27 @@ jobs:
           path: ${{ runner.temp }}/promotion.json
           if-no-files-found: error
           retention-days: 30
+      # Truthful final status, posted only after the identity-aware smoke, the
+      # deployed-identity proof and the promotion receipt all succeeded.
+      - name: Record final Deployment status (success)
+        id: final-status
+        run: node ci/deploy-identity.mjs status --deployment-id "${GITHUB_DEPLOYMENT_ID:?}" --deploy-event-id "${DEPLOY_EVENT_ID:?}" --state success --run-url "${RUN_URL:?}" --environment-url https://togetherweown.com
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_EVENT_ID: ${{ steps.deploy-event.outputs.DEPLOY_EVENT_ID }}
+          GITHUB_DEPLOYMENT_ID: ${{ steps.deployment.outputs.GITHUB_DEPLOYMENT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      # Only when the lane failed before the success status ran. Best effort:
+      # it never replaces the failure that triggered it, and the rollback
+      # workflow stays independent of this step.
+      - name: Record failure Deployment status
+        if: failure() && steps.deployment.outputs.GITHUB_DEPLOYMENT_ID != '' && steps.final-status.outcome == 'skipped'
+        run: node ci/deploy-identity.mjs status --deployment-id "${GITHUB_DEPLOYMENT_ID:?}" --deploy-event-id "${DEPLOY_EVENT_ID:?}" --state failure --run-url "${RUN_URL:?}" --environment-url https://togetherweown.com
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_EVENT_ID: ${{ steps.deploy-event.outputs.DEPLOY_EVENT_ID }}
+          GITHUB_DEPLOYMENT_ID: ${{ steps.deployment.outputs.GITHUB_DEPLOYMENT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
   release:
     name: release

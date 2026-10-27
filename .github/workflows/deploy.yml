@@ -43,6 +43,11 @@ jobs:
     # back on the self-hosted fleet with no workflow change.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      # The canonical GitHub Deployment record for this deploy event.
+      deployments: write
     # Environment secrets and the deployed staging URL. Exact-SHA CI, the
     # staging hold and post-deploy verification are the automated release gates.
     environment:
@@ -100,6 +105,21 @@ jobs:
       # CI's drift check passed, so the deployed bytes are the reviewed bytes.
       - name: Build minified public assets (esbuild, drift fails closed)
         run: npm run build:assets:check
+      # Build identity (source SHA, build ID, input-set digest) is generated
+      # BEFORE the single compile and compiled into the payload. The
+      # environment deploy event and GitHub Deployment ID are not compiled:
+      # they are attached to the Worker Version below as runtime bindings.
+      - name: Generate build stamp (before the compile)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -d '' -t inputs < <(bash ci/build-stamp-inputs.sh)
+          args=()
+          for f in "${inputs[@]}"; do args+=(--input "$f"); done
+          # The checkout above is already the CI-verified commit.
+          node ci/deploy-identity.mjs stamp --sha "$(git rev-parse HEAD)" --build-id "${BUILD_ID:?}" --out src/build-stamp.ts "${args[@]}"
+        env:
+          BUILD_ID: ${{ github.repository_id }}-${{ github.run_id }}-${{ github.run_attempt }}
       - name: Build Kit staging Worker
         run: npm run build --prefix web
       - name: Moderator role-config preflight (before any Cloudflare mutation)
@@ -194,6 +214,21 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      # The deploy event ID is minted and its canonical Deployment record is
+      # created BEFORE the Version upload, because the numeric Deployment ID is
+      # a runtime binding of that Version. The deploy-staging concurrency group
+      # serializes the lane, so the same-day counter cannot race itself.
+      - name: Allocate deploy event ID (environment-scoped, UTC-dated)
+        id: deploy-event
+        run: node ci/deploy-identity.mjs next --environment staging --sha "$(git rev-parse HEAD)" --saved "${RUNNER_TEMP:?}/deploy-event-id.txt" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Create canonical GitHub Deployment record
+        id: deployment
+        run: node ci/deploy-identity.mjs create --environment staging --sha "$(git rev-parse HEAD)" --deploy-event-id "${DEPLOY_EVENT_ID:?}" >> "$GITHUB_OUTPUT"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_EVENT_ID: ${{ steps.deploy-event.outputs.DEPLOY_EVENT_ID }}
       - name: Re-verify exact-SHA full CI before Worker deploy
         # Queue creation or the Tail deploy may outlive the accepted CI attempt; this step runs directly before the deploy.
         run: node ci/staging-deploy-gate.mjs
@@ -208,12 +243,16 @@ jobs:
         # one. The detach step below removes them explicitly before the jobs
         # Worker attaches, so two consumers never exist. Route flags come only
         # from the validated workflow input and default to Hono ownership.
-        run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}" --var "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}" --var "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}"
+        run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}" --var "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}" --var "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}" --var "DEPLOY_EVENT_ID:${DEPLOY_EVENT_ID:?}" --var "DEPLOYMENT_ENVIRONMENT:${DEPLOYMENT_ENVIRONMENT:?}" --var "GITHUB_DEPLOYMENT_ID:${GITHUB_DEPLOYMENT_ID:?}"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           # workflow_run's github.sha is main's tip; tag the CI-verified checkout.
           DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          # Version-scoped, non-secret runtime identity (never in wrangler config).
+          DEPLOY_EVENT_ID: ${{ steps.deploy-event.outputs.DEPLOY_EVENT_ID }}
+          DEPLOYMENT_ENVIRONMENT: staging
+          GITHUB_DEPLOYMENT_ID: ${{ steps.deployment.outputs.GITHUB_DEPLOYMENT_ID }}
       - name: Re-verify exact-SHA full CI before detaching web consumers
         # The web deploy may outlive the accepted CI attempt; this step runs directly before the detach.
         run: node ci/staging-deploy-gate.mjs
@@ -267,6 +306,24 @@ jobs:
         run: node bin/revision-check.mjs https://next.togetherweown.com "$DEPLOY_SHA"
         env:
           DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      # The live Worker must answer exactly the identity just recorded. Retries
+      # while the old Version still serves; fails closed when it never matches.
+      - name: Verify deployed identity (/version and /readyz)
+        run: |
+          for i in 1 2 3 4 5 6; do
+            if node ci/deploy-identity.mjs verify --origin https://next.togetherweown.com --sha "$(git rev-parse HEAD)" --deploy-event-id "${DEPLOY_EVENT_ID:?}" --deployment-id "${GITHUB_DEPLOYMENT_ID:?}"; then
+              exit 0
+            fi
+            if [ "$i" -lt 6 ]; then
+              echo "identity attempt $i failed, retrying in 10s..."
+              sleep 10
+            fi
+          done
+          echo "::error::deployed identity did not match the recorded deploy event"
+          exit 1
+        env:
+          DEPLOY_EVENT_ID: ${{ steps.deploy-event.outputs.DEPLOY_EVENT_ID }}
+          GITHUB_DEPLOYMENT_ID: ${{ steps.deployment.outputs.GITHUB_DEPLOYMENT_ID }}
       # Post-deploy smoke scope (mirrors e2e-staging.yml): a deploy whose
       # head commit only touches docs prose or the `test/` unit tree the
       # checkers never execute skips the smoke steps below — the full suite,
@@ -365,3 +422,23 @@ jobs:
           exit 1
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
+      # Truthful final status, posted only after the deployed-revision,
+      # identity and public-route proofs above all passed.
+      - name: Record final Deployment status (success)
+        id: final-status
+        run: node ci/deploy-identity.mjs status --deployment-id "${GITHUB_DEPLOYMENT_ID:?}" --deploy-event-id "${DEPLOY_EVENT_ID:?}" --state success --run-url "${RUN_URL:?}" --environment-url https://next.togetherweown.com
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_EVENT_ID: ${{ steps.deploy-event.outputs.DEPLOY_EVENT_ID }}
+          GITHUB_DEPLOYMENT_ID: ${{ steps.deployment.outputs.GITHUB_DEPLOYMENT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      # Only when the lane failed before the success status ran. Best effort:
+      # it never replaces the failure that triggered it.
+      - name: Record failure Deployment status
+        if: failure() && steps.deployment.outputs.GITHUB_DEPLOYMENT_ID != '' && steps.final-status.outcome == 'skipped'
+        run: node ci/deploy-identity.mjs status --deployment-id "${GITHUB_DEPLOYMENT_ID:?}" --deploy-event-id "${DEPLOY_EVENT_ID:?}" --state failure --run-url "${RUN_URL:?}" --environment-url https://next.togetherweown.com
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_EVENT_ID: ${{ steps.deploy-event.outputs.DEPLOY_EVENT_ID }}
+          GITHUB_DEPLOYMENT_ID: ${{ steps.deployment.outputs.GITHUB_DEPLOYMENT_ID }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

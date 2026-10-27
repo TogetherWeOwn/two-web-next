@@ -440,12 +440,14 @@ export const ALERT_ROUTES = new Set([
   "/privacy",
   "/privacy.md",
   "/profile",
+  "/readyz",
   "/.well-known/security.txt",
   "/robots.txt",
   "/rules",
   "/rules.md",
   "/sitemap_index.xml",
   "/up",
+  "/version",
 ]);
 const JOB_NAMES = new Set(["SyncEventToDiscord", "CallInternalAction", "AlertProbe"]);
 // Allowlisted scheduled-job discriminators for the direct scheduled.failing

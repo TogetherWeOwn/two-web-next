@@ -13,6 +13,14 @@ export type Env = AgentEventsEnv & {
   // there. `id` is the Version ID that `wrangler rollback` takes; `tag`
   // carries the deploy commit (src/release-tag.ts parses both tag shapes).
   CF_VERSION_METADATA?: Partial<Pick<WorkerVersionMetadata, "id" | "tag">>;
+  // Version-scoped, non-secret deploy event bindings attached by the deploy
+  // lanes (`--var`) to one Worker Version; never checked into wrangler config
+  // and never compiled. Unset locally and on any Version that predates them,
+  // so `/version` and `/readyz` refuse (503) rather than claim an identity.
+  // src/deploy-identity.ts validates them against the compiled build stamp.
+  DEPLOY_EVENT_ID?: string;
+  DEPLOYMENT_ENVIRONMENT?: string;
+  GITHUB_DEPLOYMENT_ID?: string;
   DISCORD_CLIENT_ID: string;
   DISCORD_GUILD_ID: string;
   DISCORD_INVITE_URL: string;

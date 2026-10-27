@@ -62,6 +62,8 @@ export const NON_HTML_READS = [
   "/robots.txt",
   "/.well-known/security.txt", // Plain-text RFC 9116 disclosure file, never an HTML document.
   "/up",
+  "/readyz", // Deploy identity: fixed JSON allowlist, never an HTML document.
+  "/version", // Same identity allowlist as /readyz.
   "/auth/status", // Bool-only JSON, never an HTML document.
   "/members", // Retired bare path: branded 404, never a member index.
   "/members/", // Trailing-slash form of the same retired path.
