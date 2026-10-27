@@ -647,12 +647,12 @@ describe("read budget", () => {
     const response = await src.request("/events?view=calendar&month=2026-10");
     expect(response.status).toBe(200);
     await response.text();
-    // Preserve the eight non-facet reads: upcoming count/page/going pair,
-    // past drawer/going pair, and month grid. Only the separate bounded
+    // Preserve the six non-facet reads: upcoming count/page/combined going,
+    // past drawer/combined going, and month grid. Only the separate bounded
     // published-games read is new; month-empty guidance adds no reads.
     // No search ran, so no analytics write.
     expect(src.logs).toEqual([]);
-    expect(src.queries.filter((query) => !query.sql.startsWith("select distinct"))).toHaveLength(8);
+    expect(src.queries.filter((query) => !query.sql.startsWith("select distinct"))).toHaveLength(6);
     const facets = src.queries.filter((query) => query.sql.startsWith("select distinct"));
     expect(facets).toHaveLength(1);
     expect(facets[0]!.sql).toMatch(/^select distinct trim\("game"\) from "events"/);

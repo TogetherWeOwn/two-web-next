@@ -109,12 +109,24 @@ function fixture(
       // The attributable aggregate joins users; the occupancy aggregate reads
       // every going row, so the join distinguishes the two batched counts.
       // Occupancy defaults to the named rows (existing cases never diverge);
-      // fullness cases override either side per event id.
+      // fullness cases override either side per event id. The combined
+      // aggregate merges both sides into (event_id, named, occupied) rows.
       const named: [number, number][] = counts?.named ?? [
         [1, 2],
         [2, 1],
       ];
       const occupied = counts?.occupied ?? named;
+      if (sql.includes('left join "users"') && sql.includes("group by")) {
+        const byOccupied = new Map(occupied);
+        const merged = named
+          .filter(([id]) => (params as unknown[]).includes(id))
+          .map(([id, n]) => [id, n, byOccupied.get(id) ?? 0]);
+        for (const [id, o] of occupied) {
+          if ((params as unknown[]).includes(id) && !merged.some(([mid]) => mid === id))
+            merged.push([id, 0, o]);
+        }
+        return { rows: merged };
+      }
       const countRows = (sql.includes('inner join "users"') ? named : occupied).filter(([id]) =>
         (params as unknown[]).includes(id),
       );
@@ -229,7 +241,7 @@ describe("homepage upcoming events", () => {
     const rows = await listHomeUpcoming(f.db, NOW);
     expect(rows.map((r) => r.eventKey)).toEqual(["event-1", "event-2", "event-3"]);
     expect(rows.map((r) => r.goingCount)).toEqual([2, 1, 0]);
-    expect(f.queries).toHaveLength(4);
+    expect(f.queries).toHaveLength(3);
     // Note: this pins listHomeUpcoming (the canonical teaser read) only, not
     // the merged homepage loader, which additionally reads past zones.
     expect(f.queries[0]!.sql).toContain("set_config('lock_timeout', $1, true)");
@@ -245,16 +257,13 @@ describe("homepage upcoming events", () => {
     );
     expect(f.queries[1]!.params).toEqual(["published", expect.any(String), 3]);
     expect(f.queries[2]!.sql).toContain('"rsvps"."status" =');
-    expect(f.queries[2]!.params).toEqual([1, 2, 3, "going", ""]);
-    // Attributable count: joins users and counts only named rows, still with
-    // no viewer id anywhere in the params.
-    expect(f.queries[2]!.sql).toContain('inner join "users"');
+    expect(f.queries[2]!.params).toEqual([1, 2, 3, "going"]);
+    // Combined aggregate: LEFT JOIN keeps every going row for occupancy while
+    // the conditional count admits only named rows for the badge, still with
+    // no viewer id anywhere in the params — one query, never one per row.
+    expect(f.queries[2]!.sql).toContain('left join "users"');
     expect(f.queries[2]!.sql).toContain('"users"."username" <>');
-    // Seat occupancy: the same batched all-rows shape as the write path, so
-    // the teaser keeps one query per aggregate, never one per row.
-    expect(f.queries[3]!.sql).toContain('"rsvps"."status" =');
-    expect(f.queries[3]!.params).toEqual([1, 2, 3, "going"]);
-    expect(f.queries[3]!.sql).not.toContain('inner join "users"');
+    expect(f.queries[2]!.sql).toContain("count(case when");
     expect(Object.keys(rows[0]!).sort()).toEqual([
       "capacity",
       "eventKey",
@@ -413,8 +422,8 @@ describe("homepage upcoming events", () => {
       expect(warn).toHaveBeenCalledTimes(1); // no duplicate or unhandled late rejection
       // The past-zones probe runs in parallel with the canonical read, so it
       // lands even when the stalled read trips the deadline. A stalled rsvps
-      // read holds both batched aggregates (attributable + occupancy).
-      expect(f.queries).toHaveLength(holdAt === "events" ? 3 : 5);
+      // read holds the single combined aggregate.
+      expect(f.queries).toHaveLength(holdAt === "events" ? 3 : 4);
     },
   );
 

@@ -165,7 +165,7 @@ it("AP15 RED: Hono preserves an imported global neighbor with an unrepresentable
   expect(related).toHaveLength(3);
   for (const anchor of related) expect(anchor[0]).not.toContain(`/e/${adjacentKey(50)}`);
   expect(headers["cache-control"]).toBe("private, no-store");
-  expect(traces).toHaveLength(6);
+  expect(traces).toHaveLength(5);
   expect(traces.filter((q) => isGlobal(q.sql))).toHaveLength(2);
 });
 
@@ -210,7 +210,7 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(html).not.toMatch(/Hidden draft|Hidden cancelled|Hidden venue|Ended event/);
       expect(headers["cache-control"]).toBe("private, no-store");
       expect(headers["vary"]).toBe("Cookie");
-      expect(traces).toHaveLength(7); // detail + two aggregates + two neighbors + related + series
+      expect(traces).toHaveLength(6); // detail + one combined aggregate + two neighbors + related + series
       expect(traces.filter((q) => q.sql.includes('"event_key" ='))).toHaveLength(1);
       expect(traces.filter((q) => /member_data_access_logs|from "users"/.test(q.sql))).toHaveLength(
         0,
@@ -241,15 +241,15 @@ for (const twin of ["Hono", "Kit"] as const) {
         expect(target(html, failure === "series" ? "event-next" : "event-series-next")).toBe(
           `/e/${adjacentKey(failure === "series" ? 25 : 30)}`,
         );
-        expect(traces).toHaveLength(7);
+        expect(traces).toHaveLength(6);
       },
     );
 
-    it("AP09 CONTROL: standalone has no series query and keeps the six-read global path", async () => {
+    it("AP09 CONTROL: standalone has no series query and keeps the five-read global path", async () => {
       const { html } = await render(twin, 15);
       expect(html).toContain('data-testid="event-pagination"');
       expect(html).not.toContain('data-testid="event-series-nav"');
-      expect(traces).toHaveLength(6);
+      expect(traces).toHaveLength(5);
       expect(traces.filter((q) => isSeries(q.sql))).toHaveLength(0);
     });
   });

@@ -418,7 +418,10 @@ describe("event query cost bound", () => {
       const f = fixture();
       expect((await f.request(`/events?q=${encodeURIComponent(query)}`)).status).toBe(503);
       expect(f.hits).toHaveLength(1);
-      expect(f.eventStore).toHaveBeenCalledOnce();
+      // Searching queries reach dbFor once; blank queries are cookieless-cache
+      // eligible, so the early scope check reads the sharing scope first and
+      // dbFor second — both before the null-store 503, neither a connection.
+      expect(f.eventStore).toHaveBeenCalledTimes(query.trim() === "" ? 2 : 1);
     },
   );
 

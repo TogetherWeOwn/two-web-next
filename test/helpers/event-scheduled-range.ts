@@ -68,6 +68,8 @@ async function honoPage(row: EventRow, viewer: Viewer) {
   // Only database results are synthetic; route policy, sessions and HTML are real.
   const db = drizzle(async (sql) => {
     if (sql.includes('from "rsvps"')) {
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return { rows: [[row.id, 0, 0]] };
       return sql.includes("count(*)") ? { rows: [[row.id, 0]] } : { rows: [] };
     }
     if (sql.includes('"event_key" =')) {

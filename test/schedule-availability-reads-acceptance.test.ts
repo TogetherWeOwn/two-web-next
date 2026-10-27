@@ -25,6 +25,9 @@ function transport(rowCount: number) {
     queries.push({ sql, params: [...params] });
     if (sql.includes('from "rsvps"')) {
       // Distinct named/occupied aggregates; render must not fall back to named count.
+      // The combined shape carries both sides: (event_id, named 3, occupied 8).
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return { rows: rows.map((row) => [row.id, 3, 8]) };
       const n = sql.includes('join "users"') ? 3 : 8;
       return { rows: rows.map((row) => [row.id, n]) };
     }
@@ -100,11 +103,11 @@ for (const target of ["Hono", "Kit"] as const) {
           const html = await response.text();
           expect(html).toContain("Cooperative expedition");
           expect(fixture.queries.filter((q) => q.sql.includes('from "rsvps"'))).toHaveLength(
-            calendar ? 4 : 2,
+            calendar ? 2 : 1,
           );
           expect(fixture.queries.filter((q) => /select\s+distinct/i.test(q.sql))).toHaveLength(1);
           expect(fixture.queries, fixture.queries.map((q) => q.sql).join("\n")).toHaveLength(
-            calendar ? 9 : 6,
+            calendar ? 7 : 5,
           );
           const games = fixture.queries.find((q) => /select\s+distinct/i.test(q.sql))!;
           expect(games.params.at(-1)).toBe(100);
@@ -127,11 +130,11 @@ for (const target of ["Hono", "Kit"] as const) {
       const first = await fixture.request(target, "/events");
       expect(first.status).toBe(200);
       const original = await first.text();
-      expect(fixture.queries).toHaveLength(6);
+      expect(fixture.queries).toHaveLength(5);
       const second = await fixture.request(target, "/events");
       expect(await second.text()).toBe(original);
       expect(second.headers.get("cache-control")).toMatch(/public.*max-age=/);
-      expect(fixture.queries).toHaveLength(6);
+      expect(fixture.queries).toHaveLength(5);
       expect(fixture.source.upcoming).toHaveBeenCalledTimes(1);
     });
 

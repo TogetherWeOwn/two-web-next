@@ -126,6 +126,14 @@ function calendarFixture(upcoming: EventRow[], past: EventRow[], counts: Map<num
       if (!sql.includes("count(*)")) return { rows: [] };
       // The attributable aggregate joins users; the occupancy aggregate reads
       // every going row, so the join distinguishes the two batched counts.
+      // The combined aggregate merges both sides into (event_id, named,
+      // occupied) rows.
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return {
+          rows: [...counts]
+            .filter(([id]) => (params as unknown[]).includes(id))
+            .map(([id, c]) => [id, c.named, c.occupied]),
+        };
       return sql.includes('inner join "users"')
         ? countRows(sql, params, (c) => c.named)
         : countRows(sql, params, (c) => c.occupied);
@@ -168,6 +176,13 @@ function teaserFixture(rows: EventRow[], counts: Map<number, GoingCounts>) {
     if (sql.includes('from "featured_contents"')) return { rows: [] };
     if (sql.includes("set_config")) return { rows: [] };
     if (sql.includes('from "rsvps"')) {
+      if (sql.includes('left join "users"') && sql.includes("group by")) {
+        return {
+          rows: [...counts]
+            .filter(([id]) => (params as unknown[]).includes(id))
+            .map(([id, c]) => [id, c.named, c.occupied]),
+        };
+      }
       return {
         rows: [...counts]
           .filter(([id]) => (params as unknown[]).includes(id))
