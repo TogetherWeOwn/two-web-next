@@ -111,6 +111,49 @@ describe("generated leaf CSS review evidence", () => {
     });
   });
 
+  it("snapshots each revision with its own generator, not the head's", () => {
+    const { dir, base, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    // Generator-only change, CSS untouched: the CSP hash must still move.
+    writeFileSync(generator, readFileSync(generator, "utf8").replace('.join("\\n")', '.join("")'));
+    const head = commit();
+    const result = run(head);
+    expect(result.status, result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout);
+    const hash = (separator: string) =>
+      createHash("sha256")
+        .update(
+          ["body { color: black; }", ":root { --accent: lime; }", ".hero { display: grid; }"].join(
+            separator,
+          ),
+        )
+        .digest("base64");
+    expect(report.changed).toBe(true);
+    expect(report.base).toMatchObject({ sha: base, sha256: hash("\n") });
+    expect(report.head).toMatchObject({ sha: head, sha256: hash("") });
+  });
+
+  it("copies the leaf-only seam only for revisions whose generator reads it", () => {
+    const { dir, base, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    writeFileSync(
+      generator,
+      readFileSync(generator, "utf8").replace(
+        '"public/theme.css"]',
+        '"public/theme.css", "assets/leaf-only.css"]',
+      ),
+    );
+    mkdirSync(join(dir, "assets"));
+    writeFileSync(join(dir, "assets/leaf-only.css"), "@media print { .leaf { margin: 0; } }");
+    const head = commit();
+    const result = run(head);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.changed).toBe(true);
+    expect(report.base.sha).toBe(base);
+    expect(report.head.sha).toBe(head);
+  });
+
   it("compares the merge queue's base and head revisions on merge_group runs", () => {
     // merge_group payloads carry no pull_request SHAs and no `before`, so a
     // chain without merge_group refs resolves both args to github.sha and the

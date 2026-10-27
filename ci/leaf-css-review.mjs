@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 // Review the derived CSP delta without committing derived bytes or hash pins.
 // Usage (offline, no deps): node ci/leaf-css-review.mjs <base-sha> <head-sha>
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   appendFileSync,
@@ -20,6 +20,9 @@ const inputs = [
   "public/theme-tokens.css",
   "public/theme.css",
 ];
+// Read by later generators (a revision's generator may or may not need them);
+// copied only when that revision has them, so every revision finds its inputs.
+const optionalInputs = ["assets/leaf-only.css"];
 const options = {
   encoding: "utf8",
   timeout: 10000,
@@ -35,6 +38,12 @@ function snapshot(sha) {
       const contents = execFileSync("git", ["show", `${sha}:${input}`], options);
       mkdirSync(dirname(join(dir, input)), { recursive: true });
       writeFileSync(join(dir, input), contents);
+    }
+    for (const input of optionalInputs) {
+      const present = spawnSync("git", ["cat-file", "-e", `${sha}:${input}`], options).status === 0;
+      if (!present) continue;
+      mkdirSync(dirname(join(dir, input)), { recursive: true });
+      writeFileSync(join(dir, input), execFileSync("git", ["show", `${sha}:${input}`], options));
     }
     mkdirSync(join(dir, "src"));
     // Use that revision's actual generator, not a duplicate concatenation rule.
@@ -81,15 +90,18 @@ try {
     );
   }
   console.log(JSON.stringify(report));
-} catch {
+} catch (error) {
   console.log(
     JSON.stringify({
       version: 1,
       ok: false,
       error_code: "leaf_css_review_failed",
       retryable: false,
+      detail: String(error?.message ?? error)
+        .split("\n")[0]
+        .slice(0, 300),
       next_action:
-        "Fetch both full commit revisions, then verify each revision's ci/build-leaf-css.mjs and its three CSS inputs; rerun node ci/leaf-css-review.mjs <base-sha> <head-sha>.",
+        "Fetch both full commit revisions, then verify each revision's ci/build-leaf-css.mjs and the CSS inputs it reads; rerun node ci/leaf-css-review.mjs <base-sha> <head-sha>.",
     }),
   );
   process.exitCode = 1;
