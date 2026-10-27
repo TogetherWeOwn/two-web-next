@@ -8,6 +8,7 @@ import type { JoinResult } from "../return-journey";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
+import { eventLinkAvailability } from "./link-availability";
 import type {
   EventAttendee,
   EventLink,
@@ -19,21 +20,41 @@ import type {
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-import { formatEventWhen as fmtWithOffset } from "./date-format";
+import { formatElapsedDuration, formatEventWhen as fmtWithOffset } from "./date-format";
 
-const DestinationPreview: FC<{ event: EventLink }> = ({ event }) => (
-  <>
-    {Number.isFinite(event.startsAt.getTime()) ? (
-      <>
-        {" "}
-        <time datetime={event.startsAt.toISOString()}>
-          {fmtWithOffset(event.startsAt, event.timezone)}
-        </time>
-      </>
-    ) : null}
-    {event.location ? <span class="event-related-location">{event.location}</span> : null}
-  </>
-);
+const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now }) => {
+  const availability = eventLinkAvailability(event, now);
+  return (
+    <>
+      {Number.isFinite(event.startsAt.getTime()) ? (
+        <>
+          {" "}
+          <time datetime={event.startsAt.toISOString()}>
+            {fmtWithOffset(event.startsAt, event.timezone)}
+          </time>
+        </>
+      ) : null}
+      {event.location ? (
+        <>
+          {" "}
+          <span class="event-related-location">{event.location}</span>
+        </>
+      ) : null}
+      {event.game ? (
+        <>
+          {" "}
+          <span class="event-related-game">{event.game}</span>
+        </>
+      ) : null}
+      {availability ? (
+        <>
+          {" "}
+          <span class="event-related-state">{availability}</span>
+        </>
+      ) : null}
+    </>
+  );
+};
 
 // Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
 // the blade wraps it in @guest, so any signed-in viewer (member or
@@ -92,6 +113,7 @@ export const EventPage: FC<{
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   const accessibilityNotes = e.accessibilityNotes?.trim();
+  const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
   const now = new Date();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
@@ -179,6 +201,12 @@ export const EventPage: FC<{
             </dd>
           </div>
         )}
+        {duration ? (
+          <div>
+            <dt>Duration</dt>
+            <dd>{duration}</dd>
+          </div>
+        ) : null}
         {e.location ? (
           <div>
             <dt>Where</dt>
@@ -448,13 +476,13 @@ export const EventPage: FC<{
                 data-testid="event-series-previous"
               >
                 <span>← Previous in series: {series.previous.title}</span>
-                <DestinationPreview event={series.previous} />
+                <DestinationPreview event={series.previous} now={now} />
               </a>
             ) : null}{" "}
             {series.next ? (
               <a href={`/e/${series.next.eventKey}`} rel="next" data-testid="event-series-next">
                 <span>Next in series: {series.next.title} →</span>
-                <DestinationPreview event={series.next} />
+                <DestinationPreview event={series.next} now={now} />
               </a>
             ) : null}
           </nav>
@@ -464,13 +492,13 @@ export const EventPage: FC<{
             {neighbors.previous ? (
               <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
                 <span>← Previous event: {neighbors.previous.title}</span>
-                <DestinationPreview event={neighbors.previous} />
+                <DestinationPreview event={neighbors.previous} now={now} />
               </a>
             ) : null}{" "}
             {neighbors.next ? (
               <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
                 <span>Next event: {neighbors.next.title} →</span>
-                <DestinationPreview event={neighbors.next} />
+                <DestinationPreview event={neighbors.next} now={now} />
               </a>
             ) : null}
           </nav>
@@ -482,16 +510,8 @@ export const EventPage: FC<{
               {related.map((event) => (
                 <li>
                   <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
-                    {event.title}{" "}
-                    <time datetime={event.startsAt.toISOString()}>
-                      {fmtWithOffset(event.startsAt, event.timezone)}
-                    </time>
-                    {event.location ? (
-                      <>
-                        {" "}
-                        <span class="event-related-location">{event.location}</span>
-                      </>
-                    ) : null}
+                    {event.title}
+                    <DestinationPreview event={event} now={now} />
                   </a>
                 </li>
               ))}
