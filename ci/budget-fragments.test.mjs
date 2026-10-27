@@ -24,9 +24,12 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // (ci/kit-perf-budget.json and ci/bundle-budget.json at the split commit),
 // plus the raise that landed on main during the split review and was
 // ported into its fragment (client.js.maxRawBytes 254976 -> 256000; see
-// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md) and the
+// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md), the
 // server.js.maxGzipBytes 335104 -> 335360 raise (see
-// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md).
+// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md), and the
+// one new-asset fragment ported from an open branch during its post-split
+// merge: public/islands/event-time-from-now.js 2048/1024 (see
+// ci/budgets/decisions/bundle/2026-10-26-event-time-from-now.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
@@ -63,6 +66,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
   "public/schedule-theme.css": { maxRawBytes: 9216, maxGzipBytes: 2304 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
+  "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
 };
 
 // sha256 of the frozen legacy-history archives: header + the verbatim
