@@ -5,7 +5,8 @@ night" card (server load read, page markup, shared time formatter). Each
 ceiling that moves does so by the least aligned step that covers the
 measured composition; every other limit is unchanged. The first table is the
 original three-ceiling measurement; the re-measure sections track main
-moving underneath (latest: main `e37975a07`, all three axes move one step).
+moving underneath (latest: main `d4d7a9da5`, server gzip and client raw move
+one step; client gzip still fits).
 
 Measured with `npm run build --prefix web` then `node ci/check-kit-perf.mjs`
 (Node 24.22.1, locked deps; two builds per tree on main `cb0f15736` plus its
@@ -70,13 +71,35 @@ server raw (1189761/1203200), worker, CSS and startup fit unchanged.
 Final raised values: client raw 257536, client gzip 103680, server gzip
 336640.
 
+### Third re-measure on the merged tree (main `d4d7a9da5`)
+
+Main grew the Kit event-detail bundle again (event-time-from-now #1767,
+cancelled-event labelling #1442). Merged tree, two builds, identical:
+
+| Axis | Merged tree | Previous ceiling | This branch ceiling | Margin |
+| --- | --- | --- | --- | --- |
+| client JS raw | 257788 | 257536 (over by 252) | 257792 | 4 B |
+| client JS gzip | 103591 | 103680 (fits) | 103680 (unchanged) | 89 B |
+| server JS gzip | 336643 | 336640 (over by 3) | 336896 | 253 B |
+
+Server gzip and client raw each take one 256 B step above the rejecting
+ceiling. The client raw margin is 4 B: raw bytes are deterministic
+(bit-identical across both builds), so the least step governs, but any
+further client growth needs another step. Client gzip (103591, +147 from
+main's growth) still fits 103680 and does not move. File counts (client
+55/55, server 116/126), server raw (1191090/1203200), worker, CSS and
+startup fit unchanged. Final raised values: client raw 257792, client gzip
+103680, server gzip 336896.
+
 `ci/budget-fragments.test.mjs` moves with the fragments. The additive
-allocation entries in `ci/check-kit-perf.test.mjs` are owned by the test
-correction handed back before this lands. No checker, gate, mask or
-exclusion changes; over-ceiling fixtures still fail closed. Not a feature or
-release approval. Undo: restore main's ceilings (client raw 257024, client
-gzip 103168, server gzip 336128) in `ci/budgets/kit/` (the join card then
-no longer fits) and delete this file; the 336640 test-ladder entry then become unused but harmless.
+allocation entries in `ci/check-kit-perf.test.mjs` (server gzip 336896,
+client raw 257792) are owned by the test correction handed back before this
+lands. No checker, gate, mask or exclusion changes; over-ceiling fixtures
+still fail closed. Not a feature or release approval. Undo: restore main's
+ceilings (client raw 257536, client gzip 103680, server gzip 336384) in
+`ci/budgets/kit/` (the join card then no longer fits) and delete this file;
+the 336640/336896/257792 test-ladder entries then become unused but
+harmless.
 
 ## Ported monolith history (verbatim, leading separator space kept)
 

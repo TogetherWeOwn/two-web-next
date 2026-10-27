@@ -29,10 +29,12 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md), the
 // event-detail client.js raise to 257024 raw / 103168 gzip, the
 // Happening-now server.js.maxGzipBytes 336128 raise, the join
-// next-game-night re-measured raises (client.js 257536 raw / 103680 gzip, both already admitted by the
-// event-detail ladder in ci/check-kit-perf.test.mjs;
+// next-game-night re-measured raises (client.js 257792 raw / 103680 gzip;
+// gzip already admitted by the event-detail ladder in
+// ci/check-kit-perf.test.mjs, the 257792 raw ladder entry is owned by the
+// pending test correction;
 // server.js.maxGzipBytes is admitted through
-// SHIPPING_SERVER_GZIP_ALLOCATIONS below, currently 336640; see
+// SHIPPING_SERVER_GZIP_ALLOCATIONS below, currently 336896; see
 // ci/budgets/decisions/kit-perf/2026-10-27-join-next-game-night.md),
 // and the one new-asset fragment ported from an open branch during its
 // post-split merge: public/islands/event-time-from-now.js 2048/1024 (see
@@ -43,7 +45,7 @@ const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
-    js: { maxRawBytes: 257536, maxGzipBytes: 103680, maxFiles: 55 },
+    js: { maxRawBytes: 257792, maxGzipBytes: 103680, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
@@ -142,17 +144,19 @@ function kitFixture(t, fragments) {
 // main 3baeb3793 (worst 336263, margin 121; lower 336128 rejects by 135);
 // 336640 is the join allocation re-measured again after main grew the Kit
 // server bundle (merged tree at main e37975a07, worst 336437, margin 203;
-// lower 336639 rejects by 202; see
-// ci/budgets/decisions/kit-perf/2026-10-27-join-next-game-night.md). Every
-// other pin stays exact: the oracle rejects any ceiling outside this list,
-// then deep-compares the rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336640];
+// lower 336639 rejects by 202); 336896 is the join allocation re-measured a
+// third time after main's event-detail growth (merged tree at main d4d7a9da5,
+// worst 336643 over two identical builds, margin 253; lower 336640 rejects
+// by 3; see ci/budgets/decisions/kit-perf/2026-10-27-join-next-game-night.md).
+// Every other pin stays exact: the oracle rejects any ceiling outside this
+// list, then deep-compares the rest of the plan.
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336640, 336896];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
