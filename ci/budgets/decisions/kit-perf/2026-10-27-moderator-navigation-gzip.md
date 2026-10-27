@@ -98,4 +98,8 @@ unmerged at measurement time. This step is the smallest cover for this
 composition; whichever PR lands second re-measures on the new main.
 Startup, runtime, staging and release acceptance are not claimed;
 exact-head CI and independent review remain mandatory. Undo: revert this
-fragment step and this record.
+fragment step, restore `SHIPPING_KIT_BUDGET.client.js.maxGzipBytes` in
+`ci/budget-fragments.test.mjs` to 103168, and revert this record together.
+If moderator navigation has merged, revert it or reduce its bundle first
+so the built output fits the restored ceiling; re-run the budget suites
+and `node ci/check-kit-perf.mjs` before landing the rollback.
