@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { DiscordWidgetSnapshot } from "../src/discord-widget";
-import { joinPageCacheControl } from "../src/join/kit-page";
+import { joinPageCacheControl, parseJoinNotice } from "../src/join/kit-page";
 
 const snapshot = {
   guildId: "326474832151838730",
@@ -39,6 +39,27 @@ describe("Kit GET /join cache contract (Hono joinPage parity)", () => {
   it("the static page without presence or flash keeps 3600 s", () => {
     expect(joinPageCacheControl(null, null)).toBe("public, max-age=3600");
     expect(joinPageCacheControl(null, undefined)).toBe("public, max-age=3600");
+  });
+});
+
+describe("Kit GET /join notice allowlist (Hono route-page parity)", () => {
+  it("accepts exactly start-failed", () => {
+    expect(parseJoinNotice("start-failed")).toBe("start-failed");
+  });
+
+  it("rejects null, empty, mistyped, hostile and case variants", () => {
+    for (const value of [
+      null,
+      "",
+      "bogus",
+      "START-FAILED",
+      "start-failed ",
+      " start-failed",
+      "start_failed",
+      "<script>alert(1)</script>",
+    ]) {
+      expect(parseJoinNotice(value), `notice ${String(value)}`).toBeNull();
+    }
   });
 });
 

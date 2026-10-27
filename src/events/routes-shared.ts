@@ -1,10 +1,11 @@
 // Shared event-route middleware and serializers. Split out of
 // src/events/routes.tsx so each route group registers from its own module;
 // this file holds what at least two groups use. Re-exported from the barrel.
-import type { Context, Hono } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import type { Env, Session } from "../env";
 import { loginUrl, wallDateIso, wallTimeHm } from "../islands/contracts";
 import { safeNext } from "../join/service";
+import { safeRequestId } from "../request-log";
 import { throttleGuard } from "../throttle";
 import {
   PUBLIC_DATA_ERROR_NEXT,
@@ -12,7 +13,7 @@ import {
   type PublicEventDto,
   type PublicEventId,
 } from "../public-data/contracts";
-import { varyAccept } from "../errors";
+import { clampOutageRetryAfter, OUTAGE_RETRY_AFTER_SECONDS, varyAccept } from "../errors";
 import type { PublicEvent } from "./reads";
 
 export type Ctx = Context<{ Bindings: Env }>;
@@ -44,6 +45,38 @@ export async function publicReadGuard(c: Ctx): Promise<Response | null> {
 }
 
 /**
+ * Internal-only seed header carrying the dispatch-minted request id into the
+ * Kit guard apps (kit-past-events.ts, kit-events.ts), whose bare Hono context
+ * otherwise renders 429 pages with no support reference. Never trusted from
+ * the client: seedGuardRequestId overwrites any client-sent value with the
+ * validated dispatch id, or strips it when no id is passed, and the
+ * middleware re-validates the shape before merging it into context.
+ */
+export const GUARD_REQUEST_ID_HEADER = "x-two-guard-request-id";
+
+/**
+ * Clone a request for the guard apps with the dispatch id seeded (or the
+ * header stripped when the id is absent or hostile). Rebuilt from URL +
+ * method + headers: the guard reads no body (client key, path and Accept
+ * only), and cloning a body-bearing request would need a duplex stream the
+ * guard never consumes.
+ */
+export function seedGuardRequestId(request: Request, requestId: unknown): Request {
+  const headers = new Headers(request.headers);
+  const id = safeRequestId(requestId);
+  if (id === undefined) headers.delete(GUARD_REQUEST_ID_HEADER);
+  else headers.set(GUARD_REQUEST_ID_HEADER, id);
+  return new Request(request.url, { method: request.method, headers });
+}
+
+/** Merge the seeded dispatch id into the guard context for 429 pages. */
+export const guardRequestId: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
+  const id = safeRequestId(c.req.header(GUARD_REQUEST_ID_HEADER));
+  if (id !== undefined) c.set("requestId", id);
+  await next();
+};
+
+/**
  * True only when the caller explicitly lists application/json with q>0 (same
  * quality grammar as jsonSession below): absent, wildcard, feed-native and
  * q=0-excluded callers stay on the plaintext feed contract.
@@ -73,8 +106,9 @@ function feedJsonRequested(c: Ctx): boolean {
  * either way, with Vary: Accept merged since the representation negotiates.
  * Throttled feeds (429) keep their plaintext refusal on every Accept.
  */
-export function unavailableFeed(c: Ctx, message: string): Response {
+export function unavailableFeed(c: Ctx, message: string, retryAfter?: number): Response {
   varyAccept(c);
+  if (retryAfter !== undefined) c.header("Retry-After", String(retryAfter));
   if (feedJsonRequested(c)) {
     return c.json(
       {
@@ -92,7 +126,18 @@ export function unavailableFeed(c: Ctx, message: string): Response {
   return c.text(message, 503, { "cache-control": "no-store" });
 }
 
-export const eventsUnavailable = (c: Ctx) => unavailableFeed(c, "Events temporarily unavailable");
+export const eventsUnavailable = (c: Ctx, retryAfter: number = OUTAGE_RETRY_AFTER_SECONDS) =>
+  unavailableFeed(c, "Events temporarily unavailable", clampOutageRetryAfter(retryAfter));
+
+/**
+ * Inline no-database refusal for the JSON-only event legs: the exact legacy
+ * `{error: "db_unavailable"}` bytes plus the outage Retry-After header.
+ */
+export function dbUnavailableJson(c: Pick<Ctx, "json">): Response {
+  return c.json({ error: "db_unavailable" }, 503, {
+    "Retry-After": String(OUTAGE_RETRY_AFTER_SECONDS),
+  });
+}
 
 export function eventJson(e: PublicEvent) {
   // Legacy EventResource order: event_key first, synced_to_discord

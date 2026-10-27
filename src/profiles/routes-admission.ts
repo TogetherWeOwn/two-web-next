@@ -3,6 +3,7 @@
 // limit and session gate on PATCH and form-override POST in routes-writes.tsx.
 import type { Next } from "hono";
 import postgres from "postgres";
+import { warnAdmissionStoreFailure } from "../admission-diagnostics";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import type { Env } from "../env";
 import { nonOwnerProfileWrite, rateLimitExceeded } from "../errors";
@@ -25,9 +26,10 @@ export function admitWrite(deps: ProfileDeps) {
 
   return async (c: Ctx, next: Next) => {
     const viewer = c.get("viewer");
-    const verdict = await throttle(c, `profile-write:${viewer.id}`).catch(
-      () => ({ limited: false }) as Verdict,
-    );
+    const verdict = await throttle(c, `profile-write:${viewer.id}`).catch((err: unknown) => {
+      warnAdmissionStoreFailure(c, "profile-write", err);
+      return { limited: false } as Verdict;
+    });
     if (verdict.limited) return rateLimitExceeded(c, verdict.retryAfter);
     // UserPolicy::updateProfile: owner only. Moderators do not edit others' profiles.
     const id = c.req.param("user") ?? "";

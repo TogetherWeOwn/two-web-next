@@ -1,0 +1,9 @@
+{
+  "$comment": "See ci/budgets/README.md; changing this ceiling needs a decision file in ci/budgets/decisions/kit-perf/.",
+  "worker": {
+    "_worker.js": {
+      "maxRawBytes": 3584,
+      "maxGzipBytes": 1536
+    }
+  }
+}

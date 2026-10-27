@@ -36,7 +36,7 @@ expires within two hours (120 minutes after its last session-refreshing page vie
 normal browsing can rotate and extend that idle window, but never beyond
 24 hours from the login that started the session lineage. Rotation preserves
 that start time; reaching the absolute cap requires a fresh sign-in and role
-lookup. Kit-served admin pages renew the sliding session exactly like the Hono
+lookup. Kit-served admin pages rotate the session exactly like the Hono
 panel, under the same absolute cap. For immediate invalidation,
 an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply
@@ -158,8 +158,43 @@ bounds expire with the transaction without changing pooled connection defaults.
 If an inventory statement times out, the read transaction rolls back before
 the existing private, no-store 503 outage response is returned. A refused
 inventory never renders as an empty list: wait briefly, then reload the page.
+On a Kit admin read error, **Retry loading** repeats the current GET, keeping its
+filters and page. It does not resubmit a form or retry automatically. Missing-row
+404 pages keep their list/dashboard exits instead; malformed page state also
+falls back to those exits. This does not enable any additional Kit route cohort.
 If the outage continues, use the response's support reference when contacting
 the maintainers.
+
+## Pending or unconfirmed saves
+
+With JavaScript enabled, event and featured-content editors show **Saving… Please
+wait.** when you submit. Repeating the action during the next ten seconds sends
+no extra submission and explains that saving is already pending. This feedback
+does not move keyboard focus or confirm success.
+
+If the page has not navigated after ten seconds, the message says saving is not
+confirmed. Your draft remains in the current document. Check the saved record
+before resubmitting: the first write may have succeeded. There is no automatic
+retry or draft storage across navigation. Returning to the document clears stale
+save feedback without marking your draft saved. Native forms still submit
+normally without JavaScript, but do not show this client-side feedback.
+
+## Recover an empty event or featured list
+
+On `/admin/events` and `/admin/featured`, **Clear filters** appears when a
+search or filter is applied, even when rows are visible. It clears all filters
+and returns to page 1 while keeping the current sort and direction. It does
+not change any event or featured slot.
+
+A successful empty page 1 says **No events yet.** or **No featured content yet.**
+when unfiltered, or says no content matches the filters when filtered. Use
+**Clear filters** to broaden a no-match search.
+
+An empty page after page 1 says **No results on this page.** This does not mean
+the whole inventory is empty. Choose **First page of these results** to keep
+the current filters and sort and return directly to page 1; **Previous** still
+moves back one page. Both recovery links work by keyboard and without JavaScript.
+An unavailable read is still an outage, not an empty list; follow the guidance above.
 
 ## Correct a rejected draft
 
@@ -200,7 +235,8 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/events/:key` | **Save** event fields. |
 | POST | `/admin/events/:key/publish` | **Publish** a draft. |
 | POST | `/admin/events/:key/cancel` | **Cancel** / **Cancel event**. |
-| POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling. |
+| POST | `/admin/events/:key/duplicate` | **Duplicate as draft**: copy the event into a new unpublished draft. |
+| POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling, after a native review step. |
 | POST | `/admin/events/:key/rsvp-reopen` | **Reopen RSVPs** on an eligible event. |
 | GET | `/admin/featured` | Featured content list, title/publication filters, sorting and pagination. |
 | GET | `/admin/featured/new` | **New featured slot** form. |
@@ -212,7 +248,7 @@ POST paths are form actions, **not URLs to open or call manually**.
 | GET | `/admin/join-attempts/:id` | Read-only attempt outcome and trace detail. |
 | GET | `/admin/activity-log` | Read-only activity log, subject/causer filters and pagination. |
 
-These are the 19 canonical routes in `src/admin/routes.tsx` (10 GET, 9 POST).
+These are the 20 canonical routes in `src/admin/routes.tsx` (10 GET, 10 POST).
 Five additional GET routes retain legacy bookmarks as 301 redirects:
 
 | Legacy path | Destination |
@@ -223,17 +259,19 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 | `/admin/featured-contents/create` | `/admin/featured/new` |
 | `/admin/featured-contents/:id/edit` | `/admin/featured/:id` with the native ID resolved from the imported legacy ID, not a native-ID fallback. |
 
-All 24 routes (15 GET, 9 POST) use the moderator guard. Legacy redirects drop
+All 25 routes (15 GET, 10 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
-Mutating buttons submit immediately: there is no action-confirmation dialog.
+Pausing RSVPs opens a native review first: open **Review pause**, check the
+named event and consequence, then press the final **Pause RSVPs**. Other
+mutating buttons submit immediately with no action-confirmation dialog.
 Double-check the event/slot and intended action before pressing one. The event
 editor's separate browser warning for unsaved changes is not action approval.
 
 ### Kit admin shells (shipped; join-attempts pair Kit-served)
 
 Each of the 10 admin GET routes above also ships a Kit shell. The
-mixed-mode truth: the migration is GET-only; all 9 POST form actions stay
+mixed-mode truth: the migration is GET-only; all 10 POST form actions stay
 Hono with no manifest entries of their own. Most shell entries in
 `src/route-ownership.ts` (`ROUTE_MANIFEST`) still read `enabled: false`, so
 Hono serves those pages; the join-attempts list and detail entries read
@@ -277,7 +315,7 @@ the remaining moderator-admin journeys stay Hono-only, ledgered as skipped.
 Before publishing, use the [event page content readiness checklist](event-content-readiness.md) to confirm members can decide whether and how to attend.
 
 1. Open `/admin/events`, choose **New event**, or open an existing event by its
-   title. **Search** matches title only; **Status** filters `draft`, `published`,
+   title. **Search** matches titles and saved games; **Status** filters `draft`, `published`,
    `cancelled` or `past`. **RSVPs** filters Open/Paused; **Series** filters
    Parent/Child/Standalone; **Fill** filters Full/Has seats/Unlimited.
    Full/Has seats compare finite capacity with **Going** answers only, not Maybe
@@ -343,6 +381,12 @@ leave-page warning for unsaved changes (including after a rejected Save).
   Use the [event cancellation and reschedule communication checklist](events-communications.md)
   after verifying the site state.
 - `past` is a list filter/status, not something moderators set with a button.
+- **Duplicate as draft** on edit copies a draft, published or cancelled event
+  into a new unpublished draft titled `Copy of …` with the same venue, access,
+  joining, capacity and organizer, a fresh key, and cleared RSVPs, series
+  linkage and Discord mirror state. The copy is never published or announced:
+  review it and publish it like any new draft. A series parent duplicates as
+  one standalone event; siblings are never materialized.
   Public pages can classify an event as past by its end time even while the stored
   status still says `published`; the admin `past` filter need not include every
   ended event.
@@ -361,10 +405,37 @@ leave-page warning for unsaved changes (including after a rejected Save).
   recurrence fields afterward. Escalate needs outside the visible controls
   instead of invoking other APIs.
 
+### How cancelled events read on the public schedule
+
+Cancelled events stay listed so members can see what changed; the listing is
+informational, never an invitation. What both moderators and members see:
+
+- The list card keeps its title, scheduled time range, location, and a
+  **Cancelled** badge. The title is plain text: the detail page answers 410,
+  so there is intentionally no link to follow.
+- The card shows **no sign-in or RSVP invitation**. The general
+  **Join the Discord** navigation stays: joining the community is still
+  possible, answering the cancelled event is not.
+- The retained count reads **N existing responses**: answers members left
+  before cancellation. It is not attendance, not available places, and not a
+  reason to attend. Capacity is not shown on cancelled cards.
+- Month-grid entries carry the same **Cancelled** badge word in text (never
+  color alone) and name the cancellation to assistive technology. The entry
+  still jumps to the retained list card; like the card title, it never links
+  to the 410 detail page.
+
+To notify the people behind the existing responses, use the read-only RSVP
+roster for planning and the [event cancellation and reschedule communication
+checklist](events-communications.md) for the message. Do not report the
+existing-responses count as attendance.
+
 ### Pause or reopen RSVPs
 
 Published events that have not ended show **Pause RSVPs** or **Reopen RSVPs**
-on the list and edit screen. These actions keep the event published; pausing is
+on the list and edit screen. Pausing opens a native review naming the saved
+event and the consequence (signups close, the waitlist line freezes) before
+the final submit; closing the review changes nothing and **Reopen RSVPs**
+stays one-click. These actions keep the event published; pausing is
 not cancellation and does not remove existing answers. Reopening can promote
 waiting members into available seats in first-in-first-out order. Both changed
 settings attempt asynchronous Discord write-back, not immediate delivery.
@@ -504,14 +575,22 @@ Retyping a bound to minute precision narrows it on purpose.
 
 ### Preview and safe editing
 
-The edit page shows a **Homepage preview** panel: the last saved content,
-checked at the printed UTC time. Pressing **Create** or **Save** refreshes it.
-Typed-but-unsaved edits never appear there, and neither do rejected
-submissions: after a failed save the form keeps the submitted values for
-correction while the preview still shows the last saved row. The new-slot page
-has no preview. When the slot is not currently visible, the panel says so
-instead of rendering the slot. An inline preview is not proof of guest homepage
-delivery: verify the homepage as a guest after an authorized change.
+The edit page shows a **Homepage preview** panel with two parts. **Saved
+content preview** renders the last saved card — headline, body, admitted link
+and image — for every saved status, unpublished included, checked at the
+printed UTC time. **Homepage eligibility** separately reports the status badge,
+the reason (publication off, starts in the future, window ended, or eligible)
+and the saved UTC window bounds; an absent bound means the window is open on
+that side. For a published slot with a saved bound the editor cannot decode
+(such as a BC timestamp or infinity), the panel reports **unavailable** rather
+than asserting eligibility; the exact saved bound text remains visible. An
+unchecked **Published** setting still reports **unpublished** first. Pressing
+**Create** or **Save** refreshes both. Typed-but-unsaved
+edits never appear in the card, and neither do rejected submissions: after a
+failed save the form keeps the submitted values for correction while the card
+and eligibility still show the last saved row. The new-slot page has no
+preview. Neither part is proof of guest homepage delivery: verify the homepage
+as a guest after an authorized change.
 
 Follow one coherent workflow per approved change:
 
@@ -548,7 +627,7 @@ and **Attempted** (UTC). It shows up to **100 rows per page** from the last
 **90 days**, newest first, not every server join or sign-in. Use **Next** for older
 rows and **Previous** to return, retaining filters; **Filter** returns to page 1.
 
-Use **Outcome** (`added`, `already_member`, `error`, `denied`, `degraded`) and
+Use **Outcome** (`added`, `already_member`, `error`, `denied`, `degraded`, `rate_limited`) and
 **Discord id or request id**, then **Filter**. Search is an exact ID match, not
 a username/substring search. Empty cells mean unavailable values, not verified
 anonymity. Source is attribution, not authenticated identity. Select an outcome
@@ -556,7 +635,8 @@ link to open `/admin/join-attempts/:id`: it shows **Outcome**, **Source**,
 **Attempted at (UTC)** and **Trace** (**Request ID**, **Discord ID**) as recorded.
 Missing request IDs appear as a dash. Detail links only resolve attempts within
 the same 90-day window. **Back to join attempts** returns to the unfiltered first
-page. There is no edit, delete or retry control. Cancelled consent, expired state
+page. There is no edit, delete or join-replay control; **Retry loading** on a failed
+read only reloads this viewer. Cancelled consent, expired state
 and failures before identity exchange can record a null Discord ID; those attempts
 remain visible with an empty Discord cell (a dash in detail), without inventing a
 member subject. Request/source fields are still diagnostics, not proof of anonymity.
@@ -571,7 +651,10 @@ Stop and escalate any refusal rather than seeking another access path.
 
 For outcome meanings and safe escalation, use the
 [join troubleshooting guide](troubleshooting-join.md#moderator-diagnostics-and-escalation).
-Request ID is normally blank for the current live Discord add-member call.
+Request ID carries the website's correlation ID (the callback's
+`x-request-id`) on `denied` and `error` rows, so those rows join to request
+logs. On `added`, `already_member`, `degraded` and `rate_limited` rows it
+stays blank because the live add-member call returns no request ID.
 The ordinary sign-in flow does not write these rows; absence is not proof of
 success or no attempted join. Keep member identifiers private.
 
@@ -591,8 +674,8 @@ row, the same rule as join attempts. Keep member identifiers private.
 
 ### Dashboard
 
-`/admin` has **Events**, **Featured content** and **Activity log** cards plus
-these diagnostic sections when their data is available:
+`/admin` has **Events**, **Featured content**, **Activity log** and **Join attempts**
+cards plus these diagnostic sections when their data is available:
 
 - **Join funnel, last 90 days:** counts for recorded outcomes across the full
   window, not just one 100-row viewer page. Aggregate counts contain no member
@@ -675,6 +758,7 @@ through the approved private support process.
 | Report | Moderator response |
 |---|---|
 | Join recovery or sign-in notice | Follow the [join troubleshooting guide](troubleshooting-join.md); one-click join and sign-in have different failure behavior. |
+| RSVP seat, waitlist, pending mirror or uncertain write | Follow [RSVP states and safe recovery](rsvp-recovery.md). Pending sync is not a failed reservation; an unknown result needs a refreshed event read before another write. For this support report collect only the sanitized page path, exact visible sentence and approximate time/timezone through the approved private support process. Do not request roster/member exports, callback queries, cookies, headers or credentials, or attempt manual SQL or queue replay. |
 | **Slow down a little** (429) | Wait for `Retry-After`, or at least a minute if unavailable. Copy the Support reference from the page into the incident report. Do not repeatedly click or bypass the limit. |
 | **That request is too large** (413) on event create/save | Wire body is over the 64K `form` cap ([body budgets](body-limits.md#classes-and-derivation)). Shrink the payload and retry. Order is guard, then cap, then throttle: sign-in and moderator role still come first (a guest redirect or 403 takes precedence), but the cap runs before the write throttle, so an oversized body answers 413 even when the budget is spent, and 429 applies only to bodies at or under the cap. |
 | **Something broke on our side** (500) | Offer `/discord` for server entry and escalate the path, wording, Support reference and time. Do not guess the cause. |

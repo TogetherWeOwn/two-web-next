@@ -3,7 +3,7 @@ import { page } from "$app/state";
 import ErrorShell from "#lib/ErrorShell.svelte";
 import EventGone from "#lib/EventGone.svelte";
 import EventMissing from "#lib/EventMissing.svelte";
-import { FALLBACK_INVITE } from "../../../../../src/invite";
+import { FALLBACK_INVITE } from "../../../../../src/invite-fallback";
 import { isKitErrorStatus } from "../../../../../src/kit-errors";
 
 // Route-level error page for GET /e/:key: the load throws the branded #838
@@ -29,5 +29,5 @@ const missing = $derived(page.status === 404 ? page.error?.missing : undefined);
 {:else if missing}
   <EventMissing model={missing} />
 {:else}
-  <ErrorShell code={status} inviteUrl={FALLBACK_INVITE} />
+  <ErrorShell code={status} inviteUrl={FALLBACK_INVITE} supportReference={page.data.requestId} />
 {/if}

@@ -57,15 +57,24 @@ export function readApiPublicCache(key: string, now = Date.now()): ApiPublicCach
  * target from one page's metadata and replay another snapshot's non-final
  * page. Only the entry at the target itself can prove it is the last page.
  * Returns null when no unexpired final-page entry proves a clamp.
+ * The optional `game` isolates filtered clamps: each game's past-the-end page
+ * replays only its own last page, never another game's or the unfiltered one.
  */
 export function findCachedClampTarget(
   limit: number,
   rawPage: number,
+  game?: string | null,
   now = Date.now(),
 ): number | null {
+  const gameSuffix = game ? `&game=${encodeURIComponent(game)}` : "";
   const prefix = `GET /api/public/events?limit=${limit}&page=`;
   for (const [key, entry] of entries) {
     if (!key.startsWith(prefix)) continue;
+    if (gameSuffix) {
+      if (!key.endsWith(gameSuffix)) continue;
+    } else if (key.includes("&game=")) {
+      continue;
+    }
     if (entry.expiresAt <= now) continue;
     let lastPage: unknown;
     try {
@@ -74,7 +83,7 @@ export function findCachedClampTarget(
       continue;
     }
     if (typeof lastPage !== "number" || !Number.isSafeInteger(lastPage) || lastPage < 1) continue;
-    if (rawPage > lastPage && key === `${prefix}${lastPage}`) return lastPage;
+    if (rawPage > lastPage && key === `${prefix}${lastPage}${gameSuffix}`) return lastPage;
   }
   return null;
 }
