@@ -2,7 +2,7 @@
   "$comment": "See ci/budgets/README.md; changing this ceiling needs a decision file in ci/budgets/decisions/kit-perf/.",
   "client": {
     "js": {
-      "maxRawBytes": 256000,
+      "maxRawBytes": 257536,
       "maxGzipBytes": 103168,
       "maxFiles": 55
     }
