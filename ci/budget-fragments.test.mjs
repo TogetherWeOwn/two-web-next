@@ -123,18 +123,19 @@ function kitFixture(t, fragments) {
 // print scope line (combined worst 335588, margin 28; lower 335360 rejects by
 // 228); 335872 is the fourth, the event-time duration and clock labels
 // (measured 335639, margin 233; lower 335616 rejects by 23); 336128 is the
-// fifth, the composition of both on current main (measured 335951, margin
-// 177; lower 335872 rejects by 79; the next 256B step 336384 stays
-// unsupported). Every other pin stays exact: the oracle rejects any ceiling
-// oracle rejects any ceiling outside this list, then deep-compares the rest
-// of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335616, 335872, 336128];
+// fifth, the composition of both on the previous main (measured 335951,
+// margin 177; lower 335872 rejects by 79); 336384 is the sixth, the same
+// composition plus the archive search form (measured 336134, margin 250;
+// lower 336128 rejects by 6; the next 256B step 336640 stays unsupported).
+// Every other pin stays exact: the oracle rejects any ceiling outside this
+// list, then deep-compares the rest of the plan.
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335616, 335872, 336128, 336384];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335616, 335872, 336128`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335616, 335872, 336128, 336384`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
@@ -174,8 +175,15 @@ test("shipping oracle admits the measured 336128 server gzip allocation", () => 
   });
 });
 
+test("shipping oracle admits the measured 336384 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 336384 } },
+  });
+});
+
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335617, 336127]) {
+  for (const maxGzipBytes of [335105, 335359, 335617, 336127, 336383]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
