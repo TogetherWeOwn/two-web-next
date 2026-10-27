@@ -14,6 +14,10 @@ type Rendered = { head: string; body: string };
 type KitEvent = {
   url: URL;
   params: { signal: string };
+  // SvelteKit always supplies locals (possibly empty) and page.data
+  // (possibly empty) in production; the bindings and the root error
+  // boundary read them strictly, so the fixture carries both.
+  locals: Record<string, unknown>;
   setHeaders: (headers: Record<string, string>) => void;
 };
 export type PeriodKit = {
@@ -77,7 +81,7 @@ export const error = (status) => { page.status = status; return render(ErrorPage
           plugin.onLoad({ filter: /.*/, namespace: "period-fixture" }, ({ path }) => ({
             contents:
               path === "state"
-                ? "export const page = { status: 400 };"
+                ? "export const page = { status: 400, data: {} };"
                 : "let current; export const setEnv = (value) => { current = value; }; export const env = new Proxy({}, { get: (_, key) => Reflect.get(current, key) });",
             loader: "js",
           }));
@@ -157,6 +161,7 @@ export async function renderPeriodRequest(
       const event: KitEvent = {
         url,
         params: { signal },
+        locals: {},
         setHeaders: (values) => Object.assign(headers, values),
       };
       try {

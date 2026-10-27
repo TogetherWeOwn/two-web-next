@@ -39,6 +39,7 @@ import { formatEventWhen, isValidZone } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
+import { eventLinkAvailability } from "./link-availability";
 import {
   ATTENDEE_PAGE_SIZE,
   getEventNeighbors,
@@ -106,6 +107,11 @@ export interface KitEventDetailLink {
   whenText: string;
   datetime: string;
   location: string | null;
+  /** Destination's game; null renders no game line on the preview. */
+  game: string | null;
+  /** Destination's availability verdict at the render instant
+   * (`eventLinkAvailability`); null renders no state line. */
+  availability: string | null;
 }
 
 /** Series run context for the detail view: the hosts behind the run plus the
@@ -244,16 +250,21 @@ export function eventDetailConsumesFlash(outcome: KitEventDetailOutcome, method:
  * GET /e/:key handler (src/events/routes-detail.tsx): the shared public-read
  * budget runs before any read, and a limited client gets the Hono 429 with its
  * no-store, private headers instead of the page. The hook binds env into this
- * (request, render) => dispatchEventDetailRequest(request, env, render); the
- * core decides WHEN it runs, so the route-id branch is pinned in
+ * (request, render, requestId) => dispatchEventDetailRequest(...); the core
+ * decides WHEN it runs, so the route-id branch is pinned in
  * src/route-ownership.ts instead of in web/src/hooks.server.ts. */
 export async function dispatchEventDetailRequest(
   request: Request,
   env: Env,
   render: () => Promise<Response>,
-  guard: (request: Request, env: Env) => Promise<Response | null> = kitPublicReadGuard,
+  guard: (
+    request: Request,
+    env: Env,
+    requestId?: unknown,
+  ) => Promise<Response | null> = kitPublicReadGuard,
+  requestId?: unknown,
 ): Promise<Response> {
-  const limited = await guard(request, env);
+  const limited = await guard(request, env, requestId);
   if (limited) return limited;
   return render();
 }
@@ -295,7 +306,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
 // Preserve the read-model export used by existing Kit callers.
 export { formatEventWhen } from "./date-format";
 
-function toLink(link: EventLink): KitEventDetailLink {
+function toLink(link: EventLink, now: Date): KitEventDetailLink {
   // Discovery instants use the served long-offset detail format (the hero
   // format), not the calendar grid format.
   return {
@@ -304,6 +315,8 @@ function toLink(link: EventLink): KitEventDetailLink {
     whenText: formatEventWhen(link.startsAt, link.timezone),
     datetime: link.startsAt.toISOString(),
     location: link.location,
+    game: link.game || null,
+    availability: eventLinkAvailability(link, now),
   };
 }
 
@@ -553,15 +566,15 @@ export async function resolveKitEventDetail(
           answer,
           waitlistPosition: position,
           neighbors: {
-            previous: neighbors.previous ? toLink(neighbors.previous) : null,
-            next: neighbors.next ? toLink(neighbors.next) : null,
+            previous: neighbors.previous ? toLink(neighbors.previous, now) : null,
+            next: neighbors.next ? toLink(neighbors.next, now) : null,
           },
-          related: related.map(toLink),
+          related: related.map((link) => toLink(link, now)),
           series: series
             ? {
                 hosts: series.hosts,
-                previous: series.previous ? toLink(series.previous) : null,
-                next: series.next ? toLink(series.next) : null,
+                previous: series.previous ? toLink(series.previous, now) : null,
+                next: series.next ? toLink(series.next, now) : null,
               }
             : null,
           showJoinPitch: !viewer,
