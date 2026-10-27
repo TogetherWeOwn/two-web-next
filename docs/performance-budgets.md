@@ -138,9 +138,18 @@ never retries. Every run writes `.lighthouseci/mobile-collect.log` (full lhci
 output) and, on failure, `.lighthouseci/mobile-collect-diagnosis.md`, which says
 COLLECT FAILURE (short evidence: re-run the step, budgets untouched), BUDGET
 BREACH (full evidence plus an evaluated assertion miss: see
-`.lighthouseci/assertion-results.json` and `.lighthouseci/reports/`), or an
-unclassified step failure (full evidence, no assertion verdict). Both files ship
-in the `lighthouse-<sha>` artifact.
+`.lighthouseci/mobile-assertion-results.json` and `.lighthouseci/reports/`), or an
+unclassified step failure (full evidence, no assertion verdict). The mobile assertion
+snapshot survives the desktop step's replacement of the shared assertion file;
+it ships with the log and diagnosis in the `lighthouse-<sha>` artifact. A new
+collection clears the previous diagnosis and mobile assertion snapshot.
+
+The reviewed mobile config is the only plan: CLI options and `LHCI_*` environment
+overrides are rejected before touching evidence or starting LHCI (exit 2 with
+`INVALID_ARGUMENTS`). Remove the overrides; propose configuration changes in a
+reviewed PR instead. The sole informational options, `npm run lighthouse -- --help`
+and `npm run lighthouse -- --version`, run once, propagate LHCI's exit code and
+preserve all previous evidence.
 
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no

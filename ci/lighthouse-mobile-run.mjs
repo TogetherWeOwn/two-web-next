@@ -22,13 +22,24 @@
 //      tails below name it).
 // The mobile budgets (ci/lighthouserc.cjs assertions, performance floor in
 // ci/quality-budget.json) are never touched here.
-// Usage: npm run lighthouse [-- <extra lhci args>]
+// Usage: npm run lighthouse [-- --help|--version]
+// CLI and LHCI_* environment overrides are rejected: the reviewed file config
+// is the only collection/assertion plan. Informational flags never touch evidence.
 // Selftest: node ci/lighthouse-mobile-run.mjs --selftest (hermetic: injected
 // lhci stub and temp dirs, no network or browser).
 import { spawn } from "node:child_process";
 import assert from "node:assert/strict";
 import { createRequire } from "node:module";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
+import {
+  copyFileSync,
+  existsSync,
+  mkdtempSync,
+  mkdirSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -111,7 +122,7 @@ export function buildDiagnosis({ mode, expected, attempts }) {
     verdict =
       "BUDGET BREACH: full evidence collected and an assertion vs the mobile " +
       "budgets missed (performance floor ci/quality-budget.json, LCP/CLS/TBT " +
-      "budgets ci/lighthouserc.cjs). See .lighthouseci/assertion-results.json " +
+      "budgets ci/lighthouserc.cjs). See .lighthouseci/mobile-assertion-results.json " +
       "and .lighthouseci/reports/ for the route and the failing audits. Fix " +
       "the cause; do not lower the budgets.";
   } else if (last.matrix.complete) {
@@ -148,10 +159,32 @@ export async function main(
     log = console.log,
   } = {},
 ) {
-  const { collect, expected, runsPerRoute, mode } = expectedLhrs();
   const extraArgs = argv.filter((a) => a !== "--selftest");
+  const informational = extraArgs.length === 1 && ["--help", "--version"].includes(extraArgs[0]);
+  // No passthrough overrides: LHCI's CLI and environment precedence must not
+  // collect/assert a different plan from the one whose evidence we count.
+  if (
+    (extraArgs.length > 0 && !informational) ||
+    Object.keys(env).some((key) => /^LHCI_/i.test(key) && env[key] !== undefined)
+  ) {
+    log(
+      "INVALID_ARGUMENTS: mobile collection accepts only --help or --version, not LHCI_* " +
+        "environment or CLI overrides. Remove overrides; change ci/lighthouserc.cjs in a reviewed PR.",
+    );
+    return 2;
+  }
+  if (informational) {
+    if (extraArgs[0] === "--help")
+      log(
+        "Mobile wrapper: npm run lighthouse [-- --help|--version]; LHCI overrides are unsupported.",
+      );
+    const { exitCode } = await run({ env, extraArgs });
+    return exitCode;
+  }
+  const { collect, expected, runsPerRoute, mode } = expectedLhrs();
   mkdirSync(join(logFile, ".."), { recursive: true });
   writeFileSync(logFile, "");
+  rmSync(diagnosisFile, { force: true });
 
   const attempts = [];
   for (let n = 1; n <= MAX_ATTEMPTS; n += 1) {
@@ -162,10 +195,12 @@ export async function main(
     }
     // Clean accounting for every attempt, including the first: stale LHRs or
     // reports from an earlier invocation must not masquerade as fresh
-    // evidence (the log and any earlier diagnosis stay, since they live
-    // outside both evidence dirs). clearAttemptEvidence's first parameter is
+    // evidence. The log survives a retry; the previous invocation's diagnosis
+    // was cleared at startup. clearAttemptEvidence's first parameter is
     // named for the desktop uploader but takes any per-route upload dir.
     clearAttemptEvidence({ qualityDir: reportsDir, lhciDir });
+    const mobileAssertions = join(lhciDir, "mobile-assertion-results.json");
+    rmSync(mobileAssertions, { force: true });
     log(
       `Lighthouse mobile collect: attempt ${n}/${MAX_ATTEMPTS} (${mode}, expecting ${expected} LHRs).`,
     );
@@ -188,6 +223,10 @@ export async function main(
     const lhrObjects = loadCollectedLhrs(lhciDir);
     const matrix = sampleMatrix(lhrObjects, collect);
     const assertions = loadAssertions(lhciDir);
+    // The following desktop collect replaces the shared file. Keep the exact
+    // mobile bytes (including malformed evidence) under an upload-safe name.
+    const assertionFile = join(lhciDir, "assertion-results.json");
+    if (existsSync(assertionFile)) copyFileSync(assertionFile, mobileAssertions);
     const assertFailed =
       hasAssertFailure(output) ||
       assertions.some((failure) => failure.level === "error" && !failure.readError);
@@ -249,8 +288,10 @@ async function selftest() {
   // per route (runs overwrite each other, median survives) while the lhci dir
   // holds one lhr-<n>.json per run. A stub that wrote uniquely named reports
   // files would hide the dedup miscount this counting must survive.
-  const runCase = async (script) => {
-    const caseDir = mkdtempSync(join(tmpdir(), "lh-mobile-case-"));
+  const runCase = async (
+    script,
+    { caseDir = mkdtempSync(join(tmpdir(), "lh-mobile-case-")) } = {},
+  ) => {
     const lhci = join(caseDir, ".lighthouseci");
     const reports = join(lhci, "reports");
     mkdirSync(reports, { recursive: true });
@@ -266,6 +307,8 @@ async function selftest() {
           JSON.stringify(lhr(url)),
         );
       });
+      if (step.assertionText !== undefined)
+        writeFileSync(join(lhci, "assertion-results.json"), step.assertionText);
       const marker = step.assertFailed ? `\n${ASSERT_FAILURE_MARKER}\n` : "";
       return {
         exitCode: step.exitCode,
@@ -378,6 +421,184 @@ async function selftest() {
     writeFileSync(join(reports, "old-report.json"), "{}");
     clearAttemptEvidence({ qualityDir: reports, lhciDir: lhci });
     assert.equal(readdirSync(lhci).sort().join(","), "mobile-collect.log");
+  }
+  // File-only failures, unreadable assertions and exit-0 assertion markers
+  // all fail closed without retry once the per-URL evidence is complete.
+  for (const step of [
+    {
+      assertionText: JSON.stringify([
+        { auditId: "largest-contentful-paint", level: "error", passed: false },
+      ]),
+      verdict: /BUDGET BREACH/,
+    },
+    { assertionText: "{", verdict: /UNCLASSIFIED STEP FAILURE/ },
+    { assertionText: "null", verdict: /UNCLASSIFIED STEP FAILURE/ },
+    { assertFailed: true, verdict: /BUDGET BREACH/ },
+  ]) {
+    const { code, calls, caseDir } = await runCase([{ exitCode: 0, urls: fixtureUrls, ...step }]);
+    assert.equal(code, 1);
+    assert.equal(calls, 1);
+    assert.match(readFileSync(join(caseDir, "diagnosis.md"), "utf8"), step.verdict);
+  }
+  // A full aggregate count cannot fill the missing sample of another route.
+  {
+    const unbalanced = [...fixtureUrls.slice(0, 23), fixtureUrls[0]];
+    const { code, calls, caseDir } = await runCase([
+      { exitCode: 0, urls: unbalanced },
+      { exitCode: 0, urls: unbalanced },
+    ]);
+    assert.equal(code, 1);
+    assert.equal(calls, 2);
+    assert.match(readFileSync(join(caseDir, "diagnosis.md"), "utf8"), /COLLECT FAILURE/);
+  }
+  // Exercise the actual spawn and its chosen config, stopping the child before
+  // LHCI can launch a browser. A desktop-config substitution must fail here.
+  {
+    const probe = mkdtempSync(join(tmpdir(), "lh-mobile-launch-"));
+    const preload = join(probe, "capture.cjs");
+    writeFileSync(
+      preload,
+      `const args = process.argv.slice(2);
+const config = require(require("node:path").resolve(args[1].slice("--config=".length)));
+console.log(JSON.stringify({args, collect: config.ci.collect}));
+process.exit(0);
+`,
+    );
+    const { exitCode, output } = await runAutorun({
+      env: { ...process.env, NODE_OPTIONS: `--require=${preload}` },
+    });
+    assert.equal(exitCode, 0);
+    const captured = JSON.parse(output);
+    assert.deepEqual(captured.args, ["autorun", "--config=ci/lighthouserc.cjs"]);
+    assert.equal(captured.collect.settings.formFactor, "mobile");
+    assert.equal(captured.collect.numberOfRuns, 3);
+    assert.equal(captured.collect.url.length, 8);
+  }
+  // The desktop step clears/replaces the shared assertions before artifact
+  // upload; a mobile failure must keep its own verdict and a truthful pointer.
+  {
+    const assertionText = JSON.stringify([
+      { auditId: "largest-contentful-paint", level: "error", passed: false },
+    ]);
+    const { code, caseDir } = await runCase([{ exitCode: 1, urls: fixtureUrls, assertionText }]);
+    assert.equal(code, 1);
+    const lhci = join(caseDir, ".lighthouseci");
+    clearAttemptEvidence({ qualityDir: join(lhci, "quality"), lhciDir: lhci });
+    assert.equal(existsSync(join(lhci, "assertion-results.json")), false);
+    const retained = join(lhci, "mobile-assertion-results.json");
+    assert.equal(readFileSync(retained, "utf8"), assertionText);
+    writeFileSync(
+      join(lhci, "assertion-results.json"),
+      JSON.stringify([{ auditId: "categories:accessibility", level: "error", passed: false }]),
+    );
+    assert.equal(readFileSync(retained, "utf8"), assertionText);
+    const diagnosis = readFileSync(join(caseDir, "diagnosis.md"), "utf8");
+    assert.match(diagnosis, /\.lighthouseci\/mobile-assertion-results\.json/);
+    assert.doesNotMatch(diagnosis, /See \.lighthouseci\/assertion-results\.json/);
+  }
+  // A green invocation in the same directory must retire the previous failure
+  // diagnosis and assertion snapshot, not leave them beside passing evidence.
+  {
+    const failed = await runCase([
+      {
+        exitCode: 1,
+        urls: fixtureUrls,
+        assertionText: JSON.stringify([
+          { auditId: "largest-contentful-paint", level: "error", passed: false },
+        ]),
+      },
+    ]);
+    assert.equal(failed.code, 1);
+    assert.match(readFileSync(join(failed.caseDir, "diagnosis.md"), "utf8"), /BUDGET BREACH/);
+    const passed = await runCase([{ exitCode: 0, urls: fixtureUrls }], { caseDir: failed.caseDir });
+    assert.equal(passed.code, 0);
+    assert.equal(passed.calls, 1);
+    assert.equal(existsSync(join(passed.caseDir, "diagnosis.md")), false);
+    assert.equal(
+      existsSync(join(passed.caseDir, ".lighthouseci", "mobile-assertion-results.json")),
+      false,
+    );
+    assert.doesNotMatch(readFileSync(join(passed.caseDir, "collect.log"), "utf8"), /exit 1/);
+  }
+  // Reject overrides before launching or touching existing evidence: the
+  // reviewed fixture plan, not CLI/environment precedence, defines the gate.
+  for (const { argv = [], overrideEnv = {} } of [
+    { argv: ["--collect.numberOfRuns=1"] },
+    { argv: ["--collect.numberOfRuns", "1"] },
+    { argv: ["--collect.url=https://example.com/do-not-echo"] },
+    { argv: ["--collect.settings.preset=desktop"] },
+    { argv: ["--config=ci/lighthouserc.quality.cjs"] },
+    { argv: ["--assert.assertions.categories:performance=off"] },
+    { argv: ["--upload.outputDir=do-not-echo"] },
+    { argv: ["--help", "--collect.numberOfRuns=1"] },
+    { argv: ["--unknown"] },
+    { overrideEnv: { LHCI_COLLECT__NUMBER_OF_RUNS: "1" } },
+    { overrideEnv: { LHCI_COLLECT__URL: "https://example.com/do-not-echo" } },
+    { overrideEnv: { LHCI_COLLECT__SETTINGS__FORM_FACTOR: "desktop" } },
+    { overrideEnv: { LHCI_CONFIG: "ci/lighthouserc.quality.cjs" } },
+    { overrideEnv: { LHCI_ASSERT__ASSERTIONS: "do-not-echo" } },
+    { overrideEnv: { LHCI_HELP: "true" } },
+  ]) {
+    const probe = mkdtempSync(join(tmpdir(), "lh-mobile-overrides-"));
+    const lhci = join(probe, ".lighthouseci");
+    const reports = join(lhci, "reports");
+    mkdirSync(reports, { recursive: true });
+    const files = [
+      join(lhci, "lhr-1.json"),
+      join(probe, "collect.log"),
+      join(probe, "diagnosis.md"),
+    ];
+    for (const file of files) writeFileSync(file, "previous evidence");
+    const logs = [];
+    let calls = 0;
+    const code = await main(argv, {
+      env: { ...process.env, ...overrideEnv },
+      run: async () => {
+        calls += 1;
+        return { exitCode: 0, output: "unexpected collect" };
+      },
+      reportsDir: reports,
+      lhciDir: lhci,
+      logFile: join(probe, "collect.log"),
+      diagnosisFile: join(probe, "diagnosis.md"),
+      log: (line) => logs.push(line),
+    });
+    assert.equal(code, 2);
+    assert.equal(calls, 0);
+    assert.match(logs.join("\n"), /INVALID_ARGUMENTS.*ci\/lighthouserc\.cjs/);
+    assert.doesNotMatch(logs.join("\n"), /do-not-echo/);
+    for (const file of files) assert.equal(readFileSync(file, "utf8"), "previous evidence");
+  }
+  // Informational flags execute real pinned LHCI once and preserve every byte
+  // of the previous invocation's evidence (including its log and diagnosis).
+  for (const flag of ["--help", "--version"]) {
+    const probe = mkdtempSync(join(tmpdir(), "lh-mobile-info-"));
+    const lhci = join(probe, ".lighthouseci");
+    const reports = join(lhci, "reports");
+    mkdirSync(reports, { recursive: true });
+    const files = [
+      join(reports, "report.json"),
+      join(lhci, "lhr-1.json"),
+      join(lhci, "assertion-results.json"),
+      join(lhci, "mobile-assertion-results.json"),
+      join(probe, "collect.log"),
+      join(probe, "diagnosis.md"),
+    ];
+    for (const file of files) writeFileSync(file, "previous evidence");
+    let calls = 0;
+    const code = await main([flag], {
+      run: async (options) => {
+        calls += 1;
+        return runAutorun(options);
+      },
+      reportsDir: reports,
+      lhciDir: lhci,
+      logFile: join(probe, "collect.log"),
+      diagnosisFile: join(probe, "diagnosis.md"),
+    });
+    assert.equal(code, 0);
+    assert.equal(calls, 1);
+    for (const file of files) assert.equal(readFileSync(file, "utf8"), "previous evidence");
   }
   console.log("lighthouse-mobile-run selftest: ok");
 }
