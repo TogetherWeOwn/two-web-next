@@ -26,14 +26,20 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // ported into its fragment (client.js.maxRawBytes 254976 -> 256000; see
 // ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md) and the
 // server.js.maxGzipBytes 335104 -> 335360 raise (see
-// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md).
+// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md), the
+// event-detail client.js raise to 257024 raw / 103168 gzip, the
+// Happening-now server.js.maxGzipBytes 336128 raise, and the join
+// next-game-night re-measured raises (client.js 257280 raw / 103680 gzip;
+// server.js.maxGzipBytes is admitted through
+// SHIPPING_SERVER_GZIP_ALLOCATIONS below, currently 336640; see
+// ci/budgets/decisions/kit-perf/2026-10-27-join-next-game-night.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
-    js: { maxRawBytes: 257024, maxGzipBytes: 103424, maxFiles: 55 },
+    js: { maxRawBytes: 257280, maxGzipBytes: 103680, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
@@ -127,18 +133,21 @@ function kitFixture(t, fragments) {
 // was unsupported then; see
 // ci/budgets/decisions/kit-perf/2026-10-27-happening-now-server-gzip.md).
 // The join next-game-night slice first measured the same step (worst
-// 335941); 336384 is the join allocation re-measured on the merged tree
-// (worst 336263, margin 121; lower 336128 rejects by 135; see
+// 335941); 336384 is the join allocation re-measured on the merged tree at
+// main 3baeb3793 (worst 336263, margin 121; lower 336128 rejects by 135);
+// 336640 is the join allocation re-measured again after main grew the Kit
+// server bundle (merged tree at main e37975a07, worst 336437, margin 203;
+// lower 336639 rejects by 202; see
 // ci/budgets/decisions/kit-perf/2026-10-27-join-next-game-night.md). Every
 // other pin stays exact: the oracle rejects any ceiling outside this list,
 // then deep-compares the rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384];
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336640];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
