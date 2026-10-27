@@ -13,8 +13,10 @@ const discord = { upcoming: async () => [], lastReadFailed: () => false };
 function setup() {
   const started: string[] = [];
   let releaseGames!: (games: string[]) => void;
-  const gamesPending = new Promise<string[]>((resolve) => {
+  let rejectGames!: (reason?: unknown) => void;
+  const gamesPending = new Promise<string[]>((resolve, reject) => {
     releaseGames = resolve;
+    rejectGames = reject;
   });
   const optsSeen: unknown[] = [];
   vi.spyOn(reads, "listPublishedGames").mockImplementation(async () => {
@@ -30,7 +32,7 @@ function setup() {
     started.push("past");
     return [];
   });
-  return { started, releaseGames, optsSeen };
+  return { started, releaseGames, rejectGames, optsSeen };
 }
 
 const load = (query: Parameters<typeof resolveCalendarInput>[0]) =>
@@ -76,5 +78,31 @@ describe("calendar canonical read: games facet overlap", () => {
     setup();
     vi.spyOn(reads, "listPublishedGames").mockRejectedValue(new Error("games down"));
     await expect(load({})).rejects.toThrow("games down");
+  });
+
+  it("rejects with the rank error and nothing unhandled when games fails during a rank jump", async () => {
+    const { rejectGames } = setup();
+    let rejectRank!: (reason?: unknown) => void;
+    const rankPending = new Promise<number | null>((_resolve, reject) => {
+      rejectRank = reject;
+    });
+    vi.spyOn(reads, "rankUpcoming").mockImplementation(() => rankPending);
+    const unhandled: unknown[] = [];
+    const onUnhandled = (reason: unknown) => {
+      unhandled.push(reason);
+    };
+    process.on("unhandledRejection", onUnhandled);
+    try {
+      const model = load({ event: "jump" });
+      await flush();
+      rejectGames(new Error("games down"));
+      await flush();
+      rejectRank(new Error("rank down"));
+      await expect(model).rejects.toThrow("rank down");
+      await flush();
+      expect(unhandled).toEqual([]);
+    } finally {
+      process.off("unhandledRejection", onUnhandled);
+    }
   });
 });

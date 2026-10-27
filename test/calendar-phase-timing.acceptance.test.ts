@@ -479,6 +479,10 @@ describe("real calendar route to final request-log acceptance", () => {
     expect(s.steps).toEqual(["guard", "db", "session", "games", "upcoming", "past", "discord"]);
     now = 10;
     games.released.resolve();
+    // The facet release starts nothing new: the page reads and Discord were
+    // already underway while it was held.
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(s.steps).toEqual(["guard", "db", "session", "games", "upcoming", "past", "discord"]);
     now = 20;
     upcoming.released.resolve();
     past.released.resolve();
