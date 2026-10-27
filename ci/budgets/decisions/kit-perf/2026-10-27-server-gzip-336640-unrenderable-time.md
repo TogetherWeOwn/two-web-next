@@ -21,9 +21,16 @@ tree (main `4e90a8bcf` plus this PR head).
 | 1 | 336514 | exit 1, 130 over | exit 0, margin 126 |
 | 2 | 336514 | exit 1, 130 over | exit 0, margin 126 |
 
-Main alone builds at 336246 (138B headroom); the feature adds about 266B
-gzip, so trimming the feature cannot close the gap. Worker, client JS and
-client CSS fit their unchanged ceilings.
+Main alone at `4e90a8bcf` built at 336246 (138B headroom); the feature added
+about 266B gzip. Worker, client JS and client CSS fit their unchanged ceilings.
+
+After merging main `d6e9491c2` to resolve the shipping-oracle conflict, two
+production builds measured 336511 and 336515 server gzip bytes (worst margin
+125B under the unchanged 336640 ceiling). The next lower 336384 ceiling
+rejects that worst case by 131B. Both complete Kit budget checks exited 0.
+The conflict resolution preserves main's independent 336896 allocation and
+its literal boundary cases alongside this PR's 336640 allocation; it does
+not change any ceiling.
 
 ## Shipping tests
 
