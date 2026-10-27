@@ -155,6 +155,73 @@ function readBlock(css: string, open: number): { content: string; end: number } 
   return { content: css.slice(open + 1), end: css.length };
 }
 
+// Explicit desktop context: screen, 1280 × 800 CSS pixels. This bounded oracle
+// understands media types, px width/height bounds, orientation, comma alternatives
+// and whole-query negation. Supports queries cover the judged text properties.
+// Unknown conditions affecting those properties fail loudly, never count as active.
+// Layer blocks group rules, but this oracle does not model cross-layer precedence.
+const CSS_VIEWPORT = { width: 1280, height: 800 };
+const CSS_SUPPORT = new Map([
+  ["white-space", new Set(["normal", "nowrap", "pre", "pre-wrap", "pre-line", "break-spaces"])],
+  ["white-space-collapse", new Set(["collapse", "preserve", "preserve-breaks", "preserve-spaces"])],
+  ["overflow-wrap", new Set(["normal", "anywhere", "break-word"])],
+  ["word-break", new Set(["normal", "break-all", "keep-all", "break-word"])],
+]);
+
+function activeCssGroup(prelude: string, source: string): boolean {
+  const unsupported = (): never => {
+    throw new Error(
+      `CSS oracle cannot evaluate ${prelude} (${source}); extend its explicit context`,
+    );
+  };
+  if (/^@layer\b/.test(prelude)) return true;
+  if (/^@media\b/.test(prelude)) {
+    const alternatives = splitTopLevel(prelude.slice(6).trim().toLowerCase(), ",").map((query) => {
+      const negate = /^not\s+/.test(query.trim());
+      const terms = query
+        .trim()
+        .replace(/^(not|only)\s+/, "")
+        .split(/\s+and\s+/);
+      const matches = terms.map((term, index) => {
+        if (index === 0 && /^(all|screen|print)$/.test(term)) return term !== "print";
+        const bound = /^\(\s*(?:(min|max)-)?(width|height)\s*:\s*(\d+(?:\.\d+)?)px\s*\)$/.exec(
+          term,
+        );
+        if (bound) {
+          const size = CSS_VIEWPORT[bound[2] as "width" | "height"];
+          const limit = Number(bound[3]);
+          return bound[1] === "min"
+            ? size >= limit
+            : bound[1] === "max"
+              ? size <= limit
+              : size === limit;
+        }
+        const orientation = /^\(\s*orientation\s*:\s*(landscape|portrait)\s*\)$/.exec(term);
+        if (orientation) return orientation[1] === "landscape";
+        return unsupported();
+      });
+      const active = matches.every(Boolean);
+      return negate ? !active : active;
+    });
+    return alternatives.some(Boolean);
+  }
+  if (/^@supports\b/.test(prelude)) {
+    const condition = prelude.slice(9).trim().toLowerCase();
+    const negate = /^not\s+/.test(condition);
+    const declaration = /^\(\s*([\w-]+)\s*:\s*([\w-]+)\s*\)$/.exec(
+      condition.replace(/^not\s+/, ""),
+    );
+    if (!declaration) return unsupported();
+    const values = CSS_SUPPORT.get(declaration[1]!);
+    if (!values) return unsupported();
+    const active = values.has(declaration[2]!);
+    return negate ? !active : active;
+  }
+  // Container dimensions and document conditions are not available from the
+  // parsed fixture DOM. Refuse to infer them from a selector or the viewport.
+  return unsupported();
+}
+
 function parseCss(css: string, source: string, state: { order: number }, out: CssRule[]): void {
   const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
   let i = 0;
@@ -186,7 +253,12 @@ function parseCss(css: string, source: string, state: { order: number }, out: Cs
     const prelude = clean.slice(i, brace).trim();
     const block = readBlock(clean, brace);
     if (/^@(media|supports|layer|container|document)\b/.test(prelude)) {
-      parseCss(block.content, source, state, out);
+      const affectsText = /\b(?:white-space(?:-collapse)?|overflow-wrap|word-break)\s*:/i.test(
+        block.content,
+      );
+      if (affectsText && activeCssGroup(prelude, source)) {
+        parseCss(block.content, source, state, out);
+      }
     } else if (prelude && !prelude.startsWith("@")) {
       out.push({
         selectors: splitTopLevel(prelude, ",")
@@ -269,10 +341,11 @@ function matchCompound(el: Element, compoundRaw: string): boolean {
     const inner = compound.slice(at + fn.length, end);
     const before = compound.slice(0, at);
     const after = compound.slice(end + 1);
-    const alts = splitTopLevel(inner, ",").map((alt) => `${before}${alt.trim()}${after}` || "*");
+    const alts = splitTopLevel(inner, ",").map((alt) => alt.trim());
     return fn === ":not("
-      ? alts.every((alt) => !matchCompound(el, alt))
-      : alts.some((alt) => matchCompound(el, alt));
+      ? matchCompound(el, `${before}${after}` || "*") &&
+          alts.every((alt) => !matchCompound(el, alt))
+      : alts.some((alt) => matchCompound(el, `${before}${alt}${after}` || "*"));
   }
   if (compound.includes("::")) return false;
   if (compound === ":root") return el.tagName === "html";
@@ -582,6 +655,89 @@ function expectWrappable(container: Element, rules: CssRule[], label: string): v
   const verdict = wrapsLongWords(container, rules);
   expect(verdict.wraps, `${label}: long unbroken word must wrap; ${verdict.detail}`).toBe(true);
 }
+
+// ---------------------------------------------------------------------------
+// Oracle controls: a declaration must actually apply before it can preserve
+// authored lines. These exercise the same served-rule → rendered-line path as
+// the page cases, with literal expectations independent of the matcher.
+// ---------------------------------------------------------------------------
+describe("CSS oracle applicability controls", () => {
+  const markup = `<main class="content-theme"><article data-testid="featured-item"><p>${MULTI}</p></article></main>`;
+  const selector = "[data-testid='featured-item'] p";
+
+  function linesWith(css: string): string[] {
+    const html = `<style>${css}</style>${markup}`;
+    const container = smallestContaining(document(html), MULTI_LINES.filter(Boolean), "control");
+    return renderedLines(container, servedRules(html));
+  }
+
+  it.each([
+    ["missing ancestor before :not", `.unrelated:not(.content-theme) ${selector}`],
+    ["missing suffix after :not", `.content-theme:not(.unrelated).missing ${selector}`],
+    ["excluded ancestor", `.content-theme:not(.content-theme) ${selector}`],
+    ["one excluded alternative", `.content-theme:not(.missing, .content-theme) ${selector}`],
+  ])("rejects a whitespace declaration with %s", (_label, nonmatching) => {
+    expect(linesWith(`${nonmatching} { white-space: pre-line; }`)).toEqual([
+      "Doors at seven Bring a deck New players welcome",
+    ]);
+  });
+
+  it.each([
+    `.content-theme:not(.unrelated) ${selector}`,
+    `:not(.unrelated).content-theme ${selector}`,
+    `.content-theme:not(.unrelated, .missing) ${selector}`,
+    `.content-theme:not(.unrelated):not(.missing) ${selector}`,
+  ])("admits a matching negation: %s", (matching) => {
+    expect(linesWith(`${matching} { white-space: pre-line; }`)).toEqual(MULTI_LINES);
+  });
+
+  it.each([
+    "@media (max-width: 1px)",
+    "@media (min-width: 1281px)",
+    "@media print",
+    "@media screen and (max-height: 799px)",
+    "@media not screen",
+    "@supports (white-space: unsupported-oracle-value)",
+    "@supports not (white-space: pre-line)",
+  ])("rejects an inactive conditional: %s", (conditional) => {
+    expect(linesWith(`${conditional} { ${selector} { white-space: pre-line; } }`)).toEqual([
+      "Doors at seven Bring a deck New players welcome",
+    ]);
+  });
+
+  it.each([
+    "@media screen and (min-width: 1280px) and (max-height: 800px)",
+    "@media print, (min-width: 1280px)",
+    "@media (orientation: landscape)",
+    "@media not print",
+    "@supports (white-space: pre-line)",
+    "@supports not (white-space: unsupported-oracle-value)",
+    "@layer content",
+  ])("admits an active grouping rule: %s", (conditional) => {
+    expect(linesWith(`${conditional} { ${selector} { white-space: pre-line; } }`)).toEqual(
+      MULTI_LINES,
+    );
+  });
+
+  it("does not reactivate an inactive rule nested in an active group", () => {
+    expect(
+      linesWith(
+        `@media screen { @supports (white-space: pre-line) { @media (max-width: 1px) { ${selector} { white-space: pre-line; } } } }`,
+      ),
+    ).toEqual(["Doors at seven Bring a deck New players welcome"]);
+  });
+
+  it.each([
+    "@media (width > 100px)",
+    "@supports selector(:has(p))",
+    "@container (min-width: 1px)",
+    "@document url-prefix(https://example.test)",
+  ])("fails closed rather than guessing an unmodeled condition: %s", (conditional) => {
+    expect(() => linesWith(`${conditional} { ${selector} { white-space: pre-line; } }`)).toThrow(
+      "CSS oracle cannot evaluate",
+    );
+  });
+});
 
 // ---------------------------------------------------------------------------
 // Calendar cards: Hono screen and the Kit events endpoint render of it.
