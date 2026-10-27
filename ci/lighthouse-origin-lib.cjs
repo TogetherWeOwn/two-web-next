@@ -8,6 +8,7 @@
 // assertion. Everything here is read-only: the only network calls are GETs.
 const base = require("./lighthouserc.cjs");
 const { sampleMatrix, assertionsByUrl } = require("./lighthouse-samples.cjs");
+const { isServerTiming } = require("./lighthouse-serving-values.cjs");
 
 // Exact allowlist, like e2e/staging-guard.mjs: https, no port, no credentials,
 // no path, query or hash. Anything else fails closed.
@@ -511,6 +512,32 @@ function median(values) {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
+const number = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+// Per-field validators for the stored audit details. Numeric fields accept numbers
+// only: a numeric-looking string is not evidence, however it got into the artifact.
+const SERVING_FIELDS = {
+  timestamp: (v) =>
+    typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(v),
+  cfRay: (v) => typeof v === "string" && /^[a-fA-F0-9]{16}(?:-[A-Z]{3})?$/.test(v),
+  cfCacheStatus: (v) => typeof v === "string" && /^[A-Za-z]{2,16}$/.test(v),
+  ageSeconds: number,
+  serverTiming: isServerTiming,
+  serverWaitMs: number,
+};
+
+// One navigation's allowlisted serving evidence, from the informative
+// `main-document-timing` audit of its LHR. Anything missing or off-shape is
+// "unknown": never a guess, and never a raw header.
+function servingEvidence(lhr) {
+  const details = lhr?.audits?.["main-document-timing"]?.details;
+  return Object.fromEntries(
+    Object.entries(SERVING_FIELDS).map(([key, valid]) => [
+      key,
+      valid(details?.[key]) ? details[key] : "unknown",
+    ]),
+  );
+}
+
 /**
  * Per-route verdicts from the lhci output. `lhrs` are parsed lhr-*.json files,
  * `assertions` the parsed assertion-results.json (failed assertions only).
@@ -546,6 +573,7 @@ function summarizeRoutes({ origin, eventPath, skipReason, lhrs, assertions }) {
       runs: runs.length,
       medians,
       samples,
+      serving: runs.map(servingEvidence),
       failed: failures.map((failure) => ({
         audit: failure.auditId,
         level: failure.level,
@@ -569,6 +597,7 @@ function summarizeRoutes({ origin, eventPath, skipReason, lhrs, assertions }) {
       runs: 0,
       medians: {},
       samples: {},
+      serving: [],
       failed: [],
       note: skipReason ?? "no event discovered",
     });
@@ -579,7 +608,10 @@ function summarizeRoutes({ origin, eventPath, skipReason, lhrs, assertions }) {
 const cell = (value) =>
   value == null ? "-" : String(value >= 10 ? Math.round(value) : Number(value.toFixed(3)));
 
-function renderSummary({ origin, eventPath, eventSource, rows, notice }) {
+const SHORT_SHA = 12;
+const shortRevision = (sha) => (sha === "unknown" ? sha : String(sha).slice(0, SHORT_SHA));
+
+function renderSummary({ origin, eventPath, eventSource, rows, notice, servedRevision = [] }) {
   const lines = [
     "## Lighthouse watch run",
     "",
@@ -616,6 +648,38 @@ function renderSummary({ origin, eventPath, eventSource, rows, notice }) {
     );
   }
   lines.push("");
+  if (servedRevision.length > 0) {
+    lines.push(
+      "### Served revision (GET /up before and after each collect attempt)",
+      "",
+      "| Attempt | Before | After | Verdict |",
+      "| --- | --- | --- | --- |",
+      ...servedRevision.map(
+        ({ attempt, before, after, verdict }) =>
+          `| ${attempt} | ${shortRevision(before)} | ${shortRevision(after)} | ${
+            verdict === "changed during collect" ? "CHANGED during collect" : verdict
+          } |`,
+      ),
+      "",
+    );
+  }
+  if (rows.some((row) => row.serving?.length > 0)) {
+    lines.push(
+      "### Serving evidence per navigation (response headers, collection order)",
+      "",
+      "| Route | Run | Request time (UTC) | cf-ray | cf-cache-status | age (s) | server-timing | server wait (ms) |",
+      "| --- | --- | --- | --- | --- | --- | --- | --- |",
+    );
+    for (const row of rows) {
+      (row.serving ?? []).forEach((nav, i) => {
+        const show = (key) => (nav[key] === "unknown" ? "-" : nav[key]);
+        lines.push(
+          `| ${row.path} | ${i + 1} | ${show("timestamp")} | ${show("cfRay")} | ${show("cfCacheStatus")} | ${show("ageSeconds")} | ${show("serverTiming")} | ${show("serverWaitMs")} |`,
+        );
+      });
+    }
+    lines.push("");
+  }
   return lines.join("\n");
 }
 
