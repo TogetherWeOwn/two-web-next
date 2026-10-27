@@ -122,14 +122,15 @@ acceptance delta, retaining every earlier decision; coordinate with the
 dependent feature. This is not feature, staging, deployment or release
 approval; the feature must reverify its actual integrated head.
 
-## Re-verification on main `b69eea7d7f8e99096cb497dce71210caf9af0502`
+## Re-verification on main `b69eea7d7f8e99096cb497dce71210caf9af0502` (superseded 336896/257536/103680 decision)
 
 Main moved three commits with no Kit build input: #1942 (103424 client gzip
 test tier), #1905 (336384 event-share-honesty server ceiling) and #1903
 (staging summary); `git diff 227414575..b69eea7d7 -- web/` is empty and both
-package locks are unchanged. The decision above stands unchanged; the merge
-unions main's reviewed tier rows (336384 server text, 103424 client row) with
-the delivered game-suggestion tiers and keeps the fragment values
+package locks are unchanged. The 336896/257536/103680 decision above stood
+unchanged; the merge unions main's reviewed tier rows (336384 server text,
+103424 client row) with the delivered game-suggestion tiers and keeps the
+fragment values
 336896/257536/103680. Resolved `ci/check-kit-perf.test.mjs` sha256
 `e2e20bc3ae2d33b875f206b2d27f49af6d666ec769a1d6b6088534c9fc0fc7e4`,
 `ci/budget-fragments.test.mjs` sha256
@@ -155,10 +156,10 @@ to 257024, so no raw step is taken here):
 
 | Budget field | Incoming ceiling | New ceiling | Increase | Margin above worst fresh combined build |
 | --- | ---: | ---: | ---: | ---: |
-| `server.js.maxGzipBytes` | 335872 | 336640 | 768 | 123 above 336517 |
+| `server.js.maxGzipBytes` | 335872 | 336640 | 768 | 124 above 336516 |
 | `client.js.maxGzipBytes` | 103168 | 103680 | 512 | 252 above 103428 |
 
-Main `d9b213141e4250cbbdc614d70a4ee2a1cea654f` (includes #1803 event-time
+Main `d9b213141e42ffe0104a3d5c465f5813f91fa5e1` (includes #1803 event-time
 duration, #1895 client raw 257024, #1909 server tier 336128, and #1829 root
 dependency bumps with no web lockfile change) and feature
 `7d390f4b8c54e30b0da703c2085530d1876c78f4` merge cleanly to tree
@@ -177,7 +178,7 @@ builds through the canonical
 
 Worker 2551/1219 B and CSS 2861/1019 B across two files are identical in all
 builds. Main fits its own ceilings (margins 219/1906/504 B); the combined
-output breaches main's server gzip 335872 (+645 B) and client gzip 103168
+output breaches main's server gzip 335872 (+644 B) and client gzip 103168
 (+260 B), while client raw 256867 fits main's 257024 (margin 157 B), so only
 the two gzip steps are taken. Against the output without a rebuild, the new
 ceilings pass and each single step lower (336384, 103424) rejects. Steps are
@@ -203,13 +204,13 @@ acceptance delta, retaining every earlier decision; coordinate with the
 dependent feature. This is not feature, staging, deployment or release
 approval; the feature must reverify its actual integrated head.
 
-## Re-measurement on main `ba58281d211479b934ff268f54f296d2d29adfaa`
+## Re-measurement on main `ba58281d211479b934ff268f54f296d2d29adfaa` (superseded 336384/257024/103424 decision)
 
 Main moved three Kit-relevant commits (#1850 admin bearer rotation, #1806,
-#1838) and merged-in budget history. The decision above stands unchanged;
-the numbers were re-taken on this base. Main `ba58281d2` and feature
-`7d390f4b8c54e30b0da703c2085530d1876c78f4` merge cleanly to tree
-`a3275f95c09d16b766628a6dafe971c330dc31dd` (main alone: tree
+#1838) and merged-in budget history. The then-current 336384/257024/103424
+decision stood unchanged; the numbers were re-taken on this base. Main
+`ba58281d2` and feature `7d390f4b8c54e30b0da703c2085530d1876c78f4` merge
+cleanly to tree `a3275f95c09d16b766628a6dafe971c330dc31dd` (main alone: tree
 `b567726b3a2a174e57c54bc9ee635449921f5efb`). Node 24.22.1, npm 11.19.1,
 identical locked dependencies, two builds per tree through the canonical
 `node ci/check-kit-perf.mjs --format json`:
@@ -224,7 +225,7 @@ identical locked dependencies, two builds per tree through the canonical
 
 Main fits its own ceilings (server margin 7 B); the combined output breaches
 main's server gzip 335360 (+844 B), client raw 256000 (+675 B) and client gzip
-103168 (+218 B), so all three allocations are still required. The proposed
+103168 (+218 B), so all three allocations were still required. The then-proposed
 ceilings pass the combined output with margins 180 B (server gzip), 349 B
 (client raw) and 38 B (client gzip); each single step lower (336128, 256512,
 103168) rejects it. The fixed test intervals (336190 server) from the earlier
@@ -273,8 +274,8 @@ review. See [the full evidence](../../../../docs/game-suggestion-kit-budget.md).
 ## Historical branch records
 
 The records below are preserved verbatim from this branch's former monolith
-history suffix. Their earlier three-axis and two-axis proposals are historical;
-the one-axis decision above supersedes them. Main's frozen legacy record is
+history suffix. Their earlier proposals are historical; the current decision
+at the top of this record supersedes them. Main's frozen legacy record is
 not edited.
 
  2026-10-26 decision (published game suggestion assistance): main 91b66a68d2d37bd2c717f3a75299300d3617b811 plus feature 7d390f4b8c54e30b0da703c2085530d1876c78f4 merges cleanly to source tree a51b15238a8a28880fc4e87c7f432e9143fcf81f. Node 24.22.1/npm 11.19.1, identical locked root/web dependencies, two builds per tree through the unchanged canonical checker: pristine main server 115 files raw 1178762/1178764B and gzip 333875/333875B, client 54 files raw 253949B/gzip 102273B both builds; combined server 115 files raw 1182408/1182406B and gzip 334761/334762B, client 55 files raw 255698B/gzip 103034B both builds. Native datalist/hint rendering across board and event create/edit adds client 1749 raw/761 gzip bytes and server 886-887 gzip bytes. A throwaway shared Svelte component still breaches (server raw/gzip 1182115/334766B, client 255652/103162B); it is discarded and changes no product code. Admit only the measured combined capacity: server.js.maxGzipBytes 334080->334848 (+768B, 86B above largest observation); client.js.maxRawBytes 254976->256000 (+1024B, 302B margin), client.js.maxGzipBytes 102912->103168 (+256B, 134B margin). These are the smallest 256B gzip/512B raw boundary steps that fit; this is not a fresh x1.25 allocation or speculative headroom. Worker 2551/1219B, CSS two files 2833/1006B, server raw, all file caps, startup 60000ms, checker, dependencies, original acceptance tests and every unrelated threshold remain unchanged. Incoming limits reject; the proposed limits pass the same restored combined output; reducing any changed cap by one rounding step rejects again. Full pinned evidence, rejected sharing experiment and limits are in docs/game-suggestion-kit-budget.md. This independent budget decision is not feature, staging, deployment or release approval; the feature must reverify its actual integrated head under exact-head CI and independent review. ACT: allocate these three measured byte steps in this standalone PR. WHY: current caps are exhausted and measured shared-component extraction does not recover the native assistance cost; HTML serialization or escaping-boundary changes are not justified solely to chase these bytes. UNDO: reviewed revert of only these three steps and this appended record, retaining all prior history; coordinate with the dependent feature before reverting. 2026-10-26 reconcile (game-suggestion capacity onto main 0141158a01b32d7d6e16901f49a26558583da9c7): main #1779 changed only this history line (1-file diff, numerics byte-identical, zero build-input change); the 91b66a68d-based combined measurements stand; merged-tree build re-verified post-merge under these caps. 2026-10-26 reconcile (game-suggestion capacity onto main 4d9ebeee5): main #1814 restructured the shipping test to explicit server-gzip allocation tiers (no numeric or build-input change); this decision adopts that structure and adds the measured 334848 tier (interval 334762). Sibling #1816 justifies the same tier with its own interval (334683); the first merger sets the test literal and the second reconciles rows while prose cites both measurements. 2026-10-26 reconcile (game-suggestion capacity onto main 0fe4dd903): main #1826 already moved server.js.maxGzipBytes 334080->335104; fresh repeated builds (Node 24.22.1/npm 11.19.1, identical locked root/web dependencies, unchanged canonical checker, two builds per tree) measure pristine main 0fe4dd903 server 115 files raw 1179526/1179528B gzip 334041/334040B, client 54 files raw 253949B/gzip 102273B both builds, and the clean main+feature tree d8fd764d71e1ccfac62843cdc8d24da236009328 (feature 7d390f4b8 unchanged) server raw 1183170/1183172B gzip 334923/334924B, client 55 files raw 255698B/gzip 103034B both builds. The combined server gzip worst 334924B already fits the reviewed 335104 ceiling (180B margin), so the 334848 server step proposed in the record above is NOT taken: taking it would lower the reviewed ceiling. server.js.maxGzipBytes stays 335104 and the shipping test keeps main's supported tiers (334080/335104/335360) unchanged. The combined client still breaches 254976/102912 on both builds (+722/+122B), so only the two measured client steps are retained: client.js.maxRawBytes 254976->256000 (302B margin; 255488 rejects the same built output) and client.js.maxGzipBytes 102912->103168 (134B margin; 102912 rejects). Every other bound unchanged; evidence updated in docs/game-suggestion-kit-budget.md. Not feature or release approval.

@@ -122,14 +122,15 @@ acceptance delta, retaining every earlier decision; coordinate with the
 dependent feature. This is not feature, staging, deployment or release
 approval; the feature must reverify its actual integrated head.
 
-## Re-verification on main `b69eea7d7f8e99096cb497dce71210caf9af0502`
+## Re-verification on main `b69eea7d7f8e99096cb497dce71210caf9af0502` (superseded 336896/257536/103680 decision)
 
 Main moved three commits with no Kit build input: #1942 (103424 client gzip
 test tier), #1905 (336384 event-share-honesty server ceiling) and #1903
 (staging summary); `git diff 227414575..b69eea7d7 -- web/` is empty and both
-package locks are unchanged. The decision above stands unchanged; the merge
-unions main's reviewed tier rows (336384 server text, 103424 client row) with
-the delivered game-suggestion tiers and keeps the fragment values
+package locks are unchanged. The 336896/257536/103680 decision above stood
+unchanged; the merge unions main's reviewed tier rows (336384 server text,
+103424 client row) with the delivered game-suggestion tiers and keeps the
+fragment values
 336896/257536/103680. Resolved `ci/check-kit-perf.test.mjs` sha256
 `e2e20bc3ae2d33b875f206b2d27f49af6d666ec769a1d6b6088534c9fc0fc7e4`,
 `ci/budget-fragments.test.mjs` sha256
@@ -155,10 +156,10 @@ to 257024, so no raw step is taken here):
 
 | Budget field | Incoming ceiling | New ceiling | Increase | Margin above worst fresh combined build |
 | --- | ---: | ---: | ---: | ---: |
-| `server.js.maxGzipBytes` | 335872 | 336640 | 768 | 123 above 336517 |
+| `server.js.maxGzipBytes` | 335872 | 336640 | 768 | 124 above 336516 |
 | `client.js.maxGzipBytes` | 103168 | 103680 | 512 | 252 above 103428 |
 
-Main `d9b213141e4250cbbdc614d70a4ee2a1cea654f` (includes #1803 event-time
+Main `d9b213141e42ffe0104a3d5c465f5813f91fa5e1` (includes #1803 event-time
 duration, #1895 client raw 257024, #1909 server tier 336128, and #1829 root
 dependency bumps with no web lockfile change) and feature
 `7d390f4b8c54e30b0da703c2085530d1876c78f4` merge cleanly to tree
@@ -177,7 +178,7 @@ builds through the canonical
 
 Worker 2551/1219 B and CSS 2861/1019 B across two files are identical in all
 builds. Main fits its own ceilings (margins 219/1906/504 B); the combined
-output breaches main's server gzip 335872 (+645 B) and client gzip 103168
+output breaches main's server gzip 335872 (+644 B) and client gzip 103168
 (+260 B), while client raw 256867 fits main's 257024 (margin 157 B), so only
 the two gzip steps are taken. Against the output without a rebuild, the new
 ceilings pass and each single step lower (336384, 103424) rejects. Steps are
@@ -199,13 +200,13 @@ ACT: allocate these two measured steps through independent review.
 WHY: the exact feature composition exhausts them on current main; the earlier
 shared-component experiment did not recover the capacity.
 
-## Re-measurement on main `ba58281d211479b934ff268f54f296d2d29adfaa`
+## Re-measurement on main `ba58281d211479b934ff268f54f296d2d29adfaa` (superseded 336384/257024/103424 decision)
 
 Main moved three Kit-relevant commits (#1850 admin bearer rotation, #1806,
-#1838) and merged-in budget history. The decision above stands unchanged;
-the numbers were re-taken on this base. Main `ba58281d2` and feature
-`7d390f4b8c54e30b0da703c2085530d1876c78f4` merge cleanly to tree
-`a3275f95c09d16b766628a6dafe971c330dc31dd` (main alone: tree
+#1838) and merged-in budget history. The then-current 336384/257024/103424
+decision stood unchanged; the numbers were re-taken on this base. Main
+`ba58281d2` and feature `7d390f4b8c54e30b0da703c2085530d1876c78f4` merge
+cleanly to tree `a3275f95c09d16b766628a6dafe971c330dc31dd` (main alone: tree
 `b567726b3a2a174e57c54bc9ee635449921f5efb`). Node 24.22.1, npm 11.19.1,
 identical locked dependencies, two builds per tree through the canonical
 `node ci/check-kit-perf.mjs --format json`:
@@ -220,7 +221,7 @@ identical locked dependencies, two builds per tree through the canonical
 
 Main fits its own ceilings (server margin 7 B); the combined output breaches
 main's server gzip 335360 (+844 B), client raw 256000 (+675 B) and client gzip
-103168 (+218 B), so all three allocations are still required. The proposed
+103168 (+218 B), so all three allocations were still required. The then-proposed
 ceilings pass the combined output with margins 180 B (server gzip), 349 B
 (client raw) and 38 B (client gzip); each single step lower (336128, 256512,
 103168) rejects it. The fixed test intervals (336190 server) from the earlier
