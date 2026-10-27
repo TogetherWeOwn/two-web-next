@@ -470,11 +470,15 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
 // so raw takes two 512B steps from 257536); worst gzip 103757, margin 179
 // (lower 103680 rejects by 77). Any other loaded ceiling fails its
 // allocation control and its boundary cases.
+// Main's featured editorial-limits allocation (merged build 257638 raw, which
+// the lower 257536 ceiling rejects by 102) takes the 258048 raw step; it sits
+// below the game-suggestion composition's 258560 (258048 rejects 258120 by 72).
 const SHIPPING_CLIENT_RAW_CAP = shippingClientBudget?.maxRawBytes;
 const SHIPPING_CLIENT_GZIP_CAP = shippingClientBudget?.maxGzipBytes;
 const SHIPPING_CLIENT_RAW_ALLOCATIONS = {
   257024: { intervalBytes: 255856, exactBytes: 257024, overBytes: 257025 },
   257536: { intervalBytes: 257039, exactBytes: 257536, overBytes: 257537 },
+  258048: { intervalBytes: 257638, exactBytes: 258048, overBytes: 258049 },
   258560: { intervalBytes: 258120, exactBytes: 258560, overBytes: 258561 },
 };
 const SHIPPING_CLIENT_GZIP_ALLOCATIONS = {
@@ -485,7 +489,7 @@ const SHIPPING_CLIENT_GZIP_ALLOCATIONS = {
 };
 const SHIPPING_CLIENT_RAW_UNSUPPORTED =
   `unsupported client raw allocation ${String(SHIPPING_CLIENT_RAW_CAP)}: ` +
-  `expected one of 257024, 257536, 258560`;
+  `expected one of 257024, 257536, 258048, 258560`;
 const SHIPPING_CLIENT_GZIP_UNSUPPORTED =
   `unsupported client gzip allocation ${String(SHIPPING_CLIENT_GZIP_CAP)}: ` +
   `expected one of 103168, 103424, 103680, 103936`;
@@ -832,6 +836,25 @@ function shippingClientRawCases() {
         axis: "raw",
         bytes: 257537,
         ceiling: 257536,
+        breach: true,
+      },
+    ];
+  }
+  if (SHIPPING_CLIENT_RAW_CAP === 258048) {
+    return [
+      {
+        name: "client raw newly allowed interval",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 257638,
+      },
+      { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 258048 },
+      {
+        name: "client raw one byte over",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 258049,
+        ceiling: 258048,
         breach: true,
       },
     ];
