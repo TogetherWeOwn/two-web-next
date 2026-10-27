@@ -26,7 +26,7 @@ on:
   # Nightly full smoke (TOG-14880): schedule events run the journeys
   # unconditionally (the scope step only fast-passes pull requests).
   schedule:
-    - cron: '29 2 * * *'
+    - cron: "29 2 * * *"
   workflow_dispatch:
 
 permissions:
@@ -268,4 +268,3 @@ jobs:
               else echo "browser-smoke skipped without a scope verdict"; exit 1; fi ;;
             *) echo "browser-smoke result: $SMOKE"; exit 1 ;;
           esac
-
