@@ -1,8 +1,9 @@
 # 2026-10-26 decision: join investigation + chosen-timezone composition
 
-Server JS gzip 335872 -> 336640 (+768, three 256 B steps),
-client JS raw 256000 -> 257024 (+1024, two 512 B steps),
+Server JS gzip 335872 -> 336640 (+768, three 256 B steps) and
 client JS gzip 103168 -> 103680 (+512, two 256 B steps).
+Client JS raw is no longer changed: main raised it to 257024 meanwhile
+(event-detail allocation) and the composition fits it with 201 B margin.
 No other ceiling changes. This is the fragment-era allocation for the
 join/timezone composition. Main moved repeatedly while this proposal
 waited (the event-time commitment change grew the Kit server and client
@@ -13,9 +14,9 @@ current main, not carried forward.
 
 - Behavior head (frozen, unchanged): `2ae12d2c2738d337112e4c8ca87762046dca0e20`
   (join investigation return context, PR #1705).
-- Main at measurement: `b5bef6810e7803ddff8cbd5105e6253cf56e4320`; the
-  later main commit `d939263e89d04eb703dcb36340b250c97a406137` changes only CI workflow, README and a CI
-  test (no build input), so the sizes below hold at it.
+- Main at measurement: `7d5db1c21f12d8d51b74be43374cb7451cd31c76`. The sizes were first measured on
+  `b5bef6810` and reproduced byte-for-byte on this main (the intervening
+  commits change only budgets, tests and the Hono past-events island).
 - Measurement tree: the behavior head merged into that main; the only
   conflict is the modify/delete of the removed monolith
   `ci/kit-perf-budget.json`, resolved by accepting the deletion, so the tree
@@ -28,18 +29,18 @@ current main, not carried forward.
 
 Two locked `npm run build --prefix web` + `node ci/check-kit-perf.mjs`
 runs per tree. Client totals are byte-identical across repeats; server
-gzip wobbled 1 B on main (335654 / 335653) and was identical on the
-composition.
+gzip wobbled 1-2 B between builds (main 335655 / 335653, composition
+336465 / 336463); the larger value is used.
 
 | Tree | Server files | Server raw B | Server gzip B | Client files | Client raw B | Client gzip B |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| Main | 116 | 1186502 / 1186500 | 335654 / 335653 | 54 | 255118 | 102664 |
-| Composition | 116 | 1189698 | 336465 / 336465 | 55 | 256823 | 103459 |
+| Main | 116 | 1186502 / 1186500 | 335655 / 335653 | 54 | 255118 | 102664 |
+| Composition | 116 | 1189698 / 1189698 | 336465 / 336463 | 55 | 256823 | 103459 |
 
-Main fits every retained ceiling (server gzip 335872, client raw 256000,
+Main fits every retained ceiling (server gzip 335872, client raw 257024,
 client gzip 103168). Against those retained ceilings the composition breaches
-server gzip by 593 B, client raw by 823 B and client gzip by 291 B (gate
-exit 1 in both builds). Worker (2551 raw / 1219 gzip B) and client CSS
+server gzip by 593 B and client gzip by 291 B (gate exit 1 in both builds);
+client raw (256823 of 257024) fits. Worker (2551 raw / 1219 gzip B) and client CSS
 (2 files, 2861 raw / 1019 gzip B) are identical in every build and still fit.
 
 ## Why the growth is justified, and why it is minimal
@@ -60,7 +61,6 @@ build, not a x1.25 reserve:
 | Ceiling | Measured max | One step below (rejects) | New ceiling | Margin |
 | --- | ---: | ---: | ---: | ---: |
 | Server gzip | 336465 | 336384, short 81 B | 336640 | 175 B |
-| Client raw | 256823 | 256512, short 311 B | 257024 | 201 B |
 | Client gzip | 103459 | 103424, short 35 B | 103680 | 221 B |
 
 Margins are thin by construction: each ceiling is the smallest step the
@@ -74,7 +74,7 @@ newly admitted server interval is pinned to the measured 336465 B.
 
 ## Undo
 
-Revert only these three numeric changes (and this file): the
+Revert only these two numeric changes (and this file): the
 composition fails the restored ceilings again, main keeps passing. No
 application state, schema or deployed artifact changes. Any later
 integrated head must be freshly rebuilt and pass exact-head CI,

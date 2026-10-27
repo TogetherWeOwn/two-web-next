@@ -1,9 +1,9 @@
 # Join investigation and chosen-timezone composition budget
 
 Measured 2026-10-27 on main `b5bef6810e7803ddff8cbd5105e6253cf56e4320`
-(re-measured after main's event-time change grew both bundles again; the
-later main commit `d939263e89d04eb703dcb36340b250c97a406137` touches only the
-CI workflow, README and a CI test, no build input; this supersedes the 2026-10-25 and 2026-10-26 measurements,
+(re-measured after main's event-time change grew both bundles again) and
+reproduced byte-for-byte on main `7d5db1c21f12d8d51b74be43374cb7451cd31c76`
+(later commits change only budgets, tests and a Hono island); this supersedes the 2026-10-25 and 2026-10-26 measurements,
 whose proposal numbers are stale). This separate allocation covers the
 composition of
 [join investigation](https://github.com/TogetherWeOwn/two-web-next/pull/1705)
@@ -12,7 +12,7 @@ It neither ships nor approves those behaviors. The
 [earlier allocation](kit-perf-join-investigation-budget.md) describes older inputs;
 its decision history remains unchanged.
 
-Only three byte ceilings change, one unit per fragment:
+Only two byte ceilings change (server gzip and client gzip), one unit per fragment:
 [`ci/budgets/kit/server-js.json`](../ci/budgets/kit/server-js.json) and
 [`ci/budgets/kit/client-js.json`](../ci/budgets/kit/client-js.json), with the
 decision recorded in
@@ -24,7 +24,7 @@ remain unchanged.
 ## Pinned inputs and reproducibility
 
 - Behavior head (frozen, unchanged): `2ae12d2c2738d337112e4c8ca87762046dca0e20`.
-- Main: `b5bef6810e7803ddff8cbd5105e6253cf56e4320`.
+- Main: `7d5db1c21f12d8d51b74be43374cb7451cd31c76` (first measured on `b5bef6810`, same sizes).
 - Measurement tree: behavior head merged into that main (unrecorded tree id; reproduce with `git merge` and accept the monolith deletion).
 
 Merging the behavior head into main conflicts only on the deleted monolith
@@ -51,14 +51,14 @@ paths. All emitted JS remains counted, including repeated wrappers.
 
 | Tree | Server JS files | Server raw B | Server gzip B, builds 1 / 2 | Client JS files | Client raw B | Client gzip B | Gate exit, both |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Main | 116 | 1186502 / 1186500 | 335654 / 335653 | 54 | 255118 | 102664 | 0 |
-| Composition | 116 | 1189698 | 336465 / 336465 | 55 | 256823 | 103459 | 1 |
+| Main | 116 | 1186502 / 1186500 | 335655 / 335653 | 54 | 255118 | 102664 | 0 |
+| Composition | 116 | 1189698 / 1189698 | 336465 / 336463 | 55 | 256823 | 103459 | 1 |
 
 Main fits every ceiling. The composition exceeds the retained server gzip
-335872 B by **593 B**, client raw 256000 B by **823 B**, and client gzip
-103168 B by **291 B**. Client paths and sizes are identical within each tree's
-repeated builds; main server gzip wobbled 1 B across the pair, the composition was identical, and the
-allocation uses the larger observed value. Composition raw totals were read from the second build.
+335872 B by **593 B** and client gzip 103168 B by **291 B**; client raw
+(256823 of main's 257024 B) fits. Client paths and sizes are identical within
+each tree's repeated builds; server gzip wobbled 1-2 B across each pair and the
+allocation uses the larger observed value.
 
 Worker and CSS are identical in every build: worker **2551 raw / 1219 gzip B**;
 client CSS **2 files, 2861 raw / 1019 gzip B**.
@@ -104,30 +104,29 @@ and no saving from it is claimed.
 
 ## Minimum aligned allocation and refusal controls
 
-Use the existing 512 B raw / 256 B gzip steps, not a percentage or reserve:
+Use the existing 256 B gzip steps, not a percentage or reserve:
 
 | Ceiling | Before | Proposed | Increase | Minimum observed remaining margin |
 | --- | ---: | ---: | ---: | ---: |
 | Server JS gzip B | 335872 | 336640 | 768 | 175 |
-| Client JS raw B | 256000 | 257024 | 1024 | 201 |
 | Client JS gzip B | 103168 | 103680 | 512 | 221 |
 
 Controls run the unchanged checker on the retained composition output, changing
 **only disposable budget copies**:
 
-- Original limits reject: server gzip +593 B, client raw +823 B, client gzip +291 B.
+- Original limits reject: server gzip +593 B and client gzip +291 B (client raw fits).
 - Proposed limits accept the composition: exit 0.
 - One step below proposed rejects on each axis independently: server gzip
-  336384 B (short 81 B on the 336465 B build), client raw 256512 B (short 311 B),
-  client gzip 103424 B (short 35 B).
-- One byte below the observed totals rejects (server gzip 336464 B, client raw
-  256822 B, gzip 103458 B); the exact observed totals accept.
+  336384 B (short 81 B on the 336465 B build) and client gzip 103424 B (short 35 B).
+- One byte below the observed totals rejects (server gzip 336464 B against the
+  336465 B build, client gzip 103458 B; the latest rebuild read 336463 B, within the
+  1-2 B jitter); the exact observed totals accept.
 
 The unchanged checker passes its selftests, and the updated boundary pins pass:
 `check-kit-perf.test.mjs` and `budget-fragments.test.mjs` 67/67 together,
-including the new 336640 server arm and admission case, the moved raw/gzip
-exact/one-over pins and the fixed 256823 B client raw evidence case. With the
-fragments at main's values the new pins fail 6 cases (red-before). No
+including the new 336640 server arm and admission case, the moved client gzip
+exact/one-over pins. With the
+fragments at main's values the new pins fail 3 cases (red-before). No
 author-owned test was weakened; only ceiling literals moved with their fragments.
 This does not claim a full application check, browser, visual, accessibility,
 Lighthouse, startup-latency, staging or production verification.
@@ -135,12 +134,12 @@ Lighthouse, startup-latency, staging or production verification.
 Every other ceiling stays fixed: worker 3584 raw / 1536 gzip B; server 1203200 raw B
 and 126 files; client JS 55 files; client CSS 3072 raw / 1024 gzip B and four files;
 startup 60000 ms. The composition has **zero spare client JS files**, **5 B CSS gzip
-margin** and a **175 B** server gzip margin. None is reserved capacity.
+margin** a **175 B** server gzip margin and a **221 B** client gzip margin. None is reserved capacity.
 Any later integrated head must be freshly rebuilt and pass exact-head CI, security,
 QA and independent review.
 
 ## Undo
 
-Revert only these three numeric changes and this note. This restores the
-335872 B server gzip and 256000/103168 B client limits, intentionally rejecting the
+Revert only these two numeric changes and this note. This restores the
+335872 B server gzip and 103168 B client gzip limits, intentionally rejecting the
 measured composition again. No application state, schema or deployed artifact changes.
