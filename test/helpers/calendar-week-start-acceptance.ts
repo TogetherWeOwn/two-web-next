@@ -356,6 +356,7 @@ export function weekFixture(rows = weekRows) {
             GET({
               request,
               url: new URL(request.url),
+              locals: {},
               cookies: {
                 delete: () => {
                   throw new Error("WEEK_UNEXPECTED_COOKIE_WRITE: presentation must not persist");
