@@ -38,9 +38,12 @@ const {
   gamesOmitted = false,
 } = $derived(data);
 const destination = $derived(pastEventsUrl(page, q, game));
+const calendarFeedUrl = $derived(feedUrl(appUrl));
 // A component-level <script> is Svelte's own; the island tags are emitted as markup.
-const copyLinkIsland = '<script src="/islands/copy-link.js" defer></' + "script>";
-const island = '<script src="/islands/past-events.js" defer></' + "script>";
+const islands =
+  '<script src="/islands/copy-link.js" defer></' +
+  'script> <script src="/islands/past-events.js" defer></' +
+  "script>";
 // csr=false still emits a structural client route node. Keep the archive cards
 // server-only, like the home-event list, so that unused asset does not carry them.
 // Direct server compilation without Vite's env renders the cards normally.
@@ -64,21 +67,21 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
     </div>
     <p>
       <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>{EVENTS_EMPTY_COPY.subscribe}</a>{" "}
-      <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
+      <a href={rssUrl(appUrl)}>RSS feed</a> <a href={calendarFeedUrl}>Download calendar (.ics)</a>
     </p>
     <!-- Static mirror of subscriptionHelp() (src/events/subscription-help.tsx):
          {@html} inside this section leaves hydration anchors with no Hono
          counterpart and breaks the cross-target section contract. -->
-    <details class="subscription-help">
+    <details class="subscription-help" data-testid="subscription-help">
       <summary>How to subscribe to the calendar</summary>
       <p>{SUBSCRIPTION_GUIDANCE[0]}</p>
       <p>{SUBSCRIPTION_GUIDANCE[1]}</p>
       <label for="calendar-feed-url">Calendar feed URL</label>
       <div class="subscription-copy">
-        <input id="calendar-feed-url" type="text" value={feedUrl(appUrl)} readonly /><button class="btn" type="button" data-copy-link={feedUrl(appUrl)} data-copy-feed="true" hidden>Copy feed URL</button>
+        <input id="calendar-feed-url" data-testid="subscription-feed-url" type="text" value={calendarFeedUrl} readonly /><button class="btn" type="button" data-testid="subscription-copy-button" data-copy-link={calendarFeedUrl} data-copy-feed="true" hidden>Copy feed URL</button>
       </div>
-      <p>Select the feed URL to copy it manually if Subscribe does not open your calendar app.</p>
-      <p role="status" aria-atomic="true" data-copy-toast></p>
+      <p data-testid="subscription-manual-copy">Select the feed URL and copy it manually in your calendar app.</p>
+      <p role="status" aria-atomic="true" data-copy-toast data-testid="subscription-copy-status"></p>
       <p>{SUBSCRIPTION_GUIDANCE[2]}</p>
     </details>
     <div data-archive-state>
@@ -126,6 +129,5 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
     <p><a data-testid={PAST_EVENTS_BACK_TESTID} href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
   </section>
-  {@html copyLinkIsland}
-  {@html island}
+  {@html islands}
 </Shell>

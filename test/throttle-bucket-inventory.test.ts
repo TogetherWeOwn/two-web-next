@@ -286,7 +286,7 @@ describe("throttle bucket inventory", () => {
     const expected = new Map<string, { file: string; count: number }[]>([
       ["admin-write", [{ file: "src/admin/routes.tsx", count: 8 }]],
       ["event-write", [{ file: "src/events/routes-writes.ts", count: 4 }]],
-      ["logout", [{ file: "src/auth/routes.ts", count: 1 }]],
+      ["logout", [{ file: "src/auth/routes.ts", count: 2 }]],
       ["qa-login", [{ file: "src/auth/routes.ts", count: 1 }]],
       ["alert-probe", [{ file: "src/alert-probe.ts", count: 1 }]],
     ]);

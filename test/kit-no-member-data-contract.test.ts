@@ -675,6 +675,8 @@ describe("Kit GET /events/past anonymous payload", () => {
   // the rendered DOM): `titleSpans` and `passage` ride a row only for a nonblank
   // query, and `passage` only when the row has a description. The description
   // itself, member bytes and internal columns never appear in either mode.
+  // `organizer_name` is not a search exception: the public host display name is
+  // one of the eleven base keys on every row, in browse and search alike.
   describe("search-only payload fields", () => {
     const BASE_ROW_KEYS = [
       "eventKey",
@@ -683,6 +685,7 @@ describe("Kit GET /events/past anonymous payload", () => {
       "timezone",
       "location",
       "game",
+      "organizer_name",
       "goingCount",
       "goingOccupancy",
       "capacity",
@@ -840,7 +843,7 @@ describe("Kit GET /events/past anonymous payload", () => {
     ];
 
     for (const [label, search] of BLANK_QUERIES) {
-      it(`ships only the ten base keys per row for ${label}, descriptions and all`, async () => {
+      it(`ships only the eleven base keys per row for ${label}, descriptions and all`, async () => {
         const { payload, bytes, headers } = await servedArchive(
           [descriptionRow(), noDescriptionRow(), emptyDescriptionRow(), longDescriptionRow()],
           search,
@@ -851,6 +854,8 @@ describe("Kit GET /events/past anonymous payload", () => {
         expect(payload.rows).toHaveLength(4);
         const first = rowByKey(payload.rows, "hostile-event-key-zz9");
         expect(first["title"]).toBe(TEASER_TITLE);
+        // The public host display name rides every base row verbatim.
+        expect(first["organizer_name"]).toBe("Hostile Organizer Display");
         expect(first["goingCount"]).toBe(2);
         expect(first["goingOccupancy"]).toBe(3);
         expect(first["capacity"]).toBe(25);
@@ -896,6 +901,7 @@ describe("Kit GET /events/past anonymous payload", () => {
       ]);
       // Full title and bounded excerpt keep their literal text; marks are the only addition.
       expect(withDescription["title"]).toBe(TEASER_TITLE);
+      expect(withDescription["organizer_name"]).toBe("Hostile Organizer Display");
       expect(joined(withDescription["titleSpans"])).toBe(TEASER_TITLE);
       expect(joined(withDescription["passage"])).toBe(TEASER_DESCRIPTION);
       expect(withDescription["goingCount"]).toBe(2);

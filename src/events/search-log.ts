@@ -14,20 +14,13 @@ export const MAX_QUERY_LENGTH = 255;
 /** NUL is rejected by PostgreSQL text parameters; drop it before matching or logging. */
 const stripNul = (raw: string | null | undefined): string => (raw ?? "").replace(/\u0000/g, "");
 
-/**
- * HTML input preprocessing normalizes CR/CRLF in attribute values to LF, so a
- * raw CR in `data-query` would desync the island from the %0D canonical and
- * break every enhanced page turn. Normalize here so the SQL term, canonical,
- * pager hrefs and data-query share one meaning on both twins.
- */
+// Keep existing read/model imports on the same matching authority; renderers
+// import the pure module directly so static leaves stay database-free.
+export { matchQuery } from "./search-query";
+
+/** HTML preprocessing turns CR/CRLF in attribute values into LF; match that. */
 const normalizeNewlines = (value: string): string =>
   value.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-
-/** Matching input: trimmed original text (no collapse/lowercase, as legacy). null = blank = not a search. */
-export function matchQuery(raw: string | null | undefined): string | null {
-  const t = normalizeNewlines(stripNul(raw)).trim();
-  return t === "" ? null : t;
-}
 
 /** Archive game input: trimmed original text (no collapse/lowercase).
  * null = blank = unfiltered. Unlike text search, NUL is preserved here so

@@ -88,7 +88,7 @@
     "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
     "lighthouse:quality": "node ci/lighthouse-quality-run.mjs",
     "standards": "node ci/web-standards.mjs",
-    "standards:selftest": "node ci/web-standards.mjs --selftest && node --test ci/web-standards-route-timeout-acceptance.test.mjs ci/web-standards-maxlinks-acceptance.test.mjs && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
+    "standards:selftest": "node ci/web-standards.mjs --selftest && node --test ci/web-standards-route-timeout-acceptance.test.mjs ci/web-standards-maxlinks-acceptance.test.mjs ci/web-standards-browser-links-acceptance.test.mjs ci/web-standards-regression.test.mjs ci/web-standards-analysis-bounds.test.mjs && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
     "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {
@@ -112,6 +112,7 @@
     "esbuild": "0.28.2",
     "fast-check": "4.10.2",
     "miniflare": "5.20260926.1-alpha",
+    "parse5": "8.0.1",
     "playwright": "^1.63.0",
     "proxy-agent": "8.0.2",
     "tsx": "^4.23.15",

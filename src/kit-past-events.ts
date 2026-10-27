@@ -16,19 +16,32 @@ import type { PublicEvent } from "./events/reads";
 import { resolveCalendarInput } from "./events/page-models.server";
 import { searchContext, type SearchSegment } from "./events/search-context";
 import { matchGame, matchQuery, resolveArchiveGameFilter } from "./events/search-log";
-import { publicReadGuard } from "./events/routes-shared";
+import { guardRequestId, publicReadGuard, seedGuardRequestId } from "./events/routes-shared";
 
-export type KitPublicReadGuard = (request: Request, env: Env) => Promise<Response | null>;
+export type KitPublicReadGuard = (
+  request: Request,
+  env: Env,
+  requestId?: unknown,
+) => Promise<Response | null>;
 
 const guardApp = new Hono<{ Bindings: Env }>();
+guardApp.use(guardRequestId);
 guardApp.all("*", async (c) => {
   const limited = await publicReadGuard(c);
   return limited ?? c.body(null, 204);
 });
 
-/** Reuse the public Hono read budget for the native Kit route. */
-export async function kitPublicReadGuard(request: Request, env: Env): Promise<Response | null> {
-  const response = await guardApp.fetch(request, env);
+/**
+ * Reuse the public Hono read budget for the native Kit route. The dispatch
+ * passes its minted id so a 429 renders the same support reference the
+ * response header carries; without one the refusal stays blank-safe.
+ */
+export async function kitPublicReadGuard(
+  request: Request,
+  env: Env,
+  requestId?: unknown,
+): Promise<Response | null> {
+  const response = await guardApp.fetch(seedGuardRequestId(request, requestId), env);
   return response.status === 204 ? null : response;
 }
 
@@ -39,6 +52,7 @@ export async function dispatchPastArchiveRequest(
   resolve: () => Promise<Response>,
   guard: KitPublicReadGuard = kitPublicReadGuard,
   now: number = Date.now(),
+  requestId?: unknown,
 ): Promise<Response> {
   const url = new URL(request.url);
   const input = resolveCalendarInput({
@@ -50,7 +64,7 @@ export async function dispatchPastArchiveRequest(
   // The loader rejects raw oversized/refused input before reads, even on a warm cache.
   if (input.queryTooLong || input.gameTooLong || input.gameRefused || input.queryConflicting)
     return resolve();
-  const limited = await guard(request, env);
+  const limited = await guard(request, env, requestId);
   if (limited) return limited;
   // Kit data requests still execute the read guard/load but their JSON payload
   // is not the HTML representation cached by Hono.
@@ -277,21 +291,22 @@ export async function loadPastArchivePage<Row>({
 
 /**
  * The anonymous-safe slice of a past-archive row: the fields the archive
- * card renders (key/title/time/zone/location/game/counts/capacity) plus the
- * occupancy aggregate and the public-by-design Discord event id. Kit
+ * card renders (key/title/time/zone/location/game/host/counts/capacity) plus
+ * the occupancy aggregate and the public-by-design Discord event id. Kit
  * serializes load data into `__data.json` for anonymous clients even with
  * `csr=false`, so the past load returns this projection, never the full
  * row: the authorship snowflake (`createdBy`, a moderator Discord id kept
- * for retention), descriptions, organizer names and sync internals never
- * leave the server on this logged-out, indexed page. The exceptions are
- * query-only, present only for a nonblank search: the bounded description
- * passage (`passage`, at most 320 code points, only when the row has a
- * description) and the full-title literal segments (`titleSpans`) that the
- * archive card renders with semantic marks. Both derive from the already
- * public title or a bounded excerpt, never member data, and keep the
- * segment authority server-side so the client ships no search code.
- * Mirrors the join
- * precedent (`toPublicWidgetSnapshot`) and the home teaser (`HomeEvent`).
+ * for retention), full descriptions and sync internals never leave the
+ * server on this logged-out, indexed page. The organizer display name rides
+ * along because the card renders it — the same public name the detail page
+ * shows, never an id or a member link. Search-only fields are present only
+ * for a nonblank query: the bounded description passage (`passage`, at most
+ * 320 code points, only when the row has a description) and the full-title
+ * literal segments (`titleSpans`) rendered with semantic marks. Both derive
+ * from the already public title or a bounded excerpt, never member data,
+ * and keep segment authority server-side so the client ships no search code.
+ * Mirrors the join precedent (`toPublicWidgetSnapshot`) and the home teaser
+ * (`HomeEvent`).
  */
 export type PastArchiveEvent = Pick<
   PublicEvent,
@@ -301,6 +316,7 @@ export type PastArchiveEvent = Pick<
   | "timezone"
   | "location"
   | "game"
+  | "organizer_name"
   | "goingCount"
   | "goingOccupancy"
   | "capacity"
@@ -316,6 +332,7 @@ export function toPublicPastArchiveRow(row: PublicEvent, q?: string): PastArchiv
     timezone: row.timezone,
     location: row.location,
     game: row.game,
+    organizer_name: row.organizer_name,
     goingCount: row.goingCount,
     goingOccupancy: row.goingOccupancy,
     capacity: row.capacity,
