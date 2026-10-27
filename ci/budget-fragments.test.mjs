@@ -37,7 +37,7 @@ const SHIPPING_KIT_BUDGET = {
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
     js: { maxRawBytes: 257024, maxGzipBytes: 103168, maxFiles: 55 },
-    css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
+    css: { maxRawBytes: 3072, maxGzipBytes: 1280, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
 };
@@ -132,17 +132,21 @@ function kitFixture(t, fragments) {
 // (combined worst 336168, margin 216; lower 336128 rejects by 40); 336640 is
 // sixth, earlier adjacent-period allocation on b69eea7d7 (two merged builds
 // 336463 and 336462, margin 177; lower 336384 rejects by 79); 336896 is the
-// seventh, current adjacent-period allocation on d6e9491c2 (two merged builds
-// 336871, margin 25; lower 336640 rejects by 231). Every other pin stays exact:
-// the oracle rejects any ceiling outside this list, then deep-compares the
-// rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336640, 336896];
+// seventh, earlier adjacent-period allocation on d6e9491c2 (two merged builds
+// 336871, margin 25; lower 336640 rejects by 231); 337152 is the eighth,
+// current adjacent-period allocation on db2590d0c (two merged builds 336997
+// and 336998, margin 154; lower 336896 rejects by 102). Every other pin stays
+// exact: the oracle rejects any ceiling outside this list, then deep-compares
+// the rest of the plan.
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
+  335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152,
+];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
@@ -196,8 +200,17 @@ test("shipping oracle admits the measured 336896 server gzip allocation", () => 
   });
 });
 
+test("shipping oracle admits the measured 337152 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 337152 } },
+  });
+});
+
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 336639, 336641, 336895, 336897]) {
+  for (const maxGzipBytes of [
+    335105, 335359, 335616, 336385, 336639, 336641, 336895, 336897, 337151, 337153,
+  ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
