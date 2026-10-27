@@ -228,6 +228,7 @@ function runReportCli(t, format) {
     "lighthouse-origin-lib.cjs",
     "lighthouserc.cjs",
     "lighthouse-samples.cjs",
+    "lighthouse-serving-values.cjs",
     "quality-budget.json",
   ]) {
     copyFileSync(join(repoRoot, "ci", file), join(root, "ci", file));
