@@ -143,6 +143,7 @@ function page(opts: { missing?: boolean; orphan?: boolean; noInvite?: boolean } 
     frame,
     preview,
     strap,
+    link,
     message,
     timers,
     createElement,
@@ -192,6 +193,17 @@ describe("join-widget island", () => {
     p.frame.fire("load");
     expect(p.frame.focus).toHaveBeenCalledOnce();
     expect(p.preview.children).toEqual([p.frame]);
+  });
+
+  // Hiding the strap drops focus to <body> in a real browser, but not where
+  // the strap is missing (append without hide) or focus stays on the control:
+  // resting on the clicked control still means "hasn't moved".
+  it("moves focus into the frame on load while focus still rests on the clicked control", async () => {
+    const p = page();
+    await p.click();
+    p.moveFocusTo(p.link);
+    p.frame.fire("load");
+    expect(p.frame.focus).toHaveBeenCalledOnce();
   });
 
   it("does not steal focus on load when the visitor moved elsewhere since the click", async () => {
