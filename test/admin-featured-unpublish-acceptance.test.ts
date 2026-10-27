@@ -73,7 +73,7 @@ const STALE_SLOT: SeedSlot = {
 
 const unpublishPath = (id: number | string) => `/featured/${id}/unpublish`;
 
-describe.skipIf(!process.env.DATABASE_URL)(
+describe(
   "admin featured unpublish: moderator POST sets only isPublished=false (agent-testdb)",
   () => {
     let fixture: MemberDataFixture;

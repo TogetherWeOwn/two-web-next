@@ -43,7 +43,7 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-describe.skipIf(!process.env.DATABASE_URL)(
+describe(
   "featured unpublish: persisted and cached invariants",
   () => {
     let fixture: MemberDataFixture;
@@ -96,8 +96,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
     };
 
     beforeAll(async () => {
-      // DB lane: skipped without DATABASE_URL (describe.skipIf above); CI
-      // always sets it, so the commit/rollback proofs still execute there.
+      // These proofs require DATABASE_URL for an approved disposable DB.
+      // CI supplies it; local runs must do the same.
       fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
     });
     beforeEach(async () => {
