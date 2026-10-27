@@ -153,6 +153,22 @@ interface TestAnchor {
   ariaLabel: string | null;
 }
 
+// Collects the characters outside `<...>` tags instead of rewriting the
+// markup, so no partially stripped tag can survive. A `<` with no closing `>`
+// is kept as text, matching the earlier `/<[^>]*>/g` strip.
+function textOutsideTags(inner: string): string {
+  let text = "";
+  let index = 0;
+  while (index < inner.length) {
+    const open = inner.indexOf("<", index);
+    const close = open === -1 ? -1 : inner.indexOf(">", open);
+    if (close === -1) return text + inner.slice(index);
+    text += inner.slice(index, open);
+    index = close + 1;
+  }
+  return text;
+}
+
 function anchorsByTestid(html: string, testid: string): TestAnchor[] {
   const anchors: TestAnchor[] = [];
   const pattern = new RegExp(`<a\\b([^>]*data-testid="${testid}"[^>]*)>([\\s\\S]*?)</a>`, "g");
@@ -165,7 +181,7 @@ function anchorsByTestid(html: string, testid: string): TestAnchor[] {
     anchors.push({
       tag: match[0],
       href: unescapeHtml(rawHref),
-      text: unescapeHtml((match[2] ?? "").replace(/<[^>]*>/g, "").trim()),
+      text: unescapeHtml(textOutsideTags(match[2] ?? "").trim()),
       ariaLabel: rawLabel === undefined ? null : unescapeHtml(rawLabel),
     });
   }
