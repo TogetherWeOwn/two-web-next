@@ -179,11 +179,7 @@ const IF_NONE_MATCH_PARAMETER = {
   required: false,
   schema: { type: "string" },
   description:
-    "Conditional read. Send the ETag of a representation you hold: the exact tag, its " +
-    "W/ weak copy, a comma-separated list or * answers an empty 304 when it matches the " +
-    "current representation, otherwise the normal 200. Admission runs before the " +
-    "comparison, so a spent read budget still answers 429, never 304. " +
-    "Only ETag validators are supported.",
+    "ETag of a held representation (exact, W/ weak, list or *); a match answers an empty 304.",
 };
 
 const VALIDATOR_HEADERS = {
@@ -192,13 +188,9 @@ const VALIDATOR_HEADERS = {
 };
 
 const NOT_MODIFIED_DESCRIPTION =
-  "Not modified: the If-None-Match validator matches the current ETag, so the response is " +
-  "empty (no body) and repeats ETag and Cache-Control. Admission is checked before the " +
-  "comparison: a rate-limited request answers 429, never 304. Freshness is only what " +
-  "remains of the original 60s window: a hit just before expiry carries max-age=1, or " +
-  "max-age=0 once expired, never a fresh full window. Committed event writes retire " +
-  "entries in the mutating isolate only; other isolates converge on TTL expiry, so a " +
-  "304 can briefly repeat a representation another isolate has already retired.";
+  "Not modified: If-None-Match matches the current ETag; empty body. Admission runs before the comparison (429, never 304). Freshness is what remains " +
+  "of the original 60s window (max-age=1 near expiry, then 0). Writes retire " +
+  "entries per isolate, so a 304 can briefly repeat a representation another isolate retired.";
 
 function jsonRef(name: string, description: string) {
   return {
@@ -303,13 +295,12 @@ export function getOpenApiDocument(appUrl: string) {
       parameters: { IfNoneMatch: IF_NONE_MATCH_PARAMETER },
       headers: {
         ETag: {
-          description: "Validator for this representation; echo it in If-None-Match.",
+          description: "Validator; echo it in If-None-Match.",
           schema: { type: "string" },
         },
         CacheControl: {
           description:
-            "public, max-age=N with N the remaining freshness (at most 60); " +
-            "max-age=0, must-revalidate when a retire overtook the read.",
+            "max-age=N, N the remaining freshness (at most 60); max-age=0, must-revalidate after a retire.",
           schema: { type: "string" },
         },
       },
