@@ -201,10 +201,13 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         ) {
           return { rows: [["0"]] };
         }
+        // Home teaser: finite-window guard keeps infinity-end rows from
+        // occupying the three limit slots, so the pinned statement carries
+        // the same isfinite pair as the sibling upcoming reads.
         if (
           inTransaction &&
           sql ===
-            `${eventSelect} where ("events"."status" = $1 and "events"."ends_at" >= $2 and isfinite("events"."starts_at")) order by "events"."starts_at" asc, "events"."id" asc limit $3` &&
+            `${eventSelect} where ("events"."status" = $1 and "events"."ends_at" >= $2 and (isfinite("events"."starts_at") and isfinite("events"."ends_at"))) order by "events"."starts_at" asc, "events"."id" asc limit $3` &&
           params.length === 3 &&
           params[0] === "published" &&
           isInstant(params[1]) &&
