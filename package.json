@@ -71,7 +71,7 @@
     "build:assets:selftest": "node ci/minify-assets.mjs --selftest",
     "build:assets:check": "node ci/minify-assets.mjs --check",
     "dev:lighthouse": "wrangler dev --config ci/wrangler.lighthouse.jsonc --local --ip 127.0.0.1 --port 8787",
-    "lighthouse": "lhci autorun --config=ci/lighthouserc.cjs",
+    "lighthouse": "node ci/lighthouse-perf-run.mjs",
     "lighthouse:origin": "node ci/lighthouse-origin-run.mjs",
     "lighthouse:origin:selftest": "node --test ci/lighthouse-origin.test.mjs && node ci/lighthouse-origin-run.mjs --selftest",
     "lighthouse:evidence:selftest": "node --test ci/lighthouse-evidence.test.mjs",
@@ -88,7 +88,7 @@
     "drill:internal-action": "node --import ./bin/ts-hook.mjs bin/internal-action-drill.mjs",
     "lighthouse:quality": "node ci/lighthouse-quality-run.mjs",
     "standards": "node ci/web-standards.mjs",
-    "standards:selftest": "node ci/web-standards.mjs --selftest && node --test ci/web-standards-route-timeout-acceptance.test.mjs ci/web-standards-maxlinks-acceptance.test.mjs ci/web-standards-browser-links-acceptance.test.mjs ci/web-standards-regression.test.mjs ci/web-standards-analysis-bounds.test.mjs && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest",
+    "standards:selftest": "node ci/web-standards.mjs --selftest && node --test ci/web-standards-route-timeout-acceptance.test.mjs ci/web-standards-maxlinks-acceptance.test.mjs ci/web-standards-browser-links-acceptance.test.mjs ci/web-standards-regression.test.mjs ci/web-standards-analysis-bounds.test.mjs && node ci/lighthouse-summary.mjs --selftest && node ci/lighthouse-quality-run.mjs --selftest && node ci/lighthouse-perf-run.mjs --selftest",
     "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {
