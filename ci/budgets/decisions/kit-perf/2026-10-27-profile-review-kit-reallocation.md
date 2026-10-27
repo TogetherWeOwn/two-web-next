@@ -32,12 +32,13 @@ combined tree by 837B server gzip, 833B client raw and 164B client gzip.
 
 ## Attribution
 
-Main moved after the first allocation: it carries the event-egress server
-bound (server gzip 334041 -> 335351) and +977 client raw / +348 client gzip,
-which consumed the first allocation's margins. The slice itself is
-unchanged since the first measurement (client raw delta +1907 both times).
-The growth is the `ProfileView` review markup and the shared row helper
-`src/profiles/composition.ts`, which ships to both the Kit server bundle and
+Main moved after the first allocation: the first measurement saw server
+gzip 334041 and client 253949 raw / 102273 gzip on main, and pristine main
+now measures 335351 and 254926 / 102621 (see also
+`2026-10-26-server-gzip-335360.md`). That consumed the first allocation's
+margins. The slice itself is unchanged since the first measurement (client
+raw delta +1907 both times). The growth is the `ProfileView` review
+markup and the shared row helper `src/profiles/composition.ts`, which ships to both the Kit server bundle and
 the client; no new files and no new dependency.
 
 ## Shipping tests
