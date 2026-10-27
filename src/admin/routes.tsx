@@ -78,6 +78,7 @@ import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors
 import { safeRequestId } from "../request-log";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
+import { capacityPanel } from "./event-capacity";
 import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
 import {
@@ -448,7 +449,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const row = await getEvent(db, key);
     if (!row) return errorPage(c, 404, "Event not found");
     const rosterQuery = parseRosterQuery(c.req.query());
-    const { rows: roster, total: rosterTotal } = await listRoster(db, row.eventKey, rosterQuery);
+    const {
+      rows: roster,
+      total: rosterTotal,
+      occupied,
+    } = await listRoster(db, row.eventKey, rosterQuery, { occupied: true });
     return bufferedMemberHtml(
       c,
       <EventFormPage
@@ -459,6 +464,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         roster={roster}
         rosterTotal={rosterTotal}
         rosterQuery={rosterQuery}
+        capacity={capacityPanel(row.eventKey, rosterQuery, occupied, row.capacity)}
       />,
     );
   });

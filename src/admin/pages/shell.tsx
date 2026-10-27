@@ -112,6 +112,8 @@ type FieldProps = {
   label: string;
   errors: Record<string, string>;
   hint?: string;
+  /** Extra nodes rendered right after the control, before the hint and error. */
+  after?: unknown;
   children: (id: string) => unknown;
 };
 
@@ -129,7 +131,7 @@ const mergeDescribedBy = (existing: unknown, added: string): string => {
  * `aria-describedby` (appended after any inline wiring, never clobbering it),
  * plus `aria-invalid` when an error is present. Consumers pass a bare control.
  */
-export const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) => {
+export const Field: FC<FieldProps> = ({ name, label, errors, hint, after, children }) => {
   const err = errors[name];
   const id = `f-${name.replace(/[^a-z0-9]+/gi, "-")}`;
   const owned = [hint ? `${id}-hint` : "", err ? `${id}-error` : ""].filter(Boolean).join(" ");
@@ -145,6 +147,7 @@ export const Field: FC<FieldProps> = ({ name, label, errors, hint, children }) =
     <div class="field">
       <label for={id}>{label}</label>
       {control}
+      {after}
       {hint ? (
         <p id={`${id}-hint`} class="hint">
           {hint}

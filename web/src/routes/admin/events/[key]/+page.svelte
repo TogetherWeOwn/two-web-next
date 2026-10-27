@@ -31,10 +31,17 @@ const hasErrors = $derived(view.hasErrors ?? Object.keys(errors).length > 0);
 const val = (name: string) => values[name] ?? "";
 const timezoneVal = $derived(val("timezone") || "Europe/London");
 const roster = $derived(view.roster);
+const capacity = $derived(view.capacity);
+const capacityDescribedBy = $derived(
+  [capacity ? "capacity-snapshot capacity-advice" : "", errors.capacity ? "f-capacity-error" : ""]
+    .filter(Boolean)
+    .join(" ") || undefined,
+);
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
 const textLimitsIsland =
   '<script type="module" src="/islands/admin-event-text-limits.js"></' + "script>";
 const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
+const capacityIsland = '<script src="/islands/admin-event-capacity.js" defer></' + "script>";
 </script>
 
 <AdminShell title={`Edit ${view.title}`}>
@@ -188,8 +195,27 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         inputmode="numeric"
         value={val("capacity")}
         aria-invalid={errors.capacity ? "true" : undefined}
-        aria-describedby={errors.capacity ? "f-capacity-error" : undefined}
+        aria-describedby={capacityDescribedBy}
       />
+      {#if capacity}
+        <p
+          id="capacity-snapshot"
+          class="hint"
+          data-testid="capacity-snapshot"
+          data-occupied={capacity.occupied}
+          data-capacity={capacity.capacity ?? undefined}
+        >{capacity.snapshot}</p>
+        <p
+          id="capacity-advice"
+          class="hint"
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          data-testid="capacity-advice"
+        >{capacity.advice}</p>
+        <p class="hint">{capacity.seatNote}</p>
+        <p class="hint"><a href={capacity.reviewUrl}>{capacity.reviewLabel}</a> {capacity.reviewNote}</p>
+      {/if}
       {#if errors.capacity}
         <p id="f-capacity-error" class="error" role="alert" data-testid="error-capacity">
           {errors.capacity}
@@ -317,5 +343,6 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
   </section>
   {@html textLimitsIsland}
   {@html editorIsland}
+  {#if capacity}{@html capacityIsland}{/if}
 </section>
 </AdminShell>

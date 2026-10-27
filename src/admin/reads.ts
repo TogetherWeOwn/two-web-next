@@ -28,19 +28,53 @@ export type RosterEntry = {
   answeredAt: Date;
 };
 
+/**
+ * Going-only occupied seats for one event: the same count the locked update
+ * enforces (`waitlist.goingCount`), read for display only. One classified
+ * aggregate that returns a number, never member identifiers, and never follows
+ * the roster's search, facet, sort or page (a filtered roster `total` is a
+ * response count, not occupancy). It reuses the pinned roster-count Going
+ * facet shape, so the member-read classifier admits nothing new.
+ */
+async function countGoingSeats(db: Db, eventKey: string): Promise<number> {
+  const [tally] = await nonSensitiveRead("roster-count", () =>
+    db
+      .select({ n: count() })
+      .from(rsvps)
+      .innerJoin(events, eq(events.id, rsvps.eventId))
+      .where(and(eq(events.eventKey, eventKey), eq(rsvps.status, "going"))),
+  );
+  return Number(tally?.n ?? 0);
+}
+
 /** Paged read-only RSVP roster for one event; most recent first unless explicitly sorted.
  *
  * Search and sort apply before paging, so `total` is the filtered count and
  * `rows` is one page of it. The deterministic `rsvps.userId` tie-break is kept.
  * A page past the end returns no rows (with working navigation); callers render
  * the past-end copy. The count is a classified aggregate: it returns only a
- * number, never member identifiers.
+ * number, never member identifiers. Passing `{ occupied: true }` adds the
+ * Going-only seat count for the whole event (see countGoingSeats): it never
+ * follows search, facet, sort or page, and is display-only; the locked update
+ * re-counts.
  */
 export async function listRoster(
   db: Db,
   eventKey: string,
+  query: RosterQuery,
+  opts: { occupied: true },
+): Promise<{ rows: RosterEntry[]; total: number; occupied: number }>;
+export async function listRoster(
+  db: Db,
+  eventKey: string,
+  query?: RosterQuery,
+): Promise<{ rows: RosterEntry[]; total: number }>;
+export async function listRoster(
+  db: Db,
+  eventKey: string,
   query: RosterQuery = { q: "", status: "", sort: "answered", order: "desc", page: 1 },
-): Promise<{ rows: RosterEntry[]; total: number }> {
+  opts?: { occupied: true },
+): Promise<{ rows: RosterEntry[]; total: number; occupied?: number }> {
   const page = Number.isSafeInteger(query.page) && query.page > 0 ? query.page : 1;
   const search: SQL | undefined = query.q
     ? ilike(users.username, `%${escapeLikeTerm(query.q)}%`)
@@ -84,7 +118,10 @@ export async function listRoster(
       .limit(ROSTER_PAGE_SIZE)
       .offset((page - 1) * ROSTER_PAGE_SIZE),
   );
-  return { rows, total: Number(countRows[0]?.n ?? 0) };
+  const total = Number(countRows[0]?.n ?? 0);
+  // Opt-in, so every other caller keeps the two-statement count + page read.
+  if (!opts?.occupied) return { rows, total };
+  return { rows, total, occupied: await countGoingSeats(db, eventKey) };
 }
 
 // Explicit projection works on both migrateJoin() bootstrap and imported

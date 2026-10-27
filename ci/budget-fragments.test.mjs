@@ -40,6 +40,7 @@ const SHIPPING_KIT_BUDGET = {
 };
 
 const SHIPPING_BUNDLE_BUDGETS = {
+  "public/islands/admin-event-capacity.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/admin-event-editor.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/admin-event-text-limits.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/auth-status.js": { maxRawBytes: 3072, maxGzipBytes: 1536 },
