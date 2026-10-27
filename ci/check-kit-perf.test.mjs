@@ -447,9 +447,11 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
 // per axis, the 257024/103168 baseline and the 257536/103680
 // admin-orientation allocation (merged build 257039 raw / 103569 gzip on the
 // earlier base; the lower 257024/103168 ceilings reject by 15/401), plus the
-// 103424 client gzip allocation (merged-tree worst 103302, margin 122; the
-// lower 103168 ceiling rejects by 134). Any other loaded ceiling fails its
-// allocation control and its boundary cases.
+// 103424 client gzip allocation with two witnesses: the merged-tree worst
+// 103302 (margin 122; the lower 103168 ceiling rejects by 134) and the
+// event-detail second step's measured union 257285 raw / 103235 gzip at raw
+// 257536 (margin 189; the lower 257024/103168 ceilings reject by 261/67). Any
+// other loaded ceiling fails its allocation control and its boundary cases.
 const SHIPPING_CLIENT_RAW_CAP = shippingClientBudget?.maxRawBytes;
 const SHIPPING_CLIENT_GZIP_CAP = shippingClientBudget?.maxGzipBytes;
 const SHIPPING_CLIENT_RAW_ALLOCATIONS = {
@@ -766,6 +768,12 @@ function shippingClientGzipCases() {
         group: "kit.client.js",
         axis: "gzip",
         bytes: 103302,
+      },
+      {
+        name: "client gzip event-detail union interval",
+        group: "kit.client.js",
+        axis: "gzip",
+        bytes: 103235,
       },
       { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103424 },
       {
