@@ -89,8 +89,11 @@ const NEIGHBORS: EventNeighbors = {
     eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAC",
     title: "Chess finals",
     startsAt: new Date("2030-02-01T19:00:00Z"),
+    endsAt: new Date("2030-02-01T21:00:00Z"),
     timezone: "UTC",
     location: "The lobby",
+    game: null,
+    rsvpOpen: true,
   },
 };
 
@@ -432,8 +435,11 @@ describe("event-detail guest reads", () => {
       eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA",
       title: "Chess prelims",
       startsAt: new Date("2030-01-01T19:00:00Z"),
+      endsAt: new Date("2030-01-01T21:00:00Z"),
       timezone: "UTC",
       location: "The lobby",
+      game: null,
+      rsvpOpen: true,
     };
     const { outcome } = await resolve(
       KEY,

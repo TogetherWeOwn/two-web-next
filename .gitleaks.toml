@@ -173,3 +173,11 @@ condition = "AND"
 regexTarget = "secret"
 paths = ['''^test/rss-game-scope-category-refresh-acceptance\.test\.ts$''']
 regexes = ['''^01ARZ3NDEKTSV4RRFFQ69G5FAX$''', '''^01ARZ3NDEKTSV4RRFFQ69G5FAY$''']
+
+[[allowlists]]
+description = "Synthetic unknown-event ULID in the MCP/REST parity acceptance fixture, used only for an in-memory 404 lookup, not a credential (including its committed history)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/mcp-rest-parity-acceptance\.test\.ts$''']
+regexes = ['''^01BRZ3NDEKTSV4RRFFQ69G5FAV$''']
