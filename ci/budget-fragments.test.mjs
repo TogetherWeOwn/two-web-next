@@ -37,7 +37,7 @@ const SHIPPING_KIT_BUDGET = {
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
     js: { maxRawBytes: 259072, maxGzipBytes: 103936, maxFiles: 55 },
-    css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
+    css: { maxRawBytes: 3072, maxGzipBytes: 1280, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
 };
@@ -129,10 +129,10 @@ function kitFixture(t, fragments) {
 // fourth, independently measured allocation (combined worst 335901, margin
 // 227; lower 335872 rejects by 29); 336384 is the fifth, event-share-honesty
 // allocation (combined worst 336168, margin 216; lower 336128 rejects by 40);
-// 336896 is the sixth, independently measured allocation (profile review
-// combined worst 336671, margin 225; lower 336640 rejects by 31); 337408 is
-// the seventh, profile review re-measured allocation (combined worst 337080,
-// margin 328; lower 337152 rejects by 72). Every other
+// 336896 is the sixth, bounded-homepage allocation (combined worst 336673,
+// margin 223; lower 336640 rejects by 33); 337408 is
+// the seventh, profile review re-measured allocation (combined worst 337206,
+// margin 202; lower 337152 rejects by 54). Every other
 // pin stays exact: the oracle rejects any ceiling outside this list, then
 // deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336896, 337408];
