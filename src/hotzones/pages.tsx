@@ -20,31 +20,39 @@ const HOURS = Array.from({ length: 24 }, (_, h) => h);
 // The region mirrors the calendar scroll wrapper (focusable with a label) so
 // keyboard users can pan the grid. Both renderers share this markup through
 // renderHotzoneGrid.
-const Grid: FC<{ cells: HeatGrid; caption: string }> = ({ cells, caption }) => (
-  <div data-hotzone-scroll role="region" aria-label={caption} tabindex={0}>
-    <table>
-      <caption>{caption}</caption>
-      <thead>
-        <tr>
-          <th scope="col">Day</th>
-          {HOURS.map((h) => (
-            <th scope="col">{String(h).padStart(2, "0")}</th>
-          ))}
-        </tr>
-      </thead>
-      <tbody>
-        {WEEKDAY_NAMES.map((day, weekday) => (
+const Grid: FC<{ cells: HeatGrid; caption: string }> = ({ cells, caption }) => {
+  // The day and hour axes bucket in UTC (aggregates.ts), so say so where the
+  // hours are read: one labelled string serves as the visible caption and
+  // the scroll region's accessible name, and the corner header carries the
+  // same UTC marking at the axis origin (the first thing a panning mobile
+  // reader sees), on every grid and both renderers.
+  const labelled = `${caption} (hours in UTC)`;
+  return (
+    <div data-hotzone-scroll role="region" aria-label={labelled} tabindex={0}>
+      <table>
+        <caption>{labelled}</caption>
+        <thead>
           <tr>
-            <th scope="row">{day}</th>
+            <th scope="col">Day (UTC)</th>
             {HOURS.map((h) => (
-              <td>{cells[weekday]![h]}</td>
+              <th scope="col">{String(h).padStart(2, "0")}</th>
             ))}
           </tr>
-        ))}
-      </tbody>
-    </table>
-  </div>
-);
+        </thead>
+        <tbody>
+          {WEEKDAY_NAMES.map((day, weekday) => (
+            <tr>
+              <th scope="row">{day}</th>
+              {HOURS.map((h) => (
+                <td>{cells[weekday]![h]}</td>
+              ))}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+};
 
 // Kit's server-only loaders reuse this escaped JSX, rather than shipping a
 // second table renderer in the client bundle. Never accept pre-rendered input.
