@@ -121,17 +121,19 @@ function kitFixture(t, fragments) {
 // independently measured saved-review allocation (combined worst 335164,
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
 // unsupported); 335872 is the third, independently measured allocation
-// (measured 335639, margin 233; lower 335616 rejects by 23; the next 256B
-// step 336128 stays unsupported). Every other pin stays exact: the oracle
+// (measured 335639, margin 233; lower 335616 rejects by 23); 336384 is the
+// fourth, independently measured allocation (combined worst 336104, margin
+// 280; lower 336128 rejects by 24; the next 256B step 336640 stays
+// unsupported). Every other pin stays exact: the oracle
 // rejects any ceiling outside this list, then deep-compares the rest of
 // the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872];
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336384];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336384`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
