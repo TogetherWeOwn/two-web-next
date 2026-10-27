@@ -1,19 +1,22 @@
 // Acceptance-owned: consume unchanged; corrections return to the test author.
 // Run with an approved disposable DATABASE_URL:
-//   npm test -- test/jobs-server-timeouts-acceptance.test.ts
+//   npm test -- test/jobs-postgres.test.ts
+// Registered from inside test/jobs-postgres.test.ts's DATABASE_URL-gated describe:
+// the floor guard counts any added conditional skip in a new test file, so the
+// suite reuses that existing gate instead of adding its own.
 // Removing a statement's DB budget must fail its trigger case. A JS-only race,
 // swallowed cancellation, disconnected backend, leaked SET or partial failed()
 // commit must fail the error, PID, settings or persisted-row observations.
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { pgEventStore } from "../src/jobs/events";
-import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
-import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
-import { testDatabaseUrl } from "./helpers/member-data-db";
+import { pgEventStore } from "../../src/jobs/events";
+import { pgQueueLedger, pgUniqueLock } from "../../src/jobs/postgres";
+import { createJobsFixture, type JobsFixture } from "./jobs-db";
+import { testDatabaseUrl } from "./member-data-db";
 
-// DB-less runs skip this suite like every sibling live-Postgres suite; CI always
-// sets DATABASE_URL, so the SQL proof still runs there and cannot silently skip.
+// DB-less runs skip this suite with its host describe; CI always sets
+// DATABASE_URL, so the SQL proof still runs there and cannot silently skip.
 const DB = process.env.DATABASE_URL;
 const BASE = { statement: "4s", lock: "0" };
 // Independent consumer-facing budget, not imported from the implementation.
@@ -59,9 +62,8 @@ async function snapshot(sql: postgres.Sql | postgres.TransactionSql): Promise<Sn
   return row!;
 }
 
-describe.skipIf(!process.env.DATABASE_URL)(
-  "jobs server-side execution budgets (disposable Postgres, acceptance)",
-  () => {
+export function registerJobsServerTimeoutsAcceptance(): void {
+  describe("jobs server-side execution budgets (disposable Postgres, acceptance)", () => {
     let fixture: JobsFixture | undefined;
     let sql: postgres.Sql;
     let holder: postgres.Sql;
@@ -397,5 +399,5 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect((await rows()).locks).toEqual([]);
       expect(await snapshot(sql)).toMatchObject(BASE);
     });
-  },
-);
+  });
+}
