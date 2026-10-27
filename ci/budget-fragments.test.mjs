@@ -31,9 +31,9 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
-  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 336128, maxFiles: 126 } },
+  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
-    js: { maxRawBytes: 256768, maxGzipBytes: 103424, maxFiles: 55 },
+    js: { maxRawBytes: 257024, maxGzipBytes: 103424, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
@@ -123,9 +123,9 @@ function kitFixture(t, fragments) {
 // unsupported); 335872 is the third, independently measured allocation
 // (measured 335639, margin 233; lower 335616 rejects by 23; the next 256B
 // step 336128 was unsupported then). 336128 is the join next-game-night
-// allocation stacked on it (worst measured 335941 before the event-time merge);
-// 336384 is the same join allocation re-measured on the merged tree (worst
-// 336263, margin 121; lower 336128 rejects by 135; see
+// allocation as first measured (worst 335941); 336384 is the same join
+// allocation re-measured on the merged tree (worst 336263, margin 121; lower
+// 336128 rejects by 135; see
 // ci/budgets/decisions/kit-perf/2026-10-27-join-next-game-night.md). Every
 // other pin stays exact: the oracle rejects any ceiling outside this list,
 // then deep-compares the rest of the plan.

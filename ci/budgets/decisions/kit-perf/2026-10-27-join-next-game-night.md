@@ -1,9 +1,11 @@
 # 2026-10-27 decision: join next-game-night Kit client and server allocations
 
 Measured-budget allocation for the Kit cost of the join page's "Next game
-night" card (server load read, page markup, shared time formatter). Three
-ceilings move, each by the least aligned step that covers the measured
-composition; every other limit is unchanged.
+night" card (server load read, page markup, shared time formatter). Each
+ceiling that moves does so by the least aligned step that covers the
+measured composition; every other limit is unchanged. The first table is the
+original three-ceiling measurement; after merging main only client gzip and
+server gzip still move (see the re-measure section).
 
 Measured with `npm run build --prefix web` then `node ci/check-kit-perf.mjs`
 (Node 24.22.1, locked deps; two builds per tree on main `cb0f15736` plus its
@@ -27,29 +29,32 @@ Measured with `npm run build --prefix web` then `node ci/check-kit-perf.mjs`
   54/55, server 116/126), worker, CSS and startup limits fit unchanged.
 - Server gzip needs the 336128 step: 335872 stays 67-69 B short.
 
-### Re-measure on the merged tree (main `d939263e8`)
+### Re-measure on the merged tree (main `3baeb3793`)
 
-Merging the event-time commit (#1803) into this branch re-measured both
-server and client over the first allocation (two builds, identical):
+Main moved after the first allocation (event-time #1803, event-detail #1895,
+which raised client raw to 257024 and client gzip to 103168). Merged tree,
+two builds, identical:
 
-| Axis | Merged tree | Ceiling | Next least aligned step | Margin |
+| Axis | Merged tree | Main ceiling | This branch ceiling | Margin |
 | --- | --- | --- | --- | --- |
-| client JS raw | 256535 | 256512 (over by 23) | 256768 | 233 B |
-| client JS gzip | 103261 | 103424 | unchanged | 163 B |
-| server JS gzip | 336262-336263 | 336128 (over by 134-135) | 336384 | 121 B |
+| client JS raw | 256535 | 257024 | 257024 (main's, unchanged) | 489 B |
+| client JS gzip | 103261 | 103168 (over by 93) | 103424 | 163 B |
+| server JS gzip | 336262-336263 | 335872 (over by 391) | 336384 | 121 B |
 
-Client raw and server gzip each move one 256 B step above the first
-allocation (256512 to 256768, 336128 to 336384); 336128 rejects the merged
-server composition by 135 B and 256512 rejects the client by 23 B. Client
-gzip, file counts (client 55/55, server 116/126), worker, CSS and startup
-fit unchanged. Final raised values: client raw 256768, client gzip 103424,
-server gzip 336384.
+The raw client ceiling now comes from main, so this branch no longer raises
+it. Client gzip and server gzip each take one 256 B step above main's
+ceiling (103168 to 103424, 335872 to 336384; 336128 rejects the server
+composition by 135 B, and 103168 rejects client gzip by 93 B). File counts
+(client 55/55, server 116/126), worker, CSS and startup fit unchanged.
+Final raised values: client gzip 103424, server gzip 336384.
 
 `ci/budget-fragments.test.mjs` moves with the fragments. The additive
 allocation entries in `ci/check-kit-perf.test.mjs` are owned by the test
-correction handed back before this lands. No checker, gate, mask or exclusion
-changes; over-ceiling fixtures still fail closed. Not a feature or release
-approval. Undo: revert the three fragment values (client raw 256000, client gzip 103168, server gzip 335872 on the current main) and delete this file; the 336128/336384 and 256512/256768 test-ladder entries then become unused but harmless.
+correction handed back before this lands. No checker, gate, mask or
+exclusion changes; over-ceiling fixtures still fail closed. Not a feature or
+release approval. Undo: restore client gzip 103168 and server gzip 335872 in
+`ci/budgets/kit/` (the join card then no longer fits) and delete this file;
+the 336384 and 103424 test-ladder entries then become unused but harmless.
 
 ## Ported monolith history (verbatim, leading separator space kept)
 
