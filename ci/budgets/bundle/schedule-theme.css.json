@@ -2,8 +2,8 @@
   "$comment": "See ci/budgets/README.md; changing this ceiling needs a decision file in ci/budgets/decisions/bundle/.",
   "budgets": {
     "public/schedule-theme.css": {
-      "maxRawBytes": 6144,
-      "maxGzipBytes": 1792
+      "maxRawBytes": 8704,
+      "maxGzipBytes": 2304
     }
   }
 }

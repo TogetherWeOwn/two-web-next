@@ -61,7 +61,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
   "public/event-theme.css": { maxRawBytes: 7168, maxGzipBytes: 2048 },
   "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
-  "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },
+  "public/schedule-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2304 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
 };
 

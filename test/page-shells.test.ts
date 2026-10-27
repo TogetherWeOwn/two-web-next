@@ -159,16 +159,47 @@ it("keeps event detail on its own theme, outside the schedule-only sheet", async
 
 it("keeps schedule layout in its own self-contained sheet", () => {
   const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
-  // Tracks the authoritative raw ceiling in ci/bundle-budget.json (6144): the
-  // 6000 pin dated from #222 while approved slices grew the sheet (main alone
-  // is 5953). The budget gate still enforces raw+gzip independently.
-  expect(css.length).toBeLessThan(6144);
+  // Tracks the authoritative raw ceiling in ci/budgets/bundle/schedule-theme.css.json
+  // (8704, which carries the print block): the pin stays under it so the
+  // budget gate remains the stricter check. The budget gate still enforces raw+gzip independently.
+  expect(css.length).toBeLessThan(8704);
   expect(css).toContain("@media (max-width: 48rem)");
   expect(css).not.toMatch(/@import|https:\/\/|@font-face/);
-  // Every rule stays scoped to the schedule main, never the shared chrome.
-  for (const rule of css.replace(/\/\*[\s\S]*?\*\//g, "").matchAll(/([^{}]+)\{[^{}]*\}/g)) {
-    for (const selector of rule[1]!.split(/,(?![^(]*\))/))
-      expect(selector.trim()).toMatch(/^\.events-page /);
+  // Every screen rule stays scoped to the schedule main, never the shared
+  // chrome. The print block may additionally reach the page chrome (header,
+  // footer) and the body theme tokens, but only through the themed shell that holds a
+  // list or archive root, so the member board and other pages never match.
+  const printStart = css.indexOf("@media print");
+  expect(printStart).toBeGreaterThan(0);
+  const printRoots = "[data-testid=events-calendar][data-view=list],[data-testid=past-events]";
+  const scoped = (selector: string, printBlock: boolean): boolean =>
+    /^\.events-page /.test(selector) ||
+    (printBlock && selector.startsWith(`.base-theme:has(${printRoots})`));
+  const stripped = (text: string) => text.replace(/\/\*[\s\S]*?\*\//g, "");
+  // Top-level selector list items only: commas inside :is()/:has() stay put.
+  const items = (list: string): string[] => {
+    const out: string[] = [];
+    let depth = 0;
+    let start = 0;
+    for (let i = 0; i < list.length; i++) {
+      if (list[i] === "(") depth++;
+      else if (list[i] === ")") depth--;
+      else if (list[i] === "," && depth === 0) {
+        out.push(list.slice(start, i));
+        start = i + 1;
+      }
+    }
+    return [...out, list.slice(start)];
+  };
+  for (const [text, printBlock] of [
+    [css.slice(0, printStart), false],
+    [css.slice(printStart), true],
+  ] as const) {
+    for (const rule of stripped(text).matchAll(/([^{}]+)\{[^{}]*\}/g)) {
+      for (const selector of items(rule[1]!)) {
+        expect(scoped(selector.trim(), printBlock), selector.trim()).toBe(true);
+      }
+    }
   }
 });
 

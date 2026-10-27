@@ -10,7 +10,7 @@ The homepage, `/about`, `/faq`, `/rules`, `/privacy`, the `/join` landing, the c
 - `public/logo.svg` and `public/icons/*.png`: generated temporary TWO wordmark, not template art. Regenerate all five consistently with `python3 ci/generate-icons.py`. The mark stays inside the maskable safe area. Existing install icon URLs, sizes and manifest identity are unchanged; theme/background colors match the new mark.
 - `public/theme.css`: adapted, explicitly opted-in base-theme rules (home, content/join, recovery), under 12 KB uncompressed. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
 - `public/profile-theme.css`: profile-only layout under 8 KB, loaded only when `theme="profile"`.
-- `public/schedule-theme.css`: schedule-only layout under 6 KB, loaded only when `theme="schedule"`. Every rule is scoped to `.events-page`, so the shared chrome stays in `theme.css`.
+- `public/schedule-theme.css`: schedule-only layout under 8.5 KB, loaded only when `theme="schedule"`. Every screen rule is scoped to `.events-page`, so the shared chrome stays in `theme.css`. Its `@media print` block makes the `/events` list view and `/events/past` archive readable on paper: it keys on the list-view and archive roots (`.base-theme:has(...)` for the header, footer and light tokens), so the calendar grid and the member board print as before. A server-rendered, screen-hidden scope line (`events-print-scope`, `past-events-print-scope`; copy in `src/islands/contracts-print-scope.ts`) names the committed search, game and page and claims nothing beyond the page shown.
 
 ## Community schedule
 

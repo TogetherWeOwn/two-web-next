@@ -13,10 +13,12 @@ import {
   PAST_EVENTS_PAGER_NEWER_TESTID,
   PAST_EVENTS_PAGER_OLDER_TESTID,
   PAST_EVENTS_PAGER_TESTID,
+  PAST_EVENTS_PRINT_SCOPE_TESTID,
   PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
+  printScopeCopy,
 } from "../../../../../src/islands/contracts";
 import { feedUrl, rssUrl, webcalUrl } from "../../../../../src/events/feeds";
 import { SUBSCRIPTION_GUIDANCE } from "../../../../../src/events/subscription-copy";
@@ -75,6 +77,7 @@ const islands =
       <p>{SUBSCRIPTION_GUIDANCE[2]}</p>
     </details>
     <div data-archive-state>
+      <p data-testid={PAST_EVENTS_PRINT_SCOPE_TESTID} hidden>{printScopeCopy("Past events archive", q, null, page, totalPages)}</p>
       {#if q}<p role="status">Past events matching “{q}”. <a href="/events/past">Clear search</a></p>{/if}
       {#if rows.length === 0}
         {#if totalPages === 0 && q}

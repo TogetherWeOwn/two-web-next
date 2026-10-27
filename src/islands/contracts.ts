@@ -5,6 +5,7 @@
 export * from "./contracts-shared";
 export * from "./contracts-calendar";
 export * from "./contracts-past-events";
+export * from "./contracts-print-scope";
 export * from "./contracts-going-count";
 export * from "./contracts-rsvp-button";
 export * from "./contracts-member-profile";

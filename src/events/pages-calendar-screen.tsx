@@ -14,6 +14,7 @@ import {
   EVENTS_LOADING_ROWS,
   EVENTS_LOADING_TESTID,
   EVENTS_PAST_DRAWER_LIMIT,
+  EVENTS_PRINT_SCOPE_TESTID,
   EVENTS_READ_CLEAR_COPY,
   EVENTS_READ_CLEAR_TESTID,
   EVENTS_READ_RETRY_COPY,
@@ -28,6 +29,7 @@ import {
   calendarUrl,
   canonicalIntervalDays,
   monthGrid,
+  printScopeCopy,
   wallDateIso,
   wallMonth,
   type CalendarEmptyState,
@@ -271,6 +273,14 @@ export const EventsCalendarPage: FC<{
         </div>
 
         <div data-cal-zone="content" data-testid={EVENTS_CONTENT_TESTID}>
+          {/* Print-only scope line: names the committed search, game and page
+              of what is on screen. Inside the swapped zone so fragment turns
+              keep it current; the schedule sheet reveals it in print. */}
+          {state.view === "list" ? (
+            <p data-testid={EVENTS_PRINT_SCOPE_TESTID} hidden>
+              {printScopeCopy("Upcoming events", state.q, gameFilter, state.page, totalPages)}
+            </p>
+          ) : null}
           {/* Partial source: healthy rows stay useful beside the notice. An
               empty state (including the failed-empty error) takes precedence,
               and an out-of-range page keeps its turns back into the schedule.

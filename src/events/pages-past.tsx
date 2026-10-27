@@ -14,11 +14,13 @@ import {
   PAST_EVENTS_PAGER_NEWER_TESTID,
   PAST_EVENTS_PAGER_OLDER_TESTID,
   PAST_EVENTS_PAGER_TESTID,
+  PAST_EVENTS_PRINT_SCOPE_TESTID,
   PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
   goingCountText,
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
+  printScopeCopy,
 } from "../islands/contracts";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { feedUrl, rssUrl, webcalUrl } from "./feeds";
@@ -119,6 +121,10 @@ export const PastEventsPage: FC<{
       </p>
       {subscriptionHelp(appUrl)}
       <div data-archive-state>
+        {/* Print-only scope line, inside the swapped zone so page turns keep it current. */}
+        <p data-testid={PAST_EVENTS_PRINT_SCOPE_TESTID} hidden>
+          {printScopeCopy("Past events archive", q, null, page, totalPages)}
+        </p>
         {q ? (
           <p role="status">
             Past events matching “{q}”. <a href="/events/past">Clear search</a>
