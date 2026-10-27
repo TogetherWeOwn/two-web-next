@@ -4,6 +4,7 @@
 import { parse, type DefaultTreeAdapterMap } from "parse5";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
+import { listFeatured } from "../src/admin/store-featured";
 import { activityLog, featuredContents } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -132,12 +133,21 @@ describe.skipIf(!process.env.DATABASE_URL)(
     });
     afterAll(() => fixture?.dispose());
 
-    it("changes only isPublished in the full stored row, including provenance and timestamps", async () => {
+    it("changes only isPublished and updatedAt in the full stored row, including provenance", async () => {
       const before = await seed();
       const first = await unpublish(before.id);
+      const afterPost = new Date();
       expect(first.status).toBe(303);
       expect(first.headers.get("location")).toBe("/admin/featured");
-      expect(await rows()).toEqual([{ ...before, isPublished: false }]);
+      const afterFirst = await rows();
+      expect(afterFirst).toHaveLength(1);
+      expect(afterFirst[0]!.updatedAt.getTime()).toBeGreaterThan(
+        new Date("2019-03-04T05:06:07Z").getTime(),
+      );
+      expect(afterFirst[0]!.updatedAt.getTime()).toBeLessThanOrEqual(afterPost.getTime());
+      expect(afterFirst).toEqual([
+        { ...before, isPublished: false, updatedAt: afterFirst[0]!.updatedAt },
+      ]);
       const firstAudits = await audits();
       expect(firstAudits).toHaveLength(1);
       expect(firstAudits[0]!.properties).toEqual({ isPublished: { before: true, after: false } });
@@ -145,8 +155,23 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const second = await unpublish(before.id);
       expect(second.status).toBe(303);
       expect(second.headers.get("location")).toBe("/admin/featured");
-      expect(await rows()).toEqual([{ ...before, isPublished: false }]);
+      expect(await rows()).toEqual(afterFirst);
       expect(await audits()).toEqual(firstAudits);
+    });
+
+    it("moves the withdrawn row ahead of a newer untouched row in the updated_at-sorted list", async () => {
+      const withdrawn = await seed();
+      const untouched = await seed({
+        legacyId: null,
+        title: "Untouched newer slot",
+        position: 18,
+        updatedAt: new Date("2024-04-05T06:07:08Z"),
+      });
+      const byUpdatedAt = async () =>
+        (await listFeatured(db, { sort: "updated_at", order: "desc" })).map((row) => row.id);
+      expect(await byUpdatedAt()).toEqual([untouched.id, withdrawn.id]);
+      expect((await unpublish(withdrawn.id)).status).toBe(303);
+      expect(await byUpdatedAt()).toEqual([withdrawn.id, untouched.id]);
     });
 
     it("keeps the warm guest entry until commit, then retires it before returning success", async () => {
