@@ -3,8 +3,9 @@
 // The Builder incorporates this file unchanged; corrections return to its author.
 //
 // RED cases fail until the shared admin read gains elapsed-published eligibility.
-// CONTROL cases pin behavior already present. Live cases use only the guarded,
-// disposable DATABASE_URL fixture; the read-budget case is hermetic.
+// CONTROL cases pin behavior already present. Live cases use only the disposable
+// DATABASE_URL fixture (ungated: CI always provides it); the read-budget case
+// is hermetic.
 // Run: npm test -- test/admin-events-past-filter-acceptance.test.ts
 import { drizzle } from "drizzle-orm/postgres-js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -57,7 +58,9 @@ describe("admin Past filter read budget (hermetic)", () => {
   });
 });
 
-describe.skipIf(!process.env.DATABASE_URL)("admin Past filter (disposable SQL fixture)", () => {
+// Live cases run ungated: CI always provides DATABASE_URL (floor guard #1852
+// forbids added conditional skips; new DB tests land ungated).
+describe("admin Past filter (disposable SQL fixture)", () => {
   let fixture: MemberDataFixture;
   let countedDb: Db;
   let statements: string[] = [];
