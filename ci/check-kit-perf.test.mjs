@@ -410,8 +410,8 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // independently justified 335872 ceiling (combined worst 335624, margin 248;
 // lower 335616 rejects by 8), the independently justified 336128 ceiling
 // (combined worst 335977, margin 151; lower 335872 rejects by 105), and the
-// independently justified 336896 ceiling (combined worst 336671, margin 225;
-// lower 336640 rejects by 31).
+// independently justified 336896 ceiling (combined worst 336850, margin 46;
+// lower 336640 rejects by 210).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -430,7 +430,7 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   335616: { intervalBytes: 335504, exactBytes: 335616, overBytes: 335617 },
   335872: { intervalBytes: 335624, exactBytes: 335872, overBytes: 335873 },
   336128: { intervalBytes: 335977, exactBytes: 336128, overBytes: 336129 },
-  336896: { intervalBytes: 336671, exactBytes: 336896, overBytes: 336897 },
+  336896: { intervalBytes: 336850, exactBytes: 336896, overBytes: 336897 },
 };
 
 test("shipping budget: server gzip allocation is explicitly approved", () => {
@@ -640,7 +640,7 @@ function shippingServerGzipCases() {
         name: "server gzip newly allowed interval",
         group: "kit.server.js",
         axis: "gzip",
-        bytes: 336671,
+        bytes: 336850,
       },
       { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 336896 },
       {

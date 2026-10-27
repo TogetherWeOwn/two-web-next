@@ -125,7 +125,7 @@ function kitFixture(t, fragments) {
 // (measured 335639, margin 233; lower 335616 rejects by 23); 336128 is the
 // fourth, independently measured allocation (combined worst 335901, margin
 // 227; lower 335872 rejects by 29); 336896 is the fifth, the capacity-snapshot
-// allocation (combined worst 336671, margin 225; lower 336640 rejects by 31).
+// allocation (combined worst 336850, margin 46; lower 336640 rejects by 210).
 // Every other pin stays exact: the oracle rejects any ceiling outside this
 // list, then deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336896];
