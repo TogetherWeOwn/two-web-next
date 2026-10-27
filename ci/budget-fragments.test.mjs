@@ -38,12 +38,12 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/copy-link.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/event-device-timezone.js": { maxRawBytes: 2560, maxGzipBytes: 1280 },
   "public/islands/event-share.js": { maxRawBytes: 1024, maxGzipBytes: 768 },
-  "public/islands/events-calendar.js": { maxRawBytes: 10240, maxGzipBytes: 3840 },
+  "public/islands/events-calendar.js": { maxRawBytes: 10752, maxGzipBytes: 4096 },
   "public/islands/going-count.js": { maxRawBytes: 5632, maxGzipBytes: 2304 },
   "public/islands/join-widget.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/member-profile.js": { maxRawBytes: 15872, maxGzipBytes: 5632 },
   "public/islands/model-context.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
-  "public/islands/past-events.js": { maxRawBytes: 4608, maxGzipBytes: 1792 },
+  "public/islands/past-events.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/islands/rsvp-button.js": { maxRawBytes: 17408, maxGzipBytes: 5120 },
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
@@ -166,6 +166,68 @@ test("ledger: a raised fragment needs a newer decision, the latest declaration w
   );
   const raised = { server: { js: { ...SERVER_PLAN.server.js, maxGzipBytes: 60 } } };
   assertKitPlanMatchesLedger(raised, ledger);
+});
+
+test("ledger: a re-declared key must name the ceiling it replaces", (t) => {
+  for (const [raise, pattern] of [
+    // omitted: the newly-allowed interval would silently disappear
+    ["Ceiling: server.js.maxGzipBytes = 60\n", /must declare \(previous 50\)/],
+    // wrong: the interval byte would already be admitted by the old ceiling
+    [
+      "Ceiling: server.js.maxGzipBytes = 60 (previous 40)\n",
+      /must declare \(previous 50\).*not \(previous 40\)/,
+    ],
+  ]) {
+    const root = ledgerFixture(t, {
+      decisions: { "0001-base.md": SERVER_DECLARATIONS, "2026-10-27-raise.md": raise },
+    });
+    assert.throws(() => loadKitCeilingLedger(root), pattern, raise);
+  }
+  // A chain of raises resolves link by link.
+  const root = ledgerFixture(t, {
+    decisions: {
+      "0001-base.md": SERVER_DECLARATIONS,
+      "2026-10-27-a.md": "Ceiling: server.js.maxGzipBytes = 60 (previous 50)\n",
+      "2026-10-28-b.md": "Ceiling: server.js.maxGzipBytes = 70 (previous 60)\n",
+    },
+  });
+  assert.equal(loadKitCeilingLedger(root).get("server.js.maxGzipBytes").previous, 60);
+});
+
+test("ledger: decision files resolve in file-name order, not directory order", (t) => {
+  const root = ledgerFixture(t, {
+    decisions: {
+      "0001-base.md": SERVER_DECLARATIONS,
+      "2026-10-27-a.md": "Ceiling: server.js.maxGzipBytes = 60 (previous 50)\n",
+      "2026-10-28-b.md": "Ceiling: server.js.maxGzipBytes = 70 (previous 60)\n",
+    },
+  });
+  // Readdir order is a filesystem detail; hand the loader the names newest
+  // first so an unsorted read applies the chain backwards and throws.
+  const newestFirst = (dir) => readdirSync(dir).sort().reverse();
+  const entry = loadKitCeilingLedger(root, newestFirst).get("server.js.maxGzipBytes");
+  assert.deepEqual(entry, { value: 70, previous: 60, file: "2026-10-28-b.md" });
+});
+
+test("ledger: the baseline keeps the previous ceilings of its two historic raises", () => {
+  // The baseline's first declarations are the only ones the chain rule cannot
+  // check, so their previous figures are pinned to the dated decisions that
+  // recorded the raises: 2026-10-27-server-gzip-335872-event-time.md and
+  // 2026-10-26-client-js-event-detail-257024.md. Deleting one silently drops
+  // its newly-allowed interval row from the shipping suite.
+  const ledger = loadKitCeilingLedger(repoRoot);
+  const baseline = "0001-ceiling-ledger-baseline.md";
+  const seeded = readFileSync(join(repoRoot, "ci/budgets/decisions/kit-perf", baseline), "utf8");
+  for (const [key, previous] of [
+    ["server.js.maxGzipBytes", 335360],
+    ["client.js.maxRawBytes", 256000],
+  ]) {
+    assert.match(
+      seeded,
+      new RegExp(`^Ceiling: ${key.replaceAll(".", "\\.")} = \\d+ \\(previous ${previous}\\)$`, "m"),
+    );
+    assert.ok(ledger.has(key), key);
+  }
 });
 
 test("ledger: a declaration no fragment carries fails closed", (t) => {

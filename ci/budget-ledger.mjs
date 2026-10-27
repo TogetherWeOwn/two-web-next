@@ -5,14 +5,17 @@
 //
 //   Ceiling: server.js.maxGzipBytes = 335616 (previous 335360)
 //
-// The key is the fragment path joined with dots; "(previous N)" is optional
-// and names the ceiling this decision replaced. Decision files are read in
+// The key is the fragment path joined with dots; "(previous N)" names the
+// ceiling this decision replaced. It is required, and must equal the earlier
+// declaration, whenever a key is declared again; only a key's first
+// declaration may omit it. Decision files are read in
 // file-name order and the last declaration for a key is authoritative, so a
 // ceiling change is exactly one fragment edit plus one new decision file and
 // the shipping tests derive their cap, cap+1 and newly-allowed interval from
 // the pair instead of carrying literal tables. Fail-closed: a malformed
-// declaration, a previous ceiling not below its value, a fragment value no decision declares,
-// or a declaration for a unit no fragment carries all throw.
+// declaration, a previous ceiling not below its value or not the one it
+// replaces, a fragment value no decision declares, or a declaration for a unit
+// no fragment carries all throw.
 import { existsSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
@@ -35,11 +38,13 @@ export function flattenKitPlan(plan, prefix = "", out = new Map()) {
 }
 
 // key -> { value, previous (number | undefined), file }
-export function loadKitCeilingLedger(root) {
+// listNames is a seam for tests: readdir order is a filesystem detail, so the
+// ordering rule below is proven by handing it names in the wrong order.
+export function loadKitCeilingLedger(root, listNames = readdirSync) {
   const dir = join(root, DECISIONS_DIR);
   if (!existsSync(dir)) throw new Error(`${DECISIONS_DIR}/ is missing`);
   const ledger = new Map();
-  const names = readdirSync(dir)
+  const names = listNames(dir)
     .filter((name) => name.endsWith(".md"))
     .sort();
   for (const name of names) {
@@ -61,6 +66,16 @@ export function loadKitCeilingLedger(root) {
       }
       if (seen.has(key)) throw new Error(`${DECISIONS_DIR}/${name}: ${key} declared twice`);
       seen.add(key);
+      // The chain is checked, not trusted: a declaration that replaces an
+      // earlier one must name exactly the ceiling it replaces, or the derived
+      // newly-allowed interval would be vacuous or silently absent.
+      const replaced = ledger.get(key);
+      if (replaced !== undefined && previous !== replaced.value) {
+        throw new Error(
+          `${DECISIONS_DIR}/${name}: ${key} must declare (previous ${replaced.value}), the ceiling ${replaced.file} set` +
+            (previous === undefined ? "" : `, not (previous ${previous})`),
+        );
+      }
       ledger.set(key, { value, previous, file: name });
     }
   }

@@ -29,8 +29,9 @@ objects the checkers enforce:
    that decision file (`decisions/kit-perf/` only):
    `Ceiling: server.js.maxGzipBytes = 335616 (previous 335360)`. The key
    is the fragment path joined with dots; `(previous N)` names the
-   ceiling you replaced. Decision files are read in file-name order and
-   the last declaration for a key wins. `ci/budget-ledger.mjs` is
+   ceiling you replaced, and a key that is declared again must carry it
+   with exactly the earlier declaration's value. Decision files are read
+   in file-name order and the last declaration for a key wins. `ci/budget-ledger.mjs` is
    fail-closed: a fragment value with no matching declaration, or a
    declaration no fragment carries, fails `ci/budget-fragments.test.mjs`
    and `ci/check-kit-perf.test.mjs`. Those shipping tests derive their
