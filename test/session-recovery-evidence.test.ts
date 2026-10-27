@@ -7,6 +7,8 @@ import {
   readdirSync,
   readFileSync,
   rmSync,
+  statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -427,6 +429,34 @@ catch (e) { process.stdout.write(JSON.stringify({ code: e?.code, nextAction: e?.
 }
 
 describe("session-recovery evidence filesystem faults", () => {
+  it("reports an evidence-directory stat fault as unreadable, not missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "recovery-stat-fault-"));
+    const dir = join(root, "loop");
+    try {
+      // ELOOP faults statSync even when CI runs as root.
+      symlinkSync("loop", dir, "dir");
+      expect(() => statSync(dir)).toThrow(expect.objectContaining({ code: "ELOOP" }));
+      const missing = expectMachineReadableError(
+        () => checkSessionRecoveryEvidence(join(root, "missing")),
+        RECOVERY_SUITE,
+        "missing directory control",
+      );
+      expect(missing.code).toBe("SESSION_RECOVERY_NO_EVIDENCE_DIR");
+      expect(missing.nextAction).toBe(`rerun npm run ${RECOVERY_SUITE}`);
+      const err = expectMachineReadableError(
+        () => checkSessionRecoveryEvidence(dir),
+        RECOVERY_SUITE,
+        "evidence-directory stat fault",
+      );
+      expect(err.code).toBe("SESSION_RECOVERY_DIR_UNREADABLE");
+      expect(err.nextAction).toBe(`rerun npm run ${RECOVERY_SUITE}`);
+      expect(err.message).toContain(`npm run ${RECOVERY_SUITE}`);
+      expect(err.message).toMatch(/session-recovery evidence directory is unreadable/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
   it("rejects a traversal-only evidence directory holding a valid PASS receipt as unreadable", async () => {
     const schema = await loadAuthEvidenceSchema();
     // World-readable root holding copies of the exact validator bytes, so an
