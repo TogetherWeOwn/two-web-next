@@ -18,16 +18,6 @@ let { data }: PageProps = $props();
 const errors = $derived(data.errors ?? {});
 const hasErrors = $derived(data.hasErrors ?? Object.keys(errors).length > 0);
 const val = (name: string) => data.values?.[name] ?? "";
-const fieldAria = (name: string, withHint = false) => {
-  const error = errors[name];
-  const id = `f-${name.replaceAll("_", "-")}`;
-  const hint = withHint ? `${id}-hint` : undefined;
-  const errorId = `${id}-error`;
-  return {
-    "aria-invalid": error ? true : undefined,
-    "aria-describedby": error ? (hint ? `${hint} ${errorId}` : errorId) : hint,
-  };
-};
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
 const islands =
   '<p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>' +
@@ -42,6 +32,35 @@ const islands =
       {errors[name]}
     </p>
   {/if}
+{/snippet}
+
+{#snippet detail(name: string, label: string, hint: string, limit: number, type?: string)}
+  {@const id = `f-${name.replaceAll("_", "-")}`}
+  <div class="field">
+    <label for={id}>{label}</label>
+    {#if type === ""}
+      <textarea
+        {id}
+        {name}
+        rows={4}
+        data-event-text-limit={limit}
+        aria-invalid={errors[name] ? "true" : undefined}
+        aria-describedby={errors[name] ? `${id}-hint ${id}-error` : `${id}-hint`}
+      >{val(name)}</textarea>
+    {:else}
+      <input
+        {id}
+        {name}
+        {type}
+        value={val(name)}
+        data-event-text-limit={limit || undefined}
+        aria-invalid={errors[name] ? "true" : undefined}
+        aria-describedby={errors[name] ? `${id}-hint ${id}-error` : `${id}-hint`}
+      />
+    {/if}
+    <p id={`${id}-hint`} class="hint">{hint}</p>
+    {@render fieldError(name, `error-${name}`)}
+  </div>
 {/snippet}
 
 <AdminShell title="New event">
@@ -77,7 +96,8 @@ const islands =
         value={val("title")}
         data-event-text-limit={100}
         required
-        {...fieldAria("title")}
+        aria-invalid={errors.title ? "true" : undefined}
+        aria-describedby={errors.title ? "f-title-error" : undefined}
       />
       {@render fieldError("title", "error-title")}
     </div>
@@ -88,7 +108,8 @@ const islands =
         name="game"
         value={val("game")}
         data-event-text-limit={100}
-        {...fieldAria("game")}
+        aria-invalid={errors.game ? "true" : undefined}
+        aria-describedby={errors.game ? "f-game-error" : undefined}
       />
       {@render fieldError("game", "error-game")}
     </div>
@@ -99,27 +120,12 @@ const islands =
         name="description"
         rows={4}
         data-event-text-limit={1000}
-        {...fieldAria("description")}
+        aria-invalid={errors.description ? "true" : undefined}
+        aria-describedby={errors.description ? "f-description-error" : undefined}
       >{val("description")}</textarea>
       {@render fieldError("description", "error-description")}
     </div>
-    <div class="field">
-      <label for="f-accessibility-notes">Accessibility notes</label>
-      <textarea
-        id="f-accessibility-notes"
-        name="accessibility_notes"
-        rows={4}
-        data-event-text-limit={1000}
-        aria-invalid={errors.accessibility_notes ? "true" : undefined}
-        aria-describedby={errors.accessibility_notes
-          ? "f-accessibility-notes-hint f-accessibility-notes-error"
-          : "f-accessibility-notes-hint"}
-      >{val("accessibility_notes")}</textarea>
-      <p id="f-accessibility-notes-hint" class="hint">
-        Optional; include only confirmed details, not personal contact information.
-      </p>
-      {@render fieldError("accessibility_notes", "error-accessibility_notes")}
-    </div>
+    {@render detail("accessibility_notes", "Accessibility notes", "Optional; include only confirmed details, not personal contact information.", 1000, "")}
     <div class="field">
       <label for="f-starts-at">Starts (local wall time, YYYY-MM-DD HH:mm)</label>
       <input
@@ -127,7 +133,8 @@ const islands =
         name="starts_at"
         value={val("starts_at")}
         required
-        {...fieldAria("starts_at")}
+        aria-invalid={errors.starts_at ? "true" : undefined}
+        aria-describedby={errors.starts_at ? "f-starts-at-error" : undefined}
       />
       {@render fieldError("starts_at", "error-starts_at")}
     </div>
@@ -138,7 +145,8 @@ const islands =
         name="ends_at"
         value={val("ends_at")}
         required
-        {...fieldAria("ends_at")}
+        aria-invalid={errors.ends_at ? "true" : undefined}
+        aria-describedby={errors.ends_at ? "f-ends-at-error" : undefined}
       />
       {@render fieldError("ends_at", "error-ends_at")}
     </div>
@@ -148,7 +156,8 @@ const islands =
         id="f-timezone"
         name="timezone"
         value={val("timezone") || "Europe/London"}
-        {...fieldAria("timezone", true)}
+        aria-invalid={errors.timezone ? "true" : undefined}
+        aria-describedby={errors.timezone ? "f-timezone-hint f-timezone-error" : "f-timezone-hint"}
       />
       <p id="f-timezone-hint" class="hint">
         The IANA zone the wall time above is typed in. Storage is UTC.
@@ -162,52 +171,14 @@ const islands =
         name="location"
         value={val("location")}
         data-event-text-limit={255}
-        {...fieldAria("location")}
+        aria-invalid={errors.location ? "true" : undefined}
+        aria-describedby={errors.location ? "f-location-error" : undefined}
       />
       {@render fieldError("location", "error-location")}
     </div>
-    <div class="field">
-      <label for="f-organizer-name">Organizer display name (optional)</label>
-      <input
-        id="f-organizer-name"
-        name="organizer_name"
-        value={val("organizer_name")}
-        data-event-text-limit={500}
-        {...fieldAria("organizer_name", true)}
-      />
-      <p id="f-organizer-name-hint" class="hint">
-        Use a name the organizer has agreed to show publicly. Do not enter contact details.
-      </p>
-      {@render fieldError("organizer_name", "error-organizer_name")}
-    </div>
-    <div class="field">
-      <label for="f-join-url">Public joining link (optional)</label>
-      <input
-        id="f-join-url"
-        name="join_url"
-        type="url"
-        value={val("join_url")}
-        {...fieldAria("join_url", true)}
-      />
-      <p id="f-join-url-hint" class="hint">
-        HTTPS or HTTP link visible to everyone. Never use attendee-only or private links.
-      </p>
-      {@render fieldError("join_url", "error-join_url")}
-    </div>
-    <div class="field">
-      <label for="f-join-instructions">Public joining instructions (optional)</label>
-      <textarea
-        id="f-join-instructions"
-        name="join_instructions"
-        rows={4}
-        data-event-text-limit={5000}
-        {...fieldAria("join_instructions", true)}
-      >{val("join_instructions")}</textarea>
-      <p id="f-join-instructions-hint" class="hint">
-        Share only verified details that are safe for anyone to see. Do not enter contact details.
-      </p>
-      {@render fieldError("join_instructions", "error-join_instructions")}
-    </div>
+    {@render detail("organizer_name", "Organizer display name (optional)", "Use a name the organizer has agreed to show publicly. Do not enter contact details.", 500)}
+    {@render detail("join_url", "Public joining link (optional)", "HTTPS or HTTP link visible to everyone. Never use attendee-only or private links.", 0, "url")}
+    {@render detail("join_instructions", "Public joining instructions (optional)", "Share only verified details that are safe for anyone to see. Do not enter contact details.", 5000, "")}
     <div class="field">
       <label for="f-capacity">Capacity (empty = unlimited)</label>
       <input
@@ -215,7 +186,8 @@ const islands =
         name="capacity"
         inputmode="numeric"
         value={val("capacity")}
-        {...fieldAria("capacity")}
+        aria-invalid={errors.capacity ? "true" : undefined}
+        aria-describedby={errors.capacity ? "f-capacity-error" : undefined}
       />
       {@render fieldError("capacity", "error-capacity")}
     </div>
@@ -226,7 +198,8 @@ const islands =
         <select
           id="f-recurrence-frequency"
           name="recurrence_frequency"
-          {...fieldAria("recurrence_frequency", true)}
+          aria-invalid={errors.recurrence_frequency ? "true" : undefined}
+          aria-describedby={errors.recurrence_frequency ? "f-recurrence-frequency-hint f-recurrence-frequency-error" : "f-recurrence-frequency-hint"}
         >
           <option value="" selected={val("recurrence_frequency") === ""}>Does not repeat</option>
           <option value="weekly" selected={val("recurrence_frequency") === "weekly"}>Weekly</option>
@@ -242,9 +215,10 @@ const islands =
         <input
           id="f-recurrence-count"
           name="recurrence_count"
-            inputmode="numeric"
+          inputmode="numeric"
           value={val("recurrence_count")}
-          {...fieldAria("recurrence_count")}
+          aria-invalid={errors.recurrence_count ? "true" : undefined}
+          aria-describedby={errors.recurrence_count ? "f-recurrence-count-error" : undefined}
         />
         {@render fieldError("recurrence_count", "error-recurrence_count")}
       </div>
@@ -253,8 +227,9 @@ const islands =
         <input
           id="f-recurrence-ends-on"
           name="recurrence_ends_on"
-            value={val("recurrence_ends_on")}
-          {...fieldAria("recurrence_ends_on")}
+          value={val("recurrence_ends_on")}
+          aria-invalid={errors.recurrence_ends_on ? "true" : undefined}
+          aria-describedby={errors.recurrence_ends_on ? "f-recurrence-ends-on-error" : undefined}
         />
         {@render fieldError("recurrence_ends_on", "error-recurrence_ends_on")}
       </div>
