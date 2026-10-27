@@ -18,6 +18,24 @@ const command = step
   .replace(/^          /gm, "");
 const original = "npm run lint && npm run typecheck && npm test";
 const sentinel = "fixture-private-value-not-for-telemetry";
+// Test-only readiness wrapper, installed in the fixture at the
+// `ci/node22-progress.mjs` path the pinned workflow shell invokes. The shell
+// starts the sidecar and the suite concurrently, so on a loaded runner node
+// may still be booting the sidecar when a fast-failing stage exits and the
+// shell can end before the first sample is queued (observed: a lint-stage
+// failure whose monitored stderr was exactly `err:lint`). The wrapper runs
+// the verbatim production CLI (argv[1] rewritten so its entry check passes)
+// and only then touches DIAGNOSTIC_READY_FILE, after the first sample is
+// queued; the fake npm waits for that file before its stage timer, which
+// makes the stderr marker below deterministic instead of a startup race.
+const readinessWrapper = `import { writeFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
+process.argv[1] = fileURLToPath(new URL("./node22-progress.real.mjs", import.meta.url));
+await import("./node22-progress.real.mjs");
+const readyFile = process.env.DIAGNOSTIC_READY_FILE;
+if (!readyFile) throw new Error("test fixture must set DIAGNOSTIC_READY_FILE");
+writeFileSync(readyFile, "ready\\n");
+`;
 
 async function scratch(t) {
   const dir = await mkdtemp(
@@ -194,14 +212,24 @@ for (const [failAt, expected] of [
     await mkdir(join(dir, "ci"));
     await mkdir(join(dir, "bin"));
     await writeFile(
-      join(dir, "ci/node22-progress.mjs"),
+      join(dir, "ci/node22-progress.real.mjs"),
       await readFile(new URL("./node22-progress.mjs", import.meta.url)),
     );
+    await writeFile(join(dir, "ci/node22-progress.mjs"), readinessWrapper);
     await writeFile(
       join(dir, "bin/npm"),
       `#!/usr/bin/env node
 import assert from "node:assert/strict";
+import { existsSync } from "node:fs";
 assert.equal(process.env.DIAGNOSTIC_CANARY, ${JSON.stringify(sentinel)});
+const readyFile = process.env.DIAGNOSTIC_READY_FILE;
+if (readyFile) {
+  const deadline = Date.now() + 10000;
+  while (!existsSync(readyFile)) {
+    if (Date.now() > deadline) throw new Error("node22-progress sidecar never signalled readiness");
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
 const args = process.argv.slice(2);
 assert.ok(JSON.stringify([["run", "lint"], ["run", "typecheck"], ["test"]]).includes(JSON.stringify(args)));
 const stage = args.at(-1);
@@ -210,11 +238,14 @@ console.error("err:" + stage);
 setTimeout(() => {
   if (process.env.FAIL_AT === "signal" && stage === "test") process.kill(process.pid, "SIGTERM");
   else process.exit(process.env.FAIL_AT === stage ? { lint: 7, typecheck: 8, test: 9 }[stage] : 0);
-}, 100);
+  // 500ms per stage: the lint case fails after the first stage, and the
+  // sidecar's node startup can exceed a 100ms window on a loaded runner,
+  // leaving no [node22-progress] line to assert (red node22-compat).
+}, 500);
 `,
       { mode: 0o755 },
     );
-    async function run(shellCommand) {
+    async function run(shellCommand, extraEnv = {}) {
       const child = spawn("sh", ["-e", "-c", shellCommand], {
         cwd: dir,
         env: {
@@ -222,6 +253,7 @@ setTimeout(() => {
           PATH: `${join(dir, "bin")}:${process.env.PATH}`,
           DIAGNOSTIC_CANARY: sentinel,
           FAIL_AT: failAt,
+          ...extraEnv,
         },
         stdio: ["ignore", "pipe", "pipe"],
       });
@@ -237,7 +269,7 @@ setTimeout(() => {
       return { code, signal, stdout, stderr };
     }
     const baseline = await run(original);
-    const monitored = await run(command);
+    const monitored = await run(command, { DIAGNOSTIC_READY_FILE: join(dir, "sidecar-ready") });
     assert.equal(monitored.code, expected, monitored.stderr);
     assert.equal(monitored.code, baseline.code);
     assert.equal(monitored.signal, baseline.signal);
@@ -245,6 +277,8 @@ setTimeout(() => {
     assert.equal(monitored.stderr.replace(/^\[node22-progress\].*\n/gm, ""), baseline.stderr);
     assert.doesNotMatch(monitored.stderr, new RegExp(sentinel));
     assert.match(monitored.stderr, /\[node22-progress\]/);
+    // The ready rendezvous above makes this marker deterministic: the fake
+    // npm cannot exit before the wrapper queues the first sample.
     // `close` waits for inherited diagnostic pipes, so a leaked sidecar hangs this test.
   });
 }

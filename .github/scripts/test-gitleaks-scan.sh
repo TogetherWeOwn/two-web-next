@@ -284,5 +284,193 @@ pr_commit
 expect "merge_group: unfetched base branch fails the scan" 2 \
   "$(scan_rc merge_group refs/heads/missing-branch)"
 
+# -- candidate Hono fixture exception: real rules, exact git-relative paths ---
+# Read the actual candidate policy, not a copy of the entry under test. These
+# direct scans test the policy before it becomes the wrapper's trusted base.
+hono_policy="${here}/../../.gitleaks.toml"
+hono_path="test/hono-no-member-data-contract.test.ts"
+hono_id_one="$(printf '%s' 111 222 333 444 555 667)"
+hono_id_two="$(printf '%s' 222 333 444 555 666 778)"
+
+plant_hono_ids() {
+  mkdir -p "${repo}/$(dirname "$1")"
+  printf 'discord_client_id = "%s"\ndiscord_client_id = "%s"\n' \
+    "${hono_id_one}" "${hono_id_two}" > "${repo}/$1"
+}
+
+# expect_policy_scan NAME CONFIG WANT_RC EXPECTED_JSON
+# Compare the complete redacted report, including count, rule, path and line.
+# A scanner error, missing/empty report or unexpected finding fails closed.
+expect_policy_scan() {
+  local rc=0 report="${work}/hono-report.json" verdict=0
+  rm -f "${report}"
+  (cd "${repo}" && "${GITLEAKS_BIN}" git . --config "$2" --log-opts=HEAD \
+    --redact=100 --no-banner --ignore-gitleaks-allow --gitleaks-ignore-path "${work}/empty.ignore" \
+    --exit-code 1 --report-format json --report-path "${report}" \
+    >"${work}/last.log" 2>&1) || rc=$?
+  python3 - "${report}" "${rc}" "$3" "$4" <<'PY' || verdict=$?
+import json
+import sys
+
+try:
+    report = json.load(open(sys.argv[1], encoding="utf-8"))
+    expected = json.loads(sys.argv[4])
+    if sys.argv[2] != sys.argv[3]:
+        raise ValueError(f"scanner exit: expected {sys.argv[3]}, got {sys.argv[2]}")
+    if not isinstance(report, list) or len(report) != len(expected):
+        raise ValueError(f"report count: expected {len(expected)} findings")
+    actual = sorted([row["RuleID"], row["File"], row["StartLine"]] for row in report)
+    if actual != sorted(expected):
+        raise ValueError(f"rule/path/line mismatch: expected {sorted(expected)}, got {actual}")
+    if any(row["Secret"] != "REDACTED" or "REDACTED" not in row["Match"] for row in report):
+        raise ValueError("report is not fully redacted")
+except (OSError, ValueError, KeyError, TypeError) as error:
+    print(f"FAIL Hono policy report: {error}")
+    sys.exit(1)
+PY
+  expect "$1" 0 "${verdict}"
+}
+
+# An empty ignore file prevents any caller-local fingerprint exemptions.
+: > "${work}/empty.ignore"
+new_repo hono-approved
+plant_hono_ids "${hono_path}"
+base_commit
+expect_policy_scan "Hono: stock rules detect both approved fixture ids" "${work}/stock.toml" 1 \
+  '[["discord-client-id","test/hono-no-member-data-contract.test.ts",1],["discord-client-id","test/hono-no-member-data-contract.test.ts",2]]'
+expect_policy_scan "Hono: candidate excludes both approved ids at the exact path" "${hono_policy}" 0 '[]'
+
+new_repo hono-other-secrets
+mkdir -p "${repo}/test"
+printf 'discord_client_id = "%s"\nvalue = "%s"\n' \
+  "$(printf '%s' 333 444 555 666 777 889)" "${token}" > "${repo}/${hono_path}"
+base_commit
+expect_policy_scan "Hono: another Discord id and another secret rule remain detected at the allowed path" \
+  "${hono_policy}" 1 \
+  '[["discord-client-id","test/hono-no-member-data-contract.test.ts",1],["github-pat","test/hono-no-member-data-contract.test.ts",2]]'
+
+for path in \
+  test/other.test.ts \
+  nested/test/hono-no-member-data-contract.test.ts \
+  test/hono-no-member-data-contract.test.ts.bak \
+  test/hono-no-member-data-contractXtest.ts \
+  test/hono-no-member-data-contract.testXts; do
+  new_repo "hono-path-${cases}"
+  plant_hono_ids "${path}"
+  base_commit
+  expected="$(printf '[["discord-client-id","%s",1],["discord-client-id","%s",2]]' "${path}" "${path}")"
+  expect_policy_scan "Hono: both approved ids remain detected at ${path}" "${hono_policy}" 1 "${expected}"
+done
+
+# -- RSS event-key exception: exact secrets, exact path, one rule only ---------
+# Missing an approved key must fail the positive case; broadening the exception
+# must fail the neighbouring-value, path or other-rule controls. Build the
+# synthetic literals at runtime so this policy test needs no exemption itself.
+rss_path="test/rss-game-scope-category-refresh-acceptance.test.ts"
+rss_key_one="$(printf '%s' 01ARZ3NDEKTSV4RRFFQ69G5 FA X)"
+rss_key_two="$(printf '%s' 01ARZ3NDEKTSV4RRFFQ69G5 FA Y)"
+
+plant_rss_keys() {
+  mkdir -p "${repo}/$(dirname "$1")"
+  printf 'const THIRD_KEY = "%s";\nconst FOURTH_KEY = "%s";\n' \
+    "${rss_key_one}" "${rss_key_two}" > "${repo}/$1"
+}
+
+new_repo rss-approved
+plant_rss_keys "${rss_path}"
+base_commit
+expect_policy_scan "RSS: stock rules detect both synthetic event keys" "${work}/stock.toml" 1 \
+  '[["generic-api-key","test/rss-game-scope-category-refresh-acceptance.test.ts",1],["generic-api-key","test/rss-game-scope-category-refresh-acceptance.test.ts",2]]'
+expect_policy_scan "RSS: candidate excludes both keys at the exact path" "${hono_policy}" 0 '[]'
+
+new_repo rss-other-secrets
+mkdir -p "${repo}/test"
+printf 'const NEIGHBOUR_KEY = "%s";\nvalue = "%s"\n' \
+  "$(printf '%s' 01ARZ3NDEKTSV4RRFFQ69G5 FA Z)" "${token}" > "${repo}/${rss_path}"
+base_commit
+expect_policy_scan "RSS: a nearby key and another secret rule remain detected at the allowed path" \
+  "${hono_policy}" 1 \
+  '[["generic-api-key","test/rss-game-scope-category-refresh-acceptance.test.ts",1],["github-pat","test/rss-game-scope-category-refresh-acceptance.test.ts",2]]'
+
+new_repo rss-longer-secrets
+mkdir -p "${repo}/test"
+printf 'const PREFIXED_KEY = "x%s";\nconst SUFFIXED_KEY = "%sx";\n' \
+  "${rss_key_one}" "${rss_key_two}" > "${repo}/${rss_path}"
+base_commit
+expect_policy_scan "RSS: approved keys embedded in longer secrets remain detected" "${hono_policy}" 1 \
+  '[["generic-api-key","test/rss-game-scope-category-refresh-acceptance.test.ts",1],["generic-api-key","test/rss-game-scope-category-refresh-acceptance.test.ts",2]]'
+
+for path in \
+  test/other.test.ts \
+  nested/test/rss-game-scope-category-refresh-acceptance.test.ts \
+  test/rss-game-scope-category-refresh-acceptance.test.ts.bak \
+  test/rss-game-scope-category-refresh-acceptanceXtest.ts \
+  test/rss-game-scope-category-refresh-acceptance.testXts; do
+  new_repo "rss-path-${cases}"
+  plant_rss_keys "${path}"
+  base_commit
+  expected="$(printf '[["generic-api-key","%s",1],["generic-api-key","%s",2]]' "${path}" "${path}")"
+  expect_policy_scan "RSS: both keys remain detected at ${path}" "${hono_policy}" 1 "${expected}"
+done
+
+new_repo rss-pr-policy
+write_stock_config
+base_commit
+plant_rss_keys "${rss_path}"
+cp "${hono_policy}" "${repo}/.gitleaks.toml"
+pr_commit
+expect "RSS: candidate policy cannot exempt its own PR" 1 "$(scan_rc pull_request)"
+
+new_repo rss-base-policy
+cp "${hono_policy}" "${repo}/.gitleaks.toml"
+base_commit
+plant_rss_keys "${rss_path}"
+pr_commit
+expect "RSS: merged base policy admits the fixture history" 0 "$(scan_rc pull_request)"
+
+# -- candidate parity fixture: exact rule/path/value, including new SHAs -------
+# Read the candidate policy, so broadening it makes the negative controls fail.
+parity_policy="${here}/../../.gitleaks.toml"
+parity_path="test/mcp-rest-parity-acceptance.test.ts"
+# Build fixture values at run time so the self-test adds no scannable literals.
+parity_ulid="$(printf '%s' 01B RZ3NDEKTSV4RRFFQ69G5FAV)"
+plant_parity_ulid() {
+  mkdir -p "${repo}/$(dirname "$1")"
+  printf 'const UNKNOWN_KEY = "%s";\n' "${parity_ulid}" > "${repo}/$1"
+}
+new_repo parity-approved
+plant_parity_ulid "${parity_path}"
+base_commit
+expect_policy_scan "parity: stock detects the unknown-event fixture" "${work}/stock.toml" 1 \
+  '[["generic-api-key","test/mcp-rest-parity-acceptance.test.ts",1]]'
+expect_policy_scan "parity: candidate excludes only the approved fixture" "${parity_policy}" 0 '[]'
+# A commit-bound fingerprint would fail here and after a squash merge.
+printf '\nconst UNKNOWN_KEY = "%s";\n' "${parity_ulid}" > "${repo}/${parity_path}"
+pr_commit
+expect_policy_scan "parity: exception survives a new commit and line number" "${parity_policy}" 0 '[]'
+
+new_repo parity-other-secrets
+mkdir -p "${repo}/test"
+printf 'api_key = "%s"\nvalue = "%s"\nconst UNKNOWN_KEY = "%sX";\n' \
+  "$(printf 'parity negative-control fixture' | sha256sum | cut -c1-32 | base64 -w0)" "${token}" "${parity_ulid}" \
+  > "${repo}/${parity_path}"
+base_commit
+expect_policy_scan "parity: other values, longer values and another secret rule remain detected" \
+  "${parity_policy}" 1 \
+  '[["generic-api-key","test/mcp-rest-parity-acceptance.test.ts",1],["github-pat","test/mcp-rest-parity-acceptance.test.ts",2],["generic-api-key","test/mcp-rest-parity-acceptance.test.ts",3]]'
+
+for path in \
+  test/other.test.ts \
+  nested/test/mcp-rest-parity-acceptance.test.ts \
+  test/mcp-rest-parity-acceptance.test.ts.bak \
+  test/mcp-rest-parity-acceptanceXtest.ts \
+  test/mcp-rest-parity-acceptance.testXts; do
+  new_repo "parity-path-${cases}"
+  plant_parity_ulid "${path}"
+  base_commit
+  expected="$(printf '[["generic-api-key","%s",1]]' "${path}")"
+  expect_policy_scan "parity: approved value remains detected at ${path}" "${parity_policy}" 1 "${expected}"
+done
+
 printf '\n%d cases, %d failed\n' "${cases}" "${failures}"
 [[ "${failures}" -eq 0 ]]

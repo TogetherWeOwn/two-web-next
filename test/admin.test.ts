@@ -470,8 +470,8 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     expect(edit.status).toBe(200);
     const editHtml = await edit.text();
     expect(editHtml).toContain('data-status="scheduled">scheduled</span>');
-    expect(editHtml).toContain('data-testid="featured-preview-hidden"');
-    expect(editHtml).not.toContain('data-testid="featured-item"');
+    expect(editHtml).not.toContain('data-testid="featured-preview-hidden"');
+    expect(editHtml).toContain('data-testid="featured-item"');
     expect(editHtml).toContain(`action="/admin/featured/${id}"`);
     expect(editHtml).toContain(`action="/admin/featured/${id}/delete"`);
     expect(editHtml).toContain(`name="title" type="text" value="${fields.title}"`);

@@ -202,6 +202,8 @@ describe("Kit profile model: reads declare the retrieved subject", () => {
       isOwner: false,
       isModerator: false,
       joinResult: null,
+      // Bob stores no games, so nothing of Alice's list is shared with him.
+      sharedGames: [],
     });
   });
 });
@@ -364,7 +366,6 @@ describe("Kit profile view: single-source Hono parity", () => {
       "PROFILE_HONEY_FIELD",
       "PROFILE_OPENED_AT_FIELD",
       "MEMBER_PROFILE_ISLAND",
-      "MOUNT_ATTR",
       "profileAvatarSrcset",
       "profileIsNewMember",
       "profileJoinedMonth",
@@ -372,6 +373,16 @@ describe("Kit profile view: single-source Hono parity", () => {
       expect(page, name).toContain(name);
     }
     expect(page).toContain('from "../../../src/islands/contracts"');
+    expect(page).toMatch(
+      /import\s*\{[^}]*\bMEMBER_PROFILE_ISLAND\b[^}]*\}\s*from\s*["']\.\.\/\.\.\/\.\.\/src\/islands\/contracts["']/,
+    );
+    // The owner editor needs the shared island value, not a computed-key spelling.
+    // kit-profile-form.test.ts separately pins the emitted data-island mount.
+    const editor =
+      page.match(/<section\b[^>]*data-testid=\{PROFILE_EDIT_TESTID\}[^>]*>/)?.[0] ?? "";
+    expect(editor).toMatch(
+      /\sdata-island\s*=\s*\{\s*MEMBER_PROFILE_ISLAND\s*\}|\{\s*\.\.\.\s*\{\s*\[\s*MOUNT_ATTR\s*\]\s*:\s*MEMBER_PROFILE_ISLAND\s*\}\s*\}/,
+    );
     // Hono-owned profile helpers stay imported from their source module.
     for (const name of ["PROFILE_FIELD_IDS", "profileInitials", "PROFILE_SHARE_DESCRIPTION"]) {
       expect(page, name).toContain(name);

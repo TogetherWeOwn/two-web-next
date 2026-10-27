@@ -10,6 +10,10 @@
 // allowlisted by its sha256 hash, so style-src keeps no 'unsafe-inline'.
 // Regen: node ci/build-leaf-css.mjs (drift is pinned by
 // test/leaf-css-drift.test.ts — CI fails until this is re-run).
+// Keep font-fallback rationale here rather than shipping it in theme.css and
+// again in the inlined block: Latin-only, Arial-metric fallback; arrows (U+2192)
+// keep prior rendering. Overrides = Display's 93%/34.6% ascent/descent at 77% +
+// margin: fallback hero paints >= swapped-in text (no larger repaint).
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

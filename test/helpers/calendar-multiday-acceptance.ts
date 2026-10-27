@@ -151,6 +151,7 @@ export async function renderCalendar(
     view: options.view ?? "calendar",
     month: options.month ?? "2027-02",
     q: "",
+    game: "",
     past: options.showPast ?? false,
     page: 1,
   };
@@ -164,7 +165,10 @@ export async function renderCalendar(
     emptyState: null,
     robots: undefined,
     discordFailed: false,
+    games: [],
+    gameFilter: null,
     member: false,
+    session: null,
     moderator: false,
     inviteUrl: "https://discord.gg/fixture",
     appUrl: "https://calendar.example.test",

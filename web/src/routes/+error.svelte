@@ -2,7 +2,7 @@
 import { page } from "$app/state";
 import ErrorShell from "#lib/ErrorShell.svelte";
 import { adminWayBackForStatus } from "../../../src/admin-wayback";
-import { FALLBACK_INVITE } from "../../../src/invite";
+import { FALLBACK_INVITE } from "../../../src/invite-fallback";
 import { isKitErrorStatus } from "../../../src/kit-errors";
 
 // Branded Kit error boundary: every Kit 400/404/403/410/422/429/500/503
@@ -25,4 +25,4 @@ const adminBack = $derived(adminWayBackForStatus(status, page.url?.pathname ?? "
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} adminBack={adminBack} />
+<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} supportReference={page.data.requestId} adminBack={adminBack} />

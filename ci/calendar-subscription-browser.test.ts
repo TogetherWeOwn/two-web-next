@@ -4,7 +4,7 @@ import { readFileSync } from "node:fs";
 import { extname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium, type Browser, type BrowserContext, type Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import {
   FEED_URL,
   ORIGIN,
@@ -27,15 +27,17 @@ let fixture: Awaited<ReturnType<typeof subscriptionFixture>>;
 const publicDir = fileURLToPath(new URL("../public/", import.meta.url).href);
 
 beforeAll(async () => {
-  vi.useFakeTimers({ toFake: ["Date"] });
-  vi.setSystemTime(new Date("2026-10-01T12:00:00Z"));
+  // Node's Date stays real. Freezing it (vi.useFakeTimers on Date) while
+  // Playwright drives a page.clock-fixed page across goto() stalls the
+  // browser's animation frames, hanging every settleUi() call. The fixture
+  // renders empty event rows, so Node time cannot change any asserted SSR
+  // content; in-page time is fixed by page.clock below.
   fixture = await subscriptionFixture();
   browser = await chromium.launch({ headless: true });
 });
 afterAll(async () => {
   await browser?.close();
   fixture?.dispose();
-  vi.useRealTimers();
 });
 
 async function open(

@@ -6,7 +6,11 @@ import app from "../src/index";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { EVENTS_MONTH_GRID_LIMIT, EVENTS_UPCOMING_PAGE_SIZE } from "../src/islands/contracts";
+import {
+  EVENTS_DISTINCT_GAMES_LIMIT,
+  EVENTS_MONTH_GRID_LIMIT,
+  EVENTS_UPCOMING_PAGE_SIZE,
+} from "../src/islands/contracts";
 import { createMemorySessionStore } from "../src/sessions";
 
 import { auditPaths, fixtureKey } from "./lighthouse-paths";
@@ -15,7 +19,7 @@ const eventColumns = getTableColumns(events);
 const columns = Object.keys(eventColumns) as (keyof typeof events.$inferSelect)[];
 const eventSelect = `select ${columns.map((key) => `"${eventColumns[key].name}"`).join(", ")} from "events"`;
 const linkSelect =
-  'select "id", "event_key", "title", "starts_at", "timezone", "location" from "events"';
+  'select "id", "event_key", "title", "starts_at", "ends_at", "timezone", "location", "game", "rsvp_open" from "events"';
 const timeoutsSql =
   "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)";
 const featuredSql =
@@ -112,6 +116,13 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         return { rows: [] }; // Only these transaction-local read timeouts are simulated.
       }
       if (method === "all") {
+        if (
+          sql ===
+            `select distinct trim("game") from "events" where ("events"."status" = 'published' and "events"."game" is not null and trim("events"."game") <> '') order by trim("game") limit $1` &&
+          sameParams(params, [EVENTS_DISTINCT_GAMES_LIMIT])
+        ) {
+          return { rows: [[fixture.game]] };
+        }
         if (sql === goingSql && sameParams(params, [fixture.id, "going", ""]))
           return { rows: [[fixture.id, 3]] };
         if (sql === occupancySql && sameParams(params, [fixture.id, "going"]))
