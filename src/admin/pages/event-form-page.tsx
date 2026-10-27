@@ -9,6 +9,7 @@ import type { RosterQuery } from "../table-list";
 import { EventFormFields } from "./event-form-fields";
 import { EventRosterSection } from "./event-form-roster";
 import { EventStatusSection } from "./event-form-status";
+import type { SchedulePreview } from "./schedule-preview";
 import { Shell } from "./shell";
 
 export const EventFormPage: FC<{
@@ -19,13 +20,21 @@ export const EventFormPage: FC<{
   roster?: RosterEntry[];
   rosterTotal?: number;
   rosterQuery?: RosterQuery;
-}> = ({ mode, row, values, errors, roster, rosterTotal, rosterQuery }) => {
+  preview?: SchedulePreview;
+}> = ({ mode, row, values, errors, roster, rosterTotal, rosterQuery, preview }) => {
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
     <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
       <section>
         <h1>{mode === "new" ? "New event" : `Edit ${row!.title}`}</h1>
-        <EventFormFields mode={mode} row={row} values={values} errors={errors} action={action} />
+        <EventFormFields
+          mode={mode}
+          row={row}
+          values={values}
+          errors={errors}
+          action={action}
+          preview={preview}
+        />
         {mode === "edit" && row ? <EventStatusSection row={row} /> : null}
         {mode === "edit" && roster ? (
           <EventRosterSection

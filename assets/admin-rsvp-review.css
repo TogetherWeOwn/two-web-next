@@ -1,8 +1,9 @@
-/* RSVP-pause review disclosure (admin only). Served as a separate
+/* Admin-only rules: the RSVP-pause review disclosure and the new-event
+   schedule preview (.schedule-preview, .btn-secondary). Served as a separate
    stylesheet linked from the admin shells so these rules never enter the
    inlined leaf critical-CSS bundle: the homepage LCP ratchets forbid
    regrowing the shared inlined bytes, and only admin surfaces render
-   .rsvp-* markup. The admin shells already load stylesheets externally, so
+   this markup. The admin shells already load stylesheets externally, so
    no-JS rendering is unaffected. Source for public/admin-rsvp-review.css
    (esbuild --minify via `npm run build:assets`; drift fails CI). */
 .rsvp-actions {
@@ -37,4 +38,19 @@
 }
 .admin-table .rsvp-review {
   min-width: 16rem;
+}
+.btn-secondary {
+  background: var(--paper);
+  color: var(--brand);
+  border: 2px solid var(--brand);
+}
+.btn-secondary:hover {
+  background: #fff7ed;
+  color: #9a3412;
+}
+.schedule-preview {
+  margin: 1.5rem 0;
+}
+.schedule-preview li .hint {
+  white-space: nowrap;
 }

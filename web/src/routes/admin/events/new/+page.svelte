@@ -261,6 +261,13 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     </fieldset>
     <div class="actions">
       <button type="submit" class="btn" data-testid="save-event">Create draft</button>
+      <button
+        type="submit"
+        class="btn btn-secondary"
+        name="preview"
+        value="schedule"
+        formaction="/admin/events#schedule-preview"
+        data-testid="preview-schedule">Preview schedule</button>
       <a href="/admin/events">Cancel</a>
     </div>
   </form>

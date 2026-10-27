@@ -79,7 +79,7 @@ import { safeRequestId } from "../request-log";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
-import { parseRecurrenceForm } from "./recurrence";
+import { occurrences, parseRecurrenceForm } from "./recurrence";
 import {
   isKnownTimezone,
   parseEventForm,
@@ -433,6 +433,31 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           );
         }
         throw err;
+      }
+      // Preview schedule: the same parsers, guard, cap and throttle, but the
+      // enumerator's dates are rendered and nothing is written or retired.
+      if (values.preview === "schedule") {
+        const { startsAtUtc, endsAtUtc, timezone } = input!;
+        const dates = recurrence
+          ? [
+              ...occurrences(
+                startsAtUtc,
+                endsAtUtc,
+                timezone,
+                recurrence.frequency,
+                recurrence.count,
+                recurrence.endsOn,
+              ).values(),
+            ]
+          : [{ startsAt: startsAtUtc, endsAt: endsAtUtc }];
+        return c.html(
+          <EventFormPage
+            mode="new"
+            values={values}
+            errors={{}}
+            preview={{ occurrences: dates, timezone }}
+          />,
+        );
       }
       const { row } = await createEvent(db, c.get("adminActor"), input!, recurrence ?? null);
       return c.redirect(`/admin/events/${row.eventKey}`, 303);

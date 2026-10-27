@@ -7,6 +7,7 @@ import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 import { adminSaveStatus } from "../save-status";
 import type { EventRow } from "../store";
+import { SchedulePreviewPanel, type SchedulePreview } from "./schedule-preview";
 import { Field, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
 
@@ -16,7 +17,9 @@ export const EventFormFields: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   action: string;
-}> = ({ mode, row, values, errors, action }) => {
+  /** Not-saved expansion of the submitted series (new mode, valid preview only). */
+  preview?: SchedulePreview;
+}> = ({ mode, row, values, errors, action, preview }) => {
   return (
     <>
       <ValidationSummary errors={errors} kind="event" mode={mode} />
@@ -24,7 +27,7 @@ export const EventFormFields: FC<{
         method="post"
         action={action}
         data-event-editor=""
-        data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
+        data-event-draft={Object.keys(errors).length > 0 || preview ? "" : undefined}
       >
         <Field name="title" label="Title" errors={errors}>
           {(id) => (
@@ -206,10 +209,23 @@ export const EventFormFields: FC<{
             occurrences by the same amount.
           </p>
         ) : null}
+        {mode === "new" && preview ? <SchedulePreviewPanel preview={preview} /> : null}
         <div class="actions">
           <button type="submit" class="btn" data-testid="save-event">
             {mode === "new" ? "Create draft" : "Save"}
           </button>
+          {mode === "new" ? (
+            <button
+              type="submit"
+              class="btn btn-secondary"
+              name="preview"
+              value="schedule"
+              formaction="/admin/events#schedule-preview"
+              data-testid="preview-schedule"
+            >
+              Preview schedule
+            </button>
+          ) : null}
           <a href="/admin/events">Cancel</a>
         </div>
       </form>

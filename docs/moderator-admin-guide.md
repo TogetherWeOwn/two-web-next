@@ -461,8 +461,12 @@ Sources: [critical browser journeys](critical-journeys.md#critical-browser-journ
 
 ### Weekly series
 
-Choose **Weekly** only for an approved series and review its count/end date
-before **Create draft**. Occurrences retain local wall time across clock changes;
+Choose **Weekly** only for an approved series and press **Preview schedule**
+before **Create draft**. The preview lists every occurrence (at most 52) with its
+local wall time and UTC instant, marked **Not saved**: it creates no event, audit
+entry, Discord update or cache change, and the form keeps your values so you can
+adjust them or press **Create draft**. Invalid input shows the usual field
+errors and no preview. Occurrences retain local wall time across clock changes;
 subsequent occurrences in a spring-forward gap move forward by that gap, and
 repeated-hour times use the first occurrence. Fresh ambiguous first-event times
 still follow the event form's validation rules.
