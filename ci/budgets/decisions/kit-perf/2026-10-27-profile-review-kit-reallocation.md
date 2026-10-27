@@ -5,8 +5,12 @@ that lets a member review unsaved profile differences before saving. The
 first allocation (`2026-10-26-profile-review-client-gzip.md`) was sized
 against an older main; main has since consumed that headroom, so the exact
 reviewed feature head now fails `node ci/check-kit-perf.mjs` in CI. This
-decision was re-measured on main `227414575` after earlier measurements
-(`ba58281d2`, `3baeb3793`, `d9b213141`, `f1dfd3eb2`) went stale. No Kit
+decision was re-measured on main `b69eea7d7` after earlier measurements
+(`ba58281d2`, `3baeb3793`, `d9b213141`, `f1dfd3eb2`, `227414575`) went stale.
+Main moved to `b69eea7d7` with the event-share-honesty 336384 server rung
+(#1905), a 103424 client gzip shipping rung (#1942) and Lighthouse evidence
+changes; none touches a Kit bundle input, and the combined re-build reads
+336669/336667 server gzip, 257539 client raw, 103557 client gzip. No Kit
 bundle input moved between `f1dfd3eb2` and `227414575` (`web/` untouched;
 the only `src/` change is `src/islands/contracts-shared.ts`, which `web/`
 does not import), so the combined bytes reproduce the `f1dfd3eb2`
@@ -69,8 +73,9 @@ the 336896 profile review rung (interval = measured worst 336671, exact
 Two unconditional cases pin the measured tree (336671 server gzip, 257539
 client raw), so reverting either fragment to an older admitted rung fails
 closed instead of selecting an older fixture set.
-`ci/budget-fragments.test.mjs` admits 336128 (Happening-now) and 336896
-(profile review) alongside the older server rungs.
+`ci/budget-fragments.test.mjs` admits 336128 (Happening-now), 336384
+(event-share-honesty) and 336896 (profile review) alongside the older server
+rungs; the 103424 client gzip rung from #1942 stays admitted and unused here.
 
 ## Scope
 
