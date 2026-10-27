@@ -112,7 +112,10 @@ describe("needsSync TxClient lock-first budgets (offline pin)", () => {
     });
     expect(`${LEDGER_DB_LOCK_TIMEOUT_MS}ms`).toBe("1950ms");
     expect(`${LEDGER_DB_TIMEOUT_MS}ms`).toBe("2000ms");
-    expect(restore!.pair).toEqual({ lock: PREVIOUS.lock_timeout, statement: PREVIOUS.statement_timeout });
+    expect(restore!.pair).toEqual({
+      lock: PREVIOUS.lock_timeout,
+      statement: PREVIOUS.statement_timeout,
+    });
     const [statement] = events.filter(
       (event): event is Extract<Event, { kind: "statement" }> => event.kind === "statement",
     );
