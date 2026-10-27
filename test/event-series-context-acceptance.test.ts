@@ -139,8 +139,29 @@ const GLOBAL_PREVIOUS = row(30, { title: "Global prev" });
 const GLOBAL_NEXT = row(31, { title: "Global next" });
 
 const linkValues = (
-  e: Pick<EventRow, "id" | "eventKey" | "title" | "startsAt" | "timezone" | "location">,
-) => [e.id, e.eventKey, e.title, e.startsAt.toISOString(), e.timezone, e.location];
+  e: Pick<
+    EventRow,
+    | "id"
+    | "eventKey"
+    | "title"
+    | "startsAt"
+    | "endsAt"
+    | "timezone"
+    | "location"
+    | "game"
+    | "rsvpOpen"
+  >,
+) => [
+  e.id,
+  e.eventKey,
+  e.title,
+  e.startsAt.toISOString(),
+  e.endsAt.toISOString(),
+  e.timezone,
+  e.location,
+  e.game,
+  e.rsvpOpen,
+];
 
 interface SeriesFixtureOpts {
   /** Current event id (10-15 series, 20 standalone). */
