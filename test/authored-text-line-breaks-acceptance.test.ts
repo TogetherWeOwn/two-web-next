@@ -667,9 +667,11 @@ const USER_AGENT_CSS =
   "nobr, td[nowrap], th[nowrap] { white-space: nowrap; }";
 
 /** Stylesheets a rendered page serves, in document order, plus test-supplied
- * extras (the compiled Kit global sheet / captured component CSS). Sheets in
- * <template> content, disabled or alternate sheets and sheets whose media
- * list is inactive in the explicit context do not apply. */
+ * extras (the compiled Kit global sheet / captured component CSS). The DOM
+ * parser's scripting-enabled context keeps <noscript> sheets inert, and its
+ * traversal excludes <template> content. Non-CSS types, disabled/alternate
+ * links and inactive media do not apply. Preferred sets, source admission
+ * policies and URL resolution outside canonical public/ CSS fail closed. */
 function servedRules(html: string, extras: { css: string; source: string }[] = []): CssRule[] {
   const rules: CssRule[] = [];
   const state: CssState = { order: 0, layers: new Map(), anonymous: 0 };
@@ -683,22 +685,64 @@ function servedRules(html: string, extras: { css: string; source: string }[] = [
   });
   parseCss(USER_AGENT_CSS, context("user-agent sheet", 0), rules);
   const chunks: { css: string; source: string }[] = [];
-  for (const el of elements(document(html), (e) => e.tagName === "style" || e.tagName === "link")) {
+  const doc = document(html);
+  if (
+    elements(
+      doc,
+      (e) =>
+        e.tagName === "meta" &&
+        (attribute(e, "http-equiv") ?? "").toLowerCase() === "content-security-policy",
+    ).length > 0
+  )
+    unevaluable("meta Content-Security-Policy (stylesheet admission)");
+  const hasBaseHref =
+    elements(doc, (e) => e.tagName === "base" && attribute(e, "href") !== undefined).length > 0;
+  for (const el of elements(doc, (e) => e.tagName === "style" || e.tagName === "link")) {
+    if (el.namespaceURI !== "http://www.w3.org/1999/xhtml")
+      unevaluable(`foreign stylesheet element <${el.tagName}>`);
+    if (el.attrs.some((attr) => attr.name.startsWith("on")))
+      unevaluable(`event handler on <${el.tagName}> (dynamic stylesheet admission)`);
+    const relTokens = (attribute(el, "rel") ?? "").split(/[\t\n\f\r ]+/);
+    const rel = relTokens.map((token) => token.toLowerCase());
+    if (el.tagName === "link" && !rel.includes("stylesheet")) continue;
+    const title = attribute(el, "title");
+    if (title) unevaluable(`stylesheet title ${JSON.stringify(title)} (preferred sets)`);
+    const type = attribute(el, "type");
+    if (type && !/^text\/css$/i.test(type)) {
+      // Links parse MIME parameters/whitespace differently from <style>.
+      // Do not silently discard a potentially active collapsing sheet.
+      if (el.tagName === "link" && /[;\t\n\f\r ]/.test(type))
+        unevaluable(`stylesheet type ${JSON.stringify(type)} (MIME parsing)`);
+      continue;
+    }
     const media = attribute(el, "media");
+    if (media !== undefined && /[^\t\n\f\r\x20-\x7e]/.test(media))
+      unevaluable(`stylesheet media ${JSON.stringify(media)} (CSS tokenization)`);
     if (el.tagName === "style") {
       if (media === undefined || mediaListActive(media, "<style media>"))
         chunks.push({ css: text(el), source: "inline <style>" });
       continue;
     }
-    const rel = (attribute(el, "rel") ?? "").toLowerCase().split(/\s+/);
-    if (!rel.includes("stylesheet") || rel.includes("alternate")) continue;
+    if (rel.includes("alternate")) {
+      // Alternate activation has browser-sensitive casing; the controls
+      // admit only the canonical lowercase token as deterministically inert.
+      if (!relTokens.includes("alternate")) unevaluable("noncanonical alternate stylesheet rel");
+      continue;
+    }
     if (attribute(el, "disabled") !== undefined) continue;
     const href = attribute(el, "href") ?? "";
+    if (!href) continue;
     if (media !== undefined && !mediaListActive(media, href)) continue;
-    if (!href.startsWith("/") || href.startsWith("//"))
-      unevaluable(`stylesheet ${JSON.stringify(href)} (only local public/ sheets are readable)`);
+    if (hasBaseHref) unevaluable("<base href> (stylesheet URL resolution)");
+    if (attribute(el, "integrity")) unevaluable("stylesheet integrity (served-byte admission)");
     const path = href.split(/[?#]/)[0]!;
-    chunks.push({ css: readFileSync(join(root, "public", path), "utf8"), source: path });
+    if (!/^\/(?:[\w-]+\/)*[\w.-]+\.css$/.test(path))
+      unevaluable(`stylesheet ${JSON.stringify(href)} (only canonical public/ CSS is readable)`);
+    try {
+      chunks.push({ css: readFileSync(join(root, "public", path), "utf8"), source: path });
+    } catch {
+      unevaluable(`unreadable stylesheet ${JSON.stringify(path)}`);
+    }
   }
   for (const chunk of [...chunks, ...extras]) parseCss(chunk.css, context(chunk.source, 1), rules);
   return rules;
@@ -1345,6 +1389,14 @@ describe("CSS oracle selector, cascade and source fidelity controls", () => {
 
     it.each([
       [
+        "a non-CSS style element",
+        `<style type="text/plain">${preserving("[data-testid='featured-item'] p")}</style>${featured()}`,
+      ],
+      [
+        "a non-CSS linked sheet",
+        `<link rel="stylesheet" type="text/plain" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
         "a print-only style element",
         `<style media="print">${preserving("p")}</style>${featured()}`,
       ],
@@ -1353,8 +1405,54 @@ describe("CSS oracle selector, cascade and source fidelity controls", () => {
         `<template><style>${preserving("p")}</style></template>${featured()}`,
       ],
       [
+        "a link inside a template",
+        `<template><link rel="stylesheet" href="/event-theme.css"></template>${eventMarkup}`,
+      ],
+      [
+        "a style inside head noscript with scripting enabled",
+        `<head><noscript><style>${preserving("p")}</style></noscript></head><body>${featured()}</body>`,
+      ],
+      [
+        "a link inside head noscript with scripting enabled",
+        `<head><noscript><link rel="stylesheet" href="/event-theme.css"></noscript></head><body>${eventMarkup}</body>`,
+      ],
+      [
+        "a style inside body noscript with scripting enabled",
+        `<body><noscript><style>${preserving("p")}</style></noscript>${featured()}</body>`,
+      ],
+      [
+        "a link inside body noscript with scripting enabled",
+        `<body><noscript><link rel="stylesheet" href="/event-theme.css"></noscript>${eventMarkup}</body>`,
+      ],
+      [
+        "a padded inline CSS type",
+        `<style type=" text/css ">${preserving("p")}</style>${featured()}`,
+      ],
+      [
+        "an inline CSS type with MIME parameters",
+        `<style type="text/css; charset=utf-8">${preserving("p")}</style>${featured()}`,
+      ],
+      [
         "a print-only linked sheet",
         `<link rel="stylesheet" href="/event-theme.css" media="print">${eventMarkup}`,
+      ],
+      [
+        "a linked sheet outside the explicit screen width",
+        `<link rel="stylesheet" href="/event-theme.css" media="screen and (max-width: 1px)">${eventMarkup}`,
+      ],
+      ["a link with no href", `<link rel="stylesheet">${eventMarkup}`],
+      ["a link with an empty href", `<link rel="stylesheet" href="">${eventMarkup}`],
+      [
+        "a preload without a stylesheet relation",
+        `<link rel="preload" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a non-ASCII rel separator",
+        `<link rel="stylesheet preload" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a vertical-tab rel separator",
+        `<link rel="stylesheet\u000bpreload" href="/event-theme.css">${eventMarkup}`,
       ],
       [
         "a disabled linked sheet",
@@ -1363,6 +1461,14 @@ describe("CSS oracle selector, cascade and source fidelity controls", () => {
       [
         "an alternate linked sheet",
         `<link rel="alternate stylesheet" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a stylesheet with the alternate token last",
+        `<link rel="stylesheet alternate" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a boolean disabled attribute spelled false",
+        `<link rel="stylesheet" disabled="false" href="/event-theme.css">${eventMarkup}`,
       ],
       [
         "a utility class name with no served utility CSS",
@@ -1385,6 +1491,147 @@ describe("CSS oracle selector, cascade and source fidelity controls", () => {
       [
         "an all-media linked sheet",
         `<link rel="stylesheet preload" href="/event-theme.css" media="all">${eventMarkup}`,
+      ],
+      [
+        "an empty-media linked sheet",
+        `<link rel="stylesheet" href="/event-theme.css" media="">${eventMarkup}`,
+      ],
+      [
+        "an ASCII-whitespace-separated uppercase stylesheet relation",
+        `<link REL=" PRELOAD\tSTYLESHEET\n" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a versioned local sheet",
+        `<link rel="stylesheet" href="/event-theme.css?v=1#rules">${eventMarkup}`,
+      ],
+      [
+        "a target-only base that cannot change stylesheet resolution",
+        `<base target="_blank"><link rel="stylesheet" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "an inline sheet with an ignored disabled content attribute",
+        `<style disabled>${preserving("p")}</style>${featured()}`,
+      ],
+      [
+        "a titled calendar feed beside the active CSS",
+        `<link rel="alternate" type="text/calendar" title="Events" href="/events.ics"><style>${preserving("p")}</style>${featured()}`,
+      ],
+      [
+        "a titled icon beside the active CSS",
+        `<link rel="icon" title="Site icon" href="/favicon.ico"><style>${preserving("p")}</style>${featured()}`,
+      ],
+    ])("lets %s preserve breaks", (_label, html) => {
+      expect(linesIn(html)).toEqual(MULTI_LINES);
+    });
+
+    it.each(["text/css", "TEXT/CSS", ""])("admits the CSS type %j on style and link", (type) => {
+      expect(linesIn(`<style type="${type}">${preserving("p")}</style>${featured()}`)).toEqual(
+        MULTI_LINES,
+      );
+      expect(
+        linesIn(`<link rel="stylesheet" type="${type}" href="/event-theme.css">${eventMarkup}`),
+      ).toEqual(MULTI_LINES);
+    });
+
+    it("ignores a non-CSS collapsing mutant over a served preserving sheet", () => {
+      const html =
+        `<link rel="stylesheet" href="/event-theme.css">` +
+        `<style type="text/plain">.event-theme .event-description p { white-space: normal !important; }</style>` +
+        eventMarkup;
+      expect(linesIn(html)).toEqual(MULTI_LINES);
+    });
+
+    it.each([
+      [
+        "two preferred linked stylesheet sets",
+        `<link rel="stylesheet" title="first" href="/schedule-theme.css"><link rel="stylesheet" title="second" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a titled inline stylesheet",
+        `<style title="preferred">${preserving("p")}</style>${featured()}`,
+      ],
+      [
+        "a whitespace-only stylesheet title",
+        `<style title=" ">${preserving("p")}</style>${featured()}`,
+      ],
+      [
+        "an external base changing a root-relative stylesheet's origin",
+        `<base href="https://cdn.example.test/"><link rel="stylesheet" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a local base without an explicit document URL",
+        `<base href="/nested/"><link rel="stylesheet" href="/event-theme.css">${eventMarkup}`,
+      ],
+      ["a relative stylesheet URL", `<link rel="stylesheet" href="event-theme.css">${eventMarkup}`],
+      [
+        "a protocol-relative stylesheet URL",
+        `<link rel="stylesheet" href="//cdn.example.test/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a dot-segment stylesheet URL",
+        `<link rel="stylesheet" href="/../event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "an encoded stylesheet path",
+        `<link rel="stylesheet" href="/%65vent-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a backslash stylesheet URL",
+        `<link rel="stylesheet" href="/\\\\cdn.example.test/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "an unreadable local stylesheet",
+        `<link rel="stylesheet" href="/missing-oracle-control.css">${eventMarkup}`,
+      ],
+      [
+        "a linked sheet with an unmodelled media condition",
+        `<link rel="stylesheet" href="/event-theme.css" media="(width > 100px)">${eventMarkup}`,
+      ],
+      [
+        "non-CSS source media whitespace on style",
+        `<style media=" screen">${preserving("p")}</style>${featured()}`,
+      ],
+      [
+        "non-CSS source media whitespace on link",
+        `<link rel="stylesheet" href="/event-theme.css" media=" screen">${eventMarkup}`,
+      ],
+      [
+        "an alternate relation with browser-sensitive noncanonical casing",
+        `<link rel="STYLESHEET ALTERNATE" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a linked CSS type requiring MIME parsing",
+        `<link rel="stylesheet" type="text/css; charset=utf-8" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a linked CSS type requiring whitespace trimming",
+        `<link rel="stylesheet" type=" text/css " href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "stylesheet integrity that could reject the served bytes",
+        `<link rel="stylesheet" integrity="sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a meta CSP that could reject an inline stylesheet",
+        `<meta http-equiv="Content-Security-Policy" content="style-src 'none'"><style>${preserving("p")}</style>${featured()}`,
+      ],
+      [
+        "a stylesheet enabled by an unmodelled event handler",
+        `<link rel="preload" as="style" href="/event-theme.css" onload="this.rel='stylesheet'">${eventMarkup}`,
+      ],
+      [
+        "an SVG stylesheet with foreign-element semantics",
+        `<svg><style>${preserving("p")}</style></svg>${featured()}`,
+      ],
+    ])("fails closed on %s", (_label, html) => {
+      expect(() => linesIn(html)).toThrow("CSS oracle cannot evaluate");
+    });
+
+    it.each([
+      ["an untitled inline sheet", `<style title="">${preserving("p")}</style>${featured()}`],
+      [
+        "an untitled linked sheet",
+        `<link rel="stylesheet" title="" href="/event-theme.css">${eventMarkup}`,
       ],
     ])("lets %s preserve breaks", (_label, html) => {
       expect(linesIn(html)).toEqual(MULTI_LINES);
