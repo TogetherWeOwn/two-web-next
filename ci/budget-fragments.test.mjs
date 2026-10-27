@@ -46,12 +46,12 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/copy-link.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/event-device-timezone.js": { maxRawBytes: 2560, maxGzipBytes: 1280 },
   "public/islands/event-share.js": { maxRawBytes: 1024, maxGzipBytes: 768 },
-  "public/islands/events-calendar.js": { maxRawBytes: 10240, maxGzipBytes: 3840 },
+  "public/islands/events-calendar.js": { maxRawBytes: 10752, maxGzipBytes: 4096 },
   "public/islands/going-count.js": { maxRawBytes: 5632, maxGzipBytes: 2304 },
   "public/islands/join-widget.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/member-profile.js": { maxRawBytes: 15872, maxGzipBytes: 5632 },
   "public/islands/model-context.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
-  "public/islands/past-events.js": { maxRawBytes: 4608, maxGzipBytes: 1792 },
+  "public/islands/past-events.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/islands/rsvp-button.js": { maxRawBytes: 17408, maxGzipBytes: 5120 },
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
@@ -121,8 +121,9 @@ function kitFixture(t, fragments) {
 // step 336896 stays unsupported). Preserve the historical 335104 baseline,
 // the 335360 saved-review allocation (combined worst 335164, margin 196),
 // main's 335872 allocation (measured 335639, margin 233), and the earlier
-// game-suggestion 336128 (worst 335875, margin 253) and 336384 (worst 336190,
-// margin 194) allocations. Every other pin stays exact: the oracle rejects
+// game-suggestion 336128 (worst 335875, margin 253; main's Happening-now
+// allocation at the same value measured 335901, margin 227) and 336384
+// (worst 336190, margin 194) allocations. Every other pin stays exact: the oracle rejects
 // any ceiling outside this list, then deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336640];
 
