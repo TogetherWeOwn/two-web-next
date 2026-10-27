@@ -129,9 +129,14 @@ For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-Always supply the test URL for full-suite runs. Live suites skip when
+Always supply the test URL for full-suite runs. Older live suites skip when
 `DATABASE_URL` is unset; `test/review-p1-verify.test.ts` gates its live-DB
-proofs behind the same skip and keeps its P1-3 refusal proofs offline.
+proofs behind the same skip and keeps its P1-3 refusal proofs offline. Suites
+added after the floor guard (#1852) carry no DB gate, because added skips are
+forbidden, and need the disposable test database: with `DATABASE_URL` unset
+the DB-free lane (`env -u DATABASE_URL npm run check`) no longer passes in
+full. `test/admin-featured-unpublish-acceptance.test.ts` and
+`test/admin-featured-unpublish-invariants.test.ts` are the current examples.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.

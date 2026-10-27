@@ -88,7 +88,11 @@ synchronization.
 
 ## Running and inspecting evidence
 
-- Locally/controller: `env -u DATABASE_URL npm run check` (no live SQL/browser).
+- Locally/controller: `env -u DATABASE_URL npm run check` (no live SQL/browser)
+  no longer passes in full. Suites added after the floor guard (#1852) carry no
+  DB gate and need the disposable test database; the two featured-unpublish
+  suites (`test/admin-featured-unpublish-acceptance.test.ts` and
+  `test/admin-featured-unpublish-invariants.test.ts`) are the current examples.
 - On the `ubuntu-latest` runner: `npm run e2e` after prepare, migrations,
   seed and `npx playwright install --with-deps chromium`.
 - Chromium only, one worker, fresh browser context per spec, zero retries.
