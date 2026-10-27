@@ -44,7 +44,6 @@ import {
   type RosterStatus,
   type SortOrder,
 } from "./table-list";
-import { renderableIso } from "./kit-events";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 
@@ -238,17 +237,18 @@ export async function resolveKitEventEdit(
   const rangeEnd = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + entries.length : 0;
   const hasPrev = query.page > 1;
   const hasNext = query.page * ROSTER_PAGE_SIZE < roster.total;
+  const endFinite = Number.isFinite(row.endsAt.getTime());
   const rsvpAction: "rsvp-pause" | "rsvp-reopen" | null =
-    row.status === "published" && Number.isFinite(row.endsAt.getTime()) && row.endsAt > now
+    row.status === "published" && endFinite && row.endsAt > now
       ? row.rsvpOpen
         ? "rsvp-pause"
         : "rsvp-reopen"
       : null;
   const recovery = rosterRecovery(row.eventKey, query, entries.length, roster.total);
-  // Same guard as the Hono eventValues fill: a corrupt stored zone or an
-  // instant a JS Date cannot represent stays visible for correction, but is
-  // never formatted — the wall fields open empty instead of throwing.
+  // Same guard as the Hono edit fill: a corrupt zone or unrenderable instant
+  // stays visible for correction but is never formatted.
   const knownTimezone = isKnownTimezone(row.timezone);
+  const startFinite = Number.isFinite(row.startsAt.getTime());
   return {
     kind: "ok",
     view: {
@@ -261,14 +261,8 @@ export async function resolveKitEventEdit(
         description: row.description ?? "",
         // Wall text in the row's zone — what the moderator typed is what they
         // see; the stored instant is preserved by the Hono UTC carriers.
-        starts_at:
-          knownTimezone && Number.isFinite(row.startsAt.getTime())
-            ? utcToWall(row.startsAt, row.timezone)
-            : "",
-        ends_at:
-          knownTimezone && Number.isFinite(row.endsAt.getTime())
-            ? utcToWall(row.endsAt, row.timezone)
-            : "",
+        starts_at: knownTimezone && startFinite ? utcToWall(row.startsAt, row.timezone) : "",
+        ends_at: knownTimezone && endFinite ? utcToWall(row.endsAt, row.timezone) : "",
         timezone: row.timezone,
         location: row.location ?? "",
         capacity: row.capacity === null ? "" : String(row.capacity),
@@ -282,7 +276,7 @@ export async function resolveKitEventEdit(
       seriesNote: row.recurrenceFrequency
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
-      endsAt: renderableIso(row.endsAt),
+      endsAt: endFinite ? row.endsAt.toISOString() : "",
       roster: {
         total: roster.total,
         query,
