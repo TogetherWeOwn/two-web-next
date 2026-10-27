@@ -1,10 +1,9 @@
 # Join investigation and chosen-timezone composition budget
 
-Measured 2026-10-27 on main `b5bef6810e7803ddff8cbd5105e6253cf56e4320`
-(re-measured after main's event-time change grew both bundles again) and
-reproduced byte-for-byte on main `7d5db1c21f12d8d51b74be43374cb7451cd31c76`
-(later commits change only budgets, tests and a Hono island); this supersedes the 2026-10-25 and 2026-10-26 measurements,
-whose proposal numbers are stale). This separate allocation covers the
+Measured 2026-10-27 on main `5919f44c4ab860c00e2d5d953ec0d8b1f79a9b0f`
+(re-measured after the archive-search and Happening-now changes grew the Kit
+bundles again); this supersedes the earlier measurements, whose proposal
+numbers are stale. This separate allocation covers the
 composition of
 [join investigation](https://github.com/TogetherWeOwn/two-web-next/pull/1705)
 with main after [chosen-timezone comparison](https://github.com/TogetherWeOwn/two-web-next/pull/1755).
@@ -12,7 +11,7 @@ It neither ships nor approves those behaviors. The
 [earlier allocation](kit-perf-join-investigation-budget.md) describes older inputs;
 its decision history remains unchanged.
 
-Only two byte ceilings change (server gzip and client gzip), one unit per fragment:
+Only three byte ceilings change (server gzip, client raw and client gzip), one unit per fragment:
 [`ci/budgets/kit/server-js.json`](../ci/budgets/kit/server-js.json) and
 [`ci/budgets/kit/client-js.json`](../ci/budgets/kit/client-js.json), with the
 decision recorded in
@@ -24,7 +23,7 @@ remain unchanged.
 ## Pinned inputs and reproducibility
 
 - Behavior head (frozen, unchanged): `2ae12d2c2738d337112e4c8ca87762046dca0e20`.
-- Main: `7d5db1c21f12d8d51b74be43374cb7451cd31c76` (first measured on `b5bef6810`, same sizes).
+- Main: `5919f44c4ab860c00e2d5d953ec0d8b1f79a9b0f`.
 - Measurement tree: behavior head merged into that main (unrecorded tree id; reproduce with `git merge` and accept the monolith deletion).
 
 Merging the behavior head into main conflicts only on the deleted monolith
@@ -51,12 +50,12 @@ paths. All emitted JS remains counted, including repeated wrappers.
 
 | Tree | Server JS files | Server raw B | Server gzip B, builds 1 / 2 | Client JS files | Client raw B | Client gzip B | Gate exit, both |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Main | 116 | 1186502 / 1186500 | 335655 / 335653 | 54 | 255118 | 102664 | 0 |
-| Composition | 116 | 1189698 / 1189698 | 336465 / 336463 | 55 | 256823 | 103459 | 1 |
+| Main | 116 | 1187398 / 1187400 | 335838 / 335837 | 54 | 255632 | 102846 | 0 |
+| Composition | 116 | 1190596 / 1190598 | 336646 / 336644 | 55 | 257337 | 103642 | 1 |
 
 Main fits every ceiling. The composition exceeds the retained server gzip
-335872 B by **593 B** and client gzip 103168 B by **291 B**; client raw
-(256823 of main's 257024 B) fits. Client paths and sizes are identical within
+336128 B by **518 B**, client raw 257024 B by **313 B** and client gzip
+103168 B by **474 B**. Client paths and sizes are identical within
 each tree's repeated builds; server gzip wobbled 1-2 B across each pair and the
 allocation uses the larger observed value.
 
@@ -65,7 +64,7 @@ client CSS **2 files, 2861 raw / 1019 gzip B**.
 
 ## Attribution and duplication audit
 
-Relative to main the composition adds **1705 raw / 795 gzip client B** and one JS
+Relative to main the composition adds **1705 raw / 796 gzip client B** and one JS
 file. Client raw delta by emitted file (hashed names change with content):
 
 | Generated output | Raw delta B |
@@ -81,7 +80,7 @@ All three nodes reference the same helper chunk. Its contents are paging, bounde
 context, diagnostic labels and evidence copy, not a second framework runtime.
 Every other client JS file is byte-identical to main.
 
-Server growth is **+3198 raw / +812 gzip B**: `chunks/admin.js` +3023 raw, the
+Server growth is **+3198 raw / +808 gzip B**: `chunks/admin.js` +3023 raw, the
 join-attempt detail server load +67, and nodes 12/19/20 +36 each. Same-length
 import-table churn elsewhere nets to +0 raw. There are still 116 server JS files,
 no new runtime or server chunk inventory.
@@ -104,29 +103,31 @@ and no saving from it is claimed.
 
 ## Minimum aligned allocation and refusal controls
 
-Use the existing 256 B gzip steps, not a percentage or reserve:
+Use the existing 512 B raw / 256 B gzip steps, not a percentage or reserve:
 
 | Ceiling | Before | Proposed | Increase | Minimum observed remaining margin |
 | --- | ---: | ---: | ---: | ---: |
-| Server JS gzip B | 335872 | 336640 | 768 | 175 |
-| Client JS gzip B | 103168 | 103680 | 512 | 221 |
+| Server JS gzip B | 336128 | 336896 | 768 | 250 |
+| Client JS raw B | 257024 | 257536 | 512 | 199 |
+| Client JS gzip B | 103168 | 103680 | 512 | 38 |
 
 Controls run the unchanged checker on the retained composition output, changing
 **only disposable budget copies**:
 
-- Original limits reject: server gzip +593 B and client gzip +291 B (client raw fits).
+- Original limits reject: server gzip +518 B, client raw +313 B and client gzip +474 B.
 - Proposed limits accept the composition: exit 0.
 - One step below proposed rejects on each axis independently: server gzip
-  336384 B (short 81 B on the 336465 B build) and client gzip 103424 B (short 35 B).
-- One byte below the observed totals rejects (server gzip 336464 B against the
-  336465 B build, client gzip 103458 B; the latest rebuild read 336463 B, within the
-  1-2 B jitter); the exact observed totals accept.
+  336640 B (short 4 B on the retained 336644 B build, 6 B on the 336646 B build),
+  client raw 257024 B (short 313 B) and client gzip 103424 B (short 218 B).
+- One byte below the observed totals rejects (client raw 257336 B, client gzip
+  103641 B; server gzip is not byte-controlled because the two builds read 336646 and
+  336644 B, within the 1-2 B jitter); the exact observed totals accept.
 
 The unchanged checker passes its selftests, and the updated boundary pins pass:
-`check-kit-perf.test.mjs` and `budget-fragments.test.mjs` 67/67 together,
-including the new 336640 server arm and admission case, the moved client gzip
-exact/one-over pins. With the
-fragments at main's values the new pins fail 3 cases (red-before). No
+`check-kit-perf.test.mjs` and `budget-fragments.test.mjs` 70/70 together,
+including the new 336896 server arm and admission case and the moved client raw
+and gzip exact/one-over pins. With the
+fragments at main's values the new pins fail 6 cases (red-before). No
 author-owned test was weakened; only ceiling literals moved with their fragments.
 This does not claim a full application check, browser, visual, accessibility,
 Lighthouse, startup-latency, staging or production verification.
@@ -134,12 +135,12 @@ Lighthouse, startup-latency, staging or production verification.
 Every other ceiling stays fixed: worker 3584 raw / 1536 gzip B; server 1203200 raw B
 and 126 files; client JS 55 files; client CSS 3072 raw / 1024 gzip B and four files;
 startup 60000 ms. The composition has **zero spare client JS files**, **5 B CSS gzip
-margin** a **175 B** server gzip margin and a **221 B** client gzip margin. None is reserved capacity.
+margin** a **250 B** server gzip margin, a **199 B** client raw margin and a **38 B** client gzip margin. None is reserved capacity.
 Any later integrated head must be freshly rebuilt and pass exact-head CI, security,
 QA and independent review.
 
 ## Undo
 
-Revert only these two numeric changes and this note. This restores the
-335872 B server gzip and 103168 B client gzip limits, intentionally rejecting the
+Revert only these three numeric changes and this note. This restores the
+336128 B server gzip, 257024 B client raw and 103168 B client gzip limits, intentionally rejecting the
 measured composition again. No application state, schema or deployed artifact changes.
