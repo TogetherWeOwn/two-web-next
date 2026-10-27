@@ -79,7 +79,9 @@ describe("event time-from-now served-markup pins", () => {
     // render-blocking event stylesheet (a deferred-only reveal loses the
     // first-paint race and the quality gate records CLS on the event page).
     const theme = readFileSync("public/event-theme.css", "utf8");
-    expect(theme).toContain(".event-theme .event-meta div[hidden]{display: block;visibility: hidden}");
+    expect(theme).toContain(
+      ".event-theme .event-meta div[hidden]{display: block;visibility: hidden}",
+    );
     expect(theme).toContain(
       ".event-theme .event-meta button[hidden],.event-theme .event-meta input[hidden]{display: inline-block;visibility: hidden}",
     );
