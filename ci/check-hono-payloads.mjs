@@ -65,7 +65,8 @@ export function publicRows(source = readFileSync(join(ROOT, SUITE), "utf8")) {
 
 // These non-content GETs have separate contracts. Auth deliberately issues
 // session/state artifacts; applying the public-content prohibition there would
-// break sign-in. Health uses an independent DB client (test/up.test.ts).
+// break sign-in. Health uses an independent DB client (test/up.test.ts); deploy identity
+// answers a fixed five-field allowlist.
 export const EXCLUSIONS = {
   "/auth/discord": "OAuth initiation: test/auth-acceptance.test.ts",
   "/auth/discord/redirect": "OAuth alias: test/auth-acceptance.test.ts",
@@ -75,6 +76,8 @@ export const EXCLUSIONS = {
   "/join/discord": "Join OAuth initiation: test/join.test.ts",
   "/join/callback": "Join OAuth callback: test/join.test.ts",
   "/up": "Operational readiness: test/up.test.ts",
+  "/readyz": "Deploy identity allowlist: test/web-deploy-identity-acceptance.test.ts",
+  "/version": "Deploy identity allowlist: test/web-deploy-identity-acceptance.test.ts",
 };
 export const AUXILIARY_GETS = ["/.well-known/security.txt", "/members", "/members/"];
 const GATED_LABELS = new Set([

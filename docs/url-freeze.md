@@ -241,11 +241,13 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /privacy` | public | privacy: versioned policy |
 | `GET /privacy.md` | public | ai-friendly-md: policy-source Markdown alternate, static TTL, staging noindex |
 | `GET /profile` | member | profiles: current member |
+| `GET /readyz` | public | deploy-identity: build and deploy-event identity (same fixed allowlist as `/version`), 503 when unproven |
 | `GET /robots.txt` | public | seo: frozen robots |
 | `GET /rules` | public | seo: frozen funnel leaf |
 | `GET /rules.md` | public | ai-friendly-md: curated Markdown alternate with last-updated stamp, static TTL, staging noindex |
 | `GET /sitemap_index.xml` | public | seo: frozen sitemap |
 | `GET /up` | public | up: always-200 queue health |
+| `GET /version` | public | deploy-identity: source SHA, build ID, deploy event ID, GitHub Deployment ID and Cloudflare Version ID only; session-free, `no-store`, 503 when unproven |
 | `OPTIONS /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `OPTIONS /mcp` | public | mcp: CORS preflight for the stateless public MCP; answered by the handler, no body, no budget burn |
 | `PATCH /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |

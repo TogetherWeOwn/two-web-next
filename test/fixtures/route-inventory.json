@@ -346,6 +346,11 @@
   },
   {
     "method": "GET",
+    "path": "/readyz",
+    "auth": "public"
+  },
+  {
+    "method": "GET",
     "path": "/robots.txt",
     "auth": "public"
   },
@@ -367,6 +372,11 @@
   {
     "method": "GET",
     "path": "/up",
+    "auth": "public"
+  },
+  {
+    "method": "GET",
+    "path": "/version",
     "auth": "public"
   },
   {
