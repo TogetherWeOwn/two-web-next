@@ -219,12 +219,29 @@ export class EventByteCapExceededError extends Error {
 }
 
 /**
+ * Bytes of the MCP `CallToolResult` that carries `body`: the text content
+ * (the body re-escaped as a JSON string) plus `structuredContent` (the body
+ * again, verbatim). `structuredContent` is the parsed body, and a parsed then
+ * re-stringified DTO is byte-identical, so it is spliced in unparsed. The
+ * JSON-RPC envelope (request id, SSE/HTTP framing) is deliberately outside
+ * this measure: it carries a client-chosen id.
+ */
+export function eventResultBytes(body: string): number {
+  return TEXT.encode(
+    `{"content":[{"type":"text","text":${JSON.stringify(body)}}],"structuredContent":${body}}`,
+  ).length;
+}
+
+/**
  * Fits a collection inside the byte cap by halving the longest description
- * until the wrapped body fits. Shortened descriptions end in …; rows are
- * never dropped, so paging stays stable. Always terminates: a one-character
- * description collapses to empty. Throws EventByteCapExceededError when no
- * description remains but the body still exceeds the cap — irreducible
- * metadata (title/game/location) must refuse, never return oversized.
+ * until the typed result (see eventResultBytes) fits. REST serves the same
+ * fitted bytes as MCP, so one authority bounds both surfaces and the REST
+ * body is always the smaller of the two. Shortened descriptions end in …;
+ * rows are never dropped, so paging stays stable. Always terminates: a
+ * one-character description collapses to empty. Throws
+ * EventByteCapExceededError when no description remains but the result still
+ * exceeds the cap — irreducible metadata (title/game/location) must refuse,
+ * never return oversized.
  */
 export function fitByteBudget(
   rows: PublicApiEventDto[],
@@ -233,7 +250,7 @@ export function fitByteBudget(
 ): string {
   let body = JSON.stringify(wrap(rows));
   for (;;) {
-    if (TEXT.encode(body).length <= maxBytes) return body;
+    if (eventResultBytes(body) <= maxBytes) return body;
     let longest: PublicApiEventDto | null = null;
     for (const row of rows) {
       if (
@@ -441,7 +458,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       return internalFault(c, err);
     }
     // Final guard: an oversized success is never cached or served.
-    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
+    if (eventResultBytes(body) > API_PUBLIC_BOUNDS.maxBodyBytes)
       return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
     // Store under the clamped page the database answered, never the raw alias:
     // N past-the-end pages occupy one entry and cannot evict page 1. Filtered
@@ -488,7 +505,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       return internalFault(c, err);
     }
     // Final guard: an oversized success is never cached or served.
-    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
+    if (eventResultBytes(body) > API_PUBLIC_BOUNDS.maxBodyBytes)
       return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
     return servePublicJson(c, key, body, generation);
   });

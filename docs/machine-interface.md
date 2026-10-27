@@ -21,8 +21,14 @@ machine surface only.
 
 - Collections cap at 20 rows per response (`per_page` clamps to 20);
   past-the-end pages clamp to the last page.
-- Every JSON body fits 32 KiB: long descriptions trim with a `…`
-  marker, rows are never dropped.
+- Every event result fits 32 KiB, measured on the serialized MCP
+  `CallToolResult` object: the text content plus the
+  `structuredContent` copy, with string escaping counted. The REST JSON
+  body is the same DTO bytes, so it is smaller. Long descriptions trim
+  with a `…` marker, rows are never dropped; metadata that cannot fit
+  answers `unavailable`.
+- The JSON-RPC envelope (the client-chosen request ID, SSE and HTTP
+  framing) is outside that measure and is not bounded by it.
 - Events are published-only: drafts and cancelled rows read as not found.
 - Unknown counts read as `null`, never `0` (`going_count`,
   `going_occupancy`, `member_count`, `online_count`).

@@ -5,7 +5,9 @@
 // tools/list runs over an in-memory transport against a null database, so a
 // stale guide or a drifting schema fails here the same way in CI and on a
 // laptop. Run via `npm run check:machine-contract`; exit 0 on pass, 1 with
-// the failing assertions on stdout otherwise.
+// the failing assertions on stdout otherwise. `--format json` prints one
+// deterministic receipt instead ({ version, verdict, error_code, next_action,
+// failures }) with the same exit codes, bounded to 32 KiB.
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
@@ -26,9 +28,12 @@ import {
   PUBLIC_API_META_FIELDS,
 } from "../src/public-data/contracts";
 import { getOpenApiDocument } from "../src/public-data/openapi";
+import { eventResultBytes, fitByteBudget } from "../src/public-data/routes";
 
-if (process.argv.length > 2) {
-  console.error("check:machine-contract takes no arguments.");
+const args = process.argv.slice(2);
+const jsonMode = args.length === 2 && args[0] === "--format" && args[1] === "json";
+if (args.length > 0 && !jsonMode) {
+  console.error("check:machine-contract takes no arguments except `--format json`.");
   process.exit(1);
 }
 
@@ -281,6 +286,61 @@ check(
   "guide names npm run check:machine-contract",
   guide.includes("npm run check:machine-contract"),
 );
+
+// Measured boundary: the 32 KiB ceiling applies to the serialized MCP result
+// object (text plus structuredContent, escaping counted); REST body and the
+// JSON-RPC/HTTP transport are distinct and the guide must say so. The
+// contradiction patterns catch the legacy unqualified promise and the three
+// wrong estimates (DTO-only, twice-DTO, fixed-size transport).
+for (const [label, pattern] of [
+  ["names the CallToolResult boundary", /CallToolResult/],
+  ["names the structuredContent copy", /structuredContent/],
+  ["counts string escaping", /escaping/i],
+  ["names the REST JSON body", /REST JSON\s+body/],
+  ["names the JSON-RPC envelope", /JSON-RPC envelope/],
+  ["names the client-chosen request ID", /request\s+ID/],
+]) {
+  check(`guide ${label}`, pattern.test(guide));
+}
+check(
+  "guide drops the legacy unqualified body promise",
+  !/every JSON body fits 32 KiB/i.test(guide.replace(/\s+/g, " ")),
+);
+const guideSentences = guide.replace(/\s+/g, " ").split(/(?<=[.;])\s/);
+for (const sentence of guideSentences) {
+  const flat = sentence.trim();
+  if (
+    /\bonly the DTO\b|before the (?:MCP )?wrapper|\b(?:duplication|escaping)\b[^.;]*\bnot counted\b/i.test(
+      flat,
+    )
+  )
+    check(`guide must count the whole result, not the DTO alone: "${flat.slice(0, 80)}"`, false);
+  if (/\btwice the DTO\b|\b2\s*[x×]\s*(?:the )?DTO\b|do not serialize the text string/i.test(flat))
+    check(`guide must not estimate the result as twice the DTO: "${flat.slice(0, 80)}"`, false);
+  if (
+    /JSON-RPC|\bHTTP\b|transport|request\s+ID/i.test(flat) &&
+    /\b(?:fits?|within|bounded by)\b/i.test(flat) &&
+    !/\b(?:not|outside|excludes?|excluded|never)\b/i.test(flat)
+  )
+    check(`guide must not promise the transport fits the cap: "${flat.slice(0, 80)}"`, false);
+}
+
+// Real serialization control: 20 maximum-length, escape-heavy descriptions
+// must be fitted so the whole typed result, not one DTO copy, is in budget.
+{
+  const dtoRow = (n) => ({
+    ...REALISTIC_EVENT,
+    event_key: String(n).padStart(26, "0"),
+    description: '"\\'.repeat(500),
+  });
+  const rows = Array.from({ length: 20 }, (_, i) => dtoRow(i + 1));
+  const fitted = fitByteBudget(rows, 32768, (trimmed) => ({ data: trimmed }));
+  check(
+    "event result fitter bounds the typed result at 32768 bytes",
+    eventResultBytes(fitted) <= 32768,
+  );
+  check("event result fitter keeps every row", JSON.parse(fitted).data.length === 20);
+}
 
 const body = llmsTxt(APP_URL);
 check("llms.txt links /mcp", body.includes(`${APP_URL}/mcp`));
@@ -562,6 +622,29 @@ try {
   await rpc();
 } catch (err) {
   failures.push(`MCP in-memory tools/list failed: ${err?.message ?? err}`);
+}
+
+const MAX_RECEIPT_FAILURES = 50;
+const MAX_FAILURE_CHARS = 300;
+
+if (jsonMode) {
+  const failed = failures.length > 0;
+  // Fixed fields only: no timestamps or request IDs, so repeated runs agree.
+  console.log(
+    JSON.stringify({
+      version: 1,
+      verdict: failed ? "fail" : "pass",
+      error_code: failed ? "machine_contract_mismatch" : null,
+      next_action: failed
+        ? "Fix the listed assertions in docs/machine-interface.md or the MCP contract, then run npm run check:machine-contract again."
+        : null,
+      failure_count: failures.length,
+      failures: failures
+        .slice(0, MAX_RECEIPT_FAILURES)
+        .map((failure) => String(failure).slice(0, MAX_FAILURE_CHARS)),
+    }),
+  );
+  process.exit(failed ? 1 : 0);
 }
 
 if (failures.length > 0) {
