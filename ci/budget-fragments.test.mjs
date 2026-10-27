@@ -123,12 +123,13 @@ function kitFixture(t, fragments) {
 // print scope line (combined worst 335588, margin 28; lower 335360 rejects by
 // 228); 335872 is the fourth, the event-time duration and clock labels
 // (measured 335639, margin 233; lower 335616 rejects by 23); 336128 is the
-// fifth, the composition of both on the previous main (measured 335951,
-// margin 177; lower 335872 rejects by 79); 336384 is the sixth, the same
-// composition plus the archive search form (measured 336134, margin 250;
-// lower 336128 rejects by 6; the next 256B step 336640 stays unsupported).
-// Every other pin stays exact: the oracle rejects any ceiling outside this
-// list, then deep-compares the rest of the plan.
+// fifth, witnessed twice in (335872, 336128]: Happening-now (combined worst
+// 335901, margin 227; lower rejects by 29) and the print/event-time
+// composition (measured 335951, margin 177; lower rejects by 79); 336384 is
+// the sixth, the same composition plus the archive search form (measured
+// 336134, margin 250; lower 336128 rejects by 6; the next 256B step 336640
+// stays unsupported). Every other pin stays exact: the oracle rejects any
+// ceiling outside this list, then deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335616, 335872, 336128, 336384];
 
 function assertShippingKitBudget(actual) {
