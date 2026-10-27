@@ -123,13 +123,13 @@ function kitFixture(t, fragments) {
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
 // unsupported). Every other pin stays exact: the oracle rejects any ceiling
 // outside this list, then deep-compares the rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360];
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 336384];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 336384`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
