@@ -19,11 +19,14 @@ function elements(html: string): Element[] {
 const attr = (node: Element, name: string) => node.attrs.find((a) => a.name === name)?.value;
 const GOOGLE_TARGET =
   "https://calendar.google.com/calendar/render?action=TEMPLATE&text=Chess%20%22night%22%20%26%20friends%20%E2%99%9F&dates=20350110T200000Z%2F20350110T220000Z&details=Public%20description%3B%20not%20part%20of%20the%20native%20payload.&location=The%20lobby";
+// Served-script baseline for both views, including main's time-from-now
+// island; share honesty adds no script or island of its own to this list.
 const EXISTING_SCRIPTS = [
   "/islands/attendees-live.js",
   "/islands/copy-link.js",
   "/islands/event-device-timezone.js",
   "/islands/event-share.js",
+  "/islands/event-time-from-now.js",
   "/islands/going-count.js",
   "/islands/rsvp-button.js",
 ];
