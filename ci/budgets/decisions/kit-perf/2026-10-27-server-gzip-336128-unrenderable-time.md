@@ -45,6 +45,16 @@ Several sibling allocation PRs also propose 336128 with their own
 witnesses; any interval in (335872, 336128] proves this step, so whichever
 lands first keeps the key and the others re-measure on the new base.
 
+## 2026-10-27 merge addendum: sibling 336128 landed first
+
+Main landed the Happening-now 336128 step (`5919f44c4`) before this branch
+merged, so the oracle comment conflicted and was resolved as a union: both
+decision records stand and the 336128 admission is shared. Re-measured on
+the combined tree (this branch merged with main at `e37975a07`), locked
+Node 24.22.1 / npm 11.19.1, two production builds: 336099 and 336097 gzip
+bytes, worst 336099, margin 29 under the unchanged 336128 ceiling. No new
+step is needed.
+
 ## Shipping tests
 
 `ci/budget-fragments.test.mjs` moves with the ceiling: the 336128

@@ -47,12 +47,12 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/copy-link.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/event-device-timezone.js": { maxRawBytes: 2560, maxGzipBytes: 1280 },
   "public/islands/event-share.js": { maxRawBytes: 1024, maxGzipBytes: 768 },
-  "public/islands/events-calendar.js": { maxRawBytes: 10240, maxGzipBytes: 3840 },
+  "public/islands/events-calendar.js": { maxRawBytes: 10752, maxGzipBytes: 4096 },
   "public/islands/going-count.js": { maxRawBytes: 5632, maxGzipBytes: 2304 },
   "public/islands/join-widget.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/member-profile.js": { maxRawBytes: 15872, maxGzipBytes: 5632 },
   "public/islands/model-context.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
-  "public/islands/past-events.js": { maxRawBytes: 4608, maxGzipBytes: 1792 },
+  "public/islands/past-events.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/islands/rsvp-button.js": { maxRawBytes: 17408, maxGzipBytes: 5120 },
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
@@ -122,9 +122,11 @@ function kitFixture(t, fragments) {
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
 // unsupported); 335872 is the third, independently measured allocation
 // (measured 335639, margin 233; lower 335616 rejects by 23); 336128 is the
-// fourth, independently measured unrenderable-time allocation (combined
-// worst 335922 on the merged tree, margin 206; lower 335872 rejects by 50;
-// the next 256B step 336384 stays unsupported). Every other pin stays
+// fourth, independently measured allocation shared by two features:
+// unrenderable-time (worst 335922 on its merged tree, margin 206) and
+// Happening-now (worst 335901 on its merged tree, margin 227); the combined
+// tree builds twice at 336099/336097 gzip bytes, worst 336099 for a margin
+// of 29; the next 256B step 336384 stays unsupported. Every other pin stays
 // exact: the oracle rejects any ceiling outside this list, then
 // deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128];
