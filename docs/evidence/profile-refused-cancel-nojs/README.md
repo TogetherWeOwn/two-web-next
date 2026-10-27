@@ -49,7 +49,7 @@ appears; a real keyboard press focuses Cancel normally.
 | After Cancel (was 422) | Desktop 1280x800 | [Before](cancelled-422-desktop-before.png) | [After](cancelled-422-desktop-after.png) |
 | After Cancel (was 422) | Mobile 390x844 | [Before](cancelled-422-mobile-before.png) | [After](cancelled-422-mobile-after.png) |
 | After Cancel (was 503) | Desktop 1280x800 | [Before](cancelled-503-desktop-before.png) | [After](cancelled-503-desktop-after.png) |
-| After Cancel (was 503) | Mobile 390x844 | [Before](cancelled-503-mobile-after.png) | [After](cancelled-503-mobile-after.png) |
+| After Cancel (was 503) | Mobile 390x844 | [Before](cancelled-503-mobile-before.png) | [After](cancelled-503-mobile-after.png) |
 
 Refusal before/after pairs differ in one sub-control detail: as an anchor,
 Cancel renders without the native button outset border. Everything else on
