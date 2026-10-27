@@ -1696,9 +1696,7 @@ function renderFeaturedKit(body: string): string {
 async function compileKitGlobalCss(extraCandidates: string[] = []): Promise<string> {
   const webRequire = createRequire(join(root, "web/package.json"));
   type Source = { base: string; pattern: string; negated: boolean };
-  const { compile } = (await import(
-    pathToFileURL(webRequire.resolve("@tailwindcss/node")).href
-  )) as {
+  const { compile } = webRequire("@tailwindcss/node") as {
     compile: (
       css: string,
       options: { base: string; onDependency: (path: string) => void },
@@ -1793,7 +1791,8 @@ function svelteStyleExtras(): { css: string; source: string }[] {
   // scoped in these components would still be served in production, so
   // compile them the same way and read the scoped CSS Svelte emits (its hash
   // classes match the harness markup) rather than the unscoped source.
-  const { compile } = createRequire(join(root, "web/package.json"))("svelte/compiler") as {
+  const webRequire = createRequire(join(root, "web/package.json"));
+  const { compile } = webRequire("svelte/compiler") as {
     compile: (
       source: string,
       options: Record<string, unknown>,
