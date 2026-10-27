@@ -291,29 +291,45 @@ check(
 // object (text plus structuredContent, escaping counted); the REST JSON body
 // and the JSON-RPC/HTTP transport are distinct. Denylisting wrong phrasings
 // cannot keep up with paraphrase, so the guide is compared with the canonical
-// statement instead: the exact boundary bullets must be present, and once they
-// are removed no other text may talk about the cap, the DTO measure, the
-// result estimate or the transport envelope.
-const CANONICAL_BOUNDARY = [
-  "Every event result fits 32 KiB, measured on the serialized MCP `CallToolResult` object: the text content plus the `structuredContent` copy, with string escaping counted. The REST JSON body is the same DTO bytes, so it is smaller. Long descriptions trim with a `…` marker, rows are never dropped; metadata that cannot fit answers `unavailable`.",
-  "The JSON-RPC envelope (the client-chosen request ID, SSE and HTTP framing) is outside that measure and is not bounded by it.",
-];
+// text instead: the whole `## Limits` section must equal CANONICAL_LIMITS
+// (any edit, deletion or added claim there fails), and no other section may
+// state a size, a budget, a cap or a measurement of the result or transport.
+// Changing the limits therefore means changing this constant in the same PR.
+const CANONICAL_LIMITS = [
+  "- Collections cap at 20 rows per response (`per_page` clamps to 20); past-the-end pages clamp to the last page.",
+  "- Every event result fits 32 KiB, measured on the serialized MCP `CallToolResult` object: the text content plus the `structuredContent` copy, with string escaping counted. The REST JSON body is the same DTO bytes, so it is smaller. Long descriptions trim with a `…` marker, rows are never dropped; metadata that cannot fit answers `unavailable`.",
+  "- The JSON-RPC envelope (the client-chosen request ID, SSE and HTTP framing) is outside that measure and is not bounded by it.",
+  "- Events are published-only: drafts and cancelled rows read as not found.",
+  "- Unknown counts read as `null`, never `0` (`going_count`, `going_occupancy`, `member_count`, `online_count`).",
+].join(" ");
 const flatGuide = guide.replace(/\s+/g, " ");
-let outsideBoundary = flatGuide;
-for (const statement of CANONICAL_BOUNDARY) {
-  const present = outsideBoundary.includes(statement);
-  check(`guide states the canonical boundary: "${statement.slice(0, 60)}…"`, present);
-  outsideBoundary = outsideBoundary.replace(statement, " ");
-}
-for (const sentence of outsideBoundary.split(/(?<=[.;!?])\s+/)) {
+const limitsMatch = /(?:^|\n)## Limits\n([\s\S]*?)(?=\n## |$)/.exec(guide);
+const limitsSection = (limitsMatch?.[1] ?? "").replace(/\s+/g, " ").trim();
+check(
+  "guide `## Limits` section states the canonical boundary exactly",
+  limitsSection === CANONICAL_LIMITS,
+);
+check(
+  "guide has exactly one `## Limits` section",
+  (guide.match(/^## Limits\s*$/gm) ?? []).length === 1,
+);
+let outsideLimits = limitsMatch
+  ? flatGuide.replace(limitsMatch[0].replace(/\s+/g, " ").trim(), " ")
+  : flatGuide;
+// Pre-existing sentences that use a measure word for another meaning.
+const ALLOWED_OUTSIDE = [
+  "Same DTOs as the MCP tools, byte for byte.",
+  "success results carry `structuredContent` matching it.",
+  "Shared public-read budget exhausted.",
+];
+const MEASURE_WORDS =
+  /\b\d[\d,._]*\s*(?:[KMG]i?B|bytes?|kilobytes?|megabytes?)\b|\b(?:KiB|KB|kB|MiB|MB)\b|\b(?:budgets?|caps?|capped|limits?|limited|fits?|fitting|within|ceilings?|framing|wrapper|envelope|overhead|twice|double|duplicat\w*|escap\w*|measure[sd]?|measuring|counted|DTOs?|CallToolResult|structuredContent|request\s+IDs?|transport|HTTP\s+(?:response|body|reply)|JSON-RPC\s+(?:response|reply|body|message|result))\b/i;
+for (const allowed of ALLOWED_OUTSIDE) outsideLimits = outsideLimits.replace(allowed, " ");
+for (const sentence of outsideLimits.split(/(?<=[.;!?])\s+/)) {
   const flat = sentence.trim();
-  if (
-    /32\s*KiB|32[ ,_]?768|\bDTO\b|\btwice\b|\bdouble|\bduplicat|\b2\s*[x×]|\bwrapper\b|\bescap|\bCallToolResult\b|\bstructuredContent\b[^.;]*\b(?:count|measure|budget|cap|limit)|\bHTTP\b[^.;]*\b(?:response|body|capped|fits?|within)|\brequest\s+IDs?\b|\btransport\b|\bJSON-RPC\s+(?:envelope|response|body|message)/i.test(
-      flat,
-    )
-  )
+  if (flat && MEASURE_WORDS.test(flat))
     check(
-      `guide has an unrecognised statement about the measured boundary: "${flat.slice(0, 80)}"`,
+      `guide states a size or measurement claim outside the canonical Limits: "${flat.slice(0, 80)}"`,
       false,
     );
 }

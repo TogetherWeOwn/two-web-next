@@ -50,13 +50,34 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     );
   }
 
-  it.each([
+  const claims = [
     "The check measures the DTO only.",
     "Estimate the result as twice DTO length.",
     "The entire HTTP response is capped at 32 KiB.",
     "Every response is limited to 32768 bytes.",
-  ])("refuses the paraphrase %j", (claim) => {
+    "Every JSON body fits 32 KB.",
+    "Responses are capped at 32 kB, including the HTTP framing.",
+    "The JSON-RPC reply fits the budget.",
+  ];
+
+  it.each(claims)("refuses the paraphrase %j appended after the Limits", (claim) => {
     const result = run(`${guide}\n${claim}\n`);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout).verdict).toBe("fail");
+  });
+
+  it.each(claims)("refuses the paraphrase %j added inside the Limits", (claim) => {
+    const result = run(guide.replace("## Limits\n", `## Limits\n\n- ${claim}\n`));
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout).verdict).toBe("fail");
+  });
+
+  it.each([
+    ["the result boundary bullet", /- Every event result fits[\s\S]*?answers `unavailable`\.\n/],
+    ["the JSON-RPC envelope bullet", /- The JSON-RPC envelope[\s\S]*?not bounded by it\.\n/],
+  ])("refuses a guide missing %s", (_name, pattern) => {
+    expect(guide).toMatch(pattern);
+    const result = run(guide.replace(pattern, ""));
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(JSON.parse(result.stdout).verdict).toBe("fail");
   });
