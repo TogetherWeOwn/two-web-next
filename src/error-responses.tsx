@@ -22,6 +22,7 @@ import {
   bufferedMemberText,
   memberReadActive,
 } from "./member-reads";
+import { jsonRefusal } from "./json-refusal";
 import { cachedNotFoundSuggestions } from "./not-found-suggestions";
 import { acceptsJson } from "./media-type";
 import { requestRoute, safeRequestId } from "./request-log";
@@ -138,7 +139,8 @@ function jsonOnlyEventRequest(c: Context): boolean {
   if (method === "GET" || method === "HEAD") return path === "/events.json";
   if (method === "POST") {
     return (
-      path === "/events" || /^\/events\/[^/]+\/(publish|cancel|rsvp-pause|rsvp-reopen)$/.test(path)
+      path === "/events" ||
+      /^\/events\/[^/]+\/(publish|cancel|duplicate|rsvp-pause|rsvp-reopen)$/.test(path)
     );
   }
   if (method === "PATCH") return /^\/events\/[^/]+$/.test(path);
@@ -443,7 +445,7 @@ export function nonOwnerProfileWrite(c: Context): Response | Promise<Response> {
   varyAccept(c);
   c.status(403);
   if (acceptsJson(c.req.header("accept"))) {
-    return c.json({ error: "forbidden", message: "You can only edit your own profile." });
+    return jsonRefusal(c, "forbidden", 403, { message: "You can only edit your own profile." });
   }
   return c.html(<OwnProfileOnlyPage />);
 }

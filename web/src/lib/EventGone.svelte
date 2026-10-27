@@ -1,6 +1,7 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import { EXISTING_RESPONSES_TESTID, existingResponsesText } from "../../../src/islands/contracts";
 import type { EventGoneModel } from "../../../src/kit-event-states";
 
 // Cancelled-event presentation for GET /e/:key (card 24/43). Markup contract
@@ -30,6 +31,7 @@ let { model }: { model: EventGoneModel } = $props();
     <p class="event-kicker">{model.game ?? "Community event"}</p>
     <p class="notice" role="status" data-testid="event-cancelled">Cancelled</p>
     <h1>{model.title}</h1>
+    <p data-testid={EXISTING_RESPONSES_TESTID}>{existingResponsesText(model.existingResponses)}</p>
     <p>
       <a class="btn" href={model.upcomingUrl}>See upcoming events</a>
     </p>

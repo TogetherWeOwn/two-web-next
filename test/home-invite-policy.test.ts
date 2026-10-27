@@ -45,8 +45,15 @@ const destinations = [
   },
 ];
 
+// The unusable-config warn is rate-limited per isolate: refill the log
+// budget between cases so each refusal warns exactly once.
+let now = Date.now();
+
 beforeEach(() => {
+  now += 600_000;
+  vi.spyOn(Date, "now").mockImplementation(() => now);
   vi.spyOn(console, "error").mockImplementation(() => {});
+  vi.spyOn(console, "warn").mockImplementation(() => {});
 });
 afterEach(() => vi.restoreAllMocks());
 
@@ -74,7 +81,11 @@ describe.each([
 
 it("normalizes once when both member invite links are visible", async () => {
   await render("javascript:alert(1)", member, "join_failed");
-  expect(console.error).toHaveBeenCalledTimes(1);
+  expect(console.warn).toHaveBeenCalledTimes(1);
+  expect(console.warn).toHaveBeenCalledWith("invite.config.unusable", {
+    exception: "InviteConfigError",
+  });
+  expect(console.error).not.toHaveBeenCalled();
 });
 
 it.each([

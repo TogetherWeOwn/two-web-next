@@ -106,6 +106,8 @@ beforeEach(() => {
       emptyState: null,
       robots: undefined,
       discordFailed: false,
+      games: [],
+      gameFilter: null,
     })),
     render: vi.fn(renderEventsHtml),
   };
@@ -133,6 +135,10 @@ function requestEvent({ flash = false, method = "GET", island = false } = {}) {
   const event = {
     request,
     url: new URL(request.url),
+    // The binding threads locals.requestId into the load (the dispatch sets
+    // it on the Kit branch); this harness drives the endpoint without the
+    // dispatch, so locals carries no id, exactly like a headerless request.
+    locals: {},
     cookies: { delete: deleteCookie },
     setHeaders(values) {
       for (const [name, value] of Object.entries(values)) headers.set(name, value);
