@@ -1,0 +1,9 @@
+{
+  "$comment": "See ci/budgets/README.md; changing this ceiling needs a decision file in ci/budgets/decisions/bundle/.",
+  "budgets": {
+    "public/islands/rsvp-button.js": {
+      "maxRawBytes": 17408,
+      "maxGzipBytes": 5120
+    }
+  }
+}

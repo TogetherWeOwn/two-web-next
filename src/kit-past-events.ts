@@ -16,19 +16,32 @@ import type { PublicEvent } from "./events/reads";
 import { resolveCalendarInput } from "./events/page-models.server";
 import { searchContext, type SearchSegment } from "./events/search-context";
 import { matchQuery } from "./events/search-log";
-import { publicReadGuard } from "./events/routes-shared";
+import { guardRequestId, publicReadGuard, seedGuardRequestId } from "./events/routes-shared";
 
-export type KitPublicReadGuard = (request: Request, env: Env) => Promise<Response | null>;
+export type KitPublicReadGuard = (
+  request: Request,
+  env: Env,
+  requestId?: unknown,
+) => Promise<Response | null>;
 
 const guardApp = new Hono<{ Bindings: Env }>();
+guardApp.use(guardRequestId);
 guardApp.all("*", async (c) => {
   const limited = await publicReadGuard(c);
   return limited ?? c.body(null, 204);
 });
 
-/** Reuse the public Hono read budget for the native Kit route. */
-export async function kitPublicReadGuard(request: Request, env: Env): Promise<Response | null> {
-  const response = await guardApp.fetch(request, env);
+/**
+ * Reuse the public Hono read budget for the native Kit route. The dispatch
+ * passes its minted id so a 429 renders the same support reference the
+ * response header carries; without one the refusal stays blank-safe.
+ */
+export async function kitPublicReadGuard(
+  request: Request,
+  env: Env,
+  requestId?: unknown,
+): Promise<Response | null> {
+  const response = await guardApp.fetch(seedGuardRequestId(request, requestId), env);
   return response.status === 204 ? null : response;
 }
 
@@ -39,12 +52,13 @@ export async function dispatchPastArchiveRequest(
   resolve: () => Promise<Response>,
   guard: KitPublicReadGuard = kitPublicReadGuard,
   now: number = Date.now(),
+  requestId?: unknown,
 ): Promise<Response> {
   const url = new URL(request.url);
   const input = resolveCalendarInput({ q: url.searchParams.get("q") });
   // The loader rejects raw oversized input before reads, even on a warm cache.
   if (input.queryTooLong) return resolve();
-  const limited = await guard(request, env);
+  const limited = await guard(request, env, requestId);
   if (limited) return limited;
   // Kit data requests still execute the read guard/load but their JSON payload
   // is not the HTML representation cached by Hono.
