@@ -73,7 +73,7 @@ const withTiming = (report, details) =>
       }
     : report;
 
-async function scenario(t, steps, { fetchImpl } = {}) {
+async function scenario(t, steps, { fetchImpl, upTimeoutMs, onLhci } = {}) {
   const root = await mkdtemp(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "lh-evidence-"),
   );
@@ -85,7 +85,9 @@ async function scenario(t, steps, { fetchImpl } = {}) {
     env: {},
     log: () => {},
     fetchImpl: fetchImpl ?? (async () => ({ status: 200, text: async () => "" })),
+    ...(upTimeoutMs ? { upTimeoutMs } : {}),
     lhci: async () => {
+      onLhci?.();
       const step = steps[calls++];
       for (const [i, url] of (step.urls ?? urls).entries()) {
         await writeFile(
@@ -608,7 +610,25 @@ test("cache, age and server-timing headers accept only bounded well-formed value
   for (const bad of ["-1", "1.5", "12abc", "", "99999999999"])
     assert.equal(at([["age", bad]]).ageSeconds, "unknown", bad);
   assert.equal(at([["server-timing", "cfOrigin;dur=640"]]).serverTiming, "cfOrigin;dur=640");
-  for (const bad of ["a|b", "x".repeat(300), "<b>", ""])
+  for (const good of [
+    'cfL4;desc="?proto=TCP&rtt=20"',
+    'edge;dur=12.5, origin;desc="origin";dur=640',
+    "cache;desc=HIT",
+  ])
+    assert.equal(at([["server-timing", good]]).serverTiming, good, good);
+  for (const bad of [
+    "a|b",
+    "x".repeat(300),
+    "<b>",
+    "",
+    "edge;dur=not-a-number",
+    ",,,",
+    "edge;dur=",
+    'edge;desc="a|b"',
+    'edge;desc="<b>"',
+    "edge\n;dur=1",
+    "edge;unknown=1",
+  ])
     assert.equal(at([["server-timing", bad]]).serverTiming, "unknown", bad);
 });
 
@@ -651,7 +671,7 @@ test("summary records the served revision before and after the collect and each 
   assert.match(md, /### Served revision/);
   assert.match(
     md,
-    new RegExp(`\\| 1 \\| ${"a".repeat(12)} \\| ${"a".repeat(12)} \\| unchanged \\|`),
+    new RegExp(`\\| 1 \\| ${"a".repeat(12)} \\| ${"a".repeat(12)} \\| same at both reads \\|`),
   );
   assert.match(md, /### Serving evidence per navigation/);
   assert.match(
@@ -660,7 +680,7 @@ test("summary records the served revision before and after the collect and each 
   );
   const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
   assert.deepEqual(json.servedRevision, [
-    { attempt: 1, before: sha("a"), after: sha("a"), verdict: "unchanged" },
+    { attempt: 1, before: sha("a"), after: sha("a"), verdict: "same at both reads" },
   ]);
   const events = json.rows.find((r) => r.path === "/events");
   assert.equal(events.serving.length, 3);
@@ -711,8 +731,149 @@ test("a retried collect brackets every attempt and the budget verdict is unchang
   assert.deepEqual(
     json.servedRevision.map((r) => [r.attempt, r.verdict]),
     [
-      [1, "unchanged"],
+      [1, "same at both reads"],
       [2, "changed during collect"],
     ],
   );
+});
+
+test("summary re-validates stored serving values: hostile or mistyped fields become unknown", async (t) => {
+  const hostile = () => ({
+    schemaVersion: 2,
+    timestamp: "yesterday",
+    cfRay: "a|b",
+    cfCacheStatus: "<b>",
+    ageSeconds: "12",
+    serverTiming: "a|b<img>",
+    serverWaitMs: "12",
+  });
+  const { dir } = await scenario(t, [{ timing: hostile }]);
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  for (const entry of json.rows.flatMap((row) => row.serving ?? [])) {
+    for (const key of [
+      "timestamp",
+      "cfRay",
+      "cfCacheStatus",
+      "ageSeconds",
+      "serverTiming",
+      "serverWaitMs",
+    ])
+      assert.equal(entry[key], "unknown", key);
+  }
+  const md = await readFile(join(dir, "watch-summary.md"), "utf8");
+  assert.doesNotMatch(md, /a\|b|<b>|<img>/);
+  for (const bad of [-1, Number.POSITIVE_INFINITY]) {
+    const { dir: d } = await scenario(t, [{ timing: () => ({ ...hostile(), ageSeconds: bad }) }]);
+    const j = JSON.parse(await readFile(join(d, "watch-summary.json"), "utf8"));
+    assert.equal(j.rows[0].serving[0].ageSeconds, "unknown", String(bad));
+  }
+});
+
+test("a valid quoted Server-Timing description survives from response header to summary", async (t) => {
+  const value = 'cfL4;desc="?proto=TCP&rtt=20"';
+  const { dir } = await scenario(t, [
+    {
+      timing: () =>
+        documentTiming({ ...resource, responseHeaders: [{ name: "server-timing", value }] }, []),
+    },
+  ]);
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  assert.equal(json.rows[0].serving[0].serverTiming, value);
+  assert.ok((await readFile(join(dir, "watch-summary.md"), "utf8")).includes(value));
+});
+
+test("a /up read that fails on only one side is unknown, never a deploy", async (t) => {
+  for (const queue of [
+    [upResponse(sha("a")), new Error("blip")],
+    [new Error("blip"), upResponse(sha("a"))],
+  ]) {
+    const { dir, code } = await scenario(t, [{}], { fetchImpl: fetchWithUp(queue) });
+    assert.equal(code, 0);
+    const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+    assert.equal(json.servedRevision[0].verdict, "unknown");
+  }
+});
+
+test("the /up read is bounded, manual-redirect, and cannot stall or fail the collect", async (t) => {
+  const inits = [];
+  const hang = async (url, init) => {
+    if (String(url) !== `${origin}/up`) return { status: 200, text: async () => "" };
+    inits.push(init);
+    return new Promise((_, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason));
+    });
+  };
+  const { dir, code } = await scenario(t, [{}], { fetchImpl: hang, upTimeoutMs: 20 });
+  assert.equal(code, 0);
+  assert.equal(inits.length, 2);
+  for (const init of inits) {
+    assert.equal(init.redirect, "manual");
+    assert.ok(init.signal instanceof AbortSignal && init.signal.aborted, "bounded by a timeout");
+  }
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  assert.deepEqual(json.servedRevision, [
+    { attempt: 1, before: "unknown", after: "unknown", verdict: "unknown" },
+  ]);
+});
+
+test("each collect attempt reads /up before lhci starts and again after it ends", async (t) => {
+  const seen = [];
+  const mark = () => seen.push("lhci");
+  const { code } = await scenario(t, [{ urls: urls.slice(0, 2) }, { urls: urls.slice(0, 2) }], {
+    fetchImpl: fetchWithUp(
+      [upResponse(sha("a")), upResponse(sha("a")), upResponse(sha("a")), upResponse(sha("a"))],
+      seen,
+    ),
+    onLhci: mark,
+  });
+  assert.equal(code, 1);
+  assert.deepEqual(
+    seen.filter((entry) => entry === "lhci" || entry === `${origin}/up`),
+    [`${origin}/up`, "lhci", `${origin}/up`, `${origin}/up`, "lhci", `${origin}/up`],
+  );
+});
+
+const marginalLcp = JSON.stringify([
+  {
+    url: `${origin}/`,
+    auditId: "largest-contentful-paint",
+    level: "error",
+    actual: 2060,
+    expected: 2000,
+  },
+]);
+const marginalStep = () => ({ assertions: marginalLcp, exitCode: 1 });
+
+test("a marginal retry archives attempt 1's revision and the diagnosis carries every attempt's", async (t) => {
+  const { dir, code } = await scenario(t, [marginalStep(), marginalStep()], {
+    fetchImpl: fetchWithUp([
+      upResponse(sha("a")),
+      upResponse(sha("a")),
+      upResponse(sha("a")),
+      upResponse(sha("b")),
+    ]),
+  });
+  assert.equal(code, 1);
+  const first = JSON.parse(await readFile(join(dir, "watch-summary.attempt1.json"), "utf8"));
+  assert.deepEqual(first.servedRevision, [
+    { attempt: 1, before: sha("a"), after: sha("a"), verdict: "same at both reads" },
+  ]);
+  const diagnosis = await readFile(join(dir, "origin-collect-diagnosis.md"), "utf8");
+  assert.match(diagnosis, /served revision, attempt 1: a{40} -> a{40} \(same at both reads\)/);
+  assert.match(diagnosis, /served revision, attempt 2: a{40} -> b{40} \(changed during collect\)/);
+  assert.doesNotMatch(diagnosis, /systematic, not variance/);
+  assert.match(diagnosis, /do not treat this as systematic/);
+});
+
+test("a marginal retry that breaches twice on a stable revision is still called systematic", async (t) => {
+  const { dir } = await scenario(t, [marginalStep(), marginalStep()], {
+    fetchImpl: fetchWithUp([
+      upResponse(sha("a")),
+      upResponse(sha("a")),
+      upResponse(sha("a")),
+      upResponse(sha("a")),
+    ]),
+  });
+  const diagnosis = await readFile(join(dir, "origin-collect-diagnosis.md"), "utf8");
+  assert.match(diagnosis, /systematic, not variance/);
 });

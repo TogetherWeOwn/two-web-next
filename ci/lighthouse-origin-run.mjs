@@ -67,11 +67,11 @@ const FULL_SHA = /^[0-9a-f]{40}$/;
 // GET, bounded, never throws: evidence only, so a failure cannot change any
 // verdict. Read immediately before and after each collect so a deploy landing
 // mid-run shows up as a changed revision instead of a silent mixed sample.
-async function readServedRevision(origin, fetchImpl) {
+async function readServedRevision(origin, fetchImpl, timeoutMs = UP_TIMEOUT_MS) {
   try {
     const response = await fetchImpl(`${origin}/up`, {
       redirect: "manual",
-      signal: AbortSignal.timeout(UP_TIMEOUT_MS),
+      signal: AbortSignal.timeout(timeoutMs),
     });
     const commit = JSON.parse(await response.text())?.revision?.commit;
     return typeof commit === "string" && FULL_SHA.test(commit) ? commit : "unknown";
@@ -80,9 +80,15 @@ async function readServedRevision(origin, fetchImpl) {
   }
 }
 
+// Two probes bracket the collect; they cannot prove every navigation in between
+// reached the same revision (a rollout can serve both), so equal reads are only
+// "same at both reads", never "unchanged".
+const SAME_REVISION = "same at both reads";
+const CHANGED_REVISION = "changed during collect";
+
 function revisionVerdict(before, after) {
   if (before === "unknown" || after === "unknown") return "unknown";
-  return before === after ? "unchanged" : "changed during collect";
+  return before === after ? SAME_REVISION : CHANGED_REVISION;
 }
 
 // One `lhci autorun` attempt. Streams combined output to the parent's stdout
@@ -136,6 +142,7 @@ export function buildOriginDiagnosis({
   expected,
   attempts,
   marginalRetry = null,
+  servedRevision = [],
 }) {
   const last = attempts[attempts.length - 1];
   const collected = last.lhrs;
@@ -152,6 +159,10 @@ export function buildOriginDiagnosis({
       return `- attempt ${a.n}: exit ${a.exitCode}, ${a.lhrs} LHRs${a.marginal?.marginal ? ` (marginal / LCP breach at ${a.marginal.actual} ms${followed})` : ""}`;
     }),
   ];
+  for (const r of servedRevision) {
+    lines.push(`- served revision, attempt ${r.attempt}: ${r.before} -> ${r.after} (${r.verdict})`);
+  }
+  const revisionChanged = servedRevision.some((r) => r.verdict === CHANGED_REVISION);
   if (marginalRetry) {
     lines.push(
       `- marginal retry: attempt 1 ${marginalRetry.reason}; first table in ${ATTEMPT1_TABLE_MD}, first per-run LHRs in ${ATTEMPT1_LHR_DIR}/`,
@@ -163,7 +174,11 @@ export function buildOriginDiagnosis({
       "BUDGET BREACH: full evidence collected and an assertion vs " +
       "ci/lighthouserc.cjs missed. See watch-summary.md for the route and " +
       "the failing audits. Fix the cause; do not lower the budgets." +
-      (marginalRetry ? " The retry also breached, so this is systematic, not variance." : "");
+      (marginalRetry
+        ? revisionChanged
+          ? " The retry also breached, but the served revision changed during an attempt (see the served-revision lines), so do not treat this as systematic until that is explained."
+          : " The retry also breached, so this is systematic, not variance."
+        : "");
   } else if (last.matrix.complete) {
     verdict =
       "UNCLASSIFIED STEP FAILURE: full evidence collected but process or assertion evidence " +
@@ -301,6 +316,7 @@ export async function main(
     logFile,
     diagnosisFile,
     discoveryOptions = {},
+    upTimeoutMs = UP_TIMEOUT_MS,
   } = {},
 ) {
   if (argv.length === 0) {
@@ -396,7 +412,7 @@ export async function main(
       }
     }
     log(`Lighthouse mobile collect: attempt ${n}/${MAX_ATTEMPTS} (expecting ${expected} LHRs).`);
-    const revisionBefore = await readServedRevision(origin, fetchImpl);
+    const revisionBefore = await readServedRevision(origin, fetchImpl, upTimeoutMs);
     const started = Date.now();
     // Sequential by design: attempt 2 runs only when attempt 1 came up short
     // or breached marginally. A spawn failure (missing CLI, process error) is
@@ -410,7 +426,7 @@ export async function main(
       result = { exitCode: 1, output: `lhci autorun failed to start: ${detail}\n` };
     }
     const { exitCode, output } = result;
-    const revisionAfter = await readServedRevision(origin, fetchImpl);
+    const revisionAfter = await readServedRevision(origin, fetchImpl, upTimeoutMs);
     servedRevision.push({
       attempt: n,
       before: revisionBefore,

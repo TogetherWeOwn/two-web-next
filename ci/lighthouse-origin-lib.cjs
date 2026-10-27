@@ -8,6 +8,7 @@
 // assertion. Everything here is read-only: the only network calls are GETs.
 const base = require("./lighthouserc.cjs");
 const { sampleMatrix, assertionsByUrl } = require("./lighthouse-samples.cjs");
+const { isServerTiming } = require("./lighthouse-serving-values.cjs");
 
 // Exact allowlist, like e2e/staging-guard.mjs: https, no port, no credentials,
 // no path, query or hash. Anything else fails closed.
@@ -511,15 +512,18 @@ function median(values) {
   return sorted.length % 2 ? sorted[mid] : (sorted[mid - 1] + sorted[mid]) / 2;
 }
 
-const SERVING_KEYS = [
-  "timestamp",
-  "cfRay",
-  "cfCacheStatus",
-  "ageSeconds",
-  "serverTiming",
-  "serverWaitMs",
-];
-const SERVING_TEXT = /^[A-Za-z0-9_.:;=, "-]{1,256}$/;
+const number = (value) => typeof value === "number" && Number.isFinite(value) && value >= 0;
+// Per-field validators for the stored audit details. Numeric fields accept numbers
+// only: a numeric-looking string is not evidence, however it got into the artifact.
+const SERVING_FIELDS = {
+  timestamp: (v) =>
+    typeof v === "string" && /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{1,3})?Z$/.test(v),
+  cfRay: (v) => typeof v === "string" && /^[a-fA-F0-9]{16}(?:-[A-Z]{3})?$/.test(v),
+  cfCacheStatus: (v) => typeof v === "string" && /^[A-Za-z]{2,16}$/.test(v),
+  ageSeconds: number,
+  serverTiming: isServerTiming,
+  serverWaitMs: number,
+};
 
 // One navigation's allowlisted serving evidence, from the informative
 // `main-document-timing` audit of its LHR. Anything missing or off-shape is
@@ -527,14 +531,10 @@ const SERVING_TEXT = /^[A-Za-z0-9_.:;=, "-]{1,256}$/;
 function servingEvidence(lhr) {
   const details = lhr?.audits?.["main-document-timing"]?.details;
   return Object.fromEntries(
-    SERVING_KEYS.map((key) => {
-      const value = details?.[key];
-      const ok =
-        typeof value === "number"
-          ? Number.isFinite(value) && value >= 0
-          : typeof value === "string" && SERVING_TEXT.test(value);
-      return [key, ok ? value : "unknown"];
-    }),
+    Object.entries(SERVING_FIELDS).map(([key, valid]) => [
+      key,
+      valid(details?.[key]) ? details[key] : "unknown",
+    ]),
   );
 }
 
