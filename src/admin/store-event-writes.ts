@@ -649,7 +649,14 @@ export async function setRsvpOpen(
     if (open && !locked.rsvpOpen && locked.status === "published")
       await lockWaitlist(tx, locked.id);
     const now = clock();
-    if (locked.status !== "published" || locked.endsAt <= now) {
+    // An unrenderable end (Invalid Date) is not a live event: every
+    // comparison with it is false, so without the finite check the writer
+    // would accept a pause/reopen the inventory refuses to offer.
+    if (
+      locked.status !== "published" ||
+      !Number.isFinite(locked.endsAt.getTime()) ||
+      locked.endsAt <= now
+    ) {
       throw new ValidationError({
         rsvp_open: "Only published events that have not ended can pause or reopen RSVPs.",
       });

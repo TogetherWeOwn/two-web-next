@@ -5,9 +5,13 @@
 // needs to open and repair. These pins drive the admin read seams directly:
 // the Hono EventsPage render, the Kit list serializer, the Kit edit read
 // model, and the PATCH merge that saves a corrected time.
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { eq, sql } from "drizzle-orm";
+import { build } from "esbuild";
 import { jsx } from "hono/jsx/jsx-runtime";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
@@ -17,7 +21,11 @@ import {
   type KitEventEditDeps,
   type KitEventEditRow,
 } from "../src/admin/kit-event-edit";
-import { buildEventListView, serializeEventListRow } from "../src/admin/kit-events";
+import {
+  buildEventListView,
+  serializeEventListRow,
+  type KitEventListView,
+} from "../src/admin/kit-events";
 import { EventsPage } from "../src/admin/pages";
 import { adminApp } from "../src/admin/routes";
 import { mergePatchInput, type EventListRow, type PatchBase } from "../src/admin/store";
@@ -161,16 +169,117 @@ describe("Kit moderator inventory with an unrenderable stored time", () => {
     expect(view.rows[1]!.endsAt).toBe("");
   });
 
-  it("renders the placeholder instead of a bare time element in the Kit page", () => {
-    const source = readFileSync(
-      fileURLToPath(new URL("../web/src/routes/admin/events/+page.svelte", import.meta.url).href),
-      "utf8",
-    );
-    expect(source).toContain("Unrenderable time");
-    expect(source).toContain("event-unrenderable-time-");
-    // The <time> element is conditional on a rendered instant existing.
-    expect(source).toContain("{#if r.startsAt}");
-    expect(source).toContain("<time datetime={r.startsAt}>{r.startsAt}</time>");
+  // Executed, not structural: the real Kit events page, SSR-compiled with
+  // the web workspace's svelte/compiler and bundled by esbuild (same shape
+  // as test/kit-admin-event-edit-acceptance.test.ts), rendered with the
+  // serialized mixed rows the load hands it. A source-substring pin cannot
+  // see a deleted display branch; these assertions fail when either
+  // placeholder branch is removed or disabled.
+  describe("Kit page SSR with mixed renderable and unrenderable rows", () => {
+    const root = fileURLToPath(new URL("../", import.meta.url).href);
+    let scratch = "";
+    let renderList: (data: KitEventListView) => string;
+
+    beforeAll(async () => {
+      scratch = mkdtempSync(
+        join(process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "kit-events-unrenderable-"),
+      );
+      const webRequire = createRequire(join(root, "web/package.json"));
+      const { compile } = webRequire("svelte/compiler") as {
+        compile(source: string, options: Record<string, unknown>): { js: { code: string } };
+      };
+      const entry = join(scratch, "entry.mjs");
+      writeFileSync(
+        entry,
+        `import { render } from "svelte/server";
+import Page from ${JSON.stringify(join(root, "web/src/routes/admin/events/+page.svelte"))};
+export function renderList(data) { return render(Page, { props: { data } }).body; }`,
+      );
+      const outfile = join(scratch, "bundle.mjs");
+      await build({
+        entryPoints: [entry],
+        outfile,
+        bundle: true,
+        platform: "node",
+        format: "esm",
+        logLevel: "warning",
+        tsconfigRaw: { compilerOptions: {} },
+        absWorkingDir: root,
+        nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
+        alias: { "#lib": join(root, "web/src/lib") },
+        plugins: [
+          {
+            name: "kit-events-unrenderable-ssr",
+            setup(plugin) {
+              plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
+                contents: compile(readFileSync(path, "utf8"), {
+                  generate: "server",
+                  dev: false,
+                  filename: path,
+                }).js.code,
+                loader: "js",
+                resolveDir: dirname(path),
+              }));
+            },
+          },
+        ],
+      });
+      renderList = (await import(pathToFileURL(outfile).href)).renderList;
+    }, 120000);
+
+    afterAll(() => {
+      if (scratch) rmSync(scratch, { recursive: true, force: true });
+    });
+
+    function mixedView(): KitEventListView {
+      return buildEventListView(parseEventListQuery({}), [
+        listRow({ eventKey: "EVTNORMAL1", title: "Friday game night" }),
+        listRow({
+          eventKey: "EVTBADSTART",
+          title: "Imported night (broken start)",
+          startsAt: INVALID,
+          endsAt: INVALID,
+          status: "draft",
+        }),
+        listRow({
+          eventKey: "EVTBADEND1",
+          title: "Imported night (broken end)",
+          startsAt: new Date("2026-11-02T18:00:00.000Z"),
+          endsAt: INVALID,
+        }),
+      ]);
+    }
+
+    it("renders the finite row with its exact time bytes and no placeholder", () => {
+      const html = renderList(mixedView());
+      expect(html).toContain(
+        '<time datetime="2026-11-01T18:00:00.000Z">2026-11-01T18:00:00.000Z</time>',
+      );
+      expect(html).not.toContain("event-unrenderable-time-EVTNORMAL1");
+    });
+
+    it("flags the broken-start row with the exact start marker, row intact", () => {
+      const html = renderList(mixedView());
+      expect(html).toContain("/admin/events/EVTBADSTART");
+      expect(html).toContain("Imported night (broken start)");
+      expect(html).toContain('data-testid="event-unrenderable-time-EVTBADSTART"');
+      expect(html).toContain(">Unrenderable time</span>");
+    });
+
+    it("keeps the renderable start and flags the broken end with the exact end marker", () => {
+      const html = renderList(mixedView());
+      expect(html).toContain(
+        '<time datetime="2026-11-02T18:00:00.000Z">2026-11-02T18:00:00.000Z</time>',
+      );
+      expect(html).toContain('data-testid="event-unrenderable-time-EVTBADEND1"');
+      expect(html).toContain("(unrenderable end time)");
+    });
+
+    it("emits no empty datetime attribute and no Invalid Date text", () => {
+      const html = renderList(mixedView());
+      expect(html).not.toContain('datetime=""');
+      expect(html).not.toContain("Invalid Date");
+    });
   });
 });
 
@@ -337,10 +446,33 @@ describe.skipIf(!process.env.DATABASE_URL)(
           startsAt: new Date("2026-11-03T18:00:00.000Z"),
           endsAt: new Date("2026-11-03T21:00:00.000Z"),
         },
+        {
+          eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAC",
+          title: "Imported night (paused, broken end)",
+          status: "published",
+          timezone: "Europe/London",
+          location: "Hall",
+          startsAt: new Date("2026-11-05T18:00:00.000Z"),
+          endsAt: new Date("2026-11-05T21:00:00.000Z"),
+          rsvpOpen: false,
+        },
+        {
+          eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAD",
+          title: "Imported night (open, broken end)",
+          status: "published",
+          timezone: "Europe/London",
+          location: "Hall",
+          startsAt: new Date("2026-11-06T18:00:00.000Z"),
+          endsAt: new Date("2026-11-06T21:00:00.000Z"),
+          rsvpOpen: true,
+        },
       ]);
       // The import defect under test: a stored bound JS cannot represent.
       await fixture.db.execute(
         sql`update events set starts_at = 'infinity' where event_key = '01ARZ3NDEKTSV4RRFFQ69G5FAB'`,
+      );
+      await fixture.db.execute(
+        sql`update events set ends_at = '-infinity' where event_key in ('01ARZ3NDEKTSV4RRFFQ69G5FAC', '01ARZ3NDEKTSV4RRFFQ69G5FAD')`,
       );
     });
 
@@ -389,6 +521,40 @@ describe.skipIf(!process.env.DATABASE_URL)(
         .where(eq(events.eventKey, "01ARZ3NDEKTSV4RRFFQ69G5FAB"));
       expect(row!.startsAt.toISOString()).toBe("2026-11-03T19:00:00.000Z");
       expect(row!.endsAt.toISOString()).toBe("2026-11-03T22:00:00.000Z");
+    });
+
+    it("refuses to reopen RSVPs for a published paused row whose end is unrenderable", async () => {
+      const res = await app().request(
+        "/events/01ARZ3NDEKTSV4RRFFQ69G5FAC/rsvp-reopen",
+        { method: "POST", headers: { cookie } },
+        bindings(),
+      );
+      expect(res.status).toBe(422);
+      const html = await res.text();
+      expect(html).toContain("That transition is not allowed");
+      expect(html).toContain("Only published events that have not ended");
+      const [row] = await fixture.db
+        .select()
+        .from(events)
+        .where(eq(events.eventKey, "01ARZ3NDEKTSV4RRFFQ69G5FAC"));
+      expect(row!.rsvpOpen).toBe(false);
+    });
+
+    it("refuses to pause RSVPs for a published open row whose end is unrenderable", async () => {
+      const res = await app().request(
+        "/events/01ARZ3NDEKTSV4RRFFQ69G5FAD/rsvp-pause",
+        { method: "POST", headers: { cookie } },
+        bindings(),
+      );
+      expect(res.status).toBe(422);
+      const html = await res.text();
+      expect(html).toContain("That transition is not allowed");
+      expect(html).toContain("Only published events that have not ended");
+      const [row] = await fixture.db
+        .select()
+        .from(events)
+        .where(eq(events.eventKey, "01ARZ3NDEKTSV4RRFFQ69G5FAD"));
+      expect(row!.rsvpOpen).toBe(true);
     });
   },
 );
