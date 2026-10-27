@@ -794,6 +794,26 @@ test("a /up read that fails on only one side is unknown, never a deploy", async 
   }
 });
 
+test("a non-200 /up response with a valid commit records unknown, never a revision", async (t) => {
+  const bad = (status) => ({
+    status,
+    text: async () =>
+      JSON.stringify({ status: "ok", revision: { version_id: "v", commit: sha("a") } }),
+  });
+  for (const status of [503, 302, 404]) {
+    const { dir, code } = await scenario(t, [{}], {
+      fetchImpl: fetchWithUp([bad(status), bad(status)]),
+    });
+    assert.equal(code, 0);
+    const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+    assert.deepEqual(
+      json.servedRevision,
+      [{ attempt: 1, before: "unknown", after: "unknown", verdict: "unknown" }],
+      `status ${status}`,
+    );
+  }
+});
+
 test("the /up read is bounded, manual-redirect, and cannot stall or fail the collect", async (t) => {
   const inits = [];
   const hang = async (url, init) => {

@@ -73,6 +73,8 @@ async function readServedRevision(origin, fetchImpl, timeoutMs = UP_TIMEOUT_MS) 
       redirect: "manual",
       signal: AbortSignal.timeout(timeoutMs),
     });
+    // A failed or redirected probe is not evidence of the served revision.
+    if (response.status !== 200) return "unknown";
     const commit = JSON.parse(await response.text())?.revision?.commit;
     return typeof commit === "string" && FULL_SHA.test(commit) ? commit : "unknown";
   } catch {
