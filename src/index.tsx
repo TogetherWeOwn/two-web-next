@@ -624,17 +624,14 @@ registerJoinRoutes(
       // the static page keeps its shared-cache TTL only when there is nothing
       // to consume (otherwise a guest could read another member's banner).
       // Vary stays on every variant: the representation depends on the flash
-      // cookie even when this view has nothing to consume. A rendered presence
-      // snapshot says "now", so it keeps only a 60 s shared-cache TTL to match
-      // the widget verdict TTL; the static page without presence keeps 3600 s.
+      // cookie even when this view has nothing to consume. Every other page
+      // keeps a 60 s shared-cache TTL: a presence snapshot says "now" (the
+      // widget verdict TTL) and the next-game-night card tracks a moving
+      // schedule, so neither survives longer in a shared cache.
       const joinResult = await takeJoinResult(c);
       c.header(
         "cache-control",
-        joinResult
-          ? "private, no-store"
-          : props.widgetSnapshot
-            ? "public, max-age=60"
-            : "public, max-age=3600",
+        joinResult ? "private, no-store" : "public, max-age=60",
       );
       c.header("vary", "Cookie");
       return c.html(
