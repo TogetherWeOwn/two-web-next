@@ -324,8 +324,10 @@ describe("controls: sign-in statuses, selectors, indexes and read budget stay pu
     expect(page).toContain(
       "const status = $derived(isKitErrorStatus(page.status) ? page.status : 500);",
     );
-    expect(page).toContain(
-      "<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} adminBack={adminBack} />",
+    // The request-id correlation prop is the only extra attribute allowed on
+    // the boundary line; anything else (a message, an error echo) fails here.
+    expect(page).toMatch(
+      /<ErrorShell code=\{status\} inviteUrl=\{FALLBACK_INVITE\}(?: supportReference=\{page\.data\.requestId\})? adminBack=\{adminBack\} \/>/,
     );
     expect(page).toContain('<meta name="robots" content="noindex, nofollow" />');
     expect(page).not.toMatch(/page\.error/);
