@@ -1,0 +1,206 @@
+{
+  "$comment": "No-member-data contract on public Kit payloads: the one enumeration of every Kit GET and what its load data may carry. Public routes assert no Discord IDs/usernames, snowflakes, emails or session artifacts in __data/load payloads (suite below, hostile fixtures). Session-required routes keep their audited reads (negative controls). Hono-owned surfaces are out of scope (separate audit). ci/check-kit-payloads.mjs fails closed when a Kit server file is not classified here, so a new route cannot escape the contract by omission. Check IDs are stable: never reuse an ID for another route.",
+  "contract": "no-member-data",
+  "version": 1,
+  "suite": "test/kit-no-member-data-contract.test.ts",
+  "additionalSuites": [
+    "test/kit-public-events-payload.test.ts",
+    "test/kit-root-layout-load.test.mjs"
+  ],
+  "checks": [
+    {
+      "id": "kit-payload-root-layout",
+      "route": "GET /*",
+      "binding": "web/src/routes/+layout.server.ts",
+      "tests": ["Kit root layout load: requestId forwarding"],
+      "note": "Every Kit page inherits only the validated request reference, never member or session locals; executed exact-shape and hostile-locals checks."
+    },
+    {
+      "id": "kit-payload-detector",
+      "route": null,
+      "binding": null,
+      "tests": ["no-member-data detector"],
+      "note": "Detector unit pins: flags every planted needle plus the bearer shape, passes clean payloads; fixtures actually carry the needles."
+    },
+    {
+      "id": "kit-payload-home",
+      "route": "GET /",
+      "binding": "web/src/routes/+page.server.ts",
+      "tests": ["Kit GET / anonymous payload"]
+    },
+    {
+      "id": "kit-payload-events",
+      "route": "GET /events",
+      "binding": "web/src/routes/events/+server.ts",
+      "tests": ["Kit GET /events anonymous payload"]
+    },
+    {
+      "id": "kit-payload-events-binding",
+      "route": "GET /events",
+      "binding": "web/src/routes/events/+server.ts",
+      "tests": ["Kit GET /events binding anonymous payload"],
+      "note": "Executes the bundled GET with hostile database rows; checks response bytes, not a source substring."
+    },
+    {
+      "id": "kit-payload-events-past",
+      "route": "GET /events/past",
+      "binding": "web/src/routes/events/past/+page.server.ts",
+      "tests": ["Kit GET /events/past anonymous payload"]
+    },
+    {
+      "id": "kit-payload-about",
+      "route": "GET /about",
+      "binding": "web/src/routes/about/+page.server.ts",
+      "tests": ["Kit static-leaf anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-faq",
+      "route": "GET /faq",
+      "binding": "web/src/routes/faq/+page.server.ts",
+      "tests": ["Kit static-leaf anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-rules",
+      "route": "GET /rules",
+      "binding": "web/src/routes/rules/+page.server.ts",
+      "tests": ["Kit static-leaf anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-privacy",
+      "route": "GET /privacy",
+      "binding": "web/src/routes/privacy/+page.server.ts",
+      "tests": ["Kit static-leaf anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-join",
+      "route": "GET /join",
+      "binding": "web/src/routes/join/+page.server.ts",
+      "tests": ["Kit GET /join anonymous payload"]
+    },
+    {
+      "id": "kit-payload-hotzones",
+      "route": "GET /hotzones",
+      "binding": "web/src/routes/hotzones/+page.server.ts",
+      "tests": ["Kit GET /hotzones anonymous payload"]
+    },
+    {
+      "id": "kit-payload-hotzones-joins",
+      "route": "GET /hotzones/joins",
+      "binding": "web/src/routes/hotzones/[signal]/+page.server.ts",
+      "tests": ["Kit GET /hotzones/:signal anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-hotzones-voice",
+      "route": "GET /hotzones/voice",
+      "binding": "web/src/routes/hotzones/[signal]/+page.server.ts",
+      "tests": ["Kit GET /hotzones/:signal anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-hotzones-games",
+      "route": "GET /hotzones/games",
+      "binding": "web/src/routes/hotzones/[signal]/+page.server.ts",
+      "tests": ["Kit GET /hotzones/:signal anonymous payloads"]
+    },
+    {
+      "id": "kit-payload-negative-controls",
+      "route": null,
+      "binding": null,
+      "tests": ["member-gated negative controls"],
+      "note": "Member board + member profile with hostile fixtures: audited member reads still served (the contract must not strip them)."
+    }
+  ],
+  "sessionRequired": [
+    {
+      "route": "GET /profile",
+      "binding": "web/src/routes/profile/+page.server.ts",
+      "reads": "own member record (audited)"
+    },
+    {
+      "route": "GET /members/:user",
+      "binding": "web/src/routes/members/[user]/+page.server.ts",
+      "reads": "member profile plus the viewer's own games row for the shared-games match (audited)"
+    },
+    {
+      "route": "GET /leaderboards/members",
+      "binding": "web/src/routes/leaderboards/members/+page.server.ts",
+      "reads": "member ranking rows (audited)"
+    },
+    {
+      "route": "GET /admin",
+      "binding": "web/src/routes/admin/+page.server.ts",
+      "reads": "moderator dashboard (bridged moderator viewer)"
+    },
+    {
+      "route": "GET /admin/*",
+      "binding": "web/src/routes/admin/+layout.server.ts",
+      "reads": "decideKitAdminGuard layout guard (all admin children)"
+    },
+    {
+      "route": "GET /admin/events",
+      "binding": "web/src/routes/admin/events/+page.server.ts",
+      "reads": "events/list (audited)"
+    },
+    {
+      "route": "GET /admin/events/new",
+      "binding": "web/src/routes/admin/events/new/+page.server.ts",
+      "reads": "empty create view (no store read on fresh GET)"
+    },
+    {
+      "route": "GET /admin/events/:key",
+      "binding": "web/src/routes/admin/events/[key]/+page.server.ts",
+      "reads": "events/view + roster members (audited, failed audit refuses the render)"
+    },
+    {
+      "route": "GET /admin/activity-log",
+      "binding": "web/src/routes/admin/activity-log/+page.server.ts",
+      "reads": "activity log (audited)"
+    },
+    {
+      "route": "GET /admin/join-attempts",
+      "binding": "web/src/routes/admin/join-attempts/+page.server.ts",
+      "reads": "join_attempts/list (audited)"
+    },
+    {
+      "route": "GET /admin/join-attempts/:id",
+      "binding": "web/src/routes/admin/join-attempts/[id]/+page.server.ts",
+      "reads": "join_attempts/view (audited)"
+    },
+    {
+      "route": "GET /admin/featured",
+      "binding": "web/src/routes/admin/featured/+page.server.ts",
+      "reads": "featured list (audited)"
+    },
+    {
+      "route": "GET /admin/featured/new",
+      "binding": "web/src/routes/admin/featured/new/+page.server.ts",
+      "reads": "empty create view (no store read on fresh GET)"
+    },
+    {
+      "route": "GET /admin/featured/:id",
+      "binding": "web/src/routes/admin/featured/[id]/+page.server.ts",
+      "reads": "featured view (audited)"
+    }
+  ],
+  "outOfScope": [
+    {
+      "route": "GET /e/:key",
+      "binding": "web/src/routes/e/[key]/+page.server.ts",
+      "reason": "Hono-owned member-read boundary (detail + neighbors); covered by the Hono payload audit, not this contract."
+    },
+    {
+      "route": "GET /e/:key",
+      "binding": "web/src/routes/e/[key]/+layout.server.ts",
+      "reason": "Layout half of the Hono-owned /e/:key boundary (see above)."
+    },
+    {
+      "route": "GET /auth/recover",
+      "binding": "web/src/routes/auth/recover/+page.server.ts",
+      "reason": "Hono-owned transient outcome page (journey writes + /join/callback outcomes stay Hono)."
+    },
+    {
+      "route": "*",
+      "binding": "web/src/routes/[...path]/+server.ts",
+      "reason": "Strangler catch-all: unrouted paths go to the Hono app unchanged (Hono surface)."
+    }
+  ]
+}

@@ -62,10 +62,10 @@ const REVIEWED_PINS: Pin[] = [
     reason: "Operator hint in the misconfiguration error; message text, never a request target.",
   },
   {
-    file: "src/invite.ts",
+    file: "src/invite-fallback.ts",
     line: 'export const FALLBACK_INVITE = "https://discord.gg/4GwEDNRTtx";',
     reason:
-      "Last-resort public invite when DISCORD_INVITE_URL is unusable (legacy FALLBACK_INVITE).",
+      "Last-resort public invite when DISCORD_INVITE_URL is unusable (legacy FALLBACK_INVITE); lives in the import-free leaf so error shells bundle it without the invite telemetry.",
   },
 ];
 

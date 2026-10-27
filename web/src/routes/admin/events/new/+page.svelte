@@ -30,6 +30,7 @@ const fieldAria = (name: string, withHint = false) => {
 };
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
 const islands =
+  '<p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>' +
   '<script type="module" src="/islands/admin-event-text-limits.js"></' +
   'script><script src="/islands/admin-event-editor.js" defer></' +
   "script>";

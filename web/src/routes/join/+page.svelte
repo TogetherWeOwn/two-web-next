@@ -11,7 +11,8 @@ import type { PageProps } from "./$types";
 // A component-level <script> is Svelte's own; the island tag is emitted as markup.
 let { data }: PageProps = $props();
 // The server load builds /join/discord from the sanitized query inputs.
-const { inviteUrl, widgetUrl, widgetSnapshot, oneClickHref, appUrl, joinResult } = $derived(data);
+const { inviteUrl, widgetUrl, widgetSnapshot, oneClickHref, appUrl, joinResult, notice } =
+  $derived(data);
 const { HOME_JOIN_RESULT_COPY, JOIN_INTRO } = $derived(data.joinCopy);
 // The island binder is a plain script tag, not hydration: with csr=false the
 // no-JS contract (links, presence or fallback copy in the raw fetch body) holds.
@@ -44,6 +45,14 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
         {HOME_JOIN_RESULT_COPY.alreadyInServer}{" "}
         <a href="/discord" data-testid="reinvite-link">{HOME_JOIN_RESULT_COPY.reinvite}</a>
       {/if}
+    </p>
+  {/if}
+  {#if notice}
+    <!-- Already allowlisted by the load (start-failed or null). Display-only:
+      explains a failed start, never echoed into the one-click href. Copy is
+      byte-identical to the Hono banner (src/screens/join.tsx). -->
+    <p class="notice" role="status" data-testid="join-start-notice">
+      The Discord approval failed to start — try again below.
     </p>
   {/if}
   <section class="join-layout" aria-labelledby="join-heading">

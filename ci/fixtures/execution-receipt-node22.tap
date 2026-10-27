@@ -1,0 +1,42 @@
+TAP version 13
+# Subtest: RSVP outcome focus in Chromium
+    # Subtest: keyboard
+        # Subtest: returns focus
+        ok 1 - returns focus
+          ---
+          duration_ms: 2.072251
+          type: 'test'
+          ...
+        # Subtest: keeps pending
+        ok 2 - keeps pending
+          ---
+          duration_ms: 0.185578
+          type: 'test'
+          ...
+        1..2
+    ok 1 - keyboard
+      ---
+      duration_ms: 2.961296
+      type: 'suite'
+      ...
+    # Subtest: retains selection
+    ok 2 - retains selection
+      ---
+      duration_ms: 0.09054
+      type: 'test'
+      ...
+    1..2
+ok 1 - RSVP outcome focus in Chromium
+  ---
+  duration_ms: 3.55098
+  type: 'suite'
+  ...
+1..1
+# tests 3
+# suites 2
+# pass 3
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 108.944291

@@ -1,0 +1,266 @@
+{
+  "checkedAt": "2034-05-20T12:00:00.123Z",
+  "databaseOracle": [
+    {
+      "name": "infinity",
+      "twin": "hono",
+      "oracleEligible": false,
+      "status": "unavailable",
+      "startText": "infinity",
+      "endText": null
+    },
+    {
+      "name": "infinity",
+      "twin": "kit",
+      "oracleEligible": false,
+      "status": "unavailable",
+      "startText": "infinity",
+      "endText": null
+    },
+    {
+      "name": "negative-infinity",
+      "twin": "hono",
+      "oracleEligible": false,
+      "status": "unavailable",
+      "startText": null,
+      "endText": "-infinity"
+    },
+    {
+      "name": "negative-infinity",
+      "twin": "kit",
+      "oracleEligible": false,
+      "status": "unavailable",
+      "startText": null,
+      "endText": "-infinity"
+    },
+    {
+      "name": "bc",
+      "twin": "hono",
+      "oracleEligible": false,
+      "status": "unavailable",
+      "startText": null,
+      "endText": "0199-10-01 13:45:12.345678 BC"
+    },
+    {
+      "name": "bc",
+      "twin": "kit",
+      "oracleEligible": false,
+      "status": "unavailable",
+      "startText": null,
+      "endText": "0199-10-01 13:45:12.345678 BC"
+    },
+    {
+      "name": "open",
+      "twin": "hono",
+      "oracleEligible": true,
+      "status": "live",
+      "startText": null,
+      "endText": null
+    },
+    {
+      "name": "open",
+      "twin": "kit",
+      "oracleEligible": true,
+      "status": "live",
+      "startText": null,
+      "endText": null
+    }
+  ],
+  "browser": [
+    {
+      "route": "/after/hono/infinity/admin/featured/1",
+      "width": 1280,
+      "screenshot": "after-hono-infinity-1280.png",
+      "status": "unavailable",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 1280,
+        "scrollWidth": 1280
+      },
+      "axe": {
+        "criticalOrSerious": 0,
+        "other": []
+      }
+    },
+    {
+      "route": "/after/hono/infinity/admin/featured/1",
+      "width": 390,
+      "screenshot": "after-hono-infinity-390.png",
+      "status": "unavailable",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "axe": {
+        "criticalOrSerious": 0,
+        "other": []
+      }
+    },
+    {
+      "route": "/before/hono/infinity/admin/featured/1",
+      "width": 1280,
+      "screenshot": "before-hono-infinity-1280.png",
+      "status": "live",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 1280,
+        "scrollWidth": 1280
+      },
+      "axe": null
+    },
+    {
+      "route": "/before/hono/infinity/admin/featured/1",
+      "width": 390,
+      "screenshot": "before-hono-infinity-390.png",
+      "status": "live",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "axe": null
+    },
+    {
+      "route": "/after/kit/infinity/admin/featured/1",
+      "width": 1280,
+      "screenshot": "after-kit-infinity-1280.png",
+      "status": "unavailable",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 1280,
+        "scrollWidth": 1280
+      },
+      "axe": {
+        "criticalOrSerious": 0,
+        "other": []
+      }
+    },
+    {
+      "route": "/after/kit/infinity/admin/featured/1",
+      "width": 390,
+      "screenshot": "after-kit-infinity-390.png",
+      "status": "unavailable",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "axe": {
+        "criticalOrSerious": 0,
+        "other": []
+      }
+    },
+    {
+      "route": "/before/kit/infinity/admin/featured/1",
+      "width": 1280,
+      "screenshot": "before-kit-infinity-1280.png",
+      "status": "live",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 1280,
+        "scrollWidth": 1280
+      },
+      "axe": null
+    },
+    {
+      "route": "/before/kit/infinity/admin/featured/1",
+      "width": 390,
+      "screenshot": "before-kit-infinity-390.png",
+      "status": "live",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "axe": null
+    },
+    {
+      "route": "/after/hono/bc/admin/featured/3",
+      "width": 1280,
+      "screenshot": "after-hono-bc-1280.png",
+      "status": "unavailable",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 1280,
+        "scrollWidth": 1280
+      },
+      "axe": {
+        "criticalOrSerious": 0,
+        "other": []
+      }
+    },
+    {
+      "route": "/after/hono/bc/admin/featured/3",
+      "width": 390,
+      "screenshot": "after-hono-bc-390.png",
+      "status": "unavailable",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "axe": {
+        "criticalOrSerious": 0,
+        "other": []
+      }
+    },
+    {
+      "route": "/after/kit/bc/admin/featured/3",
+      "width": 1280,
+      "screenshot": "after-kit-bc-1280.png",
+      "status": "unavailable",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 1280,
+        "scrollWidth": 1280
+      },
+      "axe": {
+        "criticalOrSerious": 0,
+        "other": []
+      }
+    },
+    {
+      "route": "/after/kit/bc/admin/featured/3",
+      "width": 390,
+      "screenshot": "after-kit-bc-390.png",
+      "status": "unavailable",
+      "javaScriptEnabled": false,
+      "keyboard": true,
+      "writes": [],
+      "layout": {
+        "width": 390,
+        "scrollWidth": 390
+      },
+      "axe": {
+        "criticalOrSerious": 0,
+        "other": []
+      }
+    }
+  ],
+  "limitations": [
+    "Local fixture SSR, not staging or production. Before uses exact reviewed head; Kit leaf is compiled from its unchanged checked-in Svelte source."
+  ]
+}

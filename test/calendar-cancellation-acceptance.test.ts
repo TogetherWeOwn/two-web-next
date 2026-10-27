@@ -28,6 +28,7 @@ vi.mock("../src/events/reads", async (original) => ({
   listUpcoming: vi.fn(),
   listUpcomingForMonth: vi.fn(),
   listCalendarPast: vi.fn(),
+  listPublishedGames: vi.fn(async () => []),
   persistedDiscordIds: vi.fn(async () => new Set<string>()),
 }));
 
@@ -58,6 +59,7 @@ async function card(e: CalRow, member: boolean, isPast: boolean): Promise<string
   return jsx(CalCard, {
     e,
     zone: "Europe/London",
+    now: new Date("2099-01-01T12:00:00Z"),
     isPast,
     member,
     inviteUrl: "https://discord.gg/example",
