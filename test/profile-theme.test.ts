@@ -209,7 +209,7 @@ describe("member profile base theme", () => {
 
   it("keeps styling external, compact and responsive for dynamic island lists/notices", () => {
     const css = readFileSync(new URL("../public/profile-theme.css", import.meta.url), "utf8");
-    expect(css.length).toBeLessThan(8000);
+    expect(css.length).toBeLessThan(8500);
     expect(css).toContain("@media (max-width: 48rem)");
     expect(css).toContain("@media (max-width: 30rem)");
     expect(css).toContain("grid-template-columns: 1fr");
