@@ -150,8 +150,19 @@ describe("generated leaf CSS review evidence", () => {
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const report = JSON.parse(result.stdout);
     expect(report.changed).toBe(true);
-    expect(report.base.sha).toBe(base);
-    expect(report.head.sha).toBe(head);
+    const hash = (parts: string[]) =>
+      createHash("sha256").update(parts.join("\n")).digest("base64");
+    const rules = [
+      "body { color: black; }",
+      ":root { --accent: lime; }",
+      ".hero { display: grid; }",
+    ];
+    // Pin the seam bytes' effect on the evidence, so an empty/wrong copy fails.
+    expect(report.base).toMatchObject({ sha: base, sha256: hash(rules) });
+    expect(report.head).toMatchObject({
+      sha: head,
+      sha256: hash([...rules, "@media print { .leaf { margin: 0; } }"]),
+    });
   });
 
   it("compares the merge queue's base and head revisions on merge_group runs", () => {
