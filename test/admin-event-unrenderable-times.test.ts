@@ -380,181 +380,178 @@ describe("saving a corrected time over an unrenderable stored row", () => {
   });
 });
 
-describe.skipIf(!process.env.DATABASE_URL)(
-  "stored infinity timestamps through the admin routes (isolated fixture)",
-  () => {
-    const env: Env = {
-      APP_URL: "https://next.example.test",
-      DISCORD_CLIENT_ID: "client-id",
-      DISCORD_GUILD_ID: "guild-id",
-      DISCORD_INVITE_URL: "https://discord.gg/invite",
-      DISCORD_CLIENT_SECRET: "client-secret",
-      DISCORD_BOT_TOKEN: "bot-token",
-      SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
-    };
-    const viewer = "100000000000000117";
-    let fixture: MemberDataFixture;
-    const store = createMemorySessionStore();
-    let cookie: string;
-    const app = () => adminApp({ sessionStore: store, db: fixture.db });
-    const bindings = () => ({ ...env, ADMIN_DB: fixture.db }) as Env;
+describe("stored infinity timestamps through the admin routes (isolated fixture)", () => {
+  const env: Env = {
+    APP_URL: "https://next.example.test",
+    DISCORD_CLIENT_ID: "client-id",
+    DISCORD_GUILD_ID: "guild-id",
+    DISCORD_INVITE_URL: "https://discord.gg/invite",
+    DISCORD_CLIENT_SECRET: "client-secret",
+    DISCORD_BOT_TOKEN: "bot-token",
+    SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
+  };
+  const viewer = "100000000000000117";
+  let fixture: MemberDataFixture;
+  const store = createMemorySessionStore();
+  let cookie: string;
+  const app = () => adminApp({ sessionStore: store, db: fixture.db });
+  const bindings = () => ({ ...env, ADMIN_DB: fixture.db }) as Env;
 
-    async function cookieFor(sessionStore: SessionStore) {
-      const token = newSessionToken();
-      await sessionStore.create({
-        tokenHash: await hashToken(token),
-        userId: viewer,
-        username: "mod",
-        avatar: null,
-        member: true,
-        moderator: true,
-        expiresAt: new Date(Date.now() + 3600_000),
-      });
-      return (
-        await serializeSigned("__Host-two_session", token, env.SESSION_SECRET!, {
-          path: "/",
-          secure: true,
-          httpOnly: true,
-          sameSite: "Lax",
-        })
-      ).split(";")[0]!;
-    }
-
-    beforeAll(async () => {
-      fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+  async function cookieFor(sessionStore: SessionStore) {
+    const token = newSessionToken();
+    await sessionStore.create({
+      tokenHash: await hashToken(token),
+      userId: viewer,
+      username: "mod",
+      avatar: null,
+      member: true,
+      moderator: true,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
-    afterAll(() => fixture?.dispose());
+    return (
+      await serializeSigned("__Host-two_session", token, env.SESSION_SECRET!, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
+  }
 
-    beforeEach(async () => {
-      await fixture.reset();
-      cookie = await cookieFor(store);
-      await fixture.db.insert(events).values([
-        {
-          eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA",
-          title: "Friday game night",
-          status: "published",
-          timezone: "Europe/London",
-          location: "Hall",
-          startsAt: new Date("2026-11-01T18:00:00.000Z"),
-          endsAt: new Date("2026-11-01T21:00:00.000Z"),
-        },
-        {
-          eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAB",
-          title: "Imported night (broken start)",
-          status: "draft",
-          timezone: "Europe/London",
-          startsAt: new Date("2026-11-03T18:00:00.000Z"),
-          endsAt: new Date("2026-11-03T21:00:00.000Z"),
-        },
-        {
-          eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAC",
-          title: "Imported night (paused, broken end)",
-          status: "published",
-          timezone: "Europe/London",
-          location: "Hall",
-          startsAt: new Date("2026-11-05T18:00:00.000Z"),
-          endsAt: new Date("2026-11-05T21:00:00.000Z"),
-          rsvpOpen: false,
-        },
-        {
-          eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAD",
-          title: "Imported night (open, broken end)",
-          status: "published",
-          timezone: "Europe/London",
-          location: "Hall",
-          startsAt: new Date("2026-11-06T18:00:00.000Z"),
-          endsAt: new Date("2026-11-06T21:00:00.000Z"),
-          rsvpOpen: true,
-        },
-      ]);
-      // The import defect under test: a stored bound JS cannot represent.
-      await fixture.db.execute(
-        sql`update events set starts_at = 'infinity' where event_key = '01ARZ3NDEKTSV4RRFFQ69G5FAB'`,
-      );
-      await fixture.db.execute(
-        sql`update events set ends_at = '-infinity' where event_key in ('01ARZ3NDEKTSV4RRFFQ69G5FAC', '01ARZ3NDEKTSV4RRFFQ69G5FAD')`,
-      );
-    });
+  beforeAll(async () => {
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+  });
+  afterAll(() => fixture?.dispose());
 
-    it("serves the inventory with the bad row flagged, never a 500", async () => {
-      const res = await app().request("/events", { headers: { cookie } }, bindings());
-      expect(res.status).toBe(200);
-      const html = await res.text();
-      expect(html).toContain("Friday game night");
-      expect(html).toContain(
-        '<time datetime="2026-11-01T18:00:00.000Z">2026-11-01T18:00:00.000Z</time>',
-      );
-      expect(html).toContain("Imported night (broken start)");
-      expect(html).toContain('data-testid="event-unrenderable-time-01ARZ3NDEKTSV4RRFFQ69G5FAB"');
-      expect(html).toContain("Unrenderable time");
-    });
-
-    it("opens the edit page and saves a corrected finite time", async () => {
-      const page = await app().request(
-        "/events/01ARZ3NDEKTSV4RRFFQ69G5FAB",
-        { headers: { cookie } },
-        bindings(),
-      );
-      expect(page.status).toBe(200);
-      const pageHtml = await page.text();
-      expect(pageHtml).toContain("Imported night (broken start)");
-
-      const body = new URLSearchParams({
-        title: "Imported night (broken start)",
-        starts_at: "2026-11-03 19:00",
-        ends_at: "2026-11-03 22:00",
+  beforeEach(async () => {
+    await fixture.reset();
+    cookie = await cookieFor(store);
+    await fixture.db.insert(events).values([
+      {
+        eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAA",
+        title: "Friday game night",
+        status: "published",
         timezone: "Europe/London",
-      });
-      const saved = await app().request(
-        "/events/01ARZ3NDEKTSV4RRFFQ69G5FAB",
-        {
-          method: "POST",
-          headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
-          body: body.toString(),
-        },
-        bindings(),
-      );
-      expect(saved.status).toBe(303);
-      const [row] = await fixture.db
-        .select()
-        .from(events)
-        .where(eq(events.eventKey, "01ARZ3NDEKTSV4RRFFQ69G5FAB"));
-      expect(row!.startsAt.toISOString()).toBe("2026-11-03T19:00:00.000Z");
-      expect(row!.endsAt.toISOString()).toBe("2026-11-03T22:00:00.000Z");
-    });
+        location: "Hall",
+        startsAt: new Date("2026-11-01T18:00:00.000Z"),
+        endsAt: new Date("2026-11-01T21:00:00.000Z"),
+      },
+      {
+        eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAB",
+        title: "Imported night (broken start)",
+        status: "draft",
+        timezone: "Europe/London",
+        startsAt: new Date("2026-11-03T18:00:00.000Z"),
+        endsAt: new Date("2026-11-03T21:00:00.000Z"),
+      },
+      {
+        eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAC",
+        title: "Imported night (paused, broken end)",
+        status: "published",
+        timezone: "Europe/London",
+        location: "Hall",
+        startsAt: new Date("2026-11-05T18:00:00.000Z"),
+        endsAt: new Date("2026-11-05T21:00:00.000Z"),
+        rsvpOpen: false,
+      },
+      {
+        eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAD",
+        title: "Imported night (open, broken end)",
+        status: "published",
+        timezone: "Europe/London",
+        location: "Hall",
+        startsAt: new Date("2026-11-06T18:00:00.000Z"),
+        endsAt: new Date("2026-11-06T21:00:00.000Z"),
+        rsvpOpen: true,
+      },
+    ]);
+    // The import defect under test: a stored bound JS cannot represent.
+    await fixture.db.execute(
+      sql`update events set starts_at = 'infinity' where event_key = '01ARZ3NDEKTSV4RRFFQ69G5FAB'`,
+    );
+    await fixture.db.execute(
+      sql`update events set ends_at = '-infinity' where event_key in ('01ARZ3NDEKTSV4RRFFQ69G5FAC', '01ARZ3NDEKTSV4RRFFQ69G5FAD')`,
+    );
+  });
 
-    it("refuses to reopen RSVPs for a published paused row whose end is unrenderable", async () => {
-      const res = await app().request(
-        "/events/01ARZ3NDEKTSV4RRFFQ69G5FAC/rsvp-reopen",
-        { method: "POST", headers: { cookie } },
-        bindings(),
-      );
-      expect(res.status).toBe(422);
-      const html = await res.text();
-      expect(html).toContain("That transition is not allowed");
-      expect(html).toContain("Only published events that have not ended");
-      const [row] = await fixture.db
-        .select()
-        .from(events)
-        .where(eq(events.eventKey, "01ARZ3NDEKTSV4RRFFQ69G5FAC"));
-      expect(row!.rsvpOpen).toBe(false);
-    });
+  it("serves the inventory with the bad row flagged, never a 500", async () => {
+    const res = await app().request("/events", { headers: { cookie } }, bindings());
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain("Friday game night");
+    expect(html).toContain(
+      '<time datetime="2026-11-01T18:00:00.000Z">2026-11-01T18:00:00.000Z</time>',
+    );
+    expect(html).toContain("Imported night (broken start)");
+    expect(html).toContain('data-testid="event-unrenderable-time-01ARZ3NDEKTSV4RRFFQ69G5FAB"');
+    expect(html).toContain("Unrenderable time");
+  });
 
-    it("refuses to pause RSVPs for a published open row whose end is unrenderable", async () => {
-      const res = await app().request(
-        "/events/01ARZ3NDEKTSV4RRFFQ69G5FAD/rsvp-pause",
-        { method: "POST", headers: { cookie } },
-        bindings(),
-      );
-      expect(res.status).toBe(422);
-      const html = await res.text();
-      expect(html).toContain("That transition is not allowed");
-      expect(html).toContain("Only published events that have not ended");
-      const [row] = await fixture.db
-        .select()
-        .from(events)
-        .where(eq(events.eventKey, "01ARZ3NDEKTSV4RRFFQ69G5FAD"));
-      expect(row!.rsvpOpen).toBe(true);
+  it("opens the edit page and saves a corrected finite time", async () => {
+    const page = await app().request(
+      "/events/01ARZ3NDEKTSV4RRFFQ69G5FAB",
+      { headers: { cookie } },
+      bindings(),
+    );
+    expect(page.status).toBe(200);
+    const pageHtml = await page.text();
+    expect(pageHtml).toContain("Imported night (broken start)");
+
+    const body = new URLSearchParams({
+      title: "Imported night (broken start)",
+      starts_at: "2026-11-03 19:00",
+      ends_at: "2026-11-03 22:00",
+      timezone: "Europe/London",
     });
-  },
-);
+    const saved = await app().request(
+      "/events/01ARZ3NDEKTSV4RRFFQ69G5FAB",
+      {
+        method: "POST",
+        headers: { cookie, "content-type": "application/x-www-form-urlencoded" },
+        body: body.toString(),
+      },
+      bindings(),
+    );
+    expect(saved.status).toBe(303);
+    const [row] = await fixture.db
+      .select()
+      .from(events)
+      .where(eq(events.eventKey, "01ARZ3NDEKTSV4RRFFQ69G5FAB"));
+    expect(row!.startsAt.toISOString()).toBe("2026-11-03T19:00:00.000Z");
+    expect(row!.endsAt.toISOString()).toBe("2026-11-03T22:00:00.000Z");
+  });
+
+  it("refuses to reopen RSVPs for a published paused row whose end is unrenderable", async () => {
+    const res = await app().request(
+      "/events/01ARZ3NDEKTSV4RRFFQ69G5FAC/rsvp-reopen",
+      { method: "POST", headers: { cookie } },
+      bindings(),
+    );
+    expect(res.status).toBe(422);
+    const html = await res.text();
+    expect(html).toContain("That transition is not allowed");
+    expect(html).toContain("Only published events that have not ended");
+    const [row] = await fixture.db
+      .select()
+      .from(events)
+      .where(eq(events.eventKey, "01ARZ3NDEKTSV4RRFFQ69G5FAC"));
+    expect(row!.rsvpOpen).toBe(false);
+  });
+
+  it("refuses to pause RSVPs for a published open row whose end is unrenderable", async () => {
+    const res = await app().request(
+      "/events/01ARZ3NDEKTSV4RRFFQ69G5FAD/rsvp-pause",
+      { method: "POST", headers: { cookie } },
+      bindings(),
+    );
+    expect(res.status).toBe(422);
+    const html = await res.text();
+    expect(html).toContain("That transition is not allowed");
+    expect(html).toContain("Only published events that have not ended");
+    const [row] = await fixture.db
+      .select()
+      .from(events)
+      .where(eq(events.eventKey, "01ARZ3NDEKTSV4RRFFQ69G5FAD"));
+    expect(row!.rsvpOpen).toBe(true);
+  });
+});
