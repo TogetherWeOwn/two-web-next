@@ -29,8 +29,26 @@ beforeAll(async () => {
   kit = await compileRosterKit();
 });
 const qs = (values: Record<string, string>) => new URLSearchParams(values).toString();
-const rosterReads = (fixture: ReturnType<typeof rosterDb>) =>
-  fixture.statements.filter((s) => s.sql.includes('from "rsvps"'));
+// The edit page also issues one trailing display-only capacity snapshot: an
+// event-scoped, Going-only, search-free count(*) after the roster page. It is
+// not a roster read, so it is excluded here only when it is that exact third
+// statement (the capacity acceptance suite owns its shape); the roster itself
+// keeps its two-read bound.
+type Read = ReturnType<typeof rosterDb>["statements"][number];
+const isCapacitySnapshot = (s: Read) =>
+  /^select count\(\*\) from "rsvps" inner join "events" on "events"\."id" = "rsvps"\."event_id" where \("events"\."event_key" = \$1 and "rsvps"\."status" = \$2\)$/.test(
+    s.sql,
+  ) &&
+  s.fields.length === 1 &&
+  s.fields[0] === "n" &&
+  s.params.length === 2 &&
+  s.params[0] === key &&
+  s.params[1] === "going";
+const rosterReads = (fixture: ReturnType<typeof rosterDb>) => {
+  const reads = fixture.statements.filter((s) => s.sql.includes('from "rsvps"'));
+  const last = reads.at(-1);
+  return reads.length === 3 && last && isCapacitySnapshot(last) ? reads.slice(0, 2) : reads;
+};
 const where = (sql: string) => sql.split(" where ")[1]!.split(/ order by | limit /)[0]!;
 const predicate = (sql: string, params: unknown[]) =>
   where(sql).replace(/\$(\d+)/g, (_, n) => JSON.stringify(params[Number(n) - 1]));
