@@ -126,8 +126,63 @@ export function checkHostSourcePin(source = file(TRUST_HOSTS_PATH)) {
   return { id: "host-source-pin", status: "pass" };
 }
 
+// The leaf module stores only the seam literally and reuses the shared
+// homepage CSS at runtime (home import + template composition). The gate pins
+// that composed shape line for line and recomputes the full bundle statically
+// — shared sources plus the parsed seam — so the recorded hash is verified
+// without importing TypeScript. The old independent literal, a wrong import,
+// an alias, or any extra line fails closed here.
+const LEAF_COMPOSED_IMPORT = 'import { HOME_CRITICAL_CSS } from "./home-critical-css";';
+const LEAF_SEAM_DECL = "const LEAF_ONLY_CSS: string =";
+const LEAF_COMPOSITION =
+  "export const LEAF_CRITICAL_CSS: string = `${HOME_CRITICAL_CSS}\\n${LEAF_ONLY_CSS}`;";
+
+function verifyComposedLeafBytes(sources, moduleSource) {
+  const lines = moduleSource.split("\n");
+  if (lines.length !== 8 || lines[7] !== "") {
+    return { ok: false, detail: "recorded bundle or hash does not parse" };
+  }
+  const [marker, regenLine, importLine, seamDecl, seamLiteral, compositionLine, hashLine] = lines;
+  if (!marker.startsWith("// GENERATED from ") || !regenLine.startsWith("//")) {
+    return { ok: false, detail: "recorded bundle or hash does not parse" };
+  }
+  if (importLine !== LEAF_COMPOSED_IMPORT || seamDecl !== LEAF_SEAM_DECL) {
+    return { ok: false, detail: "recorded bundle or hash does not parse" };
+  }
+  const seamMatch = /^  ("(?:[^"\\]|\\.)*");$/.exec(seamLiteral);
+  if (!seamMatch) {
+    return { ok: false, detail: "recorded bundle or hash does not parse" };
+  }
+  let seamCss;
+  try {
+    seamCss = JSON.parse(seamMatch[1]);
+  } catch {
+    return { ok: false, detail: "recorded bundle or hash does not parse" };
+  }
+  if (compositionLine !== LEAF_COMPOSITION) {
+    return { ok: false, detail: "recorded bundle or hash does not parse" };
+  }
+  const hashMatch = /^export const LEAF_CRITICAL_CSS_SHA256: string = "([^"]+)";$/.exec(hashLine);
+  if (!hashMatch) {
+    return { ok: false, detail: "recorded bundle or hash does not parse" };
+  }
+  // The seam is the last input; everything before it is the shared homepage
+  // bundle, verified literally by the homepage lifecycle pin, while the
+  // acceptance suite proves the runtime composition evaluates to these bytes.
+  if (seamCss !== sources[sources.length - 1]) {
+    return { ok: false, detail: "recorded bundle bytes differ from regenerated sources" };
+  }
+  const regenerated = sources.join("\n");
+  const actual = createHash("sha256").update(regenerated, "utf8").digest("base64");
+  if (actual !== hashMatch[1]) {
+    return { ok: false, detail: "recorded hash differs from the regenerated bundle hash" };
+  }
+  return { ok: true };
+}
+
 /** The recorded bytes and hash must match a fresh regeneration. */
 function verifyBundleBytesFor(sources, moduleSource, name) {
+  if (name === "LEAF") return verifyComposedLeafBytes(sources, moduleSource);
   const regenerated = sources.join("\n");
   const cssMatch = new RegExp(
     `export const ${name}_CRITICAL_CSS: string =\\n {2}("(?:[^"\\\\]|\\\\.)*");`,
@@ -472,30 +527,78 @@ function selftest() {
     ).status === "fail",
     "bind-aliased header read fails",
   );
-  // Lifecycle: matching bytes pass; drifted bytes or hash fail; the input
-  // list must match the generated marker or the gate is checking the wrong files.
+  // Leaf lifecycle: the composed module (home import + seam literal +
+  // template composition + recorded hash) passes when the seam and hash match
+  // regeneration; drifted bytes or hash fail; the old independent literal, a
+  // wrong import, an aliased export, an extra line, and a malformed seam
+  // literal fail closed; the input list must match the generated marker or
+  // the gate is checking the wrong files.
+  const composedLeafModule = (seamJson, hash) =>
+    "// GENERATED from public/styles.css, public/theme-tokens.css, public/theme.css, assets/leaf-only.css\n" +
+    "// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-delivery-acceptance.test.ts).\n" +
+    'import { HOME_CRITICAL_CSS } from "./home-critical-css";\n' +
+    "const LEAF_ONLY_CSS: string =\n" +
+    `  ${seamJson};\n` +
+    "export const LEAF_CRITICAL_CSS: string = `${HOME_CRITICAL_CSS}\\n${LEAF_ONLY_CSS}`;\n" +
+    `export const LEAF_CRITICAL_CSS_SHA256: string = "${hash}";\n`;
+  const LEAF_SEAM_HASH = "fhj3NzEbLcOy8mndeDlrA1HxT7Zu+oefdoyyMYGIPHg="; // sha256("a\nb")
   assert(
-    verifyBundleBytes(
-      ["a", "b"],
-      'export const LEAF_CRITICAL_CSS: string =\n  "a\\nb";\nexport const LEAF_CRITICAL_CSS_SHA256: string = "fhj3NzEbLcOy8mndeDlrA1HxT7Zu+oefdoyyMYGIPHg=";\n',
-    ).ok === true,
+    verifyBundleBytes(["a", "b"], composedLeafModule('"b"', LEAF_SEAM_HASH)).ok === true,
     "matching bytes pass",
   );
   assert(
-    verifyBundleBytes(
-      ["a", "CHANGED"],
-      'export const LEAF_CRITICAL_CSS: string =\n  "a\\nb";\nexport const LEAF_CRITICAL_CSS_SHA256: string = "fhj3NzEbLcOy8mndeDlrA1HxT7Zu+oefdoyyMYGIPHg=";\n',
-    ).ok === false,
+    verifyBundleBytes(["a", "CHANGED"], composedLeafModule('"b"', LEAF_SEAM_HASH)).ok === false,
     "drifted bytes fail",
   );
   assert(
     verifyBundleBytes(
       ["a", "b"],
-      'export const LEAF_CRITICAL_CSS: string =\n  "a\\nb";\nexport const LEAF_CRITICAL_CSS_SHA256: string = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";\n',
+      composedLeafModule('"b"', "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="),
     ).ok === false,
     "wrong hash fails",
   );
   assert(verifyBundleBytes(["a"], "not a module").ok === false, "unparseable module fails");
+  assert(
+    verifyBundleBytes(
+      ["a", "b"],
+      "// GENERATED from public/styles.css, public/theme-tokens.css, public/theme.css, assets/leaf-only.css\n" +
+        "// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-delivery-acceptance.test.ts).\n" +
+        'export const LEAF_CRITICAL_CSS: string =\n  "a\\nb";\n' +
+        `export const LEAF_CRITICAL_CSS_SHA256: string = "${LEAF_SEAM_HASH}";\n`,
+    ).ok === false,
+    "independent literal leaf module fails",
+  );
+  assert(
+    verifyBundleBytes(
+      ["a", "b"],
+      composedLeafModule('"b"', LEAF_SEAM_HASH).replace(
+        'from "./home-critical-css"',
+        'from "./other-module"',
+      ),
+    ).ok === false,
+    "wrong import fails",
+  );
+  assert(
+    verifyBundleBytes(
+      ["a", "b"],
+      composedLeafModule('"b"', LEAF_SEAM_HASH).replace(
+        "export const LEAF_CRITICAL_CSS: string = `${HOME_CRITICAL_CSS}\\n${LEAF_ONLY_CSS}`;",
+        "export const LEAF_CRITICAL_CSS: string = HOME_CRITICAL_CSS;",
+      ),
+    ).ok === false,
+    "aliased export fails",
+  );
+  assert(
+    verifyBundleBytes(
+      ["a", "b"],
+      `${composedLeafModule('"b"', LEAF_SEAM_HASH)}export const EXTRA = 1;\n`,
+    ).ok === false,
+    "extra line fails",
+  );
+  assert(
+    verifyBundleBytes(["a", "b"], composedLeafModule('"a\\xb"', LEAF_SEAM_HASH)).ok === false,
+    "malformed seam literal fails",
+  );
   assert(
     checkLeafLifecycleStatic(["x"], "// GENERATED from other.css\nrest").status === "fail",
     "input-list skew fails",

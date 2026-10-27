@@ -23,12 +23,24 @@
 //   ci/build-leaf-css.mjs, invoked as `node ci/build-leaf-css.mjs`, regenerates
 //     both modules (single command; the exports below are the oracle, the
 //     generator's internal function names are not pinned).
-//   Generated layout, mirroring the current leaf module exactly:
+//   Generated layout: the homepage module keeps the literal shape, mirroring
+//     the original leaf module exactly:
 //     line 1: `// GENERATED from <inputs, comma+space> — do not hand-edit.`
 //     line 2: `// Regen: node ci/build-leaf-css.mjs (drift is pinned by
 //             test/leaf-css-delivery-acceptance.test.ts).`
-//     then `export const <NAME>_CSS: string =\n  <JSON string>;\n` and
-//          `export const <NAME>_CSS_SHA256: string = "<base64 sha256>";\n`
+//     then `export const HOME_CRITICAL_CSS: string =\n  <JSON string>;\n` and
+//          `export const HOME_CRITICAL_CSS_SHA256: string = "<base64>";\n`
+//   The leaf module instead reuses the shared homepage CSS at runtime, so the
+//     shared bytes are stored once per server chunk while the served bundle
+//     stays byte-identical:
+//     lines 1-2: the same marker and regen lines (all four inputs listed).
+//     line 3: `import { HOME_CRITICAL_CSS } from "./home-critical-css";`
+//     lines 4-5: `const LEAF_ONLY_CSS: string =\n  <seam JSON string>;`
+//     line 6: the template composition of home + "\n" + seam (exact line
+//             pinned by LEAF_COMPOSITION_LINE below).
+//     line 7: `export const LEAF_CRITICAL_CSS_SHA256: string = "<base64>";`
+//     then a trailing newline and nothing else: any extra line, a wrong
+//     import, an alias, or the old independent literal fails the parse.
 //   Inputs are public/styles.css, public/theme-tokens.css, public/theme.css
 //   (both modules) plus assets/leaf-only.css (leaf module only), joined "\n".
 //
@@ -46,6 +58,7 @@ import { join } from "node:path";
 import { URL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { securityHeadersFor } from "../src/headers";
+import { LEAF_CRITICAL_CSS, LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 // Mirroring homepage-mobile-lcp: the live-factory homepage bytes come from
 // the lighthouse worker harness (ci/lighthouse-worker), never a replay stub.
 import worker from "../ci/lighthouse-worker";
@@ -198,7 +211,7 @@ function stripPrintRules(css: string): string {
 
 type ParsedModule = { marker: string; css: string; sha256: string; regenLine: string } | null;
 
-function parseGeneratedModule(rel: string, name: "HOME" | "LEAF"): ParsedModule {
+function parseGeneratedModule(rel: string, name: "HOME"): ParsedModule {
   const path = new URL(rel, repoRoot);
   if (!existsSync(path)) return null;
   const source = readRepo(rel);
@@ -214,6 +227,56 @@ function parseGeneratedModule(rel: string, name: "HOME" | "LEAF"): ParsedModule 
     marker: lines[0] ?? "",
     regenLine: lines[1] ?? "",
     css: JSON.parse(cssMatch[1]!) as string,
+    sha256: hashMatch[1]!,
+  };
+}
+
+type ParsedComposedLeaf = {
+  marker: string;
+  regenLine: string;
+  importLine: string;
+  seamCss: string;
+  compositionLine: string;
+  sha256: string;
+} | null;
+
+// The composed leaf shape, pinned line for line: marker + regen comment,
+// home-CSS import, seam-only literal, template composition, recorded hash.
+// Anything else — the old independent literal, a wrong import, an alias, an
+// extra line — returns null and fails the suite closed.
+const LEAF_IMPORT_LINE = 'import { HOME_CRITICAL_CSS } from "./home-critical-css";';
+const LEAF_SEAM_DECL_LINE = "const LEAF_ONLY_CSS: string =";
+const LEAF_COMPOSITION_LINE =
+  "export const LEAF_CRITICAL_CSS: string = `${HOME_CRITICAL_CSS}\\n${LEAF_ONLY_CSS}`;";
+
+function parseComposedLeafModule(rel: string): ParsedComposedLeaf {
+  const path = new URL(rel, repoRoot);
+  if (!existsSync(path)) return null;
+  const source = readRepo(rel);
+  const lines = source.split("\n");
+  if (lines.length !== 8 || lines[7] !== "") return null;
+  const [marker, regenLine, importLine, seamDecl, seamLiteral, compositionLine, hashLine] = lines;
+  if (importLine !== LEAF_IMPORT_LINE) return null;
+  if (seamDecl !== LEAF_SEAM_DECL_LINE) return null;
+  const seamMatch = /^  ("(?:[^"\\]|\\.)*");$/.exec(seamLiteral ?? "");
+  if (!seamMatch) return null;
+  let seamCss: string;
+  try {
+    seamCss = JSON.parse(seamMatch[1]!) as string;
+  } catch {
+    return null;
+  }
+  if (compositionLine !== LEAF_COMPOSITION_LINE) return null;
+  const hashMatch = /^export const LEAF_CRITICAL_CSS_SHA256: string = "([^"]+)";$/.exec(
+    hashLine ?? "",
+  );
+  if (!hashMatch) return null;
+  return {
+    marker: marker ?? "",
+    regenLine: regenLine ?? "",
+    importLine,
+    seamCss,
+    compositionLine,
     sha256: hashMatch[1]!,
   };
 }
@@ -276,18 +339,32 @@ describe("leaf-CSS delivery: two hash-allowlisted bundles from one generator", (
   });
 
   it("generates the full leaf bundle from the shared sources plus the leaf-only seam", () => {
-    const leaf = parseGeneratedModule(LEAF_MODULE_PATH, "LEAF");
-    expect(leaf, `${LEAF_MODULE_PATH} must exist with LEAF_CRITICAL_CSS exports`).not.toBeNull();
+    const leaf = parseComposedLeafModule(LEAF_MODULE_PATH);
+    expect(
+      leaf,
+      `${LEAF_MODULE_PATH} must exist as a composed LEAF_CRITICAL_CSS module`,
+    ).not.toBeNull();
     expect(leaf!.marker).toBe(
       `// GENERATED from ${[...SHARED_SOURCES, LEAF_ONLY_SOURCE].join(", ")} — do not hand-edit.`,
     );
     expect(leaf!.regenLine).toBe(
       "// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-delivery-acceptance.test.ts).",
     );
-    expect(leafCss, `${LEAF_ONLY_SOURCE} (leaf-only seam source) must exist`).not.toBeNull();
-    expect(leaf!.css).toBe(leafCss);
+    expect(leafOnlyCss, `${LEAF_ONLY_SOURCE} (leaf-only seam source) must exist`).not.toBeNull();
+    // The module stores only the seam literally; the shared bytes arrive via
+    // the home import, so the served bundle stays byte-identical while the
+    // server chunk stores the shared CSS once.
+    expect(leaf!.importLine).toBe(LEAF_IMPORT_LINE);
+    expect(leaf!.seamCss).toBe(leafOnlyCss);
+    expect(leaf!.compositionLine).toBe(LEAF_COMPOSITION_LINE);
     expect(leaf!.sha256).toBe(LEAF_SHA);
-    expect(leaf!.css).not.toMatch(/<\/style/i);
+    expect(leaf!.seamCss).not.toMatch(/<\/style/i);
+    // Runtime proof: the composition evaluates to exactly the recomputed
+    // bundle bytes, and the recorded hash allowlists those bytes.
+    expect(leafCss).not.toBeNull();
+    expect(LEAF_CRITICAL_CSS).toBe(leafCss);
+    expect(LEAF_CRITICAL_CSS_SHA256).toBe(LEAF_SHA);
+    expect(LEAF_CRITICAL_CSS).not.toMatch(/<\/style/i);
   });
 
   it("keeps the two bundles distinct so the homepage never guesses the leaf bytes", () => {
@@ -303,11 +380,16 @@ describe("leaf-CSS delivery: two hash-allowlisted bundles from one generator", (
 
   it("recorded bytes recompute to the recorded hashes (no trust in the constants)", () => {
     const home = parseGeneratedModule(HOME_MODULE_PATH, "HOME");
-    const leaf = parseGeneratedModule(LEAF_MODULE_PATH, "LEAF");
+    const leaf = parseComposedLeafModule(LEAF_MODULE_PATH);
     expect(home).not.toBeNull();
     expect(leaf).not.toBeNull();
     expect(sha256B64(home!.css)).toBe(home!.sha256);
-    expect(sha256B64(leaf!.css)).toBe(leaf!.sha256);
+    // The leaf bytes recompose statically — parsed home literal plus "\n"
+    // plus parsed seam literal — and the recorded leaf hash must be the
+    // sha256 of exactly those recomposed bytes.
+    const recomposed = `${home!.css}\n${leaf!.seamCss}`;
+    expect(recomposed).toBe(leafCss);
+    expect(sha256B64(recomposed)).toBe(leaf!.sha256);
   });
 });
 
