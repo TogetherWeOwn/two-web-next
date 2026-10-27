@@ -119,7 +119,7 @@ function kitFixture(t, fragments) {
 }
 
 // Admitted server.js maxGzipBytes allocations. The SHIPPING_KIT_BUDGET pin
-// above (335360) is the historical baseline; 335360 is the second,
+// above (335104) is the historical baseline; 335360 is the second,
 // independently measured saved-review allocation (combined worst 335164,
 // margin 196; lower 335104 rejects by 60); 335872 is the third, the
 // discovery-actions allocation (combined worst 335824, margin 48; lower

@@ -4,8 +4,8 @@
 `ci/budgets/kit/server-js.json`; no other ceiling changes. This admits the
 event discovery actions feature (PR #1916): the required game-catalog read
 and two links on the Kit event detail page grow the Kit server bundle past
-the current ceiling. One 256B step, the smallest aligned cover for the
-measured worst case.
+the current ceiling. Two 256B steps up, the smallest aligned cover for the
+measured worst case (the intermediate 335616 step still rejects it by 208B).
 
 ## Measurements
 
