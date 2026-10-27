@@ -197,7 +197,28 @@ const CASES = [
     endOffset: /(?:UTC|GMT)\s*[−-]0?4(?::?00)?\b(?![\d:])/,
   },
 ] as const;
-type RangeCase = (typeof CASES)[number];
+// The CASES windows fall in 2026 and have elapsed or soon will; an elapsed
+// row correctly drops its calendar links. Controls that need those links
+// render this live twin of CASES[0] instead.
+const LIVE_CASE = {
+  name: "live London summer range to New York",
+  chosenStart: "Monday, 15 July 2030 at 15:00 GMT-04:00",
+  chosenEnd: "Monday, 15 July 2030 at 17:00 GMT-04:00",
+  start: "2030-07-15T19:00:00.000Z",
+  end: "2030-07-15T21:00:00.000Z",
+  host: "Europe/London",
+  chosen: "America/New_York",
+  device: "Asia/Tokyo",
+  hostStart: "Monday, 15 July 2030 at 20:00 GMT+01:00 (Europe/London)",
+  hostEnd: "Monday, 15 July 2030 at 22:00 GMT+01:00 (Europe/London)",
+  startDate: /15 July 2030|July 15,? 2030|2030-07-15/,
+  startTime: /15:00|3:00\s*pm/i,
+  startOffset: /(?:UTC|GMT)\s*[−-]0?4(?::?00)?\b(?![\d:])/,
+  endDate: /15 July 2030|July 15,? 2030|2030-07-15/,
+  endTime: /17:00|5:00\s*pm/i,
+  endOffset: /(?:UTC|GMT)\s*[−-]0?4(?::?00)?\b(?![\d:])/,
+} as const;
+type RangeCase = (typeof CASES)[number] | typeof LIVE_CASE;
 type ZoneFailure = "malformed" | "overlong" | "unsupported" | "empty";
 const ZONE_FAILURES: Array<{ mode: ZoneFailure; value: string }> = [
   { mode: "malformed", value: "Not/AZone!!" },
@@ -403,15 +424,17 @@ function openingTag(html: string, testid: string, tag: string): string {
 for (const view of VIEWS) {
   describe(`${view} chosen timezone server contract`, () => {
     it("positive control: no-JS HTML retains both host instants and calendar links", async () => {
-      for (const range of CASES) {
+      for (const range of [...CASES, LIVE_CASE]) {
         const { html } = await renderFixture(view, range);
         expect(html).toContain(`<time datetime="${range.start}">${range.hostStart}</time>`);
         expect(html).toContain(`<time datetime="${range.end}">${range.hostEnd}</time>`);
         expect(html).toContain(KEY);
-        expect(html).toContain("event-ics");
-        expect(html).toContain("event-google-calendar");
         expect(html).not.toContain("In America/New_York");
         expect(html).not.toContain("In Asia/Tokyo");
+        if (range === LIVE_CASE) {
+          expect(html).toContain("event-ics");
+          expect(html).toContain("event-google-calendar");
+        }
       }
     });
 
@@ -807,7 +830,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
 
     for (const view of VIEWS) {
       it(`${view}: positive control, real no-JS browser keeps host schedule and links usable`, async () => {
-        const range = CASES[0];
+        const range = LIVE_CASE;
         const { page, errors } = await open(view, range, undefined, false);
         expect(await page.locator(`time[datetime="${range.start}"]`).first().innerText()).toBe(
           range.hostStart,

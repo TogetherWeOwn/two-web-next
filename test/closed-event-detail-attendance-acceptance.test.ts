@@ -893,10 +893,13 @@ describe("keyboard and no-JS detail journeys (CONTROL: green before and after)",
     expect(html).toContain(
       '<p role="status" aria-live="polite" data-testid="event-device-timezone-starts-status"></p>',
     );
-    // Share and calendar targets are native anchors: keyboard-reachable with
-    // no JS enhancement.
+    // Share targets are native anchors: keyboard-reachable with no JS
+    // enhancement. A past row offers no calendar links; the way forward is
+    // the past-events archive.
     expect(html).toMatch(/<a href="[^"]*" data-copy-link=[^>]*data-testid="event-copy-link">/);
-    expect(html).toContain('data-testid="event-ics"');
+    expect(html).not.toContain('data-testid="event-ics"');
+    expect(html).not.toContain('data-testid="event-google-calendar"');
+    expect(html).toMatch(/<a href="\/events\/past"[^>]*>Browse past events<\/a>/);
     expect(html).not.toMatch(/\son(?:click|keydown)=/);
   }
 
