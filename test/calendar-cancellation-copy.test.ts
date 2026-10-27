@@ -41,6 +41,7 @@ describe("cancelled schedule copy", () => {
       const html = await jsx(CalCard, {
         e: cancellationEvent(),
         zone: ZONE,
+        now: new Date("2099-01-01T12:00:00Z"),
         isPast: false,
         member,
         inviteUrl: "https://discord.gg/example",
@@ -59,6 +60,7 @@ describe("cancelled schedule copy", () => {
     const html = await jsx(CalCard, {
       e: cancellationEvent({ goingCount: 100, goingOccupancy: 100 }),
       zone: ZONE,
+      now: new Date("2099-01-01T12:00:00Z"),
       isPast: false,
       member: false,
       inviteUrl: "https://discord.gg/example",

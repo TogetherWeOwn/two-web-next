@@ -21,9 +21,9 @@ import {
 
 // Independently specified admission shape. Do not import the classifier's
 // allowlist or derive this expectation from the reader's generated statement.
-const SERIES_SELECT = `select "id", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $1 then "event_key" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $2 then "title" end, "starts_at", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $3 then "timezone" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $4 then "location" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $5 then "organizer_name" end, "recurrence_index", ( octet_length("event_key") + octet_length("title") + octet_length("timezone") + coalesce(octet_length("location"), 0) + coalesce(octet_length("organizer_name"), 0) ) <= $6 from "events" where ("events"."status" in ($7, $8) and isfinite("events"."starts_at") and ("events"."id" = $9 or "events"."parent_event_id" = $10)) order by "events"."recurrence_index" asc, "events"."id" asc limit $11`;
+const SERIES_SELECT = `select "id", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $1 then "event_key" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $2 then "title" end, "starts_at", "ends_at", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $3 then "timezone" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $4 then "location" end, case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $5 then "game" end, "rsvp_open", case when ( octet_length("events"."event_key") + octet_length("events"."title") + octet_length("events"."timezone") + coalesce(octet_length("events"."location"), 0) + coalesce(octet_length("events"."game"), 0) + coalesce(octet_length("events"."organizer_name"), 0) ) <= $6 then "organizer_name" end, "recurrence_index", ( octet_length("event_key") + octet_length("title") + octet_length("timezone") + coalesce(octet_length("location"), 0) + coalesce(octet_length("game"), 0) + coalesce(octet_length("organizer_name"), 0) ) <= $7 from "events" where ("events"."status" in ($8, $9) and isfinite("events"."starts_at") and ("events"."id" = $10 or "events"."parent_event_id" = $11)) order by "events"."recurrence_index" asc, "events"."id" asc limit $12`;
 const WHERE =
-  ' where ("events"."status" in ($7, $8) and isfinite("events"."starts_at") and ("events"."id" = $9 or "events"."parent_event_id" = $10))';
+  ' where ("events"."status" in ($8, $9) and isfinite("events"."starts_at") and ("events"."id" = $10 or "events"."parent_event_id" = $11))';
 const ORDER = ' order by "events"."recurrence_index" asc, "events"."id" asc';
 const computedFields: SelectedField[] = [
   { path: ["id"], field: events.id },
@@ -62,12 +62,12 @@ const nearMisses: Array<[string, string]> = [
   ],
   ["different byte comparison", SERIES_SELECT.replace("<= $1", "< $1")],
   ["literal byte bound", SERIES_SELECT.replace("<= $1 ", "<= 4096 ")],
-  ["different byte-bound parameter", SERIES_SELECT.replace("<= $1 ", "<= $12 ")],
+  ["different byte-bound parameter", SERIES_SELECT.replace("<= $1 ", "<= $13 ")],
   [
     "changed overflow marker",
-    SERIES_SELECT.replace(') <= $6 from "events"', ') > $6 from "events"'),
+    SERIES_SELECT.replace(') <= $7 from "events"', ') > $7 from "events"'),
   ],
-  ...["event_key", "title", "timezone", "location", "organizer_name"].map(
+  ...["event_key", "title", "timezone", "location", "game", "organizer_name"].map(
     (column): [string, string] => [
       `ELSE expression for ${column}`,
       SERIES_SELECT.replace(`then "${column}" end`, `then "${column}" else "${column}" end`),
@@ -107,8 +107,8 @@ const nearMisses: Array<[string, string]> = [
   ["trailing statement", SERIES_SELECT + '; select "username" from "users"'],
   ["trailing delimiter", SERIES_SELECT + ";"],
   ["missing where clause", SERIES_SELECT.replace(WHERE, "")],
-  ["missing status gate", SERIES_SELECT.replace('"events"."status" in ($7, $8) and ', "")],
-  ["changed status parameter", SERIES_SELECT.replace("in ($7, $8)", "in ($7, $12)")],
+  ["missing status gate", SERIES_SELECT.replace('"events"."status" in ($8, $9) and ', "")],
+  ["changed status parameter", SERIES_SELECT.replace("in ($8, $9)", "in ($8, $13)")],
   ["missing finite predicate", SERIES_SELECT.replace('isfinite("events"."starts_at") and ', "")],
   [
     "changed finite predicate",
@@ -116,13 +116,13 @@ const nearMisses: Array<[string, string]> = [
   ],
   [
     "missing root scope",
-    SERIES_SELECT.replace(' and ("events"."id" = $9 or "events"."parent_event_id" = $10)', ""),
+    SERIES_SELECT.replace(' and ("events"."id" = $10 or "events"."parent_event_id" = $11)', ""),
   ],
-  ["missing root arm", SERIES_SELECT.replace('"events"."id" = $9 or ', "")],
-  ["missing child arm", SERIES_SELECT.replace(' or "events"."parent_event_id" = $10', "")],
+  ["missing root arm", SERIES_SELECT.replace('"events"."id" = $10 or ', "")],
+  ["missing child arm", SERIES_SELECT.replace(' or "events"."parent_event_id" = $11', "")],
   [
     "changed root parameter",
-    SERIES_SELECT.replace('"events"."parent_event_id" = $10', '"events"."parent_event_id" = $12'),
+    SERIES_SELECT.replace('"events"."parent_event_id" = $11', '"events"."parent_event_id" = $13'),
   ],
   ["unrestricted scope", SERIES_SELECT.replace(WHERE, WHERE + " or true")],
   ["missing order", SERIES_SELECT.replace(ORDER, "")],
@@ -131,10 +131,10 @@ const nearMisses: Array<[string, string]> = [
     "changed order direction",
     SERIES_SELECT.replace('"events"."recurrence_index" asc', '"events"."recurrence_index" desc'),
   ],
-  ["missing limit", SERIES_SELECT.replace(" limit $11", "")],
-  ["literal limit", SERIES_SELECT.replace("limit $11", "limit 53")],
-  ["different limit parameter", SERIES_SELECT.replace("limit $11", "limit $12")],
-  ["computed limit", SERIES_SELECT.replace("limit $11", "limit ($11 + 1)")],
+  ["missing limit", SERIES_SELECT.replace(" limit $12", "")],
+  ["literal limit", SERIES_SELECT.replace("limit $12", "limit 53")],
+  ["different limit parameter", SERIES_SELECT.replace("limit $12", "limit $13")],
+  ["computed limit", SERIES_SELECT.replace("limit $12", "limit ($12 + 1)")],
   ["new offset", SERIES_SELECT + " offset 0"],
   ["arbitrary event expression", 'select "id", lower("title") from "events" limit $1'],
 ];
@@ -144,24 +144,33 @@ const previous = {
   eventKey: "01J00000000000000000000071",
   title: "Earlier night",
   startsAt: new Date("2099-11-01T20:00:00Z"),
+  endsAt: new Date("2099-11-01T22:00:00Z"),
   timezone: "UTC",
   location: null,
+  game: null,
+  rsvpOpen: true,
 };
 const current = {
   id: 72,
   eventKey: "01J00000000000000000000072",
   title: "Current night",
   startsAt: new Date("2099-11-08T20:00:00Z"),
+  endsAt: new Date("2099-11-08T22:00:00Z"),
   timezone: "UTC",
   location: "Voice lounge",
+  game: null,
+  rsvpOpen: true,
 };
 const following = {
   id: 73,
   eventKey: "01J00000000000000000000073",
   title: "Following night",
   startsAt: new Date("2099-11-15T20:00:00Z"),
+  endsAt: new Date("2099-11-15T22:00:00Z"),
   timezone: "UTC",
   location: null,
+  game: null,
+  rsvpOpen: true,
 };
 const seriesRows = [
   { ...previous, recurrenceIndex: 0, organizer_name: "First host", textFits: true },
@@ -292,13 +301,22 @@ describe("generated series read inside the Hono member boundary", () => {
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(await response.json()).toEqual({
         hosts: ["Current host", "First host", "Next host"],
-        previous: { ...previous, startsAt: "2099-11-01T20:00:00.000Z" },
-        next: { ...following, startsAt: "2099-11-15T20:00:00.000Z" },
+        previous: {
+          ...previous,
+          startsAt: "2099-11-01T20:00:00.000Z",
+          endsAt: "2099-11-01T22:00:00.000Z",
+        },
+        next: {
+          ...following,
+          startsAt: "2099-11-15T20:00:00.000Z",
+          endsAt: "2099-11-15T22:00:00.000Z",
+        },
       });
       expect(fixture.executions()).toBe(1);
       expect(fixture.prepared).toHaveLength(1);
       expect(fixture.prepared[0]!.sql.trim().replace(/\s+/g, " ")).toBe(SERIES_SELECT);
       expect(fixture.prepared[0]!.params).toEqual([
+        4096,
         4096,
         4096,
         4096,
@@ -311,7 +329,7 @@ describe("generated series read inside the Hono member boundary", () => {
         71,
         53,
       ]);
-      expect(fixture.prepared[0]!.fields).toHaveLength(9);
+      expect(fixture.prepared[0]!.fields).toHaveLength(12);
       expect(audit).toEqual([]);
     },
   );

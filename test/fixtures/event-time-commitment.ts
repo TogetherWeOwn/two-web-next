@@ -120,7 +120,8 @@ export const clockCases = [
     zone: "America/New_York",
     effective: "America/New_York",
     clock: "14:00",
-    title: "New York chess",
+    // Even the truncated title is an unbroken token wider than a day cell.
+    title: "WARHAMMERWORLDTOURNAMENTWITHFRIENDS",
     status: "published",
   },
   {

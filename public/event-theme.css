@@ -45,7 +45,7 @@
 .event-theme .event-related-grid a{display: block;height: 100%;padding: 1.5rem;background: var(--surface);color: var(--ink);border: 1px solid var(--line);text-decoration: none;overflow-wrap: anywhere}
 .event-theme .event-related-grid a:hover{border-color: var(--brand);color: var(--brand)}
 .event-theme :is(.event-related-grid, .event-pagination) time{display: block;font-size: .9rem;color: var(--muted);margin-top: .5rem}
-.event-theme .event-related-location{display: block;font-size: .9rem;color: var(--muted)}
+.event-theme .event-related-location, .event-theme .event-related-game, .event-theme .event-related-state{display: block;font-size: .9rem;color: var(--muted)}
 .event-theme .event-gone{min-height: 28rem;padding-block: 4rem}
 .event-theme .event-gone h1{margin-bottom: 1.5rem}
 @media (max-width: 48rem) {

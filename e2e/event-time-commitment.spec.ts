@@ -231,16 +231,86 @@ for (const twin of ["Hono", "Kit"] as const) {
             );
             expect(await link.getAttribute("aria-label")).toContain(visible.replace(/…$/, ""));
             expect(await link.getAttribute("aria-label")).toContain(fixture.title);
-            const layout = await link.evaluate((node) => ({
-              whiteSpace: getComputedStyle(node).whiteSpace,
-              textOverflow: getComputedStyle(node).textOverflow,
-              left: node.getBoundingClientRect().left,
-              right: node.getBoundingClientRect().right,
-            }));
+            if (fixture.name === "New York") {
+              await expect(link).toHaveText(
+                "14:00 America/New_York WARHAMMERWORLDTOUR… 6 seats left",
+              );
+            }
+            const layout = await link.evaluate((node) => {
+              const cell = node.closest("td")!;
+              const bounds = (element: Element) => {
+                const { left, right, top, bottom } = element.getBoundingClientRect();
+                return { left, right, top, bottom };
+              };
+              // Anchor boxes can fit while their text paints over the next day.
+              // Measure every rendered text run, including the cancellation badge.
+              const walker = document.createTreeWalker(node, NodeFilter.SHOW_TEXT);
+              const runs = [];
+              for (let text = walker.nextNode(); text; text = walker.nextNode()) {
+                if (!text.textContent?.trim()) continue;
+                const range = document.createRange();
+                range.selectNodeContents(text);
+                // Each run must also fit any ancestor that could clip it.
+                const clips = [];
+                for (
+                  let ancestor = text.parentElement;
+                  ancestor;
+                  ancestor = ancestor.parentElement
+                ) {
+                  const style = getComputedStyle(ancestor);
+                  if (style.overflowX !== "visible" || style.overflowY !== "visible") {
+                    clips.push(bounds(ancestor));
+                  }
+                  if (ancestor === cell) break;
+                }
+                runs.push({
+                  text: text.textContent,
+                  visible: text.parentElement!.checkVisibility({
+                    checkOpacity: true,
+                    checkVisibilityCSS: true,
+                  }),
+                  clips,
+                  rects: Array.from(range.getClientRects(), ({ left, right, top, bottom }) => ({
+                    left,
+                    right,
+                    top,
+                    bottom,
+                  })),
+                });
+              }
+              return {
+                whiteSpace: getComputedStyle(node).whiteSpace,
+                textOverflow: getComputedStyle(node).textOverflow,
+                ...bounds(node),
+                cell: bounds(cell),
+                runs,
+              };
+            });
             expect(layout.whiteSpace).not.toBe("nowrap");
             expect(layout.textOverflow).not.toBe("ellipsis");
             expect(layout.left).toBeGreaterThanOrEqual(0);
             expect(layout.right).toBeLessThanOrEqual(viewport.width);
+            expect(layout.runs.length).toBeGreaterThan(0);
+            for (const run of layout.runs) {
+              expect(run.visible, `${fixture.name}: ${run.text} must not be hidden`).toBe(true);
+              expect(run.rects.length).toBeGreaterThan(0);
+              for (const rect of run.rects) {
+                expect(rect.right - rect.left).toBeGreaterThan(0);
+                expect(rect.bottom - rect.top).toBeGreaterThan(0);
+                for (const [boxName, box] of [
+                  ["day cell", layout.cell],
+                  ["link", layout],
+                  ...run.clips.map((clip) => ["clipping ancestor", clip] as const),
+                ] as const) {
+                  const { left, right, top, bottom } = box;
+                  const message = `${fixture.name}: text ${JSON.stringify(rect)} must fit ${boxName} ${JSON.stringify({ left, right, top, bottom })}`;
+                  expect(rect.left, message).toBeGreaterThanOrEqual(left);
+                  expect(rect.right, message).toBeLessThanOrEqual(right);
+                  expect(rect.top, message).toBeGreaterThanOrEqual(top);
+                  expect(rect.bottom, message).toBeLessThanOrEqual(bottom);
+                }
+              }
+            }
           }
         } finally {
           await context.close();

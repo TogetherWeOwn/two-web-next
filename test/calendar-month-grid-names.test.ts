@@ -121,7 +121,26 @@ const ariaOf = (attrs: string): string | null => /aria-label="([^"]*)"/.exec(att
 
 // WCAG 2.5.3: speech-input users say the visible words, so the name must start with them.
 function expectNameLeadsWithVisible(name: string, link: GridLink): void {
-  const lead = link.visible.replace(/…$/, "");
+  // Strip nested markup (the availability suffix node): speech users say the
+  // visible words, not the tags. A manual scan, not a tag-matching regex:
+  // rendered titles are escaped, so the only literal brackets are real tags.
+  let words = "";
+  let rest = link.visible;
+  for (;;) {
+    const open = rest.indexOf("<");
+    if (open === -1) {
+      words += rest;
+      break;
+    }
+    words += rest.slice(0, open);
+    const close = rest.indexOf(">", open + 1);
+    if (close === -1) {
+      words += rest.slice(open);
+      break;
+    }
+    rest = rest.slice(close + 1);
+  }
+  const lead = words.replace(/…$/, "");
   expect(name.slice(0, lead.length)).toBe(lead);
 }
 
@@ -164,8 +183,11 @@ describe("month grid accessible names", () => {
       // Useful day context follows the title.
       expect(name).toContain(wallTimeHm(e.startsAt, ZONE));
       expect(name).toContain(cardDayLabel(e.startsAt, ZONE));
-      // The host zone identifies the compact clock without changing truncation.
-      expect(link.visible).toBe(`${wallTimeHm(e.startsAt, ZONE)} ${ZONE} ${gridTitle(e.title)}`);
+      // The host zone identifies the compact clock without changing truncation,
+      // plus the uncapped availability suffix.
+      expect(link.visible).toBe(
+        `${wallTimeHm(e.startsAt, ZONE)} ${ZONE} ${gridTitle(e.title)} <span data-testid="event-schedule-availability">No seat limit</span>`,
+      );
       // Link target / jump behavior unchanged.
       expect(link.href).toBe(calendarJumpUrl(false, rowKey(e)));
       expect(link.attrs).toContain("data-cal-jump");
@@ -214,7 +236,9 @@ describe("month grid accessible names", () => {
     expectNameLeadsWithVisible(dName, dLink);
     expect(dName).toContain(wallTimeHm(d.startsAt, ZONE));
     expect(dName).toContain(cardDayLabel(d.startsAt, ZONE));
-    expect(dLink.visible).toBe(`${wallTimeHm(d.startsAt, ZONE)} ${ZONE} ${gridTitle(d.title)}`);
+    expect(dLink.visible).toBe(
+      `${wallTimeHm(d.startsAt, ZONE)} ${ZONE} ${gridTitle(d.title)} <span data-testid="event-schedule-availability">Discord-managed</span>`,
+    );
   });
 
   it("keeps the names and link targets on consecutive month pages", async () => {
@@ -292,11 +316,17 @@ describe("month grid accessible names", () => {
     const links = gridLinks(html);
     expect(links).toHaveLength(1);
     const link = links[0]!;
-    expect(link.visible).toBe("20:00 America/New_York NY raid night");
-    expect(ariaOf(link.attrs)).toBe("20:00 America/New_York NY raid night, Mon 14 Jan");
+    expect(link.visible).toBe(
+      '20:00 America/New_York NY raid night <span data-testid="event-schedule-availability">No seat limit</span>',
+    );
+    expect(ariaOf(link.attrs)).toBe(
+      "20:00 America/New_York NY raid night No seat limit, Mon 14 Jan",
+    );
     const cell = new RegExp(`<td[^>]*data-date="2030-01-14"[^>]*>([\\s\\S]*?)</td>`).exec(
       html,
     )![1]!;
-    expect(cell).toContain(">20:00 America/New_York NY raid night</a>");
+    expect(cell).toContain(
+      '>20:00 America/New_York NY raid night <span data-testid="event-schedule-availability">No seat limit</span></a>',
+    );
   });
 });
