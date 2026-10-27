@@ -104,6 +104,19 @@ const lineup = $derived(
   {/if}
 </svelte:head>
 
+{#snippet destinationPreview(event: NonNullable<KitEventDetailModel["neighbors"]["previous"]>)}
+  <time datetime={event.datetime}>{event.whenText}</time>
+  {#if event.location}
+    {" "}<span class="event-related-location">{event.location}</span>
+  {/if}
+  {#if event.game}
+    {" "}<span class="event-related-game">{event.game}</span>
+  {/if}
+  {#if event.availability}
+    {" "}<span class="event-related-state">{event.availability}</span>
+  {/if}
+{/snippet}
+
 {#snippet eventPagination(neighbors: KitEventDetailModel["neighbors"] | null | undefined, series: boolean)}
   {#snippet eventLink(event: KitEventDetailModel["neighbors"]["previous"], previous: boolean)}
     {#if event}
@@ -113,16 +126,7 @@ const lineup = $derived(
         data-testid="event-{series ? 'series-' : ''}{previous ? 'previous' : 'next'}"
       >
         <span>{previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}</span>{" "}
-        <time datetime={event.datetime}>{event.whenText}</time>
-        {#if event.location}
-          <span class="event-related-location">{event.location}</span>
-        {/if}
-        {#if event.game}
-          <span class="event-related-game">{event.game}</span>
-        {/if}
-        {#if event.availability}
-          <span class="event-related-state">{event.availability}</span>
-        {/if}
+        {@render destinationPreview(event)}
       </a>
     {/if}
   {/snippet}
@@ -452,16 +456,7 @@ const lineup = $derived(
             <li>
               <a href="/e/{event.key}" data-testid="event-related-link">
                 {event.title}{" "}
-                <time datetime={event.datetime}>{event.whenText}</time>
-                {#if event.location}
-                  {" "}<span class="event-related-location">{event.location}</span>
-                {/if}
-                {#if event.game}
-                  {" "}<span class="event-related-game">{event.game}</span>
-                {/if}
-                {#if event.availability}
-                  {" "}<span class="event-related-state">{event.availability}</span>
-                {/if}
+                {@render destinationPreview(event)}
               </a>
             </li>
           {/each}

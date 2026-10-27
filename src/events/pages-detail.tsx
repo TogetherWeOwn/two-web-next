@@ -34,9 +34,24 @@ const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now })
           </time>
         </>
       ) : null}
-      {event.location ? <span class="event-related-location">{event.location}</span> : null}
-      {event.game ? <span class="event-related-game">{event.game}</span> : null}
-      {availability ? <span class="event-related-state">{availability}</span> : null}
+      {event.location ? (
+        <>
+          {" "}
+          <span class="event-related-location">{event.location}</span>
+        </>
+      ) : null}
+      {event.game ? (
+        <>
+          {" "}
+          <span class="event-related-game">{event.game}</span>
+        </>
+      ) : null}
+      {availability ? (
+        <>
+          {" "}
+          <span class="event-related-state">{availability}</span>
+        </>
+      ) : null}
     </>
   );
 };
@@ -471,28 +486,8 @@ export const EventPage: FC<{
               {related.map((event) => (
                 <li>
                   <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
-                    {event.title}{" "}
-                    <time datetime={event.startsAt.toISOString()}>
-                      {fmtWithOffset(event.startsAt, event.timezone)}
-                    </time>
-                    {event.location ? (
-                      <>
-                        {" "}
-                        <span class="event-related-location">{event.location}</span>
-                      </>
-                    ) : null}
-                    {event.game ? (
-                      <>
-                        {" "}
-                        <span class="event-related-game">{event.game}</span>
-                      </>
-                    ) : null}
-                    {eventLinkAvailability(event, now) ? (
-                      <>
-                        {" "}
-                        <span class="event-related-state">{eventLinkAvailability(event, now)}</span>
-                      </>
-                    ) : null}
+                    {event.title}
+                    <DestinationPreview event={event} now={now} />
                   </a>
                 </li>
               ))}
