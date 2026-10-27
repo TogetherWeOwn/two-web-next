@@ -116,15 +116,15 @@ function kitFixture(t, fragments) {
   return root;
 }
 
-// Admitted server.js maxGzipBytes allocations. 335104 is the historical
-// baseline; 335360 is the second, independently measured saved-review
-// allocation (combined worst 335164, margin 196; lower 335104 rejects by
-// 60; the next 256B step 335616 stays unsupported); 335872 is the
-// truthful-RSVP-prompt allocation (combined worst 335833, margin 39; lower
-// 335360 rejects by 473; see
-// ci/budgets/decisions/kit-perf/2026-10-27-truthful-rsvp-server-gzip-335872.md).
-// Every other pin stays exact: the oracle rejects any ceiling
-// outside this list, then deep-compares the rest of the plan.
+// Admitted server.js maxGzipBytes allocations. The SHIPPING_KIT_BUDGET pin
+// above (335104) is the historical baseline; 335360 is the second,
+// independently measured saved-review allocation (combined worst 335164,
+// margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
+// unsupported); 335872 is the third, independently measured allocation
+// (measured 335639, margin 233; lower 335616 rejects by 23; the next 256B
+// step 336128 stays unsupported). Every other pin stays exact: the oracle
+// rejects any ceiling outside this list, then deep-compares the rest of
+// the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872];
 
 function assertShippingKitBudget(actual) {

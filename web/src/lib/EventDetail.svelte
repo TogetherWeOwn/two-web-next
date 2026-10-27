@@ -215,6 +215,12 @@ const lineup = $derived(
         <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
       </dd>
     </div>
+    {#if model.durationText}
+      <div>
+        <dt>Duration</dt>
+        <dd>{model.durationText}</dd>
+      </div>
+    {/if}
     {#if model.location}
       <div>
         <dt>Where</dt>
