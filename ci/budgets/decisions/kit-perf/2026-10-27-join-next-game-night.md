@@ -5,8 +5,8 @@ night" card (server load read, page markup, shared time formatter). Each
 ceiling that moves does so by the least aligned step that covers the
 measured composition; every other limit is unchanged. The first table is the
 original three-ceiling measurement; the re-measure sections track main
-moving underneath (latest: main `d4d7a9da5`, server gzip and client raw move
-one step; client gzip still fits).
+moving underneath (latest: main `4e90a8bcf`, server gzip grows within the
+336896 ceiling; no ceiling moves).
 
 Measured with `npm run build --prefix web` then `node ci/check-kit-perf.mjs`
 (Node 24.22.1, locked deps; two builds per tree on main `cb0f15736` plus its
@@ -90,6 +90,23 @@ main's growth) still fits 103680 and does not move. File counts (client
 55/55, server 116/126), server raw (1191090/1203200), worker, CSS and
 startup fit unchanged. Final raised values: client raw 257792, client gzip
 103680, server gzip 336896.
+
+### Fourth re-measure on the merged tree (main `4e90a8bcf`)
+
+Main's jobs ledger/lock bounds (#1866, server-side only) add Kit server
+bytes through the bundled `src/jobs` code. Merged tree, two builds
+(server gzip 336850/336848, worst governs; client axes identical):
+
+| Axis | Merged tree | This branch ceiling | Margin |
+| --- | --- | --- | --- |
+| client JS raw | 257788 | 257792 | 4 B |
+| client JS gzip | 103591 | 103680 | 89 B |
+| server JS gzip | 336850 | 336896 | 46 B |
+
+No ceiling moves: every axis still fits (server raw 1192605/1203200,
+116/126 files; worker, CSS and startup unchanged). The server margin is
+46 B against known ±3 B identical-tree gzip jitter, so any further server
+growth needs another step.
 
 `ci/budget-fragments.test.mjs` moves with the fragments. The additive
 allocation entries in `ci/check-kit-perf.test.mjs` (server gzip 336896,
