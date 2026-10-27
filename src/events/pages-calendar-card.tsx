@@ -18,6 +18,7 @@ import {
   spotsLeftText,
   wallTimeHm,
 } from "../islands/contracts";
+import { effectiveZone } from "./date-format";
 import { ScheduleDate } from "./pages-shared";
 import { searchContext } from "./search-context";
 import { matchQuery } from "./search-query";
@@ -59,7 +60,7 @@ export const CalCard: FC<{
   inviteUrl: string;
   loginReturnTo: string | null;
 }> = ({ e, zone, now = new Date(), isPast, q = "", member, inviteUrl, loginReturnTo }) => {
-  const tz = rowZone(e, zone);
+  const tz = effectiveZone(rowZone(e, zone));
   const transient = isTransient(e);
   const cancelled = !transient && e.status === "cancelled";
   // The drawer context wins over row dates: a card shown under past events
