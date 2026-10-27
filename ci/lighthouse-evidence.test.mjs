@@ -65,7 +65,15 @@ const lhr = (url, server = 100, profile = "mobile") => ({
   ),
 });
 
-async function scenario(t, steps) {
+const withTiming = (report, details) =>
+  details
+    ? {
+        ...report,
+        audits: { ...report.audits, "main-document-timing": { score: null, details } },
+      }
+    : report;
+
+async function scenario(t, steps, { fetchImpl } = {}) {
   const root = await mkdtemp(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "lh-evidence-"),
   );
@@ -76,13 +84,13 @@ async function scenario(t, steps) {
     dir,
     env: {},
     log: () => {},
-    fetchImpl: async () => ({ status: 200, text: async () => "" }),
+    fetchImpl: fetchImpl ?? (async () => ({ status: 200, text: async () => "" })),
     lhci: async () => {
       const step = steps[calls++];
       for (const [i, url] of (step.urls ?? urls).entries()) {
         await writeFile(
           join(dir, `lhr-${calls * 1000 + i}.json`),
-          JSON.stringify(lhr(url, step.server)),
+          JSON.stringify(withTiming(lhr(url, step.server), step.timing?.(url, i))),
         );
       }
       await writeFile(join(dir, "assertion-results.json"), step.assertions ?? "[]");
@@ -176,6 +184,9 @@ const resource = {
   responseHeaders: [
     { name: "X-Request-ID", value: "0123456789abcdef-LHR" },
     { name: "CF-Ray", value: "0123456789abcdef-LHR" },
+    { name: "CF-Cache-Status", value: "HIT" },
+    { name: "Age", value: "12" },
+    { name: "Server-Timing", value: 'cfEdge;dur=5, cfOrigin;dur=640.5;desc="origin"' },
     { name: "Set-Cookie", value: "DO_NOT_COPY" },
     { name: "Authorization", value: "DO_NOT_COPY" },
     { name: "X-Arbitrary", value: "DO_NOT_COPY" },
@@ -203,6 +214,9 @@ test("allowlist retains correlation and native server wait only, without header/
       "timestamp",
       "requestId",
       "cfRay",
+      "cfCacheStatus",
+      "ageSeconds",
+      "serverTiming",
       "protocol",
       "edgeColo",
       "servingRevision",
@@ -210,6 +224,10 @@ test("allowlist retains correlation and native server wait only, without header/
       "serverWaitMs",
     ].sort(),
   );
+  assert.equal(result.schemaVersion, 2);
+  assert.equal(result.cfCacheStatus, "HIT");
+  assert.equal(result.ageSeconds, 12);
+  assert.equal(result.serverTiming, 'cfEdge;dur=5, cfOrigin;dur=640.5;desc="origin"');
   assert.equal(result.requestId, "0123456789abcdef-LHR");
   assert.equal(result.cfRay, "0123456789abcdef-LHR");
   assert.equal(result.edgeColo, "LHR");
@@ -320,6 +338,9 @@ test("invalid, duplicate, absent metadata and timing are unknown, never inferred
     "timestamp",
     "requestId",
     "cfRay",
+    "cfCacheStatus",
+    "ageSeconds",
+    "serverTiming",
     "protocol",
     "edgeColo",
     "servingRevision",
@@ -565,5 +586,133 @@ test("malformed assertions stay failing over full samples, regardless of diagnos
   assert.equal(
     await readFile(join(dir, "mobile-attempts", "attempt-1", "assertion-results.json"), "utf8"),
     "{broken",
+  );
+});
+
+test("cache, age and server-timing headers accept only bounded well-formed values", () => {
+  const at = (headers) =>
+    documentTiming(
+      { ...resource, responseHeaders: headers.map(([name, value]) => ({ name, value })) },
+      [],
+    );
+  assert.equal(at([["cf-cache-status", "dynamic"]]).cfCacheStatus, "DYNAMIC");
+  assert.equal(at([["cf-cache-status", "HIT; <script>"]]).cfCacheStatus, "unknown");
+  assert.equal(
+    at([
+      ["cf-cache-status", "HIT"],
+      ["cf-cache-status", "MISS"],
+    ]).cfCacheStatus,
+    "unknown",
+  );
+  assert.equal(at([["age", "0"]]).ageSeconds, 0);
+  for (const bad of ["-1", "1.5", "12abc", "", "99999999999"])
+    assert.equal(at([["age", bad]]).ageSeconds, "unknown", bad);
+  assert.equal(at([["server-timing", "cfOrigin;dur=640"]]).serverTiming, "cfOrigin;dur=640");
+  for (const bad of ["a|b", "x".repeat(300), "<b>", ""])
+    assert.equal(at([["server-timing", bad]]).serverTiming, "unknown", bad);
+});
+
+const sha = (c) => c.repeat(40);
+const upResponse = (commit) => ({
+  status: 200,
+  text: async () => JSON.stringify({ status: "ok", revision: { version_id: "v", commit } }),
+});
+// Discovery GETs return an empty body (no event); /up answers from the queue.
+const fetchWithUp =
+  (queue, seen = []) =>
+  async (url) => {
+    seen.push(String(url));
+    if (String(url) === `${origin}/up`) {
+      const next = queue.shift();
+      if (next instanceof Error) throw next;
+      return next ?? { status: 503, text: async () => "not json" };
+    }
+    return { status: 200, text: async () => "" };
+  };
+const timingFor = (url, i) => ({
+  schemaVersion: 2,
+  timestamp: `2026-10-27T02:28:${String(10 + i).padStart(2, "0")}.000Z`,
+  requestId: "unknown",
+  cfRay: `${String(i).padStart(16, "0")}-LHR`,
+  cfCacheStatus: i % 2 ? "HIT" : "DYNAMIC",
+  ageSeconds: i % 2 ? 7 : "unknown",
+  serverTiming: i === 0 ? "cfOrigin;dur=640" : "unknown",
+  serverWaitMs: 100 + i,
+});
+
+test("summary records the served revision before and after the collect and each navigation's serving headers", async (t) => {
+  const seen = [];
+  const { dir, code } = await scenario(t, [{ timing: timingFor }], {
+    fetchImpl: fetchWithUp([upResponse(sha("a")), upResponse(sha("a"))], seen),
+  });
+  assert.equal(code, 0);
+  assert.equal(seen.filter((u) => u === `${origin}/up`).length, 2);
+  const md = await readFile(join(dir, "watch-summary.md"), "utf8");
+  assert.match(md, /### Served revision/);
+  assert.match(
+    md,
+    new RegExp(`\\| 1 \\| ${"a".repeat(12)} \\| ${"a".repeat(12)} \\| unchanged \\|`),
+  );
+  assert.match(md, /### Serving evidence per navigation/);
+  assert.match(
+    md,
+    /\| \/ \| 1 \| 2026-10-27T02:28:10\.000Z \| 0000000000000000-LHR \| DYNAMIC \| - \| cfOrigin;dur=640 \| 100 \|/,
+  );
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  assert.deepEqual(json.servedRevision, [
+    { attempt: 1, before: sha("a"), after: sha("a"), verdict: "unchanged" },
+  ]);
+  const events = json.rows.find((r) => r.path === "/events");
+  assert.equal(events.serving.length, 3);
+  assert.equal(events.serving[2].cfCacheStatus, "HIT");
+  assert.equal(events.serving[2].ageSeconds, 7);
+});
+
+test("a revision that changes mid-collect is flagged; /up failure is unknown and never fails the run", async (t) => {
+  {
+    const { dir, code } = await scenario(t, [{ timing: timingFor }], {
+      fetchImpl: fetchWithUp([upResponse(sha("a")), upResponse(sha("b"))]),
+    });
+    assert.equal(code, 0);
+    const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+    assert.equal(json.servedRevision[0].verdict, "changed during collect");
+    assert.match(await readFile(join(dir, "watch-summary.md"), "utf8"), /CHANGED during collect/);
+  }
+  {
+    const { dir, code } = await scenario(t, [{}], {
+      fetchImpl: fetchWithUp([new Error("boom"), upResponse("not-a-sha")]),
+    });
+    assert.equal(code, 0);
+    const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+    assert.deepEqual(json.servedRevision, [
+      { attempt: 1, before: "unknown", after: "unknown", verdict: "unknown" },
+    ]);
+    // An LHR with no timing audit renders "-"/unknown, never a made-up value.
+    assert.equal(json.rows[0].serving[0].cfRay, "unknown");
+  }
+});
+
+test("a retried collect brackets every attempt and the budget verdict is unchanged", async (t) => {
+  const { dir, code, calls } = await scenario(
+    t,
+    [{ urls: urls.slice(0, 2) }, { urls: urls.slice(0, 2) }],
+    {
+      fetchImpl: fetchWithUp([
+        upResponse(sha("a")),
+        upResponse(sha("a")),
+        upResponse(sha("a")),
+        upResponse(sha("c")),
+      ]),
+    },
+  );
+  assert.equal(code, 1);
+  assert.equal(calls, 2);
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  assert.deepEqual(
+    json.servedRevision.map((r) => [r.attempt, r.verdict]),
+    [
+      [1, "unchanged"],
+      [2, "changed during collect"],
+    ],
   );
 });

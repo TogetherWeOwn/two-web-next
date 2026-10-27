@@ -5,6 +5,10 @@ import { MainResource } from "lighthouse/core/computed/main-resource.js";
 
 const UNKNOWN = "unknown";
 const RAY = /^[a-fA-F0-9]{16}(?:-[A-Z]{3})?$/;
+const CACHE_STATUS = /^[A-Za-z]{2,16}$/;
+const AGE = /^\d{1,9}$/;
+// Server-Timing grammar subset (names, `dur=`/`desc="..."` params, commas); no pipes or markup.
+const SERVER_TIMING = /^[A-Za-z0-9_.;=, "-]{1,256}$/;
 const ULID = /^[0-7][0-9A-HJKMNP-TV-Z]{25}$/;
 const TIMING_FIELDS = [
   "dnsStart",
@@ -36,6 +40,10 @@ export function documentTiming(resource, devtoolsLog) {
     (v) => RAY.test(v) || ULID.test(v),
   );
   const cfRay = header(resource.responseHeaders, "cf-ray", (v) => RAY.test(v));
+  const cacheStatus = header(resource.responseHeaders, "cf-cache-status", (v) =>
+    CACHE_STATUS.test(v),
+  );
+  const age = header(resource.responseHeaders, "age", (v) => AGE.test(v));
   const request = [...devtoolsLog]
     .reverse()
     .find(
@@ -67,16 +75,22 @@ export function documentTiming(resource, devtoolsLog) {
       ? timingMs.receiveHeadersStart - timingMs.sendEnd
       : UNKNOWN;
   return {
-    schemaVersion: 1,
+    schemaVersion: 2,
     timestamp,
     requestId,
     cfRay,
+    // Edge cache disposition and age answer "was this served from cache?" for the
+    // same response; Server-Timing carries whatever breakdown the edge/Worker emits.
+    cfCacheStatus: cacheStatus === UNKNOWN ? UNKNOWN : cacheStatus.toUpperCase(),
+    ageSeconds: age === UNKNOWN ? UNKNOWN : Number(age),
+    serverTiming: header(resource.responseHeaders, "server-timing", (v) => SERVER_TIMING.test(v)),
     protocol: ["h2", "h3", "http/1.0", "http/1.1"].includes(resource.protocol)
       ? resource.protocol
       : UNKNOWN,
     edgeColo: cfRay !== UNKNOWN && /-[A-Z]{3}$/.test(cfRay) ? cfRay.slice(-3) : UNKNOWN,
-    // The served revision is not exposed by the current main-document response.
-    // The CI checkout SHA is not evidence of the revision that served a request.
+    // The served revision is not exposed by the current main-document response; the
+    // runner brackets each collect with GET /up instead. The CI checkout SHA is not
+    // evidence of the revision that served a request.
     servingRevision: UNKNOWN,
     timingMs,
     serverWaitMs,
