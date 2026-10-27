@@ -306,7 +306,14 @@ from TypeScript's module diagnostic. `assets/styles.css`, `public/styles.css`,
 `ci/a11y.mjs` are not formatted because existing regression tests assert exact stylesheet bytes,
 source-order substrings and single-line selector scoping. `ci/featured-proof/**` also retains its immutable,
 hash-verified proof inputs byte-for-byte. Their content, hashes and regression
-assertions remain unchanged. These formatter exemptions disable neither lint nor
+assertions remain unchanged. Biome 2.6 adds Markdown and YAML formatting; this
+repo adopts the YAML formatter, but Markdown (`**/*.md`) stays unformatted for
+now: the 2.6.2 Markdown formatter joins words around inline code in several
+docs, never reaches a fixed point on the retention-ledger table, and rewrites
+JSON fences that docs quote as exact machine output. Adopting it also keeps
+the published `content/privacy-policy-v*.md` texts byte-stable, as the
+privacy-history tests require. Revisit when upstream fixes those defects.
+These formatter exemptions disable neither lint nor
 typecheck. Lint exemptions are limited to `public/islands/**` and the hash-pinned
 `ci/featured-proof/fixtures/**`; `ci/a11y.mjs`, the other featured-proof files and the
 stylesheets are still linted.

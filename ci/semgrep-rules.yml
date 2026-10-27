@@ -39,4 +39,4 @@ rules:
     languages: [ts, js]
     severity: WARNING
     message: "Discord bot-token-shaped literal in source; read DISCORD_BOT_TOKEN from the environment"
-    pattern-regex: 'Bot [A-Za-z0-9._-]{20,}'
+    pattern-regex: "Bot [A-Za-z0-9._-]{20,}"

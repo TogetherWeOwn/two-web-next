@@ -15,7 +15,7 @@ on:
   # the whole suite including the long gates. Catches regressions that slipped
   # past area-gated PR runs within hours.
   schedule:
-    - cron: '19 2 * * *'
+    - cron: "19 2 * * *"
   # Manual re-run on a branch. Releases no longer dispatch it: there is no
   # release PR (docs/releases.md).
   workflow_dispatch:

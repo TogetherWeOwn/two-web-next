@@ -85,7 +85,12 @@ const islands =
       <p>{SUBSCRIPTION_GUIDANCE[2]}</p>
     </details>
     <div data-archive-state>
+      <!-- One plain GET form for text and game, inside the swapped zone so a
+        fragment turn keeps both controls in sync; submitting starts from page 1
+        with JS off. -->
       <form method="get" action="/events/past" role="search">
+        <label class="sr-only" for="past-events-search-input">Search past events</label>
+        <input id="past-events-search-input" type="search" name="q" value={q} placeholder="Search past events" />
         <!-- Facet labels mirror EVENTS_GAME_FILTER_LABEL / EVENTS_GAME_ALL_COPY
           (contracts-calendar) as literals: importing the calendar module would
           add a client graph edge for two strings (Kit perf budget). -->
@@ -95,7 +100,6 @@ const islands =
           {#each games as suggestion}<option value={suggestion} selected={suggestion === game}>{suggestion}</option>{/each}
           {#if game !== "" && !games.includes(game)}<option value={game} selected>{game}</option>{/if}
         </select>
-        {#if q}<input type="hidden" name="q" value={q} />{/if}
         <button class="btn" type="submit">Search</button>
         <p id="past-events-game-scope">Games from past events.</p>
         {#if gamesOmitted}<p>Showing the first 100 games; more games exist in the archive.</p>{/if}
@@ -125,7 +129,7 @@ const islands =
       {/if}
     </div>
     <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{#if import.meta.env?.SSR !== false}{#each rows as e (e.eventKey)}<EventCard {e} {q} archive={{ page, q, game }} />{/each}{/if}</ul>
-    <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>{#if page > 1 && totalPages > 0}<a data-testid={PAST_EVENTS_PAGER_NEWER_TESTID} data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q, game)}>Newer</a>{/if}{" "}{#if hasMore}<a data-testid={PAST_EVENTS_PAGER_OLDER_TESTID} data-archive-page href={pastEventsUrl(page + 1, q, game)}>Older</a>{/if}</nav>
+    <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>{#if page > 1 && totalPages > 0}<a data-testid={PAST_EVENTS_PAGER_NEWER_TESTID} data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q, game)}>Newer</a>{/if}{" "}{#if totalPages > 0}<span>{`Page ${page} of ${totalPages}`}</span>{/if}{" "}{#if hasMore}<a data-testid={PAST_EVENTS_PAGER_OLDER_TESTID} data-archive-page href={pastEventsUrl(page + 1, q, game)}>Older</a>{/if}</nav>
     <p><a data-testid={PAST_EVENTS_BACK_TESTID} href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
   </section>

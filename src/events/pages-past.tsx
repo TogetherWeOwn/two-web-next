@@ -160,10 +160,20 @@ export const PastEventsPage: FC<{
       </p>
       {subscriptionHelp(appUrl)}
       <div data-archive-state>
-        {/* Native GET facet inside the swapped zone, so enhanced page turns
-            keep the selected game in sync. Changing it submits without a page
-            value, resetting to page one; the text query rides along hidden. */}
+        {/* One plain GET form for text and game, inside the swapped zone so
+            enhanced page turns keep both controls in sync. Submitting carries
+            no page value, so it starts from page one with JS off. */}
         <form method="get" action="/events/past" role="search">
+          <label class="sr-only" for="past-events-search-input">
+            Search past events
+          </label>
+          <input
+            id="past-events-search-input"
+            type="search"
+            name="q"
+            value={q}
+            placeholder="Search past events"
+          />
           <label for="past-events-game-filter">{EVENTS_GAME_FILTER_LABEL}</label>
           <select
             id="past-events-game-filter"
@@ -186,7 +196,6 @@ export const PastEventsPage: FC<{
               </option>
             ) : null}
           </select>
-          {q ? <input type="hidden" name="q" value={q} /> : null}
           <button class="btn" type="submit">
             Search
           </button>
@@ -262,6 +271,11 @@ export const PastEventsPage: FC<{
           >
             Newer
           </a>
+        ) : null}{" "}
+        {totalPages > 0 ? (
+          <span>
+            Page {page} of {totalPages}
+          </span>
         ) : null}{" "}
         {hasMore ? (
           <a
