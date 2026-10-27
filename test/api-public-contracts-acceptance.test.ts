@@ -729,7 +729,7 @@ describe("public API conditional runtime without a database (offline)", () => {
 // DB slice: unknown paths with a database, plus preserved boundaries.
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!process.env.DATABASE_URL)("public API contracts with a database", () => {
+describe("public API contracts with a database", () => {
   let fixture: MemberDataFixture;
   let db: MemberDataFixture["db"];
   let env: Env & EnvWithThrottle;
