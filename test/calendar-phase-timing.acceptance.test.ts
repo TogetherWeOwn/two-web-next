@@ -468,12 +468,17 @@ describe("real calendar route to final request-log acceptance", () => {
     expect(entries()).toEqual([]);
     now = 5;
     guard.released.resolve();
-    await Promise.all([games.entered.promise, discord.entered.promise]);
-    expect(s.steps).toEqual(["guard", "db", "session", "games", "discord"]);
+    // No game requested: the facet read is held, yet the page reads and
+    // Discord all start without waiting for it.
+    await Promise.all([
+      games.entered.promise,
+      upcoming.entered.promise,
+      past.entered.promise,
+      discord.entered.promise,
+    ]);
+    expect(s.steps).toEqual(["guard", "db", "session", "games", "upcoming", "past", "discord"]);
     now = 10;
     games.released.resolve();
-    await Promise.all([upcoming.entered.promise, past.entered.promise]);
-    expect(s.steps).toEqual(["guard", "db", "session", "games", "discord", "upcoming", "past"]);
     now = 20;
     upcoming.released.resolve();
     past.released.resolve();
@@ -513,9 +518,9 @@ describe("real calendar route to final request-log acceptance", () => {
       "db",
       "session",
       "games",
-      "discord",
       "upcoming",
       "past",
+      "discord",
       "dedupe",
       "render",
       "settle",
@@ -565,9 +570,9 @@ describe("real calendar route to final request-log acceptance", () => {
         "db",
         "session",
         "games",
-        "discord",
         "upcoming",
         "past",
+        "discord",
         "dedupe",
         "render",
       ]);
