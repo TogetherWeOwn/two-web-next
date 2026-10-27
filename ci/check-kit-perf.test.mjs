@@ -336,6 +336,22 @@ test("shipping budget: refreshed 255872-byte client raw fits", (t) => {
   assert.deepEqual(result.errors, []);
 });
 
+test("shipping budget: event-detail 256342-byte client raw fits", (t) => {
+  const fx = makeClientShippingFixture(Buffer.alloc(256342, "a"));
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 0, result.errors.join("\n"));
+  assert.deepEqual(result.errors, []);
+});
+
+test("shipping budget: event-detail 102953-byte client gzip fits", (t) => {
+  const fx = makeClientShippingFixture(bodyWithGzipBytes(102953));
+  t.after(fx.cleanup);
+  const result = fx.runCaptured();
+  assert.equal(result.code, 0, result.errors.join("\n"));
+  assert.deepEqual(result.errors, []);
+});
+
 test("shipping budget: exact client raw boundary fits and one byte above fails", (t) => {
   const fx = makeClientShippingFixture(Buffer.alloc(shippingClientBudget.maxRawBytes, "a"));
   t.after(fx.cleanup);
@@ -558,13 +574,13 @@ function shippingServerGzipCases() {
 }
 for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = false } of [
   { name: "client raw newly allowed interval", group: "kit.client.js", axis: "raw", bytes: 255856 },
-  { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256000 },
+  { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256512 },
   {
     name: "client raw one byte over",
     group: "kit.client.js",
     axis: "raw",
-    bytes: 256001,
-    ceiling: 256000,
+    bytes: 256513,
+    ceiling: 256512,
     breach: true,
   },
   ...shippingServerGzipCases(),
