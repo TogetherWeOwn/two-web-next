@@ -463,15 +463,15 @@ function shippingBodies(group, axis, bytes) {
   ];
 }
 
-function makeShippingFixture(t, group, axis, bytes) {
+function makeShippingFixture(t, group, axis, bytes, budgetBytes = SHIPPING_BUDGET_BYTES) {
   const root = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "kit-perf-shipping-"),
   );
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  // Copy the aggregated shipping plan byte-for-byte, including every
-  // unrelated group. Never pass it through makeFixture(), groupBudget() or
-  // budgetOverrides.
-  writeFixtureFile(root, "ci/kit-perf-budget.json", SHIPPING_BUDGET_BYTES);
+  // Copy the supplied plan byte-for-byte (shipping by default), including
+  // every unrelated group. Never pass it through makeFixture(), groupBudget()
+  // or budgetOverrides.
+  writeFixtureFile(root, "ci/kit-perf-budget.json", budgetBytes);
   const bodies = Object.fromEntries(
     Object.entries(SHIPPING_BASES).map(([id, body]) => [id, [body]]),
   );
@@ -486,7 +486,7 @@ function makeShippingFixture(t, group, axis, bytes) {
       writeFixtureFile(root, join(dir, `nested/${index}.${extension}`), body);
     });
   }
-  assert.deepEqual(readFileSync(join(root, "ci/kit-perf-budget.json")), SHIPPING_BUDGET_BYTES);
+  assert.deepEqual(readFileSync(join(root, "ci/kit-perf-budget.json")), budgetBytes);
   return { root, bodies };
 }
 
@@ -495,8 +495,62 @@ function makeShippingFixture(t, group, axis, bytes) {
 // The three server-gzip rows select fixed literals for the loaded allocation
 // via the explicit mapping above; unsupported ceilings produce failing
 // controls, never skips or green.
-function shippingServerGzipCases() {
-  if (SHIPPING_SERVER_GZIP_CAP === 334080) {
+test("pending budget: 335616 server gzip cases execute before the shipping cap changes", async (t) => {
+  const budget = JSON.parse(SHIPPING_BUDGET_BYTES.toString("utf8"));
+  budget.server.js.maxGzipBytes = 335616;
+  const budgetBytes = Buffer.from(JSON.stringify(budget));
+  assert.ok(
+    Object.hasOwn(SHIPPING_SERVER_GZIP_ALLOCATIONS, "335616"),
+    "pending 335616 server gzip allocation must be explicitly approved",
+  );
+  const cases = shippingServerGzipCases(335616);
+  const expected = [
+    { name: "newly allowed interval", bytes: 335465, code: 0, errors: [] },
+    { name: "exact ceiling", bytes: 335616, code: 0, errors: [] },
+    {
+      name: "one byte over",
+      bytes: 335617,
+      code: 1,
+      errors: ["kit perf budget: server js: gzip 335617B over 335616B"],
+    },
+  ];
+  assert.equal(cases.length, expected.length);
+  for (const [index, want] of expected.entries()) {
+    await t.test(want.name, (t) => {
+      const scenario = cases[index];
+      assert.ok(!scenario.unsupported, "pending 335616 server gzip cases must be supported");
+      const fx = makeShippingFixture(t, scenario.group, scenario.axis, scenario.bytes, budgetBytes);
+      const result = runJson(fx.root);
+      assert.equal(result.code, want.code, result.errors.join("\n"));
+      assert.equal(result.report.exitCode, want.code);
+      assert.equal(result.report.ok, want.code === 0);
+      assert.deepEqual(result.errors, want.errors);
+      assert.deepEqual(
+        result.report.groups.map((entry) => entry.id),
+        SHIPPING_GROUPS,
+      );
+      for (const entry of result.report.groups) {
+        const status = entry.id === "kit.server.js" && want.code === 1 ? "fail" : "pass";
+        assert.equal(entry.status, status);
+        assert.equal(entry.checks.length, 1);
+        const check = entry.checks[0];
+        assert.equal(check.status, status);
+        if (entry.id === "kit.server.js") {
+          assert.equal(check.gzipBytes, want.bytes);
+          assert.equal(check.maxGzipBytes, 335616);
+        } else {
+          assert.ok(check.gzipBytes <= check.maxGzipBytes, entry.id);
+        }
+        assert.ok(check.rawBytes <= check.maxRawBytes, entry.id);
+        if (check.files !== undefined) assert.ok(check.files <= check.maxFiles, entry.id);
+      }
+      assert.equal(result.logs.includes("kit perf budget: every Kit asset fits."), want.code === 0);
+    });
+  }
+});
+
+function shippingServerGzipCases(cap = SHIPPING_SERVER_GZIP_CAP) {
+  if (cap === 334080) {
     return [
       {
         name: "server gzip newly allowed interval",
@@ -515,7 +569,7 @@ function shippingServerGzipCases() {
       },
     ];
   }
-  if (SHIPPING_SERVER_GZIP_CAP === 335104) {
+  if (cap === 335104) {
     return [
       {
         name: "server gzip newly allowed interval",
@@ -534,7 +588,7 @@ function shippingServerGzipCases() {
       },
     ];
   }
-  if (SHIPPING_SERVER_GZIP_CAP === 335360) {
+  if (cap === 335360) {
     return [
       {
         name: "server gzip newly allowed interval",
@@ -553,7 +607,7 @@ function shippingServerGzipCases() {
       },
     ];
   }
-  if (SHIPPING_SERVER_GZIP_CAP === 335616) {
+  if (cap === 335616) {
     return [
       {
         name: "server gzip newly allowed interval",
