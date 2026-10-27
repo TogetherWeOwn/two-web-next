@@ -163,7 +163,7 @@ export async function unpublishFeatured(db: Db, actor: Actor, id: number): Promi
     if (!locked.isPublished) return false;
     await tx
       .update(featuredContents)
-      .set({ isPublished: false })
+      .set({ isPublished: false, updatedAt: new Date() })
       .where(eq(featuredContents.id, id));
     await audit(tx, {
       subjectType: "FeaturedContent",
