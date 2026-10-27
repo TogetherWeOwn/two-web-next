@@ -120,15 +120,18 @@ function kitFixture(t, fragments) {
 // above (335104) is the historical baseline; 335360 is the second,
 // independently measured saved-review allocation (combined worst 335164,
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
-// unsupported). Every other pin stays exact: the oracle rejects any ceiling
+// unsupported). 336128 is the featured stale-save refusal's allocation
+// (combined worst 336049, margin 79; see
+// ci/budgets/decisions/kit-perf/2026-10-27-featured-stale-save-server-gzip.md).
+// Every other pin stays exact: the oracle rejects any ceiling
 // outside this list, then deep-compares the rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360];
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 336128];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 336128`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
