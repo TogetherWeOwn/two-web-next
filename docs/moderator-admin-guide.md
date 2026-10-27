@@ -36,7 +36,7 @@ expires within two hours (120 minutes after its last session-refreshing page vie
 normal browsing can rotate and extend that idle window, but never beyond
 24 hours from the login that started the session lineage. Rotation preserves
 that start time; reaching the absolute cap requires a fresh sign-in and role
-lookup. Kit-served admin pages renew the sliding session exactly like the Hono
+lookup. Kit-served admin pages rotate the session exactly like the Hono
 panel, under the same absolute cap. For immediate invalidation,
 an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply

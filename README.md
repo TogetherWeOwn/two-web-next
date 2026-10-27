@@ -29,6 +29,12 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 ## Event search
 
+Upcoming text searches mark locatable title matches and show a relevant, bounded
+passage from the description. Open **Full description** to read the original text.
+Search text is literal, including `%`, `_` and backslash. Matching stays database-led:
+a returned event can show an unmarked excerpt when its match cannot be located
+faithfully for display. Clear the text search to restore ordinary compact cards.
+
 The upcoming schedule's **Filter by game** select works in list and calendar views.
 Choose a game and submit **Search**, with or without JavaScript; combine it with a
 title/description search when needed. Share the resulting `?game=` URL. Matching
@@ -276,7 +282,10 @@ to execute the same Chromium proof.
 | `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/event-chosen-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-chosen-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/profile-local-time-comparison-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-comparison-acceptance.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/profile-local-time-save.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-save.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `test/member-profile-native-422-baseline.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/member-profile-native-422-baseline.test.ts` |
 | `test/profile-composition-browser.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-composition-browser.test.ts` |

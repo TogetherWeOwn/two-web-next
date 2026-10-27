@@ -49,12 +49,49 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
   shift text rendering, so either bump is expected to re-baseline through the
   failure artifact in its own PR.
 
+## Evidence lookup
+
+The stable lookup keys here are existing spec/config paths, not a new gate.
+[`e2e.yml`](../.github/workflows/e2e.yml) owns execution order and artifact paths.
+
+| Spec / gate | Existing command | Evidence location |
+| --- | --- | --- |
+| [`public-pages.visual.ts`](../e2e/visual/public-pages.visual.ts) (Hono) | `npx playwright test --config playwright.visual.config.ts` in `browser-smoke` | `test-results-visual/`, `playwright-report-visual/`, `e2e/visual/__screenshots__/` |
+| [`events-index.visual.spec.ts`](../e2e/kit-parity/events-index.visual.spec.ts) (imports viewer visuals) | `npx playwright test --config playwright.kit-visual.config.ts` in `browser-smoke`, before mutable journeys | `test-results-kit-visual/`, `e2e/visual/__screenshots-kit__/`; list reporter only, no Kit-visual HTML report |
+| [`parity.spec.ts`](../e2e/kit-parity/parity.spec.ts) and [`auth-boundaries.spec.ts`](../e2e/kit-parity/auth-boundaries.spec.ts) | `npx playwright test --config playwright.kit-parity.config.ts e2e/kit-parity/parity.spec.ts e2e/kit-parity/auth-boundaries.spec.ts` in `browser-smoke`, after critical journeys | `test-results-kit-parity/`, `playwright-report-kit-parity/`, `test-results/kit-parity-journeys.json`; `ci/check-kit-parity.mjs` writes `test-results/kit-parity-ledger.{json,md}` |
+
+For a read-only local reachability check, use
+`node ci/test-inventory.mjs --strict --json`: existing machine output includes
+`checkId: "playwright-spec-reachability"`, `ok`, `code`, `total`, `reachable`,
+`orphans` and `next_action`. It follows the viewer import without
+loading browser configs or starting workers. Reachability is not executed-test
+evidence. Do not fake runner variables to bypass
+[`e2e/ci-only.mjs`](../e2e/ci-only.mjs), even to load a config for `--list`.
+See [Kit visual states](kit-parity-gates.md#visual-gates) and the
+[read-only performance lookup](performance-budgets.md#read-only-evidence-lookup).
+
+Local fixture screenshots show rendering only; Hono a11y/Lighthouse gates do
+not exercise Kit routes. Kit-specific execution needs its own reports, and
+neither fixture screenshots nor CI parity prove a live release. Use the
+[release contract](releases.md) for exact-revision deployed evidence.
+
 ## When a diff is intentional
 
-1. Download the `e2e-failure-<run>` artifact from the failed run. It holds the
-   expected, actual and diff images under `test-results-visual/`, the whole
-   `e2e/visual/__screenshots__/` directory (committed baselines plus any newly
-   generated ones), and an HTML report under `playwright-report-visual/`.
+1. Download `e2e-failure-<run_id>-<run_attempt>` from the failed `browser-smoke`
+   run and attempt; the exact workflow name is
+   `e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}`. The failure-only
+   upload retains files for 7 days and ignores missing paths. It includes Hono
+   expected/actual/diff images under `test-results-visual/`, committed and newly
+   generated baselines in `e2e/visual/__screenshots__/`, and the HTML report in
+   `playwright-report-visual/`. It also collects `test-results/`,
+   `playwright-report/`, `test-results-kit-visual/`, `test-results-kit-parity/`,
+   `playwright-report-kit-parity/` and `e2e/visual/__screenshots-kit__/` when
+   present; Kit screenshots must use the Kit accept script below, not Hono's.
+   If the artifact or a required image is missing, check the exact attempt's
+   step logs, upload condition and retention. A skipped/not-started suite or an
+   expired/missing upload is not a visual PASS. Obtain the matching evidence
+   through the existing CI flow; do not substitute a different attempt's images
+   or regenerate baselines locally.
 2. Check every diff image. Only accept changes the PR meant to make.
 3. Run `node ci/visual-accept.mjs <unzipped-artifact-dir>`, which copies each
    `*-actual.png` over its baseline and each new baseline into place. Only

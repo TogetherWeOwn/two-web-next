@@ -218,7 +218,7 @@ for (const twin of ["Hono", "Kit"] as const) {
       const series = traces.filter((q) => isSeries(q.sql));
       expect(series).toHaveLength(1);
       expect(series[0]!.rows).toBe(3);
-      expect(series[0]!.columns).toHaveLength(9);
+      expect(series[0]!.columns).toHaveLength(12);
       const limit = /\blimit\s+\$(\d+)/i.exec(series[0]!.sql);
       expect(limit).not.toBeNull();
       expect(series[0]!.params[Number(limit![1]) - 1]).toBe(53);

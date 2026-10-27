@@ -137,11 +137,15 @@ export function eventSearchLogEntry(
   };
 }
 
-/* Past drawer (legacy showPast): opens one way, stays open; searching reveals
- * past matches regardless. The drawer is an island addition — the legacy blade
- * dropped the visible trigger when the archive page shipped. */
+/* Past drawer (legacy showPast): a manually opened preview closes again with
+ * the matching Hide turn; searching reveals past matches regardless and
+ * offers no Hide — closing the manual flag would not close a search. Both
+ * turns share one testid so the binder's focus restoration treats them as
+ * the same control across the swap. The drawer is an island addition — the
+ * legacy blade dropped the visible trigger when the archive page shipped. */
 export const EVENTS_PAST_TOGGLE_TESTID = "events-past-toggle";
 export const EVENTS_PAST_TOGGLE_COPY = "Show past events";
+export const EVENTS_PAST_HIDE_COPY = "Hide past events";
 export const EVENTS_PAST_LIST_TESTID = "events-past-list";
 export const EVENTS_PAST_LIST_HEADING = "Past events";
 export const EVENTS_PAST_STATUS_TESTID = "events-past-status";
@@ -161,12 +165,16 @@ export const EVENTS_UPCOMING_PAGE_SIZE = 20;
  * at the soonest rows so the render cannot blow up. */
 export const EVENTS_MONTH_GRID_LIMIT = 200;
 export const EVENTS_PAGER_TESTID = "events-pager";
+export const EVENTS_PAGER_FIRST_TESTID = "events-pager-first";
 export const EVENTS_PAGER_PREV_TESTID = "events-pager-prev";
 export const EVENTS_PAGER_NEXT_TESTID = "events-pager-next";
+export const EVENTS_PAGER_LAST_TESTID = "events-pager-last";
 export const EVENTS_PAGER_STATUS_TESTID = "events-pager-status";
 export const EVENTS_PAGER_LABEL = "Upcoming event pages";
+export const EVENTS_PAGER_FIRST_COPY = "First page";
 export const EVENTS_PAGER_PREV_COPY = "Previous page";
 export const EVENTS_PAGER_NEXT_COPY = "Next page";
+export const EVENTS_PAGER_LAST_COPY = "Last page";
 export const EVENTS_OUT_OF_RANGE_TESTID = "events-out-of-range";
 export function upcomingEventsOutOfRangeCopy(page: number, totalPages: number): string {
   return `Page ${page} is outside the schedule. There ${totalPages === 1 ? "is" : "are"} ${totalPages} ${totalPages === 1 ? "page" : "pages"}.`;
@@ -397,12 +405,17 @@ export const GRID_CANCELLED_COPY = "Cancelled";
  * then the day. Long titles keep the truncated visible form first so axe
  * label-content-name-mismatch passes, then the full title; short titles are
  * not duplicated. Cancelled entries lead with the same visible words plus
- * the badge, retaining the full title and day. */
+ * the badge, retaining the full title and day. The optional availability
+ * suffix ("2 seats left", "RSVPs paused", …) sits inside the visible
+ * prefix — right after the title words, before the restored full title and
+ * day — so the visible label stays a contiguous prefix of the name.
+ * Cancelled entries never carry availability: the badge is the verdict. */
 export function gridAccessibleName(
   title: string,
   startsAt: Date,
   zone: string,
   cancelled = false,
+  availability: string | null = null,
 ): string {
   const truncated = gridTitle(title);
   const time = wallTimeHm(startsAt, zone);
@@ -413,18 +426,23 @@ export function gridAccessibleName(
     const fullTitle = truncated === title ? "" : `, ${title}`;
     return `${time} ${truncated} ${GRID_CANCELLED_COPY}${fullTitle}, ${day}`;
   }
-  return truncated === title ? `${time} ${title}, ${day}` : `${time} ${truncated} ${title}, ${day}`;
+  const suffix = availability ? ` ${availability}` : "";
+  return truncated === title
+    ? `${time} ${title}${suffix}, ${day}`
+    : `${time} ${truncated}${suffix} ${title}, ${day}`;
 }
 
 /** Continuation link name starts with the visible "Continues title" (WCAG
  * 2.5.3), then the displayed day — never the original start. Long titles keep
  * the truncated visible form first so axe label-content-name-mismatch passes,
  * then the full title; short titles are not duplicated. Cancelled entries
- * add the badge after the visible words. */
+ * add the badge after the visible words. The optional availability suffix
+ * sits inside the visible prefix, like {@link gridAccessibleName}. */
 export function gridContinuationAccessibleName(
   title: string,
   dayIso: string,
   cancelled = false,
+  availability: string | null = null,
 ): string {
   const truncated = gridTitle(title);
   const day = calendarDayLongLabel(dayIso);
@@ -435,9 +453,10 @@ export function gridContinuationAccessibleName(
     const fullTitle = truncated === title ? "" : `, ${title}`;
     return `Continues ${truncated} ${GRID_CANCELLED_COPY}${fullTitle}, ${day}`;
   }
+  const suffix = availability ? ` ${availability}` : "";
   return truncated === title
-    ? `Continues ${title}, ${day}`
-    : `Continues ${truncated} ${title}, ${day}`;
+    ? `Continues ${title}${suffix}, ${day}`
+    : `Continues ${truncated}${suffix} ${title}, ${day}`;
 }
 
 /* Discord-native rows (TOG-5168): display-only transients merged into the

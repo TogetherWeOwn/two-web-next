@@ -59,6 +59,7 @@ async function card(e: CalRow, member: boolean, isPast: boolean): Promise<string
   return jsx(CalCard, {
     e,
     zone: "Europe/London",
+    now: new Date("2099-01-01T12:00:00Z"),
     isPast,
     member,
     inviteUrl: "https://discord.gg/example",

@@ -265,6 +265,7 @@ exactly once.
 | `src/ai-friendly/` | content |
 | `src/admin/` | admin |
 | `src/admin-wayback.ts` | admin |
+| `src/admission-diagnostics.ts` | observability |
 | `src/agent-events/` | agent-events |
 | `src/alert-probe-error.ts` | observability |
 | `src/alert-probe.ts` | observability |

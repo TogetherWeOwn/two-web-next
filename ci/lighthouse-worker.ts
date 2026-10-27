@@ -19,7 +19,7 @@ const eventColumns = getTableColumns(events);
 const columns = Object.keys(eventColumns) as (keyof typeof events.$inferSelect)[];
 const eventSelect = `select ${columns.map((key) => `"${eventColumns[key].name}"`).join(", ")} from "events"`;
 const linkSelect =
-  'select "id", "event_key", "title", "starts_at", "timezone", "location" from "events"';
+  'select "id", "event_key", "title", "starts_at", "ends_at", "timezone", "location", "game", "rsvp_open" from "events"';
 const timeoutsSql =
   "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)";
 const featuredSql =
