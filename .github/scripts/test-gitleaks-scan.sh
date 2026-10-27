@@ -428,5 +428,49 @@ plant_rss_keys "${rss_path}"
 pr_commit
 expect "RSS: merged base policy admits the fixture history" 0 "$(scan_rc pull_request)"
 
+# -- candidate parity fixture: exact rule/path/value, including new SHAs -------
+# Read the candidate policy, so broadening it makes the negative controls fail.
+parity_policy="${here}/../../.gitleaks.toml"
+parity_path="test/mcp-rest-parity-acceptance.test.ts"
+# Build fixture values at run time so the self-test adds no scannable literals.
+parity_ulid="$(printf '%s' 01B RZ3NDEKTSV4RRFFQ69G5FAV)"
+plant_parity_ulid() {
+  mkdir -p "${repo}/$(dirname "$1")"
+  printf 'const UNKNOWN_KEY = "%s";\n' "${parity_ulid}" > "${repo}/$1"
+}
+new_repo parity-approved
+plant_parity_ulid "${parity_path}"
+base_commit
+expect_policy_scan "parity: stock detects the unknown-event fixture" "${work}/stock.toml" 1 \
+  '[["generic-api-key","test/mcp-rest-parity-acceptance.test.ts",1]]'
+expect_policy_scan "parity: candidate excludes only the approved fixture" "${parity_policy}" 0 '[]'
+# A commit-bound fingerprint would fail here and after a squash merge.
+printf '\nconst UNKNOWN_KEY = "%s";\n' "${parity_ulid}" > "${repo}/${parity_path}"
+pr_commit
+expect_policy_scan "parity: exception survives a new commit and line number" "${parity_policy}" 0 '[]'
+
+new_repo parity-other-secrets
+mkdir -p "${repo}/test"
+printf 'api_key = "%s"\nvalue = "%s"\nconst UNKNOWN_KEY = "%sX";\n' \
+  "$(printf 'parity negative-control fixture' | sha256sum | cut -c1-32 | base64 -w0)" "${token}" "${parity_ulid}" \
+  > "${repo}/${parity_path}"
+base_commit
+expect_policy_scan "parity: other values, longer values and another secret rule remain detected" \
+  "${parity_policy}" 1 \
+  '[["generic-api-key","test/mcp-rest-parity-acceptance.test.ts",1],["github-pat","test/mcp-rest-parity-acceptance.test.ts",2],["generic-api-key","test/mcp-rest-parity-acceptance.test.ts",3]]'
+
+for path in \
+  test/other.test.ts \
+  nested/test/mcp-rest-parity-acceptance.test.ts \
+  test/mcp-rest-parity-acceptance.test.ts.bak \
+  test/mcp-rest-parity-acceptanceXtest.ts \
+  test/mcp-rest-parity-acceptance.testXts; do
+  new_repo "parity-path-${cases}"
+  plant_parity_ulid "${path}"
+  base_commit
+  expected="$(printf '[["generic-api-key","%s",1]]' "${path}")"
+  expect_policy_scan "parity: approved value remains detected at ${path}" "${parity_policy}" 1 "${expected}"
+done
+
 printf '\n%d cases, %d failed\n' "${cases}" "${failures}"
 [[ "${failures}" -eq 0 ]]
