@@ -28,11 +28,20 @@ JS grows 254926/102621B -> 255261/102762B (the same Svelte page ships a
 structural client node) and still fits its unchanged 256000/103168B
 ceilings, client CSS is unchanged.
 
+## Re-measure after main moved to `cb0f15736`
+
+Merged tree (this change on `cb0f15736`, two fresh production builds, 116
+server files): 1186441 raw / 335601 gzip and 1186437 raw / 335600 gzip, both
+exit 0 against 335616 (margin 15). Client JS 255261/102762B and worker
+2551/1219B are unchanged by the merge. The earlier 335588 reading was taken
+on `cd50096f3`; main's session changes since then add about 13B.
+
 ## Shipping tests
 
-`ci/check-kit-perf.test.mjs` gains an additive 335616 allocation (fixed
-335588 / 335616 / 335617 interval, exact and one-byte-over literals; existing
-entries byte-identical). `ci/budget-fragments.test.mjs` admits 335616 in
+`ci/check-kit-perf.test.mjs` already carries the 335616 allocation on main
+(interval 335504, landed separately); this change keeps that single key rather
+than forking it. This feature's measurement, 335588, lies in the same
+(335360, 335616] interval, so it proves the same step. `ci/budget-fragments.test.mjs` admits 335616 in
 `SHIPPING_SERVER_GZIP_ALLOCATIONS`; its unsupported-allocation control moves
 from 335616 to 335617 and 335872.
 

@@ -389,8 +389,8 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // independently justified 335104 ceiling (combined worst 334994, margin 110;
 // lower 334848 rejects by 146), the independently justified 335360 ceiling
 // (combined worst 335338, margin 22; lower 335104 rejects by 234), and the
-// independently justified 335616 ceiling (schedule print scope line, combined
-// worst 335588, margin 28; lower 335360 rejects by 228), and the
+// independently justified 335616 ceiling (combined worst 335504, margin 112;
+// lower 335360 rejects by 144), and the
 // independently justified 335872 ceiling (combined worst 335624, margin 248;
 // lower 335616 rejects by 8).
 // Fixture lengths below are fixed literals
@@ -408,7 +408,7 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   334080: { intervalBytes: 333639, exactBytes: 334080, overBytes: 334081 },
   335104: { intervalBytes: 334994, exactBytes: 335104, overBytes: 335105 },
   335360: { intervalBytes: 335338, exactBytes: 335360, overBytes: 335361 },
-  335616: { intervalBytes: 335588, exactBytes: 335616, overBytes: 335617 },
+  335616: { intervalBytes: 335504, exactBytes: 335616, overBytes: 335617 },
   335872: { intervalBytes: 335624, exactBytes: 335872, overBytes: 335873 },
 };
 
@@ -562,7 +562,7 @@ function shippingServerGzipCases() {
         name: "server gzip newly allowed interval",
         group: "kit.server.js",
         axis: "gzip",
-        bytes: 335588,
+        bytes: 335504,
       },
       { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 335616 },
       {
