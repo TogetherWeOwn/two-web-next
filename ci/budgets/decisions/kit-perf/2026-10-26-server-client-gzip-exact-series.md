@@ -1,5 +1,66 @@
 # 2026-10-26 decision: admit exact-series review server+client gzip growth
 
+## Current decision after main advanced
+
+Rechecked main `4b2a8ce3f9126536d4d107840d97ed8ff92ed49a` against the
+original pin with `git diff --name-status f6b97d9f0..origin/main`. PR #1831
+changed Kit build dependencies (Vite 8.3.4 -> 8.3.5, Wrangler 4.151.0 ->
+4.152.0, svelte-check 4.7.6 -> 4.7.7), so the original green was not carried
+forward. PR #1833 already supplied client gzip 103168B. The net ceiling
+change here is now server gzip 335104 -> 336128 only; the client allocation
+is inherited, not raised again.
+
+Keep the requested server ceiling covering the historical maximum 335899B
+below. It is the smallest 256B-aligned cover of that historical maximum,
+NOT the smallest fit for the refreshed output. The refreshed minimum
+aligned fits are server 335872B and client 102912B. This distinction is
+intentional and visible to independent review; no lower-current-boundary
+failure is claimed for those historical values.
+
+Refreshed main and combined tree were each built twice, with locked web
+dependencies installed separately via `npm ci --include=dev` per archive,
+Node 24.22.1/npm 11.19.1, `npm run build --prefix <archive>/web`, then
+`node ci/check-kit-perf.mjs --root <archive> --format json`. Combined tree
+`7ef0d170a2b2cba1dd067371153bcbe2301fe117` is the clean merge of refreshed
+main and unchanged PR #1764 head `20684191d62abdc6a17379bbdac6e804153af792`;
+measurement archives overlay only the requested gzip ceilings.
+
+| Tree / run | Server raw | Server gzip | Client raw | Client gzip | Gate |
+| --- | ---: | ---: | ---: | ---: | --- |
+| Refreshed main / 1 | 1182156 | 334739 | 254691 | 102574 | exit 0 |
+| Refreshed main / 2 | 1182154 | 334740 | 254691 | 102574 | exit 0 |
+| Combined / 1 | 1186500 | 335786 | 255708 | 102902 | exit 0 |
+| Combined / 2 | 1186502 | 335790 | 255708 | 102902 | exit 0 |
+
+All four builds retain server 116 files, client 54 files, Worker
+2551 raw/1219 gzip bytes, and CSS 2 files at 2861 raw/1019 gzip bytes.
+Worst refreshed margins: server gzip 338B under 336128, client gzip 266B
+under inherited 103168, client raw 292B under unchanged 256000. Server
+gzip spans 4B across the combined rebuilds; the historical +/-3B is not a
+guaranteed bound. Client gzip remains identical within each pair.
+
+Refreshed run-2 attribution retains `server/chunks/admin.js` +4303 raw
+(412777 -> 417080), events server page +43 raw (854 -> 897), and instance
+hash churn +2 raw. Manifest/internal/node hashes change at identical sizes.
+Client nodes/13 remains +760 raw (7492 -> 8252), nodes/14 +257 raw
+(11164 -> 11421); app entry renames at identical 5596B, with 51/54 client
+files unchanged. No new chunks.
+
+Refreshed boundary probes on combined run 2: server 335616B rejects
+335790B (exit 1); client 102656B rejects 102902B (exit 1). Historical
+server 335872B now PASSES by 82B, and old client 102912B now PASSES by 10B
+(both exit 0). Those are not fresh rejection proofs. The historical
+rejections below remain evidence for the original build pin only.
+
+Reviewer-owned pin coevolution accompanies this decision: additive server
+336128 and client 103168 interval/exact/one-byte-over cases, retaining
+prior allocations and both main/original client raw intervals. Only the
+two pinning test files change beside the server fragment and this record;
+no product code, checker, workflow, dependency, raw/files ceiling, or other
+budget changes relative to refreshed main.
+
+## Historical proposal and measurements at the original pin
+
 `server.js.maxGzipBytes` rises 335104 -> 336128 (+1024B, four 256B steps)
 in `ci/budgets/kit/server-js.json`; `client.js.maxGzipBytes` rises 102912 ->
 103168 (+256B, one step) in `ci/budgets/kit/client-js.json`. No other
@@ -67,4 +128,6 @@ Client raw 54B margin is tight but fits; no raw move. Exact-head CI and
 independent review remain mandatory; no feature, staging or release
 acceptance is claimed.
 
-Undo: revert both fragment `maxGzipBytes` values and delete this file.
+Undo on refreshed main: revert this slice's server fragment to 335104B,
+restore its additive test changes, and delete this file. Do not revert the
+103168B client allocation or other changes inherited from PR #1833.
