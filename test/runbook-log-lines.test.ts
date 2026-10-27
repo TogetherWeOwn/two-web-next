@@ -653,3 +653,172 @@ describe("refused-write and invite-config warning docs", () => {
     expect(leaves).toContain("c.redirect(destination, 302)");
   });
 });
+
+describe("kit session-bridge and auth-status probe runbook row cites", () => {
+  const HEADING = "### Kit session-bridge and auth-status probe warnings";
+  const ROUTE_OWNERSHIP = "src/route-ownership.ts";
+  const KIT_SESSION = "src/kit-session.ts";
+  const BRIDGE = "kit session bridge unavailable; rendering without locals.";
+  const PROBE = "kit auth-status probe unavailable; rendering without probe cookie.";
+  const ROTATION = "kit event-detail rotation unavailable; rendering without renewal.";
+  const ADMIN = "kit admin renewal unavailable; rendering without renewal.";
+
+  function section(): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(HEADING);
+    expect(start, `missing ${HEADING} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + HEADING.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  function rowFor(message: string): string {
+    const row = section()
+      .split("\n")
+      .find((l) => l.startsWith(`| \`${message}\` |`));
+    expect(row, `missing row for \`${message}\` in ${HEADING}`).toBeDefined();
+    return row as string;
+  }
+
+  function sourceLines(file: string): string[] {
+    return readFileSync(file, "utf8").split("\n");
+  }
+
+  /** 1-based line of the console.warn emitting the literal message. */
+  function warnLine(file: string, message: string): number {
+    const idx = sourceLines(file).findIndex(
+      (l) => l.includes("console.warn") && l.includes(`"${message}"`),
+    );
+    expect(idx, `${file} still warns "${message}"`).toBeGreaterThanOrEqual(0);
+    return idx + 1;
+  }
+
+  /**
+   * `file:start-end` of the construct opening at the first line matching
+   * `open` (a line offset back handles a multi-line `if (`) and closing at the
+   * first later line equal to `close` (the construct's own indentation).
+   */
+  function span(file: string, open: RegExp, close: string, backOffset = 0): string {
+    const lines = sourceLines(file);
+    const at = lines.findIndex((l) => open.test(l));
+    expect(at, `${file} still declares ${open}`).toBeGreaterThanOrEqual(0);
+    const start = at - backOffset;
+    const end = lines.findIndex((l, i) => i > at && l === close);
+    expect(end, `${file} closes ${open} with "${close}"`).toBeGreaterThan(at);
+    return `${file}:${start + 1}-${end + 1}`;
+  }
+
+  /** Every `src/<file>.ts:N-M` or `:N-M` range cited anywhere in the row. */
+  function cites(row: string): string[] {
+    return [...row.matchAll(/src\/(?:route-ownership|kit-session)\.ts:\d+-\d+/g)].map((m) => m[0]);
+  }
+
+  const ownership = {
+    viewerOf: () => span(ROUTE_OWNERSHIP, /^function viewerOf\(/, "}"),
+    bridge: () => span(ROUTE_OWNERSHIP, /^ {2}const bridgeSession = async/, "  };"),
+    probe: () => span(ROUTE_OWNERSHIP, /^ {4}deps\.authStatusCookieFor &&$/, "  }", 1),
+    rotationPredicate: () =>
+      span(ROUTE_OWNERSHIP, /^function releasedEventDetailRenewsSession\(/, "}"),
+    rotationAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(deps\.eventDetailRotationFor &&/, "  }"),
+    adminPredicate: () => span(ROUTE_OWNERSHIP, /^function releasedAdminRenewsSession\(/, "}"),
+    adminAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(deps\.adminRenewalFor &&/, "  }"),
+  };
+  const session = {
+    bridge: () => span(KIT_SESSION, /^export function kitSessionBridge\(/, "}"),
+    rotation: () => span(KIT_SESSION, /^export function kitEventDetailRotationFor\(/, "}"),
+    adminRenewal: () => span(KIT_SESSION, /^export function kitAdminRenewalFor\(/, "}"),
+    signer: () => span(KIT_SESSION, /^export function kitAuthStatusCookieFor\(/, "}"),
+  };
+
+  /** The row names the span (a `file:N-M` string) computed from the source now. */
+  function expectCited(row: string, cite: string): void {
+    expect(row, `row cites ${cite}`).toContain(cite);
+  }
+
+  /** The cite's line range holds the emitting console.warn. */
+  function expectContainsWarn(cite: string, file: string, message: string): void {
+    const [, start, end] = cite.match(/:(\d+)-(\d+)$/) as RegExpMatchArray;
+    const at = warnLine(file, message);
+    expect(at, `${cite} contains the "${message}" warn at ${at}`).toBeGreaterThanOrEqual(
+      Number(start),
+    );
+    expect(at).toBeLessThanOrEqual(Number(end));
+  }
+
+  it("says four warnings and has a row for each", () => {
+    const body = section();
+    expect(body).toContain("Four `console.warn` lines from the Kit hook dispatch");
+    for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) rowFor(message);
+    // Exactly four warn emitters in the dispatch, so a fifth cannot land unrowed.
+    const emits = sourceLines(ROUTE_OWNERSHIP).filter(
+      (l) => l.includes("console.warn") && /"kit [a-z-]+ [a-z-]+ unavailable;/.test(l),
+    );
+    expect(emits).toHaveLength(4);
+  });
+
+  it("pins every range cite to the span it names, with the emitting warn inside", () => {
+    const bridge = rowFor(BRIDGE);
+    expectCited(bridge, ownership.bridge());
+    expectCited(bridge, ownership.viewerOf());
+    expectCited(bridge, session.bridge());
+    expectContainsWarn(ownership.bridge(), ROUTE_OWNERSHIP, BRIDGE);
+
+    const probe = rowFor(PROBE);
+    expectCited(probe, ownership.probe());
+    expectCited(probe, session.signer());
+    expectContainsWarn(ownership.probe(), ROUTE_OWNERSHIP, PROBE);
+
+    const rotation = rowFor(ROTATION);
+    expectCited(rotation, ownership.rotationPredicate());
+    expectCited(rotation, ownership.rotationAppend());
+    expectCited(rotation, session.rotation());
+    expectContainsWarn(ownership.rotationAppend(), ROUTE_OWNERSHIP, ROTATION);
+
+    const admin = rowFor(ADMIN);
+    expectCited(admin, ownership.adminPredicate());
+    expectCited(admin, ownership.adminAppend());
+    expectCited(admin, session.adminRenewal());
+    expectContainsWarn(ownership.adminAppend(), ROUTE_OWNERSHIP, ADMIN);
+  });
+
+  it("leaves no cite in these rows that is not one of the pinned spans", () => {
+    const allowed: Record<string, string[]> = {
+      [BRIDGE]: [ownership.bridge(), ownership.viewerOf(), session.bridge()],
+      [PROBE]: [ownership.probe(), session.signer()],
+      [ROTATION]: [ownership.rotationPredicate(), ownership.rotationAppend(), session.rotation()],
+      [ADMIN]: [ownership.adminPredicate(), ownership.adminAppend(), session.adminRenewal()],
+    };
+    for (const [message, spans] of Object.entries(allowed)) {
+      for (const cite of cites(rowFor(message))) {
+        expect(spans, `${cite} in the "${message}" row is not a pinned span`).toContain(cite);
+      }
+    }
+  });
+
+  it("pins the cited test cases to existing `it(` lines", () => {
+    for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) {
+      for (const m of rowFor(message).matchAll(/`(test\/[\w-]+\.test\.ts):(\d+)`/g)) {
+        const [, file, line] = m as unknown as [string, string, string];
+        const text = sourceLines(file)[Number(line) - 1] ?? "";
+        expect(text, `${file}:${line} cited in the "${message}" row`).toMatch(/^\s*it\(/);
+      }
+    }
+  });
+
+  it("carries the class-only exception field on every Kit dispatch warn", () => {
+    const source = readFileSync(ROUTE_OWNERSHIP, "utf8");
+    for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) {
+      const start = source.indexOf(`console.warn("${message}"`);
+      expect(start, `missing warn "${message}"`).toBeGreaterThanOrEqual(0);
+      const payload = source.slice(start, source.indexOf("});", start));
+      expect(payload).toContain("exception");
+      expect(payload).not.toContain("request_id");
+    }
+  });
+
+  it("documents each message as class-only in its row", () => {
+    for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) {
+      expect(rowFor(message)).toContain("`exception`");
+    }
+  });
+});
