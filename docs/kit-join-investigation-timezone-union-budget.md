@@ -1,6 +1,6 @@
 # Join investigation and chosen-timezone composition budget
 
-Measured 2026-10-27 on main `5919f44c4ab860c00e2d5d953ec0d8b1f79a9b0f`
+Measured 2026-10-27 on main `227414575dd8fffe8ebe245086442ce5a20ca174`
 (re-measured after the archive-search and Happening-now changes grew the Kit
 bundles again); this supersedes the earlier measurements, whose proposal
 numbers are stale. This separate allocation covers the
@@ -23,7 +23,7 @@ remain unchanged.
 ## Pinned inputs and reproducibility
 
 - Behavior head (frozen, unchanged): `2ae12d2c2738d337112e4c8ca87762046dca0e20`.
-- Main: `5919f44c4ab860c00e2d5d953ec0d8b1f79a9b0f`.
+- Main: `227414575dd8fffe8ebe245086442ce5a20ca174`.
 - Measurement tree: behavior head merged into that main (unrecorded tree id; reproduce with `git merge` and accept the monolith deletion).
 
 Merging the behavior head into main conflicts only on the deleted monolith
@@ -57,7 +57,8 @@ Main fits every ceiling. The composition exceeds the retained server gzip
 336128 B by **518 B**, client raw 257024 B by **313 B** and client gzip
 103168 B by **474 B**. Client paths and sizes are identical within
 each tree's repeated builds; server gzip wobbled 1-2 B across each pair and the
-allocation uses the larger observed value.
+allocation uses the largest observed value (336646 B over all builds; a later
+pair of rebuilds on a newer main read 336644 / 336645 B with identical raw totals).
 
 Worker and CSS are identical in every build: worker **2551 raw / 1219 gzip B**;
 client CSS **2 files, 2861 raw / 1019 gzip B**.
@@ -124,10 +125,10 @@ Controls run the unchanged checker on the retained composition output, changing
   336644 B, within the 1-2 B jitter); the exact observed totals accept.
 
 The unchanged checker passes its selftests, and the updated boundary pins pass:
-`check-kit-perf.test.mjs` and `budget-fragments.test.mjs` 70/70 together,
-including the new 336896 server arm and admission case and the moved client raw
-and gzip exact/one-over pins. With the
-fragments at main's values the new pins fail 6 cases (red-before). No
+`check-kit-perf.test.mjs` and `budget-fragments.test.mjs` 73/73 together,
+including the new 336896 server arm and admission case. Main's tests already
+admit the 257536/103680 client arms, so with the fragments at main's values
+only 1 case fails (the aggregate fragment pin, red-before). No
 author-owned test was weakened; only ceiling literals moved with their fragments.
 This does not claim a full application check, browser, visual, accessibility,
 Lighthouse, startup-latency, staging or production verification.

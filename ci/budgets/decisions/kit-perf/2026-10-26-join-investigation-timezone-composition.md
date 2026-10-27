@@ -14,7 +14,7 @@ carried forward.
 
 - Behavior head (frozen, unchanged): `2ae12d2c2738d337112e4c8ca87762046dca0e20`
   (join investigation return context, PR #1705).
-- Main at measurement: `5919f44c4ab860c00e2d5d953ec0d8b1f79a9b0f`.
+- Main at measurement: `227414575dd8fffe8ebe245086442ce5a20ca174`.
 - Measurement tree: the behavior head merged into that main; the only
   conflict is the modify/delete of the removed monolith
   `ci/kit-perf-budget.json`, resolved by accepting the deletion, so the tree
@@ -28,7 +28,10 @@ carried forward.
 Two locked `npm run build --prefix web` + `node ci/check-kit-perf.mjs`
 runs per tree. Client totals are byte-identical across repeats; server
 gzip wobbled 1-2 B between builds (main 335838 / 335837, composition
-336646 / 336644); the larger value is used.
+336646 / 336644); a later pair of rebuilds on a newer main (only
+Hono-island and test changes in between) read main 335839 / 335840 and
+composition 336644 / 336645 with identical raw totals. The largest value over
+all builds, 336646, is used.
 
 | Tree | Server files | Server raw B | Server gzip B | Client files | Client raw B | Client gzip B |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: |
