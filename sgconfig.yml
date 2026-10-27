@@ -15,6 +15,6 @@ testConfigs:
   - testDir: sg-tests
 languageGlobs:
   TypeScript:
-    - '**/*.cjs'
-    - '**/*.mjs'
-    - '**/*.js'
+    - "**/*.cjs"
+    - "**/*.mjs"
+    - "**/*.js"
