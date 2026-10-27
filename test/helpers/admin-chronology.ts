@@ -357,6 +357,7 @@ export async function readChronology(
         try {
           data = await (surface === "roster" ? kit.loadRoster : kit.loadActivity)({
             parent: () => kit.layout({ locals, url, setHeaders }),
+            locals,
             params: { key: eventKey },
             url,
             setHeaders,
