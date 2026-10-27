@@ -39,7 +39,8 @@ const destination = (nextScope: string, nextSeason = season) => {
 >
   <p class="strap">Members only</p>
   <h1>Member leaderboard</h1>
-  <p>Members ranked by events they answered going to, for season {season} and {label}. Members can opt out of leaderboards; see the <a href="/privacy">privacy policy</a>.</p>
+  <p>Members ranked by their Going responses to events, not observed attendance, for season {season} and {label}. Members can opt out of leaderboards; see the <a href="/privacy">privacy policy</a>.</p>
+  <p><a href="/profile#edit-heading">Manage leaderboard visibility</a> in your own profile. Hiding yourself removes you from every board and every count.</p>
   <nav aria-label="Board scope">
     <ul>
       <li><a href={destination("overall")} aria-current={scope === "overall" ? "page" : undefined}>Overall</a></li>
@@ -64,7 +65,7 @@ const destination = (nextScope: string, nextSeason = season) => {
     <p><button class="btn" type="submit">Show board</button></p>
   </form>
   {#if !available}
-    <p role="status">Rankings are temporarily unavailable.</p>
+    <p role="status">Rankings are temporarily unavailable. <a href={destination(scope)}>Retry rankings</a></p>
   {:else if rows.length === 0}
     <p role="status">{scope === "relative" ? "You are not ranked for this season and game yet." : "Nobody is ranked for this season and game yet."}</p>
   {:else}

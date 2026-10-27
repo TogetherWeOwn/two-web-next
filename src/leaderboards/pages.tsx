@@ -44,8 +44,13 @@ export const MemberLeaderboardPage: FC<{
         <p class="strap">Members only</p>
         <h1>Member leaderboard</h1>
         <p>
-          Members ranked by events they answered going to, for season {query.season} and {label}.
-          Members can opt out of leaderboards; see the <a href="/privacy">privacy policy</a>.
+          Members ranked by their Going responses to events, not observed attendance, for season{" "}
+          {query.season} and {label}. Members can opt out of leaderboards; see the{" "}
+          <a href="/privacy">privacy policy</a>.
+        </p>
+        <p>
+          <a href="/profile#edit-heading">Manage leaderboard visibility</a> in your own profile.
+          Hiding yourself removes you from every board and every count.
         </p>
         <nav aria-label="Board scope">
           <ul>
@@ -106,7 +111,9 @@ export const MemberLeaderboardPage: FC<{
           </p>
         </form>
         {!available ? (
-          <p role="status">Rankings are temporarily unavailable.</p>
+          <p role="status">
+            Rankings are temporarily unavailable. <a href={boardPath(query)}>Retry rankings</a>
+          </p>
         ) : rows.length === 0 ? (
           <p role="status">
             {query.scope === "relative"
