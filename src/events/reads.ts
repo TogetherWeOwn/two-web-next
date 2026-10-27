@@ -91,7 +91,7 @@ export const JSON_MAX_LIMIT = PUBLIC_DATA_BOUNDS.maxPageSize;
  * occupancy count while the conditional count admits only rows whose joined
  * username is non-empty for the badge. A missing user row yields NULL, which
  * the `<> ''` test rejects exactly like the old inner-join predicate, so an
- * empty name, a NULL name and a missing user row all hold a seat without
+ * empty stored name and a missing user row both hold a seat without
  * inflating the badge. userId is unique in users, so the join never fans out
  * and `count()` still counts going rows. */
 async function withGoing(
