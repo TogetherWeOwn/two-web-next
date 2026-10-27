@@ -101,13 +101,24 @@ export const textCases = (limit: number) => [
   },
   { label: "trimmed whitespace", value: " \t é😀   ", used: 3, over: false },
 ];
-export function urlCases(field: "url" | "image_url") {
+type UrlCase = { label: string; value: string; used: number; over: boolean; refusal?: string };
+export function urlCases(field: "url" | "image_url"): UrlCase[] {
   const prefix = field === "url" ? "https://example.test/" : "https://cdn.discordapp.com/";
   const boundary = prefix + "x".repeat(255 - prefix.length - 2) + "😀";
+  // `over` is the length verdict after trimming. The server inspects a submitted
+  // link before trimming, so its edge tab is refused as a control character;
+  // the image URL is trimmed first and stays accepted.
+  const trimmedRefusal = field === "url" ? "Link cannot contain control characters." : undefined;
   return [
     { label: "255 UTF-16 units", value: boundary, used: 255, over: false },
     { label: "256 units but 255 code points", value: `${boundary}x`, used: 256, over: true },
-    { label: "trimmed URL", value: ` \t${boundary}  `, used: 255, over: false },
+    {
+      label: "trimmed URL",
+      value: ` \t${boundary}  `,
+      used: 255,
+      over: false,
+      refusal: trimmedRefusal,
+    },
   ];
 }
 

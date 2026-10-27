@@ -119,9 +119,11 @@ describe("independent validator oracle for editorial feedback", () => {
     });
   }
   for (const field of ["url", "image_url"] as const) {
-    it.each(urlCases(field))(`${field}: $label`, ({ value, used, over }) => {
+    it.each(urlCases(field))(`${field}: $label`, ({ value, used, over, refusal }) => {
       expect(value.trim().length).toBe(used);
-      expect(Boolean(errorsFor({ ...saved, [field]: value })[field])).toBe(over);
+      const error = errorsFor({ ...saved, [field]: value })[field];
+      // A refused link keeps its exact copy; otherwise only the length decides.
+      expect(refusal ? error : Boolean(error)).toBe(refusal ?? over);
     });
   }
   it("requires alt only while an image URL is present, and trims whitespace", () => {
