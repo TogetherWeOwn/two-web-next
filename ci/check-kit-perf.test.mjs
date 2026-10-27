@@ -437,6 +437,28 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
       `expected one of 334080, 335104, 335360, 335616, 335872, 336128`,
   );
 });
+
+// Two explicit client-gzip allocations are supported: the current 103168
+// ceiling and the independently justified 103424 ceiling (merged-tree worst
+// 103302, margin 122; lower 103168 rejects by 134). Fixture lengths below are
+// fixed literals selected by this mapping, never `cap` or `cap + 1`; any
+// other loaded ceiling fails the allocation control and the client-gzip
+// cases, so an arbitrary widening cannot go green.
+const SHIPPING_CLIENT_GZIP_CAP = shippingClientBudget?.maxGzipBytes;
+const SHIPPING_CLIENT_GZIP_ALLOCATIONS = {
+  103168: { exactBytes: 103168, overBytes: 103169 },
+  103424: { intervalBytes: 103302, exactBytes: 103424, overBytes: 103425 },
+};
+const SHIPPING_CLIENT_GZIP_UNSUPPORTED =
+  `unsupported client gzip allocation ${String(SHIPPING_CLIENT_GZIP_CAP)}: ` +
+  `expected one of 103168, 103424`;
+
+test("shipping budget: client gzip allocation is explicitly approved", () => {
+  assert.ok(
+    Object.hasOwn(SHIPPING_CLIENT_GZIP_ALLOCATIONS, String(SHIPPING_CLIENT_GZIP_CAP)),
+    SHIPPING_CLIENT_GZIP_UNSUPPORTED,
+  );
+});
 const SHIPPING_GROUPS = ["kit.worker", "kit.server.js", "kit.client.js", "kit.client.css"];
 const SHIPPING_BASES = {
   "kit.worker": WORKER_BODY,
@@ -513,9 +535,9 @@ function makeShippingFixture(t, group, axis, bytes) {
 
 // Literal boundaries are independent of the plan loaded above. In particular,
 // neither a reverted cap nor an accidental increase can move the evidence.
-// The three server-gzip rows select fixed literals for the loaded allocation
-// via the explicit mapping above; unsupported ceilings produce failing
-// controls, never skips or green.
+// The server-gzip and client-gzip rows select fixed literals for the loaded
+// allocation via the explicit mappings above; unsupported ceilings produce
+// failing controls, never skips or green.
 function shippingServerGzipCases() {
   if (SHIPPING_SERVER_GZIP_CAP === 334080) {
     return [
@@ -637,6 +659,45 @@ function shippingServerGzipCases() {
     { name: "server gzip one byte over", unsupported: true },
   ];
 }
+function shippingClientGzipCases() {
+  if (SHIPPING_CLIENT_GZIP_CAP === 103168) {
+    return [
+      { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103168 },
+      {
+        name: "client gzip one byte over",
+        group: "kit.client.js",
+        axis: "gzip",
+        bytes: 103169,
+        ceiling: 103168,
+        breach: true,
+      },
+    ];
+  }
+  if (SHIPPING_CLIENT_GZIP_CAP === 103424) {
+    return [
+      {
+        name: "client gzip newly allowed interval",
+        group: "kit.client.js",
+        axis: "gzip",
+        bytes: 103302,
+      },
+      { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103424 },
+      {
+        name: "client gzip one byte over",
+        group: "kit.client.js",
+        axis: "gzip",
+        bytes: 103425,
+        ceiling: 103424,
+        breach: true,
+      },
+    ];
+  }
+  return [
+    { name: "client gzip newly allowed interval", unsupported: SHIPPING_CLIENT_GZIP_UNSUPPORTED },
+    { name: "client gzip exact ceiling", unsupported: SHIPPING_CLIENT_GZIP_UNSUPPORTED },
+    { name: "client gzip one byte over", unsupported: SHIPPING_CLIENT_GZIP_UNSUPPORTED },
+  ];
+}
 for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = false } of [
   { name: "client raw newly allowed interval", group: "kit.client.js", axis: "raw", bytes: 255856 },
   { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 257024 },
@@ -649,15 +710,7 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = fa
     breach: true,
   },
   ...shippingServerGzipCases(),
-  { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103168 },
-  {
-    name: "client gzip one byte over",
-    group: "kit.client.js",
-    axis: "gzip",
-    bytes: 103169,
-    ceiling: 103168,
-    breach: true,
-  },
+  ...shippingClientGzipCases(),
   { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1203200 },
   {
     name: "server raw one byte over",
@@ -727,8 +780,10 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = fa
   test(`shipping budget: ${name}`, (t) => {
     if (unsupported) {
       assert.fail(
-        `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-          `expected one of 334080, 335104, 335360, 335616, 335872, 336128`,
+        typeof unsupported === "string"
+          ? unsupported
+          : `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
+              `expected one of 334080, 335104, 335360, 335616, 335872, 336128`,
       );
     }
     const fx = makeShippingFixture(t, group, axis, bytes);
