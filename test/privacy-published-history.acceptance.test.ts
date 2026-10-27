@@ -233,9 +233,16 @@ for (const twin of ["Hono", "Kit"] as const) {
       const body = signed.html.match(
         /<div\b[^>]*data-testid="privacy-policy"[^>]*>([\s\S]*?)<\/div>/,
       )?.[1];
-      expect(body === undefined ? body : stripHtmlComments(body)).toBe(
-        renderPolicyMarkdown(POLICY_MARKDOWN),
-      );
+      // The pages serve the navigation-enabled render (jump list + heading
+      // permalinks); the default render stays link-free for hostile input.
+      const served = body === undefined ? body : stripHtmlComments(body);
+      expect(served).toBe(renderPolicyMarkdown(POLICY_MARKDOWN, { navigation: true }));
+      // Minus that navigation chrome, the legal copy is the unchanged default render.
+      expect(
+        served
+          ?.replace(/<nav\b[^>]*data-testid="privacy-jump"[^>]*>[\s\S]*?<\/nav>\n/, "")
+          .replace(/(<h2\b[^>]*>[\s\S]*?) <a\b[^>]*href="#[^"]+"[^>]*>#<\/a>(<\/h2>)/g, "$1$2"),
+      ).toBe(renderPolicyMarkdown(POLICY_MARKDOWN));
       expect(fetches).toBe(0);
       if (twin === "Kit") expect(fixture.csr).toBe(false);
     });
