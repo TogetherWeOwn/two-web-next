@@ -1,4 +1,5 @@
-// route-inventory: GET /events, GET /events/past
+// route-inventory: GET /events
+// route-inventory: GET /events/past
 // Acceptance: schedule print keeps the current list and archive readable on paper.
 //
 // Locked contract (Test Author). The Builder implements against this file;
