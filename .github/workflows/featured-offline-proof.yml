@@ -73,6 +73,7 @@ jobs:
             "src/home-copy.ts" \
             "src/image-policy.ts" \
             "src/leaf-critical-css.ts" \
+            "src/leaf-descriptions.ts" \
             "src/page-shell.tsx" \
             "src/pages.tsx" \
             "src/screens/featured-item.tsx" \
