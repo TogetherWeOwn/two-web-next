@@ -234,7 +234,7 @@ for (const twin of GAME_TWINS) {
 
     it("a superseded response body cannot install stale highlights after the newer query commits", async () => {
       const { page, requests } = await openJourney(twin);
-      // Delay only the network body stream (the shipped binder reads it). Ignore abort for this one fetch
+      // Hold only the end of the network body stream (the shipped binder reads it). Ignore abort for this one fetch
       // so the real shipped binder must reject a late successful response.
       await page.evaluate(`(() => {
         const native = window.fetch.bind(window);
@@ -246,10 +246,11 @@ for (const twin of GAME_TWINS) {
           const response = await native(url, delay ? { ...init, signal: undefined } : init);
           if (delay) {
             const bytes = new Uint8Array(await response.arrayBuffer());
-            Object.defineProperty(response, 'body', { value: new ReadableStream({ start: controller => new Promise(resolve => {
+            Object.defineProperty(response, 'body', { value: new ReadableStream({ start: controller => {
+              controller.enqueue(bytes);
               window.__scheduleBodyHeld = true;
-              window.__releaseScheduleBody = () => { controller.enqueue(bytes); controller.close(); resolve(); window.__scheduleBodyReleased = true; };
-            }) }) });
+              window.__releaseScheduleBody = () => { controller.close(); window.__scheduleBodyReleased = true; };
+            } }) });
           }
           return response;
         };
