@@ -22,7 +22,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
 
 const root = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -39,6 +39,22 @@ let scratch = "";
 const INVITE_URL = "https://discord.gg/invite";
 const APP_URL = "https://example.test";
 const FINITE_SEATS = /\b\d+\s+seats?\s+left\b/;
+
+// Frozen render instant for the closed/full boundary pins below, mirroring
+// the Hono twin's NOW. The page reads `new Date()` at render, so freezing
+// the clock pins the end = now-1ms / now / now+1ms boundary exactly.
+const KIT_NOW = new Date("2030-07-04T18:00:00Z");
+
+function freezeKitNow() {
+  vi.useFakeTimers();
+  vi.setSystemTime(KIT_NOW);
+}
+
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
 
 // Render-time availability reads the live clock in the page, so every
 // instant here is relative to the test run, never a fixed calendar date.
@@ -343,6 +359,216 @@ describe("Kit teaser: game, host and availability", () => {
     expect(row).not.toContain("Hosted by");
     expect(row).not.toContain("event-spots-left");
     expect(row).not.toMatch(FINITE_SEATS);
+  });
+
+  it("reads paused, never Full, on paused rows that are full or overfull", () => {
+    freezeKitNow();
+    const html = renderPage(
+      baseData({
+        upcomingEvents: [
+          canonicalEvent({
+            eventKey: "paused-full",
+            rsvpOpen: false,
+            capacity: 4,
+            goingCount: 1,
+            goingOccupancy: 4,
+          }),
+          canonicalEvent({
+            eventKey: "paused-overfull",
+            rsvpOpen: false,
+            capacity: 4,
+            goingCount: 1,
+            goingOccupancy: 6,
+          }),
+        ],
+      }),
+    );
+    for (const key of ["paused-full", "paused-overfull"]) {
+      const row = teaserRow(html, key);
+      expect(row).toContain("RSVPs paused");
+      expect(occurrences(row, 'data-testid="event-schedule-availability"')).toBe(1);
+      expect(occurrences(row, 'data-testid="event-spots-left"')).toBe(0);
+      expect(row).not.toContain(">Full<");
+      expect(row).not.toMatch(FINITE_SEATS);
+      expect(row).not.toContain("No seat limit");
+      expect(row).not.toContain("Ended");
+    }
+  });
+
+  it("reads Ended, never Full, on ended rows that are full or overfull, with a Full control past the end boundary", () => {
+    freezeKitNow();
+    const minus1 = new Date(KIT_NOW.getTime() - 1);
+    const plus1 = new Date(KIT_NOW.getTime() + 1);
+    const pastStart = new Date(KIT_NOW.getTime() - 7200_000);
+    const html = renderPage(
+      baseData({
+        upcomingEvents: [
+          canonicalEvent({
+            eventKey: "ended-full-minus1",
+            startsAt: pastStart,
+            endsAt: minus1,
+            goingCount: 1,
+            goingOccupancy: 4,
+            capacity: 4,
+          }),
+          canonicalEvent({
+            eventKey: "ended-full-now",
+            startsAt: pastStart,
+            endsAt: KIT_NOW,
+            goingCount: 1,
+            goingOccupancy: 4,
+            capacity: 4,
+          }),
+          canonicalEvent({
+            eventKey: "ended-overfull-minus1",
+            startsAt: pastStart,
+            endsAt: minus1,
+            goingCount: 1,
+            goingOccupancy: 6,
+            capacity: 4,
+          }),
+          canonicalEvent({
+            eventKey: "ended-overfull-now",
+            startsAt: pastStart,
+            endsAt: KIT_NOW,
+            goingCount: 1,
+            goingOccupancy: 6,
+            capacity: 4,
+          }),
+          canonicalEvent({
+            eventKey: "open-full-plus1",
+            startsAt: pastStart,
+            endsAt: plus1,
+            goingCount: 1,
+            goingOccupancy: 4,
+            capacity: 4,
+          }),
+          canonicalEvent({
+            eventKey: "open-overfull-plus1",
+            startsAt: pastStart,
+            endsAt: plus1,
+            goingCount: 1,
+            goingOccupancy: 6,
+            capacity: 4,
+          }),
+        ],
+      }),
+    );
+    for (const key of [
+      "ended-full-minus1",
+      "ended-full-now",
+      "ended-overfull-minus1",
+      "ended-overfull-now",
+    ]) {
+      const row = teaserRow(html, key);
+      expect(row).toContain("Game night");
+      expect(row).toContain("Ended");
+      expect(occurrences(row, 'data-testid="event-schedule-availability"')).toBe(1);
+      expect(occurrences(row, 'data-testid="event-spots-left"')).toBe(0);
+      expect(row).not.toContain(">Full<");
+      expect(row).not.toMatch(FINITE_SEATS);
+      expect(row).not.toContain("No seat limit");
+      expect(row).not.toContain("RSVPs paused");
+    }
+    for (const key of ["open-full-plus1", "open-overfull-plus1"]) {
+      const row = teaserRow(html, key);
+      expect(occurrences(row, 'data-testid="event-spots-left"')).toBe(1);
+      expect(occurrences(row, ">Full<")).toBe(1);
+      expect(row).not.toContain("event-schedule-availability");
+      expect(row).not.toContain("Ended");
+      expect(row).not.toContain("0 seats left");
+    }
+  });
+
+  it("reads Ended over paused when ended, paused over Full when open, on paused rows that are full or overfull", () => {
+    freezeKitNow();
+    const minus1 = new Date(KIT_NOW.getTime() - 1);
+    const plus1 = new Date(KIT_NOW.getTime() + 1);
+    const pastStart = new Date(KIT_NOW.getTime() - 7200_000);
+    const html = renderPage(
+      baseData({
+        upcomingEvents: [
+          canonicalEvent({
+            eventKey: "paused-full-ended-minus1",
+            startsAt: pastStart,
+            endsAt: minus1,
+            rsvpOpen: false,
+            goingCount: 1,
+            goingOccupancy: 4,
+            capacity: 4,
+          }),
+          canonicalEvent({
+            eventKey: "paused-full-ended-now",
+            startsAt: pastStart,
+            endsAt: KIT_NOW,
+            rsvpOpen: false,
+            goingCount: 1,
+            goingOccupancy: 4,
+            capacity: 4,
+          }),
+          canonicalEvent({
+            eventKey: "paused-overfull-ended-minus1",
+            startsAt: pastStart,
+            endsAt: minus1,
+            rsvpOpen: false,
+            goingCount: 1,
+            goingOccupancy: 6,
+            capacity: 4,
+          }),
+          canonicalEvent({
+            eventKey: "paused-overfull-ended-now",
+            startsAt: pastStart,
+            endsAt: KIT_NOW,
+            rsvpOpen: false,
+            goingCount: 1,
+            goingOccupancy: 6,
+            capacity: 4,
+          }),
+          canonicalEvent({
+            eventKey: "paused-full-open-plus1",
+            startsAt: pastStart,
+            endsAt: plus1,
+            rsvpOpen: false,
+            goingCount: 1,
+            goingOccupancy: 4,
+            capacity: 4,
+          }),
+          canonicalEvent({
+            eventKey: "paused-overfull-open-plus1",
+            startsAt: pastStart,
+            endsAt: plus1,
+            rsvpOpen: false,
+            goingCount: 1,
+            goingOccupancy: 6,
+            capacity: 4,
+          }),
+        ],
+      }),
+    );
+    for (const key of [
+      "paused-full-ended-minus1",
+      "paused-full-ended-now",
+      "paused-overfull-ended-minus1",
+      "paused-overfull-ended-now",
+    ]) {
+      const row = teaserRow(html, key);
+      expect(row).toContain("Ended");
+      expect(occurrences(row, 'data-testid="event-schedule-availability"')).toBe(1);
+      expect(occurrences(row, 'data-testid="event-spots-left"')).toBe(0);
+      expect(row).not.toContain(">Full<");
+      expect(row).not.toContain("RSVPs paused");
+      expect(row).not.toMatch(FINITE_SEATS);
+    }
+    for (const key of ["paused-full-open-plus1", "paused-overfull-open-plus1"]) {
+      const row = teaserRow(html, key);
+      expect(row).toContain("RSVPs paused");
+      expect(occurrences(row, 'data-testid="event-schedule-availability"')).toBe(1);
+      expect(occurrences(row, 'data-testid="event-spots-left"')).toBe(0);
+      expect(row).not.toContain(">Full<");
+      expect(row).not.toMatch(FINITE_SEATS);
+      expect(row).not.toContain("No seat limit");
+      expect(row).not.toContain("Ended");
+    }
   });
 
   it("keeps older fixtures without the new fields open, unhosted and crash-free", () => {

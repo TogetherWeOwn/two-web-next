@@ -336,6 +336,34 @@ describe("Hono teaser: game, host and availability from stored rows", () => {
     }
   });
 
+  it("reads paused, never Full, on paused rows that are full or overfull", async () => {
+    freezeNow();
+    const f = fixture(
+      [event(1, { rsvpOpen: false, capacity: 4 }), event(2, { rsvpOpen: false, capacity: 4 })],
+      {
+        named: [
+          [1, 1],
+          [2, 1],
+        ],
+        occupied: [
+          [1, 4],
+          [2, 6],
+        ],
+      },
+    );
+    const html = await (await f.request()).text();
+    for (const key of ["event-1", "event-2"]) {
+      const row = teaserRow(html, key);
+      expect(row).toContain("RSVPs paused");
+      expect(occurrences(row, 'data-testid="event-schedule-availability"')).toBe(1);
+      expect(occurrences(row, 'data-testid="event-spots-left"')).toBe(0);
+      expect(row).not.toContain(">Full<");
+      expect(row).not.toMatch(FINITE_SEATS);
+      expect(row).not.toContain("No seat limit");
+      expect(row).not.toContain("Ended");
+    }
+  });
+
   it("reads No seat limit on an open uncapped row with no invented finite count", async () => {
     freezeNow();
     const f = fixture([event(1, { capacity: null })], { named: [[1, 3]] });
@@ -485,6 +513,174 @@ describe("Hono teaser: rows that changed or predate the widened read", () => {
       expect(row).not.toContain("RSVPs paused");
       expect(row).not.toContain("event-spots-left");
       expect(row).not.toContain(">Full<");
+    }
+  });
+
+  it("reads Ended, never Full, on ended rows that are full or overfull, with a Full control past the end boundary", () => {
+    freezeNow();
+    const minus1 = new Date(NOW.getTime() - 1);
+    const plus1 = new Date(NOW.getTime() + 1);
+    const pastStart = new Date(NOW.getTime() - 7200_000);
+    const html = renderHome([
+      canonicalRow({
+        eventKey: "ended-full-minus1",
+        startsAt: pastStart,
+        endsAt: minus1,
+        goingCount: 1,
+        goingOccupancy: 4,
+        capacity: 4,
+      }),
+      canonicalRow({
+        eventKey: "ended-full-now",
+        startsAt: pastStart,
+        endsAt: NOW,
+        goingCount: 1,
+        goingOccupancy: 4,
+        capacity: 4,
+      }),
+      canonicalRow({
+        eventKey: "ended-overfull-minus1",
+        startsAt: pastStart,
+        endsAt: minus1,
+        goingCount: 1,
+        goingOccupancy: 6,
+        capacity: 4,
+      }),
+      canonicalRow({
+        eventKey: "ended-overfull-now",
+        startsAt: pastStart,
+        endsAt: NOW,
+        goingCount: 1,
+        goingOccupancy: 6,
+        capacity: 4,
+      }),
+      canonicalRow({
+        eventKey: "open-full-plus1",
+        startsAt: pastStart,
+        endsAt: plus1,
+        goingCount: 1,
+        goingOccupancy: 4,
+        capacity: 4,
+      }),
+      canonicalRow({
+        eventKey: "open-overfull-plus1",
+        startsAt: pastStart,
+        endsAt: plus1,
+        goingCount: 1,
+        goingOccupancy: 6,
+        capacity: 4,
+      }),
+    ]);
+    for (const key of [
+      "ended-full-minus1",
+      "ended-full-now",
+      "ended-overfull-minus1",
+      "ended-overfull-now",
+    ]) {
+      const row = teaserRow(html, key);
+      expect(row).toContain("Direct game night");
+      expect(row).toContain("Ended");
+      expect(occurrences(row, 'data-testid="event-schedule-availability"')).toBe(1);
+      expect(occurrences(row, 'data-testid="event-spots-left"')).toBe(0);
+      expect(row).not.toContain(">Full<");
+      expect(row).not.toMatch(FINITE_SEATS);
+      expect(row).not.toContain("No seat limit");
+      expect(row).not.toContain("RSVPs paused");
+    }
+    for (const key of ["open-full-plus1", "open-overfull-plus1"]) {
+      const row = teaserRow(html, key);
+      expect(occurrences(row, 'data-testid="event-spots-left"')).toBe(1);
+      expect(occurrences(row, ">Full<")).toBe(1);
+      expect(row).not.toContain("event-schedule-availability");
+      expect(row).not.toContain("Ended");
+      expect(row).not.toContain("0 seats left");
+    }
+  });
+
+  it("reads Ended over paused when ended, paused over Full when open, on paused rows that are full or overfull", () => {
+    freezeNow();
+    const minus1 = new Date(NOW.getTime() - 1);
+    const plus1 = new Date(NOW.getTime() + 1);
+    const pastStart = new Date(NOW.getTime() - 7200_000);
+    const html = renderHome([
+      canonicalRow({
+        eventKey: "paused-full-ended-minus1",
+        startsAt: pastStart,
+        endsAt: minus1,
+        rsvpOpen: false,
+        goingCount: 1,
+        goingOccupancy: 4,
+        capacity: 4,
+      }),
+      canonicalRow({
+        eventKey: "paused-full-ended-now",
+        startsAt: pastStart,
+        endsAt: NOW,
+        rsvpOpen: false,
+        goingCount: 1,
+        goingOccupancy: 4,
+        capacity: 4,
+      }),
+      canonicalRow({
+        eventKey: "paused-overfull-ended-minus1",
+        startsAt: pastStart,
+        endsAt: minus1,
+        rsvpOpen: false,
+        goingCount: 1,
+        goingOccupancy: 6,
+        capacity: 4,
+      }),
+      canonicalRow({
+        eventKey: "paused-overfull-ended-now",
+        startsAt: pastStart,
+        endsAt: NOW,
+        rsvpOpen: false,
+        goingCount: 1,
+        goingOccupancy: 6,
+        capacity: 4,
+      }),
+      canonicalRow({
+        eventKey: "paused-full-open-plus1",
+        startsAt: pastStart,
+        endsAt: plus1,
+        rsvpOpen: false,
+        goingCount: 1,
+        goingOccupancy: 4,
+        capacity: 4,
+      }),
+      canonicalRow({
+        eventKey: "paused-overfull-open-plus1",
+        startsAt: pastStart,
+        endsAt: plus1,
+        rsvpOpen: false,
+        goingCount: 1,
+        goingOccupancy: 6,
+        capacity: 4,
+      }),
+    ]);
+    for (const key of [
+      "paused-full-ended-minus1",
+      "paused-full-ended-now",
+      "paused-overfull-ended-minus1",
+      "paused-overfull-ended-now",
+    ]) {
+      const row = teaserRow(html, key);
+      expect(row).toContain("Ended");
+      expect(occurrences(row, 'data-testid="event-schedule-availability"')).toBe(1);
+      expect(occurrences(row, 'data-testid="event-spots-left"')).toBe(0);
+      expect(row).not.toContain(">Full<");
+      expect(row).not.toContain("RSVPs paused");
+      expect(row).not.toMatch(FINITE_SEATS);
+    }
+    for (const key of ["paused-full-open-plus1", "paused-overfull-open-plus1"]) {
+      const row = teaserRow(html, key);
+      expect(row).toContain("RSVPs paused");
+      expect(occurrences(row, 'data-testid="event-schedule-availability"')).toBe(1);
+      expect(occurrences(row, 'data-testid="event-spots-left"')).toBe(0);
+      expect(row).not.toContain(">Full<");
+      expect(row).not.toMatch(FINITE_SEATS);
+      expect(row).not.toContain("No seat limit");
+      expect(row).not.toContain("Ended");
     }
   });
 
