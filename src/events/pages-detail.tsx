@@ -20,7 +20,7 @@ import type {
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-import { formatEventWhen as fmtWithOffset } from "./date-format";
+import { formatElapsedDuration, formatEventWhen as fmtWithOffset } from "./date-format";
 
 const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now }) => {
   const availability = eventLinkAvailability(event, now);
@@ -112,13 +112,14 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  const accessibilityNotes = e.accessibilityNotes?.trim();
+  const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
   // One render instant for the RSVP verdict and the share box: an elapsed
   // published row (the */10 reconcile hasn't flipped it yet) already reads
   // "This one has been and gone", so the share box follows that verdict
   // instead of the persisted status alone. Drafts keep the live box.
   const now = new Date();
   const shareAsPast = e.status === "past" || (e.status === "published" && e.endsAt <= now);
-  const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -189,6 +190,12 @@ export const EventPage: FC<{
             <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
           </dd>
         </div>
+        {duration ? (
+          <div>
+            <dt>Duration</dt>
+            <dd>{duration}</dd>
+          </div>
+        ) : null}
         {e.location ? (
           <div>
             <dt>Where</dt>
