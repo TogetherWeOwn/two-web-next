@@ -281,8 +281,10 @@ export const EventsCalendarPage: FC<{
             <p data-testid={EVENTS_PRINT_SCOPE_TESTID} hidden>
               {/* matchQuery, not trim: the stamp must name exactly what the
                   search matched, so a q that filters nothing (whitespace-only,
-                  NUL-only) prints no phantom search. pastOnly names the search
-                  case where past matches render without any upcoming page. */}
+                  NUL-only) prints no phantom search. With no upcoming pages
+                  the stamp still names what renders: past events (drawer or
+                  gap list) or unpaged upcoming cards, never "nothing listed"
+                  over event cards. */}
               {printScopeCopy(
                 "Upcoming events",
                 matchQuery(state.q) ?? "",
@@ -291,9 +293,12 @@ export const EventsCalendarPage: FC<{
                 totalPages,
                 totalPages === 0 &&
                   upcoming.length === 0 &&
-                  emptyState === null &&
-                  showPast &&
-                  past.length > 0,
+                  past.length > 0 &&
+                  ((emptyState === null && showPast) || emptyState === "gap")
+                  ? "past"
+                  : totalPages === 0 && upcoming.length > 0 && emptyState === null
+                    ? "page1"
+                    : false,
               )}
             </p>
           ) : null}
