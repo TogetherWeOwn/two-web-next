@@ -2,54 +2,55 @@
 
 ## Current decision
 
-Raise three Kit ceilings to the smallest aligned steps that cover the exact
-feature composition on current main:
+Raise two Kit ceilings to the smallest aligned steps that cover the exact
+feature composition on current main (main #1895 already raised client raw
+to 257024, so no raw step is taken here):
 
 | Budget field | Incoming ceiling | New ceiling | Increase | Margin above worst fresh combined build |
 | --- | ---: | ---: | ---: | ---: |
-| `server.js.maxGzipBytes` | 335360 | 336384 | 1024 | 194 above 336190 |
-| `client.js.maxRawBytes` | 256000 | 257024 | 1024 | 349 above 256675 |
-| `client.js.maxGzipBytes` | 103168 | 103424 | 256 | 38 above 103386 |
+| `server.js.maxGzipBytes` | 335872 | 336640 | 768 | 123 above 336517 |
+| `client.js.maxGzipBytes` | 103168 | 103680 | 512 | 252 above 103428 |
 
-Main `d781cb0707ed107bb4999e37cdde1aef285d45c2` (includes #1870, which grew
-the event-detail Kit bundle) and feature
+Main `d9b213141e4250cbbdc614d70a4ee2a1cea654f` (includes #1803 event-time
+duration, #1895 client raw 257024, #1909 server tier 336128, and #1829 root
+dependency bumps with no web lockfile change) and feature
 `7d390f4b8c54e30b0da703c2085530d1876c78f4` merge cleanly to tree
-`4a0f0228960093b7a83b0c8cf3d38f86dc40f9f4`. Node 24.22.1, npm 11.19.1,
-identical locked root/web dependencies, two builds per tree through the
-canonical `node ci/check-kit-perf.mjs --format json`:
+`a18e5fc2cddd7ef9e5dc08392109022694255a99`. Node 24.22.1, npm 11.19.1,
+identical locked root/web dependencies, one main build and three composition
+builds through the canonical
+`npm run build --prefix web && node ci/check-kit-perf.mjs --format json`:
 
-| Measurement | Main build 1 / 2 | Combined build 1 / 2 |
+| Measurement | Main | Combined build 1 / 2 / 3 |
 | --- | ---: | ---: |
-| Server JS raw | 1185175 / 1185177 | 1188819 / 1188821 |
-| Server JS gzip | 335336 / 335336 | 336190 / 336190 |
-| Client JS raw | 254926 / 254926 | 256675 / 256675 |
-| Client JS gzip | 102621 / 102621 | 103386 / 103386 |
-| Server / client JS files | 116 / 54 both | 116 / 55 both |
+| Server JS raw | 1186500 | 1190144 / 1190144 / 1190146 |
+| Server JS gzip | 335653 | 336516 / 336516 / 336516 |
+| Client JS raw | 255118 | 256867 / 256867 / 256867 |
+| Client JS gzip | 102664 | 103428 / 103428 / 103428 |
+| Server / client JS files | 116 / 54 | 116 / 55 all |
 
 Worker 2551/1219 B and CSS 2861/1019 B across two files are identical in all
-builds. Main fits the incoming ceilings (server margin 24 B); the combined
-output breaches server gzip (+830 B), client raw (+675 B) and client gzip
-(+218 B). Against the output without a rebuild, the new ceilings pass and each
-single step lower (336128, 256512, 103168) rejects. Steps are the repository's
-256 B gzip / 512 B raw grid, not a x1.25 allocation or speculative headroom.
-Worker, CSS, server raw, file-count and startup limits, the checker, loader,
-application, dependencies and every other fragment are unchanged; frozen legacy
-history is not edited. The matching acceptance tests were corrected
-independently by the Test Author and incorporated byte-for-byte
-(`ci/check-kit-perf.test.mjs` sha256 `02dfb4ab54ce5d04c97bc271dc1dba62d95afb3ef52ba4a6fe8e618990bb409c`,
-`ci/budget-fragments.test.mjs` sha256 `c2386e547fa6c9c6f19b482f789e1737ce79451cf5c6eb773541d48ee84981bf`).
+builds. Main fits its own ceilings (margins 219/1906/504 B); the combined
+output breaches main's server gzip 335872 (+645 B) and client gzip 103168
+(+260 B), while client raw 256867 fits main's 257024 (margin 157 B), so only
+the two gzip steps are taken. Against the output without a rebuild, the new
+ceilings pass and each single step lower (336384, 103424) rejects. Steps are
+the repository's 256 B gzip grid, not a x1.25 allocation or speculative
+headroom. Worker, CSS, server raw, file-count and startup limits, the checker,
+loader, application, dependencies and every other fragment are unchanged;
+frozen legacy history is not edited. The matching acceptance tests were
+corrected independently by the Test Author (`2132230447b4`) and incorporated
+byte-for-byte (`ci/budget-fragments.test.mjs` sha256
+`2f46e2afdb42a19012cca439342cb0619caecae21e92d618479bc9eb2fd1d964`).
 
-Merging main `ba58281d2` added only main's own 335616 server-gzip tier to the
-ladder in `ci/check-kit-perf.test.mjs` (all delivered tiers kept; the file's
-sha256 is now `ab552c3c1016fc982997f669891e4513e962f051657053a5b7c03da50781c578`).
+Merging main `d9b213141` unioned main's own event-detail fits tests and its
+336128 tier (interval 335977) into `ci/check-kit-perf.test.mjs`; all delivered
+tiers are kept and only the shared 336128 interval takes main's newer,
+stronger measurement (the delivered 335875 also fits the tier; the file's
+sha256 is now `079948ff9c43b39eb7234d3d031e326478891ff806bf48014dd563e2503c7a7a`).
 
-ACT: allocate these three measured steps through independent review.
+ACT: allocate these two measured steps through independent review.
 WHY: the exact feature composition exhausts them on current main; the earlier
 shared-component experiment did not recover the capacity.
-UNDO: reviewed revert of these three fragment values and the matching
-acceptance delta, retaining every earlier decision; coordinate with the
-dependent feature. This is not feature, staging, deployment or release
-approval; the feature must reverify its actual integrated head.
 
 ## Re-measurement on main `ba58281d211479b934ff268f54f296d2d29adfaa`
 
