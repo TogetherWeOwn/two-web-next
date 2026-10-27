@@ -29,7 +29,8 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md), the
 // event-detail client.js raise to 257024 raw / 103168 gzip, the
 // Happening-now server.js.maxGzipBytes 336128 raise, and the join
-// next-game-night re-measured raises (client.js 257280 raw / 103680 gzip;
+// next-game-night re-measured raises (client.js 257536 raw / 103680 gzip, both already admitted by the
+// event-detail ladder in ci/check-kit-perf.test.mjs;
 // server.js.maxGzipBytes is admitted through
 // SHIPPING_SERVER_GZIP_ALLOCATIONS below, currently 336640; see
 // ci/budgets/decisions/kit-perf/2026-10-27-join-next-game-night.md).
@@ -39,7 +40,7 @@ const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
-    js: { maxRawBytes: 257280, maxGzipBytes: 103680, maxFiles: 55 },
+    js: { maxRawBytes: 257536, maxGzipBytes: 103680, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },

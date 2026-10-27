@@ -56,16 +56,18 @@ dependency bumps landed on top). Merged tree, three builds, worst governs
 
 | Axis | Merged tree | Main ceiling | This branch ceiling | Margin |
 | --- | --- | --- | --- | --- |
-| client JS raw | 257049 | 257024 (over by 25) | 257280 | 231 B |
+| client JS raw | 257049 | 257024 (over by 25) | 257536 | 487 B |
 | client JS gzip | 103444 | 103168 (over by 276) | 103680 | 236 B |
 | server JS gzip | 336437 | 336128 (over by 309) | 336640 | 203 B |
 
-Each axis takes one 256 B step above the highest ceiling that rejects it
-(client raw 257024 rejects by 25 B, client gzip 103424 rejects by 20 B,
-server gzip 336384 rejects by 53 B; one byte below each new ceiling
-rejects by 230/235/202 B). File counts (client 55/55, server 116/126),
+Client raw and gzip take the 257536 / 103680 ceilings that main's
+event-detail ladder (#1911) already admits, so no new client ladder entry
+is needed (257024 rejects by 25 B, 103424 rejects by 20 B). Server gzip
+takes one 256 B step above the highest ceiling that rejects it (336384
+rejects by 53 B; 336639 rejects by 202 B), and 336640 is not yet admitted
+by the ladder. File counts (client 55/55, server 116/126),
 server raw (1189761/1203200), worker, CSS and startup fit unchanged.
-Final raised values: client raw 257280, client gzip 103680, server gzip
+Final raised values: client raw 257536, client gzip 103680, server gzip
 336640.
 
 `ci/budget-fragments.test.mjs` moves with the fragments. The additive
@@ -74,8 +76,7 @@ correction handed back before this lands. No checker, gate, mask or
 exclusion changes; over-ceiling fixtures still fail closed. Not a feature or
 release approval. Undo: restore main's ceilings (client raw 257024, client
 gzip 103168, server gzip 336128) in `ci/budgets/kit/` (the join card then
-no longer fits) and delete this file; the 336640, 103680 and 257280
-test-ladder entries then become unused but harmless.
+no longer fits) and delete this file; the 336640 test-ladder entry then become unused but harmless.
 
 ## Ported monolith history (verbatim, leading separator space kept)
 
