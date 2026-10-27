@@ -5,14 +5,17 @@
 shared validation rule's RFC 5892 contextual-joiner tables (explicit
 virama set plus the Arabic-joining ZWNJ context) that profile bio/game
 refusals inherit, whose server-side code runs in the Kit server bundle.
-Two 256B steps, the smallest aligned cover for the measured worst case: one
-step (336128) rejects the worst build (336106) by 22B. The
+Two 256B steps, the smallest aligned cover for the re-measured worst case:
+one step (336128) rejects the worst build (336286) by 158B (see the
+2026-10-27 re-measurement below; the earlier "rejects by 22/24B" lines were
+an arithmetic error — the old worst 336104/336106 did fit under 336128 —
+caught by review and superseded by fresh numbers). The
 supported-allocation literal for 336384 is added to
 `ci/check-kit-perf.test.mjs` (`SHIPPING_SERVER_GZIP_ALLOCATIONS`) with the
 paired interval/exact/over cases, following the existing ladder pattern.
-2026-10-27 union with main's 336128 sibling entry (#1909): the ladder keeps
-both allocations (seven supported); this decision and ceiling are unchanged
-(the sibling's worst 335977 already fits 336384).
+2026-10-27 union with main's 336128 sibling entries (#1909 ladder literal,
+#1923 ceiling + fragment): the ladder and the fragment oracle keep both
+allocations (336128 fourth, 336384 fifth); this ceiling is unchanged.
 
 ## Measurements
 
@@ -46,6 +49,16 @@ Re-measured after merging current main tip `7d5db1c21` (union with the
 336128 rejects the worst by 22B, so 336384 remains the smallest aligned
 cover. Client JS (event-detail growth from main) fits its raised 257024
 raw ceiling.
+
+Re-measured again after main moved to `e37975a07` (sibling #1923 raised
+the main ceiling 335872 -> 336128 for Happening-now; #1913/#1487 added
+server code): two pristine builds give server gzip 335836 / 335837
+(raw 1187398 / 1187400), worst 335837; two feature builds give 336284 /
+336286 (raw 1188375 / 1188377), worst 336286. Feature delta is +449 gzip
+bytes over pristine worst. The sibling 336128 ceiling rejects the merged
+tree by 158B, so 336384 (256 x 1314) remains the smallest aligned cover,
+admitting it with 98B of margin. Worker, client JS and client CSS fit
+their unchanged ceilings.
 
 ## Why the growth is justified
 

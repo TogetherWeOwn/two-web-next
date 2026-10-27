@@ -410,8 +410,8 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // independently justified 335872 ceiling (combined worst 335624, margin 248;
 // lower 335616 rejects by 8), the independently justified 336128 ceiling
 // (combined worst 335977, margin 151; lower 335872 rejects by 105), and the
-// independently justified 336384 ceiling (combined worst 336106, margin 278;
-// lower 336128 rejects by 22).
+// independently justified 336384 ceiling (combined worst 336286, margin 98;
+// lower 336128 rejects by 158).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
