@@ -79,7 +79,7 @@ export const CalendarLiveRegions: FC<{
   </>
 );
 
-/** The `head` zone: list/calendar toggle plus the archive, subscribe and feed links. The subscribe/download/help targets carry the committed game scope; unfiltered schedules keep the exact all-events URLs. */
+/** The `head` zone: list/calendar toggle plus the archive, subscribe, feed and hot-zones links. The subscribe/download/help targets carry the committed game scope; unfiltered schedules keep the exact all-events URLs. */
 export const CalendarHead: FC<{
   state: CalendarState;
   appUrl: string;
@@ -111,7 +111,8 @@ export const CalendarHead: FC<{
           {EVENTS_EMPTY_COPY.subscribe}
         </a>{" "}
         <a href="/events.rss">RSS feed</a>{" "}
-        <a href={feedUrl(appUrl, gameFilter)}>Download calendar (.ics)</a>
+        <a href={feedUrl(appUrl, gameFilter)}>Download calendar (.ics)</a>{" "}
+        <a href="/hotzones">Hot zones</a>
       </p>
     </div>
     {subscriptionHelp(appUrl, gameFilter, true)}

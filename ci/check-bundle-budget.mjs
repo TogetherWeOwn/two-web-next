@@ -6,6 +6,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import assert from "node:assert/strict";
+import { loadBundleBudgets } from "./budget-fragments.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 // Nested island helpers are budgeted too: an island may import a shared
@@ -44,7 +45,7 @@ function discoverServed(root) {
 export function run(root, output = console) {
   let budgets;
   try {
-    budgets = JSON.parse(readFileSync(join(root, "ci/bundle-budget.json"), "utf8")).budgets;
+    budgets = loadBundleBudgets(root);
     if (
       !budgets ||
       typeof budgets !== "object" ||
