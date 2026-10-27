@@ -37,8 +37,10 @@ export const load: PageServerLoad = async ({ url, locals, cookies, setHeaders })
       activityParam: url.searchParams.get("activity"),
       setHeaders,
       dbForFn: dbFor,
-      queueBoardViewFn: (db, entry) => queueMembersBoardView(locals, db, entry),
+      queueBoardViewFn: (db, entry, requestId) =>
+        queueMembersBoardView(locals, db, entry, requestId),
       url: url.href,
+      requestId: locals.requestId,
     });
   } catch (err) {
     const status = (err as { status?: number })?.status;
@@ -90,7 +92,11 @@ export const load: PageServerLoad = async ({ url, locals, cookies, setHeaders })
     // The helper already alerted on unbranded read failures; alert here only
     // for failures the helper could not see, so a code bug never stays silent.
     if (typeof status !== "number")
-      alertRequestError(err, { method: "GET", route: "/leaderboards/members" });
+      alertRequestError(err, {
+        method: "GET",
+        route: "/leaderboards/members",
+        requestId: locals.requestId,
+      });
     error(503, "Member data is temporarily unavailable.");
   }
 };
