@@ -2,8 +2,8 @@
 
 Port the panel's existing 512B raw / 256B gzip allocation into the
 fragment layout. No existing ceiling changes. The authored stylesheet
-measures 225B raw / 150B gzip at the checker's compression level 9.
-It loads only on the read-only panel;
+measures 225B raw / 150B gzip using the checker's default `gzipSync`
+measurement (without a filename header). It loads only on the read-only panel;
 the four wrapping rules stay out of shared styles and the homepage's
 inlined critical CSS.
 
