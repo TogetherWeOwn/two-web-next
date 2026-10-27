@@ -147,6 +147,7 @@ export async function renderDayRequest(
           const event = {
             url,
             params: { signal },
+            locals: { requestId: "hzd-acceptance-request" },
             setHeaders: (values: Record<string, string>) => Object.assign(headers, values),
           };
           const data = await (signal ? kit.loadSignal(event) : kit.loadIndex(event));
