@@ -40,6 +40,14 @@ back 6B is explicitly rejected (the acceptance suite pins the exact
 strings, and byte-golfing user-facing copy to fit a ceiling is not a
 reduction).
 
+## Re-measure after main moved to `5919f44c4`
+
+Main admitted the Happening-now 336128 step (budget files only, no product
+or lockfile change), so the composition's bytes are unchanged by
+construction. One confirmatory production build on the merged tree: 116
+server files, 1188562 raw / 336129 gzip, exit 0 against 336384. Worst case
+across all three builds stays 336134.
+
 ## Shipping tests
 
 `ci/budget-fragments.test.mjs` unions to six allocations
