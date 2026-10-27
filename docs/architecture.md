@@ -320,6 +320,7 @@ exactly once.
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |
+| `src/leaf-descriptions.ts` | content |
 | `src/log-budget.ts` | observability |
 | `src/mcp/` | content |
 | `src/media-type.ts` | http-guard |
