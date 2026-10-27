@@ -54,6 +54,31 @@ acceptance delta, retaining every earlier decision; coordinate with the
 dependent feature. This is not feature, staging, deployment or release
 approval; the feature must reverify its actual integrated head.
 
+## Re-verification on main `b69eea7d7f8e99096cb497dce71210caf9af0502`
+
+Main moved three commits with no Kit build input: #1942 (103424 client gzip
+test tier), #1905 (336384 event-share-honesty server ceiling) and #1903
+(staging summary); `git diff 227414575..b69eea7d7 -- web/` is empty and both
+package locks are unchanged. The decision above stands unchanged; the merge
+unions main's reviewed tier rows (336384 server text, 103424 client row) with
+the delivered game-suggestion tiers and keeps the fragment values
+336896/257536/103680. Resolved `ci/check-kit-perf.test.mjs` sha256
+`e2e20bc3ae2d33b875f206b2d27f49af6d666ec769a1d6b6088534c9fc0fc7e4`,
+`ci/budget-fragments.test.mjs` sha256
+`3c39426481e306020145f3ec8b6ed970de3c6d658e16a740033219720e644ce3`.
+
+The new composition (main `b69eea7d7` + feature `7d390f4b`, tree
+`c9d9b9c81ed9c159fad8519548d86a14461712e4`) carries byte-identical `web/` and
+`src/` subtrees to the previous composition tree `efb831ff`. One fresh build
+per tree (Node 24.22.1, npm 11.19.1, canonical checker, exit 0 both):
+merged tree server gzip 335836 (1 B rebuild jitter vs 335837), client
+255632/102846; composition server gzip 336691, client raw 257381, gzip 103610
+(all three binding axes byte-identical; server raw 1191044 vs 1191042 is 2 B
+of rebuild jitter on a non-binding axis with ~12 KB margin). Proposed
+ceilings pass; each single step lower (336640, 257280, 103424) rejects the
+same built output. Focused suites 78/78, checker selftest, lint, typecheck,
+docs links and floor guard clean.
+
 ## Superseded decision (main d9b213141: server 336640, client gzip 103680)
 
 Raise two Kit ceilings to the smallest aligned steps that cover the exact
