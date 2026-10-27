@@ -35,7 +35,7 @@ import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
-import { formatEventWhen, isValidZone } from "./date-format";
+import { formatElapsedDuration, formatEventWhen, isValidZone } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
@@ -180,6 +180,8 @@ export interface KitEventDetailModel {
   whenText: string;
   /** Server-formatted scheduled end in the event zone, ISO fallback. */
   endsWhenText: string;
+  /** Server-formatted elapsed commitment; absent for an unusable interval. */
+  durationText?: string | null;
   /** Effective display zone (UTC when the stored zone is unknown). */
   zoneLabel: string;
   /** Machine instant for the <time> element, as served. */
@@ -568,6 +570,7 @@ export async function resolveKitEventDetail(
           copyLink: pageCanonical,
           whenText: formatEventWhen(event.startsAt, event.timezone),
           endsWhenText: formatEventWhen(event.endsAt, event.timezone),
+          durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
           timeDatetime: event.startsAt.toISOString(),
           attendees,

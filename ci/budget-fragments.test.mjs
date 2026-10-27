@@ -30,8 +30,8 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit. The two
 // allocation axes (server gzip, client raw) also admit the explicit
-// ceilings listed below, including the PR #1825 allocation (335872 /
-// 256512), so this suite stays green on either side of that raise.
+// ceilings listed below, including the PR #1825 client raw allocation
+// (256512), so this suite stays green on either side of that raise.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
@@ -123,13 +123,14 @@ function kitFixture(t, fragments) {
 // above (335104) is the historical baseline; 335360 is the second,
 // independently measured saved-review allocation (combined worst 335164,
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
-// unsupported). 335872 is the host and joining details allocation for Kit
-// event detail (PR #1825; combined worst 335535, margin 337; lower 335360
-// rejects by 175). Admitted client.js maxRawBytes allocations: 256000 is the
-// shipping pin and 256512 is the same PR's allocation (combined worst
-// 256103, margin 409; lower 256000 rejects by 103). Every other pin stays
-// exact: the oracle rejects any ceiling outside these lists, then
-// deep-compares the rest of the plan.
+// unsupported); 335872 is the third, independently measured allocation
+// (measured 335639, margin 233; lower 335616 rejects by 23; the next 256B
+// step 336128 stays unsupported). Admitted client.js maxRawBytes
+// allocations: 256000 is the shipping pin and 256512 is the host and joining
+// details allocation for Kit event detail (PR #1825; combined worst 256103,
+// margin 409; lower 256000 rejects by 103). Every other pin stays exact: the
+// oracle rejects any ceiling outside these lists, then deep-compares the
+// rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872];
 const SHIPPING_CLIENT_RAW_ALLOCATIONS = [256000, 256512];
 
@@ -162,6 +163,13 @@ test("shipping oracle admits the measured 335360 server gzip allocation", () => 
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
     server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 335360 } },
+  });
+});
+
+test("shipping oracle admits the measured 335872 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 335872 } },
   });
 });
 
