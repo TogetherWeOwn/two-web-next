@@ -100,6 +100,7 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     // 3. Pause the published fixture's RSVPs from its edit screen. The
     // Reopen control proves the paused state stuck.
     await page.goto(`/admin/events/${pausedKey}`);
+    await page.getByTestId("rsvp-pause-review").locator("summary").click();
     await page.getByRole("button", { name: "Pause RSVPs", exact: true }).click();
     await expect(page.getByRole("button", { name: "Reopen RSVPs", exact: true })).toBeVisible();
 

@@ -178,8 +178,11 @@ describe("unknown-member 404s fill the Happening-soon slot (failing-first)", () 
     vi.setSystemTime(T0 + NOT_FOUND_SUGGESTIONS_TTL_MS);
     expect(await warmSnapshot(envWithDb)).toEqual(["after"]);
     expect(fills).toHaveBeenCalledTimes(2);
-    expect(suggested(await member404(app, UNKNOWN_MEMBER, cookie, envWithDb))).toEqual(["after"]);
-    expect(suggested(await member404(app, BAD_SNOWFLAKE, cookie, envWithDb))).toEqual(["after"]);
+    // A fresh login past the jump: the first view rotated the original
+    // bearer, whose 10s grace cannot span the TTL.
+    const fresh = await cookieFor(sessions, MEMBER);
+    expect(suggested(await member404(app, UNKNOWN_MEMBER, fresh, envWithDb))).toEqual(["after"]);
+    expect(suggested(await member404(app, BAD_SNOWFLAKE, fresh, envWithDb))).toEqual(["after"]);
     expect(fills).toHaveBeenCalledTimes(2);
   });
 });

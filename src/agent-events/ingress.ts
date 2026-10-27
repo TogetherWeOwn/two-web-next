@@ -14,7 +14,7 @@ import {
   storedEventKey,
   ulid,
 } from "./payload";
-import { audit } from "./audit";
+import { audit, auditOperationBusy } from "./audit";
 import { ingressDenial } from "./envelope";
 import { normalizeClientIp } from "../throttle";
 import { checkGrant, findGrant } from "./grants";
@@ -86,9 +86,9 @@ export async function admitAgentEvent(
   // anonymous hits bucket per normalized IP, like human throttles (IPv6 /64,
   // mapped-IPv4, malformed verbatim). A refused hit writes no hit row and at
   // most a sampled denied/rate_limited audit row with this admission's
-  // request_id, with every refusal counted in memory and the running count
-  // surfaced on the sampled warn (see shield.ts for the bucket-class encoding
-  // and the sampling bound).
+  // request_id, with every over-budget verdict counted in memory. Final 429s
+  // emit token-bucketed class/outcome telemetry or a bounded shed count; audit
+  // failures that return 503 emit neither refusal code (see shield.ts).
   const shieldKey = credential
     ? await sha256Hex(credential)
     : `ip:${normalizeClientIp(clientIp ?? "unknown")}`;
@@ -332,8 +332,10 @@ async function processAgentEvent(
       if (limited.status === 503 && limited.body.reason === "operation_busy") {
         // Inner-budget lock contention: retryable load refusal, never a rate
         // denial. Audited once as error/operation_busy with the response
-        // request_id; the aborted verdict inserted no budget hits.
-        await audit(sql, grant, op, null, idem, dig, requestId, "error", "operation_busy");
+        // request_id; the aborted verdict inserted no budget hits. The audit
+        // runs in its own short deadline-bound transaction after admission
+        // settled; an expected audit timeout keeps this same 503.
+        await auditOperationBusy(sql, cfg.lockWaitMs, grant, op, null, idem, dig, requestId);
         return {
           status: limited.status,
           body: { ...limited.body, request_id: requestId },
@@ -416,28 +418,19 @@ async function processAgentEvent(
     const code = (err as { code?: string }).code;
     if (code === "55P03") {
       // A replay's grant may be held/deleted: do not wait on the same FK again.
-      // Bound the error receipt too; an unavailable audit table must not turn
-      // a retryable failure into a hung connection or an unaudited success.
-      try {
-        await sql.begin(async (tx) => {
-          await tx.unsafe(
-            `SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`,
-          );
-          await audit(
-            tx,
-            replaying ? null : grant,
-            op,
-            eventKeyIn,
-            idem,
-            dig,
-            requestId,
-            "error",
-            "operation_busy",
-          );
-        });
-      } catch (auditErr) {
-        if ((auditErr as { code?: string }).code !== "55P03") throw auditErr;
-      }
+      // The error receipt uses the shared bounded busy audit: its own short
+      // transaction with the admission's lock/statement deadlines, holding no
+      // admission lock. An expected audit timeout keeps the same retryable 503.
+      await auditOperationBusy(
+        sql,
+        cfg.lockWaitMs,
+        replaying ? null : grant,
+        op,
+        eventKeyIn,
+        idem,
+        dig,
+        requestId,
+      );
       return {
         status: 503,
         body: ingressDenial(

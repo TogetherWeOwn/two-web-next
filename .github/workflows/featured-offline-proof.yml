@@ -60,8 +60,14 @@ jobs:
             "src/admin/pages/**" \
             "src/admin/form-errors.ts" \
             "src/admin/routes.tsx" \
+            "src/admin/rsvp-review.ts" \
+            "src/admin/save-status.ts" \
             "src/admin/table-list.ts" \
             "src/admin/featured-list-query.ts" \
+            "src/db/admin-schema.ts" \
+            "src/db/schema.ts" \
+            "src/featured.ts" \
+            "src/featured-eligibility.ts" \
             "src/featured-image.ts" \
             "src/featured-status.tsx" \
             "src/home-copy.ts" \
@@ -70,6 +76,8 @@ jobs:
             "src/page-shell.tsx" \
             "src/pages.tsx" \
             "src/screens/featured-item.tsx" \
+            "src/seo-slots.ts" \
+            "src/seo.ts" \
             "public/styles.css" >> "$GITHUB_OUTPUT"
 
   capture:
@@ -86,7 +94,7 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
       options: --init --ipc=host
     env:
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       PROOF_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
       PROOF_WORKFLOW_HEAD: ${{ github.sha }}
       PROOF_CHECKOUT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -148,7 +156,7 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
       options: --init --ipc=host
     env:
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       PROOF_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
       PROOF_CHECKOUT_HEAD: ${{ github.event.pull_request.head.sha }}
       PROOF_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

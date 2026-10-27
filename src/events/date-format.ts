@@ -1,4 +1,38 @@
 /** Server-side event date formatting shared by page models and renderers. */
+
+/** Detail wall time shared by HTML, Kit and Markdown; ISO on a bad zone. */
+export function formatEventWhen(instant: Date, timezone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: timezone,
+      timeZoneName: "longOffset",
+    }).format(instant);
+  } catch {
+    return instant.toISOString();
+  }
+}
+
+/** Elapsed commitment, independent of wall clocks; residual seconds round down. */
+export function formatElapsedDuration(milliseconds: number): string | null {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return null;
+  const minutes = Math.floor(milliseconds / 60_000);
+  if (minutes === 0) return "Less than a minute";
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return [
+    hours ? `${hours} ${hours === 1 ? "hour" : "hours"}` : "",
+    remainder ? `${remainder} ${remainder === 1 ? "minute" : "minutes"}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function calendarDate(year: number, monthIndex: number, day: number): Date {
   const date = new Date(0);
   date.setUTCFullYear(year, monthIndex, day);

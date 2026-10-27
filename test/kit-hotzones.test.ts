@@ -195,7 +195,7 @@ describe("hot-zone read admission (Kit dispatch)", () => {
     expect(response.status).toBe(200);
     expect(await response.text()).toBe("kit");
     expect(guard).toHaveBeenCalledTimes(1);
-    expect(guard).toHaveBeenCalledWith(expect.any(Request), env);
+    expect(guard).toHaveBeenCalledWith(expect.any(Request), env, undefined);
     expect(render).toHaveBeenCalledTimes(1);
     expect(order).toEqual(["guard", "render"]);
   });

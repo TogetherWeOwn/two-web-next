@@ -227,9 +227,11 @@ describe("bounded outer-shield refusal audit", () => {
     expect(Object.values(credRows[0]!).join("\n")).not.toContain(credential);
   });
 
-  it("refusal counters increment on every refusal and the running count rides the sampled warn", async () => {
+  it("refusal counters increment on every refusal and each refusal warns with class + outcome", async () => {
     // The counters are the volume signal for the ~99% of refusals that write
-    // no audit row: deleting the increment must fail this pin.
+    // no audit row: deleting the increment must fail this pin. The warn is
+    // token-bucketed, not sampled: every refusal warns (or sheds) regardless
+    // of the audit sampler below.
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     try {
       const { rec, call } = setup(1);
@@ -244,8 +246,7 @@ describe("bounded outer-shield refusal audit", () => {
       expect(warn).not.toHaveBeenCalled();
 
       // Sampler forced on for the refusals: three refusals, three rows,
-      // three warns carrying the running count 1, 2, 3 with each refusal's
-      // own request_id and no identity.
+      // three warns carrying the bucket class + outcome, no identity.
       vi.mocked(Math.random).mockReturnValue(0);
       for (let expected = 1; expected <= 3; expected++) {
         const refused = await call(null, ip);
@@ -253,21 +254,29 @@ describe("bounded outer-shield refusal audit", () => {
         expect(shieldRefusalCounters.anonymous).toBe(expected);
         expect(shieldRefusalCounters.credential).toBe(0);
         expect(warn).toHaveBeenCalledTimes(expected);
-        expect(warn.mock.calls[expected - 1]?.[0]).toBe("agent-events.shield.refusal_sampled");
+        expect(warn.mock.calls[expected - 1]?.[0]).toBe("agent-events.shield.refused");
         expect(warn.mock.calls[expected - 1]).toEqual([
-          "agent-events.shield.refusal_sampled",
-          { bucket_class: "anonymous", refusals: expected, request_id: refused.body.request_id },
+          "agent-events.shield.refused",
+          { bucket_class: "anonymous", outcome: "rate_limited" },
         ]);
       }
       expect(shieldRows(rec)).toHaveLength(3);
 
-      // Sampler forced off: two more refusals still count, but write no row
-      // and emit no warn. The count is the only durable volume signal left.
+      // Sampler forced off: two more refusals still count and still warn,
+      // but write no row. The count is the only durable volume signal left.
       vi.mocked(Math.random).mockReturnValue(SHIELD_REFUSAL_AUDIT_RATE);
       expect((await call(null, ip)).status).toBe(429);
       expect((await call(null, ip)).status).toBe(429);
       expect(shieldRefusalCounters.anonymous).toBe(5);
-      expect(warn).toHaveBeenCalledTimes(3);
+      expect(warn).toHaveBeenCalledTimes(5);
+      expect(warn.mock.calls[3]).toEqual([
+        "agent-events.shield.refused",
+        { bucket_class: "anonymous", outcome: "rate_limited" },
+      ]);
+      expect(warn.mock.calls[4]).toEqual([
+        "agent-events.shield.refused",
+        { bucket_class: "anonymous", outcome: "rate_limited" },
+      ]);
       expect(shieldRows(rec)).toHaveLength(3);
 
       // Credentialed refusals count under their own class. The credential
@@ -279,10 +288,10 @@ describe("bounded outer-shield refusal audit", () => {
       const credRefused = await call("shield-counter-credential", ip);
       expect(credRefused.status).toBe(429);
       expect(shieldRefusalCounters).toEqual({ credential: 1, anonymous: 5 });
-      expect(warn).toHaveBeenCalledTimes(4);
-      expect(warn.mock.calls[3]).toEqual([
-        "agent-events.shield.refusal_sampled",
-        { bucket_class: "credential", refusals: 1, request_id: credRefused.body.request_id },
+      expect(warn).toHaveBeenCalledTimes(6);
+      expect(warn.mock.calls[5]).toEqual([
+        "agent-events.shield.refused",
+        { bucket_class: "credential", outcome: "rate_limited" },
       ]);
       const logged = JSON.stringify(warn.mock.calls);
       expect(logged).not.toContain(ip);

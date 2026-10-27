@@ -23,7 +23,7 @@ export const csr = false;
 // No new queries: the helper
 // calls the shared listActivityLog projection, which never selects
 // `properties`, so raw before/after maps cannot render.
-export const load: PageServerLoad = async ({ parent, url, setHeaders }) => {
+export const load: PageServerLoad = async ({ parent, url, locals, setHeaders }) => {
   await parent();
   try {
     return await loadActivityLogPage({
@@ -32,6 +32,7 @@ export const load: PageServerLoad = async ({ parent, url, setHeaders }) => {
       causerParam: url.searchParams.get("causer"),
       pageParam: url.searchParams.get("page"),
       setHeaders,
+      requestId: locals.requestId,
     });
   } catch {
     error(503, "Admin temporarily unavailable");
