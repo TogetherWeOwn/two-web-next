@@ -2,11 +2,32 @@
 import { and, asc, eq, gt, isNull, lte, or, sql } from "drizzle-orm";
 import { featuredContents } from "./db/admin-schema";
 import type { Db } from "./db/index";
+import { featuredLinkRefusal, isSafeFeaturedLink } from "./image-policy";
 
 export type VisibleFeatured = Pick<
   typeof featuredContents.$inferSelect,
   "id" | "title" | "body" | "url" | "imageUrl" | "imageAlt"
 >;
+
+/**
+ * The one place a stored link is judged before it can become a public href
+ * (Hono and Kit homepages both read through the two readers below; the admin
+ * Homepage previews judge their preview copy with it too). A row saved before
+ * the save-time policy, or written around the form, keeps its title and body
+ * but loses its link.
+ */
+export function safeStoredLink<T extends { url: string | null }>(row: T): T {
+  const url = row.url;
+  if (url === null || isSafeFeaturedLink(url) || isSameSitePath(url)) return row;
+  return { ...row, url: null };
+}
+
+// Rows seeded outside the form (the Lighthouse fixture links "/events") may
+// hold a same-site path: not deceptive, and the same checks apply. "//host"
+// is protocol-relative, so it is not a path.
+function isSameSitePath(raw: string): boolean {
+  return /^\/(?!\/)/.test(raw) && featuredLinkRefusal(raw) === null;
+}
 
 export const FEATURED_READ_DEADLINE_MS = 500;
 const FEATURED_DB_TIMEOUT_MS = 250;
@@ -65,7 +86,7 @@ export async function listVisibleFeatured(db: Db, now = new Date()): Promise<Vis
       // Like optional search analytics: cancel lock waits/slow statements in
       // Postgres, not just the HTTP wait, and never alter pooled session settings.
       await tx.execute(featuredTimeoutGuard());
-      return tx
+      const rows = await tx
         .select({
           id: featuredContents.id,
           title: featuredContents.title,
@@ -83,6 +104,7 @@ export async function listVisibleFeatured(db: Db, now = new Date()): Promise<Vis
           ),
         )
         .orderBy(asc(featuredContents.position), asc(featuredContents.id));
+      return rows.map(safeStoredLink);
     }),
   );
 }
@@ -105,7 +127,7 @@ export async function listPublishedFeatured(db: Db): Promise<PublishedFeatured[]
   return withPublishedFeaturedRead(() =>
     db.transaction(async (tx) => {
       await tx.execute(featuredTimeoutGuard());
-      return tx
+      const rows = await tx
         .select({
           id: featuredContents.id,
           title: featuredContents.title,
@@ -119,6 +141,7 @@ export async function listPublishedFeatured(db: Db): Promise<PublishedFeatured[]
         .from(featuredContents)
         .where(eq(featuredContents.isPublished, true))
         .orderBy(asc(featuredContents.position), asc(featuredContents.id));
+      return rows.map(safeStoredLink);
     }),
   );
 }

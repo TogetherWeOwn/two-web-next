@@ -3,8 +3,9 @@
 // gate, then admission (throttle, owner only), then the save — an oversized
 // body 413s with zero throttle spend and no session/store read.
 import { requestBodyLimit } from "../body-limit";
-import { alertRequestError } from "../alerts";
+import { alertRequestError, exceptionClass } from "../alerts";
 import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
+import { createRateLimitedWarn } from "../log-budget";
 import {
   BadRequestPage,
   InternalErrorPage,
@@ -27,6 +28,7 @@ import type { Ctx, ProfileApp, ProfileDeps } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
 import type { MemberView } from "./store";
 import { requestRoute, safeRequestId } from "../request-log";
+import { jsonRefusal } from "../json-refusal";
 import { acceptsJson, isJsonMediaType, mediaType } from "../media-type";
 import { normalizeLeaderboardOptOut, validateProfile } from "./validation";
 
@@ -51,6 +53,12 @@ const isFormMediaType = (value: string | null | undefined): boolean => {
   const mt = mediaType(value);
   return mt === "application/x-www-form-urlencoded" || mt === "multipart/form-data";
 };
+
+// Malformed-body warns share one bucket: a body-spraying prober emits at
+// most burst warns, then one shed per window, instead of one line per 400.
+// 415s (admission refusal before the body is read) and well-formed
+// validation 422s stay silent and spend nothing.
+const malformedLog = createRateLimitedWarn({ shedLine: "profile.write.shed" });
 
 // Round-trip the submitted draft into the editor controls: whichever games
 // representation was sent (games_text wins), the switch where the member left
@@ -99,13 +107,35 @@ export function registerWriteRoutes(
       } else {
         c.header("cache-control", "private, no-store");
         varyAccept(c);
+        if (acceptsJson(c.req.header("accept")))
+          return jsonRefusal(c, "unsupported_media_type", 415);
         if (prefersHtmlError(c)) return c.html(<BadRequestPage code="415" />, 415);
         return c.text("Unsupported Media Type", 415);
       }
-    } catch {
+    } catch (err) {
+      // Body-parse failure only: the refused content-type plus the exception
+      // class, never body bytes. The 400 shape is unchanged.
+      const requestId = safeRequestId(c.get("requestId"));
+      malformedLog.warn("profile.write.malformed_body", {
+        exception: exceptionClass(err),
+        content_type: mediaType(c.req.header("content-type")),
+        ...(requestId ? { request_id: requestId } : {}),
+      });
       return badRequest(c);
     }
-    if (typeof input !== "object" || input === null || Array.isArray(input)) return badRequest(c);
+    if (typeof input !== "object" || input === null || Array.isArray(input)) {
+      // Well-formed non-object JSON refuses the same 400 as a parse failure:
+      // warn with the synthetic TypeError like the event leg, so a non-object
+      // spray shows up in warn-vs-400-volume triage instead of reading as
+      // not-malformed. The 400 shape is unchanged.
+      const requestId = safeRequestId(c.get("requestId"));
+      malformedLog.warn("profile.write.malformed_body", {
+        exception: "TypeError",
+        content_type: mediaType(c.req.header("content-type")),
+        ...(requestId ? { request_id: requestId } : {}),
+      });
+      return badRequest(c);
+    }
     // `games` must be present (legacy `present|array`). Only a plain form
     // submission treats absence as a blank list; JSON must say so with `games: []`,
     // otherwise an omitted key would silently wipe the stored list.
@@ -116,14 +146,7 @@ export function registerWriteRoutes(
       : { ok: false as const, errors: { fields: UNSUPPORTED_FIELDS } };
     if (!result.ok) {
       if (acceptsJson(c.req.header("accept"))) {
-        // Additive correlation: the validated log id requestLog set on the
-        // context, never raw client header bytes. Omitted when there is no
-        // requestLog context (a bare mount has no log correlation id).
-        const requestId = safeRequestId(c.get("requestId"));
-        return c.json(
-          { errors: result.errors, ...(requestId ? { request_id: requestId } : {}) },
-          422,
-        );
+        return jsonRefusal(c, "invalid", 422, { fields: result.errors });
       }
       c.status(422);
       return c.html(
@@ -224,6 +247,8 @@ export function registerWriteRoutes(
       }
     }
     c.header("Allow", "GET, PATCH, POST");
+    varyAccept(c);
+    if (acceptsJson(c.req.header("accept"))) return jsonRefusal(c, "method_not_allowed", 405);
     return c.text("Method Not Allowed", 405);
   });
 }

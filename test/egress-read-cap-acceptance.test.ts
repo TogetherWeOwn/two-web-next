@@ -224,7 +224,7 @@ describe.skipIf(!url)("egress reads under over-cap fixtures (isolated test DB)",
     const rssKeys = [
       ...(await rss.text()).matchAll(/<guid isPermaLink="true">[^<]+\/e\/([^<]+)<\/guid>/g),
     ].map((m) => m[1]);
-    expect(rssKeys).toEqual([key(1), key(2), key(3)]);
+    expect(rssKeys).toEqual([key(1), key(2), key(3), key(4)]);
   });
 
   it("keeps the established 103-event subscription collection whole", async () => {

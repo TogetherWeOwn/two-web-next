@@ -60,6 +60,7 @@ import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
 import { webmcpPilot } from "./webmcp-pilot";
 
+export { faqLastReviewed } from "./faq-last-reviewed";
 export { rulesLastUpdated } from "./rules-last-updated";
 
 // The session cookie name is defined once in ./session-cookie (re-exported by ./auth/routes, which owns logout).

@@ -13,8 +13,13 @@
 // 400 is the one status without a RecoveryShell counterpart: its Hono twin is
 // the member-shell board-filter page (src/leaderboards/pages.tsx), so the
 // title and lead below are Kit's own client-error copy, never outage copy.
+// 422 is the other: its Hono twin is the overlong-search notice page
+// (EventsSearchTooLongPage in src/events/pages-calendar-screen.tsx), so the
+// title and lead below match that notice exactly, never outage copy.
 
-export type KitErrorStatus = 400 | 404 | 403 | 410 | 429 | 500 | 503;
+import { EVENTS_SEARCH_TOO_LONG_COPY } from "./islands/contracts";
+
+export type KitErrorStatus = 400 | 404 | 403 | 410 | 422 | 429 | 500 | 503;
 
 export interface KitErrorCopy {
   code: string;
@@ -42,6 +47,11 @@ const COPY: Record<KitErrorStatus, KitErrorCopy> = {
     code: "410",
     title: "This page is gone",
     lead: "The page was removed. The lobby is still open — come in and say hello.",
+  },
+  422: {
+    code: "422",
+    title: "Events",
+    lead: EVENTS_SEARCH_TOO_LONG_COPY,
   },
   429: {
     code: "429",
@@ -83,7 +93,8 @@ function isMachinePath(path: string, method: string): boolean {
   if (method === "GET" || method === "HEAD") return path === "/events.json";
   if (method === "POST") {
     return (
-      path === "/events" || /^\/events\/[^/]+\/(publish|cancel|rsvp-pause|rsvp-reopen)$/.test(path)
+      path === "/events" ||
+      /^\/events\/[^/]+\/(publish|cancel|duplicate|rsvp-pause|rsvp-reopen)$/.test(path)
     );
   }
   if (method === "PATCH") return /^\/events\/[^/]+$/.test(path);
