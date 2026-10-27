@@ -294,6 +294,12 @@ jobs:
         run: |
           npx vitest run test/event-device-timezone-ends.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-device-timezone-ends.json
           node ci/a11y-require-executed.mjs artifacts/a11y/event-device-timezone-ends.json "event device timezone ends browser acceptance" 30
+      - name: Event time from now (Hono and Kit, local fixtures, shipped bytes)
+        run: |
+          mkdir -p artifacts/a11y
+          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-time-from-now.tap ci/event-time-from-now.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Hono time-from-now browser acceptance" 28
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Kit time-from-now browser acceptance" 28
       - name: Event chosen timezone range (Hono and Kit, local fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
