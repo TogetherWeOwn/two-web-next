@@ -275,7 +275,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(list).toContain("America/New_York");
 
       const grid = await (await app.request("/events?view=calendar&month=2026-07", {}, env)).text();
-      expect(cellFor(grid, NY_BUCKET)).toContain(`20:00 Evening games`);
+      expect(cellFor(grid, NY_BUCKET)).toContain(`20:00 America/New_York Evening games`);
       expect(cellFor(grid, "2026-07-16")).not.toContain("Evening games");
     });
 
@@ -303,7 +303,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           env,
         )
       ).text();
-      expect(cellFor(grid, NY_BUCKET)).toContain(`20:00 Evening games`);
+      expect(cellFor(grid, NY_BUCKET)).toContain(`20:00 America/New_York Evening games`);
       expect(cellFor(grid, "2026-07-16")).not.toContain("Evening games");
       expect(grid).not.toContain("12:00");
 

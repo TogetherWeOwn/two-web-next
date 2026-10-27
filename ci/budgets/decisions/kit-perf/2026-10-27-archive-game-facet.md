@@ -44,12 +44,12 @@ identical-tree rebuilds; that jitter is disclosed, not signal.
 ## Shipping tests
 
 `ci/budget-fragments.test.mjs` moves with the ceilings (client pins plus
-the admitted server allocation list). The fixed literals in
-`ci/check-kit-perf.test.mjs` pin the old client and server ceilings by
-design and are corrected separately by the test owner; this change does not
-touch that file.
+the admitted server allocation list). The fixed client and server
+boundary literals in `ci/check-kit-perf.test.mjs` move with them (delivered
+by the test owner); they are part of this change and of its rollback.
 
 No feature, checker, dependency, workflow, mask or exclusion changes ship
 here. Staging and release acceptance are not claimed; exact-head CI and
 independent review remain mandatory. Undo: revert the two fragment steps,
-the oracle pins and this record.
+the oracle pins, the `ci/check-kit-perf.test.mjs` boundary fixtures and this
+record.
