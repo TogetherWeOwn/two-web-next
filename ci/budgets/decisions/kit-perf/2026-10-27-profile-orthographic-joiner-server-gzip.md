@@ -12,7 +12,9 @@ needed the same ceiling, with 199B of margin; both measurements are below.
 
 Main `d6e9491c2216738cf016c7020c0ea84e7a5b7f91` and PR #1863 head
 `a966e3c3038834109c9f02424a3ab118d97c48a8` were independently built from
-immutable source archives. The profile head already includes that main.
+immutable source archives in the initial verification session. These rows
+are historical; the fresh-main recheck below governs current headroom.
+The profile head already includes that main.
 Locked dependencies, Node 24.22.1 / npm 11.19.1, generated critical CSS,
 `npm run build --prefix web`, two production builds per tree. The canonical
 `measure(root)` from `ci/check-kit-perf.mjs` measured every build.
@@ -91,9 +93,12 @@ raw and file count remain below 1203200 and 126.
 The unchanged shipping ladder in `ci/check-kit-perf.test.mjs` already admits
 336896 with fixed 336673 interval, 336896 exact and 336897 one-over probes.
 These are synthetic boundary fixtures, not measurements of this profile head.
-The aggregate allocation oracle in `ci/budget-fragments.test.mjs` incorporates
+The aggregate allocation oracle in `ci/budget-fragments.test.mjs` cherry-picks
 independent test-author commit `37a470978bdadc8ea49aa7f3cc0892e9ac8da649`
-unchanged. It adds 336896 admission, refuses 336897 and 337152, and extends
+as `041fd92c4a84e253897a2d4f03a28f8af1f4f7dd`, with byte-identical test content.
+Its allocation comment preserves the original measurement, not the latest
+composition's headroom; use the fresh-main table above for that.
+It adds 336896 admission, refuses 336897 and 337152, and extends
 all eight off-axis drift controls to the new rung without removing the old
 ones. The integrated paired suites pass 73/73; the clean synthetic merge
 with fresh main passes 75/75, including main's additional CSS boundary tests.
