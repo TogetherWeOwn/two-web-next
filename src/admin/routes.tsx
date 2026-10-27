@@ -24,6 +24,7 @@
 // - POST /admin/featured             create
 // - GET  /admin/featured/:id         edit form
 // - POST /admin/featured/:id         update
+// - POST /admin/featured/:id/unpublish  unpublish
 // - POST /admin/featured/:id/delete  delete (safe: nothing refers to it)
 //
 // Read routes declare stable metadata; keyed retrieval owns the subjects and
