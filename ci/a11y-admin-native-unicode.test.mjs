@@ -15,16 +15,54 @@ const step = job.match(
   /      - name: Admin event native Unicode regressions[^\n]*(\n[\s\S]*?)(?=\n      - |\n?$)/,
 )?.[1];
 
-const report = (statuses) => ({
-  testResults: [
-    {
-      assertionResults: [
-        { ancestorTitles: ["admin event code-point contract"], status: "passed" },
-        ...statuses.map((status) => ({ ancestorTitles: [SUITE], status })),
-      ],
-    },
-  ],
-});
+const report = (statuses) => {
+  const other = {
+    ancestorTitles: ["admin event code-point contract"],
+    title: "code-point contract",
+    fullName: "admin event code-point contract code-point contract",
+    status: "passed",
+  };
+  const target = statuses.map((status, index) => ({
+    ancestorTitles: [SUITE],
+    title: `case-${index + 1}`,
+    fullName: `${SUITE} case-${index + 1}`,
+    status,
+  }));
+  const cases = [other, ...target];
+  const count = (wanted) => cases.filter((entry) => entry.status === wanted).length;
+  return {
+    numTotalTestSuites: 3,
+    numPassedTestSuites: 3,
+    numFailedTestSuites: 0,
+    numPendingTestSuites: 0,
+    numTotalTests: cases.length,
+    numPassedTests: count("passed"),
+    numFailedTests: count("failed"),
+    numPendingTests: count("pending") + count("skipped"),
+    numTodoTests: count("todo"),
+    success: true,
+    testResults: [
+      {
+        name: "test/admin-event-native-unicode.test.ts",
+        status: "passed",
+        assertionResults: cases,
+      },
+    ],
+  };
+};
+const emptyReport = {
+  numTotalTestSuites: 0,
+  numPassedTestSuites: 0,
+  numFailedTestSuites: 0,
+  numPendingTestSuites: 0,
+  numTotalTests: 0,
+  numPassedTests: 0,
+  numFailedTests: 0,
+  numPendingTests: 0,
+  numTodoTests: 0,
+  success: true,
+  testResults: [],
+};
 
 test("the a11y job runs the native admin browser suite with the opt-in and the executed-count verifier", () => {
   assert(step, "a11y job must keep the native admin Unicode step");
@@ -104,7 +142,7 @@ test("the verifier rejects skipped, failed, missing or no cases", () => {
     () => checkExecuted(report(Array(MIN - 1).fill("passed")), SUITE, MIN),
     /expected at least 48/,
   );
-  assert.throws(() => checkExecuted({ testResults: [] }, SUITE, MIN), /expected at least 48/);
+  assert.throws(() => checkExecuted(emptyReport, SUITE, MIN), /expected at least 48/);
   assert.throws(
     () => checkExecuted(report(Array(MIN).fill("passed")), SUITE, 0),
     /positive integer/,

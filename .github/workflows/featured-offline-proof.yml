@@ -60,6 +60,7 @@ jobs:
             "src/admin/pages/**" \
             "src/admin/form-errors.ts" \
             "src/admin/routes.tsx" \
+            "src/admin/rsvp-review.ts" \
             "src/admin/save-status.ts" \
             "src/admin/table-list.ts" \
             "src/admin/featured-list-query.ts" \
@@ -67,6 +68,7 @@ jobs:
             "src/db/admin-schema.ts" \
             "src/db/schema.ts" \
             "src/featured.ts" \
+            "src/featured-eligibility.ts" \
             "src/featured-image.ts" \
             "src/featured-status.tsx" \
             "src/home-copy.ts" \

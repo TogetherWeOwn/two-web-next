@@ -19,7 +19,7 @@ export const csr = false;
 // each pinned by source tests in test/kit-past-events.test.ts — only
 // error(503) proves what Kit sends, since SvelteKit ignores the helper's
 // status:503 Error property.
-export const load: PageServerLoad = async ({ url, request, setHeaders }) => {
+export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
   // Admission stays outside the outage catch: 422 is not a database failure.
   if ([...(url.searchParams.get("q") ?? "")].length > MAX_QUERY_LENGTH) {
     setHeaders({ "cache-control": "private, no-store" });
@@ -33,16 +33,17 @@ export const load: PageServerLoad = async ({ url, request, setHeaders }) => {
       setHeaders,
       dbForFn: dbFor,
       listPastFn: listPast,
-      // Same correlation source as the Hono request log: the validated
-      // cf-ray (safeRequestId inside the alert drops anything else).
-      requestId: request.headers.get("cf-ray") ?? undefined,
+      // The dispatch's served request id: the 503 page and x-request-id
+      // carry this same value, so the alert must name it too
+      // (safeRequestId inside the alert drops anything unvalidated).
+      requestId: locals.requestId,
     });
     // Projected before returning: Kit serializes load data into __data.json
     // for anonymous clients even with csr=false, so the authorship
     // snowflake and other unrendered row fields never ride the rows (the
     // join precedent: toPublicWidgetSnapshot). The card only reads the
-    // projected fields, so the view is unchanged.
-    return { ...data, rows: data.rows.map(toPublicPastArchiveRow) };
+    // projected fields (plus, while searching, the bounded passage), so the view is unchanged.
+    return { ...data, rows: data.rows.map((row) => toPublicPastArchiveRow(row, data.q)) };
   } catch {
     error(503, "Events temporarily unavailable");
   }

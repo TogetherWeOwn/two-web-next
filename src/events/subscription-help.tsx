@@ -18,20 +18,44 @@ export function subscriptionHelp(appUrl: string, game: string | null = null, zon
   const url = feedUrl(appUrl, game);
   const label = game === null ? "Calendar feed URL" : `${game} calendar feed URL`;
   return (
-    <details class="subscription-help" data-cal-zone={zone ? "subscribe" : undefined}>
+    <details
+      class="subscription-help"
+      data-testid="subscription-help"
+      data-cal-zone={zone ? "subscribe" : undefined}
+    >
       <summary>How to subscribe to the calendar</summary>
       {SUBSCRIPTION_GUIDANCE.slice(0, 2).map((paragraph) => (
         <p>{paragraph}</p>
       ))}
       <label for="calendar-feed-url">{label}</label>
       <div class="subscription-copy">
-        <input id="calendar-feed-url" type="text" value={url} readonly />
-        <button class="btn" type="button" data-copy-link={url} data-copy-feed hidden>
+        <input
+          id="calendar-feed-url"
+          data-testid="subscription-feed-url"
+          type="text"
+          value={url}
+          readonly
+        />
+        <button
+          class="btn"
+          type="button"
+          data-testid="subscription-copy-button"
+          data-copy-link={url}
+          data-copy-feed
+          hidden
+        >
           Copy feed URL
         </button>
       </div>
-      <p>Select the feed URL to copy it manually if Subscribe does not open your calendar app.</p>
-      <p role="status" aria-atomic="true" data-copy-toast></p>
+      <p data-testid="subscription-manual-copy">
+        Select the feed URL and copy it manually in your calendar app.
+      </p>
+      <p
+        role="status"
+        aria-atomic="true"
+        data-copy-toast
+        data-testid="subscription-copy-status"
+      ></p>
       <p>{SUBSCRIPTION_GUIDANCE[2]}</p>
     </details>
   );

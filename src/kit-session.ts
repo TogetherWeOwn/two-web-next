@@ -12,7 +12,7 @@
 // responses or audited full member documents. Renewal stays route-specific:
 // Hono's readSession rotates its page views (no blanket rotating layout load;
 // fragments and JSON keep nonrotating reads), the Kit event detail renews
-// through kitEventDetailRotationFor, and Kit admin reads slide through
+// through kitEventDetailRotationFor, and Kit admin reads rotate through
 // kitAdminRenewalFor, which the hook core calls only after the
 // member-read boundary releases a successful GET. Logout stays the
 // authoritative Hono POST /logout. This module only peeks flashes. Profile
@@ -333,22 +333,25 @@ export function kitEventDetailRotationFor(
 }
 
 /**
- * Sliding renewal for Kit-served admin reads: the post-release twin of Hono's
- * admin-guard slide (src/admin/guard.ts: a current bearer renews the
- * 120-minute window, grace reads never refresh cookies). The hook core calls
- * this only after the member-read boundary releases a successful GET document,
- * so a refused, failed, bounced or redirected read never touches the presented
- * bearer.
+ * Rotating renewal for Kit-served admin reads: the post-release twin of Hono's
+ * admin-guard re-stamp (src/admin/guard.ts: a current bearer mints a fresh
+ * token with a fresh 120-minute window, grace reads never refresh cookies).
+ * The hook core calls this only after the member-read boundary releases a
+ * successful GET document, so a refused, failed, bounced or redirected read
+ * never burns the presented bearer.
  *
- * Slide, not rotate. Hono admin reads deliberately never rotate — rotation is
- * the site's concern, and an admin read must not invalidate the cookie the
- * moderator's other tab holds. The renewal cookie re-signs the PRESENTED
- * bearer with a fresh Max-Age, and the store call is renew(), never rotate().
- * Only a current bearer (statusHash present) renews; grace/predecessor reads
- * return null without a store write. A lost race (renew resolves false)
- * returns null like any other expected non-renewal; only a store failure
- * propagates, and the hook core renders the released page without renewal
- * then. Non-moderators and anonymous callers get null with zero store writes.
+ * Rotate, not slide: re-verify the signed bearer (locals are never trusted
+ * alone), gate on a current bearer (statusHash present) so grace/predecessor
+ * reads return null without a store write, re-read the live row and re-gate
+ * on its moderator bit, mint a fresh token, atomically replace the row with
+ * the row's own identity bits, and sign the
+ * REPLACEMENT, never the presented token. Rotation preserves the lineage
+ * key and created_at (src/sessions.ts), so the 24h absolute cap is
+ * unaffected. A lost race (rotate resolves false) returns null like any
+ * other expected non-rotation; only a store failure propagates, and the
+ * hook core renders the released page without renewal then (rotate is one
+ * atomic statement, so a throw leaves the old row live as current).
+ * Non-moderators and anonymous callers get null with zero store writes.
  */
 export function kitAdminRenewalFor(env: Env): (event: HookEventLike) => Promise<string | null> {
   return async (event) => {
@@ -362,14 +365,28 @@ export function kitAdminRenewalFor(env: Env): (event: HookEventLike) => Promise<
     if (!isValidSessionToken(raw)) return null;
     const store = await storeForEnv(env);
     const tokenHash = await hashToken(raw);
-    // Only a current bearer renews: grace reads never refresh cookies (Hono
-    // gates on statusHash first). A null key returns before any renew call.
+    // Only a current bearer rotates: grace reads never refresh cookies (Hono
+    // gates on statusHash first). A null key returns before any rotate call.
     if (!(await store.statusHash(tokenHash))) return null;
-    const renewed = await store.renew(tokenHash, new Date(Date.now() + SESSION_TTL_SECONDS * 1000));
-    if (!renewed) return null;
+    // The live row, not locals, authorizes the successor: a load between the
+    // bridge read and this post-release call could have mutated locals, so
+    // re-read the row, re-gate on its moderator bit, and carry its bits.
+    const row = await store.get(tokenHash);
+    if (!row?.moderator) return null;
+    const replacement = newSessionToken();
+    const rotated = await store.rotate(tokenHash, {
+      tokenHash: await hashToken(replacement),
+      userId: row.userId,
+      username: row.username,
+      avatar: row.avatar,
+      member: row.member,
+      moderator: row.moderator,
+      expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+    });
+    if (!rotated) return null;
     // Inline options, like Hono's setSignedCookie calls: the pinned-lifetime
     // guard (test/privacy-policy-numbers.test.ts) reads maxAge from the call.
-    return generateSignedCookie(SESSION_COOKIE, raw, env.SESSION_SECRET, {
+    return generateSignedCookie(SESSION_COOKIE, replacement, env.SESSION_SECRET, {
       path: "/",
       secure: true,
       httpOnly: true,
