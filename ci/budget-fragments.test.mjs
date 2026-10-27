@@ -27,10 +27,10 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
-// Server gzip has two explicitly approved allocations: the pre-split
-// 335104 ceiling and the separately measured one-step 335360 composition
-// allowance. Every other ceiling stays pinned to its exact pre-split value;
-// any other server gzip value is unsupported by design.
+// Server gzip has two explicitly approved allocations: the 335104 ceiling
+// and the separately measured one-step 335360 composition allowance. Every
+// other ceiling matches the SHIPPING_KIT_BUDGET baseline exactly; any other
+// server gzip value is unsupported by design.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335104, maxFiles: 126 } },
@@ -41,15 +41,12 @@ const SHIPPING_KIT_BUDGET = {
   startup: { maxMs: 60000 },
 };
 
-const SHIPPING_KIT_BUDGET_335360 = {
-  worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
-  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
-  client: {
-    js: { maxRawBytes: 256000, maxGzipBytes: 102912, maxFiles: 55 },
-    css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
-  },
-  startup: { maxMs: 60000 },
-};
+// The 335360 composition shares every ceiling with the baseline except
+// server.js.maxGzipBytes. Deriving it here (rather than duplicating the
+// literal) keeps the two approved plans in sync when unrelated ceilings
+// move on main; the aggregation check still deep-compares the full plan.
+const SHIPPING_KIT_BUDGET_335360 = structuredClone(SHIPPING_KIT_BUDGET);
+SHIPPING_KIT_BUDGET_335360.server.js.maxGzipBytes = 335360;
 
 const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/admin-event-editor.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
