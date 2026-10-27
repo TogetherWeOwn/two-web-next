@@ -2,10 +2,43 @@
 // requested: it runs beside them (one fewer sequential round trip on a plain
 // `/events` render). A requested game still resolves against the list first.
 // Synthetic read models; no database, Discord, browser or staging dependencies.
-import { afterEach, describe, expect, it, vi } from "vitest";
+//
+// The doubles are plain functions behind a hoisted holder (not vi.spyOn):
+// @vitest/spy attaches a settlement handler to every promise a spy returns,
+// which would mask an unhandled games-read rejection the rank-jump test pins.
+import { describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
-import * as reads from "../src/events/reads";
 import { loadCalendarPageModel, resolveCalendarInput } from "../src/events/page-models.server";
+
+type Reads = typeof import("../src/events/reads");
+type Double = (...args: never[]) => unknown;
+type DoubleKey = "listPublishedGames" | "listUpcoming" | "listCalendarPast" | "rankUpcoming";
+
+const doubles = vi.hoisted(() => ({
+  listPublishedGames: undefined as Double | undefined,
+  listUpcoming: undefined as Double | undefined,
+  listCalendarPast: undefined as Double | undefined,
+  rankUpcoming: undefined as Double | undefined,
+}));
+
+vi.mock("../src/events/reads", async (importOriginal) => {
+  const original = await importOriginal<Reads>();
+  const delegate = (key: DoubleKey): Double => {
+    const fn = (...args: never[]): unknown => {
+      const impl = doubles[key];
+      if (!impl) throw new Error(`unexpected ${key} call (no test double installed)`);
+      return impl(...args);
+    };
+    return fn;
+  };
+  return {
+    ...original,
+    listPublishedGames: delegate("listPublishedGames"),
+    listUpcoming: delegate("listUpcoming"),
+    listCalendarPast: delegate("listCalendarPast"),
+    rankUpcoming: delegate("rankUpcoming"),
+  };
+});
 
 const NOW = new Date("2026-10-27T12:00:00Z");
 const discord = { upcoming: async () => [], lastReadFailed: () => false };
@@ -19,20 +52,23 @@ function setup() {
     rejectGames = reject;
   });
   const optsSeen: unknown[] = [];
-  vi.spyOn(reads, "listPublishedGames").mockImplementation(async () => {
+  const pastOptsSeen: unknown[] = [];
+  doubles.listPublishedGames = async () => {
     started.push("games");
     return gamesPending;
-  });
-  vi.spyOn(reads, "listUpcoming").mockImplementation(async (_db, _now, opts) => {
+  };
+  doubles.listUpcoming = async (_db, _now, opts) => {
     started.push("upcoming");
     optsSeen.push(opts);
     return { rows: [], hasMore: false, totalPages: 0, total: 0 };
-  });
-  vi.spyOn(reads, "listCalendarPast").mockImplementation(async () => {
+  };
+  doubles.listCalendarPast = async (_db, _now, opts) => {
     started.push("past");
+    pastOptsSeen.push(opts);
     return [];
-  });
-  return { started, releaseGames, rejectGames, optsSeen };
+  };
+  doubles.rankUpcoming = undefined;
+  return { started, releaseGames, rejectGames, optsSeen, pastOptsSeen };
 }
 
 const load = (query: Parameters<typeof resolveCalendarInput>[0]) =>
@@ -44,8 +80,6 @@ const load = (query: Parameters<typeof resolveCalendarInput>[0]) =>
     now: NOW,
   });
 const flush = () => new Promise((resolve) => setTimeout(resolve, 0));
-
-afterEach(() => vi.restoreAllMocks());
 
 describe("calendar canonical read: games facet overlap", () => {
   it.each([{}, { game: "" }, { game: "   " }])(
@@ -63,7 +97,7 @@ describe("calendar canonical read: games facet overlap", () => {
   );
 
   it("still resolves a requested game before the page reads", async () => {
-    const { started, releaseGames, optsSeen } = setup();
+    const { started, releaseGames, optsSeen, pastOptsSeen } = setup();
     const model = load({ game: "chess" });
     await flush();
     expect(started).toEqual(["games"]);
@@ -72,11 +106,14 @@ describe("calendar canonical read: games facet overlap", () => {
     expect(started).toEqual(["games", "upcoming", "past"]);
     expect(gameFilter).toBe("Chess");
     expect(optsSeen[0]).toMatchObject({ game: "Chess" });
+    expect(pastOptsSeen[0]).toMatchObject({ game: "Chess" });
   });
 
   it("propagates a games read failure on the overlapped path", async () => {
     setup();
-    vi.spyOn(reads, "listPublishedGames").mockRejectedValue(new Error("games down"));
+    doubles.listPublishedGames = async () => {
+      throw new Error("games down");
+    };
     await expect(load({})).rejects.toThrow("games down");
   });
 
@@ -86,7 +123,7 @@ describe("calendar canonical read: games facet overlap", () => {
     const rankPending = new Promise<number | null>((_resolve, reject) => {
       rejectRank = reject;
     });
-    vi.spyOn(reads, "rankUpcoming").mockImplementation(() => rankPending);
+    doubles.rankUpcoming = () => rankPending;
     const unhandled: unknown[] = [];
     const onUnhandled = (reason: unknown) => {
       unhandled.push(reason);
