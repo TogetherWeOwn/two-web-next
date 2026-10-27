@@ -1,4 +1,14 @@
-import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -394,5 +404,64 @@ describe("session-recovery receipt schema (reject incomplete receipts)", () => {
     expect(producer).not.toMatch(/=\s*SESSION_RECOVERY_CHECK_IDS(?!\s*\[)/);
     expect(producer).not.toMatch(/:\s*SESSION_RECOVERY_CHECK_IDS(?!\s*\[)/);
     expect(producer).toContain("result.json");
+  });
+});
+
+// A directory the validator can stat but not list must report the evidence as
+// unreadable, not leak a raw EACCES. The validator runs in a child: CI's check
+// job runs as root in a container, where CAP_DAC_OVERRIDE ignores mode bits,
+// so the child drops to an unprivileged uid there to make the chmod fault real.
+const UNPRIVILEGED = process.getuid?.() === 0 ? { uid: 65534, gid: 65534 } : {};
+
+function validateInChild(root: string, dir: string): any {
+  const script = `import { checkSessionRecoveryEvidence } from "./require-session-recovery-evidence.mjs";
+try { process.stdout.write(JSON.stringify({ ok: checkSessionRecoveryEvidence(process.argv[1]) })); }
+catch (e) { process.stdout.write(JSON.stringify({ code: e?.code, nextAction: e?.nextAction, message: String(e?.message) })); }`;
+  return JSON.parse(
+    execFileSync(process.execPath, ["--input-type=module", "-e", script, dir], {
+      cwd: root,
+      encoding: "utf8",
+      ...UNPRIVILEGED,
+    }),
+  );
+}
+
+describe("session-recovery evidence filesystem faults", () => {
+  it("rejects a traversal-only evidence directory holding a valid PASS receipt as unreadable", async () => {
+    const schema = await loadAuthEvidenceSchema();
+    // World-readable root holding copies of the exact validator bytes, so an
+    // unprivileged child can import them.
+    const root = mkdtempSync(join(tmpdir(), "recovery-fault-"));
+    chmodSync(root, 0o755);
+    for (const file of ["require-session-recovery-evidence.mjs", "auth-evidence-schema.mjs"])
+      copyFileSync(join("ci", file), join(root, file));
+    const dir = join(root, "evidence");
+    try {
+      mkdirSync(dir);
+      chmodSync(dir, 0o755);
+      writeFileSync(join(dir, "expired-draft.png"), "fake-png");
+      writeFileSync(
+        join(dir, "result.json"),
+        `${JSON.stringify({
+          schemaVersion: schema.AUTH_EVIDENCE_SCHEMA_VERSION,
+          result: "PASS",
+          checks: [...schema.SESSION_RECOVERY_CHECK_IDS],
+          unauthorizedWrites: 0,
+        })}\n`,
+      );
+      expect(validateInChild(root, dir).ok, "control: receipt is valid").toMatch(/result PASS/);
+      chmodSync(dir, 0o100);
+      const err = validateInChild(root, dir);
+      expect(err.code).toBe("SESSION_RECOVERY_DIR_UNREADABLE");
+      expect(err.nextAction).toBe(`rerun npm run ${RECOVERY_SUITE}`);
+      expect(err.message).toContain(`npm run ${RECOVERY_SUITE}`);
+      expect(err.message).toMatch(/session-recovery evidence directory is unreadable/);
+      expect(String(err.message).replaceAll(dir, "<dir>")).not.toMatch(
+        /EACCES|errno|permission denied|scandir/i,
+      );
+    } finally {
+      chmodSync(dir, 0o700);
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });
