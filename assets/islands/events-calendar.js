@@ -56,6 +56,39 @@
   // canonical state or response fragment. A superseded request's timer stays
   // silent and cannot clear the newer owner's loading state.
   var READ_DEADLINE_MS = 10000;
+
+  // Finite HTML byte cap for one discovery read (mirrors
+  // DISCOVERY_HTML_MAX_BYTES in src/islands/contracts-shared.ts). It counts
+  // bytes consumed from the body stream, never Content-Length (advisory), and
+  // cancels the stream on overflow, before DOMParser sees anything. A
+  // body-less response falls back to text(): that only bounds the parse, not
+  // the download, which the runtime has already buffered.
+  var HTML_MAX_BYTES = 1048576;
+
+  async function readHtml(response, signal) {
+    var reader = response.body && response.body.getReader && response.body.getReader();
+    var html = "";
+    if (!reader || typeof TextDecoder === "undefined") {
+      html = await response.text();
+      // UTF-8 byte length: each %XX escape is one byte, every other char is ASCII.
+      if (encodeURIComponent(html).replace(/%../g, "x").length > HTML_MAX_BYTES)
+        throw new Error("HTML too large");
+      return html;
+    }
+    var decoder = new TextDecoder();
+    var total = 0;
+    for (var step; !(step = await reader.read()).done; ) {
+      total += step.value.byteLength;
+      if (total > HTML_MAX_BYTES || signal.aborted) {
+        reader.cancel().catch(function () {});
+        throw signal.aborted
+          ? new DOMException("Aborted", "AbortError")
+          : new Error("HTML too large");
+      }
+      html += decoder.decode(step.value, { stream: true });
+    }
+    return html + decoder.decode();
+  }
   var active = null;
   var activeIsSearch = false;
   var debounceTimer = null;
@@ -357,7 +390,7 @@
         }
         throw new Error("Calendar unavailable");
       }
-      var html = await response.text();
+      var html = await readHtml(response, controller.signal);
       if (active !== controller) return;
       var page = new DOMParser().parseFromString(html, "text/html");
       var next = page.querySelector('[data-island="events-calendar"]');
