@@ -15,7 +15,8 @@
 // container's rendered lines the way a browser would — literal newlines
 // count only when the effective CSS preserves them (white-space:
 // pre/pre-wrap/pre-line/break-spaces, white-space-collapse: preserve*,
-// an inline style, or an equivalent utility class); <br> and block
+// from a matching rule, an inline style, or a utility class the served
+// compiled sheet defines, resolved through the cascade); <br> and block
 // boundaries always count. A fix in markup or in CSS can satisfy it; the
 // current output, where newlines collapse, cannot.
 //
@@ -94,16 +95,35 @@ const ARCHIVE_MULTI_LINES = ["Archive doors", "Needle archive clue", "", "Archiv
 
 // ---------------------------------------------------------------------------
 // CSS oracle: parse served stylesheets, match selectors against the real
-// rendered element chain, and resolve the effective (inherited) declaration.
-// Only enough of CSS to judge whitespace/wrapping on these pages; unknown
-// pseudo-classes simply do not match.
+// rendered tree, and resolve each judged property through the cascade
+// (origin, importance, inline style, layers, specificity, order) and
+// inheritance. It models a bounded subset of CSS exactly. Any selector,
+// value, at-rule or stylesheet source outside that subset that could touch
+// the judged properties throws "CSS oracle cannot evaluate": a guess in
+// either direction (match or no match) can let a preserving rule win that a
+// browser would discard.
 // ---------------------------------------------------------------------------
+type Longhand = "collapse" | "wrapMode" | "overflowWrap" | "wordBreak";
 type Decl = { value: string; important: boolean };
+type Specificity = [number, number, number];
+type Simple =
+  | { kind: "class" | "id"; name: string }
+  | { kind: "attr"; name: string; op: string; value: string; flag: string }
+  | { kind: "root" }
+  | { kind: "is" | "where" | "not"; list: Complex[] };
+type Compound = { tag: string; simples: Simple[]; pseudoElement: boolean };
+type Complex = { compounds: Compound[]; combinators: string[] };
 type CssRule = {
-  selectors: string[];
-  declarations: Map<string, Decl>;
+  selectors: { text: string; complex: Complex; spec: Specificity }[];
+  declarations: Map<Longhand, Decl>;
   order: number;
+  layer: number[];
+  origin: number; // 0 user agent, 1 author
   source: string;
+};
+
+const unevaluable = (what: string): never => {
+  throw new Error(`CSS oracle cannot evaluate ${what}; extend its explicit context`);
 };
 
 function splitTopLevel(input: string, separator: string): string[] {
@@ -127,18 +147,407 @@ function splitTopLevel(input: string, separator: string): string[] {
   return parts;
 }
 
-function parseDeclarations(body: string): Map<string, Decl> {
-  const declarations = new Map<string, Decl>();
+// Judged properties expand into the longhands a browser computes. The
+// white-space shorthand sets both white-space-collapse and text-wrap-mode;
+// word-wrap is the legacy alias of overflow-wrap.
+const JUDGED =
+  /(?:^|[\s;{])(?:white-space(?:-collapse)?|text-wrap(?:-mode)?|overflow-wrap|word-wrap|word-break)\s*:/i;
+const INITIAL: Record<Longhand, string> = {
+  collapse: "collapse",
+  wrapMode: "wrap",
+  overflowWrap: "normal",
+  wordBreak: "normal",
+};
+const LONGHAND_VALUES: Record<Longhand, Set<string>> = {
+  collapse: new Set(["collapse", "preserve", "preserve-breaks", "preserve-spaces", "break-spaces"]),
+  wrapMode: new Set(["wrap", "nowrap"]),
+  overflowWrap: new Set(["normal", "anywhere", "break-word"]),
+  wordBreak: new Set(["normal", "break-all", "keep-all", "break-word", "auto-phrase"]),
+};
+const WHITE_SPACE: Record<string, [string, string]> = {
+  normal: ["collapse", "wrap"],
+  nowrap: ["collapse", "nowrap"],
+  pre: ["preserve", "nowrap"],
+  "pre-wrap": ["preserve", "wrap"],
+  "pre-line": ["preserve-breaks", "wrap"],
+  "break-spaces": ["break-spaces", "wrap"],
+};
+const TEXT_WRAP_STYLES = new Set(["auto", "balance", "pretty", "stable"]);
+// inherit and unset both inherit: every judged longhand is inherited.
+const GLOBAL_KEYWORDS = new Set(["inherit", "unset", "initial"]);
+
+function expandDeclaration(prop: string, value: string, where: string): [Longhand, string][] {
+  const longhands: Record<string, Longhand> = {
+    "white-space-collapse": "collapse",
+    "text-wrap-mode": "wrapMode",
+    "overflow-wrap": "overflowWrap",
+    "word-wrap": "overflowWrap",
+    "word-break": "wordBreak",
+  };
+  const fail = () => unevaluable(`${prop}: ${value} (${where})`);
+  if (!(prop in longhands) && prop !== "white-space" && prop !== "text-wrap") return [];
+  if (GLOBAL_KEYWORDS.has(value)) {
+    if (prop === "white-space")
+      return [
+        ["collapse", value],
+        ["wrapMode", value],
+      ];
+    return [[prop === "text-wrap" ? "wrapMode" : longhands[prop]!, value]];
+  }
+  if (prop === "white-space") {
+    const pair = WHITE_SPACE[value] ?? fail();
+    return [
+      ["collapse", pair[0]],
+      ["wrapMode", pair[1]],
+    ];
+  }
+  if (prop === "text-wrap") {
+    const tokens = value.split(/\s+/);
+    const modes = tokens.filter((t) => LONGHAND_VALUES.wrapMode.has(t));
+    const styles = tokens.filter((t) => TEXT_WRAP_STYLES.has(t));
+    if (modes.length > 1 || styles.length > 1 || modes.length + styles.length !== tokens.length)
+      fail();
+    return [["wrapMode", modes[0] ?? "wrap"]];
+  }
+  const longhand = longhands[prop]!;
+  if (!LONGHAND_VALUES[longhand].has(value)) fail();
+  return [[longhand, value]];
+}
+
+function parseDeclarations(body: string, where: string): Map<Longhand, Decl> {
+  const declarations = new Map<Longhand, Decl>();
   for (const chunk of splitTopLevel(body, ";")) {
     const colon = chunk.indexOf(":");
     if (colon === -1) continue;
     const prop = chunk.slice(0, colon).trim().toLowerCase();
     let value = chunk.slice(colon + 1).trim();
-    const important = /!important\s*$/i.test(value);
-    if (important) value = value.replace(/!important\s*$/i, "").trim();
-    if (prop) declarations.set(prop, { value: value.toLowerCase(), important });
+    const important = /!\s*important\s*$/i.test(value);
+    if (important) value = value.replace(/!\s*important\s*$/i, "");
+    value = value.trim().toLowerCase();
+    for (const [longhand, resolved] of expandDeclaration(prop, value, where)) {
+      // Within one block, a later declaration wins unless it would demote
+      // an earlier !important one.
+      const earlier = declarations.get(longhand);
+      if (!earlier || important || !earlier.important)
+        declarations.set(longhand, { value: resolved, important });
+    }
   }
   return declarations;
+}
+
+// Selectors: type/universal, class, id, attribute (every operator and the
+// i/s flags), :root, :is/:where/:not over complex selector lists, the
+// descendant/child/adjacent/general-sibling combinators, and a trailing
+// pseudo-element (which never matches the element itself).
+const IDENT = /^(?:--|-?[A-Za-z_\u00a0-\uffff])[\w\u00a0-\uffff-]*/;
+const LEGACY_PSEUDO_ELEMENTS = new Set(["before", "after", "first-line", "first-letter"]);
+const ATTRIBUTE =
+  /^\[\s*([A-Za-z_][\w-]*)\s*(?:([~|^$*]?=)\s*(?:"([^"\\]*)"|'([^'\\]*)'|((?:--|-?[A-Za-z_\u00a0-\uffff])[\w\u00a0-\uffff-]*))\s*(?:([iIsS])\s*)?)?\]/;
+
+function parseSelector(text: string, where: string): Complex {
+  const fail = (why: string): never => unevaluable(`selector ${text} (${why}; ${where})`);
+  const s = text;
+  let i = 0;
+  const skipSpace = () => {
+    while (i < s.length && /\s/.test(s[i]!)) i++;
+  };
+  const ident = (): string => {
+    const m =
+      IDENT.exec(s.slice(i)) ?? fail(`identifier expected at ${JSON.stringify(s.slice(i))}`);
+    i += m[0].length;
+    return m[0];
+  };
+  const compound = (nested: boolean): Compound => {
+    const start = i;
+    let tag = "*";
+    if (s[i] === "*") i++;
+    else if (IDENT.test(s.slice(i))) tag = ident().toLowerCase();
+    const simples: Simple[] = [];
+    let pseudoElement = false;
+    for (;;) {
+      const ch = s[i];
+      if (ch !== "." && ch !== "#" && ch !== "[" && ch !== ":") break;
+      if (pseudoElement) fail("nothing may follow a pseudo-element");
+      if (ch === "." || ch === "#") {
+        i++;
+        simples.push({ kind: ch === "." ? "class" : "id", name: ident() });
+      } else if (ch === "[") {
+        const m = ATTRIBUTE.exec(s.slice(i)) ?? fail("unmodelled attribute selector");
+        i += m[0].length;
+        simples.push({
+          kind: "attr",
+          name: m[1]!.toLowerCase(),
+          op: m[2] ?? "",
+          value: m[3] ?? m[4] ?? m[5] ?? "",
+          flag: (m[6] ?? "").toLowerCase(),
+        });
+      } else if (s[i + 1] === ":") {
+        i += 2;
+        ident();
+        if (s[i] === "(") fail("functional pseudo-element");
+        pseudoElement = true;
+      } else {
+        i++;
+        const name = ident().toLowerCase();
+        if (LEGACY_PSEUDO_ELEMENTS.has(name)) pseudoElement = true;
+        else if (name === "root") simples.push({ kind: "root" });
+        else if ((name === "is" || name === "where" || name === "not") && s[i] === "(") {
+          i++;
+          const inner = list(true);
+          if (s[i] !== ")") fail(`unclosed :${name}()`);
+          i++;
+          simples.push({ kind: name, list: inner });
+        } else fail(`unmodelled pseudo-class :${name}`);
+      }
+    }
+    if (i === start) fail(`compound selector expected at ${JSON.stringify(s.slice(i))}`);
+    if (pseudoElement && nested) fail("pseudo-element inside a selector argument");
+    return { tag, simples, pseudoElement };
+  };
+  const complex = (nested: boolean): Complex => {
+    skipSpace();
+    const compounds = [compound(nested)];
+    const combinators: string[] = [];
+    for (;;) {
+      const before = i;
+      skipSpace();
+      const ch = s[i];
+      if (ch === undefined || ch === "," || ch === ")") break;
+      let combinator = " ";
+      if (ch === ">" || ch === "+" || ch === "~") {
+        combinator = ch;
+        i++;
+        skipSpace();
+      } else if (i === before) fail(`unexpected ${JSON.stringify(ch)}`);
+      if (compounds[compounds.length - 1]!.pseudoElement)
+        fail("pseudo-element before a combinator");
+      combinators.push(combinator);
+      compounds.push(compound(nested));
+    }
+    return { compounds, combinators };
+  };
+  const list = (nested: boolean): Complex[] => {
+    const out = [complex(nested)];
+    skipSpace();
+    while (s[i] === ",") {
+      i++;
+      out.push(complex(nested));
+      skipSpace();
+    }
+    return out;
+  };
+  const parsed = complex(false);
+  skipSpace();
+  if (i !== s.length) fail(`unexpected ${JSON.stringify(s.slice(i))}`);
+  return parsed;
+}
+
+function specificity(complex: Complex): Specificity {
+  let [ids, classes, types] = [0, 0, 0];
+  for (const c of complex.compounds) {
+    if (c.tag !== "*") types++;
+    if (c.pseudoElement) types++;
+    for (const simple of c.simples) {
+      switch (simple.kind) {
+        case "id":
+          ids++;
+          break;
+        case "class":
+        case "attr":
+        case "root":
+          classes++;
+          break;
+        case "is":
+        case "not": {
+          // The most specific argument counts; :where() counts nothing.
+          const [a, b, c2] = simple.list.map(specificity).sort(compareSpecificity).at(-1)!;
+          ids += a;
+          classes += b;
+          types += c2;
+        }
+      }
+    }
+  }
+  return [ids, classes, types];
+}
+
+function compareSpecificity(a: Specificity, b: Specificity): number {
+  return a[0] - b[0] || a[1] - b[1] || a[2] - b[2];
+}
+
+// HTML attributes whose values selectors compare case-insensitively
+// (HTML Standard, "Case-sensitivity of selectors").
+const CASE_INSENSITIVE_ATTRIBUTES = new Set(
+  (
+    "accept accept-charset align alink axis bgcolor charset checked clear codetype color compact " +
+    "declare defer dir direction disabled enctype face frame hreflang http-equiv lang language link " +
+    "media method multiple nohref noresize noshade nowrap readonly rel rev rules scope scrolling " +
+    "selected shape target text type valign valuetype vlink"
+  ).split(" "),
+);
+
+function parentElement(el: Element): Element | null {
+  const parent = (el as { parentNode?: DomNode | null }).parentNode;
+  return parent && "tagName" in parent ? (parent as Element) : null;
+}
+
+function previousElement(el: Element): Element | null {
+  const siblings = ((el as { parentNode?: { childNodes: DomNode[] } }).parentNode?.childNodes ??
+    []) as DomNode[];
+  for (let k = siblings.indexOf(el as DomNode) - 1; k >= 0; k--) {
+    if ("tagName" in siblings[k]!) return siblings[k] as Element;
+  }
+  return null;
+}
+
+function quirksMode(el: Element): boolean {
+  let node: DomNode = el;
+  while ((node as { parentNode?: DomNode | null }).parentNode)
+    node = (node as { parentNode: DomNode }).parentNode;
+  return (node as { mode?: string }).mode === "quirks";
+}
+
+function classList(el: Element): string[] {
+  return (attribute(el, "class") ?? "").split(/\s+/).filter(Boolean);
+}
+
+function ancestorsOf(el: Element): Element[] {
+  const chain: Element[] = [];
+  for (let node = parentElement(el); node; node = parentElement(node)) chain.push(node);
+  return chain;
+}
+
+function matchAttr(el: Element, simple: Extract<Simple, { kind: "attr" }>): boolean {
+  const actualRaw = el.attrs.find((attr) => attr.name.toLowerCase() === simple.name)?.value;
+  if (actualRaw === undefined) return false;
+  if (!simple.op) return true;
+  const insensitive =
+    simple.flag === "i" || (simple.flag === "" && CASE_INSENSITIVE_ATTRIBUTES.has(simple.name));
+  const actual = insensitive ? actualRaw.toLowerCase() : actualRaw;
+  const want = insensitive ? simple.value.toLowerCase() : simple.value;
+  switch (simple.op) {
+    case "=":
+      return actual === want;
+    case "~=":
+      return want !== "" && !/\s/.test(want) && actual.split(/[ \t\n\f\r]+/).includes(want);
+    case "|=":
+      return actual === want || actual.startsWith(`${want}-`);
+    case "^=":
+      return want !== "" && actual.startsWith(want);
+    case "$=":
+      return want !== "" && actual.endsWith(want);
+    default:
+      return want !== "" && actual.includes(want);
+  }
+}
+
+function matchSimple(el: Element, simple: Simple): boolean {
+  switch (simple.kind) {
+    case "class":
+    case "id": {
+      const names = simple.kind === "class" ? classList(el) : [attribute(el, "id") ?? ""];
+      return quirksMode(el)
+        ? names.some((name) => name.toLowerCase() === simple.name.toLowerCase())
+        : names.includes(simple.name);
+    }
+    case "attr":
+      return matchAttr(el, simple);
+    case "root":
+      return (el as { parentNode?: DomNode | null }).parentNode?.nodeName === "#document";
+    case "not":
+      return !simple.list.some((complex) => matchComplex(el, complex));
+    default:
+      return simple.list.some((complex) => matchComplex(el, complex));
+  }
+}
+
+function matchCompound(el: Element, compound: Compound): boolean {
+  if (compound.pseudoElement) return false;
+  if (compound.tag !== "*" && el.tagName.toLowerCase() !== compound.tag) return false;
+  return compound.simples.every((simple) => matchSimple(el, simple));
+}
+
+/** Right-to-left with backtracking: every candidate ancestor or sibling is
+ * tried, not only the nearest one. */
+function matchComplex(
+  el: Element,
+  complex: Complex,
+  index = complex.compounds.length - 1,
+): boolean {
+  if (!matchCompound(el, complex.compounds[index]!)) return false;
+  if (index === 0) return true;
+  const combinator = complex.combinators[index - 1];
+  const step = combinator === " " || combinator === ">" ? parentElement : previousElement;
+  for (let next = step(el); next; next = step(next)) {
+    if (matchComplex(next, complex, index - 1)) return true;
+    if (combinator === ">" || combinator === "+") return false;
+  }
+  return false;
+}
+
+// Explicit desktop context: screen, 1280 × 800 CSS pixels. This bounded oracle
+// understands media types, px width/height bounds, orientation, comma alternatives
+// and whole-query negation. Supports queries cover the judged text properties.
+// Unknown conditions affecting those properties fail loudly, never count as active.
+const CSS_VIEWPORT = { width: 1280, height: 800 };
+// A supports query is true exactly for the values this oracle evaluates.
+const CSS_SUPPORT = new Map<string, Set<string>>([
+  ["white-space", new Set(Object.keys(WHITE_SPACE))],
+  ["white-space-collapse", LONGHAND_VALUES.collapse],
+  ["text-wrap-mode", LONGHAND_VALUES.wrapMode],
+  ["overflow-wrap", LONGHAND_VALUES.overflowWrap],
+  ["word-wrap", LONGHAND_VALUES.overflowWrap],
+  ["word-break", LONGHAND_VALUES.wordBreak],
+]);
+
+function mediaListActive(list: string, where: string): boolean {
+  const unsupported = () => unevaluable(`@media ${list} (${where})`);
+  if (list.trim() === "") return true;
+  const alternatives = splitTopLevel(list.trim().toLowerCase(), ",").map((query) => {
+    const negate = /^not\s+/.test(query.trim());
+    const terms = query
+      .trim()
+      .replace(/^(not|only)\s+/, "")
+      .split(/\s+and\s+/);
+    const matches = terms.map((term, index) => {
+      if (index === 0 && /^(all|screen|print)$/.test(term)) return term !== "print";
+      const bound = /^\(\s*(?:(min|max)-)?(width|height)\s*:\s*(\d+(?:\.\d+)?)px\s*\)$/.exec(term);
+      if (bound) {
+        const size = CSS_VIEWPORT[bound[2] as "width" | "height"];
+        const limit = Number(bound[3]);
+        return bound[1] === "min"
+          ? size >= limit
+          : bound[1] === "max"
+            ? size <= limit
+            : size === limit;
+      }
+      const orientation = /^\(\s*orientation\s*:\s*(landscape|portrait)\s*\)$/.exec(term);
+      if (orientation) return orientation[1] === "landscape";
+      return unsupported();
+    });
+    const active = matches.every(Boolean);
+    return negate ? !active : active;
+  });
+  return alternatives.some(Boolean);
+}
+
+function activeCssGroup(prelude: string, source: string): boolean {
+  if (/^@media\b/.test(prelude)) return mediaListActive(prelude.slice(6).trim(), source);
+  if (/^@supports\b/.test(prelude)) {
+    const condition = prelude.slice(9).trim().toLowerCase();
+    const negate = /^not\s+/.test(condition);
+    const declaration = /^\(\s*([\w-]+)\s*:\s*([\w-]+)\s*\)$/.exec(
+      condition.replace(/^not\s+/, ""),
+    );
+    const values = declaration && CSS_SUPPORT.get(declaration[1]!);
+    if (!values) return unevaluable(`${prelude} (${source})`);
+    const active = values.has(declaration[2]!);
+    return negate ? !active : active;
+  }
+  // Container dimensions, document conditions, scoping roots and every other
+  // block at-rule are not available from the parsed fixture DOM. Refuse to
+  // infer them from a selector or the viewport.
+  return unevaluable(`${prelude} (${source})`);
 }
 
 function readBlock(css: string, open: number): { content: string; end: number } {
@@ -155,74 +564,35 @@ function readBlock(css: string, open: number): { content: string; end: number } 
   return { content: css.slice(open + 1), end: css.length };
 }
 
-// Explicit desktop context: screen, 1280 × 800 CSS pixels. This bounded oracle
-// understands media types, px width/height bounds, orientation, comma alternatives
-// and whole-query negation. Supports queries cover the judged text properties.
-// Unknown conditions affecting those properties fail loudly, never count as active.
-// Layer blocks group rules, but this oracle does not model cross-layer precedence.
-const CSS_VIEWPORT = { width: 1280, height: 800 };
-const CSS_SUPPORT = new Map([
-  ["white-space", new Set(["normal", "nowrap", "pre", "pre-wrap", "pre-line", "break-spaces"])],
-  ["white-space-collapse", new Set(["collapse", "preserve", "preserve-breaks", "preserve-spaces"])],
-  ["overflow-wrap", new Set(["normal", "anywhere", "break-word"])],
-  ["word-break", new Set(["normal", "break-all", "keep-all", "break-word"])],
-]);
+// Cascade layers: a rule's layer key is the first-appearance rank of each
+// enclosing layer, closed by Infinity (a layer's own rules beat its
+// sublayers, and unlayered rules beat every layer, for normal declarations).
+type CssState = { order: number; layers: Map<string, number>; anonymous: number };
+type CssContext = {
+  source: string;
+  origin: number;
+  layer: number[];
+  layerName: string;
+  conditional: boolean;
+  state: CssState;
+};
 
-function activeCssGroup(prelude: string, source: string): boolean {
-  const unsupported = (): never => {
-    throw new Error(
-      `CSS oracle cannot evaluate ${prelude} (${source}); extend its explicit context`,
-    );
-  };
-  if (/^@layer\b/.test(prelude)) return true;
-  if (/^@media\b/.test(prelude)) {
-    const alternatives = splitTopLevel(prelude.slice(6).trim().toLowerCase(), ",").map((query) => {
-      const negate = /^not\s+/.test(query.trim());
-      const terms = query
-        .trim()
-        .replace(/^(not|only)\s+/, "")
-        .split(/\s+and\s+/);
-      const matches = terms.map((term, index) => {
-        if (index === 0 && /^(all|screen|print)$/.test(term)) return term !== "print";
-        const bound = /^\(\s*(?:(min|max)-)?(width|height)\s*:\s*(\d+(?:\.\d+)?)px\s*\)$/.exec(
-          term,
-        );
-        if (bound) {
-          const size = CSS_VIEWPORT[bound[2] as "width" | "height"];
-          const limit = Number(bound[3]);
-          return bound[1] === "min"
-            ? size >= limit
-            : bound[1] === "max"
-              ? size <= limit
-              : size === limit;
-        }
-        const orientation = /^\(\s*orientation\s*:\s*(landscape|portrait)\s*\)$/.exec(term);
-        if (orientation) return orientation[1] === "landscape";
-        return unsupported();
-      });
-      const active = matches.every(Boolean);
-      return negate ? !active : active;
-    });
-    return alternatives.some(Boolean);
+function registerLayer(ctx: CssContext, name: string): { layer: number[]; layerName: string } {
+  const parts = name
+    ? name.split(".").map((part) => part.trim())
+    : [`<anonymous ${ctx.state.anonymous++}>`];
+  let layerName = ctx.layerName;
+  const layer = [...ctx.layer];
+  for (const part of parts) {
+    if (name && !IDENT.test(part)) unevaluable(`@layer ${name} (${ctx.source})`);
+    layerName = layerName ? `${layerName}.${part}` : part;
+    if (!ctx.state.layers.has(layerName)) ctx.state.layers.set(layerName, ctx.state.layers.size);
+    layer.push(ctx.state.layers.get(layerName)!);
   }
-  if (/^@supports\b/.test(prelude)) {
-    const condition = prelude.slice(9).trim().toLowerCase();
-    const negate = /^not\s+/.test(condition);
-    const declaration = /^\(\s*([\w-]+)\s*:\s*([\w-]+)\s*\)$/.exec(
-      condition.replace(/^not\s+/, ""),
-    );
-    if (!declaration) return unsupported();
-    const values = CSS_SUPPORT.get(declaration[1]!);
-    if (!values) return unsupported();
-    const active = values.has(declaration[2]!);
-    return negate ? !active : active;
-  }
-  // Container dimensions and document conditions are not available from the
-  // parsed fixture DOM. Refuse to infer them from a selector or the viewport.
-  return unsupported();
+  return { layer, layerName };
 }
 
-function parseCss(css: string, source: string, state: { order: number }, out: CssRule[]): void {
+function parseCss(css: string, ctx: CssContext, out: CssRule[]): void {
   const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
   let i = 0;
   while (i < clean.length) {
@@ -246,279 +616,194 @@ function parseCss(css: string, source: string, state: { order: number }, out: Cs
       }
     }
     if (semi !== -1) {
-      i = semi + 1; // @import and friends: no declarations for elements
+      const statement = clean.slice(i, semi).trim();
+      i = semi + 1;
+      if (/^@layer\b/i.test(statement)) {
+        if (ctx.conditional) unevaluable(`${statement} inside a conditional group (${ctx.source})`);
+        for (const name of statement.slice(6).split(",")) registerLayer(ctx, name.trim());
+      } else if (statement.startsWith("@") && !/^@charset\b/i.test(statement)) {
+        // @import pulls in rules the oracle cannot see; @namespace changes
+        // what type selectors mean.
+        unevaluable(`${statement} (${ctx.source})`);
+      }
       continue;
     }
     if (brace === -1) break;
     const prelude = clean.slice(i, brace).trim();
     const block = readBlock(clean, brace);
-    if (/^@(media|supports|layer|container|document)\b/.test(prelude)) {
-      const affectsText = /\b(?:white-space(?:-collapse)?|overflow-wrap|word-break)\s*:/i.test(
-        block.content,
-      );
-      if (affectsText && activeCssGroup(prelude, source)) {
-        parseCss(block.content, source, state, out);
+    i = block.end + 1;
+    if (/^@layer\b/i.test(prelude)) {
+      if (ctx.conditional) unevaluable(`${prelude} inside a conditional group (${ctx.source})`);
+      parseCss(block.content, { ...ctx, ...registerLayer(ctx, prelude.slice(6).trim()) }, out);
+    } else if (prelude.startsWith("@")) {
+      if (JUDGED.test(block.content) && activeCssGroup(prelude, ctx.source)) {
+        parseCss(block.content, { ...ctx, conditional: true }, out);
       }
-    } else if (prelude && !prelude.startsWith("@")) {
+    } else if (/[{}]/.test(block.content)) {
+      if (JUDGED.test(block.content)) unevaluable(`nested rules in ${prelude} (${ctx.source})`);
+    } else {
+      const declarations = parseDeclarations(block.content, ctx.source);
+      if (declarations.size === 0) continue;
       out.push({
-        selectors: splitTopLevel(prelude, ",")
-          .map((s) => s.trim())
-          .filter(Boolean),
-        declarations: parseDeclarations(block.content),
-        order: state.order++,
-        source,
+        selectors: splitTopLevel(prelude, ",").map((piece) => {
+          const text = piece.trim();
+          const complex = parseSelector(text, ctx.source);
+          return { text, complex, spec: specificity(complex) };
+        }),
+        declarations,
+        order: ctx.state.order++,
+        layer: [...ctx.layer, Number.POSITIVE_INFINITY],
+        origin: ctx.origin,
+        source: ctx.source,
       });
     }
-    i = block.end + 1;
   }
 }
 
+// The user-agent rules (and nowrap presentational hints) that set the judged
+// properties on HTML elements.
+const USER_AGENT_CSS =
+  "pre, listing, plaintext, xmp { white-space: pre; } textarea { white-space: pre-wrap; } " +
+  "nobr, td[nowrap], th[nowrap] { white-space: nowrap; }";
+
 /** Stylesheets a rendered page serves, in document order, plus test-supplied
- * extras (the Kit global sheet / captured component CSS). */
+ * extras (the compiled Kit global sheet / captured component CSS). Sheets in
+ * <template> content, disabled or alternate sheets and sheets whose media
+ * list is inactive in the explicit context do not apply. */
 function servedRules(html: string, extras: { css: string; source: string }[] = []): CssRule[] {
   const rules: CssRule[] = [];
-  const state = { order: 0 };
+  const state: CssState = { order: 0, layers: new Map(), anonymous: 0 };
+  const context = (source: string, origin: number): CssContext => ({
+    source,
+    origin,
+    layer: [],
+    layerName: "",
+    conditional: false,
+    state,
+  });
+  parseCss(USER_AGENT_CSS, context("user-agent sheet", 0), rules);
   const chunks: { css: string; source: string }[] = [];
-  for (const match of html.matchAll(/<link\b[^>]*>|<style\b[^>]*>([\s\S]*?)<\/style>/g)) {
-    if (match[1] !== undefined) {
-      chunks.push({ css: match[1], source: "inline <style>" });
+  for (const el of elements(document(html), (e) => e.tagName === "style" || e.tagName === "link")) {
+    const media = attribute(el, "media");
+    if (el.tagName === "style") {
+      if (media === undefined || mediaListActive(media, "<style media>"))
+        chunks.push({ css: text(el), source: "inline <style>" });
       continue;
     }
-    const tagText = match[0];
-    if (!/\brel\s*=\s*"stylesheet"/.test(tagText)) continue;
-    const href = /\bhref\s*=\s*"([^"]+)"/.exec(tagText)?.[1];
-    if (!href || !href.startsWith("/")) continue;
-    const path = href.split("?")[0]!;
+    const rel = (attribute(el, "rel") ?? "").toLowerCase().split(/\s+/);
+    if (!rel.includes("stylesheet") || rel.includes("alternate")) continue;
+    if (attribute(el, "disabled") !== undefined) continue;
+    const href = attribute(el, "href") ?? "";
+    if (media !== undefined && !mediaListActive(media, href)) continue;
+    if (!href.startsWith("/") || href.startsWith("//"))
+      unevaluable(`stylesheet ${JSON.stringify(href)} (only local public/ sheets are readable)`);
+    const path = href.split(/[?#]/)[0]!;
     chunks.push({ css: readFileSync(join(root, "public", path), "utf8"), source: path });
   }
-  for (const chunk of [...chunks, ...extras]) parseCss(chunk.css, chunk.source, state, rules);
+  for (const chunk of [...chunks, ...extras]) parseCss(chunk.css, context(chunk.source, 1), rules);
   return rules;
 }
 
-function classList(el: Element): string[] {
-  return (attribute(el, "class") ?? "").split(/\s+/).filter(Boolean);
+function compareLayers(a: number[], b: number[]): number {
+  for (let k = 0; k < Math.max(a.length, b.length); k++) {
+    if (a[k] !== b[k]) return (a[k] ?? -1) < (b[k] ?? -1) ? -1 : 1;
+  }
+  return 0;
 }
 
-function ancestorsOf(el: Element): Element[] {
-  const chain: Element[] = [];
-  let node = (el as { parentNode?: DomNode }).parentNode;
-  while (node) {
-    if ("tagName" in node) chain.push(node as Element);
-    node = (node as { parentNode?: DomNode }).parentNode;
-  }
-  return chain;
-}
+type Effective = { value: string; via: string };
 
-function matchAttr(el: Element, inner: string): boolean {
-  const m =
-    /^\s*([\w-]+)\s*(?:([~|^$*]?=)\s*(?:"([^"]*)"|'([^']*)'|([^\s"'\]]+)))?\s*[iIsS]?\s*$/.exec(
-      inner,
-    );
-  if (!m) return false;
-  const actual = attribute(el, m[1]!);
-  if (actual === undefined) return false;
-  if (!m[2]) return true;
-  const want = m[3] ?? m[4] ?? m[5] ?? "";
-  return m[2] === "~=" ? actual.split(/\s+/).includes(want) : actual === want;
-}
-
-function matchCompound(el: Element, compoundRaw: string): boolean {
-  let compound = compoundRaw.trim();
-  if (!compound) return false;
-  for (const fn of [":is(", ":where(", ":global(", ":not("] as const) {
-    const at = compound.indexOf(fn);
-    if (at === -1) continue;
-    let depth = 0;
-    let end = -1;
-    for (let i = at + fn.length - 1; i < compound.length; i++) {
-      if (compound[i] === "(") depth++;
-      else if (compound[i] === ")" && --depth === 0) {
-        end = i;
-        break;
-      }
-    }
-    if (end === -1) return false;
-    const inner = compound.slice(at + fn.length, end);
-    const before = compound.slice(0, at);
-    const after = compound.slice(end + 1);
-    const alts = splitTopLevel(inner, ",").map((alt) => alt.trim());
-    return fn === ":not("
-      ? matchCompound(el, `${before}${after}` || "*") &&
-          alts.every((alt) => !matchCompound(el, alt))
-      : alts.some((alt) => matchCompound(el, `${before}${alt}${after}` || "*"));
-  }
-  if (compound.includes("::")) return false;
-  if (compound === ":root") return el.tagName === "html";
-  if (compound.includes(":")) return false;
-  const tagMatch = /^(\*|[a-zA-Z][\w-]*)/.exec(compound);
-  if (tagMatch) {
-    if (tagMatch[1] !== "*" && el.tagName !== tagMatch[1]!.toLowerCase()) return false;
-    compound = compound.slice(tagMatch[1]!.length);
-  }
-  const token = /([.#])([\w-]+)|\[([^\]]+)\]/g;
-  let consumed = 0;
-  for (let m = token.exec(compound); m; m = token.exec(compound)) {
-    consumed = token.lastIndex;
-    if (m[1] === "." && !classList(el).includes(m[2]!)) return false;
-    if (m[1] === "#" && attribute(el, "id") !== m[2]) return false;
-    if (m[3] !== undefined && !matchAttr(el, m[3])) return false;
-  }
-  return consumed === compound.length;
-}
-
-function splitComplex(selector: string): { compounds: string[]; combinators: string[] } {
-  const compounds: string[] = [];
-  const combinators: string[] = [];
-  let depth = 0;
-  let quote = "";
-  let start = 0;
-  let i = 0;
-  const flush = (end: number) => {
-    const piece = selector.slice(start, end).trim();
-    if (piece) compounds.push(piece);
+/** The cascaded value of one longhand on one element, or null if no
+ * declaration applies to it. */
+function cascaded(el: Element, rules: CssRule[], longhand: Longhand): Effective | null {
+  type Candidate = Decl & {
+    inline: boolean;
+    origin: number;
+    layer: number[];
+    spec: Specificity;
+    order: number;
+    via: string;
   };
-  while (i < selector.length) {
-    const ch = selector[i]!;
-    if (quote) {
-      if (ch === quote) quote = "";
-    } else if (ch === '"' || ch === "'") quote = ch;
-    else if (ch === "(" || ch === "[") depth++;
-    else if (ch === ")" || ch === "]") depth--;
-    else if (depth === 0 && (ch === ">" || ch === "+" || ch === "~" || /\s/.test(ch))) {
-      flush(i);
-      let combinator = " ";
-      while (i < selector.length && /\s/.test(selector[i]!)) i++;
-      if (i < selector.length && [">", "+", "~"].includes(selector[i]!)) {
-        combinator = selector[i]!;
-        i++;
-        while (i < selector.length && /\s/.test(selector[i]!)) i++;
-      }
-      if (i < selector.length) combinators.push(combinator);
-      start = i;
-      continue;
-    }
-    i++;
+  const candidates: Candidate[] = [];
+  const style = attribute(el, "style");
+  const inline = style && parseDeclarations(style, `inline style on <${el.tagName}>`).get(longhand);
+  if (inline) {
+    candidates.push({
+      ...inline,
+      inline: true,
+      origin: 1,
+      layer: [],
+      spec: [0, 0, 0],
+      order: 0,
+      via: `inline style on <${el.tagName}>`,
+    });
   }
-  flush(selector.length);
-  return { compounds, combinators };
-}
-
-function matchComplex(el: Element, ancestors: Element[], selector: string): boolean {
-  const { compounds, combinators } = splitComplex(selector);
-  if (compounds.length === 0 || !matchCompound(el, compounds[compounds.length - 1]!)) return false;
-  let ai = 0;
-  for (let ci = compounds.length - 2; ci >= 0; ci--) {
-    if (combinators[ci] === ">") {
-      if (ai >= ancestors.length || !matchCompound(ancestors[ai]!, compounds[ci]!)) return false;
-      ai++;
-    } else {
-      let found = -1;
-      for (let j = ai; j < ancestors.length; j++) {
-        if (matchCompound(ancestors[j]!, compounds[ci]!)) {
-          found = j;
-          break;
-        }
-      }
-      if (found === -1) return false;
-      ai = found + 1;
-    }
-  }
-  return true;
-}
-
-function specificity(selector: string): number {
-  const ids = (selector.match(/#[\w-]+/g) ?? []).length;
-  const classes = (selector.match(/\.[\w-]+|\[[^\]]+\]|:(?!:)[\w-]+/g) ?? []).length;
-  const tags = (selector.match(/(^|[\s>+~,(])([a-zA-Z][\w-]*)/g) ?? []).length;
-  return ids * 100 + classes * 10 + tags;
-}
-
-type Effective = { value: string; via: string } | null;
-
-function effectiveDecl(el: Element, rules: CssRule[], prop: string): Effective {
-  const chain = [el, ...ancestorsOf(el)];
-  for (let idx = 0; idx < chain.length; idx++) {
-    const node = chain[idx]!;
-    const style = attribute(node, "style");
-    if (style) {
-      const inline = parseDeclarations(style).get(prop);
-      if (inline) return { value: inline.value, via: `inline style on <${node.tagName}>` };
-    }
-    const candidates: { decl: Decl; spec: number; order: number; sel: string; source: string }[] =
-      [];
-    for (const rule of rules) {
-      const decl = rule.declarations.get(prop);
-      if (!decl) continue;
-      for (const sel of rule.selectors) {
-        if (matchComplex(node, chain.slice(idx + 1), sel)) {
-          candidates.push({
-            decl,
-            spec: specificity(sel),
-            order: rule.order,
-            sel,
-            source: rule.source,
-          });
-        }
+  for (const rule of rules) {
+    const decl = rule.declarations.get(longhand);
+    if (!decl) continue;
+    for (const selector of rule.selectors) {
+      if (matchComplex(el, selector.complex)) {
+        candidates.push({
+          ...decl,
+          inline: false,
+          origin: rule.origin,
+          layer: rule.layer,
+          spec: selector.spec,
+          order: rule.order,
+          via: `${selector.text} (${rule.source})`,
+        });
       }
     }
-    if (candidates.length > 0) {
-      candidates.sort(
-        (a, b) =>
-          Number(b.decl.important) - Number(a.decl.important) ||
-          b.spec - a.spec ||
-          b.order - a.order,
-      );
-      const best = candidates[0]!;
-      return { value: best.decl.value, via: `${best.sel} (${best.source})` };
-    }
   }
-  return null;
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => {
+    if (a.important !== b.important) return a.important ? -1 : 1;
+    const reverse = a.important ? -1 : 1; // important origins and layers win in reverse
+    return (
+      reverse * (b.origin - a.origin) ||
+      Number(b.inline) - Number(a.inline) ||
+      reverse * compareLayers(b.layer, a.layer) ||
+      compareSpecificity(b.spec, a.spec) ||
+      b.order - a.order
+    );
+  });
+  return { value: candidates[0]!.value, via: candidates[0]!.via };
 }
 
-const PRESERVING_WS = new Set(["pre", "pre-wrap", "pre-line", "break-spaces"]);
-const WS_UTILITIES = new Set([
-  "whitespace-pre",
-  "whitespace-pre-wrap",
-  "whitespace-pre-line",
-  "whitespace-break-spaces",
-]);
-const WRAP_UTILITIES = new Set(["wrap-anywhere", "wrap-break-word", "break-all"]);
-
-function chainClasses(el: Element): string[] {
-  return [el, ...ancestorsOf(el)].flatMap(classList);
+/** The computed value: cascaded, else inherited (every judged longhand is
+ * inherited), else initial. */
+function computedValue(el: Element, rules: CssRule[], longhand: Longhand): Effective {
+  for (let node: Element | null = el; node; node = parentElement(node)) {
+    const winner = cascaded(node, rules, longhand);
+    if (!winner || winner.value === "inherit" || winner.value === "unset") continue;
+    if (winner.value === "initial")
+      return { value: INITIAL[longhand], via: `initial via ${winner.via}` };
+    return winner;
+  }
+  return { value: INITIAL[longhand], via: "initial value" };
 }
+
+const PRESERVED_BREAKS = new Set(["preserve", "preserve-breaks", "break-spaces"]);
 
 function preservesBreaks(el: Element, rules: CssRule[]): { preserved: boolean; detail: string } {
-  const utility = chainClasses(el).find((c) => WS_UTILITIES.has(c));
-  if (utility) return { preserved: true, detail: `utility class .${utility}` };
-  const ws = effectiveDecl(el, rules, "white-space");
-  if (ws && PRESERVING_WS.has(ws.value))
-    return { preserved: true, detail: `white-space: ${ws.value} via ${ws.via}` };
-  const collapse = effectiveDecl(el, rules, "white-space-collapse");
-  if (collapse && (collapse.value === "preserve" || collapse.value === "preserve-breaks"))
-    return {
-      preserved: true,
-      detail: `white-space-collapse: ${collapse.value} via ${collapse.via}`,
-    };
+  const collapse = computedValue(el, rules, "collapse");
   return {
-    preserved: false,
-    detail: ws ? `white-space: ${ws.value} via ${ws.via}` : "no white-space rule applies",
+    preserved: PRESERVED_BREAKS.has(collapse.value),
+    detail: `white-space-collapse: ${collapse.value} via ${collapse.via}`,
   };
 }
 
 function wrapsLongWords(el: Element, rules: CssRule[]): { wraps: boolean; detail: string } {
-  const utility = chainClasses(el).find((c) => WRAP_UTILITIES.has(c));
-  if (utility) return { wraps: true, detail: `utility class .${utility}` };
-  const wrap = effectiveDecl(el, rules, "overflow-wrap");
-  if (wrap && (wrap.value === "anywhere" || wrap.value === "break-word"))
+  const mode = computedValue(el, rules, "wrapMode");
+  if (mode.value !== "wrap")
+    return { wraps: false, detail: `text-wrap-mode: ${mode.value} via ${mode.via}` };
+  const wrap = computedValue(el, rules, "overflowWrap");
+  if (wrap.value === "anywhere" || wrap.value === "break-word")
     return { wraps: true, detail: `overflow-wrap: ${wrap.value} via ${wrap.via}` };
-  const wordBreak = effectiveDecl(el, rules, "word-break");
-  if (wordBreak && (wordBreak.value === "break-all" || wordBreak.value === "break-word"))
+  const wordBreak = computedValue(el, rules, "wordBreak");
+  if (wordBreak.value === "break-all" || wordBreak.value === "break-word")
     return { wraps: true, detail: `word-break: ${wordBreak.value} via ${wordBreak.via}` };
-  return {
-    wraps: false,
-    detail: wrap ? `overflow-wrap: ${wrap.value} via ${wrap.via}` : "no overflow-wrap rule applies",
-  };
+  return { wraps: false, detail: `overflow-wrap: ${wrap.value} via ${wrap.via}` };
 }
 
 // ---------------------------------------------------------------------------
@@ -554,20 +839,26 @@ const BLOCK_TAGS = new Set([
 const SKIP_TAGS = new Set(["script", "style", "template", "noscript"]);
 
 function renderedLines(container: Element, rules: CssRule[], skipHeadings = false): string[] {
-  const preserve = preservesBreaks(container, rules).preserved;
+  // Each text run follows its own element's computed white-space, so a
+  // descendant that collapses cannot hide behind a preserving container.
+  const preserving = new Map<Element, boolean>();
+  const preserves = (el: Element) => {
+    if (!preserving.has(el)) preserving.set(el, preservesBreaks(el, rules).preserved);
+    return preserving.get(el)!;
+  };
   let out = "";
-  const walk = (node: DomNode): void => {
+  const walk = (node: DomNode, parent: Element): void => {
     if (node.nodeName === "#text") {
       const value = (node as { value: string }).value;
-      out += preserve ? value : value.replace(/\s+/g, " ");
+      out += preserves(parent) ? value : value.replace(/\s+/g, " ");
       return;
     }
     if (!("tagName" in node)) {
-      if ("childNodes" in node) for (const child of node.childNodes) walk(child as DomNode);
+      if ("childNodes" in node) for (const child of node.childNodes) walk(child as DomNode, parent);
       return;
     }
     const el = node as Element;
-    if (SKIP_TAGS.has(el.tagName)) return;
+    if (SKIP_TAGS.has(el.tagName) || attribute(el, "hidden") !== undefined) return;
     if (skipHeadings && /^h[1-6]$/.test(el.tagName)) return;
     if (el.tagName === "br") {
       out += "\n";
@@ -575,10 +866,10 @@ function renderedLines(container: Element, rules: CssRule[], skipHeadings = fals
     }
     const block = BLOCK_TAGS.has(el.tagName);
     if (block) out += "\n\n";
-    for (const child of el.childNodes) walk(child as DomNode);
+    for (const child of el.childNodes) walk(child as DomNode, el);
     if (block) out += "\n\n";
   };
-  for (const child of container.childNodes) walk(child as DomNode);
+  for (const child of container.childNodes) walk(child as DomNode, container);
   const lines: string[] = [];
   for (const raw of out.split("\n")) {
     const line = raw.replace(/\s+/g, " ").trim();
@@ -619,13 +910,17 @@ function expectLinePrefix(
   return actual;
 }
 
-/** Smallest (by inclusion, then text size) element under root whose text
- * contains every needle — the authored-text container, whatever markup the
- * implementation chooses for it. */
+/** Smallest (by inclusion, then text size) rendered element under root
+ * whose text contains every needle — the authored-text container, whatever
+ * markup the implementation chooses for it. A hidden copy is never judged in
+ * place of the text a reader sees. */
 function smallestContaining(rootEl: DomNode, needles: string[], label: string): Element {
   const candidates = elements(
     rootEl,
-    (el) => !SKIP_TAGS.has(el.tagName) && needles.every((n) => text(el).includes(n)),
+    (el) =>
+      !SKIP_TAGS.has(el.tagName) &&
+      ![el, ...ancestorsOf(el)].some((node) => attribute(node, "hidden") !== undefined) &&
+      needles.every((n) => text(el).includes(n)),
   );
   expect(candidates.length, `${label}: authored text reaches the page`).toBeGreaterThan(0);
   const minimal = candidates.filter(
@@ -736,6 +1031,405 @@ describe("CSS oracle applicability controls", () => {
     expect(() => linesWith(`${conditional} { ${selector} { white-space: pre-line; } }`)).toThrow(
       "CSS oracle cannot evaluate",
     );
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Oracle fidelity controls: every selector, cascade and stylesheet-source
+// shape the oracle accepts is evaluated the way a browser would, and every
+// shape it does not model fails loudly. A guess in either direction can let
+// a preserving rule win that a browser would discard, so neither "no match"
+// nor "match" is a safe default for unmodelled syntax.
+// ---------------------------------------------------------------------------
+describe("CSS oracle selector, cascade and source fidelity controls", () => {
+  const COLLAPSED = ["Doors at seven Bring a deck New players welcome"];
+  const featured = (inner = `<p>${MULTI}</p>`) =>
+    `<main class="content-theme"><h2 class="lead">Featured</h2>` +
+    `<article id="feature" data-testid="featured-item"><span class="kicker">New</span><em>!</em>${inner}</article></main>`;
+
+  function linesIn(html: string, extras: { css: string; source: string }[] = []): string[] {
+    const container = smallestContaining(document(html), MULTI_LINES.filter(Boolean), "control");
+    return renderedLines(container, servedRules(html, extras));
+  }
+  const linesWith = (css: string, inner?: string) =>
+    linesIn(`<style>${css}</style>${featured(inner)}`);
+  const preserving = (selector: string) => `${selector} { white-space: pre-line; }`;
+
+  describe("sibling and nested combinators", () => {
+    it.each([
+      "[data-testid='featured-item'] + p",
+      "[data-testid='featured-item'] ~ p",
+      ".content-theme + article p",
+      ".content-theme ~ * p",
+      ".kicker + p",
+      ".lead + p",
+      ".lead ~ p",
+    ])("rejects a sibling form that cannot reach the paragraph: %s", (selector) => {
+      expect(linesWith(preserving(selector))).toEqual(COLLAPSED);
+    });
+
+    it.each([
+      ".kicker ~ p",
+      "em + p",
+      ".kicker + em + p",
+      ".lead + [data-testid='featured-item'] > p",
+      ".lead ~ article p",
+    ])("admits a sibling form that reaches the paragraph: %s", (selector) => {
+      expect(linesWith(preserving(selector))).toEqual(MULTI_LINES);
+    });
+
+    it("finds a farther ancestor when the nearest one cannot satisfy the next combinator", () => {
+      expect(
+        linesWith(preserving(".content-theme > * p"), `<section><p>${MULTI}</p></section>`),
+      ).toEqual(MULTI_LINES);
+    });
+  });
+
+  describe(":not() and :is() arguments", () => {
+    it.each([
+      "[data-testid='featured-item'] p:not(main p)",
+      "p:not(.content-theme > article > p)",
+      ":is(aside p)",
+      "p:not(em + p)",
+    ])("evaluates a complex argument against the real tree and rejects: %s", (selector) => {
+      expect(linesWith(preserving(selector))).toEqual(COLLAPSED);
+    });
+
+    it.each([
+      "p:not(aside p)",
+      ":is(main p)",
+      ":is(.content-theme article) > p",
+      "p:not(.kicker + p)",
+    ])("evaluates a complex argument against the real tree and admits: %s", (selector) => {
+      expect(linesWith(preserving(selector))).toEqual(MULTI_LINES);
+    });
+
+    it.each([
+      "[data-testid='featured-item'] p:not(:has(span))",
+      "[data-testid='featured-item'] p:not(:hover)",
+      "[data-testid='featured-item'] p:not(:first-child)",
+      "[data-testid='featured-item'] p:not(::before)",
+      "[data-testid='featured-item'] p:not(.missing, :focus-visible)",
+      "[data-testid='featured-item'] p:has(span)",
+      ":is(:hover, main) p",
+    ])("fails closed on a pseudo-class it cannot evaluate: %s", (selector) => {
+      expect(() => linesWith(preserving(selector))).toThrow("CSS oracle cannot evaluate");
+    });
+  });
+
+  describe("unmodelled selector syntax", () => {
+    it.each([
+      "[data-testid='featured-item'] p, p:bogus-state",
+      "svg|p",
+      ".content\\-theme p",
+      "& p",
+      "[data-testid=='featured-item'] p",
+      "> p",
+      "p ~",
+      "p::first-line span",
+    ])("fails closed rather than guessing: %s", (selector) => {
+      expect(() => linesWith(preserving(selector))).toThrow("CSS oracle cannot evaluate");
+    });
+
+    it("never applies a pseudo-element rule to the element itself", () => {
+      expect(linesWith(preserving("[data-testid='featured-item'] p::first-line"))).toEqual(
+        COLLAPSED,
+      );
+    });
+  });
+
+  describe("attribute selectors", () => {
+    it.each([
+      "[data-testid^='feat'] p",
+      "[data-testid$='-item'] p",
+      "[data-testid*='ured-it'] p",
+      "[data-testid|='featured'] p",
+      "[data-testid='FEATURED-ITEM' i] p",
+      "[class~='content-theme'] p",
+      "[data-testid=featured-item] p",
+      "[DATA-TESTID='featured-item'] p",
+    ])("admits a matching attribute operator: %s", (selector) => {
+      expect(linesWith(preserving(selector))).toEqual(MULTI_LINES);
+    });
+
+    it.each([
+      "[data-testid^='item'] p",
+      "[data-testid$='feat'] p",
+      "[data-testid*='xyz'] p",
+      "[data-testid|='feat'] p",
+      "[data-testid='FEATURED-ITEM'] p",
+      "[data-testid='FEATURED-ITEM' s] p",
+      "[data-testid~='featured'] p",
+      "[data-testid^=''] p",
+    ])("rejects a nonmatching attribute operator: %s", (selector) => {
+      expect(linesWith(preserving(selector))).toEqual(COLLAPSED);
+    });
+
+    it("lets a more specific collapsing rule written with an operator win", () => {
+      expect(
+        linesWith(
+          `${preserving("[data-testid='featured-item'] p")} main [data-testid^='feat'] p { white-space: normal; }`,
+        ),
+      ).toEqual(COLLAPSED);
+    });
+  });
+
+  describe("specificity", () => {
+    it.each([
+      [
+        ":where() contributes nothing",
+        `${preserving(":where(.content-theme) [data-testid='featured-item'] p")} main [data-testid='featured-item'] p { white-space: normal; }`,
+      ],
+      [
+        ":not() counts only its argument",
+        `${preserving("[data-testid='featured-item'] p:not(.x)")} .content-theme [data-testid='featured-item'] p { white-space: normal; }`,
+      ],
+      [
+        ":is() counts its most specific argument only",
+        `${preserving(":is(.content-theme, #feature) p")} #feature p { white-space: normal; }`,
+      ],
+      [
+        "classes never outrank an id",
+        `#feature p { white-space: normal; } ${preserving(`${".content-theme".repeat(11)} p`)}`,
+      ],
+      [
+        "attribute values are not selectors",
+        `${preserving("[data-testid='featured-item'] p:not([title='#x .y z'])")} .content-theme [data-testid='featured-item'] p { white-space: normal; }`,
+      ],
+    ])("resolves the cascade by real specificity: %s", (_label, css) => {
+      expect(linesWith(css)).toEqual(COLLAPSED);
+    });
+  });
+
+  describe("cascade order, importance and layers", () => {
+    it.each([
+      [
+        "an important rule beats a normal inline style",
+        "p { white-space: normal !important; }",
+        `<p style="white-space: pre-line">${MULTI}</p>`,
+      ],
+      [
+        "unlayered rules beat layered ones of any specificity",
+        `@layer base { ${preserving("#feature[data-testid='featured-item'] p")} } article p { white-space: normal; }`,
+        undefined,
+      ],
+      [
+        "a later white-space shorthand resets an earlier collapse longhand",
+        `[data-testid='featured-item'] p { white-space-collapse: preserve-breaks; } [data-testid='featured-item'] p { white-space: normal; }`,
+        undefined,
+      ],
+      [
+        "a more specific collapse longhand beats the shorthand",
+        `${preserving("[data-testid='featured-item'] p")} .content-theme [data-testid='featured-item'] p { white-space-collapse: collapse; }`,
+        undefined,
+      ],
+      [
+        "declaration order inside one block",
+        `[data-testid='featured-item'] p { white-space-collapse: preserve-breaks; white-space: normal; }`,
+        undefined,
+      ],
+      [
+        "a supports query names a value the oracle itself evaluates",
+        `${preserving("[data-testid='featured-item'] p")} @supports (white-space-collapse: break-spaces) { #feature p { white-space: normal; } }`,
+        undefined,
+      ],
+      [
+        "initial resets an inherited value",
+        `.content-theme { white-space: pre-line; } article { white-space: initial; }`,
+        undefined,
+      ],
+    ])("collapses when %s", (_label, css, inner) => {
+      expect(linesWith(css, inner)).toEqual(COLLAPSED);
+    });
+
+    it.each([
+      [
+        "an important inline style beats an important rule",
+        "#feature p { white-space: normal !important; }",
+        `<p style="white-space: pre-line !important">${MULTI}</p>`,
+      ],
+      [
+        "a later layer beats an earlier one of higher specificity",
+        `@layer a, b; @layer b { ${preserving("article p")} } @layer a { #feature p { white-space: normal; } }`,
+        undefined,
+      ],
+      [
+        "a layer's own rules beat its sublayers",
+        `@layer a { @layer inner { #feature p { white-space: normal; } } ${preserving("article p")} }`,
+        undefined,
+      ],
+      [
+        "important layered rules beat important unlayered ones",
+        `@layer a { article p { white-space: pre-line !important; } } #feature p { white-space: normal !important; }`,
+        undefined,
+      ],
+      [
+        "inherit takes the parent value",
+        `.content-theme { white-space: pre-line; } article { white-space: inherit; }`,
+        undefined,
+      ],
+      [
+        "unset inherits an inherited property",
+        `.content-theme { white-space: pre-line; } article { white-space: unset; }`,
+        undefined,
+      ],
+      ["the user-agent pre element preserves", "", `<pre>${MULTI}</pre>`],
+    ])("preserves when %s", (_label, css, inner) => {
+      expect(linesWith(css, inner)).toEqual(MULTI_LINES);
+    });
+
+    it.each([
+      "white-space: var(--ws)",
+      "white-space: revert",
+      "white-space: revert-layer",
+      "white-space: pre-lines",
+      "overflow-wrap: env(x)",
+    ])("fails closed on a value it cannot resolve: %s", (declaration) => {
+      expect(() => linesWith(`[data-testid='featured-item'] p { ${declaration}; }`)).toThrow(
+        "CSS oracle cannot evaluate",
+      );
+    });
+
+    it("judges each text run by its own element, not only the container", () => {
+      expect(
+        linesWith(
+          `${preserving("[data-testid='featured-item'] p")} p span { white-space: normal; }`,
+          "<p>Doors at seven\n<span>Bring a deck\n\nNew players</span> welcome</p>",
+        ),
+      ).toEqual(["Doors at seven", "Bring a deck New players welcome"]);
+    });
+  });
+
+  describe("long-word wrapping", () => {
+    function wraps(css: string, inner = `<p>${LONG_WORD}</p>`): boolean {
+      const html = `<style>${css}</style>${featured(inner)}`;
+      const container = smallestContaining(document(html), [LONG_TOKEN], "wrap control");
+      return wrapsLongWords(container, servedRules(html)).wraps;
+    }
+    const p = "[data-testid='featured-item'] p";
+
+    it.each([
+      ["white-space: pre disables wrapping", `${p} { white-space: pre; overflow-wrap: anywhere; }`],
+      [
+        "text-wrap-mode: nowrap",
+        `${p} { white-space: pre-line; overflow-wrap: anywhere; text-wrap-mode: nowrap; }`,
+      ],
+      [
+        "text-wrap: nowrap",
+        `${p} { white-space: pre-line; overflow-wrap: anywhere; text-wrap: nowrap; }`,
+      ],
+      [
+        "the word-wrap alias overrides",
+        `${p} { overflow-wrap: anywhere; } #feature p { word-wrap: normal; }`,
+      ],
+      ["the user-agent nobr element", `${p} { overflow-wrap: anywhere; }`],
+    ])("does not wrap when %s", (label, css) => {
+      const inner = label.includes("nobr") ? `<p><nobr>${LONG_WORD}</nobr></p>` : undefined;
+      expect(wraps(css, inner)).toBe(false);
+    });
+
+    it.each([
+      ["pre-line with overflow-wrap", `${p} { white-space: pre-line; overflow-wrap: anywhere; }`],
+      ["the word-wrap alias", `${p} { white-space: pre-line; word-wrap: break-word; }`],
+      [
+        "text-wrap: balance keeps wrapping",
+        `${p} { overflow-wrap: anywhere; text-wrap: balance; }`,
+      ],
+    ])("wraps with %s", (_label, css) => {
+      expect(wraps(css)).toBe(true);
+    });
+  });
+
+  describe("stylesheet sources", () => {
+    const eventMarkup = `<div class="event-theme"><div class="event-description"><p>${MULTI}</p></div></div>`;
+
+    it.each([
+      [
+        "a print-only style element",
+        `<style media="print">${preserving("p")}</style>${featured()}`,
+      ],
+      [
+        "a style element inside a template",
+        `<template><style>${preserving("p")}</style></template>${featured()}`,
+      ],
+      [
+        "a print-only linked sheet",
+        `<link rel="stylesheet" href="/event-theme.css" media="print">${eventMarkup}`,
+      ],
+      [
+        "a disabled linked sheet",
+        `<link rel="stylesheet" href="/event-theme.css" disabled>${eventMarkup}`,
+      ],
+      [
+        "an alternate linked sheet",
+        `<link rel="alternate stylesheet" href="/event-theme.css">${eventMarkup}`,
+      ],
+      [
+        "a utility class name with no served utility CSS",
+        featured(`<p class="whitespace-pre-line">${MULTI}</p>`),
+      ],
+      [
+        "a hidden preserved copy beside the visible text",
+        `<style>${preserving("p[hidden]")}</style>${featured(`<p hidden>${MULTI}</p><p>${MULTI}</p>`)}`,
+      ],
+    ])("does not let %s preserve breaks", (_label, html) => {
+      expect(linesIn(html)).toEqual(COLLAPSED);
+    });
+
+    it.each([
+      [
+        "a screen style element",
+        `<style media="screen and (min-width: 1280px)">${preserving("p")}</style>${featured()}`,
+      ],
+      ["a linked sheet", `<link rel="stylesheet" href="/event-theme.css">${eventMarkup}`],
+      [
+        "an all-media linked sheet",
+        `<link rel="stylesheet preload" href="/event-theme.css" media="all">${eventMarkup}`,
+      ],
+    ])("lets %s preserve breaks", (_label, html) => {
+      expect(linesIn(html)).toEqual(MULTI_LINES);
+    });
+
+    it("serves Tailwind utilities from the compiled Kit sheet, in their layer", async () => {
+      const css = await compileKitGlobalCss(["whitespace-pre-line"]);
+      const html = featured(`<p class="whitespace-pre-line">${MULTI}</p>`);
+      expect(linesIn(html, kitGlobalExtras("", css))).toEqual(MULTI_LINES);
+      const overridden = `<style>article p { white-space: normal; }</style>${html}`;
+      expect(linesIn(overridden, kitGlobalExtras("", css))).toEqual(COLLAPSED);
+    }, 60_000);
+
+    it("fails closed on a variant utility it cannot evaluate", async () => {
+      const css = await compileKitGlobalCss(["whitespace-pre-line", "md:whitespace-normal"]);
+      const html = featured(`<p class="whitespace-pre-line md:whitespace-normal">${MULTI}</p>`);
+      expect(() => linesIn(html, kitGlobalExtras("", css))).toThrow("CSS oracle cannot evaluate");
+    }, 60_000);
+
+    it.each([
+      [
+        "an off-site stylesheet",
+        `<link rel="stylesheet" href="https://cdn.example.test/x.css">${featured()}`,
+      ],
+      [
+        "an imported sheet",
+        `<style>@import url(/theme.css); ${preserving("p")}</style>${featured()}`,
+      ],
+      [
+        "a namespace rule",
+        `<style>@namespace svg url(http://www.w3.org/2000/svg); ${preserving("p")}</style>${featured()}`,
+      ],
+      ["a scoped block", `<style>@scope (main) { ${preserving("p")} }</style>${featured()}`],
+      [
+        "a starting-style block",
+        `<style>@starting-style { ${preserving("p")} }</style>${featured()}`,
+      ],
+      ["a nested rule", `<style>article { & p { white-space: pre-line; } }</style>${featured()}`],
+      [
+        "a layer declared in a conditional group",
+        `<style>@media screen { @layer x { ${preserving("p")} } }</style>${featured()}`,
+      ],
+    ])("fails closed on %s", (_label, html) => {
+      expect(() => linesIn(html)).toThrow("CSS oracle cannot evaluate");
+    });
   });
 });
 
@@ -995,9 +1689,55 @@ function renderFeaturedKit(body: string): string {
   });
 }
 
-function kitGlobalExtras(extraCss = ""): { css: string; source: string }[] {
+/** The Kit global sheet as production serves it: web/src/app.css compiled
+ * by Tailwind, with utilities for the candidates its @source globs yield
+ * (as the Vite plugin scans them), plus extra candidates for controls. A
+ * fresh compiler every time, because Tailwind accumulates candidates. */
+async function compileKitGlobalCss(extraCandidates: string[] = []): Promise<string> {
+  const webRequire = createRequire(join(root, "web/package.json"));
+  type Source = { base: string; pattern: string; negated: boolean };
+  const { compile } = (await import(
+    pathToFileURL(webRequire.resolve("@tailwindcss/node")).href
+  )) as {
+    compile: (
+      css: string,
+      options: { base: string; onDependency: (path: string) => void },
+    ) => Promise<{
+      root: "none" | null | { base: string; pattern: string };
+      sources: Source[];
+      build: (candidates: string[]) => string;
+    }>;
+  };
+  const { Scanner } = webRequire("@tailwindcss/oxide") as {
+    Scanner: new (options: { sources: Source[] }) => { scan: () => string[] };
+  };
+  const base = join(root, "web/src");
+  const compiler = await compile(readFileSync(join(base, "app.css"), "utf8"), {
+    base,
+    onDependency: () => {},
+  });
+  const sources: Source[] = [
+    ...(compiler.root === "none"
+      ? []
+      : compiler.root === null
+        ? [{ base, pattern: "**/*", negated: false }]
+        : [{ ...compiler.root, negated: false }]),
+    ...compiler.sources,
+  ];
+  return compiler.build([...new Scanner({ sources }).scan(), ...extraCandidates]);
+}
+
+let kitGlobalCss = "";
+beforeAll(async () => {
+  kitGlobalCss = await compileKitGlobalCss();
+}, 60_000);
+
+function kitGlobalExtras(
+  extraCss = "",
+  globalCss = kitGlobalCss,
+): { css: string; source: string }[] {
   return [
-    { css: readFileSync(join(root, "web/src/app.css"), "utf8"), source: "web/src/app.css" },
+    { css: globalCss, source: "web/src/app.css (compiled)" },
     ...(extraCss ? [{ css: extraCss, source: "compiled component CSS" }] : []),
   ];
 }
@@ -1050,19 +1790,28 @@ afterAll(() => archiveKit?.dispose());
 
 function svelteStyleExtras(): { css: string; source: string }[] {
   // The route harness compiles Svelte without emitting component CSS; a fix
-  // scoped in these components would still be served in production, so read
-  // their <style> blocks as served sheets for the Kit twin.
+  // scoped in these components would still be served in production, so
+  // compile them the same way and read the scoped CSS Svelte emits (its hash
+  // classes match the harness markup) rather than the unscoped source.
+  const { compile } = createRequire(join(root, "web/package.json"))("svelte/compiler") as {
+    compile: (
+      source: string,
+      options: Record<string, unknown>,
+    ) => { css?: { code: string } | null };
+  };
   const files = [
     "web/src/lib/EventCard.svelte",
     "web/src/routes/events/past/+page.svelte",
     "web/src/lib/Shell.svelte",
   ];
   return files.flatMap((file) => {
-    const source = readFileSync(join(root, file), "utf8");
-    return [...source.matchAll(/<style[^>]*>([\s\S]*?)<\/style>/g)].map((m) => ({
-      css: m[1]!,
-      source: `${file} <style>`,
-    }));
+    const path = join(root, file);
+    const { css } = compile(readFileSync(path, "utf8"), {
+      generate: "server",
+      dev: false,
+      filename: path,
+    });
+    return css?.code ? [{ css: css.code, source: `${file} (compiled <style>)` }] : [];
   });
 }
 
