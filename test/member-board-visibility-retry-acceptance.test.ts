@@ -207,14 +207,18 @@ describe("Hono member board manage action (page unit)", () => {
     // The existing explanation and policy link stay beside the action.
     expect(html).toContain('<a href="/privacy">privacy policy</a>');
     expect(headSection(html)).toContain("/privacy");
-    expect(headSection(html)).toMatch(/Hiding yourself removes you from every board and every count/);
+    expect(headSection(html)).toMatch(
+      /Hiding yourself removes you from every board and every count/,
+    );
   });
 
   it("HONO-MANAGE-empty: keeps the action and navigation on the empty board", () => {
     const html = honoPage({ rows: [] });
     expect(manageHref(html)).toBe(MANAGE_HREF);
     expect(headSection(html)).toContain("Manage leaderboard visibility");
-    expect(headSection(html)).toMatch(/Hiding yourself removes you from every board and every count/);
+    expect(headSection(html)).toMatch(
+      /Hiding yourself removes you from every board and every count/,
+    );
     expect(html).toContain("Nobody is ranked for this season and game yet.");
     expect(html).toContain('<nav aria-label="Board scope">');
     expect(html).toContain('aria-label="Board period"');
@@ -223,7 +227,9 @@ describe("Hono member board manage action (page unit)", () => {
   it("HONO-MANAGE-unranked: keeps the action and navigation for an unranked viewer", () => {
     const html = honoPage({ scope: "relative", rows: [] });
     expect(manageHref(html)).toBe(MANAGE_HREF);
-    expect(headSection(html)).toMatch(/Hiding yourself removes you from every board and every count/);
+    expect(headSection(html)).toMatch(
+      /Hiding yourself removes you from every board and every count/,
+    );
     expect(html).toContain("You are not ranked for this season and game yet.");
     expect(html).toContain('<nav aria-label="Board scope">');
     expect(html).toContain('aria-label="Board period"');
@@ -256,8 +262,12 @@ describe("Hono member board manage action (page unit)", () => {
 
   it("HONO-MANAGE-share: share metadata describes Going-response ranking", () => {
     const html = honoPage({ rows: sampleRows });
-    expect(html).toMatch(/<meta\b[^>]*name="description"[^>]*content="Members ranked by their Going responses to events\."/);
-    expect(html).toMatch(/<meta\b[^>]*property="og:description"[^>]*content="Members ranked by their Going responses to events\."/);
+    expect(html).toMatch(
+      /<meta\b[^>]*name="description"[^>]*content="Members ranked by their Going responses to events\."/,
+    );
+    expect(html).toMatch(
+      /<meta\b[^>]*property="og:description"[^>]*content="Members ranked by their Going responses to events\."/,
+    );
   });
 
   it("HONO-MANAGE-no-inference: absent rows never claim opt-out, state or inactivity", () => {
@@ -658,13 +668,17 @@ describe("Kit member board visibility action (SSR render)", () => {
     expect(manageHref(html)).toBe(MANAGE_HREF);
     expect(headSection(html)).toContain("Manage leaderboard visibility");
     expect(html).toContain('<a href="/privacy">privacy policy</a>');
-    expect(headSection(html)).toMatch(/Hiding yourself removes you from every board and every count/);
+    expect(headSection(html)).toMatch(
+      /Hiding yourself removes you from every board and every count/,
+    );
   });
 
   it("KIT-MANAGE-empty: keeps the action and navigation on the empty board", () => {
     const html = renderPage(baseData({ rows: [] }));
     expect(manageHref(html)).toBe(MANAGE_HREF);
-    expect(headSection(html)).toMatch(/Hiding yourself removes you from every board and every count/);
+    expect(headSection(html)).toMatch(
+      /Hiding yourself removes you from every board and every count/,
+    );
     expect(html).toContain("Nobody is ranked for this season and game yet.");
     expect(html).toContain('<nav aria-label="Board scope">');
     expect(html).toContain('aria-label="Board period"');
@@ -673,7 +687,9 @@ describe("Kit member board visibility action (SSR render)", () => {
   it("KIT-MANAGE-unranked: keeps the action for an unranked viewer", () => {
     const html = renderPage(baseData({ scope: "relative", rows: [] }));
     expect(manageHref(html)).toBe(MANAGE_HREF);
-    expect(headSection(html)).toMatch(/Hiding yourself removes you from every board and every count/);
+    expect(headSection(html)).toMatch(
+      /Hiding yourself removes you from every board and every count/,
+    );
     expect(html).toContain("You are not ranked for this season and game yet.");
     expect(html).toContain('<nav aria-label="Board scope">');
   });
@@ -708,8 +724,12 @@ describe("Kit member board visibility action (SSR render)", () => {
 
   it("KIT-MANAGE-share: share metadata describes Going-response ranking", () => {
     const html = renderPage(baseData());
-    expect(html).toMatch(/<meta\b[^>]*name="description"[^>]*content="Members ranked by their Going responses to events\."/);
-    expect(html).toMatch(/<meta\b[^>]*property="og:description"[^>]*content="Members ranked by their Going responses to events\."/);
+    expect(html).toMatch(
+      /<meta\b[^>]*name="description"[^>]*content="Members ranked by their Going responses to events\."/,
+    );
+    expect(html).toMatch(
+      /<meta\b[^>]*property="og:description"[^>]*content="Members ranked by their Going responses to events\."/,
+    );
   });
 
   it("KIT-MANAGE-no-inference: absent rows never claim opt-out, state or inactivity", () => {
