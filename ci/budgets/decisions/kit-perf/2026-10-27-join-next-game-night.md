@@ -27,11 +27,29 @@ Measured with `npm run build --prefix web` then `node ci/check-kit-perf.mjs`
   54/55, server 116/126), worker, CSS and startup limits fit unchanged.
 - Server gzip needs the 336128 step: 335872 stays 67-69 B short.
 
+### Re-measure on the merged tree (main `d939263e8`)
+
+Merging the event-time commit (#1803) into this branch re-measured both
+server and client over the first allocation (two builds, identical):
+
+| Axis | Merged tree | Ceiling | Next least aligned step | Margin |
+| --- | --- | --- | --- | --- |
+| client JS raw | 256535 | 256512 (over by 23) | 256768 | 233 B |
+| client JS gzip | 103261 | 103424 | unchanged | 163 B |
+| server JS gzip | 336262-336263 | 336128 (over by 134-135) | 336384 | 121 B |
+
+Client raw and server gzip each move one 256 B step above the first
+allocation (256512 to 256768, 336128 to 336384); 336128 rejects the merged
+server composition by 135 B and 256512 rejects the client by 23 B. Client
+gzip, file counts (client 55/55, server 116/126), worker, CSS and startup
+fit unchanged. Final raised values: client raw 256768, client gzip 103424,
+server gzip 336384.
+
 `ci/budget-fragments.test.mjs` moves with the fragments. The additive
 allocation entries in `ci/check-kit-perf.test.mjs` are owned by the test
 correction handed back before this lands. No checker, gate, mask or exclusion
 changes; over-ceiling fixtures still fail closed. Not a feature or release
-approval. Undo: revert the three fragment values and this file.
+approval. Undo: revert the three fragment values (client raw 256000, client gzip 103168, server gzip 335872 on the current main) and delete this file; the 336128/336384 and 256512/256768 test-ladder entries then become unused but harmless.
 
 ## Ported monolith history (verbatim, leading separator space kept)
 
