@@ -13,8 +13,8 @@ main, not carried forward.
 
 - Behavior head (frozen, unchanged): `2ae12d2c2738d337112e4c8ca87762046dca0e20`
   (join investigation return context, PR #1705).
-- Current main: `cd50096f3fe37d788258c4452f90e5cfcb30793a`.
-- Measurement tree: `a4c6169062e1132d3f505b809fa9f6afaf77c472` (behavior
+- Current main: `cb0f15736f603bf263be9d386dee179c3be8d4d7`.
+- Measurement tree: `a11050a93dbf2beea3c103d0eaee788ec2ac0d15` (behavior
   head merged into main; the only conflict is the modify/delete of the
   removed monolith `ci/kit-perf-budget.json`, resolved by accepting the
   deletion, so the tree is behavior code under main's fragment budgets).
@@ -26,15 +26,15 @@ main, not carried forward.
 
 Two locked `npm run build --prefix web` + `node ci/check-kit-perf.mjs`
 runs per tree. Client totals are byte-identical across repeats; server
-gzip wobbles 1 B, as in every prior round.
+gzip was identical in both builds this round (earlier rounds wobbled 1 B).
 
 | Tree | Server files | Server raw B | Server gzip B, builds 1 / 2 | Client files | Client raw B | Client gzip B | Gate exit |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Main | 116 | 1185177 / 1185175 | 335335 / 335335 | 54 | 254926 | 102621 | 0 |
-| Composition | 116 | 1188373 / 1188375 | 336141 / 336140 | 55 | 256631 | 103418 | 1 |
+| Main | 116 | 1185439 / 1185439 | 335349 / 335349 | 54 | 254926 | 102621 | 0 |
+| Composition | 116 | 1188637 / 1188637 | 336153 / 336153 | 55 | 256631 | 103418 | 1 |
 
-Main fits every ceiling (server gzip margin 25 B, client raw 1074 B, client
-gzip 547 B). The composition breaches server gzip by 780/781 B, client raw by
+Main fits every ceiling (server gzip margin 11 B, client raw 1074 B, client
+gzip 547 B). The composition breaches server gzip by 793 B, client raw by
 631 B and client gzip by 250 B. Worker (2551 raw / 1219 gzip B) and client
 CSS (2 files, 2861 raw / 1019 gzip B) are identical in every build and
 still fit.
@@ -42,7 +42,7 @@ still fit.
 ## Why the growth is justified, and why it is minimal
 
 Relative to current main the composition adds one client file and
-+1705 raw / +797 gzip client bytes, and +3198 raw / +806 gzip server bytes:
++1705 raw / +797 gzip client bytes, and +3198 raw / +804 gzip server bytes:
 the same feature delta as every earlier round (+1705 client raw, +3200
 server raw), riding on a grown baseline. The client delta is one shared
 helper chunk plus the app entry and nodes 12/19/20 (all three consumers
@@ -56,7 +56,7 @@ build, not a x1.25 reserve:
 
 | Ceiling | Measured max | One step below (rejects) | New ceiling | Margin |
 | --- | ---: | ---: | ---: | ---: |
-| Server gzip | 336141 | 336128, short 13 B | 336384 | 243 B |
+| Server gzip | 336153 | 336128, short 25 B | 336384 | 231 B |
 | Client raw | 256631 | 256512, short 119 B | 257024 | 393 B |
 | Client gzip | 103418 | 103168, short 250 B | 103424 | 6 B |
 
@@ -67,7 +67,7 @@ more; any later client growth needs its own allocation.
 
 One-byte and one-step-below controls run in the updated shipping-budget
 tests: exact ceilings fit, one byte over breaches on each axis, and the
-newly admitted server interval is pinned to the measured 336141 B.
+newly admitted server interval is pinned to the measured 336153 B.
 
 ## Undo
 

@@ -123,7 +123,7 @@ function kitFixture(t, fragments) {
 // independently measured saved-review allocation (combined worst 335164,
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
 // unsupported). 336384 is the join/timezone composition allocation (worst
-// 336141, margin 243; lower 336128 rejects by 13). Every other pin stays
+// 336153, margin 231; lower 336128 rejects by 25). Every other pin stays
 // exact: the oracle rejects any ceiling outside this list, then deep-compares
 // the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 336384];
