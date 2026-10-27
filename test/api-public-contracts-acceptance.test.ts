@@ -62,12 +62,16 @@ const UNKNOWN_PATHS = [
   "/api/public/unknown?probe=1",
 ] as const;
 
+// Every entry must stay an unknown path inside /api/public after WHATWG URL
+// normalization: bare `%2e%2e` segments resolve away before the app sees
+// them, and known routes keep their own status (see the controls below).
 const HOSTILE_PATHS = [
-  "/api/public/%2e%2e/%2e%2e/etc/passwd",
+  "/api/public/%2e%2e%2f%2e%2e%2fetc/passwd",
+  "/api/public/..%2f..%2fetc/passwd",
   "/api/public/%3Cscript%3Ealert(1)%3C/script%3E",
   "/api/public/unknown?probe=%3Cscript%3E",
-  "/api/public/events/%00",
-  "/api/public/community?x=../etc/passwd",
+  "/api/public/unknown/%00",
+  "/api/public/unknown?x=../etc/passwd",
 ] as const;
 
 const BOUNDARY_PATHS = [
@@ -183,6 +187,17 @@ describe("public API unknown paths return JSON (offline)", () => {
     expect(fetch, path).not.toHaveBeenCalled();
   });
 
+  it.each([...HOSTILE_PATHS])("%s stays an unknown in-namespace path once normalized", (path) => {
+    // Guard on the fixture itself: a hostile entry that normalizes out of
+    // the namespace or onto a known route cannot test the unknown handler.
+    const { pathname } = new URL(path, APP_URL);
+    expect(pathname, path).toMatch(/^\/api\/public\/./);
+    expect(["/api/public/community", "/api/public/events", "/api/public/join"], path).not.toContain(
+      pathname,
+    );
+    expect(pathname, path).not.toMatch(/^\/api\/public\/events\/[^/]+$/);
+  });
+
   it("keeps the unknown message and next static across paths", async () => {
     const first = await expectUnknownJson(await get("/api/public/cache"), "/api/public/cache");
     const second = await expectUnknownJson(
@@ -258,6 +273,25 @@ describe("public API unknown paths return JSON (offline)", () => {
     const body = (await res.json()) as PublicErrorBody;
     expect(body.error.code).toBe("invalid_request");
     expect(validatePublicSchema(body, "PublicDataError")).toEqual([]);
+  });
+
+  it("keeps a NUL event key 422 inert, not the unknown 404", async () => {
+    // Control: a hostile byte in the key is still a malformed known route.
+    const res = await get("/api/public/events/%00");
+    expect(res.status).toBe(422);
+    const raw = await res.text();
+    expect(raw).not.toContain("%00");
+    const body = JSON.parse(raw) as PublicErrorBody;
+    expect(body.error.code).toBe("invalid_request");
+    expect(validatePublicSchema(body, "PublicDataError")).toEqual([]);
+  });
+
+  it("keeps a known route 200 under a hostile query, without reflection", async () => {
+    // Control: the query is not a path, so the known route still answers.
+    const res = await get("/api/public/community?x=../etc/passwd");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.text()).not.toContain("etc/passwd");
   });
 
   it("keeps the disabled agent ingress envelope, not the public 404", async () => {
