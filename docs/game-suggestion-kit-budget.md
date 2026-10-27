@@ -2,6 +2,60 @@
 
 ## Current decision
 
+Raise three Kit ceilings to the smallest aligned steps that cover the exact
+feature composition on current main:
+
+| Budget field | Incoming ceiling | New ceiling | Increase | Margin above worst fresh combined build |
+| --- | ---: | ---: | ---: | ---: |
+| `server.js.maxGzipBytes` | 336128 | 336896 | 768 | 205 above 336691 |
+| `client.js.maxRawBytes` | 257024 | 257536 | 512 | 155 above 257381 |
+| `client.js.maxGzipBytes` | 103168 | 103680 | 512 | 70 above 103610 |
+
+Main `227414575dd8fffe8ebe245086442ce5a20ca174` (adds #1487 archive search and
+pager, #1923 server tier 336128 and #1913 discovery HTML cap on top of the
+previously measured base; the last commit changes only a test file) and
+feature `7d390f4b8c54e30b0da703c2085530d1876c78f4` merge cleanly to tree
+`efb831ff590effdf8d415c8e0a55bb1473418568`. Node 24.22.1, npm 11.19.1,
+identical locked root/web dependencies, one main build and three composition
+builds through the canonical
+`npm run build --prefix web && node ci/check-kit-perf.mjs --format json`
+(the builds were run against the final fragment values; all three exit 0):
+
+| Measurement | Main | Combined build 1 / 2 / 3 |
+| --- | ---: | ---: |
+| Server JS raw | 1187400 | 1191042 / 1191042 / 1191042 |
+| Server JS gzip | 335837 | 336691 / 336690 / 336691 |
+| Client JS raw | 255632 | 257381 / 257381 / 257381 |
+| Client JS gzip | 102846 | 103610 / 103610 / 103610 |
+| Server / client JS files | 116 / 54 | 116 / 55 all |
+
+Worker 2551/1219 B and CSS 2861/1019 B across two files are identical in all
+builds. Main fits its own ceilings. The combined output breaches the previous
+branch values server gzip 336640 (+54 B) and client raw 257024 (+357 B);
+client gzip 103610 still fits 103680 (the growth is main-side, from #1487;
+the feature delta is unchanged). Against the built output without a rebuild,
+the new ceilings pass and each single step lower (336640, 257280, 103424)
+rejects. Steps are the repository's 256 B gzip and 512 B raw grids, not a
+x1.25 allocation or speculative headroom. Worker, CSS, server raw, file-count
+and startup limits, the checker, loader, application, dependencies and every
+other fragment are unchanged; frozen legacy history is not edited. The
+matching acceptance tests were corrected independently by the Test Author
+(`a1d07f7da7b5`, based on main `227414575`) and incorporated byte-for-byte
+(`ci/check-kit-perf.test.mjs` sha256
+`5ce4712f61678d3a21a0223d10de9696456a76d6e9673d54bb427a95090177d4`,
+`ci/budget-fragments.test.mjs` sha256
+`87783b9446c08b4819f6b61e6f069e094ccf4966eaa395279274c0053a059933`).
+
+ACT: allocate these three measured steps through independent review.
+WHY: the exact feature composition exhausts them on current main; the earlier
+shared-component experiment did not recover the capacity.
+UNDO: reviewed revert of these three fragment values and the matching
+acceptance delta, retaining every earlier decision; coordinate with the
+dependent feature. This is not feature, staging, deployment or release
+approval; the feature must reverify its actual integrated head.
+
+## Superseded decision (main d9b213141: server 336640, client gzip 103680)
+
 Raise two Kit ceilings to the smallest aligned steps that cover the exact
 feature composition on current main (main #1895 already raised client raw
 to 257024, so no raw step is taken here):
