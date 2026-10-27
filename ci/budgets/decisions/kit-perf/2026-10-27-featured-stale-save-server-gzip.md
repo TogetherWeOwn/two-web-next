@@ -1,11 +1,12 @@
-# 2026-10-27 decision: server JS gzip ceiling 336128 -> 336640
+# 2026-10-27 decision: server JS gzip ceiling 336640 -> 337152
 
-`server.js.maxGzipBytes` rises 336128 -> 336640 in
-`ci/budgets/kit/server-js.json`; no other ceiling changes. This admits the
-featured stale-save refusal: the saved-content baseline, the in-lock
-comparison and the conflict page add server-side code to the Kit server
-bundle. Two 256B steps, the smallest aligned cover for the measured worst
-case (one step, 336384, rejects by 160B).
+`server.js.maxGzipBytes` rises 336640 -> 337152 in
+`ci/budgets/kit/server-js.json`; no other ceiling changes. This re-admits the
+featured stale-save refusal on the events/jobs main: main's event-detail Kit
+code plus the saved-content baseline, the in-lock comparison and the conflict
+page exceed the 336640 ceiling the slice previously carried. Two 256B steps,
+the smallest aligned cover for the measured worst case (one step, 336896,
+rejects by 53B).
 
 ## Measurements
 
@@ -15,14 +16,20 @@ Locked Node 24.22.1 / npm 11.19.1 production builds
 
 | Tree | Build | Server files | Gzip bytes | Gate |
 |---|---|---:|---:|---|
-| Pristine main tip `e37975a07` | 1 | 116 | 335835 | exit 0, margin 293 |
-| Feature head (main tip merged in) | 1 | 116 | 336544 | exit 1 against 336384, 160 over |
-| Feature head (main tip merged in) | 2 | 116 | 336541 | exit 1 against 336384, 157 over |
+| Pristine main tip `4e90a8bcf` | 1 | 116 | 336248 | exit 0, margin 136 |
+| Feature head (main tip merged in) | 1 | 116 | 336949 | exit 1 against 336640, 309 over |
+| Feature head (main tip merged in) | 2 | 116 | 336949 | exit 1 against 336640, 309 over |
 
-Worst case 336544. 336640 (256 x 1315) admits it with 96B of margin.
-Feature delta on the server total is about +706 gzip bytes, no new server
-files. Rebuild jitter (+-3B between identical-tree builds) is disclosed,
-not signal.
+Worst case 336949, byte-identical across both local builds and equal to the
+merge-queue run's measurement on the same tree. 337152 (256 x 1317) admits it
+with 203B of margin. Feature delta on the server total is about +701 gzip
+bytes over pristine main, no new server files. Client js fits unchanged
+(54/55 files, raw 256458/257024B, gzip 103031/103168B). Rebuild jitter is
+disclosed, not signal; none observed this round.
+
+Prior step on the earlier base (`e37975a07`, pristine 335835): 336128 ->
+336640 for worst case 336544, margin 96. That base is superseded; this record
+covers the current tree.
 
 ## Why one PR
 
