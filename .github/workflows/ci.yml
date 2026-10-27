@@ -15,7 +15,7 @@ on:
   # the whole suite including the long gates. Catches regressions that slipped
   # past area-gated PR runs within hours.
   schedule:
-    - cron: '19 2 * * *'
+    - cron: "19 2 * * *"
   # Manual re-run on a branch. Releases no longer dispatch it: there is no
   # release PR (docs/releases.md).
   workflow_dispatch:
@@ -247,6 +247,12 @@ jobs:
         run: |
           npx vitest run test/profile-composition-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-composition-browser.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-composition-browser.json "composition feedback in a real browser" 6
+      - name: Profile refused-draft recovery regressions (memory fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-refused-draft-recovery-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-refused-draft-recovery-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-refused-draft-recovery-acceptance.json "refused-draft recovery in a real browser" 2
       - name: Admin event native Unicode regressions (intercepted fixtures, no network or DB)
         env:
           ADMIN_EVENT_BROWSER_TESTS: "true"
