@@ -22,6 +22,16 @@ export interface JsonSchema {
   items?: JsonSchema;
 }
 
+/** A Parameter Object or a $ref to a shared one (components.parameters). */
+type ParameterObject = {
+  $ref?: string;
+  name?: string;
+  in?: string;
+  required?: boolean;
+  schema?: Record<string, unknown>;
+  description?: string;
+};
+
 type EventField = (typeof PUBLIC_API_EVENT_FIELDS)[number];
 
 const EVENT_PROPERTIES: Record<EventField, JsonSchema> = {
@@ -100,7 +110,7 @@ function error(status: number, description: string) {
  * Consistency and behavioral tests pin the alias, ceiling, integer-prefix
  * page parsing, defaults and clamp-to-last-page behavior (never a 422).
  */
-const PAGING_PARAMETERS = [
+const PAGING_PARAMETERS: ParameterObject[] = [
   {
     name: "page",
     in: "query",
@@ -154,9 +164,46 @@ const PAGING_PARAMETERS = [
   },
 ];
 
+/**
+ * Conditional-read definitions shared by all four read operations. The
+ * runtime compares If-None-Match weakly (exact, W/ copy, comma list or `*`),
+ * after admission and any validation, against the representation's ETag.
+ */
+const NOT_MODIFIED_REF = { $ref: "#/components/responses/NotModified" };
+
+const IF_NONE_MATCH_REF: ParameterObject = { $ref: "#/components/parameters/IfNoneMatch" };
+
+const IF_NONE_MATCH_PARAMETER = {
+  name: "If-None-Match",
+  in: "header",
+  required: false,
+  schema: { type: "string" },
+  description:
+    "Conditional read. Send the ETag of a representation you hold: the exact tag, its " +
+    "W/ weak copy, a comma-separated list or * answers an empty 304 when it matches the " +
+    "current representation, otherwise the normal 200. Admission runs before the " +
+    "comparison, so a spent read budget still answers 429, never 304. " +
+    "Only ETag validators are supported.",
+};
+
+const VALIDATOR_HEADERS = {
+  ETag: { $ref: "#/components/headers/ETag" },
+  "Cache-Control": { $ref: "#/components/headers/CacheControl" },
+};
+
+const NOT_MODIFIED_DESCRIPTION =
+  "Not modified: the If-None-Match validator matches the current ETag, so the response is " +
+  "empty (no body) and repeats ETag and Cache-Control. Admission is checked before the " +
+  "comparison: a rate-limited request answers 429, never 304. Freshness is only what " +
+  "remains of the original 60s window: a hit just before expiry carries max-age=1, or " +
+  "max-age=0 once expired, never a fresh full window. Committed event writes retire " +
+  "entries in the mutating isolate only; other isolates converge on TTL expiry, so a " +
+  "304 can briefly repeat a representation another isolate has already retired.";
+
 function jsonRef(name: string, description: string) {
   return {
     description,
+    headers: VALIDATOR_HEADERS,
     content: {
       "application/json": { schema: { $ref: `#/components/schemas/${name}` } },
     },
@@ -191,9 +238,10 @@ export function getOpenApiDocument(appUrl: string) {
       "/api/public/events": {
         get: {
           summary: "Published events, soonest first",
-          parameters: PAGING_PARAMETERS,
+          parameters: [...PAGING_PARAMETERS, IF_NONE_MATCH_REF],
           responses: {
             "200": jsonRef("PublicApiEventCollection", "At most 20 published events."),
+            "304": NOT_MODIFIED_REF,
             "429": error(429, "Shared public-read budget exhausted."),
             "500": error(500, "Unexpected failure reading event data. Try again shortly."),
             "503": error(503, "Event data temporarily unavailable."),
@@ -211,11 +259,13 @@ export function getOpenApiDocument(appUrl: string) {
               schema: { type: "string" },
               description: "Stored uppercase ULID event key.",
             },
+            IF_NONE_MATCH_REF,
           ],
           responses: {
             "200": jsonRef("PublicApiEvent", "The published event."),
             "404": error(404, "No published event with that key (drafts and cancelled rows 404)."),
             "422": error(422, "That event key is not valid."),
+            "304": NOT_MODIFIED_REF,
             "429": error(429, "Shared public-read budget exhausted."),
             "500": error(500, "Unexpected failure reading event data. Try again shortly."),
             "503": error(503, "Event data temporarily unavailable."),
@@ -225,11 +275,13 @@ export function getOpenApiDocument(appUrl: string) {
       "/api/public/community": {
         get: {
           summary: "Community snapshot",
+          parameters: [IF_NONE_MATCH_REF],
           responses: {
             "200": jsonRef(
               "CommunitySnapshot",
               "Live counts, null when the collectors are unavailable.",
             ),
+            "304": NOT_MODIFIED_REF,
             "429": error(429, "Shared public-read budget exhausted."),
           },
         },
@@ -238,14 +290,32 @@ export function getOpenApiDocument(appUrl: string) {
         get: {
           summary: "Join handoff",
           description: "Joining happens in Discord only; this is the public invite.",
+          parameters: [IF_NONE_MATCH_REF],
           responses: {
             "200": jsonRef("JoinHandoff", "The public invite and intro."),
+            "304": NOT_MODIFIED_REF,
             "429": error(429, "Shared public-read budget exhausted."),
           },
         },
       },
     },
     components: {
+      parameters: { IfNoneMatch: IF_NONE_MATCH_PARAMETER },
+      headers: {
+        ETag: {
+          description: "Validator for this representation; echo it in If-None-Match.",
+          schema: { type: "string" },
+        },
+        CacheControl: {
+          description:
+            "public, max-age=N with N the remaining freshness (at most 60); " +
+            "max-age=0, must-revalidate when a retire overtook the read.",
+          schema: { type: "string" },
+        },
+      },
+      responses: {
+        NotModified: { description: NOT_MODIFIED_DESCRIPTION, headers: VALIDATOR_HEADERS },
+      },
       schemas: {
         PublicApiEvent: {
           type: "object",

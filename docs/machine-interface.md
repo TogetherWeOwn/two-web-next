@@ -27,15 +27,26 @@ machine surface only.
 - Unknown counts read as `null`, never `0` (`going_count`,
   `going_occupancy`, `member_count`, `online_count`).
 
+## Conditional reads
+
+The four REST reads send an `ETag`. Repeat it in `If-None-Match` (exact,
+weak `W/`, comma list or `*`) and a match answers an empty `304` with
+`ETag` and `Cache-Control`. Admission runs first: a spent budget is `429`,
+never `304`. Freshness is what remains of the 60s window, and retirement
+is per isolate, so other isolates converge on TTL expiry. There is no
+`If-Modified-Since`.
+
 ## Errors
 
 Failures keep `isError` on MCP and `{ error: { code, message } }` on
-REST and in the MCP text content. Codes and next actions:
+REST and in the MCP text content; REST errors also carry `request_id` (matches
+`x-request-id`) and `next`. Every unknown path under `/api/public` answers
+404 `not_found` as JSON (GET and HEAD, never HTML). Codes and next actions:
 
 | Code | Meaning | Next action |
 | ---- | ------- | ----------- |
 | `invalid_request` | Rejected input, e.g. a malformed event key. | Fix the input and try again. |
-| `not_found` | No published row for that key. | Check the key and try again. |
+| `not_found` | No published row for that key, or an unknown `/api/public/*` path. | Check the key and try again. |
 | `rate_limited` | Shared public-read budget exhausted. | Honor `Retry-After`, then try again. |
 | `unavailable` | Event data temporarily unreadable. | Wait and try again. |
 | `internal` | The read failed on our side. | Wait and try again. |

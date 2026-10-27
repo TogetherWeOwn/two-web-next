@@ -70,6 +70,20 @@ function apiError(
   return c.json(body, status, { "cache-control": "no-store, private" });
 }
 
+/** The exact `/api/public` namespace: the root and everything below a slash. */
+export function isPublicApiPath(path: string): boolean {
+  return path === "/api/public" || path.startsWith("/api/public/");
+}
+
+/**
+ * Unknown path inside the public API namespace: the same static not_found
+ * envelope as a missing event, never the branded page or an asset lookup. The
+ * request path is never echoed; HEAD loses its body in the framework.
+ */
+export function publicApiNotFound(c: Ctx): Response {
+  return apiError(c, "not_found", "No such public API path.", 404);
+}
+
 /**
  * Unexpected fault on an event read: alert once with the class fingerprint
  * (the same privacy boundary as the global handler — class, never message)
