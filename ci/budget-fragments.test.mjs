@@ -116,17 +116,20 @@ function kitFixture(t, fragments) {
 }
 
 // Admitted server.js maxGzipBytes allocations. The SHIPPING_KIT_BUDGET pin
-// above (336896) is the refreshed game-suggestion allocation (composition
-// worst 336694, margin 202; lower 336640 rejects by 54; the next 256B step
-// 337152 stays unsupported). Preserve the historical 335104 baseline, the
-// 335360 saved-review allocation (combined worst 335164, margin 196), main's
-// 335872 allocation (measured 335639, margin 233), the 336128 allocation
-// shared by main's Happening-now slice (combined worst 335901, margin 227;
-// lower 335872 rejects by 29) and the earlier game-suggestion measurement
-// (worst 335875, margin 253), and the superseded game-suggestion 336384
-// (worst 336190, margin 194) and 336640 (worst 336517, margin 123)
-// allocations. Every other pin stays exact: the oracle rejects any ceiling
-// outside this list, then deep-compares the rest of the plan.
+// above (335104) is the historical baseline; 335360 is the second,
+// independently measured saved-review allocation (combined worst 335164,
+// margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
+// unsupported); 335872 is the third, independently measured allocation
+// (measured 335639, margin 233; lower 335616 rejects by 23); 336128 is the
+// fourth, independently measured allocation (combined worst 335901, margin
+// 227; lower 335872 rejects by 29; the next 256B step 336384 was
+// unsupported then); 336384 is the fifth, event-share-honesty allocation
+// (combined worst 336168, margin 216; lower 336128 rejects by 40); 336640 is
+// the superseded game-suggestion allocation (worst 336517, margin 123) and
+// 336896 is the refreshed game-suggestion allocation (composition worst
+// 336694, margin 202; lower 336640 rejects by 54; the next 256B step 337152
+// stays unsupported). Every other pin stays exact: the oracle rejects any
+// ceiling outside this list, then deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336640, 336896];
 
 function assertShippingKitBudget(actual) {
