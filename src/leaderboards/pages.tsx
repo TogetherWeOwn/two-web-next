@@ -35,7 +35,7 @@ export const MemberLeaderboardPage: FC<{
     <Layout
       title="Member leaderboard — Together We Own"
       canonical={canonicalUrl(appUrl, "/leaderboards/members")}
-      shareDescription="Members ranked by events attended."
+      shareDescription="Members ranked by their Going responses to events."
       robots="noindex, nofollow"
       theme="schedule"
     >

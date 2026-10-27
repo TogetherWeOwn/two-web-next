@@ -30,7 +30,7 @@ const destination = (nextScope: string, nextSeason = season) => {
   title="Member leaderboard"
   canonical={canonicalUrl(appUrl, "/leaderboards/members")}
   robots="noindex, nofollow"
-  description="Members ranked by events attended."
+  description="Members ranked by their Going responses to events."
   theme="schedule"
   activeNav="leaderboard"
   mainClass="events-page"
