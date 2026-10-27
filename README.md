@@ -304,6 +304,7 @@ to execute the same Chromium proof.
 | `ci/schedule-search-context-browser.test.ts` | None—always runs | `npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts` (5 Hono and 5 Kit real Chromium cases; requires Kit dependencies and Chromium; JSON-verified in `a11y` via `ci/a11y-require-executed.mjs`) |
 | `ci/calendar-subscription-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts` (10 cases on each of the four calendar surfaces; intercepted clipboard fixtures; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
 | `ci/calendar-game-recovery-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-game-recovery-browser.vitest.ts ci/calendar-game-recovery-browser.test.ts` (16 cases for each Hono/Kit and source/shipped bundle pairing, enforced minimum 14; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
+| `ci/calendar-navigation-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-navigation-browser.vitest.ts ci/calendar-navigation-browser.test.ts` (shipped schedule navigation on Hono and Kit, enforced minimum 16 per surface; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures

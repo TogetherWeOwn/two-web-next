@@ -1,9 +1,11 @@
 // Single registry of every browser suite the a11y job must really execute.
-// SUITES is the source of truth: each entry pins one workflow step (opt-in
-// env or unconditional config, JSON report, executed-count verifier with its
-// exact title and minimum), and the reverse scan at the bottom fails when a
-// *_BROWSER_TESTS-gated file or a ci/*-browser.vitest.ts config exists
-// without an entry (or a named bespoke exception). Run this file directly:
+// SUITES is the source of truth for the Vitest suites: each entry pins one
+// workflow step (opt-in env or unconditional config, JSON report,
+// executed-count verifier with its exact title and minimum), and the reverse
+// scan at the bottom fails when a *_BROWSER_TESTS-gated file or a
+// ci/*-browser.vitest.ts config exists without an entry (or a named bespoke
+// exception). The node --test TAP suites (RSVP focus, Kit member auth, native
+// event share) are pinned by the dedicated tests below. Run this file directly:
 // node --test ci/a11y-native-browser-suites.test.mjs
 import assert from "node:assert/strict";
 import { readFile, readdir } from "node:fs/promises";
@@ -175,6 +177,19 @@ const SUITES = [
       { name: "surface", values: ["Hono", "Kit"] },
       { name: "bundle", values: ["source", "shipped"] },
     ],
+  },
+  {
+    file: "ci/calendar-navigation-browser.test.ts",
+    config: "ci/calendar-navigation-browser.vitest.ts",
+    env: null,
+    artifact: "artifacts/a11y/calendar-navigation.json",
+    sourceTitle: "${twin}: shipped schedule navigation in Chromium",
+    verifiers: [
+      { title: "Hono: shipped schedule navigation in Chromium", min: 16 },
+      { title: "Kit: shipped schedule navigation in Chromium", min: 16 },
+    ],
+    titleTemplate: "$surface: shipped schedule navigation in Chromium",
+    verifierLoops: [{ name: "surface", values: ["Hono", "Kit"] }],
   },
 ];
 
@@ -439,6 +454,48 @@ test("a11y job runs ci/event-native-share-browser.test.mjs unconditionally after
   assert.match(row ?? "", /None—always runs/);
 });
 
+const MEMBER_AUTH_FILE = "ci/kit-member-auth-browser.test.mjs";
+const MEMBER_AUTH_SUITE = "Kit member auth in Chromium";
+const MEMBER_AUTH_MIN = 15;
+
+test("a11y job runs ci/kit-member-auth-browser.test.mjs unconditionally after Chromium and Kit installs", async () => {
+  const step = steps.find(
+    (entry) => entry.includes(MEMBER_AUTH_FILE) && entry.includes("node --import tsx --test"),
+  );
+  assert(step, `a11y job must run ${MEMBER_AUTH_FILE}`);
+  assert.match(
+    step,
+    new RegExp(
+      `\\n          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/kit-member-auth\\.tap ${escape(MEMBER_AUTH_FILE)}\\n`,
+    ),
+    "the member-auth step must run the Chromium gate with its TAP report and 60s timeout",
+  );
+  assert.match(
+    step,
+    new RegExp(
+      `\\n          node ci/rsvp-focus-require-executed\\.mjs artifacts/a11y/kit-member-auth\\.tap "${escape(MEMBER_AUTH_SUITE)}" ${MEMBER_AUTH_MIN}\\s*$`,
+    ),
+    "the member-auth step must fail an all-skipped run via the executed-count verifier",
+  );
+  assert.doesNotMatch(step, /^\s*(?:- )?(?:if|continue-on-error):/m);
+  assert.doesNotMatch(step, /\n        env:\n/, "the member-auth suite must stay unconditional");
+  assert(chromiumInstall >= 0, "a11y job must install Chromium");
+  assert(chromiumInstall < job.indexOf(step), "Chromium install must precede the member-auth step");
+  assert(
+    kitDepsInstall >= 0 && kitDepsInstall < job.indexOf(step),
+    "Kit install must precede the member-auth step",
+  );
+
+  const source = await readFile(new URL(`../${MEMBER_AUTH_FILE}`, import.meta.url), "utf8");
+  assert.doesNotMatch(source, /_BROWSER_TESTS/, "the suite must not gain an opt-out gate");
+  assert(source.includes(MEMBER_AUTH_SUITE), "the suite must keep its verifier title");
+
+  const readme = await readFile(new URL("../README.md", import.meta.url), "utf8");
+  const row = readme.split("\n").find((line) => line.startsWith(`| \`${MEMBER_AUTH_FILE}\` |`));
+  assert.match(row ?? "", /None—always runs/);
+  assert.match(row ?? "", /TAP-verified in `a11y`/);
+});
+
 // Every browser gate is named *_BROWSER_TESTS, so the scan keys on that name.
 async function browserGatedSuites() {
   const found = [];
@@ -514,7 +571,18 @@ async function browserVitestConfigs() {
 test("every browser-gated suite and browser Vitest config is registered in SUITES", async () => {
   const gated = await browserGatedSuites();
   assert.deepEqual(unregisteredGated(gated, SUITES, BESPOKE_GATED_EXCEPTIONS), []);
-  assert.deepEqual(unregisteredConfigs(await browserVitestConfigs(), SUITES), []);
+  // Set equality, not just a subset: a discovery that finds nothing (a
+  // drifted pattern or directory) must fail on the registered configs it
+  // stopped finding, not pass vacuously.
+  const discovered = await browserVitestConfigs();
+  assert.deepEqual(unregisteredConfigs(discovered, SUITES), []);
+  assert.deepEqual(
+    discovered,
+    SUITES.map((suite) => suite.config)
+      .filter(Boolean)
+      .sort(),
+    "ci/*-browser.vitest.ts discovery must find exactly the registered configs",
+  );
 });
 
 test("the reverse registry scan rejects planted removals and additions (fixture)", () => {
