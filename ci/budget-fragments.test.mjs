@@ -129,16 +129,17 @@ function kitFixture(t, fragments) {
 // fourth, independently measured allocation (combined worst 335901, margin
 // 227; lower 335872 rejects by 29; the next 256B step 336384 was
 // unsupported then); 336384 is the fifth, event-share-honesty allocation
-// (combined worst 336168, margin 216; lower 336128 rejects by 40). Every other
-// pin stays exact: the oracle rejects any ceiling outside this list, then
-// deep-compares the rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384];
+// (combined worst 336168, margin 216; lower 336128 rejects by 40); 337920 is
+// the sixth, operator-panel allocation (combined worst 337768, margin 152;
+// lower 337664 rejects by 104). Every other pin stays exact: the oracle rejects
+// any ceiling outside this list, then deep-compares the rest of the plan.
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 337920];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 337920`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
@@ -178,8 +179,15 @@ test("shipping oracle admits the measured 336384 server gzip allocation", () => 
   });
 });
 
+test("shipping oracle admits the measured 337920 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 337920 } },
+  });
+});
+
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616, 336385]) {
+  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 337664, 337921]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
@@ -203,15 +211,17 @@ test("shipping oracle rejects off-axis drift at an admitted allocation", () => {
     ["worker gzip", (plan) => (plan.worker["_worker.js"].maxGzipBytes += 1)],
     ["startup", (plan) => (plan.startup.maxMs += 1)],
   ];
-  for (const [label, drift] of drifts) {
-    const plan = JSON.parse(JSON.stringify(SHIPPING_KIT_BUDGET));
-    plan.server.js.maxGzipBytes = 335360;
-    drift(plan);
-    assert.throws(
-      () => assertShippingKitBudget(plan),
-      /Expected values to be strictly deep-equal/,
-      `${label} drift must fail the shipping oracle`,
-    );
+  for (const maxGzipBytes of SHIPPING_SERVER_GZIP_ALLOCATIONS) {
+    for (const [label, drift] of drifts) {
+      const plan = JSON.parse(JSON.stringify(SHIPPING_KIT_BUDGET));
+      plan.server.js.maxGzipBytes = maxGzipBytes;
+      drift(plan);
+      assert.throws(
+        () => assertShippingKitBudget(plan),
+        /Expected values to be strictly deep-equal/,
+        `${maxGzipBytes} ${label} drift must fail the shipping oracle`,
+      );
+    }
   }
 });
 
