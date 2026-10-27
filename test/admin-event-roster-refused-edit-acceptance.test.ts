@@ -59,9 +59,10 @@ const UNCHANGED_RE =
 // 3. reloading the edit page shows the roster again;
 const RELOAD_SHOWS_RE =
   /(reload|reopen|re-open)[^.]{0,160}(show|see|display|bring)[^.]{0,80}(roster|again)|roster[^.]{0,80}(again|back)[^.]{0,80}(reload|reopen)/i;
-// 4. reloading discards the unsaved edits currently shown.
+// 4. require an affirmative consequence, not just nearby reload/discard words.
+// No arbitrary gap may swallow "does not", "never" or a different object.
 const DISCARD_RE =
-  /(reload|reloading|reopen|leaving)[^.]{0,160}(discard|lose|lost|throw away)[^.]{0,80}(unsaved|edit|change)|(discard|lose)[^.]{0,80}unsaved/i;
+  /(?:^|[.!?]\s+)(?:reload(?:ing)?|re-?open(?:ing)?|leaving)(?:\s+(?:the\s+)?edit\s+page)?\s+(?:will\s+)?(?:discards?|loses?|throws?\s+away)\s+(?:(?:the|any|your)\s+)?unsaved\s+(?:edits|changes)\b/i;
 
 type Anchor = { href: string; index: number };
 const anchors = (html: string): Anchor[] =>
@@ -71,20 +72,34 @@ const anchors = (html: string): Anchor[] =>
   }));
 
 /**
- * The notice link: an anchor to the canonical GET edit page for this event
- * (same pathname, no roster filter state to resurrect), with hidden-roster
- * wording in the text immediately around it. Returns the anchor plus that
- * surrounding visible text, or null when no such notice exists.
+ * Find the canonical reload link inside the parsed RSVP notice section.
+ * Words in neighboring sections cannot satisfy any of the notice's jobs.
  */
 function findRosterHiddenNotice(
   html: string,
 ): { href: string; window: string; index: number } | null {
-  for (const anchor of anchors(html)) {
-    const url = new URL(anchor.href, APP_URL);
-    if (url.pathname !== EDIT_PATH) continue;
-    if ([...url.searchParams.keys()].some((k) => k.startsWith("roster_"))) continue;
-    const window = stripTags(html.slice(Math.max(0, anchor.index - 2500), anchor.index + 2500));
-    if (HIDDEN_RE.test(window)) return { href: anchor.href, window, index: anchor.index };
+  function* sections(
+    node: DefaultTreeAdapterMap["node"],
+  ): Generator<DefaultTreeAdapterMap["element"]> {
+    if (
+      "tagName" in node &&
+      node.tagName === "section" &&
+      node.attrs.some((attr) => attr.name === "aria-label" && attr.value === "RSVP roster")
+    )
+      yield node;
+    if ("childNodes" in node) for (const child of node.childNodes) yield* sections(child);
+  }
+  for (const section of sections(parseFragment(html, { sourceCodeLocationInfo: true }))) {
+    const location = section.sourceCodeLocation!;
+    const sectionHtml = html.slice(location.startOffset, location.endOffset);
+    const window = stripTags(sectionHtml);
+    if (!HIDDEN_RE.test(window)) continue;
+    for (const anchor of anchors(sectionHtml)) {
+      const url = new URL(anchor.href, APP_URL);
+      if (url.pathname !== EDIT_PATH) continue;
+      if ([...url.searchParams.keys()].some((k) => k.startsWith("roster_"))) continue;
+      return { href: anchor.href, window, index: location.startOffset + anchor.index };
+    }
   }
   return null;
 }
@@ -92,10 +107,12 @@ function findRosterHiddenNotice(
 function expectRefusedEditNotice(html: string) {
   const notice = findRosterHiddenNotice(html);
   expect(notice, "no roster-hidden notice link found on the 422 re-render").not.toBeNull();
-  // Every job of the notice wording, judged in the text around the link.
+  // Every job is judged only in the notice section's visible text.
   expect(notice!.window).toMatch(UNCHANGED_RE);
   expect(notice!.window).toMatch(RELOAD_SHOWS_RE);
-  expect(notice!.window).toMatch(DISCARD_RE);
+  expect(notice!.window, "notice must affirm that reloading discards unsaved edits").toMatch(
+    DISCARD_RE,
+  );
   // Where the roster would be: after the edit form, not buried in the
   // error summary at the top of the form.
   expect(notice!.index).toBeGreaterThan(html.indexOf("</form>"));
@@ -139,6 +156,55 @@ describe("roster notice text extraction", () => {
           `<a href="${EDIT_PATH}">Reload</a>`,
       ),
     ).toBeNull();
+  });
+});
+
+describe("refused-edit discard warning oracle", () => {
+  const refusedPage = (warning: string) =>
+    '<form><div data-testid="form-errors">Fix the start time.</div></form>' +
+    '<section aria-label="RSVP roster"><h2>RSVPs</h2><p>Roster hidden. RSVPs unchanged. ' +
+    `<a href="${EDIT_PATH}">Reload the edit page</a> to show the roster again. ${warning}</p></section>`;
+
+  it.each([
+    "Reloading discards the unsaved edits currently shown.",
+    "Reload will discard your unsaved changes.",
+    "Reopening the edit page will discard the unsaved <strong>edits</strong> currently shown.",
+  ])("accepts an affirmative consequence: %s", (warning) => {
+    expect(() => expectRefusedEditNotice(refusedPage(warning))).not.toThrow();
+  });
+
+  it.each([
+    "Reloading does not discard the unsaved edits currently shown.",
+    "Reloading doesn't discard the unsaved edits currently shown.",
+    "Reloading will not discard the unsaved edits currently shown.",
+    "Reloading never discards the unsaved edits currently shown.",
+    "Reloading discards no unsaved edits currently shown.",
+    "Reloading discards edits but preserves your unsaved changes.",
+  ])("rejects the opposite consequence: %s", (warning) => {
+    expect(() => expectRefusedEditNotice(refusedPage(warning))).toThrow(
+      "notice must affirm that reloading discards unsaved edits",
+    );
+  });
+
+  it.each(["before", "after"])(
+    "does not borrow a discard warning from a sibling section %s the notice",
+    (position) => {
+      const page = refusedPage("Fix the highlighted fields first.");
+      const unrelated = "<section>Reloading discards the unsaved edits currently shown.</section>";
+      const html = position === "before" ? unrelated + page : page + unrelated;
+      expect(() => expectRefusedEditNotice(html)).toThrow(
+        "notice must affirm that reloading discards unsaved edits",
+      );
+    },
+  );
+
+  it.each(["SCRIPT", "StYlE"])("does not count a warning inside %s", (tag) => {
+    const html = refusedPage(
+      `<${tag}>Reloading discards the unsaved edits currently shown.</${tag}>`,
+    );
+    expect(() => expectRefusedEditNotice(html)).toThrow(
+      "notice must affirm that reloading discards unsaved edits",
+    );
   });
 });
 
