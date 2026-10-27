@@ -288,41 +288,34 @@ check(
 );
 
 // Measured boundary: the 32 KiB ceiling applies to the serialized MCP result
-// object (text plus structuredContent, escaping counted); REST body and the
-// JSON-RPC/HTTP transport are distinct and the guide must say so. The
-// contradiction patterns catch the legacy unqualified promise and the three
-// wrong estimates (DTO-only, twice-DTO, fixed-size transport).
-for (const [label, pattern] of [
-  ["names the CallToolResult boundary", /CallToolResult/],
-  ["names the structuredContent copy", /structuredContent/],
-  ["counts string escaping", /escaping/i],
-  ["names the REST JSON body", /REST JSON\s+body/],
-  ["names the JSON-RPC envelope", /JSON-RPC envelope/],
-  ["names the client-chosen request ID", /request\s+ID/],
-]) {
-  check(`guide ${label}`, pattern.test(guide));
+// object (text plus structuredContent, escaping counted); the REST JSON body
+// and the JSON-RPC/HTTP transport are distinct. Denylisting wrong phrasings
+// cannot keep up with paraphrase, so the guide is compared with the canonical
+// statement instead: the exact boundary bullets must be present, and once they
+// are removed no other text may talk about the cap, the DTO measure, the
+// result estimate or the transport envelope.
+const CANONICAL_BOUNDARY = [
+  "Every event result fits 32 KiB, measured on the serialized MCP `CallToolResult` object: the text content plus the `structuredContent` copy, with string escaping counted. The REST JSON body is the same DTO bytes, so it is smaller. Long descriptions trim with a `…` marker, rows are never dropped; metadata that cannot fit answers `unavailable`.",
+  "The JSON-RPC envelope (the client-chosen request ID, SSE and HTTP framing) is outside that measure and is not bounded by it.",
+];
+const flatGuide = guide.replace(/\s+/g, " ");
+let outsideBoundary = flatGuide;
+for (const statement of CANONICAL_BOUNDARY) {
+  const present = outsideBoundary.includes(statement);
+  check(`guide states the canonical boundary: "${statement.slice(0, 60)}…"`, present);
+  outsideBoundary = outsideBoundary.replace(statement, " ");
 }
-check(
-  "guide drops the legacy unqualified body promise",
-  !/every JSON body fits 32 KiB/i.test(guide.replace(/\s+/g, " ")),
-);
-const guideSentences = guide.replace(/\s+/g, " ").split(/(?<=[.;])\s/);
-for (const sentence of guideSentences) {
+for (const sentence of outsideBoundary.split(/(?<=[.;!?])\s+/)) {
   const flat = sentence.trim();
   if (
-    /\bonly the DTO\b|before the (?:MCP )?wrapper|\b(?:duplication|escaping)\b[^.;]*\bnot counted\b/i.test(
+    /32\s*KiB|32[ ,_]?768|\bDTO\b|\btwice\b|\bdouble|\bduplicat|\b2\s*[x×]|\bwrapper\b|\bescap|\bCallToolResult\b|\bstructuredContent\b[^.;]*\b(?:count|measure|budget|cap|limit)|\bHTTP\b[^.;]*\b(?:response|body|capped|fits?|within)|\brequest\s+IDs?\b|\btransport\b|\bJSON-RPC\s+(?:envelope|response|body|message)/i.test(
       flat,
     )
   )
-    check(`guide must count the whole result, not the DTO alone: "${flat.slice(0, 80)}"`, false);
-  if (/\btwice the DTO\b|\b2\s*[x×]\s*(?:the )?DTO\b|do not serialize the text string/i.test(flat))
-    check(`guide must not estimate the result as twice the DTO: "${flat.slice(0, 80)}"`, false);
-  if (
-    /JSON-RPC|\bHTTP\b|transport|request\s+ID/i.test(flat) &&
-    /\b(?:fits?|within|bounded by)\b/i.test(flat) &&
-    !/\b(?:not|outside|excludes?|excluded|never)\b/i.test(flat)
-  )
-    check(`guide must not promise the transport fits the cap: "${flat.slice(0, 80)}"`, false);
+    check(
+      `guide has an unrecognised statement about the measured boundary: "${flat.slice(0, 80)}"`,
+      false,
+    );
 }
 
 // Real serialization control: 20 maximum-length, escape-heavy descriptions
@@ -630,20 +623,24 @@ const MAX_FAILURE_CHARS = 300;
 if (jsonMode) {
   const failed = failures.length > 0;
   // Fixed fields only: no timestamps or request IDs, so repeated runs agree.
-  console.log(
-    JSON.stringify({
-      version: 1,
-      verdict: failed ? "fail" : "pass",
-      error_code: failed ? "machine_contract_mismatch" : null,
-      next_action: failed
-        ? "Fix the listed assertions in docs/machine-interface.md or the MCP contract, then run npm run check:machine-contract again."
-        : null,
-      failure_count: failures.length,
-      failures: failures
-        .slice(0, MAX_RECEIPT_FAILURES)
-        .map((failure) => String(failure).slice(0, MAX_FAILURE_CHARS)),
-    }),
-  );
+  const receipt = (listed) => ({
+    version: 1,
+    verdict: failed ? "fail" : "pass",
+    error_code: failed ? "machine_contract_mismatch" : null,
+    next_action: failed
+      ? "Fix the listed assertions in docs/machine-interface.md or the MCP contract, then run npm run check:machine-contract again."
+      : null,
+    failure_count: failures.length,
+    failures: listed,
+  });
+  const listed = failures
+    .slice(0, MAX_RECEIPT_FAILURES)
+    .map((failure) => String(failure).slice(0, MAX_FAILURE_CHARS));
+  // The byte bound is enforced on the serialized receipt itself, so it holds
+  // whatever the two caps above are set to.
+  while (listed.length > 0 && Buffer.byteLength(JSON.stringify(receipt(listed)), "utf8") > 32768)
+    listed.pop();
+  console.log(JSON.stringify(receipt(listed)));
   process.exit(failed ? 1 : 0);
 }
 
