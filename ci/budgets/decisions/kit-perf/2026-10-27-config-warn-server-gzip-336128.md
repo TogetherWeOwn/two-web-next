@@ -44,3 +44,11 @@ Worst case 335927: the current 335872 ceiling rejects it by 55B and
 a +227/+130 delta that fits its unchanged ceilings with 1679/374B of
 margin; worker and client CSS are byte-identical to main and fit.
 Rebuild jitter of 1-2B on server gzip is disclosed, not signal.
+
+## Update after merging main `227414575`
+
+Main landed the same 336128 ceiling independently (#1923, happening-now
+allocation), so `server-js.json` carries no diff from main here. On the
+merged tree the server bundle measures 336100/336128 gzip (116/126 files,
+`npm run kit-perf` exit 0), 28B margin; this file stays as the independent
+measurement for the warning's share of that ceiling.

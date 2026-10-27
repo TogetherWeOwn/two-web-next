@@ -73,6 +73,6 @@ describe("pr-size moved-behaviour contract", () => {
   });
 
   it("keeps the Monday weekly tally schedule", () => {
-    expect(workflow).toMatch(/\n  schedule:\n    - cron: '17 7 \* \* 1'\n/);
+    expect(workflow).toMatch(/\n  schedule:\n    - cron: (["'])17 7 \* \* 1\1\n/);
   });
 });

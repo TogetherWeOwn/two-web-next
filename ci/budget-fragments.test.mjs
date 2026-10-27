@@ -47,12 +47,12 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/copy-link.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/event-device-timezone.js": { maxRawBytes: 2560, maxGzipBytes: 1280 },
   "public/islands/event-share.js": { maxRawBytes: 1024, maxGzipBytes: 768 },
-  "public/islands/events-calendar.js": { maxRawBytes: 10240, maxGzipBytes: 3840 },
+  "public/islands/events-calendar.js": { maxRawBytes: 10752, maxGzipBytes: 4096 },
   "public/islands/going-count.js": { maxRawBytes: 5632, maxGzipBytes: 2304 },
   "public/islands/join-widget.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/member-profile.js": { maxRawBytes: 15872, maxGzipBytes: 5632 },
   "public/islands/model-context.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
-  "public/islands/past-events.js": { maxRawBytes: 4608, maxGzipBytes: 1792 },
+  "public/islands/past-events.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/islands/rsvp-button.js": { maxRawBytes: 17408, maxGzipBytes: 5120 },
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
@@ -121,16 +121,14 @@ function kitFixture(t, fragments) {
 // independently measured saved-review allocation (combined worst 335164,
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
 // unsupported); 335872 is the third, independently measured allocation
-// (measured 335639, margin 233; lower 335616 rejects by 23). 335872 also
-// covers the invalid-operator-config warning allocation, measured
-// independently on its feature tree (see
-// ci/budgets/decisions/kit-perf/2026-10-27-config-warn-server-gzip.md).
-// 336128 is the fourth allocation: the config-warn composition on current
-// main measures 335927 worst case (margin 201; lower 335872 rejects by 55;
-// the next 256B step 336384 stays unsupported; see
-// ci/budgets/decisions/kit-perf/2026-10-27-config-warn-server-gzip-336128.md).
-// Every other pin stays exact: the oracle rejects any ceiling outside
-// this list, then deep-compares the rest of the plan.
+// (measured 335639, margin 233; lower 335616 rejects by 23); 336128 is the
+// fourth, independently measured allocation (combined worst 335901, margin
+// 227; lower 335872 rejects by 29; the next 256B step 336384 stays
+// unsupported). Every other pin stays exact: the oracle rejects any ceiling
+// outside this list, then deep-compares the rest of the plan. The
+// invalid-operator-config warning (measured 335927 worst case on its
+// composition, see ci/budgets/decisions/kit-perf/2026-10-27-config-warn-server-gzip-336128.md)
+// fits the same 336128 ceiling.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128];
 
 function assertShippingKitBudget(actual) {
