@@ -91,6 +91,20 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
 
+Root and `web/` installs generate the ignored critical-CSS module through
+`postinstall`. If install scripts are disabled (`npm ci --ignore-scripts`),
+run the generator explicitly **from the repository root before typecheck,
+tests or bundling**:
+
+```sh
+node ci/build-leaf-css.mjs
+# Or, from the root: npm run build:leaf-css
+```
+
+The generator uses only Node builtins, so it also works before dependency
+installation. See [security-pin contracts](docs/security-pin-contracts.md)
+for the offline static gate and generated-hash review evidence.
+
 Set the local origin in `.dev.vars` to match Wrangler's local server and the
 Discord application's registered callbacks (`${APP_URL}/auth/discord/callback`
 and `${APP_URL}/join/callback`).

@@ -21,7 +21,9 @@ describe("critical CSS is a build output, not a source", () => {
     for (const bundle of ["src/leaf-critical-css.ts", "src/home-critical-css.ts"]) {
       let ignored = false;
       try {
-        git(["check-ignore", "-q", bundle]);
+        // Test ignore policy independently of another branch tracking a future bundle.
+        // The separate assertion below owns this PR's leaf untracking contract.
+        git(["check-ignore", "--no-index", "-q", bundle]);
         ignored = true;
       } catch {
         ignored = false;
