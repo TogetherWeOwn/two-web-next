@@ -261,24 +261,22 @@ describe("staging calendar cache-hit phase pin", () => {
     s.clones = 0;
     s.bodyReads = 0;
     log.mockClear();
-    const guard = hold(s, "guard");
+    // The cookieless hit serves before admission: no guard, db or session
+    // step runs, and the final log carries only render_cache.
     const render = hold(s, "render");
     now = 100;
     const pending = get(s, "/events", RAY_B);
-    await guard.entered.promise;
-    expect(s.steps).toEqual(["guard"]);
-    now = 105;
-    guard.released.resolve();
     await render.entered.promise;
+    expect(s.steps).toEqual(["render"]);
     now = 112;
     render.released.resolve();
     const response = await pending;
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(body);
     expect(response.headers.get("cache-control")).toBe("public, max-age=60");
-    expect(s.steps).toEqual(["guard", "db", "session", "render"]);
+    expect(s.steps).toEqual(["render"]);
     expect([s.clones, s.bodyReads]).toEqual([0, 0]);
     expect(entries()).toHaveLength(1);
-    finalEntry(RAY_B, 12, { public_read_guard: 5, render_cache: 7 });
+    finalEntry(RAY_B, 12, { render_cache: 12 });
   });
 });
