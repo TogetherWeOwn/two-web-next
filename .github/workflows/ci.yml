@@ -292,7 +292,8 @@ jobs:
         run: |
           mkdir -p artifacts/a11y
           node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-time-from-now.tap ci/event-time-from-now.test.mjs
-          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Event time from now in Chromium" 56
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Hono time-from-now browser acceptance" 28
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Kit time-from-now browser acceptance" 28
       - name: Event chosen timezone range (Hono and Kit, local fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"

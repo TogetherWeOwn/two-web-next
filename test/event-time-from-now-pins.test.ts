@@ -190,7 +190,10 @@ describe("event time-from-now CI wiring", () => {
       "node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-time-from-now.tap ci/event-time-from-now.test.mjs",
     );
     expect(step).toContain(
-      'node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Event time from now in Chromium" 56',
+      'node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Hono time-from-now browser acceptance" 28',
+    );
+    expect(step).toContain(
+      'node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Kit time-from-now browser acceptance" 28',
     );
   });
 });
