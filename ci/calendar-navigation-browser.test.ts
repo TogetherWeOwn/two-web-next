@@ -361,9 +361,9 @@ for (const twin of ["Hono", "Kit"] as const) {
           const delay = !held && !target.searchParams.has('past');
           if (delay) held = true;
           const response = await original(url, delay ? { ...init, signal: undefined } : init);
-          if (delay) { const body = await response.text(); Object.defineProperty(response, 'text', { value: () => new Promise(resolve => {
-            window.__navigationHeld = true; window.__releaseNavigation = () => { resolve(body); window.__navigationReleased = true; };
-          }) }); }
+          if (delay) { const bytes = new Uint8Array(await response.arrayBuffer()); Object.defineProperty(response, 'body', { value: new ReadableStream({ start: c => new Promise(resolve => {
+            window.__navigationHeld = true; window.__releaseNavigation = () => { c.enqueue(bytes); c.close(); resolve(); window.__navigationReleased = true; };
+          }) }) }); }
           return response;
         };
       })()`);
