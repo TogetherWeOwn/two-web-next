@@ -43,202 +43,199 @@ function deferred<T>() {
   return { promise, resolve };
 }
 
-describe(
-  "featured unpublish: persisted and cached invariants",
-  () => {
-    let fixture: MemberDataFixture;
-    let db: Db;
-    let sessions: SessionStore;
-    let cookie: string;
-    let opens: number;
-    type Gate = {
-      entered: ReturnType<typeof deferred<void>>;
-      release: ReturnType<typeof deferred<boolean>>;
-    };
-    let nextTransaction: Gate | undefined;
-    const bindings = () => ({ ...env, ADMIN_DB: db }) as Env;
-    const readFeatured = () =>
-      cachedFeatured(
-        bindings(),
-        async () => {
-          opens++;
-          return db;
+describe("featured unpublish: persisted and cached invariants", () => {
+  let fixture: MemberDataFixture;
+  let db: Db;
+  let sessions: SessionStore;
+  let cookie: string;
+  let opens: number;
+  type Gate = {
+    entered: ReturnType<typeof deferred<void>>;
+    release: ReturnType<typeof deferred<boolean>>;
+  };
+  let nextTransaction: Gate | undefined;
+  const bindings = () => ({ ...env, ADMIN_DB: db }) as Env;
+  const readFeatured = () =>
+    cachedFeatured(
+      bindings(),
+      async () => {
+        opens++;
+        return db;
+      },
+      NOW,
+    );
+  const unpublish = async (id: number) =>
+    adminApp({ sessionStore: sessions, db }).request(
+      `/featured/${id}/unpublish`,
+      {
+        method: "POST",
+        headers: {
+          cookie,
+          origin: env.APP_URL,
+          "content-type": "application/x-www-form-urlencoded",
         },
-        NOW,
-      );
-    const unpublish = async (id: number) =>
-      adminApp({ sessionStore: sessions, db }).request(
-        `/featured/${id}/unpublish`,
-        {
-          method: "POST",
-          headers: {
-            cookie,
-            origin: env.APP_URL,
-            "content-type": "application/x-www-form-urlencoded",
-          },
-          body: "",
-        },
-        bindings(),
-      );
-    const rows = () => fixture.db.select().from(featuredContents).orderBy(featuredContents.id);
-    const audits = () => fixture.db.select().from(activityLog).orderBy(activityLog.id);
-    const seed = async (overrides: Partial<typeof featuredContents.$inferInsert> = {}) => {
-      const [row] = await fixture.db
-        .insert(featuredContents)
-        .values({ ...storedSlot, ...overrides })
-        .returning();
-      return row!;
-    };
-    const holdNextTransaction = () => {
-      const gate = { entered: deferred<void>(), release: deferred<boolean>() };
-      nextTransaction = gate;
-      return gate;
-    };
+        body: "",
+      },
+      bindings(),
+    );
+  const rows = () => fixture.db.select().from(featuredContents).orderBy(featuredContents.id);
+  const audits = () => fixture.db.select().from(activityLog).orderBy(activityLog.id);
+  const seed = async (overrides: Partial<typeof featuredContents.$inferInsert> = {}) => {
+    const [row] = await fixture.db
+      .insert(featuredContents)
+      .values({ ...storedSlot, ...overrides })
+      .returning();
+    return row!;
+  };
+  const holdNextTransaction = () => {
+    const gate = { entered: deferred<void>(), release: deferred<boolean>() };
+    nextTransaction = gate;
+    return gate;
+  };
 
-    beforeAll(async () => {
-      // These proofs require DATABASE_URL for an approved disposable DB.
-      // CI supplies it; local runs must do the same.
-      fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-    });
-    beforeEach(async () => {
-      await fixture.reset();
-      await fixture.db.delete(featuredContents);
-      __resetHomeGuestCacheForTests();
-      opens = 0;
+  beforeAll(async () => {
+    // These proofs require DATABASE_URL for an approved disposable DB.
+    // CI supplies it; local runs must do the same.
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+  });
+  beforeEach(async () => {
+    await fixture.reset();
+    await fixture.db.delete(featuredContents);
+    __resetHomeGuestCacheForTests();
+    opens = 0;
+    nextTransaction = undefined;
+    sessions = createMemorySessionStore();
+    cookie = await cookieFor(sessions, MODERATOR);
+    // Gate the real session adapter: dbFor clones the Drizzle facade for
+    // read observation, so replacing only db.transaction would be bypassed.
+    // The callback still executes against Postgres and COMMIT/ROLLBACK stays real.
+    db = fixture.db;
+    const session = (db as unknown as { session: { transaction: Db["transaction"] } }).session;
+    const transaction = session.transaction.bind(session);
+    vi.spyOn(session, "transaction").mockImplementation((work, config) => {
+      const gate = nextTransaction;
       nextTransaction = undefined;
-      sessions = createMemorySessionStore();
-      cookie = await cookieFor(sessions, MODERATOR);
-      // Gate the real session adapter: dbFor clones the Drizzle facade for
-      // read observation, so replacing only db.transaction would be bypassed.
-      // The callback still executes against Postgres and COMMIT/ROLLBACK stays real.
-      db = fixture.db;
-      const session = (db as unknown as { session: { transaction: Db["transaction"] } }).session;
-      const transaction = session.transaction.bind(session);
-      vi.spyOn(session, "transaction").mockImplementation((work, config) => {
-        const gate = nextTransaction;
-        nextTransaction = undefined;
-        return transaction(async (tx) => {
-          const result = await work(tx);
-          if (gate) {
-            gate.entered.resolve();
-            if (!(await gate.release.promise)) throw new Error("Acceptance transaction rollback");
-          }
-          return result;
-        }, config);
-      });
+      return transaction(async (tx) => {
+        const result = await work(tx);
+        if (gate) {
+          gate.entered.resolve();
+          if (!(await gate.release.promise)) throw new Error("Acceptance transaction rollback");
+        }
+        return result;
+      }, config);
     });
-    afterEach(() => {
-      __resetHomeGuestCacheForTests();
-      vi.restoreAllMocks();
-    });
-    afterAll(() => fixture?.dispose());
+  });
+  afterEach(() => {
+    __resetHomeGuestCacheForTests();
+    vi.restoreAllMocks();
+  });
+  afterAll(() => fixture?.dispose());
 
-    it("changes only isPublished and updatedAt in the full stored row, including provenance", async () => {
-      const before = await seed();
-      const first = await unpublish(before.id);
-      const afterPost = new Date();
-      expect(first.status).toBe(303);
-      expect(first.headers.get("location")).toBe("/admin/featured");
-      const afterFirst = await rows();
-      expect(afterFirst).toHaveLength(1);
-      expect(afterFirst[0]!.updatedAt.getTime()).toBeGreaterThan(
-        new Date("2019-03-04T05:06:07Z").getTime(),
-      );
-      expect(afterFirst[0]!.updatedAt.getTime()).toBeLessThanOrEqual(afterPost.getTime());
-      expect(afterFirst).toEqual([
-        { ...before, isPublished: false, updatedAt: afterFirst[0]!.updatedAt },
+  it("changes only isPublished and updatedAt in the full stored row, including provenance", async () => {
+    const before = await seed();
+    const first = await unpublish(before.id);
+    const afterPost = new Date();
+    expect(first.status).toBe(303);
+    expect(first.headers.get("location")).toBe("/admin/featured");
+    const afterFirst = await rows();
+    expect(afterFirst).toHaveLength(1);
+    expect(afterFirst[0]!.updatedAt.getTime()).toBeGreaterThan(
+      new Date("2019-03-04T05:06:07Z").getTime(),
+    );
+    expect(afterFirst[0]!.updatedAt.getTime()).toBeLessThanOrEqual(afterPost.getTime());
+    expect(afterFirst).toEqual([
+      { ...before, isPublished: false, updatedAt: afterFirst[0]!.updatedAt },
+    ]);
+    const firstAudits = await audits();
+    expect(firstAudits).toHaveLength(1);
+    expect(firstAudits[0]!.properties).toEqual({ isPublished: { before: true, after: false } });
+
+    const second = await unpublish(before.id);
+    expect(second.status).toBe(303);
+    expect(second.headers.get("location")).toBe("/admin/featured");
+    expect(await rows()).toEqual(afterFirst);
+    expect(await audits()).toEqual(firstAudits);
+  });
+
+  it("moves the withdrawn row ahead of a newer untouched row in the updated_at-sorted list", async () => {
+    const withdrawn = await seed();
+    const untouched = await seed({
+      legacyId: null,
+      title: "Untouched newer slot",
+      position: 18,
+      updatedAt: new Date("2024-04-05T06:07:08Z"),
+    });
+    const byUpdatedAt = async () =>
+      (await listFeatured(db, { sort: "updated_at", order: "desc" })).map((row) => row.id);
+    expect(await byUpdatedAt()).toEqual([untouched.id, withdrawn.id]);
+    expect((await unpublish(withdrawn.id)).status).toBe(303);
+    expect(await byUpdatedAt()).toEqual([withdrawn.id, untouched.id]);
+  });
+
+  it("keeps the warm guest entry until commit, then retires it before returning success", async () => {
+    const removed = await seed();
+    const survivor = await seed({ legacyId: null, title: "Still published", position: 18 });
+    expect((await readFeatured()).map((row) => row.id)).toEqual([removed.id, survivor.id]);
+    expect((await readFeatured()).map((row) => row.id)).toEqual([removed.id, survivor.id]);
+    expect(opens).toBe(1); // The premise is a real cache hit, not a direct SQL read.
+
+    const gate = holdNextTransaction();
+    const pending = unpublish(removed.id);
+    try {
+      await Promise.race([
+        gate.entered.promise,
+        pending.then(() => {
+          throw new Error("Write returned before the commit gate");
+        }),
       ]);
-      const firstAudits = await audits();
-      expect(firstAudits).toHaveLength(1);
-      expect(firstAudits[0]!.properties).toEqual({ isPublished: { before: true, after: false } });
-
-      const second = await unpublish(before.id);
-      expect(second.status).toBe(303);
-      expect(second.headers.get("location")).toBe("/admin/featured");
-      expect(await rows()).toEqual(afterFirst);
-      expect(await audits()).toEqual(firstAudits);
-    });
-
-    it("moves the withdrawn row ahead of a newer untouched row in the updated_at-sorted list", async () => {
-      const withdrawn = await seed();
-      const untouched = await seed({
-        legacyId: null,
-        title: "Untouched newer slot",
-        position: 18,
-        updatedAt: new Date("2024-04-05T06:07:08Z"),
-      });
-      const byUpdatedAt = async () =>
-        (await listFeatured(db, { sort: "updated_at", order: "desc" })).map((row) => row.id);
-      expect(await byUpdatedAt()).toEqual([untouched.id, withdrawn.id]);
-      expect((await unpublish(withdrawn.id)).status).toBe(303);
-      expect(await byUpdatedAt()).toEqual([withdrawn.id, untouched.id]);
-    });
-
-    it("keeps the warm guest entry until commit, then retires it before returning success", async () => {
-      const removed = await seed();
-      const survivor = await seed({ legacyId: null, title: "Still published", position: 18 });
       expect((await readFeatured()).map((row) => row.id)).toEqual([removed.id, survivor.id]);
-      expect((await readFeatured()).map((row) => row.id)).toEqual([removed.id, survivor.id]);
-      expect(opens).toBe(1); // The premise is a real cache hit, not a direct SQL read.
+      expect(opens).toBe(1); // Moving retirement inside the transaction breaks this.
+    } finally {
+      gate.release.resolve(true);
+      await pending;
+    }
+    expect((await pending).status).toBe(303);
+    expect((await readFeatured()).map((row) => row.id)).toEqual([survivor.id]);
+    expect(opens).toBe(2); // Deleting retirement serves the withdrawn cached slot.
+  });
 
-      const gate = holdNextTransaction();
-      const pending = unpublish(removed.id);
-      try {
-        await Promise.race([
-          gate.entered.promise,
-          pending.then(() => {
-            throw new Error("Write returned before the commit gate");
-          }),
-        ]);
-        expect((await readFeatured()).map((row) => row.id)).toEqual([removed.id, survivor.id]);
-        expect(opens).toBe(1); // Moving retirement inside the transaction breaks this.
-      } finally {
-        gate.release.resolve(true);
-        await pending;
-      }
-      expect((await pending).status).toBe(303);
-      expect((await readFeatured()).map((row) => row.id)).toEqual([survivor.id]);
-      expect(opens).toBe(2); // Deleting retirement serves the withdrawn cached slot.
-    });
+  it("a rolled-back write preserves the stored row, audit log and warm guest entry", async () => {
+    const before = await seed();
+    expect((await readFeatured()).map((row) => row.id)).toEqual([before.id]);
+    expect(opens).toBe(1);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+    const gate = holdNextTransaction();
+    const pending = unpublish(before.id);
+    try {
+      await Promise.race([
+        gate.entered.promise,
+        pending.then(() => {
+          throw new Error("Write returned before the rollback gate");
+        }),
+      ]);
+    } finally {
+      gate.release.resolve(false);
+      await pending;
+    }
+    expect((await pending).status).toBe(500);
+    expect(await rows()).toEqual([before]);
+    expect(await audits()).toEqual([]);
+    expect((await readFeatured()).map((row) => row.id)).toEqual([before.id]);
+    expect(opens).toBe(1);
+  });
 
-    it("a rolled-back write preserves the stored row, audit log and warm guest entry", async () => {
-      const before = await seed();
-      expect((await readFeatured()).map((row) => row.id)).toEqual([before.id]);
-      expect(opens).toBe(1);
-      vi.spyOn(console, "error").mockImplementation(() => {});
-      const gate = holdNextTransaction();
-      const pending = unpublish(before.id);
-      try {
-        await Promise.race([
-          gate.entered.promise,
-          pending.then(() => {
-            throw new Error("Write returned before the rollback gate");
-          }),
-        ]);
-      } finally {
-        gate.release.resolve(false);
-        await pending;
-      }
-      expect((await pending).status).toBe(500);
-      expect(await rows()).toEqual([before]);
-      expect(await audits()).toEqual([]);
-      expect((await readFeatured()).map((row) => row.id)).toEqual([before.id]);
-      expect(opens).toBe(1);
-    });
-
-    it("an already-unpublished no-op preserves a nonempty warm guest entry without another read", async () => {
-      const withdrawn = await seed({ isPublished: false });
-      const survivor = await seed({ legacyId: null, title: "Still published" });
-      expect((await readFeatured()).map((row) => row.id)).toEqual([survivor.id]);
-      expect(opens).toBe(1);
-      expect((await unpublish(withdrawn.id)).status).toBe(303);
-      expect((await readFeatured()).map((row) => row.id)).toEqual([survivor.id]);
-      expect(opens).toBe(1);
-      expect(await rows()).toEqual([withdrawn, survivor]);
-      expect(await audits()).toEqual([]);
-    });
-  },
-);
+  it("an already-unpublished no-op preserves a nonempty warm guest entry without another read", async () => {
+    const withdrawn = await seed({ isPublished: false });
+    const survivor = await seed({ legacyId: null, title: "Still published" });
+    expect((await readFeatured()).map((row) => row.id)).toEqual([survivor.id]);
+    expect(opens).toBe(1);
+    expect((await unpublish(withdrawn.id)).status).toBe(303);
+    expect((await readFeatured()).map((row) => row.id)).toEqual([survivor.id]);
+    expect(opens).toBe(1);
+    expect(await rows()).toEqual([withdrawn, survivor]);
+    expect(await audits()).toEqual([]);
+  });
+});
 
 type HtmlNode = DefaultTreeAdapterMap["node"];
 type HtmlElement = DefaultTreeAdapterMap["element"];
