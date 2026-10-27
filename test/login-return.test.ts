@@ -435,7 +435,7 @@ describe("join_result flash (legacy AlreadyMemberReinviteTest)", () => {
     expect(html).toContain('data-testid="join-result"');
     expect(html).toContain('data-testid="reinvite-link"');
     const plain = await app.request("/join", {}, env);
-    expect(plain.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(plain.headers.get("cache-control")).toBe("public, max-age=60");
     expect(await plain.text()).not.toContain('data-testid="join-result"');
   });
 
