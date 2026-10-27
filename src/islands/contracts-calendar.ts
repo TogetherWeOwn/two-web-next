@@ -18,7 +18,7 @@ export {
   wallMonth,
   wallTimeHm,
 } from "../events/date-format";
-import { calendarDayLongLabel, cardDayLabel, wallTimeHm } from "../events/date-format";
+import { calendarDayLongLabel, cardDayLabel, isValidZone, wallTimeHm } from "../events/date-format";
 import { safeRequestId } from "../request-log";
 /* ---------------------------------------------------------- events-calendar
  * Legacy: app/Livewire/EventsCalendar.php + events-calendar.blade.php.
@@ -137,11 +137,15 @@ export function eventSearchLogEntry(
   };
 }
 
-/* Past drawer (legacy showPast): opens one way, stays open; searching reveals
- * past matches regardless. The drawer is an island addition — the legacy blade
- * dropped the visible trigger when the archive page shipped. */
+/* Past drawer (legacy showPast): a manually opened preview closes again with
+ * the matching Hide turn; searching reveals past matches regardless and
+ * offers no Hide — closing the manual flag would not close a search. Both
+ * turns share one testid so the binder's focus restoration treats them as
+ * the same control across the swap. The drawer is an island addition — the
+ * legacy blade dropped the visible trigger when the archive page shipped. */
 export const EVENTS_PAST_TOGGLE_TESTID = "events-past-toggle";
 export const EVENTS_PAST_TOGGLE_COPY = "Show past events";
+export const EVENTS_PAST_HIDE_COPY = "Hide past events";
 export const EVENTS_PAST_LIST_TESTID = "events-past-list";
 export const EVENTS_PAST_LIST_HEADING = "Past events";
 export const EVENTS_PAST_STATUS_TESTID = "events-past-status";
@@ -161,12 +165,16 @@ export const EVENTS_UPCOMING_PAGE_SIZE = 20;
  * at the soonest rows so the render cannot blow up. */
 export const EVENTS_MONTH_GRID_LIMIT = 200;
 export const EVENTS_PAGER_TESTID = "events-pager";
+export const EVENTS_PAGER_FIRST_TESTID = "events-pager-first";
 export const EVENTS_PAGER_PREV_TESTID = "events-pager-prev";
 export const EVENTS_PAGER_NEXT_TESTID = "events-pager-next";
+export const EVENTS_PAGER_LAST_TESTID = "events-pager-last";
 export const EVENTS_PAGER_STATUS_TESTID = "events-pager-status";
 export const EVENTS_PAGER_LABEL = "Upcoming event pages";
+export const EVENTS_PAGER_FIRST_COPY = "First page";
 export const EVENTS_PAGER_PREV_COPY = "Previous page";
 export const EVENTS_PAGER_NEXT_COPY = "Next page";
+export const EVENTS_PAGER_LAST_COPY = "Last page";
 export const EVENTS_OUT_OF_RANGE_TESTID = "events-out-of-range";
 export function upcomingEventsOutOfRangeCopy(page: number, totalPages: number): string {
   return `Page ${page} is outside the schedule. There ${totalPages === 1 ? "is" : "are"} ${totalPages} ${totalPages === 1 ? "page" : "pages"}.`;
@@ -437,7 +445,7 @@ export function gridTitle(title: string): string {
 /** Badge word shared by cancelled list cards and month-grid entries. */
 export const GRID_CANCELLED_COPY = "Cancelled";
 
-/** Month-grid link name starts with the visible "HH:mm title" (WCAG 2.5.3),
+/** Month-grid link name starts with the visible "HH:mm zone title" (WCAG 2.5.3),
  * then the day. Long titles keep the truncated visible form first so axe
  * label-content-name-mismatch passes, then the full title; short titles are
  * not duplicated. Cancelled entries lead with the same visible words plus
@@ -454,8 +462,9 @@ export function gridAccessibleName(
   availability: string | null = null,
 ): string {
   const truncated = gridTitle(title);
-  const time = wallTimeHm(startsAt, zone);
-  const day = cardDayLabel(startsAt, zone);
+  const effectiveZone = isValidZone(zone) ? zone : "UTC";
+  const time = `${wallTimeHm(startsAt, effectiveZone)} ${effectiveZone}`;
+  const day = cardDayLabel(startsAt, effectiveZone);
   if (cancelled) {
     // The badge follows the truncated title, so keep that exact visible prefix
     // before restoring the full title for same-prefix event disambiguation.

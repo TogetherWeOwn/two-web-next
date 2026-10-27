@@ -18,23 +18,36 @@ import {
   type CalendarPageInput,
   type CalendarPageModel,
 } from "./events/page-models.server";
-import { publicReadGuard } from "./events/routes-shared";
+import { guardRequestId, publicReadGuard, seedGuardRequestId } from "./events/routes-shared";
 import type { DiscordEventsSource } from "./events/discord-transients-types";
 import { inviteDestination } from "./invite";
 import type { JoinResult } from "./return-journey";
 import { canonicalUrl } from "./seo";
 
-export type KitEventsGuard = (request: Request, env: Env) => Promise<Response | null>;
+export type KitEventsGuard = (
+  request: Request,
+  env: Env,
+  requestId?: unknown,
+) => Promise<Response | null>;
 
 const guardApp = new Hono<{ Bindings: Env }>();
+guardApp.use(guardRequestId);
 guardApp.all("*", async (c) => {
   const limited = await publicReadGuard(c);
   return limited ?? c.body(null, 204);
 });
 
-/** Reuse the public Hono read budget for the native Kit route. */
-export async function kitEventsGuard(request: Request, env: Env): Promise<Response | null> {
-  const response = await guardApp.fetch(request, env);
+/**
+ * Reuse the public Hono read budget for the native Kit route. The dispatch
+ * passes its minted id so a 429 renders the same support reference the
+ * response header carries; without one the refusal stays blank-safe.
+ */
+export async function kitEventsGuard(
+  request: Request,
+  env: Env,
+  requestId?: unknown,
+): Promise<Response | null> {
+  const response = await guardApp.fetch(seedGuardRequestId(request, requestId), env);
   return response.status === 204 ? null : response;
 }
 
@@ -50,6 +63,7 @@ export interface EventsDispatchOverrides {
   sessionFor?: (request: Request) => Promise<KitEventsSession | null>;
   journeyFor?: (request: Request) => Promise<JoinResult | null>;
   now?: number;
+  requestId?: unknown;
 }
 
 const ISLAND_NAME = "events-calendar";
@@ -104,12 +118,13 @@ export async function dispatchEventsRequest(
     sessionFor = async () => null,
     journeyFor = async () => null,
     now = Date.now(),
+    requestId,
   } = overrides;
   const url = new URL(request.url);
   const input = calendarInputOf(url);
   if (input.queryTooLong) return rewriteTooLong(await resolve());
 
-  const limited = await guard(request, env);
+  const limited = await guard(request, env, requestId);
   if (limited) return limited;
 
   // Kit data requests still execute the read guard/load but their JSON payload

@@ -34,6 +34,7 @@ import {
   gridAccessibleName,
   gridContinuationAccessibleName,
   gridTitle,
+  isValidZone,
   wallDateIso,
   wallMonth,
   wallTimeHm,
@@ -155,7 +156,8 @@ export const MonthGrid: FC<{
                   <span>{day.day}</span>
                   <ul>
                     {day.events.map((e) => {
-                      const entryZone = rowZone(e, zone);
+                      const hostZone = rowZone(e, zone);
+                      const entryZone = isValidZone(hostZone) ? hostZone : "UTC";
                       // A row lands on a non-start cell only through canonical
                       // interval expansion — transients and past rows bucket on
                       // their start day — so a day mismatch is exactly the
@@ -202,7 +204,7 @@ export const MonthGrid: FC<{
                           >
                             {continued
                               ? `Continues ${gridTitle(rowTitle(e))}`
-                              : `${wallTimeHm(e.startsAt, entryZone)} ${gridTitle(rowTitle(e))}`}
+                              : `${wallTimeHm(e.startsAt, entryZone)} ${entryZone} ${gridTitle(rowTitle(e))}`}
                             {cancelled ? (
                               <>
                                 {" "}

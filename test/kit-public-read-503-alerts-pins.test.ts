@@ -528,25 +528,29 @@ describe("request_id threading (pins)", () => {
   });
 });
 
-describe("binding cf-ray threading (source pins)", () => {
+describe("binding request-id threading (source pins)", () => {
   const root = join(dirname(fileURLToPath(import.meta.url)), "..");
   const bindingSource = (path: string) => readFileSync(join(root, path), "utf8");
 
-  it("pins the /events binding threading the validated cf-ray", () => {
+  // The bindings thread the dispatch's served id (admitted ray or minted
+  // ULID), never the raw header: with no valid cf-ray the dispatch mints a
+  // ULID for the 503 page and x-request-id, and an alert naming only the
+  // header would log a null request_id the operator cannot join.
+  it("pins the /events binding threading the dispatch request id", () => {
     const source = bindingSource("web/src/routes/events/+server.ts");
-    expect(source).toContain('request.headers.get("cf-ray")');
-    expect(source).toContain("requestId: request.headers.get(");
+    expect(source).toContain("requestId: locals.requestId");
+    expect(source).not.toContain('request.headers.get("cf-ray")');
   });
 
-  it("pins the /events/past binding threading the validated cf-ray", () => {
+  it("pins the /events/past binding threading the dispatch request id", () => {
     const source = bindingSource("web/src/routes/events/past/+page.server.ts");
-    expect(source).toContain('request.headers.get("cf-ray")');
-    expect(source).toContain("requestId: request.headers.get(");
+    expect(source).toContain("requestId: locals.requestId");
+    expect(source).not.toContain('request.headers.get("cf-ray")');
   });
 
-  it("pins the /e/:key binding threading the validated cf-ray", () => {
+  it("pins the /e/:key binding threading the dispatch request id", () => {
     const source = bindingSource("web/src/routes/e/[key]/+page.server.ts");
-    expect(source).toContain('request.headers.get("cf-ray")');
-    expect(source).toContain("requestId: request.headers.get(");
+    expect(source).toContain("requestId: locals.requestId");
+    expect(source).not.toContain('request.headers.get("cf-ray")');
   });
 });

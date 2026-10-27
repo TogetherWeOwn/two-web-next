@@ -46,7 +46,7 @@ import {
   SearchMiss,
 } from "./pages-calendar-empty";
 import { MonthGrid } from "./pages-calendar-grid";
-import { CalendarList } from "./pages-calendar-list";
+import { CalendarList, PastDrawer } from "./pages-calendar-list";
 import { type CalRow, isTransient, rowZone } from "./pages-calendar-row";
 
 /**
@@ -316,6 +316,22 @@ export const EventsCalendarPage: FC<{
               whose non-emptiness always implied visible rows. */}
           {emptyState === null && state.view === "calendar" ? (
             <MonthGrid state={state} weeks={weeks} zone={zone} now={now} />
+          ) : null}
+
+          {/* The past preview rides under the grid too: it is the same
+              bounded drawer the list renders, so a preview opened in either
+              view can be closed without switching views first. */}
+          {emptyState === null && state.view === "calendar" ? (
+            <PastDrawer
+              state={state}
+              past={past}
+              zone={zone}
+              now={now}
+              showPast={showPast}
+              member={member}
+              inviteUrl={inviteUrl}
+              loginReturnTo={loginReturnTo}
+            />
           ) : null}
 
           {monthEmpty ? (

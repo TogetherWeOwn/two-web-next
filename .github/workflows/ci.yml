@@ -247,6 +247,12 @@ jobs:
         run: |
           npx vitest run test/profile-composition-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-composition-browser.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-composition-browser.json "composition feedback in a real browser" 6
+      - name: Profile refused-draft recovery regressions (memory fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-refused-draft-recovery-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-refused-draft-recovery-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-refused-draft-recovery-acceptance.json "refused-draft recovery in a real browser" 2
       - name: Admin event native Unicode regressions (intercepted fixtures, no network or DB)
         env:
           ADMIN_EVENT_BROWSER_TESTS: "true"
@@ -330,6 +336,12 @@ jobs:
           npx vitest run --config ci/calendar-week-start-browser.vitest.ts ci/calendar-week-start-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-week-start.json
           for surface in Hono Kit; do
             node ci/a11y-require-executed.mjs artifacts/a11y/calendar-week-start.json "$surface week-start browser controls" 14 --format json
+          done
+      - name: Calendar navigation (Hono and Kit, shipped schedule navigation in Chromium)
+        run: |
+          npx vitest run --config ci/calendar-navigation-browser.vitest.ts ci/calendar-navigation-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-navigation.json
+          for surface in Hono Kit; do
+            node ci/a11y-require-executed.mjs artifacts/a11y/calendar-navigation.json "$surface: shipped schedule navigation in Chromium" 16
           done
       - name: Profile device timezone (Hono and Kit SSR fixtures, no network or DB)
         env:

@@ -197,7 +197,7 @@ describe("DST-paired cross-surface agreement", () => {
     expect(cardTimeLabel(startsAt, zone)).toContain(wallTimeHm(startsAt, zone));
     expect(calendarZone([zone])).toBe(zone);
     const grid = await renderCalendar(e, wallMonth(startsAt, zone));
-    expect(cellFor(grid, bucket)).toContain(`${wallTimeHm(startsAt, zone)} ${e.title}`);
+    expect(cellFor(grid, bucket)).toContain(`${wallTimeHm(startsAt, zone)} ${zone} ${e.title}`);
   });
 
   it("rolls the calendar day back when New York wall time falls on the previous date", async () => {
@@ -222,7 +222,7 @@ describe("DST-paired cross-surface agreement", () => {
     expect(wallMonth(startsAt, e.timezone)).toBe("2026-01");
 
     const grid = await renderCalendar(e, "2026-01");
-    expect(cellFor(grid, "2026-01-14")).toContain("19:30 Late night raid");
+    expect(cellFor(grid, "2026-01-14")).toContain("19:30 America/New_York Late night raid");
     expect(cellFor(grid, "2026-01-15")).not.toContain("Late night raid");
   });
 
@@ -249,7 +249,7 @@ describe("DST-paired cross-surface agreement", () => {
     expect(wallMonth(startsAt, e.timezone)).toBe("2026-07");
 
     const grid = await renderCalendar(e, "2026-07");
-    expect(cellFor(grid, "2026-07-16")).toContain("01:00 Dawn patrol");
+    expect(cellFor(grid, "2026-07-16")).toContain("01:00 Pacific/Auckland Dawn patrol");
     expect(cellFor(grid, "2026-07-15")).not.toContain("Dawn patrol");
   });
 });
