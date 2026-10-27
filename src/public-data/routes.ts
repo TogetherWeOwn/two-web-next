@@ -7,7 +7,7 @@
 // viewers, cookie-bearing guests and moderator sessions — that is the cache
 // isolation, and test/api-public-events.test.ts pins it. The session-gated
 // /events.json contract is untouched.
-import type { Context, Hono } from "hono";
+import type { Hono } from "hono";
 import { dbFor } from "../admin/db";
 import { containsControlCharacters } from "../admin/validation-shared";
 import { alertRequestError } from "../alerts";
@@ -33,7 +33,6 @@ import {
   type JoinHandoffDto,
   type PublicApiEventCollectionDto,
   type PublicApiEventDto,
-  type PublicDataErrorCode,
   type PublicDataErrorDto,
   type PublicEventId,
 } from "./contracts";
@@ -46,43 +45,11 @@ import {
   type ApiPublicCacheEntry,
 } from "./cache";
 import { getOpenApiDocument } from "./openapi";
+import { apiError, type Ctx } from "./unknown-path";
 import { parseRetryAfterSeconds } from "../jobs/retry-delay";
-
-type Ctx = Context<{ Bindings: Env }>;
 
 const PUBLIC_MAX_AGE = "public, max-age=60";
 const TEXT = new TextEncoder();
-
-function apiError(
-  c: Ctx,
-  code: PublicDataErrorCode,
-  message: string,
-  status: 422 | 404 | 500 | 503,
-): Response {
-  const body: PublicDataErrorDto = {
-    error: {
-      code,
-      message,
-      request_id: c.get("requestId"),
-      next: PUBLIC_DATA_ERROR_NEXT[code],
-    },
-  };
-  return c.json(body, status, { "cache-control": "no-store, private" });
-}
-
-/** The exact `/api/public` namespace: the root and everything below a slash. */
-export function isPublicApiPath(path: string): boolean {
-  return path === "/api/public" || path.startsWith("/api/public/");
-}
-
-/**
- * Unknown path inside the public API namespace: the same static not_found
- * envelope as a missing event, never the branded page or an asset lookup. The
- * request path is never echoed; HEAD loses its body in the framework.
- */
-export function publicApiNotFound(c: Ctx): Response {
-  return apiError(c, "not_found", "No such public API path.", 404);
-}
 
 /**
  * Unexpected fault on an event read: alert once with the class fingerprint

@@ -2,7 +2,7 @@ import type { Hono } from "hono";
 import type { Env } from "./env";
 import { internalErrorHandler, notFoundHandler } from "./error-responses";
 import { withPinnedAssetCache } from "./pinned-assets";
-import { isPublicApiPath, publicApiNotFound } from "./public-data/routes";
+import { isPublicApiPath, publicApiNotFound } from "./public-data/unknown-path";
 
 export function registerErrorHandlers(app: Hono<{ Bindings: Env }>): void {
   app.notFound(async (c) => {
