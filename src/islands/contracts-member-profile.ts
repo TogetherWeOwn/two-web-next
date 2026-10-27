@@ -255,4 +255,3 @@ export function profileJoinedMonth(joinedAt: Date | null): string | null {
     ? joinedAt.toLocaleDateString("en-GB", { month: "long", year: "numeric", timeZone: "UTC" })
     : null;
 }
-
