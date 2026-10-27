@@ -416,6 +416,34 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
       `expected one of 334080, 335104, 335360, 335872`,
   );
 });
+// Two explicit client-js raw allocations are supported: current 256000
+// (interval 255856) and the independently measured 256512 ceiling for host
+// and joining details on Kit event detail (PR #1825; combined worst 256103,
+// margin 409; lower 256000 rejects by 103). Fixture lengths are fixed
+// literals selected by this mapping, never `cap` or `cap + 1`; any other
+// loaded ceiling fails the allocation control and the three client-raw
+// cases, so an arbitrary widening cannot go green.
+let SHIPPING_CLIENT_RAW_CAP;
+try {
+  SHIPPING_CLIENT_RAW_CAP = JSON.parse(SHIPPING_BUDGET_BYTES.toString("utf8"))?.client?.js
+    ?.maxRawBytes;
+} catch {
+  SHIPPING_CLIENT_RAW_CAP = undefined;
+}
+const SHIPPING_CLIENT_RAW_ALLOCATIONS = {
+  256000: { intervalBytes: 255856, exactBytes: 256000, overBytes: 256001 },
+  256512: { intervalBytes: 256103, exactBytes: 256512, overBytes: 256513 },
+};
+const UNSUPPORTED_CLIENT_RAW =
+  `unsupported client raw allocation ${String(SHIPPING_CLIENT_RAW_CAP)}: ` +
+  `expected one of 256000, 256512`;
+
+test("shipping budget: client raw allocation is explicitly approved", () => {
+  assert.ok(
+    Object.hasOwn(SHIPPING_CLIENT_RAW_ALLOCATIONS, String(SHIPPING_CLIENT_RAW_CAP)),
+    UNSUPPORTED_CLIENT_RAW,
+  );
+});
 const SHIPPING_GROUPS = ["kit.worker", "kit.server.js", "kit.client.js", "kit.client.css"];
 const SHIPPING_BASES = {
   "kit.worker": WORKER_BODY,
@@ -578,17 +606,54 @@ function shippingServerGzipCases() {
     { name: "server gzip one byte over", unsupported: true },
   ];
 }
+// The three client-raw rows follow the same rule as the server-gzip rows.
+function shippingClientRawCases() {
+  if (SHIPPING_CLIENT_RAW_CAP === 256000) {
+    return [
+      {
+        name: "client raw newly allowed interval",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 255856,
+      },
+      { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256000 },
+      {
+        name: "client raw one byte over",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 256001,
+        ceiling: 256000,
+        breach: true,
+      },
+    ];
+  }
+  if (SHIPPING_CLIENT_RAW_CAP === 256512) {
+    return [
+      {
+        name: "client raw newly allowed interval",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 256103,
+      },
+      { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256512 },
+      {
+        name: "client raw one byte over",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 256513,
+        ceiling: 256512,
+        breach: true,
+      },
+    ];
+  }
+  return [
+    { name: "client raw newly allowed interval", unsupported: UNSUPPORTED_CLIENT_RAW },
+    { name: "client raw exact ceiling", unsupported: UNSUPPORTED_CLIENT_RAW },
+    { name: "client raw one byte over", unsupported: UNSUPPORTED_CLIENT_RAW },
+  ];
+}
 for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = false } of [
-  { name: "client raw newly allowed interval", group: "kit.client.js", axis: "raw", bytes: 255856 },
-  { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 256000 },
-  {
-    name: "client raw one byte over",
-    group: "kit.client.js",
-    axis: "raw",
-    bytes: 256001,
-    ceiling: 256000,
-    breach: true,
-  },
+  ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103168 },
   {
@@ -666,12 +731,13 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported = fa
   },
 ]) {
   test(`shipping budget: ${name}`, (t) => {
-    if (unsupported) {
+    if (unsupported === true) {
       assert.fail(
         `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
           `expected one of 334080, 335104, 335360, 335872`,
       );
     }
+    if (unsupported) assert.fail(unsupported);
     const fx = makeShippingFixture(t, group, axis, bytes);
     const result = runJson(fx.root);
     assert.equal(result.code, breach ? 1 : 0, result.errors.join("\n"));
