@@ -108,7 +108,8 @@ describe("Kit activity-log load: guard ordering", () => {
       order.push("helper");
       return { rows: [], query: { subject: "", causer: "", page: 1 }, hasNext: false };
     };
-    const pending = load({ parent, url: url(), setHeaders });
+    // SvelteKit always supplies locals; the binding forwards its requestId.
+    const pending = load({ parent, url: url(), locals: {}, setHeaders });
     await tick();
     // The guard has not settled: the member-subject read must not have run.
     expect(globalThis.__kitActivityLogCalls).toHaveLength(0);
@@ -128,6 +129,7 @@ describe("Kit activity-log load: guard ordering", () => {
         throw redirect;
       },
       url: url("?causer=100000000000000111"),
+      locals: {},
       setHeaders,
     }).catch((e) => e);
     expect(err?.status).toBe(302);
@@ -141,6 +143,7 @@ describe("Kit activity-log load: guard ordering", () => {
         throw forbidden;
       },
       url: url("?causer=100000000000000111"),
+      locals: {},
       setHeaders,
     }).catch((e) => e);
     expect(err?.status).toBe(403);
@@ -151,12 +154,14 @@ describe("Kit activity-log load: guard ordering", () => {
     const out = await load({
       parent: async () => ({ actor }),
       url: url("?subject=Alpha&page=2"),
+      locals: { requestId: "01ARYZ6S41AAAAAAAAAAAAAAAA" },
       setHeaders,
     });
     expect(globalThis.__kitActivityLogCalls).toHaveLength(1);
     expect(globalThis.__kitActivityLogCalls[0]).toMatchObject({
       subjectParam: "Alpha",
       pageParam: "2",
+      requestId: "01ARYZ6S41AAAAAAAAAAAAAAAA",
     });
     expect(out).toMatchObject({ hasNext: false });
   });
@@ -168,6 +173,7 @@ describe("Kit activity-log load: guard ordering", () => {
     const err = await load({
       parent: async () => ({ actor }),
       url: url(),
+      locals: {},
       setHeaders,
     }).catch((e) => e);
     expect(err?.status).toBe(503);
