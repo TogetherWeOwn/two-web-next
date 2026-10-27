@@ -27,28 +27,14 @@ const escapeHtml = (s: string): string =>
 
 export type PolicySection = { id: string; title: string };
 
-const SECTION_ID_PREFIX = "policy-";
-const SECTION_SLUG_MAX = 60;
-
 /** The title of a `## ` heading line, or null for any other line. */
 const headingTitle = (line: string): string | null =>
   line.startsWith("## ") ? line.slice(3).trim() : null;
 
-/** Plain, fragment-safe slug: lowercase ASCII letters/digits joined by "-". */
-function sectionSlug(title: string): string {
-  const slug = title
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+/, "")
-    .slice(0, SECTION_SLUG_MAX)
-    .replace(/-+$/, "");
-  return slug === "" ? "section" : slug;
-}
-
 /**
- * Deterministic, unique fragment ids for the `## ` sections in document order.
- * The fixed prefix keeps every id clear of the page's own ids; repeated titles
- * get -2, -3, … suffixes, skipping any id already taken.
+ * Deterministic, unique fragment ids for the `## ` sections in document order:
+ * a fixed prefix (clear of the page's own ids) plus a lowercase ASCII slug of
+ * the title. Repeated titles get -2, -3, … suffixes, skipping any id in use.
  */
 export function policySections(markdown: string): PolicySection[] {
   const taken = new Set<string>();
@@ -56,7 +42,12 @@ export function policySections(markdown: string): PolicySection[] {
   for (const line of markdown.split("\n")) {
     const title = headingTitle(line);
     if (title === null) continue;
-    const base = `${SECTION_ID_PREFIX}${sectionSlug(title)}`;
+    const base = `policy-${title
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-/, "")
+      .slice(0, 60)
+      .replace(/-$/, "")}`;
     let id = base;
     for (let n = 2; taken.has(id); n++) id = `${base}-${n}`;
     taken.add(id);
@@ -81,9 +72,6 @@ function renderInline(src: string): string {
 function renderListItem(src: string): string {
   return `<li>${renderInline(src)}</li>`;
 }
-
-// Marker-free text for accessible names (the policy headings carry none today).
-const plainTitle = (title: string): string => title.replace(/[`*]/g, "");
 
 /**
  * Minimal CommonMark-equivalent for the v1 policy constructs. Output is fully
@@ -130,7 +118,7 @@ export function renderPolicyMarkdown(
       flushList();
       const { id, title } = sections[heading++]!;
       const permalink = navigation
-        ? ` <a href="#${id}" aria-label="Permalink to section: ${escapeHtml(plainTitle(title))}">#</a>`
+        ? ` <a href="#${id}" aria-label="Permalink to section: ${escapeHtml(title)}">#</a>`
         : "";
       blocks.push(`<h2 id="${id}">${renderInline(title)}${permalink}</h2>`);
     } else if (line.startsWith("- ")) {
