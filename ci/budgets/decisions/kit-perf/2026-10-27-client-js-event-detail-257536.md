@@ -36,6 +36,10 @@ Pristine main checker exits 0 twice; the union exits 1 twice. Feature increment 
 
 Read from the `kit.client.js` group status in the checker JSON: 257024/103168 rejects; raw 257284 rejects and exact 257285 accepts; gzip 103234 rejects and exact 103235 accepts; 257536/103424 accepts. Every smaller value fails closed.
 
+## Base note (re-proved on `b69eea7d7`)
+
+Main moved from `227414575` to `b69eea7d7` (CI-only files, the server-js fragment 336384 and docs; no `web/`, `src/` or lockfile input). The client-js fragment on main is unchanged at 257024/103168/55 and #1499 is unchanged at `26fd963642faef083e77db37c37d458217111a6a`. The same recipe, rebuilt with two builds per tree, gives the identical client numbers: pristine 255632 / 102846 / 54 (checker exit 0 twice), union 257285 / 103235 / 54 (client group fails against 257024/103168 twice). With this fragment applied to the union, `kit.client.js` passes at 257536/103424/55. The union's server gzip (336415 against the landed 336384) still fails; that ceiling belongs to the separate server gzip card, not this decision.
+
 ## Enforcement and coevolution
 
 - The shipping allocation controls and the aggregate fragment pin still list 257024/103168 and, for gzip, only 103168 and 103680. They coevolve with the independent test owner's delivery (a 103424 gzip allocation with exact and one-byte-over cases, and the 257536/103424 aggregate pin); this decision edits no test assertion of its own.
