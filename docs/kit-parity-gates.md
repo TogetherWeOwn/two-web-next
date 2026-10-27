@@ -346,7 +346,9 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
 ## Performance gates (`ci/check-kit-perf.mjs`, `ci/budgets/kit/`)
 
 Measured baseline 2026-10-12, ceilings at measured ×1.25 (raw to 512B, gzip
-to 256B — the repository rule in `ci/budgets/README.md`):
+to 256B at that time). Raises since 2026-10-27 follow the block-step
+allocation policy and the `Ceiling:` decision ledger in
+`ci/budgets/README.md`:
 
 - Worker entry `_worker.js` (read from the built
   `web/.svelte-kit/cloudflare/` output): exact raw/gzip ceilings.

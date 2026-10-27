@@ -14,31 +14,22 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
+import {
+  assertKitPlanMatchesLedger,
+  flattenKitPlan,
+  loadKitCeilingLedger,
+} from "./budget-ledger.mjs";
 import { loadBundleBudgets, loadKitBudget } from "./budget-fragments.mjs";
 import { run as runBundle } from "./check-bundle-budget.mjs";
 import { run as runKit } from "./check-kit-perf.mjs";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
-// The exact ceilings shipped in the monolith files before the split
-// (ci/kit-perf-budget.json and ci/bundle-budget.json at the split commit),
-// plus the raise that landed on main during the split review and was
-// ported into its fragment (client.js.maxRawBytes 254976 -> 256000; see
-// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md) and the
-// server.js.maxGzipBytes 335104 -> 335360 raise (see
-// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md).
-// Aggregation must reproduce them exactly: any drift here is a budget
-// change, which needs its own decision file, never a silent edit.
-const SHIPPING_KIT_BUDGET = {
-  worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
-  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
-  client: {
-    js: { maxRawBytes: 257024, maxGzipBytes: 103168, maxFiles: 55 },
-    css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
-  },
-  startup: { maxMs: 60000 },
-};
-
+// The exact served-asset ceilings shipped in ci/bundle-budget.json at the
+// split commit. Aggregation must reproduce them exactly: any drift here is
+// a budget change, which needs its own decision file, never a silent edit.
+// Kit ceilings carry no literal table: they are derived from the decision
+// ledger (ci/budget-ledger.mjs), see the ledger tests below.
 const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/admin-event-editor.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/admin-event-text-limits.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
@@ -116,82 +107,100 @@ function kitFixture(t, fragments) {
   return root;
 }
 
-// Admitted server.js maxGzipBytes allocations. The SHIPPING_KIT_BUDGET pin
-// above (335104) is the historical baseline; 335360 is the second,
-// independently measured saved-review allocation (combined worst 335164,
-// margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
-// unsupported); 335872 is the third, independently measured allocation
-// (measured 335639, margin 233; lower 335616 rejects by 23; the next 256B
-// step 336128 stays unsupported). Every other pin stays exact: the oracle
-// rejects any ceiling outside this list, then deep-compares the rest of
-// the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872];
+// The Kit aggregate pin is derived, not tabulated: every value in
+// ci/budgets/kit/*.json must be declared by a `Ceiling:` line in a decision
+// file (ci/budget-ledger.mjs), and every declaration must be carried by a
+// fragment. Raising a ceiling is one fragment edit plus one new decision.
+test("kit fragments aggregate to the ceilings their decision files declare", () => {
+  assertKitPlanMatchesLedger(loadKitBudget(repoRoot), loadKitCeilingLedger(repoRoot));
+});
 
-function assertShippingKitBudget(actual) {
-  const gzip = actual?.server?.js?.maxGzipBytes;
-  assert.ok(
-    SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872`,
+test("the ledger covers every unit the shipping plan carries", () => {
+  const flat = flattenKitPlan(loadKitBudget(repoRoot));
+  assert.deepEqual(
+    [...flat.keys()].sort(),
+    [...loadKitCeilingLedger(repoRoot).keys()].sort(),
   );
-  assert.deepEqual(actual, {
-    ...SHIPPING_KIT_BUDGET,
-    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: gzip } },
-  });
+  assert.ok(flat.size >= 12, "fewer shipping ceilings than expected");
+});
+
+function ledgerFixture(t, { fragment = {}, decisions = {} }) {
+  const root = scratchRoot(t, "budget-ledger-");
+  writeFile(root, "ci/budgets/kit/server-js.json", JSON.stringify(fragment));
+  for (const [name, body] of Object.entries(decisions)) {
+    writeFile(root, `ci/budgets/decisions/kit-perf/${name}`, body);
+  }
+  return root;
 }
 
-test("kit fragments aggregate to an admitted shipping allocation", () => {
-  assertShippingKitBudget(loadKitBudget(repoRoot));
-});
+const SERVER_PLAN = { server: { js: { maxRawBytes: 100, maxGzipBytes: 50, maxFiles: 3 } } };
+const SERVER_DECLARATIONS = [
+  "Ceiling: server.js.maxRawBytes = 100",
+  "Ceiling: server.js.maxGzipBytes = 50",
+  "Ceiling: server.js.maxFiles = 3",
+].join("\n");
 
-test("shipping oracle admits the measured 335360 server gzip allocation", () => {
-  assertShippingKitBudget({
-    ...SHIPPING_KIT_BUDGET,
-    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 335360 } },
+test("ledger: a fragment value no decision declares fails closed", (t) => {
+  const root = ledgerFixture(t, {
+    decisions: { "0001-base.md": "Ceiling: server.js.maxRawBytes = 100\n" },
   });
+  assert.throws(
+    () => assertKitPlanMatchesLedger(SERVER_PLAN, loadKitCeilingLedger(root)),
+    /server\.js\.maxGzipBytes = 50 has no decision file declaring it/,
+  );
 });
 
-test("shipping oracle admits the measured 335872 server gzip allocation", () => {
-  assertShippingKitBudget({
-    ...SHIPPING_KIT_BUDGET,
-    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 335872 } },
+test("ledger: a raised fragment needs a newer decision, the latest declaration wins", (t) => {
+  const root = ledgerFixture(t, {
+    decisions: {
+      "0001-base.md": SERVER_DECLARATIONS,
+      "2026-10-27-raise.md": "Ceiling: server.js.maxGzipBytes = 60 (previous 50)\n",
+    },
   });
+  const ledger = loadKitCeilingLedger(root);
+  assert.deepEqual(ledger.get("server.js.maxGzipBytes"), {
+    value: 60,
+    previous: 50,
+    file: "2026-10-27-raise.md",
+  });
+  assert.throws(
+    () => assertKitPlanMatchesLedger(SERVER_PLAN, ledger),
+    /server\.js\.maxGzipBytes = 50 but the latest decision \(2026-10-27-raise\.md\) declares 60/,
+  );
+  const raised = { server: { js: { ...SERVER_PLAN.server.js, maxGzipBytes: 60 } } };
+  assertKitPlanMatchesLedger(raised, ledger);
 });
 
-test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616]) {
-    const unsupported = {
-      ...SHIPPING_KIT_BUDGET,
-      server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
-    };
-    assert.throws(
-      () => assertShippingKitBudget(unsupported),
-      new RegExp(`unsupported server gzip allocation ${maxGzipBytes}`),
-    );
-  }
-  assert.throws(() => assertShippingKitBudget({}), /unsupported server gzip allocation/);
+test("ledger: a declaration no fragment carries fails closed", (t) => {
+  const root = ledgerFixture(t, {
+    decisions: { "0001-base.md": `${SERVER_DECLARATIONS}\nCeiling: startup.maxMs = 1\n` },
+  });
+  assert.throws(
+    () => assertKitPlanMatchesLedger(SERVER_PLAN, loadKitCeilingLedger(root)),
+    /declares startup\.maxMs but no fragment carries it/,
+  );
 });
 
-test("shipping oracle rejects off-axis drift at an admitted allocation", () => {
-  const drifts = [
-    ["server raw", (plan) => (plan.server.js.maxRawBytes += 1)],
-    ["server files", (plan) => (plan.server.js.maxFiles += 1)],
-    ["client raw", (plan) => (plan.client.js.maxRawBytes += 1)],
-    ["client gzip", (plan) => (plan.client.js.maxGzipBytes += 1)],
-    ["client files", (plan) => (plan.client.js.maxFiles += 1)],
-    ["client css gzip", (plan) => (plan.client.css.maxGzipBytes += 1)],
-    ["worker gzip", (plan) => (plan.worker["_worker.js"].maxGzipBytes += 1)],
-    ["startup", (plan) => (plan.startup.maxMs += 1)],
-  ];
-  for (const [label, drift] of drifts) {
-    const plan = JSON.parse(JSON.stringify(SHIPPING_KIT_BUDGET));
-    plan.server.js.maxGzipBytes = 335360;
-    drift(plan);
-    assert.throws(
-      () => assertShippingKitBudget(plan),
-      /Expected values to be strictly deep-equal/,
-      `${label} drift must fail the shipping oracle`,
-    );
+test("ledger: malformed, duplicate and non-increasing declarations throw", (t) => {
+  for (const [body, pattern] of [
+    ["Ceiling: server.js.maxGzipBytes 50\n", /malformed ceiling line/],
+    ["Ceiling: server.js.maxGzipBytes = 5e1\n", /malformed ceiling line/],
+    ["Ceiling: server.js.maxGzipBytes = 50 (was 40)\n", /malformed ceiling line/],
+    [
+      "Ceiling: server.js.maxGzipBytes = 50\nCeiling: server.js.maxGzipBytes = 60\n",
+      /declared twice/,
+    ],
+    ["Ceiling: server.js.maxGzipBytes = 50 (previous 50)\n", /previous 50 must be below 50/],
+    ["Ceiling: __proto__ = 1\n", /unsupported ceiling key/],
+  ]) {
+    const root = ledgerFixture(t, { decisions: { "0001-bad.md": body } });
+    assert.throws(() => loadKitCeilingLedger(root), pattern, body);
   }
+});
+
+test("ledger: the frozen legacy archive and prose never count as declarations", () => {
+  const ledger = loadKitCeilingLedger(repoRoot);
+  for (const { file } of ledger.values()) assert.ok(!file.startsWith("0000-legacy"), file);
 });
 
 test("bundle fragments aggregate to the exact pre-split ceilings", () => {
