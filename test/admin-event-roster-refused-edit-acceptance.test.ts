@@ -208,155 +208,156 @@ describe("refused-edit discard warning oracle", () => {
   });
 });
 
-describe.skipIf(!process.env.DATABASE_URL)(
-  "refused event edit explains the missing roster (isolated test DB)",
-  () => {
-    let fixture: MemberDataFixture;
-    let cookie: string;
-    let env: Env;
-    let app: Hono<{ Bindings: Env }>;
-    const store = createMemorySessionStore();
+describe("refused event edit explains the missing roster (isolated test DB)", () => {
+  let fixture: MemberDataFixture;
+  let cookie: string;
+  let env: Env;
+  let app: Hono<{ Bindings: Env }>;
+  const store = createMemorySessionStore();
 
-    beforeAll(async () => {
-      fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-      const token = newSessionToken();
-      await store.create({
-        tokenHash: await hashToken(token),
-        userId: "100000000000007700",
-        username: "mod",
-        avatar: null,
-        member: true,
-        moderator: true,
-        expiresAt: new Date(Date.now() + 3600_000),
-      });
-      cookie = (
-        await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
-          path: "/",
-          secure: true,
-          httpOnly: true,
-          sameSite: "Lax",
-        })
-      ).split(";")[0]!;
-      env = {
-        APP_URL,
-        SESSION_SECRET,
-        DISCORD_CLIENT_ID: "client-id",
-        DISCORD_CLIENT_SECRET: "client-secret",
-        DISCORD_GUILD_ID: "guild",
-        DISCORD_INVITE_URL: "https://discord.gg/invite",
-        DISCORD_BOT_TOKEN: "bot-token",
-        ADMIN_DB: fixture.db,
-      } as Env;
-      app = new Hono<{ Bindings: Env }>()
-        .use("*", sameOrigin)
-        .route("/admin", adminApp({ sessionStore: store, db: fixture.db }));
-    });
-    afterAll(async () => {
-      await fixture?.dispose();
-    });
-    beforeEach(async () => {
-      await fixture.reset();
-      const [event] = await fixture.db
-        .insert(events)
-        .values({
-          eventKey: KEY,
-          title: "Stored title",
-          timezone: FORM.timezone,
-          status: "draft",
-          startsAt: new Date("2026-11-04T20:00:00Z"),
-          endsAt: new Date("2026-11-04T22:00:00Z"),
-        })
-        .returning();
-      await fixture.db.insert(users).values([
-        { id: "100000000000007701", username: ROSTER_NAMES[0] },
-        { id: "100000000000007702", username: ROSTER_NAMES[1] },
-      ]);
-      await fixture.db.insert(rsvps).values([
-        {
-          eventId: event!.id,
-          userId: "100000000000007701",
-          status: "going",
-          updatedAt: new Date(ROSTER_ANSWERED[0]!),
-        },
-        {
-          eventId: event!.id,
-          userId: "100000000000007702",
-          status: "going",
-          updatedAt: new Date(ROSTER_ANSWERED[1]!),
-        },
-      ]);
-    });
-
-    const get = (path: string) => app.request(APP_URL + path, { headers: { cookie } }, env);
-    const post = (path: string, values: Record<string, string>) =>
-      app.request(
-        APP_URL + path,
-        {
-          method: "POST",
-          headers: { cookie, origin: APP_URL },
-          body: new URLSearchParams(values),
-        },
-        env,
+  beforeAll(async () => {
+    if (!process.env.DATABASE_URL)
+      throw new Error(
+        "DATABASE_URL is required for the refused-edit roster DB cases; set it to the disposable test database (see the Run line at the top of this file)",
       );
-
-    it("CONTROL: the plain GET edit page shows the roster and no hidden-roster notice", async () => {
-      const res = await get(EDIT_PATH);
-      expect(res.status).toBe(200);
-      const html = await res.text();
-      expect(html).toContain('data-testid="rsvp-roster"');
-      for (const name of ROSTER_NAMES) expect(html).toContain(name);
-      expect(findRosterHiddenNotice(html)).toBeNull();
-      expect(stripTags(html)).not.toMatch(HIDDEN_RE);
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL);
+    const token = newSessionToken();
+    await store.create({
+      tokenHash: await hashToken(token),
+      userId: "100000000000007700",
+      username: "mod",
+      avatar: null,
+      member: true,
+      moderator: true,
+      expiresAt: new Date(Date.now() + 3600_000),
     });
+    cookie = (
+      await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
+    env = {
+      APP_URL,
+      SESSION_SECRET,
+      DISCORD_CLIENT_ID: "client-id",
+      DISCORD_CLIENT_SECRET: "client-secret",
+      DISCORD_GUILD_ID: "guild",
+      DISCORD_INVITE_URL: "https://discord.gg/invite",
+      DISCORD_BOT_TOKEN: "bot-token",
+      ADMIN_DB: fixture.db,
+    } as Env;
+    app = new Hono<{ Bindings: Env }>()
+      .use("*", sameOrigin)
+      .route("/admin", adminApp({ sessionStore: store, db: fixture.db }));
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
+  beforeEach(async () => {
+    await fixture.reset();
+    const [event] = await fixture.db
+      .insert(events)
+      .values({
+        eventKey: KEY,
+        title: "Stored title",
+        timezone: FORM.timezone,
+        status: "draft",
+        startsAt: new Date("2026-11-04T20:00:00Z"),
+        endsAt: new Date("2026-11-04T22:00:00Z"),
+      })
+      .returning();
+    await fixture.db.insert(users).values([
+      { id: "100000000000007701", username: ROSTER_NAMES[0] },
+      { id: "100000000000007702", username: ROSTER_NAMES[1] },
+    ]);
+    await fixture.db.insert(rsvps).values([
+      {
+        eventId: event!.id,
+        userId: "100000000000007701",
+        status: "going",
+        updatedAt: new Date(ROSTER_ANSWERED[0]!),
+      },
+      {
+        eventId: event!.id,
+        userId: "100000000000007702",
+        status: "going",
+        updatedAt: new Date(ROSTER_ANSWERED[1]!),
+      },
+    ]);
+  });
 
-    it("a form-parse refusal (invalid start) shows the notice, leaks no roster, writes nothing", async () => {
-      const eventsBefore = await fixture.db.select().from(events);
-      const rsvpsBefore = await fixture.db.select().from(rsvps);
-      const res = await post(EDIT_PATH, { ...FORM, starts_at: "not-a-time" });
-      expect(res.status).toBe(422);
-      const notice = expectRefusedEditNotice(await res.text());
-      expect(notice.href.startsWith(EDIT_PATH)).toBe(true);
-      expect(await fixture.db.select().from(events)).toEqual(eventsBefore);
-      expect(await fixture.db.select().from(rsvps)).toEqual(rsvpsBefore);
-    });
+  const get = (path: string) => app.request(APP_URL + path, { headers: { cookie } }, env);
+  const post = (path: string, values: Record<string, string>) =>
+    app.request(
+      APP_URL + path,
+      {
+        method: "POST",
+        headers: { cookie, origin: APP_URL },
+        body: new URLSearchParams(values),
+      },
+      env,
+    );
 
-    it("a locked-update refusal (capacity below going) shows the notice, leaks no roster, writes nothing", async () => {
-      const eventsBefore = await fixture.db.select().from(events);
-      const rsvpsBefore = await fixture.db.select().from(rsvps);
-      // Two members are going; capacity 1 parses fine but the locked
-      // update refuses it, exercising the second 422 re-render.
-      const res = await post(EDIT_PATH, { ...FORM, capacity: "1" });
-      expect(res.status).toBe(422);
-      expectRefusedEditNotice(await res.text());
-      expect(await fixture.db.select().from(events)).toEqual(eventsBefore);
-      expect(await fixture.db.select().from(rsvps)).toEqual(rsvpsBefore);
-    });
+  it("CONTROL: the plain GET edit page shows the roster and no hidden-roster notice", async () => {
+    const res = await get(EDIT_PATH);
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(html).toContain('data-testid="rsvp-roster"');
+    for (const name of ROSTER_NAMES) expect(html).toContain(name);
+    expect(findRosterHiddenNotice(html)).toBeNull();
+    expect(stripTags(html)).not.toMatch(HIDDEN_RE);
+  });
 
-    it("following the notice link reloads the canonical edit page with the roster back", async () => {
-      const res = await post(EDIT_PATH, { ...FORM, starts_at: "not-a-time" });
-      expect(res.status).toBe(422);
-      const notice = expectRefusedEditNotice(await res.text());
-      const linked = new URL(notice.href, APP_URL);
-      expect(linked.pathname).toBe(EDIT_PATH);
-      const reload = await get(linked.pathname + linked.search);
-      expect(reload.status).toBe(200);
-      const html = await reload.text();
-      expect(html).toContain('data-testid="rsvp-roster"');
-      for (const name of ROSTER_NAMES) expect(html).toContain(name);
-      for (const answered of ROSTER_ANSWERED) expect(html).toContain(answered);
-      expect(findRosterHiddenNotice(html)).toBeNull();
-    });
+  it("a form-parse refusal (invalid start) shows the notice, leaks no roster, writes nothing", async () => {
+    const eventsBefore = await fixture.db.select().from(events);
+    const rsvpsBefore = await fixture.db.select().from(rsvps);
+    const res = await post(EDIT_PATH, { ...FORM, starts_at: "not-a-time" });
+    expect(res.status).toBe(422);
+    const notice = expectRefusedEditNotice(await res.text());
+    expect(notice.href.startsWith(EDIT_PATH)).toBe(true);
+    expect(await fixture.db.select().from(events)).toEqual(eventsBefore);
+    expect(await fixture.db.select().from(rsvps)).toEqual(rsvpsBefore);
+  });
 
-    it("CONTROL: a create-mode refusal shows no roster-hidden notice", async () => {
-      const res = await post("/admin/events", { ...FORM, starts_at: "not-a-time" });
-      expect(res.status).toBe(422);
-      const html = await res.text();
-      expect(html).toContain('data-testid="form-errors"');
-      expect(findRosterHiddenNotice(html)).toBeNull();
-      const text = stripTags(html);
-      expect(text).not.toMatch(HIDDEN_RE);
-      expect(text).not.toMatch(DISCARD_RE);
-      for (const name of ROSTER_NAMES) expect(html).not.toContain(name);
-    });
-  },
-);
+  it("a locked-update refusal (capacity below going) shows the notice, leaks no roster, writes nothing", async () => {
+    const eventsBefore = await fixture.db.select().from(events);
+    const rsvpsBefore = await fixture.db.select().from(rsvps);
+    // Two members are going; capacity 1 parses fine but the locked
+    // update refuses it, exercising the second 422 re-render.
+    const res = await post(EDIT_PATH, { ...FORM, capacity: "1" });
+    expect(res.status).toBe(422);
+    expectRefusedEditNotice(await res.text());
+    expect(await fixture.db.select().from(events)).toEqual(eventsBefore);
+    expect(await fixture.db.select().from(rsvps)).toEqual(rsvpsBefore);
+  });
+
+  it("following the notice link reloads the canonical edit page with the roster back", async () => {
+    const res = await post(EDIT_PATH, { ...FORM, starts_at: "not-a-time" });
+    expect(res.status).toBe(422);
+    const notice = expectRefusedEditNotice(await res.text());
+    const linked = new URL(notice.href, APP_URL);
+    expect(linked.pathname).toBe(EDIT_PATH);
+    const reload = await get(linked.pathname + linked.search);
+    expect(reload.status).toBe(200);
+    const html = await reload.text();
+    expect(html).toContain('data-testid="rsvp-roster"');
+    for (const name of ROSTER_NAMES) expect(html).toContain(name);
+    for (const answered of ROSTER_ANSWERED) expect(html).toContain(answered);
+    expect(findRosterHiddenNotice(html)).toBeNull();
+  });
+
+  it("CONTROL: a create-mode refusal shows no roster-hidden notice", async () => {
+    const res = await post("/admin/events", { ...FORM, starts_at: "not-a-time" });
+    expect(res.status).toBe(422);
+    const html = await res.text();
+    expect(html).toContain('data-testid="form-errors"');
+    expect(findRosterHiddenNotice(html)).toBeNull();
+    const text = stripTags(html);
+    expect(text).not.toMatch(HIDDEN_RE);
+    expect(text).not.toMatch(DISCARD_RE);
+    for (const name of ROSTER_NAMES) expect(html).not.toContain(name);
+  });
+});
