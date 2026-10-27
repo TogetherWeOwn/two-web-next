@@ -80,3 +80,17 @@ export async function audit(
     properties: opts.properties,
   });
 }
+
+type AuditEntry = {
+  subjectType: string;
+  subjectId: string;
+  causerId: string | null;
+  description: string;
+  properties: Record<string, { before: unknown; after: unknown }>;
+};
+
+/** One INSERT for several audit entries; same row shape as `audit`. */
+export async function auditAll(db: Pick<Db, "insert">, entries: AuditEntry[]): Promise<void> {
+  if (entries.length === 0) return;
+  await db.insert(activityLog).values(entries.map((e) => ({ logName: "default", ...e })));
+}
