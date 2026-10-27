@@ -43,7 +43,7 @@ Raw ceiling 256000 rejects, 256512 rejects, 256577 rejects, exact 256578 accepts
 
 ## Enforcement and coevolution
 
-- The shipping-budget regression cases and aggregate pins coevolve with the independent test owner's delivery (raw exact/one-byte-over at 257024/257025, plus two fits cases); this decision edits no test assertion of its own.
+- The shipping-budget regression cases and aggregate pins coevolve with the independent test owner's delivery (raw exact/one-byte-over at 257024/257025, plus two fits cases); this decision edits no test assertion of its own. The two fits cases use 256580 raw and 103073 gzip, the earlier measurement of this same composition on the previous main; they are retained as regression inputs like the earlier 255253 and 255872 cases, still fit the ceilings (the current 256578/103008 fits too), and are not a claim about the current measurement.
 - Server gzip (335914/335925 vs 335360) is owned separately and unchanged here. No worker, server, CSS, startup, file-count, gzip, Hono, feature, checker, dependency, workflow, mask or exclusion change ships. No staging, runtime or release acceptance is claimed; exact-head CI and independent review remain mandatory.
 
 Undo: revert only this fragment's raw ceiling value and this decision file.
