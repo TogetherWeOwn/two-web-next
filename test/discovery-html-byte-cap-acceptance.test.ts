@@ -888,6 +888,16 @@ function fixtureDb(rows: (typeof events.$inferSelect)[]): Db {
     if (sql.startsWith('select distinct trim("game") from "events"')) {
       return { rows: [[ACCENT.repeat(100)]] };
     }
+    // Archive game suggestions: `select distinct on (lower(game)) game, selected`.
+    // Answer the two selected columns positionally, one row per distinct game.
+    if (sql.startsWith("select distinct on (")) {
+      const games = new Map<string, string>();
+      for (const row of rows) {
+        const game = row.game?.trim();
+        if (game && !games.has(game.toLowerCase())) games.set(game.toLowerCase(), game);
+      }
+      return { rows: [...games.values()].map((game) => [game, false]) };
+    }
     if (sql.startsWith('select "discord_event_id" from "events"')) return { rows: [] };
     if (/^select count/i.test(sql)) return { rows: [[rows.length]] };
     const hasOffset = sql.includes(" offset ");
