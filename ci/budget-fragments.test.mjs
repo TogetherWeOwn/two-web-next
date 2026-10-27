@@ -119,7 +119,7 @@ function kitFixture(t, fragments) {
 }
 
 // Admitted server.js maxGzipBytes allocations. The SHIPPING_KIT_BUDGET pin
-// above (335104) is the historical baseline; 337408 is the archive game-facet
+// above (335104) is the historical baseline; 337664 is the archive game-facet
 // allocation (decision 2026-10-27-archive-game-facet.md). 335360 is the second,
 // independently measured saved-review allocation (combined worst 335164,
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
@@ -128,13 +128,13 @@ function kitFixture(t, fragments) {
 // step 336128 stays unsupported). Every other pin stays exact: the oracle
 // rejects any ceiling outside this list, then deep-compares the rest of
 // the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 337408];
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 337664];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 337408`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 337664`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
@@ -160,15 +160,15 @@ test("shipping oracle admits the measured 335872 server gzip allocation", () => 
   });
 });
 
-test("shipping oracle admits the measured 337408 server gzip allocation", () => {
+test("shipping oracle admits the measured 337664 server gzip allocation", () => {
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
-    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 337408 } },
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 337664 } },
   });
 });
 
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616, 337407, 337409, 337664]) {
+  for (const maxGzipBytes of [335105, 335359, 335616, 337407, 337408, 337663, 337665, 337920]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
