@@ -55,7 +55,9 @@ export function loadKitCeilingLedger(root) {
       const value = Number(rawValue);
       const previous = rawPrevious === undefined ? undefined : Number(rawPrevious);
       if (previous !== undefined && previous >= value) {
-        throw new Error(`${DECISIONS_DIR}/${name}: ${key} previous ${previous} must be below ${value}`);
+        throw new Error(
+          `${DECISIONS_DIR}/${name}: ${key} previous ${previous} must be below ${value}`,
+        );
       }
       if (seen.has(key)) throw new Error(`${DECISIONS_DIR}/${name}: ${key} declared twice`);
       seen.add(key);

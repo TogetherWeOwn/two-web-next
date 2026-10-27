@@ -117,10 +117,7 @@ test("kit fragments aggregate to the ceilings their decision files declare", () 
 
 test("the ledger covers every unit the shipping plan carries", () => {
   const flat = flattenKitPlan(loadKitBudget(repoRoot));
-  assert.deepEqual(
-    [...flat.keys()].sort(),
-    [...loadKitCeilingLedger(repoRoot).keys()].sort(),
-  );
+  assert.deepEqual([...flat.keys()].sort(), [...loadKitCeilingLedger(repoRoot).keys()].sort());
   assert.ok(flat.size >= 12, "fewer shipping ceilings than expected");
 });
 
