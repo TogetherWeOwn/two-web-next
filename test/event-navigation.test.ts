@@ -59,8 +59,11 @@ const linkValues = (e: EventLink) => [
   e.eventKey,
   e.title,
   e.startsAt.toISOString(),
+  e.endsAt.toISOString(),
   e.timezone,
   e.location,
+  e.game,
+  e.rsvpOpen,
 ];
 
 function pageFixture(

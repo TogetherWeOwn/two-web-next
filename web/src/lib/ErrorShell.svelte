@@ -5,10 +5,14 @@ import { kitErrorCopy, type KitErrorStatus } from "../../../src/kit-errors";
 let {
   code,
   inviteUrl,
+  supportReference,
   adminBack,
 }: {
   code: KitErrorStatus;
   inviteUrl: string;
+  // Validated request id from page data. Optional: without one the shell
+  // omits the reference block blank-safe, exactly as before.
+  supportReference?: string;
   adminBack?: { href: string; label: string } | null;
 } = $props();
 
@@ -125,6 +129,14 @@ const isOutage = $derived(OUTAGE_CODES.includes(code));
           Use the Discord invite instead
         </a>
         <a href="/" data-testid="error-retry">Back to the homepage</a>
+      </p>
+    {/if}
+    {#if supportReference}
+      <!-- Hono SupportReference conventions (src/error-pages.tsx): the same
+        paragraph class, visible copy and code testid, so the moderator
+        guide's "use the response's support reference" holds on Kit pages. -->
+      <p class="support-reference">
+        Support reference: <code data-testid="error-support-reference">{supportReference}</code>
       </p>
     {/if}
   </section>

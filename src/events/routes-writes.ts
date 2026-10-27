@@ -1,12 +1,13 @@
-// Moderator event writes (JSON): POST /events, PATCH /events/:key and the
-// publish/cancel/rsvp-pause/rsvp-reopen transitions. Split out of
-// src/events/routes.tsx; behavior unchanged.
-import type { MiddlewareHandler } from "hono";
+// Moderator event writes (JSON): POST /events, PATCH /events/:key, the
+// publish/cancel/rsvp-pause/rsvp-reopen transitions and the duplicate copy
+// action. Split out of src/events/routes.tsx; behavior unchanged.
+import type { Context, MiddlewareHandler } from "hono";
 import { getSignedCookie } from "hono/cookie";
 import { dbFor } from "../admin/db";
 import {
   NotFoundError,
   createEvent,
+  duplicateEvent,
   patchEvent,
   setRsvpOpen,
   transitionEvent,
@@ -14,8 +15,11 @@ import {
 import { ValidationError, parseEventForm } from "../admin/validation";
 import { dispatchWriteBack } from "../admin/writeback";
 import { requestBodyLimit } from "../body-limit";
+import { exceptionClass } from "../alerts";
 import type { Env, Session } from "../env";
+import { createRateLimitedWarn } from "../log-budget";
 import { safeRequestId } from "../request-log";
+import { jsonRefusal } from "../json-refusal";
 import { WRITE_THROTTLE_PER_MINUTE, throttle } from "../throttle";
 import { expiredWriteBounce } from "../write-recovery";
 import { eventKeyAllowed } from "./keys";
@@ -45,9 +49,9 @@ async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Se
   if (!session) {
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     if (isValidSessionToken(token)) return expiredWriteBounce(c, true);
-    return c.json({ error: "unauthenticated" }, 401);
+    return jsonRefusal(c, "unauthenticated", 401);
   }
-  if (!session.moderator) return c.json({ error: "forbidden" }, 403);
+  if (!session.moderator) return jsonRefusal(c, "forbidden", 403);
   return session;
 }
 
@@ -69,15 +73,38 @@ const isFormMediaType = (value: string | null | undefined): boolean => {
   return mt === "application/x-www-form-urlencoded" || mt === "multipart/form-data";
 };
 
-async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> {
+// Malformed-body warns share one bucket: a body-spraying prober emits at
+// most burst warns, then one shed per window, instead of one line per 422.
+// 415s (admission refusal before the body is read) and well-formed
+// validation 422s stay silent and spend nothing.
+const malformedLog = createRateLimitedWarn({ shedLine: "event.write.shed" });
+
+async function eventBody(c: Pick<Ctx, "req" | "get">): Promise<Record<string, unknown>> {
   // Event edits must not turn malformed/non-object JSON into an empty PATCH.
   // Keep the RSVP trap's permissive body parsing independent of this admission:
   // a form body that fails to parse is a 422 here, never an empty edit that
   // gets written, audited, and re-synced to Discord.
   const contentType = c.req.header("content-type");
+  // Malformed-body warn fields: the refused content-type plus the exception
+  // class only, never body bytes. The 422 shapes below are unchanged.
+  const warnMalformed = (exception: string): void => {
+    const requestId = safeRequestId(c.get("requestId"));
+    malformedLog.warn("event.write.malformed_body", {
+      exception,
+      content_type: mediaType(contentType),
+      ...(requestId ? { request_id: requestId } : {}),
+    });
+  };
   if (isJsonMediaType(contentType)) {
-    const input: unknown = await c.req.json().catch(() => null);
+    let parseError: unknown;
+    const input: unknown = await c.req.json().catch((err) => {
+      parseError = err;
+      return null;
+    });
     if (!input || typeof input !== "object" || Array.isArray(input)) {
+      // A parse failure carries its real class (usually SyntaxError); a
+      // well-formed non-object body carries TypeError (expected an object).
+      warnMalformed(parseError !== undefined ? exceptionClass(parseError) : "TypeError");
       throw new ValidationError({ body: "Send a JSON object." });
     }
     return input as Record<string, unknown>;
@@ -85,23 +112,16 @@ async function eventBody(c: Pick<Ctx, "req">): Promise<Record<string, unknown>> 
   if (isFormMediaType(contentType)) {
     try {
       return await body(c, { onMalformedForm: "throw" });
-    } catch {
+    } catch (err) {
+      warnMalformed(exceptionClass(err));
       throw new ValidationError({ body: "Send a valid form body." });
     }
   }
   throw new UnsupportedMediaTypeError(`Unsupported media type: ${contentType ?? ""}`);
 }
 
-const invalid = (c: Pick<Ctx, "json" | "get">, err: ValidationError) => {
-  // Additive correlation: the validated log id requestLog set on the context,
-  // never raw client header bytes. Omitted when there is no requestLog context
-  // (a bare mount has no log correlation id to carry).
-  const requestId = safeRequestId(c.get("requestId"));
-  return c.json(
-    { error: "invalid", fields: err.fields, ...(requestId ? { request_id: requestId } : {}) },
-    422,
-  );
-};
+const invalid = (c: Context<any>, err: ValidationError) =>
+  jsonRefusal(c, "invalid", 422, { fields: err.fields });
 
 export function registerWriteRoutes(app: App, readFragmentSession: SessionReader): void {
   const moderatorGate: MiddlewareHandler<{
@@ -133,7 +153,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
         return c.json({ data: eventJson({ ...row, goingCount: 0, goingOccupancy: 0 }) }, 201);
       } catch (err) {
         if (err instanceof UnsupportedMediaTypeError)
-          return c.json({ error: "unsupported_media_type" }, 415);
+          return jsonRefusal(c, "unsupported_media_type", 415);
         if (err instanceof ValidationError) return invalid(c, err);
         throw err;
       }
@@ -150,7 +170,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
       const db = await dbFor(c);
       if (!db) return dbUnavailableJson(c);
       const key = c.req.param("key");
-      if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
+      if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
       try {
         // PATCH: omitted fields resolve from the locked row inside the same
         // transaction that commits the update (patchEvent), never from a
@@ -183,9 +203,9 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
         return c.json({ data: eventJson(updated!) });
       } catch (err) {
         if (err instanceof UnsupportedMediaTypeError)
-          return c.json({ error: "unsupported_media_type" }, 415);
+          return jsonRefusal(c, "unsupported_media_type", 415);
         if (err instanceof ValidationError) return invalid(c, err);
-        if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
+        if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
         throw err;
       }
     },
@@ -204,7 +224,7 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
         try {
           const actor = { id: who.id, username: who.username };
           const key = c.req.param("key");
-          if (!eventKeyAllowed(key, c.env.APP_URL)) return c.json({ error: "not_found" }, 404);
+          if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
           const { row, writeBack } =
             action === "rsvp-pause" || action === "rsvp-reopen"
               ? await setRsvpOpen(db, actor, key, action === "rsvp-reopen")
@@ -218,10 +238,35 @@ export function registerWriteRoutes(app: App, readFragmentSession: SessionReader
           return c.json({ data: eventJson(await withGoingCount(db, row)) });
         } catch (err) {
           if (err instanceof ValidationError) return invalid(c, err);
-          if (err instanceof NotFoundError) return c.json({ error: "not_found" }, 404);
+          if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
           throw err;
         }
       },
     );
   }
+
+  // Duplicate-as-draft (S4): same action stack as the transitions above. The
+  // action takes no body; 201 carries the fresh copy's envelope. A draft is
+  // never mirrored, so no write-back leaves this handler.
+  app.post(
+    "/events/:key/duplicate",
+    requestBodyLimit("action"),
+    throttle("event-write", WRITE_THROTTLE_PER_MINUTE),
+    moderatorGate,
+    async (c) => {
+      const who = c.get("eventModerator");
+      const db = await dbFor(c);
+      if (!db) return dbUnavailableJson(c);
+      try {
+        const key = c.req.param("key");
+        if (!eventKeyAllowed(key, c.env.APP_URL)) return jsonRefusal(c, "not_found", 404);
+        const { row } = await duplicateEvent(db, { id: who.id, username: who.username }, key);
+        return c.json({ data: eventJson(await withGoingCount(db, row)) }, 201);
+      } catch (err) {
+        if (err instanceof ValidationError) return invalid(c, err);
+        if (err instanceof NotFoundError) return jsonRefusal(c, "not_found", 404);
+        throw err;
+      }
+    },
+  );
 }

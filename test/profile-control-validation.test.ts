@@ -230,7 +230,10 @@ describe("profile write boundary (in-memory fixtures only)", () => {
         env,
       );
       expect(response.status).toBe(422);
-      expect(await response.json()).toEqual({ errors: { [field]: "Remove control characters." } });
+      expect(await response.json()).toEqual({
+        error: "invalid",
+        fields: { [field]: "Remove control characters." },
+      });
       expect(save).not.toHaveBeenCalled();
       expect(store.rows.get(id)).toEqual({ id, username: "alice", avatar: null, ...valid });
     },

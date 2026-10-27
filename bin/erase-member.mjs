@@ -5,19 +5,25 @@
 // web_sessions (signs them out everywhere), web_session_grace (retired
 // predecessor records) and join_attempts.
 //
-//   node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production]
+//   node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production] [--confirm <host>]
 //
 // Dry-run is the default: print per-table row counts only, never row
 // contents. --apply deletes. DATABASE_URL is env-only; never argv or logs.
 // A host outside agent-testdb and loopback needs `--target staging` or
 // `--target production`; a production-looking URL needs `--target production`.
 // Remote connections need sslmode=verify-full or sslrootcert=system.
+// `--apply` against a remote host also needs `--confirm <host>`, typed exactly
+// as the DATABASE_URL host (no trim, no case folding), checked before any
+// connection opens. A remote dry-run prints `targetHost` and, without the
+// flag, a `confirmHint`. Local hosts never need it. No TTY prompt.
 // Exit 0 on success, 2 on usage/config/refusal (including a malformed id),
 // 1 on driver/transaction failure. Driver console output is discarded.
 import { pathToFileURL } from "node:url";
+import { parseDatabaseUrl } from "./db-ping-core.mjs";
 import {
   createOperatorClient,
   isLockTimeoutError,
+  LOCAL_HOSTS,
   isProductionDatabaseUrl as sharedIsProductionDatabaseUrl,
   validateOperatorEnvironment,
 } from "./operator-db-core.mjs";
@@ -29,7 +35,10 @@ import {
 import { assertDiscordId, eraseMember, InvalidMemberIdError } from "../src/member-erasure.ts";
 
 const USAGE =
-  "Usage: node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production]. Connection settings come from env only.";
+  "Usage: node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production] [--confirm <host>]. Connection settings come from env only. Example: DATABASE_URL=<url> node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> --apply --target staging --confirm <host>, where <host> is the DATABASE_URL host (remote --apply only; a dry-run shows the host).";
+
+const CONFIRM_HINT =
+  "--apply on this remote target requires --confirm <host>, typed exactly as targetHost.";
 
 export function parseEraseArgs(args) {
   if (!Array.isArray(args) || args.some((arg) => typeof arg !== "string"))
@@ -39,6 +48,7 @@ export function parseEraseArgs(args) {
   let hasDiscordId = false;
   let mode = "dry-run";
   let target;
+  let confirm;
   let seenMode = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
@@ -55,6 +65,14 @@ export function parseEraseArgs(args) {
       const value = arg === "--target" ? args[++i] : arg.slice("--target=".length);
       if (value === undefined || value.startsWith("--")) throw new OperatorCliError("E_TARGET");
       target = value;
+      continue;
+    }
+    if (arg === "--confirm" || arg.startsWith("--confirm=")) {
+      if (confirm !== undefined) throw new OperatorCliError("E_DUPLICATE_FLAG");
+      const value = arg === "--confirm" ? args[++i] : arg.slice("--confirm=".length);
+      if (value === undefined || value === "" || value.startsWith("--"))
+        throw new OperatorCliError("E_CONFIRM");
+      confirm = value;
       continue;
     }
     if (arg.startsWith("--discord-id=")) {
@@ -78,7 +96,7 @@ export function parseEraseArgs(args) {
   } catch {
     throw new OperatorCliError("E_DISCORD_ID");
   }
-  return { discordId, mode, target };
+  return { discordId, mode, target, confirm };
 }
 
 /** Production-looking connection strings need `--target production`. */
@@ -92,6 +110,13 @@ export function validateEraseEnvironment(env, target) {
 
 export function createEraseClient(postgres, raw) {
   return createOperatorClient(postgres, raw, "erase-member");
+}
+
+/** The URL host for a non-local target, else undefined. Called after validation. */
+function remoteDatabaseHost(raw) {
+  if (LOCAL_HOSTS.has(parseDatabaseUrl(raw).host[0].toLowerCase().replace(/\.$/, "")))
+    return undefined;
+  return new URL(raw).hostname;
 }
 
 export async function main(args = process.argv.slice(2), env = process.env) {
@@ -114,6 +139,11 @@ export async function main(args = process.argv.slice(2), env = process.env) {
   } catch (error) {
     return writeOperatorError(error instanceof OperatorCliError ? error.code : "E_DATABASE_URL");
   }
+  // Remote targets: the typed host must equal the DATABASE_URL host exactly.
+  // Decided from the environment alone, so a refusal precedes any connection.
+  const remoteHost = remoteDatabaseHost(env.DATABASE_URL);
+  if (remoteHost !== undefined && parsed.mode === "apply" && parsed.confirm !== remoteHost)
+    return writeOperatorError("E_CONFIRM");
   // This standalone process owns its environment. Discard ambient libpq
   // settings before driver construction, including PGAPPNAME/PGSSLMODE.
   for (const key of Object.keys(process.env)) if (key.startsWith("PG")) delete process.env[key];
@@ -132,8 +162,18 @@ export async function main(args = process.argv.slice(2), env = process.env) {
     // keeps one key per table; passes and deletesPerPass report the
     // session-chase forensics next to it.
     const { passes, deletesPerPass, ...counts } = result;
+    const remoteDryRun = remoteHost !== undefined && parsed.mode === "dry-run";
     process.stdout.write(
-      `${JSON.stringify({ ok: true, mode: parsed.mode, counts, passes, deletesPerPass })}\n`,
+      `${JSON.stringify({
+        ok: true,
+        mode: parsed.mode,
+        counts,
+        passes,
+        deletesPerPass,
+        // Dry-run only: the already-visible host, and the apply requirement.
+        ...(remoteDryRun ? { targetHost: remoteHost } : {}),
+        ...(remoteDryRun && parsed.confirm === undefined ? { confirmHint: CONFIRM_HINT } : {}),
+      })}\n`,
     );
     return 0;
   } catch (error) {

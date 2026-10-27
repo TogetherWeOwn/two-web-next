@@ -19,8 +19,8 @@ exhausted bucket returns 429 only for bodies at or under the cap. Profile owner
 policy runs after the cap; other moderator write authentication runs before
 buffering, read once, without rotation.
 
-`POST /events`, `PATCH /events/:key` and the four `POST /events/:key/` actions
-(`publish`, `cancel`, `rsvp-pause`, `rsvp-reopen`) likewise apply the existing body
+`POST /events`, `PATCH /events/:key` and the five `POST /events/:key/` actions
+(`publish`, `cancel`, `duplicate`, `rsvp-pause`, `rsvp-reopen`) likewise apply the existing body
 cap before the shared throttle and moderator authentication. Oversized advertised
 or streamed bodies return 413 without throttle rows or session reads, even when
 the throttle budget is exhausted. At or under the cap, requests still run the
@@ -35,7 +35,7 @@ first, oversized or not; at or under the cap, moderator posts still spend one
 throttle hit before validation and the store.
 
 Admin lifecycle actions (`POST /admin/events/:key/publish`, `/cancel`,
-`/rsvp-pause`, `/rsvp-reopen`) and queue redispatch
+`/duplicate`, `/rsvp-pause`, `/rsvp-reopen`) and queue redispatch
 (`POST /admin/queue/failed/:id/redispatch`) run the wire cap first instead: an
 oversized moderator body returns 413 with zero admin-write throttle spend and no
 store work, and stays 413 when the budget is already spent.
@@ -58,13 +58,13 @@ shield hit; the SQL client is closed on shield refusals and normal replies
 (413 and source-read failures never reach admission, so no client opens for
 them).
 The QA environment gate runs first, so a disabled seam always returns 404 without
-reads or throttle queries. `POST /logout` and `POST /auth/qa/:identity` (after
-its QA identity/token gate) apply the `action` cap before the throttle: an
-oversized body returns 413 with zero throttle-budget spend even when the bucket
-is exhausted, while bodies at or under the cap keep the existing
-throttle-then-work order. Unauthenticated QA probes still 404 at the gate
-before either. Source-read failures return a static 400; downstream
-route and store exceptions still reach their existing handlers.
+reads or throttle queries. `POST /logout`, `POST /logout/everywhere` and
+`POST /auth/qa/:identity` (after its QA identity/token gate) apply the `action`
+cap before the throttle: an oversized body returns 413 with zero
+throttle-budget spend even when the bucket is exhausted, while bodies at or
+under the cap keep the existing throttle-then-work order. Unauthenticated QA
+probes still 404 at the gate before either. Source-read failures return a static
+400; downstream route and store exceptions still reach their existing handlers.
 
 `POST /mcp` is likewise cap-first: `requestBodyLimit("mcp")` runs before
 `mcpRefused()` in [`src/mcp/routes.ts`](../src/mcp/routes.ts), so an over-cap

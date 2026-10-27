@@ -16,7 +16,7 @@ function fixture(rows: CalendarRow[]) {
     if (!sql.includes('from "events"') || !sql.includes('"status" in'))
       throw new Error("Unexpected RSS fixture query");
     expect(params).toContain("published");
-    expect(params).not.toContain("cancelled");
+    expect(params).toContain("cancelled");
     const cutoff = params.find(
       (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value),
     );

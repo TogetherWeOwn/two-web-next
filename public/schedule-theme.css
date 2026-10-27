@@ -1,59 +1,65 @@
-/* Community schedule (/events, /events/past): layout over the base tokens in theme.css. */
-.events-page .schedule-heading { border-left: 4px solid var(--brand); padding-left: 1.5rem; margin-bottom: 2.5rem; }
-.events-page h1 { font-size: clamp(3rem, 7vw, 5rem); margin: .5rem 0 1rem; }
-.events-page .strap { color: var(--brand); margin: 0; }
-.events-page [data-cal-zone=head] { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; }
-.events-page [data-cal-zone=head] p { display: flex; flex-wrap: wrap; gap: .5rem 1.5rem; margin: 0; }
-.events-page a:not(.btn) { min-height: 44px; display: inline-flex; align-items: center; }
-.events-page .schedule-views { display: flex; border: 1px solid var(--line); }
-.events-page .schedule-views a { padding: .4rem 1.25rem; text-decoration: none; color: var(--ink); }
-.events-page .schedule-views a[aria-current] { background: var(--brand); color: var(--paper); }
-.events-page form[role=search] { display: flex; flex-wrap: wrap; gap: .75rem; margin: 1.5rem 0 2rem; }
-.events-page input[type=search] { flex: 1; min-width: 10rem; min-height: 52px; border: 1px solid var(--line); border-radius: 0; background: var(--surface); color: var(--ink); padding: .65rem 1rem; font: inherit; }
-.events-page input::placeholder { color: var(--muted); opacity: 1; }
-.events-page :is([data-testid=events-list], [data-testid=events-past-list], [data-archive-list]) { list-style: none; padding: 0; margin: 1.5rem 0; }
-.events-page .schedule-row { display: grid; grid-template-columns: 4.5rem minmax(0, 1fr) auto; gap: 1.5rem; align-items: start; background: var(--surface); border: 1px solid var(--line); margin-bottom: .75rem; padding: 1.5rem; overflow-wrap: anywhere; }
-.events-page .schedule-date { display: grid; text-align: center; color: var(--brand); border-right: 1px solid var(--line); padding-right: 1rem; font-family: Display, 'Display Fallback', 'Arial Narrow', sans-serif; text-transform: uppercase; line-height: 1.2; }
-.events-page .schedule-date strong { font-size: 2.5rem; font-variant-numeric: tabular-nums; }
-.events-page .schedule-info :is(h2, h3) { font-size: 1.6rem; margin: 0; }
-.events-page .schedule-info p { margin: .4rem 0 0; }
-.events-page .schedule-actions { display: grid; justify-items: end; gap: .5rem; max-width: 14rem; }
-.events-page .schedule-attendance { color: var(--muted); font-variant-numeric: tabular-nums; }
-.events-page .schedule-badge { display: inline-block; border: 1px solid var(--line); padding: .1rem .5rem; margin-top: .5rem; }
+.events-page .schedule-heading{border-left:4px solid var(--brand);padding-left:1.5rem;margin-bottom:2.5rem}
+.events-page h1{font-size:clamp(3rem,7vw,5rem);margin:.5rem 0 1rem}
+.events-page .strap{color:var(--brand);margin:0}
+.events-page [data-cal-zone=head]{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:1rem}
+.events-page [data-cal-zone=head] p{display:flex;flex-wrap:wrap;gap:.5rem 1.5rem;margin:0}
+.events-page a:not(.btn){min-height:44px;display:inline-flex;align-items:center}
+.events-page .schedule-views{display:flex;border:1px solid var(--line)}
+.events-page .schedule-views.board-periods{flex-wrap:wrap;width:fit-content}
+.events-page .schedule-views a{padding:.4rem 1.25rem;text-decoration:none;color:var(--ink)}
+.events-page .schedule-views a[aria-current]{background:var(--brand);color:var(--paper)}
+.events-page form[role=search]{display:flex;flex-wrap:wrap;gap:.75rem;margin:1.5rem 0 2rem}
+.events-page :is(input[type=search],select[name=game]){min-height:52px;border:1px solid var(--line);border-radius:0;background:var(--surface);color:var(--ink);padding:.65rem .5rem;font:inherit}
+.events-page input[type=search]{flex:1;min-width:10rem;padding-inline:1rem}
+.events-page .schedule-game-filter{display:inline-flex;align-items:center;gap:.5rem;max-width:100%}
+.events-page select[name=game]{min-width:0;max-width:12rem;color-scheme:dark}
+.events-page input::placeholder{color:var(--muted);opacity:1}
+.events-page :is([data-testid=events-list],[data-testid=events-past-list],[data-archive-list]){list-style:none;padding:0;margin:1.5rem 0}
+.events-page .schedule-row{display:grid;grid-template-columns:4.5rem minmax(0,1fr) auto;gap:1.5rem;align-items:start;background:var(--surface);border:1px solid var(--line);margin-bottom:.75rem;padding:1.5rem;overflow-wrap:anywhere}
+.events-page .schedule-date{display:grid;text-align:center;color:var(--brand);border-right:1px solid var(--line);padding-right:1rem;font-family:Display,'Display Fallback','Arial Narrow',sans-serif;text-transform:uppercase;line-height:1.2}
+.events-page .schedule-date strong{font-size:2.5rem;font-variant-numeric:tabular-nums}
+.events-page .schedule-info :is(h2, h3){font-size:1.6rem;margin:0}
+.events-page .schedule-info p{margin:.4rem 0 0}
+.events-page .schedule-description[open] .schedule-excerpt{display:none;}
+.events-page .schedule-actions{display:grid;justify-items:end;gap:.5rem;max-width:14rem;}
+.events-page .schedule-attendance{color:var(--muted);font-variant-numeric:tabular-nums;}
+.events-page .schedule-badge{display:inline-block;border:1px solid var(--line);padding:.1rem .5rem;margin-top:.5rem;}
+.events-page [data-cal-jump]{flex-wrap:wrap;overflow-wrap:anywhere;}
 .events-page [data-cal-jump][data-cancelled] { flex-direction: column; align-items: flex-start; }
 .events-page [data-cal-jump] .schedule-badge { margin: .25rem 0 0; }
-.events-page :is([data-cal-zone=miss] > div, [data-cal-zone=content] > [data-testid], [data-archive-state] > *) { background: var(--surface); border-left: 4px solid var(--brand); padding: 1.5rem; }
-.events-page .schedule-month-nav { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
-.events-page .schedule-month-nav a { padding: .5rem 1rem; border: 1px solid var(--line); }
-.events-page [data-testid=calendar-month-jump] { display: flex; flex-wrap: wrap; align-items: center; gap: .75rem; margin: 1rem 0; }
-.events-page input[type=month] { min-height: 44px; max-width: 100%; padding: .5rem; border: 1px solid var(--line); background: var(--surface); color: var(--ink); color-scheme: dark; font: inherit; }
-.events-page [data-testid=events-calendar-scroll] { overflow-x: auto; }
-.events-page [data-hotzone-scroll] { overflow-x: auto; max-width: 100%; }
-.events-page table { width: 100%; min-width: 42rem; table-layout: fixed; border-collapse: collapse; background: var(--surface); }
-.events-page :is(th, td) { border: 1px solid var(--line); padding: .65rem; vertical-align: top; }
-.events-page th { color: var(--muted); }
-.events-page table:not(.member-board-table) td { height: 8rem; }
-.events-page [data-testid=events-calendar-scroll] td[aria-current=date] { box-shadow: inset 0 0 0 2px var(--brand); }
-.events-page [data-testid=events-calendar-scroll] td[data-outside] { background: var(--paper); }
-.events-page [data-testid=events-calendar-scroll] td ul { list-style: none; padding: 0; margin: .25rem 0 0; font-size: .85rem; }
-.events-page .member-board-table { min-width: 0; }
-.events-page .member-board-table :is(th, td) { border: 1px solid var(--line); padding: .65rem; vertical-align: top; }
-.events-page .member-board-table th { color: var(--muted); }
-.events-page .member-board-table thead th { position: sticky; top: 0; z-index: 1; background: var(--surface); box-shadow: inset 0 -1px var(--line); }
-.events-page .member-board-table tbody tr[aria-current="true"] { background: var(--paper); outline: 2px solid var(--brand); outline-offset: -2px; }
+.events-page :is([data-cal-zone=miss] > div, [data-cal-zone=content] > [data-testid], [data-archive-state] > *){background:var(--surface);border-left:4px solid var(--brand);padding:1.5rem;}
+.events-page .schedule-month-nav{display:flex;align-items:center;justify-content:space-between;gap:1rem;}
+.events-page .schedule-month-nav a{padding:.5rem 1rem;border:1px solid var(--line);}
+.events-page [data-testid=calendar-month-jump]{display:flex;flex-wrap:wrap;align-items:center;gap:.75rem;margin:1rem 0;}
+.events-page input[type=month]{min-height:44px;max-width:100%;padding:.5rem;border:1px solid var(--line);background:var(--surface);color:var(--ink);color-scheme:dark;font:inherit;}
+.events-page [data-testid=events-calendar-scroll]{overflow-x:auto;}
+.events-page [data-hotzone-scroll]{overflow-x:auto;max-width:100%;}
+.events-page table{width:100%;min-width:42rem;table-layout:fixed;border-collapse:collapse;background:var(--surface);}
+.events-page :is(th, td){border:1px solid var(--line);padding:.65rem;vertical-align:top;}
+.events-page th{color:var(--muted);}
+.events-page table:not(.member-board-table) td{height:8rem;}
+.events-page [data-testid=events-calendar-scroll] td[aria-current=date]{box-shadow:inset 0 0 0 2px var(--brand);}
+.events-page [data-testid=events-calendar-scroll] td[data-outside]{background:var(--paper);}
+.events-page [data-testid=events-calendar-scroll] td ul{list-style:none;padding:0;margin:.25rem 0 0;font-size:.85rem;}
+.events-page .member-board-table{min-width:0}
+.events-page .member-board-table :is(th, td){border:1px solid var(--line);padding:.65rem;vertical-align:top}
+.events-page .member-board-table th{color:var(--muted)}
+.events-page .member-board-table thead th{position:sticky;top:0;z-index:1;background:var(--surface);box-shadow:inset 0 -1px var(--line)}
+.events-page .member-board-table tbody tr[aria-current="true"]{background:var(--paper);outline:2px solid var(--brand);outline-offset:-2px}
 @media (forced-colors: active) {
   .events-page .member-board-table tbody tr[aria-current="true"] { outline-color: Highlight; }
 }
 .events-page .member-board-table :is(caption, td, th[scope=row]) { overflow-wrap: anywhere; }
 .events-page .member-board-table :is(th, td):first-child { width: 5.5rem; }
 .events-page .member-board-table :is(th, td):last-child { width: 5rem; }
+.events-page mark { background: var(--brand); color: var(--paper); }
 .events-page [data-archive-state] { overflow-wrap: anywhere; }
 .events-page [data-archive-pager] { display: flex; flex-wrap: wrap; gap: 1.5rem; }
-.events-page .subscription-help { margin: 1rem 0; padding: .75rem 1rem; border: 1px solid var(--line); }
-.events-page .subscription-help summary { min-height: 44px; }
-.events-page .subscription-copy { display: flex; flex-wrap: wrap; gap: .5rem; }
-.events-page .subscription-copy [hidden] { display: none; }
-.events-page .subscription-copy input { flex: 1 1 20rem; min-width: 0; font: inherit; color: var(--ink); background: var(--surface); border: 1px solid var(--line); padding: .5rem; }
+.events-page .subscription-help{margin:1rem 0;padding:.75rem 1rem;border:1px solid var(--line);}
+.events-page summary{min-height:44px;}
+.events-page .subscription-copy{display:flex;flex-wrap:wrap;gap:.5rem;}
+.events-page .subscription-copy [hidden]{display:none;}
+.events-page .subscription-copy input{flex:1 1 20rem;min-width:0;font:inherit;color:var(--ink);background:var(--surface);border:1px solid var(--line);padding:.5rem;}
 @media (max-width: 48rem) {
   .events-page .schedule-row { grid-template-columns: 3.5rem minmax(0, 1fr); padding: 1rem; gap: 1rem; }
   .events-page .schedule-actions, .events-page .schedule-row > .schedule-attendance { grid-column: 2; justify-items: start; }

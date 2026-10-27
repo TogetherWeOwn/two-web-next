@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, it } from "vitest";
 import { expectedLhrs } from "../ci/lighthouse-quality-run.mjs";
+import { navigationMetadata } from "./lighthouse-navigation-fixtures.mjs";
 
 const ORIGIN = "https://next.togetherweown.com";
 const workflowPath = fileURLToPath(
@@ -33,24 +34,22 @@ it("runs the deployed summary with the origin configured by its workflow step", 
     const qualityDir = join(lighthouseDir, "quality");
     mkdirSync(qualityDir, { recursive: true });
     let index = 0;
+    const makeLhr = (url) => ({
+      ...navigationMetadata("desktop", { deployed: true }),
+      requestedUrl: url,
+      finalUrl: url,
+      finalDisplayedUrl: url,
+      categories: Object.fromEntries(
+        collect.settings.onlyCategories.map((category) => [category, { score: 1, auditRefs: [] }]),
+      ),
+      audits: {},
+    });
     for (const url of collect.url) {
-      const lhr = {
-        requestedUrl: url,
-        finalUrl: url,
-        finalDisplayedUrl: url,
-        categories: Object.fromEntries(
-          collect.settings.onlyCategories.map((category) => [
-            category,
-            { score: 1, auditRefs: [] },
-          ]),
-        ),
-        audits: {},
-      };
       for (let run = 0; run < collect.numberOfRuns; run++) {
-        writeFileSync(join(lighthouseDir, `lhr-${index}.json`), JSON.stringify(lhr));
+        writeFileSync(join(lighthouseDir, `lhr-${index}.json`), JSON.stringify(makeLhr(url)));
         index++;
       }
-      writeFileSync(join(qualityDir, `lhr-${index}.json`), JSON.stringify(lhr));
+      writeFileSync(join(qualityDir, `lhr-${index}.json`), JSON.stringify(makeLhr(url)));
       index++;
     }
 

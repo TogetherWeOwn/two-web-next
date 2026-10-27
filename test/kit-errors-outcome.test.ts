@@ -438,7 +438,7 @@ describe("Kit Svelte error shells (text pins; the root suite cannot transform Sv
       "const status = $derived(isKitErrorStatus(page.status) ? page.status : 500);",
     );
     expect(page).toContain(
-      "<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} adminBack={adminBack} />",
+      "<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} supportReference={page.data.requestId} adminBack={adminBack} />",
     );
     expect(page).toContain('<meta name="robots" content="noindex, nofollow" />');
     expect(page).not.toMatch(/page\.error/);
