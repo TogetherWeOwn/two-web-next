@@ -1,16 +1,16 @@
-# 2026-10-27 decision: server JS gzip ceiling 335872 -> 336128
+# 2026-10-27 decision: server JS gzip ceiling 336128 -> 336384
 
-`server.js.maxGzipBytes` rises 335872 -> 336128 in
+`server.js.maxGzipBytes` rises 336128 -> 336384 in
 `ci/budgets/kit/server-js.json`; no other ceiling changes. This admits the
 event-share-honesty change (PR #1865), whose share block on the event detail
 page grows the Kit server bundle past the current ceiling once merged with
 current main. One 256B step, the smallest aligned cover for the measured
-worst case: 335872 rejects it by 112B.
+worst case: 336128 rejects it by 40B.
 
-History: this record was first written for a 335360 -> 335872 raise measured
-on main `cd50096f3`. Main's own 335872 raise (event-time work) then landed
-and consumed that headroom, so the composition was re-measured on the new
-main tip and the allocation moved up one step.
+History: first written for 335360 -> 335872 (main `cd50096f3`), re-targeted
+to 336128 on main `7d5db1c21`; sibling raises (event-time to 335872, then
+Happening-now to 336128, #1923) consumed that headroom each time, so the
+composition was re-measured on main `227414575` and moved one more step.
 
 ## Measurements
 
@@ -18,40 +18,39 @@ Locked Node 24.22.1 / npm 11.19.1 production builds
 (`npm run build --prefix web`), measured through
 `node ci/check-kit-perf.mjs`, two builds per tree. Worst case governs.
 
-Pristine main tip `7d5db1c21`:
+Pristine main tip `227414575` (ceiling 336128):
 
-| Build | Server files | Raw bytes | Gzip bytes | Gate at 335872 |
+| Build | Server files | Raw bytes | Gzip bytes | Gate |
 |---|---:|---:|---:|---|
-| 1 | 116 | 1186500 | 335653 | exit 0, margin 219 |
-| 2 | 116 | 1186500 | 335652 | exit 0, margin 220 |
+| 1 | 116 | 1187398 | 335837 | exit 0, margin 291 |
+| 2 | 116 | 1187400 | 335837 | exit 0, margin 291 |
 
-Combined tree (main tip `7d5db1c21` plus PR #1865 head `6f2e668b6`, merged in
-a scratch worktree; the only conflict was a visual-baseline PNG, which does
-not affect the bundle):
+Combined tree (main tip plus PR #1865 head `6f2e668b6`, merged in a scratch
+worktree; the only conflicts were visual-baseline PNGs, which do not affect
+the bundle):
 
-| Build | Server files | Raw bytes | Gzip bytes | Gate at 335872 |
+| Build | Server files | Raw bytes | Gzip bytes | Gate at 336128 |
 |---|---:|---:|---:|---|
-| 1 | 116 | 1187638 | 335983 | exit 1, 111 over |
-| 2 | 116 | 1187638 | 335984 | exit 1, 112 over |
+| 1 | 116 | 1188536 | 336165 | exit 1, 37 over |
+| 2 | 116 | 1188536 | 336168 | exit 1, 40 over |
 
-Re-running the checker on the combined build with the ceiling set to each
-candidate: 335872 rejects (112 over); 336128 admits with 144B of margin
-(exit 0, every Kit asset fits). Worker (2551/1219B), client JS
-(54 files, 255705/102862B) and client CSS (2 files, 2861/1019B) fit their
+On the combined build, ceiling 336128 rejects (40 over); 336384 admits with
+216B of margin (exit 0, every Kit asset fits). Worker (2551/1219B), client
+JS (54 files, 256219/103045B) and client CSS (2 files, 2861/1019B) fit their
 unchanged ceilings. The feature delta on the server total is +1138 raw /
-+332 gzip bytes (combined worst minus pristine best); main alone has only
-220B of headroom, so trimming the feature cannot close the gap.
++331 gzip bytes; main alone has 291B of headroom, so trimming the feature
+cannot close the gap.
 
-Rebuild jitter is disclosed, not signal: pristine and combined gzip each
-wobbled 1B across rebuilds.
+Rebuild jitter is disclosed, not signal: gzip wobbled up to 3B across
+rebuilds of an identical tree.
 
 ## Shipping tests
 
-`ci/check-kit-perf.test.mjs` already carries 336128 in its
-`SHIPPING_SERVER_GZIP_ALLOCATIONS` (interval 335977, exact 336128, one byte
-over 336129), so that suite needs no change. In
-`ci/budget-fragments.test.mjs` 336128 joins the admitted allocation list and a
-case admits it, while 336129 stays rejected.
+`ci/check-kit-perf.test.mjs` already carries 336384 in its
+`SHIPPING_SERVER_GZIP_ALLOCATIONS` (interval 336192, exact 336384, one byte
+over 336385), so that suite needs no change. In
+`ci/budget-fragments.test.mjs` 336384 joins the admitted allocation list and a
+case admits it, while 336385 stays rejected.
 
 No feature, checker, dependency, workflow, mask or exclusion changes ship
 here. Sibling open PRs that also edit this line were not merged at
