@@ -9,7 +9,12 @@ import { parseSeasonParam } from "../../../../../src/hotzones/season";
 // reads the source top to bottom.
 import { isHotzoneSignal } from "../../../../../src/hotzones/aggregates";
 import { loadHotzoneSignalData } from "../../../../../src/kit-hotzones";
-import { renderHotzoneGrid, renderPeriodPicker } from "../../../../../src/hotzones/pages";
+import { parseDayParam } from "../../../../../src/hotzones/day";
+import {
+  renderHotzoneDay,
+  renderHotzoneGrid,
+  renderPeriodPicker,
+} from "../../../../../src/hotzones/pages";
 
 // Locked signal vocabulary: joins | voice | games exactly, via the shared
 // predicate. Any other segment 404s at this binding, never a grid; the helper
@@ -46,21 +51,24 @@ export const load: PageServerLoad = async ({ params, url, locals, setHeaders }) 
       dbForFn: dbFor,
       requestId: locals.requestId,
     });
+    // A repeated or unknown `day` means the full week, exactly as on Hono.
+    const day = parseDayParam(url.searchParams.getAll("day"));
+    const caption = data.estimated
+      ? `Season-independent seeded estimate of ${data.signal} activity`
+      : `Join activity for season ${data.season}`;
     return {
       signal: data.signal,
       season: data.season,
-      gridHtml: await renderHotzoneGrid(
-        data.cells,
-        data.estimated
-          ? `Season-independent seeded estimate of ${data.signal} activity`
-          : `Join activity for season ${data.season}`,
-      ),
+      day,
+      gridHtml: day
+        ? renderHotzoneDay(data.cells, caption, day)
+        : await renderHotzoneGrid(data.cells, caption),
       total: data.total,
       eventCount: data.eventCount,
       retentionNote: data.retentionNote,
       estimated: data.estimated,
       appUrl: data.appUrl,
-      periodPickerHtml: renderPeriodPicker(`/hotzones/${data.signal}`, data.season),
+      periodPickerHtml: renderPeriodPicker(`/hotzones/${data.signal}`, data.season, { day }),
     };
   } catch (err) {
     const status = (err as { status?: number })?.status;

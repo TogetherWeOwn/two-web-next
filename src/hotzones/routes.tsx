@@ -13,6 +13,7 @@ import {
   HotzoneSignalPage,
   HotzonesIndexPage,
 } from "./pages";
+import { parseDayParam } from "./day";
 import { isHotzoneSignal, joinsRetentionNote, loadJoinsGrid, priorGrid } from "./aggregates";
 import { recordBoardView } from "./board-log";
 import { parseSeasonParam, seasonLabel } from "./season";
@@ -78,6 +79,7 @@ async function renderSignal(c: Ctx) {
   if (limited) return limited;
   const label = window.kind === "all" ? "all" : window.label;
   void seasonLabel(raw ?? null);
+  const day = parseDayParam(c.req.queries("day") ?? []);
   const db = await dbFor(c);
   if (signal === "joins") {
     const joins = await loadJoinsGrid(db, window);
@@ -105,6 +107,7 @@ async function renderSignal(c: Ctx) {
         total={joins.total}
         eventCount={joins.eventCount}
         retentionNote={joinsRetentionNote(window)}
+        day={day}
       />,
     );
   }
@@ -131,6 +134,7 @@ async function renderSignal(c: Ctx) {
       season={label}
       cells={prior.cells}
       total={prior.total}
+      day={day}
     />,
   );
 }

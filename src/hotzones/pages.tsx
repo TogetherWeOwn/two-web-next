@@ -9,6 +9,7 @@ import { canonicalUrl } from "../seo";
 import type { HeatGrid } from "./aggregates";
 import { HOTZONE_SIGNALS, WEEKDAY_NAMES } from "./aggregates";
 import type { HotzoneSignal } from "./aggregates";
+import { DAY_TOKENS, hotzoneQuery, projectDay, type DayToken } from "./day";
 import { utcPeriodShortcuts } from "./season";
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
@@ -59,16 +60,65 @@ const Grid: FC<{ cells: HeatGrid; caption: string }> = ({ cells, caption }) => {
 export const renderHotzoneGrid = (cells: HeatGrid, caption: string) =>
   (<Grid cells={cells} caption={caption} />).toString();
 
+// Narrow reading mode for one weekday: the same source cells as the week grid,
+// two columns (Hour UTC / Count) so a phone or a sequential screen reader walks
+// 24 rows instead of a 25-column table. It reuses the member-board-table class
+// (min-width 0, no 8rem cell height), so no region wrapper is needed: nothing
+// scrolls sideways.
+const DayReader: FC<{ cells: HeatGrid; caption: string; day: DayToken }> = ({
+  cells,
+  caption,
+  day,
+}) => {
+  const labelled = `${WEEKDAY_NAMES[DAY_TOKENS.indexOf(day)]}: ${caption} (hours in UTC)`;
+  return (
+    <table class="member-board-table">
+      <caption>{labelled}</caption>
+      <thead>
+        <tr>
+          <th scope="col">Hour (UTC)</th>
+          <th scope="col">Count</th>
+        </tr>
+      </thead>
+      <tbody>
+        {projectDay(cells, day).map((count, hour) => (
+          <tr>
+            <th scope="row">{String(hour).padStart(2, "0")}:00</th>
+            <td>{count}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+};
+
+export const renderHotzoneDay = (cells: HeatGrid, caption: string, day: DayToken) =>
+  (<DayReader cells={cells} caption={caption} day={day} />).toString();
+
 // Native period picker shared by Hono and Kit: a GET form whose action stays
 // on the current index/signal route, plus server-derived UTC shortcuts. No
 // JavaScript dependency; the committed season renders back into the input so
 // applies and resets stay bookmarkable. The all/absent reset anchor carries
 // no query state, keeping the canonical URL bare.
-const PeriodPicker: FC<{ action: string; season: string }> = ({ action, season }) => {
+//
+// Signal pages pass `weekday` (the chosen day token, or null for the full
+// week) to add the native weekday select to this same form, so applying a
+// period keeps the chosen weekday and choosing a weekday keeps the committed
+// season. The leading "Full week" option submits an empty day, which the
+// shared parser reads as the full week; the day-mode link returns there
+// without a form. The index renders no weekday control.
+const PeriodPicker: FC<{
+  action: string;
+  season: string;
+  weekday?: { day: DayToken | null };
+}> = ({ action, season, weekday }) => {
   const { month, quarter } = utcPeriodShortcuts();
+  const day = weekday?.day ?? null;
   return (
     <section aria-labelledby="hotzone-period-heading">
-      <h2 id="hotzone-period-heading">Choose a period</h2>
+      <h2 id="hotzone-period-heading">
+        {weekday ? "Choose a period or weekday" : "Choose a period"}
+      </h2>
       <form method="get" action={action}>
         <label for="hotzone-season">Period</label>{" "}
         <input
@@ -78,6 +128,21 @@ const PeriodPicker: FC<{ action: string; season: string }> = ({ action, season }
           value={season}
           aria-describedby="hotzone-season-help"
         />{" "}
+        {weekday ? (
+          <>
+            <label for="hotzone-day">Weekday (UTC)</label>{" "}
+            <select id="hotzone-day" name="day">
+              <option value="" selected={day === null}>
+                Full week
+              </option>
+              {DAY_TOKENS.map((token, index) => (
+                <option value={token} selected={token === day}>
+                  {WEEKDAY_NAMES[index]}
+                </option>
+              ))}
+            </select>{" "}
+          </>
+        ) : null}
         <button type="submit">Apply</button>
         <p id="hotzone-season-help">
           Enter all for all available data, a year such as 2026, a month such as 2026-02, or a
@@ -85,9 +150,15 @@ const PeriodPicker: FC<{ action: string; season: string }> = ({ action, season }
         </p>
       </form>
       <p>
-        <a href={`${action}?season=${month}`}>This month</a> ·{" "}
-        <a href={`${action}?season=${quarter}`}>This quarter</a> ·{" "}
-        <a href={action}>All available data</a>
+        <a href={`${action}${hotzoneQuery(month, day)}`}>This month</a> ·{" "}
+        <a href={`${action}${hotzoneQuery(quarter, day)}`}>This quarter</a> ·{" "}
+        <a href={`${action}${hotzoneQuery("all", day)}`}>All available data</a>
+        {day ? (
+          <>
+            {" "}
+            · <a href={`${action}${hotzoneQuery(season, null)}`}>Return to full week</a>
+          </>
+        ) : null}
       </p>
     </section>
   );
@@ -95,8 +166,11 @@ const PeriodPicker: FC<{ action: string; season: string }> = ({ action, season }
 
 // Kit's server-only loaders reuse this escaped JSX string for the identical
 // picker, rather than shipping a second renderer in the client bundle.
-export const renderPeriodPicker = (action: string, season: string) =>
-  (<PeriodPicker action={action} season={season} />).toString();
+export const renderPeriodPicker = (
+  action: string,
+  season: string,
+  weekday?: { day: DayToken | null },
+) => (<PeriodPicker action={action} season={season} weekday={weekday} />).toString();
 
 export const HotzonesIndexPage: FC<{
   appUrl: string;
@@ -188,10 +262,17 @@ export const HotzoneSignalPage: FC<{
   total: number;
   eventCount?: number;
   retentionNote?: string | null;
-}> = ({ appUrl, signal, season, cells, total, eventCount, retentionNote }) => {
+  day?: DayToken | null;
+}> = ({ appUrl, signal, season, cells, total, eventCount, retentionNote, day = null }) => {
   const qs = season === "all" ? "" : `?season=${season}`;
   const path = `/hotzones/${signal}${qs}`;
+  // The weekday is a reading mode of the same board: the canonical URL stays
+  // the full-week page, while sign-in returns to the exact view.
+  const dayQs = hotzoneQuery(season, day);
   const estimated = signal !== "joins";
+  const caption = estimated
+    ? `Season-independent seeded estimate of ${signal} activity`
+    : `Join activity for season ${season}`;
   return (
     <Layout
       title={`${signal} hot zone — Together We Own`}
@@ -200,7 +281,7 @@ export const HotzoneSignalPage: FC<{
       robots="noindex, follow"
       theme="schedule"
     >
-      <SiteHeader active="events" loginReturnTo={path}>
+      <SiteHeader active="events" loginReturnTo={`/hotzones/${signal}${dayQs}`}>
         <a class="btn" href="/discord">
           Open Discord
         </a>
@@ -226,19 +307,18 @@ export const HotzoneSignalPage: FC<{
             {retentionNote ? <p>{retentionNote}</p> : null}
           </>
         )}
-        <PeriodPicker action={`/hotzones/${signal}`} season={season} />
+        <PeriodPicker action={`/hotzones/${signal}`} season={season} weekday={{ day }} />
         <p>
-          <a href={`/hotzones${qs}`}>All hot zones</a> · <a href={`/hotzones/joins${qs}`}>joins</a>{" "}
-          · <a href={`/hotzones/voice${qs}`}>voice</a> · <a href={`/hotzones/games${qs}`}>games</a>
+          <a href={`/hotzones${qs}`}>All hot zones</a> ·{" "}
+          <a href={`/hotzones/joins${dayQs}`}>joins</a> ·{" "}
+          <a href={`/hotzones/voice${dayQs}`}>voice</a> ·{" "}
+          <a href={`/hotzones/games${dayQs}`}>games</a>
         </p>
-        <Grid
-          cells={cells}
-          caption={
-            estimated
-              ? `Season-independent seeded estimate of ${signal} activity`
-              : `Join activity for season ${season}`
-          }
-        />
+        {day ? (
+          <DayReader cells={cells} caption={caption} day={day} />
+        ) : (
+          <Grid cells={cells} caption={caption} />
+        )}
       </main>
       <SiteFooter />
     </Layout>
