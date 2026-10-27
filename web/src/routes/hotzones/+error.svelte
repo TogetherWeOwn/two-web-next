@@ -64,5 +64,5 @@ const hotzoneRecovery = $derived(badSeason || unknownSignal);
     </section>
   </Shell>
 {:else}
-  <ErrorShell code={status} inviteUrl={FALLBACK_INVITE} />
+  <ErrorShell code={status} inviteUrl={FALLBACK_INVITE} supportReference={page.data?.requestId} />
 {/if}
