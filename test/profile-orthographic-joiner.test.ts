@@ -48,6 +48,14 @@ const PERSIAN_BOOKS = F(0x06a9, 0x062a, 0x0627, 0x200c, 0x0647, 0x0627);
 const BALINESE_ZWNJ = F(0x1b13, 0x1b44, 0x200c);
 const JAVANESE_ZWJ = F(0xa98f, 0xa9c0, 0x200d);
 const GRANTHA_ZWJ = F(0x11315, 0x1134d, 0x200d);
+// Every virama above U+1134D in the encoded VIRAMA_DELTAS table, in ascending
+// order (Newa through Gurung Khema U+1612F). Pinning each one kills any tail
+// edit (e.g. final delta 0x41ed -> 0x41ec retargeting U+1612F to U+1612E).
+const TAIL_VIRAMAS = [
+  0x113ce, 0x113cf, 0x113d0, 0x11442, 0x114c2, 0x115bf, 0x1163f, 0x116b6, 0x1172b, 0x11839, 0x1193d,
+  0x1193e, 0x119e0, 0x11a34, 0x11a47, 0x11a99, 0x11c3f, 0x11d44, 0x11d45, 0x11d97, 0x11f41, 0x11f42,
+  0x1612f,
+];
 
 const valid = { bio: "Hello", games: ["Halo"], timezone: "Europe/London" };
 
@@ -104,6 +112,18 @@ describe("validateProfile saves orthographic joiners verbatim", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors.bio).toMatch(/invisible|directional/i);
+  });
+
+  it("pins every virama above U+1134D: ZWJ/ZWNJ accepted, ZWSP still refused", () => {
+    for (const cp of TAIL_VIRAMAS) {
+      expect(containsControlCharacters(F(cp, 0x200d, 0x61))).toBe(false);
+      expect(containsControlCharacters(F(cp, 0x200c, 0x61))).toBe(false);
+      expect(containsControlCharacters(F(cp, 0x200b))).toBe(true);
+    }
+    // Explicit final-entry pin: the table ends at Gurung Khema U+1612F, so a
+    // one-delta typo (0x41ed -> 0x41ec) retargeting U+1612E must refuse.
+    expect(containsControlCharacters(F(0x1612f, 0x200d, 0x61))).toBe(false);
+    expect(containsControlCharacters(F(0x1612e, 0x200d, 0x61))).toBe(true);
   });
 
   it("accepts multi-cluster and Persian/Mc-virama text while refusing Mn-adjacent ZWSP", () => {
