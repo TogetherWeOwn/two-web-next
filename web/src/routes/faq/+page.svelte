@@ -1,6 +1,7 @@
 <script lang="ts">
 import ContentLeaf from "#lib/ContentLeaf.svelte";
 import Shell from "#lib/Shell.svelte";
+import { LEAF_DESCRIPTIONS } from "../../../../src/leaf-descriptions";
 import { canonicalUrl } from "../../../../src/seo";
 import type { PageProps } from "./$types";
 
@@ -29,6 +30,7 @@ const { appUrl, faqs, lastReviewed, leafCss } = $derived(data);
   title="FAQ"
   canonical={canonicalUrl(appUrl, "/faq")}
   theme="content"
+  description={LEAF_DESCRIPTIONS["/faq"]}
   {leafCss}
   accountChrome={accountJoin}
 >

@@ -3,6 +3,7 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import type { HeaderSession, Session } from "./env";
 import { HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "./home-copy";
 import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
+import { leafDescription } from "./leaf-descriptions";
 import type { JoinResult } from "./return-journey";
 import { shareImageUrl } from "./seo";
 
@@ -336,12 +337,24 @@ export const JOIN_HREF = "/join";
 // The .md alternate sits next to the leaf path by construction (A2: one media
 // type per route, so the alternate is the same path plus `.md`). Derived here
 // so the four leaf screens cannot ship a mismatched pair.
-const leafMarkdownAlternate = (canonical: string): string | undefined => {
+const leafPathname = (canonical: string): string | undefined => {
   try {
-    return `${new URL(canonical).pathname}.md`;
+    return new URL(canonical).pathname;
   } catch {
     return undefined;
   }
+};
+
+const leafMarkdownAlternate = (canonical: string): string | undefined => {
+  const pathname = leafPathname(canonical);
+  return pathname === undefined ? undefined : `${pathname}.md`;
+};
+
+// The share description comes from the shared per-leaf authority, keyed by
+// the same canonical pathname, so Hono and Kit cannot drift apart.
+const leafShareDescription = (canonical: string): string | undefined => {
+  const pathname = leafPathname(canonical);
+  return pathname === undefined ? undefined : leafDescription(pathname);
 };
 
 export const Leaf: FC<
@@ -352,6 +365,7 @@ export const Leaf: FC<
     canonical={canonical}
     theme="content"
     markdownAlternate={leafMarkdownAlternate(canonical)}
+    shareDescription={leafShareDescription(canonical)}
   >
     <SiteHeader joinAction />
     <main id="main" tabindex={-1}>

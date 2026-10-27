@@ -1,5 +1,6 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
+import { LEAF_DESCRIPTIONS } from "../../../../src/leaf-descriptions";
 import { canonicalUrl } from "../../../../src/seo";
 import { PREVIOUS_PUBLISHED_POLICIES } from "../../../../src/privacy-history";
 import type { PageProps } from "./$types";
@@ -32,6 +33,7 @@ const canonical = $derived(canonicalUrl(appUrl, "/privacy"));
   title="Privacy policy"
   {canonical}
   theme="content"
+  description={LEAF_DESCRIPTIONS["/privacy"]}
   {leafCss}
   accountChrome={joinChrome}
 >
