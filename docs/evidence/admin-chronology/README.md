@@ -35,6 +35,20 @@ can clip a column until the labelled region is focused and scrolled.
 | Kit | Roster | [Sheet](Kit-roster-normal.png) | [Sheet](Kit-roster-unavailable.png) |
 | Kit | Activity | [Sheet](Kit-activity-normal.png) | [Sheet](Kit-activity-unavailable.png) |
 
+## Opened mobile time-column views
+
+These additional 390×844 captures show the focused table after horizontal
+scrolling brings the time column fully into view. Native ArrowRight moved
+every scrollable region in a JavaScript-disabled browser; browser scrolling
+animation was disabled for deterministic assertions.
+
+| Renderer | Screen | Normal | One unavailable row |
+| --- | --- | --- | --- |
+| Hono | Roster | [Time column](Hono-roster-normal-390-scrolled.png) | [Time column](Hono-roster-unavailable-390-scrolled.png) |
+| Hono | Activity | [Time column](Hono-activity-normal-390-scrolled.png) | [Time column](Hono-activity-unavailable-390-scrolled.png) |
+| Kit | Roster | [Time column](Kit-roster-normal-390-scrolled.png) | [Time column](Kit-roster-unavailable-390-scrolled.png) |
+| Kit | Activity | [Time column](Kit-activity-normal-390-scrolled.png) | [Time column](Kit-activity-unavailable-390-scrolled.png) |
+
 ## Executed focused evidence
 
 - Before implementation: the independent acceptance suite executed 76 cases;
@@ -46,6 +60,13 @@ can clip a column until the labelled region is focused and scrolled.
   JavaScript. Each labelled table region accepted keyboard focus. A browser
   range assertion first detected multiline time labels and then passed with
   every valid time on one line after the scoped style change.
+
+- `npm run a11y`: 146 fixture pages, zero failures in the supported
+  isolated-schema test mode.
+- `npm run lighthouse` and `npm run lighthouse:quality`: both exited 0;
+  24/24 reports collected and asserted per run. Initial local collection failed
+  because a process utility was absent; using the existing utility and cleaning
+  only this run's failed fixture process tree restored collection.
 
 Hono accessibility and Lighthouse gates do not exercise the Kit routes.
 Pinned-runner visual regression stays in CI; these screenshots do not replace
