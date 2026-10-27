@@ -1,5 +1,8 @@
 # 2026-10-27 decision: client JS gzip ceiling 103168 -> 103424 for moderator navigation
 
+**Draft: the current-main recheck below rejects this proposal. Do not treat
+these historical measurements as admission of the current composition.**
+
 `client.js.maxGzipBytes` rises 103168 -> 103424 in
 `ci/budgets/kit/client-js.json`; no other ceiling changes. This admits the
 moderator-navigation change (activity-subject editor links plus
@@ -103,3 +106,40 @@ fragment step, restore `SHIPPING_KIT_BUDGET.client.js.maxGzipBytes` in
 If moderator navigation has merged, revert it or reduce its bundle first
 so the built output fits the restored ceiling; re-run the budget suites
 and `node ci/check-kit-perf.mjs` before landing the rollback.
+
+## Current-main recheck: proposal no longer sufficient
+
+Main advanced to `4e90a8bcfd70a46564f6bb363e1543304ec271c0`
+(cancelled-event alternatives, on-request relative time and bounded job
+statements). The feature head remains
+`aadfe9aadbd36f3c32b8bdfb518e9a3e4c4e8f71`. A clean
+`git merge-tree --write-tree` produces composition tree
+`d7dda561b682e16a41874b45ae4c7529b55ccce9`; no branch was rebased or
+merged. Root and web lockfiles match between the two archived trees.
+
+Reinstalled both locked dependency roots outside the source worktree,
+then ran two `npm run build --prefix web` production builds per tree on
+Node 24.22.1 / npm 11.19.1, followed by
+`node ci/check-kit-perf.mjs --format json`:
+
+| Tree / build | Server raw/gzip | Client raw/gzip | Gate at main ceilings |
+|---|---:|---:|---|
+| Pristine main / 1 | 1190240 / 336250 | 256371 / 102994 | exit 0 |
+| Pristine main / 2 | 1190242 / 336247 | 256371 / 102994 | exit 0 |
+| Composition / 1 | 1191759 / 336652 | 257283 / 103459 | exit 1 |
+| Composition / 2 | 1191761 / 336650 | 257283 / 103459 | exit 1 |
+
+Main still carries client raw/gzip 257024/103168 and server gzip 336384.
+Both compositions also exit 1 with this PR's proposed client gzip 103424:
+client gzip is 35B over that proposal, client raw is 259B over its
+unchanged ceiling, and worst server gzip is 268B over its unchanged
+ceiling. Client and server file counts remain 55 and 116; other measured
+asset groups pass. Identical-tree server rebuilds vary by 2B raw and up
+to 3B gzip; both fail, so that variance cannot change the verdict.
+
+The original 112B client and 152B server margins have been consumed by
+main drift. This is not permission to widen another axis: no additional
+ceiling, checker, source or test change is made. Keep this PR draft and
+out of the merge queue pending a separate scope/capacity decision and any
+independent test corrections. Re-measure after that decision or another
+base/head move; the earlier green composition is not current evidence.
