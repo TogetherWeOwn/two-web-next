@@ -662,6 +662,10 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
   const PROBE = "kit auth-status probe unavailable; rendering without probe cookie.";
   const ROTATION = "kit event-detail rotation unavailable; rendering without renewal.";
   const ADMIN = "kit admin renewal unavailable; rendering without renewal.";
+  // Emitted by the fallback-document style-hash read, not a session leg: no row
+  // in this section (a separate rowing decision), but it must stay named here.
+  const FALLBACK_STYLE_PROBE =
+    "kit fallback style probe unreadable; serving without the style hash.";
 
   function section(): string {
     const docs = readFileSync(DOCS_PATH, "utf8");
@@ -708,9 +712,9 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     return `${file}:${start + 1}-${end + 1}`;
   }
 
-  /** Every `src/<file>.ts:N-M` or `:N-M` range cited anywhere in the row. */
+  /** Every `src/<any file>.ts:N` or `:N-M` source cite anywhere in the row. */
   function cites(row: string): string[] {
-    return [...row.matchAll(/src\/(?:route-ownership|kit-session)\.ts:\d+-\d+/g)].map((m) => m[0]);
+    return [...row.matchAll(/src\/[\w./-]+\.ts:\d+(?:-\d+)?/g)].map((m) => m[0]);
   }
 
   const ownership = {
@@ -749,11 +753,13 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     const body = section();
     expect(body).toContain("Four `console.warn` lines from the Kit hook dispatch");
     for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) rowFor(message);
-    // Exactly four warn emitters in the dispatch, so a fifth cannot land unrowed.
-    const emits = sourceLines(ROUTE_OWNERSHIP).filter(
-      (l) => l.includes("console.warn") && /"kit [a-z-]+ [a-z-]+ unavailable;/.test(l),
+    // Every `kit ...` warn in the dispatch module is either rowed here or
+    // named as known-unrowed, so a fifth (any phrasing) cannot land silently.
+    const source = readFileSync(ROUTE_OWNERSHIP, "utf8");
+    const emitted = [...source.matchAll(/console\.warn\(\s*"(kit [^"]+)"/g)].map((m) => m[1]);
+    expect([...emitted].sort()).toEqual(
+      [BRIDGE, PROBE, ROTATION, ADMIN, FALLBACK_STYLE_PROBE].sort(),
     );
-    expect(emits).toHaveLength(4);
   });
 
   it("pins every range cite to the span it names, with the emitting warn inside", () => {
@@ -795,12 +801,41 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
     }
   });
 
-  it("pins the cited test cases to existing `it(` lines", () => {
-    for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) {
-      for (const m of rowFor(message).matchAll(/`(test\/[\w-]+\.test\.ts):(\d+)`/g)) {
-        const [, file, line] = m as unknown as [string, string, string];
+  it("pins each cited test line to the case the row means", () => {
+    const expected: Record<string, Record<string, RegExp>> = {
+      [BRIDGE]: {
+        "test/kit-member-dispatch.test.ts:266": /a failed session bridge leaves the viewer unknown/,
+      },
+      [PROBE]: {
+        "test/kit-member-dispatch.test.ts:219":
+          /keeps an authorized admin response when the probe rejects/,
+      },
+      [ROTATION]: {
+        "test/kit-event-detail-session-renewal.test.ts:499":
+          /a rotation store error delivers the released 200/,
+        "test/kit-event-detail-session-renewal.test.ts:533":
+          /re-verifies the cookie: forged locals/,
+      },
+      [ADMIN]: {
+        "test/kit-admin-session-renewal.test.ts:685":
+          /a rotation store error delivers the released 200/,
+        "test/kit-admin-renewal-404.test.ts:235":
+          /a rotation store failure on a 404 sets no cookie/,
+        "test/kit-admin-session-renewal.test.ts:852": /re-verifies the cookie: forged locals/,
+      },
+    };
+    for (const [message, pins] of Object.entries(expected)) {
+      const cited = [...rowFor(message).matchAll(/`(test\/[\w-]+\.test\.ts:\d+)`/g)].map(
+        (m) => m[1],
+      );
+      expect([...cited].sort(), `test cites in the "${message}" row`).toEqual(
+        Object.keys(pins).sort(),
+      );
+      for (const [cite, title] of Object.entries(pins)) {
+        const [file, line] = cite.split(":") as [string, string];
         const text = sourceLines(file)[Number(line) - 1] ?? "";
-        expect(text, `${file}:${line} cited in the "${message}" row`).toMatch(/^\s*it\(/);
+        expect(text, `${cite} cited in the "${message}" row`).toMatch(/^\s*it\(/);
+        expect(text, `${cite} is the case the "${message}" row means`).toMatch(title);
       }
     }
   });
@@ -811,8 +846,8 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
       const start = source.indexOf(`console.warn("${message}"`);
       expect(start, `missing warn "${message}"`).toBeGreaterThanOrEqual(0);
       const payload = source.slice(start, source.indexOf("});", start));
-      expect(payload).toContain("exception");
-      expect(payload).not.toContain("request_id");
+      expect(payload).toMatch(/exception: \(err as Error\)\?\.constructor\?\.name \?\? "unknown"/);
+      expect(payload).not.toMatch(/\.message|String\(err|request_id/);
     }
   });
 
