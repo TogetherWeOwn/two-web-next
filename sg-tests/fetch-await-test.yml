@@ -1,11 +1,11 @@
 id: fetch-must-be-awaited
 valid:
-- async function f(u) { await fetch(u); }
-- function f(u) { return fetch(u); }
-- fetch(u).then((r) => r);
-- const f = (u) => fetch(u);
-- await Promise.all(us.map((u) => fetch(u)));
+  - async function f(u) { await fetch(u); }
+  - function f(u) { return fetch(u); }
+  - fetch(u).then((r) => r);
+  - const f = (u) => fetch(u);
+  - await Promise.all(us.map((u) => fetch(u)));
 invalid:
-- function f(u) { fetch(u); }
-- await run(async () => { fetch(u); });
-- function f() { return () => { fetch(u); }; }
+  - function f(u) { fetch(u); }
+  - await run(async () => { fetch(u); });
+  - function f() { return () => { fetch(u); }; }

@@ -118,6 +118,24 @@ export const PastEventsPage: FC<{
         <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
       </p>
       {subscriptionHelp(appUrl)}
+      {/* Plain GET navigation outside the binder's swapped zones: submitting
+          starts from page 1 with JS off, and fragment turns never swallow it.
+          Same shape as the calendar search form. */}
+      <form method="get" action="/events/past" role="search">
+        <label class="sr-only" for="past-events-search-input">
+          Search past events
+        </label>
+        <input
+          id="past-events-search-input"
+          type="search"
+          name="q"
+          value={q}
+          placeholder="Search past events"
+        />
+        <button class="btn" type="submit">
+          Search
+        </button>
+      </form>
       <div data-archive-state>
         {q ? (
           <p role="status">
@@ -158,6 +176,11 @@ export const PastEventsPage: FC<{
           >
             Newer
           </a>
+        ) : null}{" "}
+        {totalPages > 0 ? (
+          <span>
+            Page {page} of {totalPages}
+          </span>
         ) : null}{" "}
         {hasMore ? (
           <a
