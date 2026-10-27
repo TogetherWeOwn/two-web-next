@@ -38,7 +38,9 @@ and all three previous branch values (336896 rejects the worst output by 220 B;
 the new ceilings pass and each single step lower (336896, 258048, 103680)
 rejects on exactly its axis (client raw takes two 512 B steps because 258048
 still rejects by 72 B). The composition `web/` subtree is byte-identical to the
-previous composition tree `56b0e0bc`; `src/` differs only in main-side `src/jobs`
+previous composition tree `56b0e0bc` (that tree is the merge output plus the
+then-current budget delta; the pure merge is `ce04920d`; build inputs are
+unaffected either way); `src/` differs only in main-side `src/jobs`
 (#1866, +211 B server gzip vs the previous main-alone measurement). The
 feature delta is unchanged (about +863 server gzip, +1749 client raw, +763
 client gzip). Steps are the repository's 256 B gzip and 512 B raw grids; the
@@ -52,6 +54,11 @@ based on main `4e90a8bcf`) and incorporated byte-for-byte
 `0c140510df4c689123b994b5f32f041448b66e5c71437a9d8e48ae86173bf4b1`,
 `ci/budget-fragments.test.mjs` sha256
 `9f6a042fdc68563424c72a3421273be2e4f8ff0d32e20d176dc2dff5ba2df16c`).
+The delivered server fixture pins the `d4d7a9da5`-base composition worst
+(336899); the fresh `4e90a8bcf`-base worst is 337116 (#1866, transitive via
+`src/admin`). Both lie in (336896, 337152], so every grid-aligned ceiling
+admits or rejects them identically and the gate enforces the true worst; the
+36 B margin above is the operative one.
 
 ACT: allocate these three measured steps through independent review.
 WHY: the exact feature composition exhausts them on current main; the earlier
