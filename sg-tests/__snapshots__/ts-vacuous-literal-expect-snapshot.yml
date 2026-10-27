@@ -2,7 +2,7 @@ id: ts-vacuous-literal-expect
 snapshots:
   it("pins behavior", () => { expect(true).toBe(true); });:
     labels:
-    - source: expect(true).toBe(true)
-      style: primary
-      start: 28
-      end: 51
+      - source: expect(true).toBe(true)
+        style: primary
+        start: 28
+        end: 51

@@ -4,52 +4,59 @@ Second measured-budget allocation for the Kit cost of the profile slice
 that lets a member review unsaved profile differences before saving. The
 first allocation (`2026-10-26-profile-review-client-gzip.md`) was sized
 against an older main; main has since consumed that headroom, so the exact
-reviewed feature head now fails `node ci/check-kit-perf.mjs` in CI.
+reviewed feature head now fails `node ci/check-kit-perf.mjs` in CI. This
+decision was re-measured on main `d9b213141` after earlier measurements
+(`ba58281d2`, `3baeb3793`) went stale.
 
 ## Ceilings
 
-- `server.js.maxGzipBytes` 335360 -> 336384 (four 256B steps, 187B margin).
-- `client.js.maxRawBytes` 256000 -> 257024 (one 1024B step, 191B margin).
-- `client.js.maxGzipBytes` 103168 -> 103680 (two 256B steps, 348B margin;
-  one step would leave 92B, less than the renaming churn a moving main
-  adds to the client gzip).
+- `server.js.maxGzipBytes` 335872 -> 336640 (three 256B steps, 146B margin;
+  lower 336384 rejects by 110B).
+- `client.js.maxRawBytes` 257024 -> 257536 (one 512B step, 511B margin;
+  lower 257024 rejects by 1B).
+- `client.js.maxGzipBytes` 103168 -> 103680 (two 256B steps, 305B margin;
+  one step, 103424, would leave 49B, less than the renaming churn a moving
+  main adds to the client gzip).
 - Every other ceiling is unchanged. No ceiling moves by x1.25 or more.
 
 ## Measurements
 
-Locked Node 24.22.1 production builds (`npm run build --prefix web`),
-measured through `node ci/check-kit-perf.mjs`.
+Locked Node production builds (`npm run build --prefix web`), measured
+through `node ci/check-kit-perf.mjs --format json`, on the profile feature
+head (#1834, `f594991f8`) merged with main `d9b213141` (conflicts only in
+`README.md` and `ci/a11y-native-browser-suites.test.mjs`; no bundle inputs).
 
 | Tree | Server gzip | Client raw | Client gzip |
 |---|---:|---:|---:|
-| Pristine main `ba58281d2` | 335351 | 254926 | 102621 |
-| Feature head merged with the same main | 336197 | 256833 | 103332 |
-| Slice delta | +846 | +1907 | +711 |
+| Combined build 1 | 336494 | 257025 | 103375 |
+| Combined build 2 | 336494 | 257025 | 103375 |
+| Slice delta over its first measurement (pristine `ba58281d2`) | +846 | +1907 | +711 |
 
-CI on the same combined head measured server gzip 336195 (run
-40453468852), inside rebuild jitter. The current ceilings reject the
-combined tree by 837B server gzip, 833B client raw and 164B client gzip.
+An independent review build of main `3baeb3793` merged with the feature
+measured server gzip 336495 / 336493 and client 257025 / 103375, matching
+these figures. The current ceilings reject the combined tree by 622B server
+gzip, 1B client raw and 207B client gzip.
 
 ## Attribution
 
-Main moved after the first allocation: the first measurement saw server
-gzip 334041 and client 253949 raw / 102273 gzip on main, and pristine main
-now measures 335351 and 254926 / 102621 (see also
-`2026-10-26-server-gzip-335360.md`). That consumed the first allocation's
-margins. The slice itself is unchanged since the first measurement (client
-raw delta +1907 both times). The growth is the `ProfileView` review
-markup and the shared row helper `src/profiles/composition.ts`, which ships to both the Kit server bundle and
-the client; no new files and no new dependency.
+Main moved after the first allocation and again after this one was first
+proposed (335360 -> 335872 server gzip, client raw 256000 -> 257024 in
+#1895), consuming the earlier sizing. The slice itself is unchanged (client
+raw delta +1907 in every measurement). The growth is the `ProfileView`
+review markup and the shared row helper `src/profiles/composition.ts`,
+which ships to both the Kit server bundle and the client; no new files and
+no new dependency.
 
 ## Shipping tests
 
-`ci/check-kit-perf.test.mjs` gains the 336384 rung in
-`SHIPPING_SERVER_GZIP_ALLOCATIONS` (interval = measured worst 336197, exact
-336384, one over 336385) and moves the client raw and gzip literals to the
-new ceilings (interval 256833, exact 257024 / 103680, one over 257025 /
-103681). `ci/budget-fragments.test.mjs` moves its client pin and admits the
-336384 server rung. With the two fragments reverted, six cases fail, so a
-revert and any further widening both fail closed.
+`ci/check-kit-perf.test.mjs` gains the 336640 rung in
+`SHIPPING_SERVER_GZIP_ALLOCATIONS` (interval = measured worst 336494, exact
+336640, one over 336641), moves the client raw and gzip literals to the new
+ceilings (interval 257025 / 103375, exact 257536 / 103680, one over 257537 /
+103681) and adds an unconditional case that the measured 336494-byte server
+tree fits, so reverting only the server fragment fails closed.
+`ci/budget-fragments.test.mjs` moves its client pin and admits the 336640
+server rung.
 
 ## Scope
 
