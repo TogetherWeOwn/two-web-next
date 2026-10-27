@@ -178,8 +178,7 @@ const IF_NONE_MATCH_PARAMETER = {
   in: "header",
   required: false,
   schema: { type: "string" },
-  description:
-    "ETag of a held representation (exact, W/ weak, list or *); a match answers an empty 304.",
+  description: "Held ETag (exact, W/ weak, list or *); a match answers an empty 304.",
 };
 
 const VALIDATOR_HEADERS = {
@@ -188,9 +187,9 @@ const VALIDATOR_HEADERS = {
 };
 
 const NOT_MODIFIED_DESCRIPTION =
-  "Not modified: If-None-Match matches the current ETag; empty body. Admission runs before the comparison (429, never 304). Freshness is what remains " +
-  "of the original 60s window (max-age=1 near expiry, then 0). Writes retire " +
-  "entries per isolate, so a 304 can briefly repeat a representation another isolate retired.";
+  "If-None-Match matches the current ETag; empty body. Admission runs before it " +
+  "(429, never 304). Freshness: the rest of the original 60s window. Retires are per " +
+  "isolate, so a 304 can briefly repeat a retired representation.";
 
 function jsonRef(name: string, description: string) {
   return {
@@ -300,7 +299,7 @@ export function getOpenApiDocument(appUrl: string) {
         },
         CacheControl: {
           description:
-            "max-age=N, N the remaining freshness (at most 60); max-age=0, must-revalidate after a retire.",
+            "Remaining freshness, at most 60s; max-age=0, must-revalidate after a retire.",
           schema: { type: "string" },
         },
       },

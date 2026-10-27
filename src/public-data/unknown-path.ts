@@ -39,5 +39,5 @@ export function isPublicApiPath(path: string): boolean {
  * request path is never echoed; HEAD loses its body in the framework.
  */
 export function publicApiNotFound(c: Ctx): Response {
-  return apiError(c, "not_found", "No such public API path.", 404);
+  return apiError(c, "not_found", "No such API path.", 404);
 }
