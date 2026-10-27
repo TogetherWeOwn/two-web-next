@@ -70,7 +70,7 @@ function loadViaPinnedWrangler(cwd: string, env: NodeJS.ProcessEnv, envFiles?: s
   );
   expect(
     JSON.parse(readFileSync(path.join(root, "node_modules/wrangler/package.json"), "utf8")).version,
-  ).toBe("4.151.0");
+  ).toBe("4.152.0");
   const require = createRequire(import.meta.url);
   const context = vm.createContext({
     process: { env: { ...env }, cwd: () => cwd, platform: "linux" },
@@ -95,8 +95,8 @@ function loadViaPinnedWrangler(cwd: string, env: NodeJS.ProcessEnv, envFiles?: s
         return module.exports;
       };
     };
-    const path30 = { resolve: (...parts) => __require("path").resolve(process.cwd(), ...parts) };
-    const path30__namespace = { default: __require("path") };
+    const path29 = { resolve: (...parts) => __require("path").resolve(process.cwd(), ...parts) };
+    const path29__namespace = { default: __require("path") };
     ${sourceBetween(source, "var require_package = __commonJS({", "function validateFileSecrets(")}
     ${sourceBetween(source, "var require_main2 = __commonJS({", "// src/config/case-insensitive-env.ts")}
     ${sourceBetween(source, "function getDefaultEnvFiles(", "var import_dotenv2, import_dotenv_expand, isWindows5;")}
