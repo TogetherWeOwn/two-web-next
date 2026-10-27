@@ -1,7 +1,7 @@
-// Implementation-owned pin for the staging cache-hit render_cache phase.
+// Implementation-owned pin for the staging cache-hit guard + render_cache phases.
 // The frozen acceptance suite only asserts public_read_guard via toMatchObject
 // on a cache hit, so a revert of the cache-hit measure wrap stays green there.
-// This file drives a held anonymous staging cache hit and asserts the exact
+// This file drives held anonymous staging cache hits and asserts the exact
 // final calendar_phase_ms, in the same exact-equality style as the miss path.
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
@@ -252,7 +252,7 @@ afterEach(async () => {
 });
 
 describe("staging calendar cache-hit phase pin", () => {
-  it("pins the exact cache-hit render_cache phase on the final request log", async () => {
+  it("pins the exact cache-hit guard and render_cache phases on the final request log", async () => {
     const s = scenario();
     const first = await get(s);
     expect(first.status).toBe(200);
@@ -261,22 +261,70 @@ describe("staging calendar cache-hit phase pin", () => {
     s.clones = 0;
     s.bodyReads = 0;
     log.mockClear();
-    // The cookieless hit serves before admission: no guard, db or session
-    // step runs, and the final log carries only render_cache.
+    // The cookieless hit runs admission before serving: one guard, then
+    // render, no db/session/model, and the final log carries guard + render.
+    const guard = hold(s, "guard");
     const render = hold(s, "render");
     now = 100;
     const pending = get(s, "/events", RAY_B);
+    const firstStep = await Promise.race([
+      guard.entered.promise.then(() => "guard" as const),
+      render.entered.promise.then(() => "render" as const),
+    ]);
+    // RED on the pre-guard cache path: the hit served render without admission.
+    expect(firstStep).toBe("guard");
+    expect(s.steps).toEqual(["guard"]);
+    now = 105;
+    guard.released.resolve();
     await render.entered.promise;
-    expect(s.steps).toEqual(["render"]);
+    expect(s.steps).toEqual(["guard", "render"]);
     now = 112;
     render.released.resolve();
     const response = await pending;
     expect(response.status).toBe(200);
     expect(await response.text()).toBe(body);
     expect(response.headers.get("cache-control")).toBe("public, max-age=60");
-    expect(s.steps).toEqual(["render"]);
+    expect(s.steps).toEqual(["guard", "render"]);
     expect([s.clones, s.bodyReads]).toEqual([0, 0]);
     expect(entries()).toHaveLength(1);
-    finalEntry(RAY_B, 12, { render_cache: 12 });
+    finalEntry(RAY_B, 12, { public_read_guard: 5, render_cache: 7 });
+  });
+
+  it("returns 429 with guard only when the warm bucket is exhausted", async () => {
+    const s = scenario();
+    const first = await get(s);
+    expect(first.status).toBe(200);
+    const body = await first.text();
+    s.steps = [];
+    s.clones = 0;
+    s.bodyReads = 0;
+    log.mockClear();
+    s.limited = true;
+    // Warm but throttled: admission runs and refuses before any cache serve,
+    // so no render/db/session/model steps run and only guard is observed.
+    const guard = hold(s, "guard");
+    const render = hold(s, "render");
+    now = 100;
+    const pending = get(s, "/events", RAY_B);
+    const firstStep = await Promise.race([
+      guard.entered.promise.then(() => "guard" as const),
+      render.entered.promise.then(() => "render" as const),
+    ]);
+    // RED on the pre-guard cache path: the warm hit served 200 without admission.
+    expect(firstStep).toBe("guard");
+    expect(s.steps).toEqual(["guard"]);
+    now = 109;
+    guard.released.resolve();
+    const response = await pending;
+    expect(response.status).toBe(429);
+    const throttled = await response.text();
+    expect(throttled).toBe("fixture throttled");
+    expect(throttled).not.toBe(body);
+    expect(response.headers.get("retry-after")).toBe("60");
+    expect(response.headers.get("cache-control")).toBe("no-store, private");
+    expect(s.steps).toEqual(["guard"]);
+    expect([s.clones, s.bodyReads]).toEqual([0, 0]);
+    expect(entries()).toHaveLength(1);
+    finalEntry(RAY_B, 9, { public_read_guard: 9 }, 429);
   });
 });

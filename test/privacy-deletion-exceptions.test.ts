@@ -4,7 +4,7 @@
 // residual Discord-keyed throttle counters are named without promising
 // immediate erasure of either. Also pins the runbook classification
 // (creator IDs are identifying data with row-scoped retention; throttle
-// cleanup is lazy and admitted-only) and the numbered-version hand-off
+// cleanup is lazy and independently sampled after verdicts) and the numbered-version hand-off
 // (v6 selected, priors preserved, bundle byte-equal).
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -69,7 +69,9 @@ describe("deletion-exception inventory", () => {
     const docs = read("docs/member-erasure.md");
     expect(docs).toMatch(/age cutoff, not a physical\s+deletion deadline/);
     expect(docs).toMatch(/exact-five-minute deletion guarantee/);
-    expect(docs).toMatch(/after every verdict, admitted or refused/);
+    expect(flat(docs)).toMatch(
+      /10% independent sample after (?:every verdict[,:]? )?admitted, refused(?:,)? (?:and|or) busy(?: verdicts)?/,
+    );
     expect(docs).not.toMatch(/only for admitted\s+requests/);
     expect(docs).not.toMatch(/triggers no cleanup/);
   });

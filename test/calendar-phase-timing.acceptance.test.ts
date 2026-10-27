@@ -468,14 +468,17 @@ describe("real calendar route to final request-log acceptance", () => {
     expect(entries()).toEqual([]);
     now = 5;
     guard.released.resolve();
-    // The route loads the facet list before the model starts, so Discord
-    // waits for games instead of overlapping it.
+    // The route starts the facet promise without awaiting before the model and
+    // canonicalRead awaits it inside: Discord overlaps games, while upcoming
+    // and past wait for the game filter and must not start while held.
     await games.entered.promise;
-    expect(s.steps).toEqual(["guard", "db", "session", "games"]);
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // RED on the sequential facet path: Discord never starts while games held.
+    expect(s.steps).toEqual(["guard", "db", "session", "games", "discord"]);
     now = 10;
     games.released.resolve();
-    await Promise.all([upcoming.entered.promise, past.entered.promise, discord.entered.promise]);
-    expect(s.steps).toEqual(["guard", "db", "session", "games", "upcoming", "past", "discord"]);
+    await Promise.all([upcoming.entered.promise, past.entered.promise]);
+    expect(s.steps).toEqual(["guard", "db", "session", "games", "discord", "upcoming", "past"]);
     now = 20;
     upcoming.released.resolve();
     past.released.resolve();
@@ -515,22 +518,115 @@ describe("real calendar route to final request-log acceptance", () => {
       "db",
       "session",
       "games",
+      "discord",
       "upcoming",
       "past",
-      "discord",
       "dedupe",
       "render",
       "settle",
     ]);
     expect([s.clones, s.bodyReads]).toEqual([1, 1]);
     expect(entries()).toHaveLength(1);
-    // The model starts after the route-level games read, so its phases run
-    // 10-35 instead of 5-35; canonical no longer contains the games wait.
+    // The model starts at 5 with the facet promise in flight, so its phases
+    // run 5-35; canonical includes the facet wait.
     finalEntry(RAY_A, 42, {
       public_read_guard: 5,
-      calendar_model: 25,
-      canonical_read: 10,
-      discord_snapshot: 20,
+      calendar_model: 30,
+      canonical_read: 15,
+      discord_snapshot: 25,
+      discord_dedupe: 5,
+      render_cache: 7,
+    });
+  });
+
+  it("starts Discord while the games facet is still unresolved and includes facet time in canonical", async () => {
+    const s = scenario();
+    const clones = vi.spyOn(Response.prototype, "clone");
+    const bodyReads = vi.spyOn(Response.prototype, "text");
+    const guard = hold(s, "guard");
+    const games = hold(s, "games");
+    const upcoming = hold(s, "upcoming");
+    const past = hold(s, "past");
+    const discord = hold(s, "discord");
+    const dedupe = hold(s, "dedupe");
+    const render = hold(s, "render");
+    const settle = hold(s, "settle");
+    const pending = get(s);
+    await guard.entered.promise;
+    expect(s.steps).toEqual(["guard"]);
+    expect(entries()).toEqual([]);
+    now = 5;
+    guard.released.resolve();
+    // The facet promise is awaited inside canonicalRead: Discord must already
+    // be parked while games is still held, while upcoming/past wait for the
+    // filter and must not start yet. Proves overlap without a 30s hang.
+    await games.entered.promise;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // RED on the sequential facet path: Discord never starts while games held.
+    expect(s.steps).toEqual(["guard", "db", "session", "games", "discord"]);
+    // Games + Discord stay held 5-25; at 15 nothing completes yet.
+    now = 15;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    expect(s.steps).not.toContain("dedupe");
+    expect(entries()).toEqual([]);
+    now = 25;
+    games.released.resolve();
+    await Promise.all([upcoming.entered.promise, past.entered.promise]);
+    expect(s.steps).toEqual(["guard", "db", "session", "games", "discord", "upcoming", "past"]);
+    upcoming.released.resolve();
+    past.released.resolve();
+    await new Promise<void>((resolve) => setImmediate(resolve));
+    // Facet + lists done at 25 (canonical 5-25), but Discord held until 30.
+    expect(s.steps).not.toContain("dedupe");
+    expect(entries()).toEqual([]);
+    now = 30;
+    discord.released.resolve();
+    await dedupe.entered.promise;
+    now = 35;
+    dedupe.released.resolve();
+    await render.entered.promise;
+    now = 38;
+    render.released.resolve();
+    await settle.entered.promise;
+    expect(entries()).toEqual([]);
+    now = 42;
+    settle.released.resolve();
+    const response = await pending;
+    expect(response.status).toBe(200);
+    expect(response.headers.get("x-request-id")).toBe(RAY_A);
+    expect(response.headers.get("cache-control")).toBe("public, max-age=60");
+    expect(response.headers.get("vary")).toBe("Cookie, X-Two-Island");
+    expect([...response.headers.keys()].sort()).toEqual([
+      "cache-control",
+      "content-type",
+      "vary",
+      "x-request-id",
+    ]);
+    expect(response.bodyUsed).toBe(false);
+    expect(clones).toHaveBeenCalledTimes(1);
+    expect(bodyReads).toHaveBeenCalledTimes(1);
+    expect(await response.text()).toContain('data-island="events-calendar"');
+    expect(s.steps).toEqual([
+      "guard",
+      "db",
+      "session",
+      "games",
+      "discord",
+      "upcoming",
+      "past",
+      "dedupe",
+      "render",
+      "settle",
+    ]);
+    expect([s.clones, s.bodyReads]).toEqual([1, 1]);
+    expect(entries()).toHaveLength(1);
+    // Canonical 5-25 includes the held facet (lists started at 25); Discord
+    // 5-30 overlapped the entire facet wait.
+    finalEntry(RAY_A, 42, {
+      public_read_guard: 5,
+      calendar_model: 30,
+      canonical_read: 20,
+      discord_snapshot: 25,
       discord_dedupe: 5,
       render_cache: 7,
     });
@@ -549,19 +645,14 @@ describe("real calendar route to final request-log acceptance", () => {
     expect(await response.text()).toBe(body);
     expect(response.headers.get("cache-control")).toBe("public, max-age=60");
     expect(response.headers.get("vary")).toBe("Cookie, X-Two-Island");
-    // The cookieless hit serves before admission: render only.
-    expect(s.steps).toEqual(["render"]);
+    // The cookieless hit runs admission before serving: guard + render, no model.
+    expect(s.steps).toEqual(["guard", "render"]);
     expect([s.clones, s.bodyReads]).toEqual([0, 0]);
     const times = requestEntry(RAY_B).calendar_phase_ms;
     bounded(times);
+    expect(times).toHaveProperty("public_read_guard");
     expect(times).toHaveProperty("render_cache");
-    for (const phase of [
-      "public_read_guard",
-      "calendar_model",
-      "canonical_read",
-      "discord_snapshot",
-      "discord_dedupe",
-    ])
+    for (const phase of ["calendar_model", "canonical_read", "discord_snapshot", "discord_dedupe"])
       expect(times).not.toHaveProperty(phase);
   });
 

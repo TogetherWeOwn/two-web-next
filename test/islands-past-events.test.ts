@@ -245,6 +245,8 @@ describe("PastEvents contract and SSR drift", () => {
     expect(combined!.sql).toContain('left join "users"');
     expect(combined!.sql).toContain("count(case when");
     expect(combined!.sql).toContain('"users"."username" <>');
+    expect(combined!.sql).not.toContain('inner join "users"');
+    expect(combined!.params).toEqual([5, 4, 3, 2, 1, "going"]);
     expect(source.queries.every((q) => !/member_id/i.test(q.sql))).toBe(true);
     expect(source.queries.filter((q) => /\bjoin\b/i.test(q.sql))).toEqual([combined]);
   });

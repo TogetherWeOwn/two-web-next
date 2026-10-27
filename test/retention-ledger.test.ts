@@ -262,7 +262,9 @@ describe("retention ledger doc rows", () => {
     expect(row).toMatch(/cleanup is lazy and path-dependent/i);
     expect(row).toMatch(/expired rows can linger on a quiet site/i);
     expect(row).toMatch(/until a later request that runs cleanup/i);
-    expect(row).toMatch(/after every verdict, admitted or refused/i);
+    expect(row).toMatch(
+      /10% independent sample after (?:every verdict[,:]? )?admitted, refused(?:,)? (?:and|or) busy(?: verdicts)?/i,
+    );
     expect(row).not.toMatch(/do not run it/i);
     expect(row).not.toMatch(/(?:next|every|any) counted request(?: anywhere)?/i);
   });

@@ -355,12 +355,35 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
         ).toEqual(scripts);
       });
 
-      it("PSC-010 CONTROL preserves four-read filtered responses, shared ordinary cache and no audit writes", async () => {
+      it("PSC-010 CONTROL preserves three-read filtered responses, shared ordinary cache and no audit writes", async () => {
+        const expectThreeReadBudget = (statements: { sql: string; params: unknown[] }[]) => {
+          // Count + rows + one combined going aggregate (named + occupancy).
+          expect(statements).toHaveLength(3);
+          expect(statements.every(({ sql }) => sql.startsWith("select "))).toBe(true);
+          expect(statements.every(({ sql }) => !/member_id/i.test(sql))).toBe(true);
+          expect(statements.every(({ sql }) => !sql.includes('select "user_id", "status"'))).toBe(
+            true,
+          );
+          const aggregates = statements.filter(({ sql }) => sql.includes('from "rsvps"'));
+          expect(aggregates).toHaveLength(1);
+          const [combined] = aggregates;
+          expect(combined!.sql).toContain('group by "rsvps"."event_id"');
+          // LEFT JOIN keeps every going row for occupancy while the conditional
+          // count admits only named rows for the badge.
+          expect(combined!.sql).toContain('left join "users"');
+          expect(combined!.sql).toContain("count(case when");
+          expect(combined!.sql).toContain('"users"."username" <>');
+          // Named conditional count + all-seat count in one statement.
+          expect(combined!.sql).toMatch(/\bcount\(\*\)/i);
+          // Params are event ids + going only; "" is a fixed literal, no session id.
+          expect(combined!.params.filter((p) => typeof p === "string")).toEqual(["going"]);
+          expect(statements.filter(({ sql }) => /\bjoin\b/i.test(sql))).toEqual(aggregates);
+        };
         const source = archiveReadFixture();
         source.replaceRows([archiveRow(1, { title: "ORBITAL", description: "ORBITAL context" })]);
         const ordinary = await requestArchive(twin, "/events/past", source.env, kit);
         const ordinaryHtml = await ordinary.text();
-        expect(source.statements).toHaveLength(4);
+        expectThreeReadBudget(source.statements);
         source.statements.length = 0;
         expect(await (await requestArchive(twin, "/events/past", source.env, kit)).text()).toBe(
           ordinaryHtml,
@@ -371,8 +394,7 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
           expect(filtered.status).toBe(200);
           expect(filtered.headers.get("cache-control")).toBe("private, no-store");
           expect(filtered.headers.get("x-two-past-cacheable")).toBeNull();
-          expect(source.statements).toHaveLength(4);
-          expect(source.statements.every(({ sql }) => sql.startsWith("select "))).toBe(true);
+          expectThreeReadBudget(source.statements);
           source.statements.length = 0;
         }
         const refused = await requestArchive(twin, pathFor("🛰".repeat(256)), source.env, kit);

@@ -264,6 +264,10 @@ describe("homepage upcoming events", () => {
     expect(f.queries[2]!.sql).toContain('left join "users"');
     expect(f.queries[2]!.sql).toContain('"users"."username" <>');
     expect(f.queries[2]!.sql).toContain("count(case when");
+    // Occupancy must still count the whole LEFT JOIN result, not the named
+    // branch. These replace the retired fourth-statement occupancy pins.
+    expect(f.queries[2]!.sql).not.toContain('inner join "users"');
+    expect(f.queries[2]!.sql).toMatch(/count\(\*\)/);
     expect(Object.keys(rows[0]!).sort()).toEqual([
       "capacity",
       "eventKey",

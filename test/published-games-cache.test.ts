@@ -1,13 +1,9 @@
-// The distinct-games facet list is cached in memory: /events renders it on
-// every miss, but games change only on event writes. A 60s TTL entry,
-// retired on every event/RSVP mutation alongside the anonymous cards, turns
-// the sequential games read into a cache hit.
-//
-// Pure unit tests: the cache functions are synchronous and need no database.
-// The live block below pins the statement saving through the real read.
-import { drizzle } from "drizzle-orm/postgres-js";
+// Retiring a facet cache must fence deferred loaders, not only settled bytes.
+// All assertions run offline, with the same read-through proofs on guarded
+// disposable Postgres whenever DATABASE_URL is set.
+import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { adminSchema, schema } from "../src/db/index";
+import type { Db } from "../src/db/index";
 import {
   __resetAnonEventCacheForTests,
   readPublishedGamesCache,
@@ -17,9 +13,17 @@ import {
 } from "../src/events/anon-cache";
 import { cachedListPublishedGames } from "../src/events/reads";
 import { loadCalendarPageModel, resolveCalendarInput } from "../src/events/page-models.server";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { createEventsPerfFixture, type EventsPerfFixture } from "./helpers/events-perf-fixture";
 
 const source = (db: unknown): AnonCacheSource => ({ db, discord: null, appUrl: "https://x.test" });
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 
 describe("published games cache", () => {
   beforeEach(() => {
@@ -50,66 +54,124 @@ describe("published games cache", () => {
     retireAnonEventCaches();
     expect(readPublishedGamesCache(source("db-a"), 2_000)).toBeNull();
   });
-});
 
-describe.skipIf(!process.env.DATABASE_URL)("cached games read (agent-testdb)", () => {
-  let fixture: MemberDataFixture;
-  let statements = 0;
-  let countedDb: MemberDataFixture["db"];
-
-  beforeAll(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-    countedDb = drizzle(fixture.client, {
-      schema: { ...schema, ...adminSchema },
-      logger: {
-        logQuery() {
-          statements += 1;
-        },
-      },
-    });
+  it("lets a retired in-flight caller finish without repopulating the facet cache", async () => {
+    const entered = deferred<void>();
+    const result = deferred<{ rows: unknown[][] }>();
+    const db = drizzle(async () => {
+      entered.resolve();
+      return result.promise;
+    }) as unknown as Db;
+    const src = source(db);
+    const pending = cachedListPublishedGames(db, src);
+    try {
+      await entered.promise;
+      expect(readPublishedGamesCache(src)).toBeNull();
+      retireAnonEventCaches();
+    } finally {
+      result.resolve({ rows: [["Old game"]] });
+    }
+    expect(await pending).toEqual(["Old game"]);
+    expect(readPublishedGamesCache(src), "retirement must fence late settlement").toBeNull();
   });
 
+  it("does not let an older retired loader overwrite a fresh post-retirement entry", async () => {
+    const entered = deferred<void>();
+    const oldResult = deferred<{ rows: unknown[][] }>();
+    let calls = 0;
+    const db = drizzle(async () => {
+      if (++calls === 1) {
+        entered.resolve();
+        return oldResult.promise;
+      }
+      return { rows: [["New game"]] };
+    }) as unknown as Db;
+    const src = source(db);
+    const pending = cachedListPublishedGames(db, src);
+    try {
+      await entered.promise;
+      retireAnonEventCaches();
+      expect(await cachedListPublishedGames(db, src)).toEqual(["New game"]);
+      expect(readPublishedGamesCache(src)).toEqual(["New game"]);
+    } finally {
+      oldResult.resolve({ rows: [["Old game"]] });
+    }
+    expect(await pending).toEqual(["Old game"]);
+    expect(readPublishedGamesCache(src)).toEqual(["New game"]);
+  });
+
+  it("accepts a deferred facet while Discord starts independently of it", async () => {
+    const facet = deferred<string[]>();
+    const statements: string[] = [];
+    const db = drizzle(async (sql) => {
+      statements.push(sql);
+      return { rows: sql.startsWith("select count(*)") ? [[0]] : [] };
+    }) as unknown as Db;
+    let discordStarted = false;
+    const pending = loadCalendarPageModel({
+      db,
+      input: resolveCalendarInput({ game: "chess" }),
+      includeDrafts: false,
+      discord: {
+        upcoming: async () => {
+          discordStarted = true;
+          return [];
+        },
+        lastReadFailed: () => false,
+      },
+      now: new Date("2030-07-04T18:00:00Z"),
+      games: facet.promise,
+    });
+    // Observe rejection without turning it into a replacement model. The
+    // held facet is always released even when an overlap assertion fails.
+    void pending.catch(() => {});
+    try {
+      await new Promise<void>((resolve) => setImmediate(resolve));
+      expect(discordStarted, "Discord must start before the facet resolves").toBe(true);
+    } finally {
+      facet.resolve(["Chess"]);
+    }
+    const model = await pending;
+    expect(model.games).toEqual(["Chess"]);
+    expect(model.gameFilter).toBe("Chess");
+    expect(statements.filter((sql) => /^select distinct\b/.test(sql))).toHaveLength(0);
+  });
+});
+
+describe("cached games read", () => {
+  let fixture: EventsPerfFixture;
+
+  beforeAll(async () => {
+    fixture = await createEventsPerfFixture();
+  });
   afterAll(async () => {
     await fixture?.dispose();
   });
-
   beforeEach(async () => {
     await fixture.reset();
     __resetAnonEventCacheForTests();
-    statements = 0;
   });
 
   it("serves repeated reads from cache and re-reads after retire", async () => {
-    const dayMs = 86_400_000;
-    const base = Date.now();
-    await fixture.client`
-      insert into events (event_key, title, starts_at, ends_at, status, game)
-      values ('games-cache-0', 'Cached', ${new Date(base + dayMs).toISOString()}, ${new Date(base + dayMs + 3_600_000).toISOString()}, 'published', 'Chess')`;
-    const src = source(countedDb);
+    await fixture.seedEvent({ eventKey: "games-cache-0", game: "Chess" });
+    const src = source(fixture.db);
 
-    statements = 0;
-    expect(await cachedListPublishedGames(countedDb, src)).toEqual(["Chess"]);
-    expect(statements).toBe(1);
-    // Second read hits the cache: no further statement.
-    expect(await cachedListPublishedGames(countedDb, src)).toEqual(["Chess"]);
-    expect(statements).toBe(1);
-    // A retire forces a fresh read.
+    fixture.statements.length = 0;
+    expect(await cachedListPublishedGames(fixture.db, src)).toEqual(["Chess"]);
+    expect(fixture.statements).toHaveLength(1);
+    expect(await cachedListPublishedGames(fixture.db, src)).toEqual(["Chess"]);
+    expect(fixture.statements).toHaveLength(1);
     retireAnonEventCaches();
-    expect(await cachedListPublishedGames(countedDb, src)).toEqual(["Chess"]);
-    expect(statements).toBe(2);
+    expect(await cachedListPublishedGames(fixture.db, src)).toEqual(["Chess"]);
+    expect(fixture.statements).toHaveLength(2);
   });
 
   it("model uses provided games without querying the facet", async () => {
-    const dayMs = 86_400_000;
     const base = Date.now();
-    // Stored game is Go; the provided list carries Chess instead. If the
-    // model queried, it would return Go.
-    await fixture.client`
-      insert into events (event_key, title, starts_at, ends_at, status, game)
-      values ('games-provided-0', 'Provided', ${new Date(base + dayMs).toISOString()}, ${new Date(base + dayMs + 3_600_000).toISOString()}, 'published', 'Go')`;
+    await fixture.seedEvent({ eventKey: "games-provided-0", game: "Go" });
     const discord = { upcoming: async () => [], lastReadFailed: () => false };
     const model = await loadCalendarPageModel({
-      db: countedDb,
+      db: fixture.db,
       input: resolveCalendarInput({ game: "chess" }),
       includeDrafts: false,
       discord,

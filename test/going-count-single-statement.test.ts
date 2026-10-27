@@ -1,77 +1,51 @@
-// The going aggregate is one statement, not two: `withGoing` used to issue a
-// named-count query plus an occupancy-count query per read. On the /events
-// miss path that is four aggregate round trips (upcoming + past drawer) over
-// a max:1 client, where they serialize. A single conditional-aggregation
-// statement returns both counts with identical semantics.
-//
-// Real Postgres through the disposable fixture (skipped without DATABASE_URL).
-// Statement counts come from a Drizzle logger on a second handle over the
-// same pool, so seeds never touch the counter.
-import { drizzle } from "drizzle-orm/postgres-js";
+// One aggregate round trip preserves the named badge/all-seat split. An
+// INNER JOIN, counting non-going answers, or a second aggregate must fail.
+// The same assertions run on a SQL-recording proxy offline and on guarded
+// disposable Postgres when DATABASE_URL is set; no suite is skipped.
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { adminSchema, schema } from "../src/db/index";
 import { listUpcoming } from "../src/events/reads";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { createEventsPerfFixture, type EventsPerfFixture } from "./helpers/events-perf-fixture";
 
-describe.skipIf(!process.env.DATABASE_URL)(
-  "going aggregate is one statement (agent-testdb)",
-  () => {
-    let fixture: MemberDataFixture;
-    let statements = 0;
-    let countedDb: MemberDataFixture["db"];
+describe("going aggregate is one statement", () => {
+  let fixture: EventsPerfFixture;
 
-    beforeAll(async () => {
-      fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-      countedDb = drizzle(fixture.client, {
-        schema: { ...schema, ...adminSchema },
-        logger: {
-          logQuery() {
-            statements += 1;
-          },
-        },
-      });
-    });
+  beforeAll(async () => {
+    fixture = await createEventsPerfFixture();
+  });
+  afterAll(async () => {
+    await fixture?.dispose();
+  });
+  beforeEach(async () => {
+    await fixture.reset();
+  });
 
-    afterAll(async () => {
-      await fixture?.dispose();
-    });
+  it("listUpcoming issues count + rows + one going aggregate with exact named/occupancy split", async () => {
+    const base = Date.now();
+    const row = await fixture.seedEvent({ eventKey: "going-single-0", title: "Going Single" });
+    // One named answer, both nameless shapes, and a non-going answer. The
+    // missing user must hold a seat without appearing in the named badge.
+    await fixture.seedUser("going-single-named", "Named");
+    await fixture.seedUser("going-single-empty", "");
+    await fixture.seedUser("going-single-maybe", "Maybe");
+    await fixture.seedAnswer(row.id, "going-single-named", "going");
+    await fixture.seedAnswer(row.id, "going-single-empty", "going");
+    await fixture.seedAnswer(row.id, "going-single-missing", "going");
+    await fixture.seedAnswer(row.id, "going-single-maybe", "maybe");
 
-    beforeEach(async () => {
-      await fixture.reset();
-      statements = 0;
-    });
-
-    it("listUpcoming issues count + rows + one going aggregate with exact named/occupancy split", async () => {
-      const dayMs = 86_400_000;
-      const base = Date.now();
-      const startsAt = new Date(base + dayMs).toISOString();
-      const endsAt = new Date(base + dayMs + 2 * 3_600_000).toISOString();
-      const [row] = await fixture.client<{ id: number }[]>`
-      insert into events (event_key, title, starts_at, ends_at, status)
-      values ('going-single-0', 'Going Single', ${startsAt}, ${endsAt}, 'published')
-      returning id`;
-      const eventId = row!.id;
-      // One named going row, one empty-name going row, one going row with no
-      // user row at all, plus one non-going answer that must not count.
-      await fixture.client`
-      insert into users (id, username) values ('going-single-named', 'Named'), ('going-single-empty', ''), ('going-single-maybe', 'Maybe')
-      on conflict (id) do nothing`;
-      await fixture.client`
-      insert into rsvps (event_id, user_id, status) values
-      (${eventId}, 'going-single-named', 'going'),
-      (${eventId}, 'going-single-empty', 'going'),
-      (${eventId}, 'going-single-missing', 'going'),
-      (${eventId}, 'going-single-maybe', 'maybe')`;
-
-      statements = 0;
-      const page = await listUpcoming(countedDb, new Date(base));
-      // Count + rows + ONE going aggregate. Two aggregates (named + occupancy
-      // as separate statements) fails this pin.
-      expect(statements).toBe(3);
-      expect(page.rows).toHaveLength(1);
-      // Named-only badge excludes both nameless shapes; occupancy holds every seat.
-      expect(page.rows[0]!.goingCount).toBe(1);
-      expect(page.rows[0]!.goingOccupancy).toBe(3);
-    });
-  },
-);
+    fixture.statements.length = 0;
+    const page = await listUpcoming(fixture.db, new Date(base));
+    expect(fixture.statements).toHaveLength(3);
+    expect(page.rows).toHaveLength(1);
+    expect(page.rows[0]!.goingCount).toBe(1);
+    expect(page.rows[0]!.goingOccupancy).toBe(3);
+    const aggregate = fixture.statements[2]!;
+    expect(aggregate.sql).toContain('left join "users"');
+    expect(aggregate.sql).not.toContain('inner join "users"');
+    expect(aggregate.sql).toContain('group by "rsvps"."event_id"');
+    expect(aggregate.sql).toContain("count(case when");
+    expect(aggregate.sql).toMatch(/count\(\*\)/);
+    expect(aggregate.sql).toContain('"users"."username" <>');
+    expect(aggregate.params).toEqual([row.id, "going"]);
+    expect(fixture.statements.every(({ sql }) => sql.startsWith("select "))).toBe(true);
+  });
+});
