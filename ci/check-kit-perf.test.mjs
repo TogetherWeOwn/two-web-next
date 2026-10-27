@@ -447,9 +447,10 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
 // per axis — raw 257024 (baseline), 257536 (admin-orientation; merged build
 // 257039 on the earlier base, which the lower 257024 ceiling rejects by 15)
 // and 258048 (featured editorial-limits; merged build 257638, which the lower
-// 257536 ceiling rejects by 102); gzip 103168 (baseline) and 103680 (merged
-// build 103569, which the lower 103168 ceiling rejects by 401). Any other
-// loaded ceiling fails its allocation control and its boundary cases.
+// 257536 ceiling rejects by 102); gzip 103168 (baseline), 103424 (merged-tree
+// worst 103302, margin 122; the lower 103168 ceiling rejects by 134) and
+// 103680 (merged build 103569, which the lower 103168 ceiling rejects by 401).
+// Any other loaded ceiling fails its allocation control and its boundary cases.
 const SHIPPING_CLIENT_RAW_CAP = shippingClientBudget?.maxRawBytes;
 const SHIPPING_CLIENT_GZIP_CAP = shippingClientBudget?.maxGzipBytes;
 const SHIPPING_CLIENT_RAW_ALLOCATIONS = {
@@ -459,6 +460,7 @@ const SHIPPING_CLIENT_RAW_ALLOCATIONS = {
 };
 const SHIPPING_CLIENT_GZIP_ALLOCATIONS = {
   103168: { exactBytes: 103168, overBytes: 103169 },
+  103424: { intervalBytes: 103302, exactBytes: 103424, overBytes: 103425 },
   103680: { intervalBytes: 103569, exactBytes: 103680, overBytes: 103681 },
 };
 const SHIPPING_CLIENT_RAW_UNSUPPORTED =
@@ -466,7 +468,7 @@ const SHIPPING_CLIENT_RAW_UNSUPPORTED =
   `expected one of 257024, 257536, 258048`;
 const SHIPPING_CLIENT_GZIP_UNSUPPORTED =
   `unsupported client gzip allocation ${String(SHIPPING_CLIENT_GZIP_CAP)}: ` +
-  `expected one of 103168, 103680`;
+  `expected one of 103168, 103424, 103680`;
 
 test("shipping budget: client raw allocation is explicitly approved", () => {
   assert.ok(
@@ -774,6 +776,25 @@ function shippingClientGzipCases() {
         axis: "gzip",
         bytes: 103169,
         ceiling: 103168,
+        breach: true,
+      },
+    ];
+  }
+  if (SHIPPING_CLIENT_GZIP_CAP === 103424) {
+    return [
+      {
+        name: "client gzip newly allowed interval",
+        group: "kit.client.js",
+        axis: "gzip",
+        bytes: 103302,
+      },
+      { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103424 },
+      {
+        name: "client gzip one byte over",
+        group: "kit.client.js",
+        axis: "gzip",
+        bytes: 103425,
+        ceiling: 103424,
         breach: true,
       },
     ];
