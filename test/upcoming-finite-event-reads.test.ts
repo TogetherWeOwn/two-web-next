@@ -6,7 +6,7 @@ import { Hono } from "hono";
 import { describe, expect, it } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Env } from "../src/env";
-import { listFeed, listUpcoming } from "../src/events/reads";
+import { listFeed, listHomeUpcoming, listUpcoming } from "../src/events/reads";
 import { registerEventRoutes } from "../src/events/routes";
 import { createMemberDataFixture, testDatabaseUrl } from "./helpers/member-data-db";
 
@@ -16,6 +16,10 @@ const url = raw ? testDatabaseUrl(raw).href : undefined;
 const FINITE = "01J0000000000000000000AAA";
 const INF_START = "01J0000000000000000000AAB";
 const INF_END = "01J0000000000000000000AAC";
+const HOME_INF_END_1 = "01J0000000000000000000AAD";
+const HOME_INF_END_2 = "01J0000000000000000000AAE";
+const HOME_INF_END_3 = "01J0000000000000000000AAF";
+const HOME_VALID = "01J0000000000000000000AAG";
 
 const routeEnv = (adminDb: EnvWithAdminDb["ADMIN_DB"]) =>
   ({
@@ -56,6 +60,27 @@ describe.skipIf(!url)("upcoming reads refuse non-finite boundaries (isolated tes
       const { rows: upcoming, total } = await listUpcoming(db);
       expect(upcoming.map((row) => row.eventKey)).toEqual([FINITE]);
       expect(total).toBe(1);
+    } finally {
+      await fixture.dispose();
+    }
+  });
+
+  // The home teaser caps at LIMIT 3 in SQL and drops unrenderable windows in
+  // JS afterwards; an isfinite(starts_at)-only filter let finite-start,
+  // infinity-end rows take every slot and starve the later valid event.
+  it("keeps infinity ends out of the home teaser LIMIT 3 slots", async () => {
+    const fixture = await createMemberDataFixture(url!, { max: 2 });
+    const { client, db } = fixture;
+    try {
+      await client`insert into events (event_key, title, starts_at, ends_at, status)
+        values
+          (${HOME_INF_END_1}, 'Infinity end one', '2070-01-01T18:00:00Z', 'infinity'::timestamptz, 'published'),
+          (${HOME_INF_END_2}, 'Infinity end two', '2070-02-01T18:00:00Z', 'infinity'::timestamptz, 'published'),
+          (${HOME_INF_END_3}, 'Infinity end three', '2070-03-01T18:00:00Z', 'infinity'::timestamptz, 'published'),
+          (${HOME_VALID}, 'Valid later', '2070-04-01T18:00:00Z', '2070-04-01T20:00:00Z', 'published')`;
+
+      const home = await listHomeUpcoming(db, new Date("2069-12-01T00:00:00Z"));
+      expect(home.map((row) => row.eventKey)).toEqual([HOME_VALID]);
     } finally {
       await fixture.dispose();
     }
