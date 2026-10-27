@@ -65,16 +65,22 @@ const RELATED: EventLink[] = [
     eventKey: FIRST_KEY,
     title: "Chess finals",
     startsAt: new Date("2030-02-01T14:15:23.456-05:00"),
+    endsAt: new Date("2030-02-01T16:15:23.456-05:00"),
     timezone: "America/New_York",
     location: "The lobby",
+    game: null,
+    rsvpOpen: true,
   },
   {
     id: 10,
     eventKey: SECOND_KEY,
     title: "Summer chess",
     startsAt: new Date("2030-07-01T09:05:06.789+09:00"),
+    endsAt: new Date("2030-07-01T11:05:06.789+09:00"),
     timezone: "Asia/Tokyo",
     location: null,
+    game: null,
+    rsvpOpen: true,
   },
 ];
 
@@ -332,10 +338,11 @@ describe("Kit gone alternatives acceptance", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const bytes = new Uint8Array(await response.arrayBuffer());
-    // Re-captured with main 71c0ec4e0b0a55d9738c824df5b4cd724157de7f merged;
-    // Hono source is unchanged from that main commit.
+    // Re-captured with main 4cd035fd8 merged. The delta from the prior pin is
+    // main 48e55e5d6 (final attendance line in src/events/pages-gone.tsx); this
+    // change leaves Hono source identical to that main commit.
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-      "3eab9ef334293582d9ce31fb082e9c2dd0e97172e2f9e99da7e8af0f14b82792",
+      "2001bedeed052bd720d8946ad1814b8a165c018b45ca120be55328a8a90f3bcf",
     );
   });
 
