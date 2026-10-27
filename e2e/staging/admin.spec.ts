@@ -1,6 +1,6 @@
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { test, expect } from "./fixtures";
-import { emptyStorageState, moderatorStorageState } from "./fixtures";
+import { emptyStorageState, moderatorStorageState, persistRotatedStorageState } from "./fixtures";
 import { loginQaModerator } from "./qa-login";
 
 test.use({ storageState: moderatorStorageState });
@@ -12,6 +12,11 @@ test.beforeAll(async () => {
   // waits get their own budget (qa-login-retry.mjs), one login here.
   test.setTimeout(30_000 + qaLoginRetryBudgetMs(1));
   await loginQaModerator();
+});
+
+// The next test creates a fresh context from disk; keep its bearer current.
+test.afterEach(async ({ context }) => {
+  await persistRotatedStorageState(context, moderatorStorageState);
 });
 
 // Moderator staging journey. This spec NEVER publishes: the fixture is
