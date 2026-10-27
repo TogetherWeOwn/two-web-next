@@ -60,7 +60,17 @@ export const CalCard: FC<{
   member: boolean;
   inviteUrl: string;
   loginReturnTo: string | null;
-}> = ({ e, schedule, zone, now = new Date(), isPast, q = "", member, inviteUrl, loginReturnTo }) => {
+}> = ({
+  e,
+  schedule,
+  zone,
+  now = new Date(),
+  isPast,
+  q = "",
+  member,
+  inviteUrl,
+  loginReturnTo,
+}) => {
   const tz = rowZone(e, zone);
   const transient = isTransient(e);
   const cancelled = !transient && e.status === "cancelled";
