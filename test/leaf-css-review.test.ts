@@ -110,4 +110,17 @@ describe("generated leaf CSS review evidence", () => {
       error_code: "leaf_css_review_failed",
     });
   });
+
+  it("compares the merge queue's base and head revisions on merge_group runs", () => {
+    // merge_group payloads carry no pull_request SHAs and no `before`, so a
+    // chain without merge_group refs resolves both args to github.sha and the
+    // CLI reports changed:false for every queued change.
+    const workflow = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+    const stepStart = workflow.indexOf("Generated leaf-CSS and CSP hash review delta");
+    expect(stepStart).toBeGreaterThan(-1);
+    const stepEnd = workflow.indexOf("- name:", stepStart + 1);
+    const step = workflow.slice(stepStart, stepEnd === -1 ? undefined : stepEnd);
+    expect(step).toContain("github.event.merge_group.base_sha");
+    expect(step).toContain("github.event.merge_group.head_sha");
+  });
 });
