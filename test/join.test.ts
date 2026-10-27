@@ -372,7 +372,7 @@ describe("W15 join landing and recovery parity", () => {
       focus: ReturnType<typeof vi.fn>;
       addEventListener: ReturnType<typeof vi.fn>;
     };
-    const preview = { replaceChildren: vi.fn() };
+    const preview = { appendChild: vi.fn() };
     let onClick: (event: { button: number; preventDefault: () => void }) => void = () => {};
     runInNewContext(binder, {
       document: {
@@ -395,7 +395,7 @@ describe("W15 join landing and recovery parity", () => {
     onClick(event);
     expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(frame.src).toBe(href);
-    expect(preview.replaceChildren).toHaveBeenCalledWith(frame);
+    expect(preview.appendChild).toHaveBeenCalledWith(frame);
   });
 
   it.each(["", "javascript:alert(1)", "https://evil.test/invite"])(
