@@ -54,6 +54,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
   "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
+  "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
 };
 
 // sha256 of the frozen legacy-history archives: header + the verbatim
