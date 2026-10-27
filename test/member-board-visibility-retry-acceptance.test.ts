@@ -13,7 +13,7 @@
 // Stable case IDs (see the builder handoff on the card for the full table):
 // - HONO-MANAGE-*: Hono page-unit manage action (populated/empty/unranked/game)
 // - HONO-RETRY-*: Hono route + page-unit retry (unavailable only, keeps query)
-// - HONO-ROUTE-DB-*: Hono route with agent-testdb (manage/retry/gating/no-store)
+// - HONO-ROUTE-DB-*: Hono route, real or fixture DB (manage/retry/gating)
 // - KIT-MANAGE-* / KIT-RETRY-*: Kit SSR render twins via the real +page.svelte
 // - SRC-*: source pins (existing URL helpers, no new preference projection)
 // - CTRL-*: already-passing controls (gate, grammar, policy, opt-out, fragment)
@@ -29,6 +29,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { serializeSigned } from "hono/utils/cookie";
+import { drizzle } from "drizzle-orm/pg-proxy";
 import { build } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import app from "./app";
@@ -416,18 +417,118 @@ describe("Hono member board retry (unavailable state only)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// Hono route with agent-testdb (HONO-ROUTE-DB-*; skips without DATABASE_URL)
+// Hono route (HONO-ROUTE-DB-*): agent-testdb when DATABASE_URL is set, the
+// in-memory pg-proxy ranking double below when it is not. Every case runs
+// and asserts in both modes; nothing in this suite is skipped offline. A
+// set-but-unapproved DATABASE_URL still refuses in createMemberDataFixture
+// (and in the global test-db guard), never falls back to the double.
 // ---------------------------------------------------------------------------
 
-describe("Hono member board route (agent-testdb)", () => {
-  let fixture: MemberDataFixture;
+describe("Hono member board route (served board)", () => {
+  let fixture: MemberDataFixture | undefined;
   let db: MemberDataFixture["db"];
   let store: ReturnType<typeof createMemorySessionStore>;
   let live: Env;
 
+  // Offline transport double (the savable-games pg-proxy pattern): seeded
+  // rows live in these tables and the ranking statements the real route
+  // issues are answered from them, honoring the bound season window and
+  // game exactly as the SQL predicates name them. Only the SQL transport
+  // is replaced; the route, gate, read boundary and page all run for real.
+  type FixtureUser = { id: string; username: string };
+  type FixtureEvent = { id: number; game: string; startsAt: Date };
+  type FixtureRsvp = { eventId: number; userId: string };
+  let fixtureUsers: FixtureUser[] = [];
+  let fixtureEvents: FixtureEvent[] = [];
+  let fixtureRsvps: FixtureRsvp[] = [];
+  let nextFixtureEventId = 1;
+
+  const resetBoard = async () => {
+    if (fixture) {
+      await fixture.reset();
+      return;
+    }
+    fixtureUsers = [];
+    fixtureEvents = [];
+    fixtureRsvps = [];
+    nextFixtureEventId = 1;
+  };
+
+  const boundValue = (sqlText: string, params: unknown[], pattern: RegExp) => {
+    const match = pattern.exec(sqlText);
+    return match ? params[Number(match[1]) - 1] : undefined;
+  };
+
+  const fixtureRanking = (sqlText: string, params: unknown[]) => {
+    const start = boundValue(sqlText, params, /events\.starts_at\s*>=\s*\$(\d+)/);
+    const end = boundValue(sqlText, params, /events\.starts_at\s*<\s*\$(\d+)/);
+    const game = boundValue(sqlText, params, /lower\(trim\(events\.game\)\)\s*=\s*\$(\d+)/);
+    const counts = new Map<string, number>();
+    for (const rsvp of fixtureRsvps) {
+      const event = fixtureEvents.find((candidate) => candidate.id === rsvp.eventId);
+      if (!event) continue;
+      if (typeof start === "string" && event.startsAt < new Date(start)) continue;
+      if (typeof end === "string" && event.startsAt >= new Date(end)) continue;
+      if (typeof game === "string" && event.game.trim().toLowerCase() !== game) continue;
+      counts.set(rsvp.userId, (counts.get(rsvp.userId) ?? 0) + 1);
+    }
+    return [...counts.entries()]
+      .flatMap(([userId, count]) => {
+        const user = fixtureUsers.find((candidate) => candidate.id === userId);
+        return user ? [{ user_id: userId, username: user.username, count }] : [];
+      })
+      .sort(
+        (a, b) => b.count - a.count || (a.user_id < b.user_id ? -1 : a.user_id > b.user_id ? 1 : 0),
+      )
+      .map((row, index) => ({ ...row, rank: index + 1 }));
+  };
+
+  const fixtureDb = (): MemberDataFixture["db"] => {
+    const proxy = drizzle(async (sqlText, params) => {
+      if (!/from rsvps/i.test(sqlText)) return { rows: [] };
+      const ranked = fixtureRanking(sqlText, [...params]);
+      // Raw execute() maps keyed aliases, not positional projections.
+      if (/select ranked\.user_id as user_id, ranked\.rank as rank/.test(sqlText)) {
+        const viewer = boundValue(sqlText, [...params], /ranked\.user_id\s*=\s*\$(\d+)/);
+        const row = ranked.find((candidate) => candidate.user_id === viewer);
+        return {
+          rows: (row ? [{ user_id: row.user_id, rank: row.rank }] : []) as unknown as unknown[][],
+        };
+      }
+      const windowMatch = /ranked\.rank between \$(\d+) - \$(\d+) and \$(\d+) \+ \$(\d+)/.exec(
+        sqlText,
+      );
+      if (windowMatch) {
+        const center = Number(params[Number(windowMatch[1]) - 1]);
+        const neighbors = Number(params[Number(windowMatch[2]) - 1]);
+        return {
+          rows: ranked.filter(
+            (row) => row.rank >= center - neighbors && row.rank <= center + neighbors,
+          ) as unknown as unknown[][],
+        };
+      }
+      return {
+        rows: ranked.slice(0, 100).map((row) => ({
+          user_id: row.user_id,
+          username: row.username,
+          count: row.count,
+        })) as unknown as unknown[][],
+      };
+    });
+    Object.assign(proxy, {
+      transaction: async (fn: (tx: MemberDataFixture["db"]) => Promise<unknown>) =>
+        fn(proxy as unknown as MemberDataFixture["db"]),
+    });
+    return proxy as unknown as MemberDataFixture["db"];
+  };
+
   beforeAll(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-    db = fixture.db;
+    if (process.env.DATABASE_URL) {
+      fixture = await createMemberDataFixture(process.env.DATABASE_URL);
+      db = fixture.db;
+    } else {
+      db = fixtureDb();
+    }
     store = createMemorySessionStore();
     live = {
       ...env,
@@ -456,6 +557,26 @@ describe("Hono member board route (agent-testdb)", () => {
     const game = opts.game ?? "Chess";
     const startsAt = opts.startsAt ?? new Date("2026-09-08T19:00:00Z");
     const ids = memberIds(opts.prefix, opts.goings.length);
+    const needed = Math.max(...opts.goings);
+    if (!fixture) {
+      fixtureUsers.push(
+        ...ids.map((id, i) => ({
+          id,
+          username: `zxq-${opts.prefix}-m${String(i).padStart(2, "0")}`,
+        })),
+      );
+      const fixtureEventIds = Array.from({ length: needed }, () => {
+        const id = nextFixtureEventId++;
+        fixtureEvents.push({ id, game, startsAt });
+        return id;
+      });
+      for (let m = 0; m < ids.length; m++) {
+        for (let g = 0; g < opts.goings[m]!; g++) {
+          fixtureRsvps.push({ eventId: fixtureEventIds[g]!, userId: ids[m]! });
+        }
+      }
+      return ids;
+    }
     await db.insert(users).values(
       ids.map((id, i) => ({
         id,
@@ -464,7 +585,6 @@ describe("Hono member board route (agent-testdb)", () => {
         avatar: null,
       })),
     );
-    const needed = Math.max(...opts.goings);
     const eventIds: number[] = [];
     for (let e = 0; e < needed; e++) {
       const [row] = await db
@@ -494,7 +614,7 @@ describe("Hono member board route (agent-testdb)", () => {
     );
 
   it("HONO-ROUTE-DB-populated: the served board links its own visibility control", async () => {
-    await fixture.reset();
+    await resetBoard();
     await seedBoard({ prefix: "100000000000000", goings: [3, 2, 1], keyBase: 410 });
     const res = await board("?season=2026-09");
     expect(res.status).toBe(200);
@@ -506,7 +626,7 @@ describe("Hono member board route (agent-testdb)", () => {
   });
 
   it("HONO-ROUTE-DB-empty: the empty board keeps action, policy link and navigation", async () => {
-    await fixture.reset();
+    await resetBoard();
     await seedBoard({ prefix: "100000000000000", goings: [2, 1], keyBase: 420 });
     const res = await board("?season=2026-09&activity=checkers");
     expect(res.status).toBe(200);
@@ -518,7 +638,7 @@ describe("Hono member board route (agent-testdb)", () => {
   });
 
   it("HONO-ROUTE-DB-unranked: the unranked relative board keeps action and copy", async () => {
-    await fixture.reset();
+    await resetBoard();
     await seedBoard({ prefix: "100000000000000", goings: [2, 1], keyBase: 430 });
     // MEMBER sent no going RSVP, so the relative scope has no window for them.
     const res = await board("?season=2026-09&scope=relative");
@@ -530,7 +650,7 @@ describe("Hono member board route (agent-testdb)", () => {
   });
 
   it("HONO-ROUTE-DB-game: the game-scoped board keeps the own-profile action", async () => {
-    await fixture.reset();
+    await resetBoard();
     await seedBoard({ prefix: "100000000000000", goings: [2, 1], keyBase: 440, game: "Chess" });
     await seedBoard({ prefix: "100000000000001", goings: [1], keyBase: 450, game: "Go" });
     const res = await board("?season=2026-09&activity=chess");
@@ -542,7 +662,7 @@ describe("Hono member board route (agent-testdb)", () => {
   });
 
   it("HONO-ROUTE-DB-fixed-target: hostile return URLs never reach the manage href", async () => {
-    await fixture.reset();
+    await resetBoard();
     const ids = await seedBoard({ prefix: "100000000000000", goings: [2, 1], keyBase: 460 });
     const res = await board(
       "?season=2026-09&return=https%3A%2F%2Fevil.test%2Fsteal&next=%2Fevil&returnTo=%2Fevil",
@@ -556,7 +676,7 @@ describe("Hono member board route (agent-testdb)", () => {
   });
 
   it("HONO-ROUTE-DB-scope: the served board explains Going-response ranking", async () => {
-    await fixture.reset();
+    await resetBoard();
     await seedBoard({ prefix: "100000000000000", goings: [3, 2, 1], keyBase: 470 });
     const res = await board("?season=2026-09");
     expect(res.status).toBe(200);
@@ -568,7 +688,7 @@ describe("Hono member board route (agent-testdb)", () => {
   });
 
   it("HONO-ROUTE-DB-hostile-label: a markup-shaped game stays escaped on the served board", async () => {
-    await fixture.reset();
+    await resetBoard();
     await seedBoard({ prefix: "100000000000000", goings: [2, 1], keyBase: 480 });
     const res = await board("?season=2026-09&activity=%3Cimg%3E");
     expect(res.status).toBe(200);
