@@ -92,6 +92,7 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/join/discord", status: 503, format: "html" },
   { method: "GET", route: "/join/callback", status: 503, format: "html" },
   { method: "POST", route: "/logout", status: 303, location: "/" },
+  { method: "POST", route: "/logout/everywhere", status: 303, location: "/", actor: "member" },
   {
     method: "POST",
     route: "/auth/qa/:identity",
@@ -177,7 +178,7 @@ const MATRIX: Case[] = [
     format: "json",
     body: "{}",
   },
-  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => ({
+  ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map((action) => ({
     method: "POST",
     route: `/events/:key/${action}`,
     status: 503,
@@ -325,6 +326,7 @@ const MATRIX: Case[] = [
     "/admin/events/:key",
     "/admin/events/:key/publish",
     "/admin/events/:key/cancel",
+    "/admin/events/:key/duplicate",
     "/admin/events/:key/rsvp-pause",
     "/admin/events/:key/rsvp-reopen",
     "/admin/featured",

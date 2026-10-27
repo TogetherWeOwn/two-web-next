@@ -229,6 +229,10 @@ export const ProfilePage: FC<{
   values?: ProfileFormValues;
   /** 422/503 re-render: the stats recovery link warns that reloading discards the draft. */
   statsDraftWarning?: boolean;
+  /** Member's displayed game strings the viewer also plays; entries exactly
+   * equal to a value render the shared marker. Absent (or empty) renders the
+   * plain list: own profile and zero-shared never mark. */
+  sharedGames?: string[];
 }> = ({
   member,
   isOwner,
@@ -239,6 +243,7 @@ export const ProfilePage: FC<{
   errors,
   values,
   statsDraftWarning,
+  sharedGames,
 }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
@@ -264,6 +269,14 @@ export const ProfilePage: FC<{
   // refreshes these same nodes; no-JS readers get the seeded state.
   const bioCount = bioCountText(codePoints(form.bio));
   const gamesCount = gamesCountText(parseGamesText(form.games_text));
+  // Exact-match set over the route's computed shared names: the match itself
+  // (trim + case-insensitive) lives in findSharedGames, shared with the Kit
+  // twin, so the view never re-derives it.
+  const shared = new Set(sharedGames ?? []);
+  // Refusal re-render (422/503): the controls' HTML defaults are the
+  // rejected draft, so Cancel cannot be a native reset there — it would
+  // restore the draft itself for a member without JavaScript.
+  const refused = !!errors && Object.keys(errors).length > 0;
   return (
     <Layout
       title={`${member.username} — Member profile`}
@@ -294,6 +307,11 @@ export const ProfilePage: FC<{
           <form method="post" action="/logout" data-testid="profile-signout">
             <button type="submit" class="link">
               Sign out
+            </button>
+          </form>
+          <form method="post" action="/logout/everywhere" data-testid="profile-signout-everywhere">
+            <button type="submit" class="link">
+              Sign out everywhere
             </button>
           </form>
         </div>
@@ -347,6 +365,11 @@ export const ProfilePage: FC<{
                     (isOwner ? PROFILE_EMPTY_COPY.timezoneOwner : PROFILE_EMPTY_COPY.timezoneOther)
                   }`}
                 </p>
+                <div data-local-time-compare={member.timezone ?? ""}>
+                  <button type="button" class="btn profile-secondary" hidden>
+                    Compare local times
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -367,9 +390,16 @@ export const ProfilePage: FC<{
               <div data-testid="profile-games">
                 {member.games.length > 0 ? (
                   <ul>
-                    {member.games.map((g) => (
-                      <li>{g}</li>
-                    ))}
+                    {member.games.map((g) =>
+                      shared.has(g) ? (
+                        <li data-shared-game="true">
+                          {g}
+                          <span data-testid="profile-shared-marker">Shared</span>
+                        </li>
+                      ) : (
+                        <li>{g}</li>
+                      ),
+                    )}
                   </ul>
                 ) : (
                   <p>{isOwner ? PROFILE_EMPTY_COPY.gamesOwner : PROFILE_EMPTY_COPY.gamesOther}</p>
@@ -379,6 +409,7 @@ export const ProfilePage: FC<{
           </div>
         </section>
         <script src="/islands/avatar.js" defer></script>
+        <script src="/islands/local-time-compare.js" defer></script>
         {isOwner ? (
           <section
             class="profile-panel profile-new-member"
@@ -571,13 +602,26 @@ export const ProfilePage: FC<{
                 <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>
                   {PROFILE_COPY.save}
                 </button>
-                <button
-                  class="btn profile-secondary"
-                  type="reset"
-                  data-testid={PROFILE_CANCEL_TESTID}
-                >
-                  {PROFILE_COPY.cancel}
-                </button>
+                {refused ? (
+                  // A safe GET back to the saved profile discards the draft
+                  // without JavaScript; the island intercepts plain clicks
+                  // and resets in place instead. Same styling as the reset.
+                  <a
+                    class="btn profile-secondary"
+                    href={`/members/${member.id}`}
+                    data-testid={PROFILE_CANCEL_TESTID}
+                  >
+                    {PROFILE_COPY.cancel}
+                  </a>
+                ) : (
+                  <button
+                    class="btn profile-secondary"
+                    type="reset"
+                    data-testid={PROFILE_CANCEL_TESTID}
+                  >
+                    {PROFILE_COPY.cancel}
+                  </button>
+                )}
               </div>
             </form>
             <script src="/islands/member-profile.js" defer></script>

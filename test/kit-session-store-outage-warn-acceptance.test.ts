@@ -480,7 +480,7 @@ describe("kitEventsSessionFor warns once on store failure; null is unchanged", (
     const live = await liveSession(store);
     const logs = captureDiagnosticStream();
     const session = await kitEventsSessionFor(bridgeEnvFor(store))(requestWith([live.cookie]));
-    expect(session).toEqual({ member: true, moderator: false });
+    expect(session).toEqual({ username: "w15-member", member: true, moderator: false });
     expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
     scanClean(logs);
   });

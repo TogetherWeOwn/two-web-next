@@ -26,6 +26,21 @@ const step = (name: string): string => {
 };
 
 describe("gitleaks fixture policy", () => {
+  it("keeps the parity fixture exception limited to the exact rule, path and secret", () => {
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.includes("Synthetic unknown-event ULID in the MCP/REST parity"));
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic unknown-event ULID in the MCP/REST parity acceptance fixture, used only for an in-memory 404 lookup, not a credential (including its committed history)"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/mcp-rest-parity-acceptance\.test\.ts$''']
+regexes = ['''^01BRZ3NDEKTSV4RRFFQ69G5FAV$''']`,
+    ]);
+  });
+
   it("keeps the public Hono event-id exception limited to the exact rule, path and two secrets", () => {
     const entries = policy
       .split(/\r?\n\[\[allowlists\]\]\r?\n/)
@@ -153,6 +168,67 @@ regexTarget = "secret"
 paths = ['''^ci/a11y-cases\.mjs$''']
 regexes = ['''^a11y-operator-fixture-$''']`,
     ]);
+  });
+});
+
+describe("gitleaks public-event fixture policy", () => {
+  const entries = policy
+    .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.includes("Two synthetic offline PUBLIC Discord event fixtures"));
+
+  it("pins the entire rule/path/value conjunction, including explicit AND and secret matching", () => {
+    expect(entries).toEqual([
+      String.raw`description = "Two synthetic offline PUBLIC Discord event fixtures in the Kit public-payload contract tests, not credentials or member identities"
+targetRules = ["discord-client-id"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^test/kit-no-member-data-contract\.test\.ts$''']
+regexes = ['''^111222333444555667$''', '''^222333444555666778$''']`,
+    ]);
+  });
+
+  // Probe the configured regexes, not a second set of copied patterns. This is
+  // structural coverage, not scanner integration: the whole-table pin above
+  // also rejects implicit OR, other rules/targets and additional fields.
+  it.each([
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "111222333444555667", true],
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "222333444555666778", true],
+    ["discord-client-id", "src/control.ts", "111222333444555667", false],
+    ["discord-client-id", "src/control.ts", "222333444555666778", false],
+    [
+      "discord-client-id",
+      "prefix/test/kit-no-member-data-contract.test.ts",
+      "111222333444555667",
+      false,
+    ],
+    [
+      "discord-client-id",
+      "test/kit-no-member-data-contract.test.ts.bak",
+      "111222333444555667",
+      false,
+    ],
+    ["discord-client-id", "test/kit-no-member-data-contractXtest.ts", "111222333444555667", false],
+    ["discord-client-id", "test/kit-no-member-data-contract.testXts", "222333444555666778", false],
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "333444555666777889", false],
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "111222333444555668", false],
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "0111222333444555667", false],
+    ["discord-client-id", "test/kit-no-member-data-contract.test.ts", "2223334445556667780", false],
+    ["generic-api-key", "test/kit-no-member-data-contract.test.ts", "111222333444555667", false],
+    ["generic-api-key", "test/kit-no-member-data-contract.test.ts", "222333444555666778", false],
+  ])("matches rule=%s path=%s secret=%s only when approved=%s", (rule, path, secret, approved) => {
+    const entry = entries[0] ?? "";
+    const targetRule = entry.match(/^targetRules = \["([^"]+)"\]$/m)?.[1];
+    const patterns = [...entry.matchAll(/'''([^']+)'''/g)].map(
+      (match) => new RegExp(match[0].slice(3, -3)),
+    );
+    expect(patterns).toHaveLength(3);
+    const [pathPattern, ...secretPatterns] = patterns;
+    expect(
+      targetRule === rule &&
+        pathPattern?.test(path) &&
+        secretPatterns.some((pattern) => pattern.test(secret)),
+    ).toBe(approved);
   });
 });
 

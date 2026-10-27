@@ -138,7 +138,7 @@ describe("budgets on the legacy paths", () => {
       APP_URL: "https://next.example.test",
       THROTTLE_STORE: async () => sql,
     } as unknown as EnvWithThrottle;
-    const actions = ["publish", "cancel", "rsvp-pause", "rsvp-reopen"];
+    const actions = ["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"];
     const init = { method: "POST", headers: { origin: e.APP_URL, accept: "application/json" } };
     for (let i = 0; i < 30; i++) {
       expect(

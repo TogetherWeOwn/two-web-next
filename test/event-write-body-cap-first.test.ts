@@ -1,3 +1,4 @@
+// route-inventory: POST /events/:key/duplicate
 // Acceptance: on the moderator event writes, the body-size cap is decided
 // before the shared write throttle and before any session read. An oversized
 // body is therefore a 413 even when the caller is unauthenticated, presents
@@ -28,7 +29,7 @@ const ERROR = {
 const eventWrites = [
   ["POST", "/events", BODY_LIMIT_BYTES.json],
   ["PATCH", "/events/test-event", BODY_LIMIT_BYTES.json],
-  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => [
+  ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map((action) => [
     "POST",
     `/events/test-event/${action}`,
     BODY_LIMIT_BYTES.action,
@@ -203,7 +204,10 @@ describe("controls: at/under-cap event writes keep the current order", () => {
         envFor(sessions, throttle),
       );
       expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ error: "unauthenticated" });
+      expect(await response.json()).toEqual({
+        error: "unauthenticated",
+        request_id: expect.any(String),
+      });
       expect(throttle.count()).toBe(1);
       expect(get).not.toHaveBeenCalled();
     },
@@ -223,7 +227,7 @@ describe("controls: at/under-cap event writes keep the current order", () => {
       expect(response.status).toBe(401);
       // A presented-but-unknown session takes the recovery-shaped 401,
       // unlike the bare-guest { error: "unauthenticated" } above.
-      expect(await response.json()).toMatchObject({ error: "Unauthorized" });
+      expect(await response.json()).toMatchObject({ error: "unauthenticated" });
       expect(throttle.count()).toBe(1);
       expect(get).toHaveBeenCalledOnce();
     },
@@ -241,7 +245,7 @@ describe("controls: at/under-cap event writes keep the current order", () => {
         envFor(sessions, throttle),
       );
       expect(response.status).toBe(403);
-      expect(await response.json()).toEqual({ error: "forbidden" });
+      expect(await response.json()).toEqual({ error: "forbidden", request_id: expect.any(String) });
       expect(throttle.count()).toBe(1);
       expect(get).toHaveBeenCalledOnce();
     },
@@ -258,7 +262,10 @@ describe("controls: at/under-cap event writes keep the current order", () => {
         envFor(sessions, throttle),
       );
       expect(response.status).toBe(401);
-      expect(await response.json()).toEqual({ error: "unauthenticated" });
+      expect(await response.json()).toEqual({
+        error: "unauthenticated",
+        request_id: expect.any(String),
+      });
       expect(throttle.count()).toBe(1);
     },
   );

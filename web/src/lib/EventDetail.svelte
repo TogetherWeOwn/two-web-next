@@ -14,6 +14,10 @@ import {
   RSVP_FULL_COPY,
   RSVP_GOING_TESTID,
   RSVP_GUEST_CTA_COPY,
+  RSVP_MAYBE_COPY,
+  RSVP_MAYBE_TESTID,
+  RSVP_NOT_GOING_COPY,
+  RSVP_NOT_GOING_TESTID,
   RSVP_PAUSED_COPY,
   RSVP_PAUSED_TESTID,
   RSVP_SYNCED_COPY,
@@ -51,8 +55,10 @@ let { model }: { model: KitEventDetailModel } = $props();
 // every deferred script runs after parsing, with all of its mount nodes present.
 const detailIslands = [
   "event-device-timezone",
+  "event-time-from-now",
   "rsvp-button",
   "copy-link",
+  "event-share",
   "going-count",
   "attendees-live",
 ]
@@ -66,6 +72,8 @@ const closed = $derived(model.rsvpClosed);
 const full = $derived(model.capacity !== null && model.goingOccupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
+const isMaybe = $derived(model.answer?.status === "maybe");
+const soft = $derived(isMaybe || model.answer?.status === "not_going");
 const signIn = $derived(loginUrl(model.joinReturnTo));
 const rsvpAction = $derived(
   model.attendeesPaging.page > 1
@@ -77,7 +85,10 @@ const lineup = $derived(
     going: model.goingCount,
     occupancy: model.goingOccupancy,
     capacity: model.capacity,
-    showSpotsLeft: true,
+    // Use the server's RSVP verdict for elapsed published rows too: status
+    // reconciliation can lag behind the event's end. Draft previews keep
+    // their spots line; the browser clock never decides closure.
+    showSpotsLeft: model.status !== "past" && model.status !== "cancelled" && closed !== "past",
     announcement: null,
   }),
 );
@@ -94,6 +105,19 @@ const lineup = $derived(
   {/if}
 </svelte:head>
 
+{#snippet destinationPreview(event: NonNullable<KitEventDetailModel["neighbors"]["previous"]>)}
+  <time datetime={event.datetime}>{event.whenText}</time>
+  {#if event.location}
+    {" "}<span class="event-related-location">{event.location}</span>
+  {/if}
+  {#if event.game}
+    {" "}<span class="event-related-game">{event.game}</span>
+  {/if}
+  {#if event.availability}
+    {" "}<span class="event-related-state">{event.availability}</span>
+  {/if}
+{/snippet}
+
 {#snippet eventPagination(neighbors: KitEventDetailModel["neighbors"] | null | undefined, series: boolean)}
   {#snippet eventLink(event: KitEventDetailModel["neighbors"]["previous"], previous: boolean)}
     {#if event}
@@ -102,13 +126,14 @@ const lineup = $derived(
         rel={previous ? "prev" : "next"}
         data-testid="event-{series ? 'series-' : ''}{previous ? 'previous' : 'next'}"
       >
-        {previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}
+        <span>{previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}</span>{" "}
+        {@render destinationPreview(event)}
       </a>
     {/if}
   {/snippet}
   {#if neighbors && (neighbors.previous || neighbors.next)}
     <nav
-      class={series ? undefined : "event-pagination"}
+      class="event-pagination"
       aria-label={series ? "Series events" : "More events"}
       data-testid={series ? "event-series-nav" : "event-pagination"}
     >
@@ -142,7 +167,7 @@ const lineup = $derived(
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
   <nav class="event-back" aria-label="Event calendar">
-    <a href="/events">← All events</a>
+    <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
   </nav>
   <section class="event-hero" aria-label="Event overview">
     <p class="event-kicker">{model.game ?? "Community event"}</p>
@@ -185,6 +210,26 @@ const lineup = $derived(
         <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
       </dd>
     </div>
+    {#if !model.isDraft}
+      <div hidden>
+        <dt>Time from now</dt>
+        <dd
+          class="event-device-timezone"
+          data-event-time-from-now
+          data-starts-at={model.timeDatetime}
+          data-ends-at={model.endsAt}
+        >
+          <button type="button" hidden data-testid="event-time-from-now-button">Show time from now</button>
+          <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
+        </dd>
+      </div>
+    {/if}
+    {#if model.durationText}
+      <div>
+        <dt>Duration</dt>
+        <dd>{model.durationText}</dd>
+      </div>
+    {/if}
     {#if model.location}
       <div>
         <dt>Where</dt>
@@ -210,6 +255,24 @@ const lineup = $derived(
     <div>
       <dt>The lineup</dt>
       <dd><p>{@html lineup}</p></dd>
+    </div>
+    <div hidden>
+      <dt>Compare in another timezone</dt>
+      <dd class="event-device-timezone" data-event-chosen-timezone>
+        <label for="chosen-timezone-input">Timezone (IANA identifier)</label>
+        <input
+          type="text"
+          id="chosen-timezone-input"
+          data-testid="event-chosen-timezone-input"
+          maxlength="64"
+          hidden
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p data-testid="event-chosen-timezone-examples">e.g. Europe/London, Asia/Tokyo</p>
+        <button type="button" hidden data-testid="event-chosen-timezone-button">Compare times</button>
+        <p role="status" aria-live="polite" data-testid="event-chosen-timezone-status"></p>
+      </dd>
     </div>
   </dl>
   <div class="event-rsvp">
@@ -246,6 +309,20 @@ const lineup = $derived(
               {@render rsvpButton("going", WAITLIST_CLAIM_TESTID, RSVP_WAITLIST_CLAIM_COPY)}
             {/if}
             {@render rsvpButton("withdraw", WAITLIST_LEAVE_TESTID, RSVP_WAITLIST_LEAVE_COPY)}
+          {:else if soft}
+            <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the soft-answer notice stays programmatically focusable exactly like the served RSVP button, so the island can move focus to the new state after a write. -->
+            <p role="status" tabindex={-1} data-testid={isMaybe ? RSVP_MAYBE_TESTID : RSVP_NOT_GOING_TESTID}>
+              {isMaybe ? RSVP_MAYBE_COPY : RSVP_NOT_GOING_COPY}
+            </p>
+            {#if !model.rsvpOpen}
+              {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_WITHDRAW_COPY)}
+            {:else if full}
+              {@render rsvpButton("waitlisted", WAITLIST_JOIN_TESTID, RSVP_WAITLIST_JOIN_COPY)}
+              {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_WITHDRAW_COPY)}
+            {:else}
+              {@render rsvpButton("going", RSVP_GOING_TESTID, RSVP_CTA_COPY)}
+              {@render rsvpButton("withdraw", RSVP_WITHDRAW_TESTID, RSVP_WITHDRAW_COPY)}
+            {/if}
           {:else if !model.rsvpOpen}
             <!-- paused with no answer: the notice above is the whole state -->
           {:else if full}
@@ -273,6 +350,16 @@ const lineup = $derived(
         <section class="event-description" aria-labelledby="event-description-heading">
           <h2 id="event-description-heading">About this event</h2>
           <p>{model.description}</p>
+        </section>
+      {/if}
+      {#if model.accessibilityNotes}
+        <section
+          class="event-description"
+          data-testid="event-accessibility"
+          aria-labelledby="event-accessibility-heading"
+        >
+          <h2 id="event-accessibility-heading">Accessibility</h2>
+          <p>{model.accessibilityNotes}</p>
         </section>
       {/if}
       {#if model.showJoinPitch}
@@ -307,8 +394,27 @@ const lineup = $derived(
         <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
           Copy link
         </a>
+        {#if model.status === "published"}<span hidden data-native-share-sep aria-hidden="true">{" · "}</span><button
+            type="button"
+            hidden
+            data-native-share
+            data-share-title={model.title}
+            data-share-url={model.canonical}
+            data-testid="event-share"
+          >
+            Share
+          </button>
+        {/if}
       </p>
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      {#if model.status === "published"}
+        <p
+          role="status"
+          aria-live="polite"
+          data-testid="event-share-status"
+          data-native-share-status
+        ></p>
+      {/if}
     </section>
   </div>
   {#if model.attendees.length > 0 || (model.viewerMember && model.attendeesPaging.page > 1)}
@@ -371,10 +477,7 @@ const lineup = $derived(
             <li>
               <a href="/e/{event.key}" data-testid="event-related-link">
                 {event.title}{" "}
-                <time datetime={event.datetime}>{event.whenText}</time>
-                {#if event.location}
-                  {" "}<span class="event-related-location">{event.location}</span>
-                {/if}
+                {@render destinationPreview(event)}
               </a>
             </li>
           {/each}

@@ -2,7 +2,12 @@
 // `./validation`, ports FeaturedContentForm rules. `./validation` re-exports
 // every public name below, so all existing importers keep working untouched.
 
-import { isFeaturedImageUrl } from "../image-policy";
+import {
+  featuredLinkRefusal,
+  isFeaturedImageUrl,
+  isSafeFeaturedLink,
+  type FeaturedLinkRefusal,
+} from "../image-policy";
 import { containsControlCharacters, fail, str, type FieldErrors } from "./validation-shared";
 import { parseWall } from "./validation-wall-time";
 
@@ -21,14 +26,12 @@ export type FeaturedFormInput = {
   endsAtUtcText?: string | null;
 };
 
-function isHttpUrl(raw: string): boolean {
-  try {
-    const u = new URL(raw);
-    return u.protocol === "http:" || u.protocol === "https:";
-  } catch {
-    return false;
-  }
-}
+const LINK_REFUSAL_COPY: Record<FeaturedLinkRefusal, string> = {
+  userinfo: "Link cannot contain credentials (user@ or user:pass@ before the host).",
+  backslash: "Link cannot contain backslashes.",
+  whitespace: "Link cannot contain spaces or other whitespace.",
+  control: "Link cannot contain control characters.",
+};
 
 /** Parse the featured-content create/edit form (ports FeaturedContentForm rules). */
 export function parseFeaturedForm(
@@ -53,7 +56,11 @@ export function parseFeaturedForm(
   if (body && [...body].length > 1000) fields.body = "Keep the body to 1000 characters.";
   if (body?.includes("\0")) fields.body = "Body cannot contain NUL characters.";
   const url = str(data.url);
-  if (url && (url.length > 255 || !isHttpUrl(url)))
+  // Inspect the submitted text, not the trimmed value: trim hides edge
+  // whitespace/controls, and URL() later strips tab/LF/CR.
+  const linkRefusal = url && typeof data.url === "string" ? featuredLinkRefusal(data.url) : null;
+  if (linkRefusal) fields.url = LINK_REFUSAL_COPY[linkRefusal];
+  else if (url && (url.length > 255 || !isSafeFeaturedLink(url)))
     fields.url = "Link is a full http(s) URL, or empty for no link.";
   // Postgres text cannot store NUL, and new URL() percent-encodes it (so
   // isHttpUrl still passes): reject it here for a field-level 422.

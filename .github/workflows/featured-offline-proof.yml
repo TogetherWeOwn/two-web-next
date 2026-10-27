@@ -60,17 +60,27 @@ jobs:
             "src/admin/pages/**" \
             "src/admin/form-errors.ts" \
             "src/admin/routes.tsx" \
+            "src/admin/rsvp-review.ts" \
+            "src/admin/save-status.ts" \
             "src/admin/table-list.ts" \
             "src/admin/featured-list-query.ts" \
+            "src/db/admin-schema.ts" \
+            "src/db/schema.ts" \
+            "src/featured.ts" \
+            "src/featured-eligibility.ts" \
             "src/featured-image.ts" \
             "src/featured-status.tsx" \
             "src/home-copy.ts" \
             "src/image-policy.ts" \
-            "src/leaf-critical-css.ts" \
+            "ci/build-leaf-css.mjs" \
             "src/page-shell.tsx" \
             "src/pages.tsx" \
             "src/screens/featured-item.tsx" \
-            "public/styles.css" >> "$GITHUB_OUTPUT"
+            "src/seo-slots.ts" \
+            "src/seo.ts" \
+            "public/styles.css" \
+            "public/theme.css" \
+            "public/theme-tokens.css" >> "$GITHUB_OUTPUT"
 
   capture:
     if: github.event_name == 'workflow_dispatch'
@@ -86,7 +96,7 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
       options: --init --ipc=host
     env:
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       PROOF_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
       PROOF_WORKFLOW_HEAD: ${{ github.sha }}
       PROOF_CHECKOUT_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
@@ -148,7 +158,7 @@ jobs:
       image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
       options: --init --ipc=host
     env:
-      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: '1'
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
       PROOF_CONTAINER_IMAGE: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
       PROOF_CHECKOUT_HEAD: ${{ github.event.pull_request.head.sha }}
       PROOF_RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -168,6 +178,10 @@ jobs:
           # out of sync. --legacy-peer-deps skips that resolution; the install
           # still comes from the lockfile, with scripts disabled.
           npm ci --ignore-scripts --include=dev --no-audit --no-fund --legacy-peer-deps
+          # --ignore-scripts skips postinstall, so regenerate the git-ignored
+          # critical-CSS bundles explicitly: the fixture bundle imports them
+          # transitively through src/pages.
+          node ci/build-leaf-css.mjs
           ./node_modules/.bin/esbuild ci/featured-proof/current-fixtures.ts --bundle --platform=node --format=cjs --outfile="$RUNNER_TEMP/featured-fixtures.cjs"
           node "$RUNNER_TEMP/featured-fixtures.cjs" "$RUNNER_TEMP/featured-current-fixtures"
       - name: Capture twelve current-source views with no app, database or network

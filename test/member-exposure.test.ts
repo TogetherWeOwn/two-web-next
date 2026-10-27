@@ -246,7 +246,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
             if (json) {
               expect(write.headers.get("location")).toBeNull();
               expect(await write.clone().json()).toEqual({
-                error: "Unauthorized",
+                error: "unauthenticated",
+                request_id: expect.any(String),
                 recovery: "/auth/recover?next=%2Fprofile",
               });
             } else expect(write.headers.get("location")).toBe("/auth/recover?next=%2Fprofile");

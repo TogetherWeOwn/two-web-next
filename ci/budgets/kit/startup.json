@@ -1,0 +1,6 @@
+{
+  "$comment": "See ci/budgets/README.md; changing this ceiling needs a decision file in ci/budgets/decisions/kit-perf/.",
+  "startup": {
+    "maxMs": 60000
+  }
+}

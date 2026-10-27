@@ -52,3 +52,19 @@ export const POLLING: Record<IslandName, { pollMs: number | null; reason: string
       "retry, non-matching keys fire no request.",
   },
 };
+
+/**
+ * Finite byte cap on one discovery read's HTML body (events calendar fragment
+ * and past-events archive page), mirrored as HTML_MAX_BYTES in
+ * assets/islands/events-calendar.js and assets/islands/past-events.js.
+ *
+ * Measured (2026-10-27, local fixtures, maximal admin-capped fields in 2-byte
+ * UTF-8): /events/past?page=1 31,962 B; /events 93,131 B;
+ * /events?view=calendar&month=2030-01 39,803 B; /events?past=1 177,177 B
+ * (largest). 1 MiB leaves about 5.9x headroom for member views, search states
+ * and Discord transients while keeping a parse-time memory ceiling. It is not
+ * the JSON read cap. The islands count bytes consumed from the body stream
+ * and cancel on overflow; Content-Length is ignored. A body-less response
+ * falls back to text(), which only bounds the parse, not the download.
+ */
+export const DISCOVERY_HTML_MAX_BYTES = 1_048_576;

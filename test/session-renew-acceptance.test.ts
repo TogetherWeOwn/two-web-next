@@ -1,8 +1,8 @@
-// Test-Author-owned acceptance contract for SessionStore.renew, the
-// expiry-only write behind the sliding window on profile and admin reads.
-// The Builder changes production code, not these expectations. The memory
-// store, a recording tagged-SQL double and the real gates run hermetically:
-// no database, Discord or network transport.
+// Acceptance contract for SessionStore.renew, the expiry-only store write,
+// plus the gate re-stamp decisions: profile and admin reads rotate through
+// store.rotate (fresh bearer + fresh window), never renew. The memory store,
+// a recording tagged-SQL double and the real gates run hermetically: no
+// database, Discord or network transport.
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -296,10 +296,12 @@ function sessionCookies(response: Response) {
   return response.headers.getSetCookie().filter((cookie) => cookie.startsWith(`${COOKIE_NAME}=`));
 }
 
-/** A memory store whose renewal is replaced by `renew`; reads stay real. */
-function storeWithRenew(renew: Renew) {
-  const store = createMemorySessionStore(() => Date.now()) as RenewableStore;
-  store.renew = renew;
+type Rotate = SessionStore["rotate"];
+
+/** A memory store whose rotation is replaced by `rotate`; reads stay real. */
+function storeWithRotate(rotate: Rotate) {
+  const store = createMemorySessionStore(() => Date.now());
+  store.rotate = rotate;
   return store;
 }
 
@@ -320,7 +322,7 @@ const gates = [
   },
 ] as const;
 
-describe.each(gates)("$name renewal decisions (hermetic)", (gate) => {
+describe.each(gates)("$name rotation decisions (hermetic)", (gate) => {
   beforeEach(() => {
     // Only Date is fake: cryptography and the read boundary's deadlines stay real.
     vi.useFakeTimers({ toFake: ["Date"] });
@@ -336,55 +338,75 @@ describe.each(gates)("$name renewal decisions (hermetic)", (gate) => {
     vi.useRealTimers();
   });
 
-  it("renews an authenticated GET once, from request time", async () => {
-    const renew = vi.fn<Renew>(async () => true);
-    const store = storeWithRenew(renew);
+  it("rotates an authenticated GET once, from request time", async () => {
+    const store = createMemorySessionStore(() => Date.now());
+    const rotate = vi.spyOn(store, "rotate");
+    const renew = vi.spyOn(store, "renew");
     const { cookie, tokenHash } = await sessionFor(store, gate.viewer);
     vi.setSystemTime(REQUEST_AT);
     const response = await gate.app(store).request(gate.path, { headers: { cookie } }, env);
     expect(response.status).toBe(200);
-    expect(renew).toHaveBeenCalledTimes(1);
-    expect(renew).toHaveBeenCalledWith(tokenHash, new Date(REQUEST_AT + TTL_MS));
+    expect(renew, "the re-stamp must rotate, not renew").not.toHaveBeenCalled();
+    expect(rotate, "an authenticated view must rotate exactly once").toHaveBeenCalledTimes(1);
+    const [source, replacement] = rotate.mock.calls[0]!;
+    expect(source).toBe(tokenHash);
+    expect(replacement.tokenHash, "the replacement must be a fresh hash").not.toBe(tokenHash);
+    expect(replacement.expiresAt).toEqual(new Date(REQUEST_AT + TTL_MS));
+    expect({ ...replacement, tokenHash: "", expiresAt: new Date(0) }).toMatchObject({
+      userId: gate.viewer.userId,
+      username: gate.viewer.username,
+      avatar: gate.viewer.avatar,
+      member: gate.viewer.member,
+      moderator: gate.viewer.moderator,
+    });
   });
 
-  it("redirects as expired when the renewal loses a race, with no bearer or contents", async () => {
-    // get() saw a live row; by the renewal it was revoked, rotated or expired.
-    // Model real revocation before the losing renewal so the renewal fallback
-    // re-read finds no row and the 302 stays valid after grace preservation.
-    let store!: RenewableStore;
-    const renew = vi.fn<Renew>(async (hash) => {
+  it("redirects as expired when the rotation loses a race, with no bearer or contents", async () => {
+    // get() saw a live row; by the rotation it was revoked, rotated or expired.
+    // Model real revocation before the losing rotation so the rotation
+    // fallback re-read finds no row and the 302 stays valid after grace
+    // preservation.
+    let store!: SessionStore;
+    const rotate = vi.fn<Rotate>(async (hash) => {
       await store.revoke(hash);
       return false;
     });
-    store = storeWithRenew(renew);
+    store = storeWithRotate(rotate);
     const { cookie, tokenHash } = await sessionFor(store, gate.viewer);
     vi.setSystemTime(REQUEST_AT);
     const response = await gate.app(store).request(gate.path, { headers: { cookie } }, env);
-    expect(renew).toHaveBeenCalledWith(tokenHash, new Date(REQUEST_AT + TTL_MS));
+    expect(rotate).toHaveBeenCalledTimes(1);
+    const [source, replacement] = rotate.mock.calls[0]!;
+    expect(source).toBe(tokenHash);
+    expect(replacement.expiresAt).toEqual(new Date(REQUEST_AT + TTL_MS));
     expect(response.status).toBe(302);
     expect(response.headers.get("location")).toBe("/auth/discord");
     expect(sessionCookies(response)).toHaveLength(0);
     expect(await response.text()).not.toContain(gate.viewer.userId);
   });
 
-  it.each(["HEAD", "POST"])("does not renew on %s", async (method) => {
-    const renew = vi.fn<Renew>(async () => true);
-    const store = storeWithRenew(renew);
+  it.each(["HEAD", "POST"])("does not rotate on %s", async (method) => {
+    const store = createMemorySessionStore(() => Date.now());
+    const rotate = vi.spyOn(store, "rotate");
+    const renew = vi.spyOn(store, "renew");
     const { cookie } = await sessionFor(store, gate.viewer);
     vi.setSystemTime(REQUEST_AT);
     const response = await gate.app(store).request(gate.path, { method, headers: { cookie } }, env);
     expect(response.status).toBe(200);
+    expect(rotate).not.toHaveBeenCalled();
     expect(renew).not.toHaveBeenCalled();
     expect(sessionCookies(response)).toHaveLength(0);
   });
 
-  it("does not renew a signed-in viewer the gate refuses", async () => {
-    const renew = vi.fn<Renew>(async () => true);
-    const store = storeWithRenew(renew);
+  it("does not rotate a signed-in viewer the gate refuses", async () => {
+    const store = createMemorySessionStore(() => Date.now());
+    const rotate = vi.spyOn(store, "rotate");
+    const renew = vi.spyOn(store, "renew");
     const { cookie } = await sessionFor(store, gate.refused);
     vi.setSystemTime(REQUEST_AT);
     const response = await gate.app(store).request(gate.path, { headers: { cookie } }, env);
     expect(response.status).toBe(403);
+    expect(rotate).not.toHaveBeenCalled();
     expect(renew).not.toHaveBeenCalled();
     expect(sessionCookies(response)).toHaveLength(0);
   });

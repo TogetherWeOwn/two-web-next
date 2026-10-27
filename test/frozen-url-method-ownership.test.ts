@@ -220,6 +220,7 @@ describe("no API, feed, ops, alias or retired path is Kit-swallowed", () => {
     { method: "GET", path: "/join/discord" },
     { method: "GET", path: "/join/callback" },
     { method: "POST", path: "/logout" },
+    { method: "POST", path: "/logout/everywhere" },
     { method: "POST", path: "/auth/qa/fixture" },
     ...METHODS.map((method) => ({ method, path: "/admin/ops-overrides" })),
     { method: "GET", path: "/admin/queue/failed/7/preview" },
@@ -383,7 +384,10 @@ describe("frozen Hono behavior without a database", () => {
         body: JSON.stringify({ title: "Seed swap" }),
       });
       expect(res.status, `accept ${accept}`).toBe(401);
-      expect(await res.json(), `accept ${accept}`).toEqual({ error: "unauthenticated" });
+      expect(await res.json(), `accept ${accept}`).toEqual({
+        error: "unauthenticated",
+        request_id: expect.any(String),
+      });
     }
   });
 
@@ -445,7 +449,7 @@ describe("frozen Hono behavior without a database", () => {
       headers: { origin: "https://evil.test" },
     });
     expect(res.status).toBe(403);
-    expect(await res.json()).toEqual({ error: "cross_origin" });
+    expect(await res.json()).toEqual({ error: "cross_origin", request_id: expect.any(String) });
     expect(res.headers.get("cache-control")).toBe("no-store, private");
     expect(dbRead).not.toHaveBeenCalled();
   });
@@ -471,7 +475,10 @@ describe("frozen Hono behavior without a database", () => {
       headers: { origin: "https://evil.test" },
     });
     expect(neighbour.status).toBe(403);
-    expect(await neighbour.json()).toEqual({ error: "cross_origin" });
+    expect(await neighbour.json()).toEqual({
+      error: "cross_origin",
+      request_id: expect.any(String),
+    });
     const preflight = await request("/mcp", env, { method: "OPTIONS" });
     expect(preflight.status).not.toBe(403);
     const getter = await request("/events.ics", env);

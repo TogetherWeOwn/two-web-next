@@ -4,7 +4,7 @@
 // --minify output that Workers serves. Top-level theme stylesheets
 // (public/theme.css, public/*-theme.css) are authored in place with no
 // assets/ source, so they are budgeted but never minified here. The budget
-// ceilings in ci/bundle-budget.json measure the minified bytes for built
+// ceilings in ci/budgets/bundle/ measure the minified bytes for built
 // assets and the authored bytes for theme stylesheets, and every binder test
 // executes them, so the suite itself proves the minified output equivalent.
 // Regenerate with `npm run build:assets`; CI fails on drift (`--check`).
@@ -24,6 +24,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
+import { loadBundleBudgets } from "./budget-fragments.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const esbuild = join(repoRoot, "node_modules", ".bin", "esbuild");
@@ -42,11 +43,12 @@ const AUTHORED_CSS = new Set([
   "public/theme-tokens.css",
 ]);
 // Budget entries are read from the checked root (not captured at import),
-// so --selftest can copy the budget file into a scratch root and prove that
-// check() fails closed on scratch mutations. On the real tree this reads the
-// same ci/bundle-budget.json, so behavior there is unchanged.
+// so --selftest can copy the budget fragments into a scratch root and prove
+// that check() fails closed on scratch mutations. On the real tree this
+// aggregates the same ci/budgets/bundle/ fragments, so behavior there is
+// unchanged.
 function budgetPathsFor(root) {
-  const budgets = JSON.parse(readFileSync(join(root, "ci", "bundle-budget.json"), "utf8")).budgets;
+  const budgets = loadBundleBudgets(root);
   return Object.keys(budgets)
     .filter((entry) => !AUTHORED_CSS.has(entry))
     .sort();
@@ -201,18 +203,18 @@ function selftest() {
   const witnessSource = sourceFor(witnessEntry);
   const realOutputBefore = readFileSync(join(repoRoot, witnessEntry));
   const realSourceBefore = readFileSync(join(repoRoot, witnessSource));
-  const realBudgetBefore = readFileSync(join(repoRoot, "ci", "bundle-budget.json"), "utf8");
+  const witnessBudgetPath = join("ci", "budgets", "bundle", "avatar.js.json");
+  const realBudgetBefore = readFileSync(join(repoRoot, witnessBudgetPath), "utf8");
   const scratch = mkdtempSync(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "minify-assets-"),
   );
   try {
     cpSync(join(repoRoot, "assets"), join(scratch, "assets"), { recursive: true });
     cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
-    mkdirSync(join(scratch, "ci"), { recursive: true });
-    copyFileSync(
-      join(repoRoot, "ci", "bundle-budget.json"),
-      join(scratch, "ci", "bundle-budget.json"),
-    );
+    mkdirSync(join(scratch, "ci", "budgets"), { recursive: true });
+    cpSync(join(repoRoot, "ci", "budgets", "bundle"), join(scratch, "ci", "budgets", "bundle"), {
+      recursive: true,
+    });
     // esbuild resolves the nearest tsconfig.json from each source file, and
     // the repo tsconfig changes the minified bytes (the "use strict" prefix):
     // without this copy an unmodified scratch tree drifts by 13B per island.
@@ -293,7 +295,7 @@ function selftest() {
     }
 
     {
-      const budgetPath = join(scratch, "ci", "bundle-budget.json");
+      const budgetPath = join(scratch, witnessBudgetPath);
       const originalText = readFileSync(budgetPath, "utf8");
       try {
         writeFileSync(budgetPath, "{");
@@ -321,13 +323,13 @@ function selftest() {
     }
 
     {
-      const budgetPath = join(scratch, "ci", "bundle-budget.json");
-      const originalText = readFileSync(budgetPath, "utf8");
       const probeEntry = "public/islands/missing-source-probe.js";
+      const probePath = join(scratch, "ci", "budgets", "bundle", "missing-source-probe.js.json");
       try {
-        const document = JSON.parse(originalText);
-        document.budgets[probeEntry] = { maxRawBytes: 1, maxGzipBytes: 1 };
-        writeFileSync(budgetPath, JSON.stringify(document));
+        writeFileSync(
+          probePath,
+          JSON.stringify({ budgets: { [probeEntry]: { maxRawBytes: 1, maxGzipBytes: 1 } } }),
+        );
         const { code, errors } = runCheck();
         assert.equal(code, 1, `budget entry without a source should fail: ${errors.join("; ")}`);
         assert.ok(
@@ -335,7 +337,7 @@ function selftest() {
           `budget entry without a source should report no source for ${probeEntry}: ${errors.join("; ")}`,
         );
       } finally {
-        writeFileSync(budgetPath, originalText);
+        rmSync(probePath, { force: true });
       }
       cases += 1;
       console.log("PASS budget entry without a source fails with no-source diagnostic");
@@ -350,9 +352,9 @@ function selftest() {
       "selftest must never write the real assets/ tree",
     );
     assert.equal(
-      readFileSync(join(repoRoot, "ci", "bundle-budget.json"), "utf8"),
+      readFileSync(join(repoRoot, witnessBudgetPath), "utf8"),
       realBudgetBefore,
-      "selftest must never write the real budget file",
+      "selftest must never write the real budget fragments",
     );
   } finally {
     rmSync(scratch, { recursive: true, force: true });
