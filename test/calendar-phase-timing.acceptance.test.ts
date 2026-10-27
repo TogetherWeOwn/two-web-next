@@ -665,15 +665,15 @@ describe("real calendar route to final request-log acceptance", () => {
       s.steps = [];
       const response = await get(s, "/events", ray, { headers: { cookie: "stray=fixture" } });
       expect(response.status).toBe(200);
-      // Route-level games first, then the model branches (lists before Discord).
+      // Discord overlaps the games facet; dependent lists start after the facet resolves.
       expect(s.steps).toEqual([
         "guard",
         "db",
         "session",
         "games",
+        "discord",
         "upcoming",
         "past",
-        "discord",
         "dedupe",
         "render",
       ]);
