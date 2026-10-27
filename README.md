@@ -91,6 +91,20 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
 
+Root and `web/` installs generate the ignored critical-CSS module through
+`postinstall`. If install scripts are disabled (`npm ci --ignore-scripts`),
+run the generator explicitly **from the repository root before typecheck,
+tests or bundling**:
+
+```sh
+node ci/build-leaf-css.mjs
+# Or, from the root: npm run build:leaf-css
+```
+
+The generator uses only Node builtins, so it also works before dependency
+installation. See [security-pin contracts](docs/security-pin-contracts.md)
+for the offline static gate and generated-hash review evidence.
+
 Set the local origin in `.dev.vars` to match Wrangler's local server and the
 Discord application's registered callbacks (`${APP_URL}/auth/discord/callback`
 and `${APP_URL}/join/callback`).
@@ -286,6 +300,7 @@ to execute the same Chromium proof.
 | `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `ci/event-time-from-now.test.mjs` | None—always runs | `node --import tsx --test ci/event-time-from-now.test.mjs` (56 real Chromium cases on Hono and Kit renders with a frozen clock and the shipped minified island; TAP-verified in `a11y`; see [docs/event-time-from-now.md](docs/event-time-from-now.md)) |
 | `test/event-chosen-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-chosen-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-local-time-comparison-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-comparison-acceptance.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
