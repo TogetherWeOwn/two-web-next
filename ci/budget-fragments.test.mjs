@@ -24,9 +24,12 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // (ci/kit-perf-budget.json and ci/bundle-budget.json at the split commit),
 // plus the raise that landed on main during the split review and was
 // ported into its fragment (client.js.maxRawBytes 254976 -> 256000; see
-// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md) and the
+// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md), the
 // server.js.maxGzipBytes 335104 -> 335360 raise (see
-// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md), plus the
+// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md), the
+// one new-asset fragment ported from an open branch during its post-split
+// merge: public/islands/event-time-from-now.js 2048/1024 (see
+// ci/budgets/decisions/bundle/2026-10-26-event-time-from-now.md), plus the
 // join/timezone composition allocation (see
 // ci/budgets/decisions/kit-perf/2026-10-26-join-investigation-timezone-composition.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
@@ -35,7 +38,7 @@ const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
-    js: { maxRawBytes: 257536, maxGzipBytes: 103680, maxFiles: 55 },
+    js: { maxRawBytes: 258560, maxGzipBytes: 103936, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
@@ -65,6 +68,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
   "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
+  "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
 };
 
 // sha256 of the frozen legacy-history archives: header + the verbatim
@@ -128,8 +132,8 @@ function kitFixture(t, fragments) {
 // 227; lower 335872 rejects by 29; the next 256B step 336384 was
 // unsupported then); 336384 is the fifth, event-share-honesty allocation
 // (combined worst 336168, margin 216; lower 336128 rejects by 40). 336896 is
-// the join/timezone composition allocation (worst 336646, margin 250; lower
-// 336640 rejects by 6). Every other pin stays exact: the oracle rejects any
+// the join/timezone composition allocation (worst 336855, margin 41; lower
+// 336640 rejects by 215). Every other pin stays exact: the oracle rejects any
 // ceiling outside this list, then deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336896];
 
