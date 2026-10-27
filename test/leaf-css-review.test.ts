@@ -146,6 +146,8 @@ describe("generated leaf CSS review evidence", () => {
     mkdirSync(join(dir, "assets"));
     writeFileSync(join(dir, "assets/leaf-only.css"), "@media print { .leaf { margin: 0; } }");
     const head = commit();
+    // Dirty worktree bytes must not masquerade as reviewed head bytes.
+    writeFileSync(join(dir, "assets/leaf-only.css"), "uncommitted");
     const result = run(head);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     const report = JSON.parse(result.stdout);
@@ -159,6 +161,45 @@ describe("generated leaf CSS review evidence", () => {
     ];
     // Pin the seam bytes' effect on the evidence, so an empty/wrong copy fails.
     expect(report.base).toMatchObject({ sha: base, sha256: hash(rules) });
+    expect(report.head).toMatchObject({
+      sha: head,
+      sha256: hash([...rules, "@media print { .leaf { margin: 0; } }"]),
+    });
+  });
+
+  it("pins the leaf-only seam bytes to the requested revision", () => {
+    const { dir, commit, run } = fixture();
+    const generator = join(dir, "ci/build-leaf-css.mjs");
+    writeFileSync(
+      generator,
+      readFileSync(generator, "utf8").replace(
+        '"public/theme.css"]',
+        '"public/theme.css", "assets/leaf-only.css"]',
+      ),
+    );
+    mkdirSync(join(dir, "assets"));
+    // Both revisions carry the seam with different bytes: a HEAD read would
+    // snapshot base with head's bytes, and a working-tree read with uncommitted bytes.
+    writeFileSync(join(dir, "assets/leaf-only.css"), "@media print { .leaf { margin: 1px; } }");
+    const seamBase = commit();
+    writeFileSync(join(dir, "assets/leaf-only.css"), "@media print { .leaf { margin: 0; } }");
+    const head = commit();
+    writeFileSync(join(dir, "assets/leaf-only.css"), "uncommitted");
+    const result = run(head, seamBase);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.changed).toBe(true);
+    const hash = (parts: string[]) =>
+      createHash("sha256").update(parts.join("\n")).digest("base64");
+    const rules = [
+      "body { color: black; }",
+      ":root { --accent: lime; }",
+      ".hero { display: grid; }",
+    ];
+    expect(report.base).toMatchObject({
+      sha: seamBase,
+      sha256: hash([...rules, "@media print { .leaf { margin: 1px; } }"]),
+    });
     expect(report.head).toMatchObject({
       sha: head,
       sha256: hash([...rules, "@media print { .leaf { margin: 0; } }"]),
