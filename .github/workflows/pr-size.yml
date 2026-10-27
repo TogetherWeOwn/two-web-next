@@ -25,7 +25,7 @@ on:
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review]
   schedule:
-    - cron: '17 7 * * 1'
+    - cron: "17 7 * * 1"
   workflow_dispatch:
     inputs:
       pr_number:
