@@ -5,7 +5,7 @@
 
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
-import type { CapacityPanel } from "../event-capacity";
+import { renderCapacityPanelHtml, type CapacityPanel } from "../event-capacity";
 import { adminSaveStatus } from "../save-status";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
@@ -146,35 +146,7 @@ export const EventFormFields: FC<{
           name="capacity"
           label="Capacity (empty = unlimited)"
           errors={errors}
-          after={
-            capacity ? (
-              <>
-                <p
-                  id="capacity-snapshot"
-                  class="hint"
-                  data-testid="capacity-snapshot"
-                  data-occupied={String(capacity.occupied)}
-                  data-capacity={capacity.capacity === null ? undefined : String(capacity.capacity)}
-                >
-                  {capacity.snapshot}
-                </p>
-                <p
-                  id="capacity-advice"
-                  class="hint"
-                  role="status"
-                  aria-live="polite"
-                  aria-atomic="true"
-                  data-testid="capacity-advice"
-                >
-                  {capacity.advice}
-                </p>
-                <p class="hint">{capacity.seatNote}</p>
-                <p class="hint">
-                  <a href={capacity.reviewUrl}>{capacity.reviewLabel}</a> {capacity.reviewNote}
-                </p>
-              </>
-            ) : null
-          }
+          after={capacity ? raw(renderCapacityPanelHtml(capacity)) : null}
         >
           {(id) => (
             <input

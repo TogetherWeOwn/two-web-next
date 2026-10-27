@@ -31,9 +31,12 @@ const hasErrors = $derived(view.hasErrors ?? Object.keys(errors).length > 0);
 const val = (name: string) => values[name] ?? "";
 const timezoneVal = $derived(val("timezone") || "Europe/London");
 const roster = $derived(view.roster);
-const capacity = $derived(view.capacity);
+const capacityHtml = $derived(view.capacityHtml);
 const capacityDescribedBy = $derived(
-  [capacity ? "capacity-snapshot capacity-advice" : "", errors.capacity ? "f-capacity-error" : ""]
+  [
+    capacityHtml ? "capacity-snapshot capacity-advice" : "",
+    errors.capacity ? "f-capacity-error" : "",
+  ]
     .filter(Boolean)
     .join(" ") || undefined,
 );
@@ -197,25 +200,7 @@ const capacityIsland = '<script src="/islands/admin-event-capacity.js" defer></'
         aria-invalid={errors.capacity ? "true" : undefined}
         aria-describedby={capacityDescribedBy}
       />
-      {#if capacity}
-        <p
-          id="capacity-snapshot"
-          class="hint"
-          data-testid="capacity-snapshot"
-          data-occupied={capacity.occupied}
-          data-capacity={capacity.capacity ?? undefined}
-        >{capacity.snapshot}</p>
-        <p
-          id="capacity-advice"
-          class="hint"
-          role="status"
-          aria-live="polite"
-          aria-atomic="true"
-          data-testid="capacity-advice"
-        >{capacity.advice}</p>
-        <p class="hint">{capacity.seatNote}</p>
-        <p class="hint"><a href={capacity.reviewUrl}>{capacity.reviewLabel}</a> {capacity.reviewNote}</p>
-      {/if}
+      {#if capacityHtml}{@html capacityHtml}{/if}
       {#if errors.capacity}
         <p id="f-capacity-error" class="error" role="alert" data-testid="error-capacity">
           {errors.capacity}
@@ -343,6 +328,6 @@ const capacityIsland = '<script src="/islands/admin-event-capacity.js" defer></'
   </section>
   {@html textLimitsIsland}
   {@html editorIsland}
-  {#if capacity}{@html capacityIsland}{/if}
+  {#if capacityHtml}{@html capacityIsland}{/if}
 </section>
 </AdminShell>

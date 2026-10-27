@@ -72,3 +72,21 @@ export function capacityPanel(
     reviewUrl: rosterUrl(eventKey, query, { status: "going", q: "", page: 1 }),
   };
 }
+
+// Same escaping as Svelte 5 (see rsvp-review.ts): text escapes & and <; an
+// attribute value also escapes ".
+const text = (value: string) => value.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+const attr = (value: string) => text(value).replace(/"/g, "&quot;");
+
+/** The panel markup both twins render beside the capacity input: one string,
+ * so Hono (raw) and Kit ({@html}, pre-rendered in the load, which keeps the
+ * Kit client bundle free of the copy) cannot drift. */
+export function renderCapacityPanelHtml(panel: CapacityPanel): string {
+  const cap = panel.capacity === null ? "" : ` data-capacity="${panel.capacity}"`;
+  return (
+    `<p id="capacity-snapshot" class="hint" data-testid="capacity-snapshot" data-occupied="${panel.occupied}"${cap}>${text(panel.snapshot)}</p>` +
+    `<p id="capacity-advice" class="hint" role="status" aria-live="polite" aria-atomic="true" data-testid="capacity-advice">${text(panel.advice)}</p>` +
+    `<p class="hint">${text(panel.seatNote)}</p>` +
+    `<p class="hint"><a href="${attr(panel.reviewUrl)}">${text(panel.reviewLabel)}</a> ${text(panel.reviewNote)}</p>`
+  );
+}

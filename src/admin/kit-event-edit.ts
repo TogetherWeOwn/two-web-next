@@ -44,7 +44,7 @@ import {
   type RosterStatus,
   type SortOrder,
 } from "./table-list";
-import { capacityPanel, type CapacityPanel } from "./event-capacity";
+import { capacityPanel, renderCapacityPanelHtml } from "./event-capacity";
 import { utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 
@@ -127,9 +127,10 @@ export type KitEventEditView = {
   seriesNote: string | null;
   endsAt: string;
   roster: KitEventEditRosterView;
-  /** Going-only capacity snapshot and guidance, the Hono twin's panel; null
-   * only for a fixture list read that returns no `occupied`. */
-  capacity: CapacityPanel | null;
+  /** Pre-rendered Going-only capacity snapshot and guidance (the Hono twin's
+   * exact markup) for {@html}; null only for a fixture list read that returns
+   * no `occupied`. Pre-rendered so the client bundle carries none of the copy. */
+  capacityHtml: string | null;
   /** Pre-rendered pause-review HTML when rsvpAction is rsvp-pause, else null;
    * the page injects it via {@html} so the client bundle carries no review
    * strings or disclosure markup (client gzip ceiling). */
@@ -307,10 +308,12 @@ export async function resolveKitEventEdit(
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
       },
-      capacity:
+      capacityHtml:
         roster.occupied === undefined
           ? null
-          : capacityPanel(row.eventKey, query, roster.occupied, row.capacity),
+          : renderCapacityPanelHtml(
+              capacityPanel(row.eventKey, query, roster.occupied, row.capacity),
+            ),
       pauseReviewHtml:
         rsvpAction === "rsvp-pause" ? renderRsvpPauseReviewHtml(row.title, row.eventKey) : null,
     },
