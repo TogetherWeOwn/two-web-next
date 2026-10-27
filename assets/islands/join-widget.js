@@ -3,6 +3,12 @@
   const link = document.querySelector("[data-join-widget]");
   const preview = link && link.closest(".join-preview");
   if (!link || !preview) return;
+  // The strap (copy + show-preview control) is the swap slot in both /join
+  // twins. Only it is ever hidden or restored: the presence snapshot beside
+  // it in .join-preview stays rendered before, during and after the load.
+  const slot = link.closest(".strap");
+  let frame = null;
+  let guidance = null;
 
   link.addEventListener("click", (event) => {
     if (
@@ -15,7 +21,11 @@
     )
       return;
     event.preventDefault();
-    const frame = document.createElement("iframe");
+    // The control stays in the DOM (hidden while its frame shows), so the
+    // guard is on the load itself: repeat clicks never stack a second frame.
+    if (frame) return;
+    if (guidance) guidance.remove();
+    frame = document.createElement("iframe");
     frame.title = "TWO Discord server preview";
     frame.src = link.getAttribute("href");
     frame.width = "350";
@@ -31,6 +41,7 @@
       const invite = document.querySelector('[data-testid="join-invite"]');
       const href = invite && invite.getAttribute("href");
       const message = document.createElement("p");
+      guidance = message;
       message.setAttribute("data-testid", "join-widget-error");
       message.setAttribute("role", "status");
       message.setAttribute("tabindex", "-1");
@@ -52,16 +63,14 @@
       // indistinguishable from a real render cross-origin: keep the frame so a
       // real render keeps working, with the guidance beside it. A frame that
       // never loaded is swapped out so its 500px hole does not strand the
-      // guidance below the fold.
-      if (beside) preview.appendChild(message);
-      else preview.replaceChildren(message);
-      const focusIt = (el) => {
-        if (el && typeof el.focus === "function") {
-          el.focus();
-          return true;
-        }
-        return false;
-      };
+      // guidance below the fold — but only the frame goes: the strap comes
+      // back so the visitor can retry, and the snapshot never moved.
+      if (!beside) {
+        frame.remove();
+        frame = null;
+        if (slot) slot.hidden = false;
+      }
+      preview.appendChild(message);
       const active = document.activeElement;
       // Post-load guidance is announcement-only and never moves focus: a
       // cross-origin parent cannot tell a blocked error-page `load` from a
@@ -72,20 +81,21 @@
       // visitor is one Tab away while a working-widget visitor is never
       // yanked mid-use. Focus moves only where the frame is replaced.
       if (!beside && (!active || active === document.body)) {
-        focusIt(fallback) || focusIt(message);
+        (fallback || message).focus();
       }
     };
     // The bounded timer survives `load`: a blocked embed fires `load` for its
     // error page, so guidance appears beside the frame when the timer fires.
     // Focus moves in only on `load`, and only when the visitor hasn't moved
-    // elsewhere since the click (after replaceChildren the link is gone, so
-    // <body> means "hasn't moved"): a late load never steals focus.
+    // elsewhere since the click — focus resting on the clicked control or,
+    // once hiding the strap drops it, on <body> both mean "hasn't moved": a
+    // late load never steals focus.
     const timer = setTimeout(() => guide(loaded), 8000);
     frame.addEventListener("load", () => {
       if (guided || loaded) return;
       loaded = true;
       const active = document.activeElement;
-      if (!active || active === document.body) {
+      if (!active || active === document.body || active === link) {
         frame.focus();
       }
     });
@@ -94,6 +104,9 @@
       clearTimeout(timer);
       guide(false);
     });
-    preview.replaceChildren(frame);
+    // Append beside the snapshot and hide the strap in its place: replacing
+    // .join-preview's children here would erase the presence section.
+    if (slot) slot.hidden = true;
+    preview.appendChild(frame);
   });
 })();

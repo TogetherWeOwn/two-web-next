@@ -15,7 +15,7 @@ on:
   # the whole suite including the long gates. Catches regressions that slipped
   # past area-gated PR runs within hours.
   schedule:
-    - cron: '19 2 * * *'
+    - cron: "19 2 * * *"
   # Manual re-run on a branch. Releases no longer dispatch it: there is no
   # release PR (docs/releases.md).
   workflow_dispatch:
@@ -117,6 +117,12 @@ jobs:
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
+      # The parity-citations gate resolves cited implementation files against
+      # the checkout, and parity.md cites the git-ignored critical-CSS
+      # bundles. This job installs with --ignore-scripts, so generate them
+      # explicitly. Needs only Node, no dependencies.
+      - name: Generate critical-CSS bundles
+        run: node ci/build-leaf-css.mjs
       - run: npm run docs:links
       # Parse the Vitest sources on every change, including ledger-only edits.
       # No install hooks or browser/database fixtures are needed by this gate.
@@ -247,6 +253,12 @@ jobs:
         run: |
           npx vitest run test/profile-composition-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-composition-browser.json
           node ci/a11y-require-executed.mjs artifacts/a11y/profile-composition-browser.json "composition feedback in a real browser" 6
+      - name: Profile refused-draft recovery regressions (memory fixtures)
+        env:
+          A11Y_BROWSER_TESTS: "true"
+        run: |
+          npx vitest run test/profile-refused-draft-recovery-acceptance.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/profile-refused-draft-recovery-acceptance.json
+          node ci/a11y-require-executed.mjs artifacts/a11y/profile-refused-draft-recovery-acceptance.json "refused-draft recovery in a real browser" 2
       - name: Admin event native Unicode regressions (intercepted fixtures, no network or DB)
         env:
           ADMIN_EVENT_BROWSER_TESTS: "true"
@@ -288,6 +300,12 @@ jobs:
         run: |
           npx vitest run test/event-device-timezone-ends.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/event-device-timezone-ends.json
           node ci/a11y-require-executed.mjs artifacts/a11y/event-device-timezone-ends.json "event device timezone ends browser acceptance" 30
+      - name: Event time from now (Hono and Kit, local fixtures, shipped bytes)
+        run: |
+          mkdir -p artifacts/a11y
+          node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-time-from-now.tap ci/event-time-from-now.test.mjs
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Hono time-from-now browser acceptance" 28
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-time-from-now.tap "Kit time-from-now browser acceptance" 28
       - name: Event chosen timezone range (Hono and Kit, local fixtures)
         env:
           A11Y_BROWSER_TESTS: "true"
@@ -324,6 +342,12 @@ jobs:
             for bundle in source shipped; do
               node ci/a11y-require-executed.mjs artifacts/a11y/calendar-game-recovery.json "$surface $bundle real game recovery" 14
             done
+          done
+      - name: Calendar navigation (Hono and Kit, shipped schedule navigation in Chromium)
+        run: |
+          npx vitest run --config ci/calendar-navigation-browser.vitest.ts ci/calendar-navigation-browser.test.ts --reporter=default --reporter=json --outputFile.json=artifacts/a11y/calendar-navigation.json
+          for surface in Hono Kit; do
+            node ci/a11y-require-executed.mjs artifacts/a11y/calendar-navigation.json "$surface: shipped schedule navigation in Chromium" 16
           done
       - name: Profile device timezone (Hono and Kit SSR fixtures, no network or DB)
         env:
@@ -431,6 +455,19 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             web/package-lock.json
+      # The critical-CSS bundles are git-ignored build output (postinstall
+      # regenerates them), but the static gates below run before `npm ci`,
+      # and the security-pin gate reads the generated module's bytes. Needs
+      # only Node, no dependencies.
+      - name: Generate critical-CSS bundles
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node ci/build-leaf-css.mjs
+      - name: Generated leaf-CSS and CSP hash review delta
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.merge_group.base_sha || github.event.before || github.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.event.merge_group.head_sha || github.sha }}
+        run: node ci/leaf-css-review.mjs "$BASE_SHA" "$HEAD_SHA"
       - name: Performance gate selftest
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node ci/require-performance.mjs --selftest
@@ -569,7 +606,7 @@ jobs:
           exit "$tier0_status"
       - name: Kit parity gate selftests
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/bundle-inventory-acceptance.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs
+        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/budget-fragments.test.mjs ci/bundle-inventory-acceptance.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs
       - name: Web quality gate selftests (standards checks + summary formatter)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run standards:selftest

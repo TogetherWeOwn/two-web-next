@@ -42,6 +42,8 @@ export interface ActivityLogLoadArgs {
   setHeaders: (headers: Record<string, string>) => void;
   dbForFn?: (c: { env: Env }) => Promise<Db | null>;
   listFn?: ActivityLogListFn;
+  /** Validated dispatch id for error.alert correlation; absent in legacy calls. */
+  requestId?: string;
 }
 
 /** Branded-outage marker: the Kit binding maps every throw to error(503). */
@@ -61,9 +63,10 @@ const PRIVATE_NO_STORE = { "cache-control": "private, no-store" };
 function reportLoadFailure(
   err: unknown,
   setHeaders: (headers: Record<string, string>) => void,
+  requestId?: string,
 ): never {
   if (!isDatabaseUnavailable(err)) {
-    alertRequestError(err, { method: "GET", route: "/admin/activity-log" });
+    alertRequestError(err, { method: "GET", route: "/admin/activity-log", requestId });
   }
   setHeaders(PRIVATE_NO_STORE);
   throw activityLogUnavailable();
@@ -83,6 +86,7 @@ export async function loadActivityLogPage({
   setHeaders,
   dbForFn = dbFor,
   listFn = listActivityLog,
+  requestId,
 }: ActivityLogLoadArgs): Promise<{
   rows: KitActivityLogRow[];
   query: { subject: string; causer: string; page: number };
@@ -92,7 +96,7 @@ export async function loadActivityLogPage({
   try {
     db = await dbForFn({ env });
   } catch (err) {
-    reportLoadFailure(err, setHeaders);
+    reportLoadFailure(err, setHeaders, requestId);
   }
   if (!db) {
     setHeaders(PRIVATE_NO_STORE);
@@ -112,6 +116,6 @@ export async function loadActivityLogPage({
     setHeaders(PRIVATE_NO_STORE);
     return { rows, query, hasNext: fetched.length > ACTIVITY_LOG_PAGE_SIZE };
   } catch (err) {
-    reportLoadFailure(err, setHeaders);
+    reportLoadFailure(err, setHeaders, requestId);
   }
 }
