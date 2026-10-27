@@ -23,7 +23,7 @@
 //   `Add to calendar (.ics)` (the existing detail anchor copy for the same
 //   endpoint), `href` exactly `/events/<eventKey>.ics`, and an
 //   event-distinguishing accessible name via
-//   `aria-label="Add <title> to calendar (.ics)"`. The anchor lives inside
+//   `aria-label="Add to calendar (.ics) for <title>"`. The anchor lives inside
 //   the existing `.schedule-actions` div as a plain server-rendered link:
 //   no onclick, no data-island hook, no tabindex, no hidden, no script in
 //   the card — keyboard and no-JS work by construction.
@@ -105,7 +105,7 @@ const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
 // New-hook contract (string literals on purpose — the constants do not exist yet).
 const CARD_ICS_TESTID = "event-card-ics";
 const CARD_ICS_COPY = "Add to calendar (.ics)";
-const cardIcsName = (title: string): string => `Add ${title} to calendar (.ics)`;
+const cardIcsName = (title: string): string => `Add to calendar (.ics) for ${title}`;
 const MORE_GAME_TESTID = "event-more-game-nights";
 const moreGameCopy = (game: string): string => `More ${game} nights`;
 
