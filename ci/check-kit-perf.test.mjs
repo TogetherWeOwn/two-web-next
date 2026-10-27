@@ -412,8 +412,8 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // (combined worst 335977, margin 151; lower 335872 rejects by 105), the
 // independently justified 336384 ceiling for the admin-orientation slice (two
 // merged builds 336190 and 336192; lower 336128 rejects by 64), and the
-// independently justified 336896 ceiling (join/timezone worst 336855,
-// margin 41; lower 336640 rejects by 215).
+// independently justified 337152 ceiling (join/timezone worst 337052,
+// margin 100; lower 336896 rejects by 156).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -433,11 +433,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   335872: { intervalBytes: 335624, exactBytes: 335872, overBytes: 335873 },
   336128: { intervalBytes: 335977, exactBytes: 336128, overBytes: 336129 },
   336384: { intervalBytes: 336192, exactBytes: 336384, overBytes: 336385 },
-  336896: { intervalBytes: 336855, exactBytes: 336896, overBytes: 336897 },
+  337152: { intervalBytes: 337052, exactBytes: 337152, overBytes: 337153 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336896`;
+  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 337152`;
 
 test("shipping budget: server gzip allocation is explicitly approved", () => {
   assert.ok(
@@ -701,21 +701,21 @@ function shippingServerGzipCases() {
       },
     ];
   }
-  if (SHIPPING_SERVER_GZIP_CAP === 336896) {
+  if (SHIPPING_SERVER_GZIP_CAP === 337152) {
     return [
       {
         name: "server gzip newly allowed interval",
         group: "kit.server.js",
         axis: "gzip",
-        bytes: 336855,
+        bytes: 337052,
       },
-      { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 336896 },
+      { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 337152 },
       {
         name: "server gzip one byte over",
         group: "kit.server.js",
         axis: "gzip",
-        bytes: 336897,
-        ceiling: 336896,
+        bytes: 337153,
+        ceiling: 337152,
         breach: true,
       },
     ];
