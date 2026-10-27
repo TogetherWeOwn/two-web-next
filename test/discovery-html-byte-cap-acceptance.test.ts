@@ -176,7 +176,9 @@ function streamOf(chunks: Uint8Array[], hangAtEnd: boolean) {
     close() {
       try {
         controller.close();
-      } catch {}
+      } catch {
+        // Already closed; this fixture close is best-effort.
+      }
     },
   };
 }
