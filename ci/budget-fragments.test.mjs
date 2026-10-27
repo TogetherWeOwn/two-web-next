@@ -128,7 +128,9 @@ function kitFixture(t, fragments) {
 // composition (measured 335951, margin 177; lower rejects by 79); 336384 is
 // the sixth, the same composition plus the archive search form (measured
 // 336134, margin 250; lower 336128 rejects by 6; the next 256B step 336640
-// stays unsupported). Every other pin stays exact: the oracle rejects any
+// stays unsupported), also independently witnessed by the event-share-honesty
+// allocation (combined worst 336168, margin 216; lower 336128 rejects by 40).
+// Every other pin stays exact: the oracle rejects any
 // ceiling outside this list, then deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335616, 335872, 336128, 336384];
 
@@ -184,7 +186,7 @@ test("shipping oracle admits the measured 336384 server gzip allocation", () => 
 });
 
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335617, 336127, 336383]) {
+  for (const maxGzipBytes of [335105, 335359, 335617, 336127, 336383, 336385]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },

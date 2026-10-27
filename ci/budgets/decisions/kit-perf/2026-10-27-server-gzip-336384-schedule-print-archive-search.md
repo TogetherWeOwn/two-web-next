@@ -57,12 +57,20 @@ re-measured twice on the merged tree: 116 server files, 1188724 raw /
 Worst case 336195 governs (margin 189; the earlier 336134 reading is
 superseded). Client JS and worker still fit their unchanged ceilings.
 
+## Re-measure after main moved to `b69eea7d7`
+
+Main admitted the independent event-share-honesty 336384 step (#1905) and a
+Kit client-gzip ceiling; the server key is the same 336384, so the oracles
+union both witnesses rather than forking the key. Two production builds on
+the merged tree: 116 server files, 1188724 raw / 336197 gzip and 336196 gzip,
+both exit 0 against 336384. Worst case 336197 governs (margin 187).
+
 ## Shipping tests
 
 `ci/budget-fragments.test.mjs` unions to six allocations
 `[335104, 335360, 335616, 335872, 336128, 336384]` with a 336384 admit
 test; the unsupported-allocation control probes
-`[335105, 335359, 335617, 336127, 336383]`.
+`[335105, 335359, 335617, 336127, 336383, 336385]`.
 `ci/check-kit-perf.test.mjs` gains the 336384 literal with the landed
 admin-orientation 336192 as its interval witness, plus the cap-selected
 exact/over cases; this composition's 336195 worst lies in the same
