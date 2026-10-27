@@ -1225,6 +1225,9 @@ function verifyConfigRoots(root, config, base, ast, hasTestBlock) {
     );
   };
   visit(ast, (node) => {
+    // Babel 8 represents dynamic import as an expression, not a call.
+    if (hasTestBlock && node.type === "ImportExpression")
+      throw new Error(`${config}: config calls are not statically verifiable`);
     if (hasTestBlock && ["CallExpression", "OptionalCallExpression"].includes(node.type)) {
       const callee = node.callee;
       const property = ["MemberExpression", "OptionalMemberExpression"].includes(callee?.type)
@@ -3521,6 +3524,36 @@ function selftest() {
         "base.config.ts": 'export default { root: "sub" };',
         "test/a.test.ts": 'it("root", () => {});',
         "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config calls are not statically verifiable"],
+    );
+    check(
+      "dynamic import beside a literal test config fails closed",
+      {
+        "vitest.config.ts": [
+          'await import("./helper.mjs");',
+          rootConfig(["test/**/*.test.ts"]),
+        ].join("\n"),
+        "helper.mjs": "export const ready = true;",
+        "test/a.test.ts": 'it("clean", () => {});',
+      },
+      [],
+      2,
+      ["config calls are not statically verifiable"],
+    );
+    check(
+      "dynamically imported config with a decoy test block fails closed",
+      {
+        "vitest.config.ts": [
+          'const actual = await import("./actual-config.mjs");',
+          'const decoy = { test: { include: ["clean/**/*.test.ts"], testTimeout: 30_000 } };',
+          "export default actual.default;",
+        ].join("\n"),
+        "actual-config.mjs": rootConfig(["hidden/**/*.test.ts"]),
+        "clean/a.test.ts": 'it("clean", () => {});',
+        "hidden/unpinned.test.ts": 'it("unpinned", () => {}, 5000);',
       },
       [],
       2,
