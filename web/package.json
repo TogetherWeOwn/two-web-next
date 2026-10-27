@@ -8,6 +8,7 @@
   },
   "scripts": {
     "postinstall": "node ../ci/build-leaf-css.mjs",
+    "prebuild": "node ../ci/build-leaf-css.mjs",
     "build": "vite build && node scripts/copy-public.mjs",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "preview:deploy": "wrangler deploy"

@@ -47,6 +47,14 @@ describe("critical CSS is a build output, not a source", () => {
     expect(scriptsOf("package.json")["build:leaf-css"] ?? "").toContain("ci/build-leaf-css.mjs");
   });
 
+  it("regenerates the bundle before every local dev server start", () => {
+    expect(scriptsOf("package.json").predev ?? "").toContain("ci/build-leaf-css.mjs");
+  });
+
+  it("regenerates the bundle before every Kit build", () => {
+    expect(scriptsOf("web/package.json").prebuild ?? "").toContain("ci/build-leaf-css.mjs");
+  });
+
   it("regenerates the bundle on every Kit install", () => {
     expect(scriptsOf("web/package.json").postinstall ?? "").toContain("build-leaf-css");
   });
