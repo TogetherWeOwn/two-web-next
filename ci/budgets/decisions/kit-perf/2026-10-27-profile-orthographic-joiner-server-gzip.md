@@ -4,8 +4,9 @@
 `ci/budgets/kit/server-js.json`; no other ceiling changes. This independently
 admits the measured server cost of profile Unicode validation in PR #1863.
 336896 is the smallest 256B-aligned cover, not a blanket 25% allocation:
-336384 rejects the measured worst case by 313B and 336640 rejects it by 57B.
-The requested ceiling leaves 199B of margin.
+on the latest composition, 336384 rejects by 430B and 336640 by 174B.
+The requested ceiling leaves 82B of margin. The initial pinned profile head
+needed the same ceiling, with 199B of margin; both measurements are below.
 
 ## Source and measurements
 
@@ -30,9 +31,33 @@ On the final profile build, changing only the scratch server fragment proves
 still exits 1 for client gzip; this decision does not claim an overall fit.
 The scratch fragment was restored byte-identically afterward.
 
+## Fresh-main composition recheck
+
+Before opening the capacity PR, main advanced to
+`db2590d0cfc892956aa8f96f21e616fa47b6d6d2`. The product head is unchanged.
+A clean `git merge-tree --write-tree` produces composition tree
+`1f0e8870427b627415e60044fb4514166996741c`; neither source branch was changed.
+Two production builds per tree, the same locked runtime and canonical checker:
+
+| Tree/build | Server files | Server raw bytes | Server gzip bytes | Full gate |
+|---|---:|---:|---:|---|
+| Fresh main 1 | 116 | 1190765 | 336367 | exit 0 |
+| Fresh main 2 | 116 | 1190765 | 336370 | exit 0 |
+| Composition 1 | 116 | 1191742 | 336814 | exit 1: server and client gzip |
+| Composition 2 | 116 | 1191740 | 336814 | exit 1: server and client gzip |
+
+336896 remains the smallest aligned cover: actual scratch controls reject
+336384 and 336640, admit the server group at 336896, and retain the client
+failure. Fresh main client JS is 54 files / 256400 raw / 103000 gzip;
+composition is 54 / 256691 / 103195, a separate 27B gzip breach. Worker and
+client CSS bytes are unchanged. Main independently raised the CSS gzip cap
+to 1280 in #1727; this PR neither includes nor reverses that allocation.
+The observed server delta over fresh main is +975–977 raw / +444–447 gzip.
+
 ## Attribution and alternatives
 
-Final-build per-file deltas, using the checker's Node `gzipSync` semantics:
+Initial pinned pair's final-build per-file deltas, using the checker's Node
+`gzipSync` semantics:
 
 | Server output | Raw delta | Gzip delta |
 |---|---:|---:|
@@ -66,9 +91,12 @@ raw and file count remain below 1203200 and 126.
 The unchanged shipping ladder in `ci/check-kit-perf.test.mjs` already admits
 336896 with fixed 336673 interval, 336896 exact and 336897 one-over probes.
 These are synthetic boundary fixtures, not measurements of this profile head.
-The aggregate allocation oracle in `ci/budget-fragments.test.mjs` requires an
-independently authored additive admission before this capacity change can ship.
-Retain every existing rung and off-axis rejection.
+The aggregate allocation oracle in `ci/budget-fragments.test.mjs` incorporates
+independent test-author commit `37a470978bdadc8ea49aa7f3cc0892e9ac8da649`
+unchanged. It adds 336896 admission, refuses 336897 and 337152, and extends
+all eight off-axis drift controls to the new rung without removing the old
+ones. The integrated paired suites pass 73/73; the clean synthetic merge
+with fresh main passes 75/75, including main's additional CSS boundary tests.
 
 Before the capacity edit, both budget suites passed 72/72. The unchanged
 profile archive passed 91/91 across the bidi/invisible acceptance,
