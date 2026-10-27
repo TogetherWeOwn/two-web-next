@@ -48,17 +48,26 @@ construction. One confirmatory production build on the merged tree: 116
 server files, 1188562 raw / 336129 gzip, exit 0 against 336384. Worst case
 across all three builds stays 336134.
 
+## Re-measure after main moved to `227414575` plus the zero-page copy fix
+
+Main added the discovery HTML byte cap (shared-contracts product code) and
+the stamp gained the gap/unpaged copy strings, so the composition was
+re-measured twice on the merged tree: 116 server files, 1188724 raw /
+336195 gzip and 1188724 raw / 336192 gzip, both exit 0 against 336384.
+Worst case 336195 governs (margin 189; the earlier 336134 reading is
+superseded). Client JS and worker still fit their unchanged ceilings.
+
 ## Shipping tests
 
 `ci/budget-fragments.test.mjs` unions to six allocations
 `[335104, 335360, 335616, 335872, 336128, 336384]` with a 336384 admit
 test; the unsupported-allocation control probes
 `[335105, 335359, 335617, 336127, 336383]`.
-`ci/check-kit-perf.test.mjs` gains the 336384 literal with this
-composition's 336134 as its interval witness, plus the cap-selected
-exact/over cases. Sibling branches propose the same 336384 key with their
-own witnesses; any interval in (336128, 336384] proves the step, so the
-first landing keeps the key without forking.
+`ci/check-kit-perf.test.mjs` gains the 336384 literal with the landed
+admin-orientation 336192 as its interval witness, plus the cap-selected
+exact/over cases; this composition's 336195 worst lies in the same
+(336128, 336384] interval, so it proves the same step without forking the
+key. The oracle comment records both witnesses.
 
 No feature, checker, dependency, workflow, mask or exclusion changes ship in
 this decision. Exact-head CI and independent review remain mandatory. Undo:
