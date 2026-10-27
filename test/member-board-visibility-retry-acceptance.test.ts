@@ -419,7 +419,7 @@ describe("Hono member board retry (unavailable state only)", () => {
 // Hono route with agent-testdb (HONO-ROUTE-DB-*; skips without DATABASE_URL)
 // ---------------------------------------------------------------------------
 
-describe.skipIf(!process.env.DATABASE_URL)("Hono member board route (agent-testdb)", () => {
+describe("Hono member board route (agent-testdb)", () => {
   let fixture: MemberDataFixture;
   let db: MemberDataFixture["db"];
   let store: ReturnType<typeof createMemorySessionStore>;
