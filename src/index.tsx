@@ -629,10 +629,7 @@ registerJoinRoutes(
       // widget verdict TTL) and the next-game-night card tracks a moving
       // schedule, so neither survives longer in a shared cache.
       const joinResult = await takeJoinResult(c);
-      c.header(
-        "cache-control",
-        joinResult ? "private, no-store" : "public, max-age=60",
-      );
+      c.header("cache-control", joinResult ? "private, no-store" : "public, max-age=60");
       c.header("vary", "Cookie");
       return c.html(
         <Join

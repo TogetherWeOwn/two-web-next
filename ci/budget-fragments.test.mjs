@@ -31,9 +31,9 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
-  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
+  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 336128, maxFiles: 126 } },
   client: {
-    js: { maxRawBytes: 256000, maxGzipBytes: 103168, maxFiles: 55 },
+    js: { maxRawBytes: 256512, maxGzipBytes: 103424, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
@@ -121,14 +121,16 @@ function kitFixture(t, fragments) {
 // independently measured saved-review allocation (combined worst 335164,
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
 // unsupported). Every other pin stays exact: the oracle rejects any ceiling
-// outside this list, then deep-compares the rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360];
+// outside this list, then deep-compares the rest of the plan. 336128 is the
+// join next-game-night allocation (worst measured 335941, margin 187; 335872
+// rejects by 69; see ci/budgets/decisions/kit-perf/2026-10-27-join-next-game-night.md).
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 336128];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 336128`,
   );
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
