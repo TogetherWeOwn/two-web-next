@@ -31,6 +31,11 @@
   // content so it is announced. Saved once per pending turn; success replaces
   // it from SSR, failure restores the last-good month.
   var monthStatus = live[3];
+  // The skeleton's textContent includes its decorative aria-hidden ellipsis
+  // rows; the live host carries only the message paragraph. Harnesses without
+  // element queries keep the skeleton text (their message-only fixture).
+  var loadingPara = skeleton.querySelector && skeleton.querySelector("p:not([aria-hidden])");
+  var loadingCopy = loadingPara ? loadingPara.textContent : skeleton.textContent;
   var monthStatusSaved = null;
   // Failed-read recovery host (optional: pages and harnesses without it keep
   // the pre-recovery behavior). Testids mirror EVENTS_READ_*_TESTID in
@@ -241,8 +246,7 @@
       // untargeted search handoffs, cancellation and current AbortError cleanup.
       // An SSR success may already have supplied a new month: never replace it.
       if (monthStatusSaved !== null && monthStatus) {
-        if (monthStatus.textContent === skeleton.textContent)
-          monthStatus.textContent = monthStatusSaved;
+        if (monthStatus.textContent === loadingCopy) monthStatus.textContent = monthStatusSaved;
         monthStatusSaved = null;
       }
     }
@@ -325,7 +329,7 @@
     // a superseding read keeps the original month for its own restore.
     if (opts.skeleton && monthStatus) {
       if (monthStatusSaved === null) monthStatusSaved = monthStatus.textContent;
-      monthStatus.textContent = skeleton.textContent;
+      monthStatus.textContent = loadingCopy;
     }
     // The owned deadline covers the whole read: headers plus body. On expiry
     // this request no longer owns the zones: release active first so its late

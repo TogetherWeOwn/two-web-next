@@ -5,7 +5,9 @@ import { describe, expect, it } from "vitest";
 
 // Exercise both the editable source and shipped binder. Reads ignore abort so
 // late completions must remain silent through ownership, not transport luck.
-function browser(path: string) {
+// skeletonRows mirrors real SSR: the skeleton carries the loading message plus
+// decorative aria-hidden ellipsis rows, so its textContent is polluted.
+function browser(path: string, skeletonRows = false) {
   type Handler = (event: any) => void;
   function node(textContent = "") {
     const attributes = new Map<string, string>();
@@ -27,8 +29,15 @@ function browser(path: string) {
   const input = Object.assign(node(), { closest: () => form });
   const game = node();
   const content = node();
-  const skeleton = node("Loading events…");
+  const skeleton = node(skeletonRows ? "Loading events…" + "…".repeat(3) : "Loading events…");
   skeleton.hidden = true;
+  if (skeletonRows) {
+    const message = node("Loading events…");
+    Object.assign(skeleton, {
+      querySelector: (selector: string) =>
+        selector === "p" || selector === "p:not([aria-hidden])" ? message : null,
+    });
+  }
   const feedback = node();
   const month = node("October 2030");
   const live = [node(), node(), node(), month];
@@ -145,6 +154,29 @@ for (const path of [
 
     it("restores a current aborted navigation when its busy state releases", async () => {
       const b = browser(path);
+      b.navigate();
+      b.requests[0]!.reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
+      await settle();
+      expect(b.root.getAttribute("aria-busy")).toBeNull();
+      expect(b.month.textContent).toBe("October 2030");
+      expect(b.feedback.textContent).toBe("");
+    });
+  });
+}
+
+for (const path of [
+  "../assets/islands/events-calendar.js",
+  "../public/islands/events-calendar.js",
+]) {
+  describe(`loading message scope: ${path}`, () => {
+    it("copies only the message paragraph, skipping the decorative ellipsis rows", () => {
+      const b = browser(path, true);
+      b.navigate();
+      expect(b.month.textContent).toBe("Loading events…");
+    });
+
+    it("releases the message-only announcement with its owner on abort", async () => {
+      const b = browser(path, true);
       b.navigate();
       b.requests[0]!.reject(Object.assign(new Error("aborted"), { name: "AbortError" }));
       await settle();
