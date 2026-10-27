@@ -704,14 +704,15 @@ describe("EventsCalendar SSR drift", () => {
     expect(html).toContain('src="/islands/events-calendar.js"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events"`);
     // One bounded published-games projection precedes the concurrent upcoming
-    // count and past drawer reads, then one upcoming page and its two grouped
-    // going aggregates (attributable + occupancy; empty past → no aggregate).
-    // Never a per-card query, never more than a page of event rows.
+    // count and past drawer reads, then one upcoming page and its single
+    // combined going aggregate (named + occupancy in one statement; empty
+    // past → no aggregate). Never a per-card query, never more than a page
+    // of event rows.
     expect(
       source.queries.map((q) =>
         /^select distinct/i.test(q.sql) ? "games" : q.sql.includes("rsvps") ? "rsvps" : "events",
       ),
-    ).toEqual(["games", "events", "events", "events", "rsvps", "rsvps"]);
+    ).toEqual(["games", "events", "events", "events", "rsvps"]);
     const distinct = source.queries[0]!;
     expect(distinct.sql).toMatch(/^select distinct trim\("game"\) from "events"/i);
     expect(distinct.sql).toContain('"events"."status" = \'published\'');
@@ -723,7 +724,8 @@ describe("EventsCalendar SSR drift", () => {
     expect(Number(distinct.params[0])).toBeGreaterThan(0);
     expect(source.queries[1]!.sql).toMatch(/^select count/i);
     expect(source.queries[4]!.sql).toContain('group by "rsvps"."event_id"');
-    expect(source.queries[5]!.sql).toContain('group by "rsvps"."event_id"');
+    expect(source.queries[4]!.sql).toContain('left join "users"');
+    expect(source.queries[4]!.sql).toContain("count(case when");
   });
 
   it("pins the LIKE: bound, wildcard-escaped, title OR description, drafts gated for guests", async () => {

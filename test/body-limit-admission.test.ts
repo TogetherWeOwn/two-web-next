@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import rawApp from "../src/index";
 import app from "./app";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
@@ -168,6 +168,14 @@ function upload(
 }
 
 describe("shared throttles admit before buffering", () => {
+  // Pin the prune sample: statement counts below include the expiry prune.
+  beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it.each(sharedRoutes)("%s rejects exhausted buckets without pulling any upload", async (key) => {
     const { method, path, max, budget } = routeInfo(key);
     const capFirst =

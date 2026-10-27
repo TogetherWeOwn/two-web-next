@@ -81,6 +81,9 @@ function fixture(
       };
     }
     if (sql.includes('from "rsvps"')) {
+      // Combined going aggregate: (event_id, named, occupied); legacy arms stay two-column.
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return { rows: [[row.id, going, going]] };
       if (sql.includes("count(*)") || sql.includes("group by")) return { rows: [[row.id, going]] };
       const answer = (answers as Record<string, ViewerRsvp | Answer>)[String(params[1])];
       if (params[0] !== row.id || !answer) return { rows: [] };

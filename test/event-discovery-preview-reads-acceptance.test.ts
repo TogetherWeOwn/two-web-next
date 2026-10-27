@@ -98,7 +98,7 @@ function link(html: string, testid: string): string {
 function expectDetailBudget(total: number, currentId: number) {
   expect(queries).toHaveLength(total);
   const aggregates = queries.filter((q) => /\bfrom "rsvps"/.test(q.sql));
-  expect(aggregates).toHaveLength(2); // Existing detail counts, never preview counts.
+  expect(aggregates).toHaveLength(1); // One combined detail count, never preview counts.
   for (const query of aggregates) {
     expect(query.sql).toMatch(/\bcount\(/i);
     expect(query.params.filter((p) => typeof p === "number")).toEqual([currentId]);
@@ -193,9 +193,9 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(html).not.toMatch(/Hidden draft|Hidden cancelled|Private game/);
     });
 
-    it("CONTROL: series detail stays at seven reads with RSVP counts only for the current event", async () => {
+    it("CONTROL: series detail stays at six reads with RSVP counts only for the current event", async () => {
       await render(twin);
-      expectDetailBudget(7, 20);
+      expectDetailBudget(6, 20);
     });
 
     it("CONTROL: unrelated extra events do not add reads or aggregate preview RSVPs", async () => {
@@ -205,13 +205,13 @@ for (const twin of ["Hono", "Kit"] as const) {
           '2027-01-01T20:00Z'::timestamptz, 'published' from generate_series(100, 149) as n
       `;
       const html = await render(twin);
-      expectDetailBudget(7, 20);
+      expectDetailBudget(6, 20);
       expect([...html.matchAll(/data-testid="event-related-link"/g)]).toHaveLength(3);
     });
 
-    it("CONTROL: standalone detail stays at six reads and has no series rail", async () => {
+    it("CONTROL: standalone detail stays at five reads and has no series rail", async () => {
       const html = await render(twin, 15);
-      expectDetailBudget(6, 15);
+      expectDetailBudget(5, 15);
       expect(html).not.toContain('data-testid="event-series-nav"');
       expect(html).toContain('data-testid="event-pagination"');
     });

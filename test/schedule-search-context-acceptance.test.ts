@@ -253,7 +253,7 @@ for (const twin of GAME_TWINS) {
         ]);
       }
       expect(fixture.queries.filter(({ sql }) => sql.includes('from "events"'))).toHaveLength(4);
-      expect(fixture.queries.filter(({ sql }) => sql.includes('from "rsvps"'))).toHaveLength(2);
+      expect(fixture.queries.filter(({ sql }) => sql.includes('from "rsvps"'))).toHaveLength(1);
       expect(fixture.discordCalls).toHaveLength(1);
     });
   });

@@ -70,6 +70,14 @@ export const WEB_THROTTLE_LOCK_TIMEOUT_MS = 2000;
  * statement.
  */
 const THROTTLE_PRUNE_WAIT_MS = 2_000;
+/**
+ * Prune sampling: the expiry DELETE runs on this fraction of admissions
+ * instead of every one. Each prune drains up to 1,000 expired rows while
+ * each admitted request inserts one, so 10% still drains two orders of
+ * magnitude more than the funnel inserts, and 90% of admissions skip the
+ * second transaction on the hot path.
+ */
+export const THROTTLE_PRUNE_SAMPLE = 0.1;
 
 function exceptionClass(err: unknown): string {
   return err instanceof Error
@@ -204,49 +212,53 @@ export async function checkJoinThrottle(
   // refused load would otherwise accumulate expired rows until some request
   // is admitted. The prune is age-only, so it records no hit and never moves
   // a request across the admit/refuse boundary. One bounded oldest-first
-  // batch per request (1,000 rows, the established cleanup batch, skip-locked
-  // so rows held by unrelated transactions wait for a later pass). It is
-  // best-effort: a throwing prune must not flip a decided refusal into an
-  // admission (the generic middleware catch) or a 500 on the direct join path
-  // (no catch there) — and a stalled prune must not hold the decided verdict
-  // either. The answer waits at most THROTTLE_PRUNE_WAIT_MS, independently of
-  // the transaction-local statement timeout; the server cancels a slow DELETE
+  // batch per sampled request (1,000 rows, the established cleanup batch,
+  // skip-locked so rows held by unrelated transactions wait for a later
+  // pass); sampling keeps the second transaction off the hot path while
+  // still draining far more than the funnel inserts. It is best-effort: a
+  // throwing prune must not flip a decided refusal into an admission (the
+  // generic middleware catch) or a 500 on the direct join path (no catch
+  // there) — and a stalled prune must not hold the decided verdict either.
+  // The answer waits at most THROTTLE_PRUNE_WAIT_MS, independently of the
+  // transaction-local statement timeout; the server cancels a slow DELETE
   // without changing pooled settings, while connection/transport stalls still
   // cannot hold the caller. A late settlement is observed without a second
   // warning or a verdict change.
-  const pruneDelete = (tx: Sql) =>
-    tx`DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) AS candidates WHERE web_throttle_hits.id = candidates.id`;
-  const pruneStore = sql as Sql & {
-    begin: (run: (tx: Sql) => Promise<void>) => Promise<void>;
-  };
-  const prune = (async () => {
+  if (Math.random() < THROTTLE_PRUNE_SAMPLE) {
+    const pruneDelete = (tx: Sql) =>
+      tx`DELETE FROM web_throttle_hits USING (SELECT id FROM web_throttle_hits WHERE at < now() - make_interval(mins => ${THROTTLE_COUNTER_RETENTION_MINUTES}) ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) AS candidates WHERE web_throttle_hits.id = candidates.id`;
+    const pruneStore = sql as Sql & {
+      begin: (run: (tx: Sql) => Promise<void>) => Promise<void>;
+    };
+    const prune = (async () => {
+      try {
+        await pruneStore.begin(async (tx) => {
+          await tx.unsafe(`SET LOCAL statement_timeout = '${THROTTLE_PRUNE_WAIT_MS}ms'`);
+          await pruneDelete(tx);
+        });
+        return null;
+      } catch (err) {
+        return { err };
+      }
+    })();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<"deadline">((resolve) => {
+      timer = setTimeout(() => resolve("deadline"), THROTTLE_PRUNE_WAIT_MS);
+    });
     try {
-      await pruneStore.begin(async (tx) => {
-        await tx.unsafe(`SET LOCAL statement_timeout = '${THROTTLE_PRUNE_WAIT_MS}ms'`);
-        await pruneDelete(tx);
-      });
-      return null;
-    } catch (err) {
-      return { err };
+      const failure = await Promise.race([prune, deadline]);
+      if (failure !== null) {
+        // Housekeeping failed or stalled; the verdict below was already decided.
+        // Log the exception class only: the message can quote statement bindings.
+        // An expired wait logs once as ThrottlePruneDeadline; a late settlement
+        // causes no second warning.
+        console.warn("Join throttle prune failed; keeping the decided verdict.", {
+          exception: failure === "deadline" ? "ThrottlePruneDeadline" : exceptionClass(failure.err),
+        });
+      }
+    } finally {
+      clearTimeout(timer);
     }
-  })();
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  const deadline = new Promise<"deadline">((resolve) => {
-    timer = setTimeout(() => resolve("deadline"), THROTTLE_PRUNE_WAIT_MS);
-  });
-  try {
-    const failure = await Promise.race([prune, deadline]);
-    if (failure !== null) {
-      // Housekeeping failed or stalled; the verdict below was already decided.
-      // Log the exception class only: the message can quote statement bindings.
-      // An expired wait logs once as ThrottlePruneDeadline; a late settlement
-      // causes no second warning.
-      console.warn("Join throttle prune failed; keeping the decided verdict.", {
-        exception: failure === "deadline" ? "ThrottlePruneDeadline" : exceptionClass(failure.err),
-      });
-    }
-  } finally {
-    clearTimeout(timer);
   }
   return verdict;
 }

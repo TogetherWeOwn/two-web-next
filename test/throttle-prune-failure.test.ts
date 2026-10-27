@@ -4,7 +4,7 @@
 // middleware catch turns that into an admission (fail-open), while the direct
 // join path (no catch) turns a 429 into a 500. Hermetic: an in-memory SQL
 // double with a throwing DELETE, no database required.
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkJoinThrottle } from "../src/join/service";
 import type { Sql } from "../src/sessions";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
@@ -33,6 +33,15 @@ function fixture(failPrune: boolean, pruneError: unknown = new Error("prune boom
 }
 
 describe("throttle prune failure keeps the decided verdict", () => {
+  beforeEach(() => {
+    // Pin the prune sample so these cases exercise the throwing prune
+    // deterministically; sampling itself is pinned separately.
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("a refused request stays refused when the prune throws", async () => {
     const { hits, sql } = fixture(true);
     const bucket = "prune-failure-refused";

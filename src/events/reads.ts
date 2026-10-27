@@ -18,6 +18,11 @@ import {
 import type { Db } from "../db/index";
 import { containsControlCharacters } from "../admin/validation-shared";
 import {
+  readPublishedGamesCache,
+  writePublishedGamesCache,
+  type AnonCacheSource,
+} from "./anon-cache";
+import {
   PUBLIC_API_GAME_MAX_LENGTH,
   PUBLIC_DATA_BOUNDS,
   PUBLIC_EVENT_STATUS,
@@ -74,44 +79,48 @@ export const JSON_MAX_LIMIT = PUBLIC_DATA_BOUNDS.maxPageSize;
 /** Two going counts per event, so the badge and the seats agree with the
  * roster and the write path at once.
  * `listGoingAttendees` excludes nameless rows (empty stored name, or no user
- * row at all) so no nameless identity is ever rendered. `goingCount` joins
- * users and counts only named rows, so it always equals the roster length
- * (within one roster page) and drives the visible "N going" label.
- * `goingOccupancy` counts every going row — the same shape as
- * `waitlist.goingCount`, the write-path seat enforcement — and drives the
- * `full` verdict, the spots-left text and the Going/waitlist CTA in
- * `rsvp-button.tsx` (plus the Kit mirror), so the page never offers a seat
- * the write cannot grant. Both are aggregates only; neither renders a name. */
+ * row at all) so no nameless identity is ever rendered. `goingCount` counts
+ * only named rows, so it always equals the roster length (within one roster
+ * page) and drives the visible "N going" label. `goingOccupancy` counts every
+ * going row — the same shape as `waitlist.goingCount`, the write-path seat
+ * enforcement — and drives the `full` verdict, the spots-left text and the
+ * Going/waitlist CTA in `rsvp-button.tsx` (plus the Kit mirror), so the page
+ * never offers a seat the write cannot grant. Both are aggregates only;
+ * neither renders a name.
+ * One statement for both counts: a LEFT JOIN keeps every going row for the
+ * occupancy count while the conditional count admits only rows whose joined
+ * username is non-empty for the badge. A missing user row yields NULL, which
+ * the `<> ''` test rejects exactly like the old inner-join predicate, so an
+ * empty stored name and a missing user row both hold a seat without
+ * inflating the badge. userId is unique in users, so the join never fans out
+ * and `count()` still counts going rows. */
 async function withGoing(
   db: Pick<Db, "select">,
   rows: (typeof events.$inferSelect)[],
 ): Promise<PublicEvent[]> {
   if (rows.length === 0) return [];
   const ids = rows.map((r) => r.id);
-  const [named, occupied] = await Promise.all([
-    nonSensitiveRead("going-counts", () =>
-      db
-        .select({ eventId: rsvps.eventId, n: count() })
-        .from(rsvps)
-        .innerJoin(users, eq(rsvps.userId, users.id))
-        .where(and(inArray(rsvps.eventId, ids), eq(rsvps.status, "going"), ne(users.username, "")))
-        .groupBy(rsvps.eventId),
-    ),
-    nonSensitiveRead("going-counts", () =>
-      db
-        .select({ eventId: rsvps.eventId, n: count() })
-        .from(rsvps)
-        .where(and(inArray(rsvps.eventId, ids), eq(rsvps.status, "going")))
-        .groupBy(rsvps.eventId),
-    ),
-  ]);
-  const byNamed = new Map(named.map((c) => [c.eventId, Number(c.n)]));
-  const byOccupied = new Map(occupied.map((c) => [c.eventId, Number(c.n)]));
-  return rows.map((r) => ({
-    ...r,
-    goingCount: byNamed.get(r.id) ?? 0,
-    goingOccupancy: byOccupied.get(r.id) ?? 0,
-  }));
+  const counts = await nonSensitiveRead("going-counts", () =>
+    db
+      .select({
+        eventId: rsvps.eventId,
+        named: sql<number>`count(case when ${users.username} <> '' then 1 end)`,
+        occupied: count(),
+      })
+      .from(rsvps)
+      .leftJoin(users, eq(rsvps.userId, users.id))
+      .where(and(inArray(rsvps.eventId, ids), eq(rsvps.status, "going")))
+      .groupBy(rsvps.eventId),
+  );
+  const byId = new Map(counts.map((c) => [c.eventId, c]));
+  return rows.map((r) => {
+    const c = byId.get(r.id);
+    return {
+      ...r,
+      goingCount: c ? Number(c.named) : 0,
+      goingOccupancy: c ? Number(c.occupied) : 0,
+    };
+  });
 }
 
 /** Title/description substring match; SQL wildcards in the query match themselves. */
@@ -173,6 +182,25 @@ export async function listPublishedGames(db: Db): Promise<string[]> {
     .orderBy(sql`trim(${sql.identifier(events.game.name)})`)
     .limit(EVENTS_DISTINCT_GAMES_LIMIT);
   return rows.map((row) => row.game).sort((a, b) => a.localeCompare(b));
+}
+
+/** Cached facet list: the games read served from the isolate-local entry when
+ * fresh for this source, otherwise read once and settled. Games change only
+ * on event writes, which retire the entry alongside the anonymous cards, so a
+ * hit is never older than the last mutation plus the TTL. Callers without a
+ * sharing scope keep calling listPublishedGames directly. The loader param
+ * lets routes pass their (mockable) reads import instead of the direct
+ * reference, so hermetic suites keep faking the facet without a database. */
+export async function cachedListPublishedGames(
+  db: Db,
+  source: AnonCacheSource,
+  loader: (db: Db) => Promise<string[]> = listPublishedGames,
+): Promise<string[]> {
+  const hit = readPublishedGamesCache(source);
+  if (hit) return hit;
+  const games = await loader(db);
+  writePublishedGamesCache(source, games);
+  return games;
 }
 
 /** Invalid list-page numbers retain the page-one fallback, like the archive —

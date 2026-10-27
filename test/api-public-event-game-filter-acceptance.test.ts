@@ -667,7 +667,7 @@ describe("public events game filter: reader contract (offline)", () => {
     expect(pages[0]!.sql).toContain('"game"');
     expect(pages[0]!.sql).toContain("limit");
     const aggregates = queries.filter((q) => q.sql.includes('from "rsvps"'));
-    expect(aggregates).toHaveLength(2);
+    expect(aggregates).toHaveLength(1);
   });
 
   it("CONTROL: unfiltered paging math is unchanged", async () => {

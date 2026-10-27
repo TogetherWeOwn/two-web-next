@@ -19,7 +19,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { getTableColumns } from "drizzle-orm";
 import type postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { boardViewLogs, eventSyncAttempts } from "../src/db/admin-schema";
 import { discordEventSnapshots, webOAuthJourneys } from "../src/db/schema";
 import {
@@ -1310,12 +1310,19 @@ describe.skipIf(!process.env.DATABASE_URL)("retention ledger (test Postgres)", (
     expect(sessions.map((r) => r.token_hash)).toEqual(["ledger-live"]);
 
     // Production prune: judges and records first, then expires old rows. A
-    // 5000-minute window or a no-op prune leaves 3 rows and fails here.
-    const verdict = await checkJoinThrottle(
-      sql as unknown as Parameters<typeof checkJoinThrottle>[0],
-      bucket,
-      10,
-    );
+    // 5000-minute window or a no-op prune leaves 3 rows and fails here. Pin
+    // the prune sample so this case exercises the prune deterministically.
+    const random = vi.spyOn(Math, "random").mockReturnValue(0);
+    let verdict;
+    try {
+      verdict = await checkJoinThrottle(
+        sql as unknown as Parameters<typeof checkJoinThrottle>[0],
+        bucket,
+        10,
+      );
+    } finally {
+      random.mockRestore();
+    }
     expect(verdict.limited).toBe(false);
     const hits = await sql<
       { at: Date }[]

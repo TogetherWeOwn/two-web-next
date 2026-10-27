@@ -146,6 +146,17 @@ function fixture(
         [2, 1],
       ];
       const occupied = counts?.occupied ?? named;
+      if (sql.includes('left join "users"') && sql.includes("group by")) {
+        const byOccupied = new Map(occupied);
+        const merged = named
+          .filter(([id]) => (params as unknown[]).includes(id))
+          .map(([id, n]) => [id, n, byOccupied.get(id) ?? 0]);
+        for (const [id, o] of occupied) {
+          if ((params as unknown[]).includes(id) && !merged.some(([mid]) => mid === id))
+            merged.push([id, 0, o]);
+        }
+        return { rows: merged };
+      }
       const countRows = (sql.includes('inner join "users"') ? named : occupied).filter(([id]) =>
         (params as unknown[]).includes(id),
       );

@@ -5,7 +5,7 @@
 // until some unrelated request happens to be admitted. Pruning must never
 // move a request across the admit/refuse boundary and must never record a
 // hit for a refused request.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkJoinThrottle, THROTTLE_COUNTER_RETENTION_MINUTES } from "../src/join/service";
 import type { Sql } from "../src/sessions";
 import {
@@ -42,6 +42,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
     beforeEach(async () => {
       await fixture.reset();
       await fixture.client`delete from web_throttle_hits`;
+      // Pin the prune sample so these cases exercise the refused-path prune
+      // deterministically; sampling itself is pinned separately.
+      vi.spyOn(Math, "random").mockReturnValue(0);
+    });
+    afterEach(() => {
+      vi.restoreAllMocks();
     });
     afterAll(async () => {
       await fixture?.dispose();

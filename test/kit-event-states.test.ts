@@ -309,8 +309,11 @@ function honoFixture(queryError?: Error) {
   const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
   const db = drizzle(async (sql, params) => {
     if (queryError && sql.includes('"event_key" =')) throw queryError;
-    if (sql.includes('from "rsvps"'))
+    if (sql.includes('from "rsvps"')) {
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return { rows: [[row.id, 3, 3]] };
       return sql.includes("count(*)") ? { rows: [[row.id, 3]] } : { rows: [] };
+    }
     // Only the fixture key resolves: any other key is an unknown row, and
     // every other read (suggestions, neighbors) finds nothing.
     if (sql.includes('"event_key" =')) {

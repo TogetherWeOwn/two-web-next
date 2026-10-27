@@ -23,11 +23,11 @@ for (const twin of ["Hono", "Kit"] as const) {
     it("CONTROL: bounds reads and cards across all three pages without changing order or game scope", async () => {
       const fixture = navigationRouteFixture();
       const keys: (string | undefined)[] = [];
-      for (const [page, size] of [
+      for (const [index, [page, size]] of [
         [1, 20],
         [2, 20],
         [3, 5],
-      ]) {
+      ].entries()) {
         const before = fixture.queries.length;
         const response = await fixture.request(twin, `/events?game=Chess&page=${page}`, true);
         expect(response.status).toBe(200);
@@ -36,9 +36,14 @@ for (const twin of ["Hono", "Kit"] as const) {
         expect(visible).toHaveLength(size!);
         keys.push(...visible);
         const queries = fixture.queries.slice(before);
-        expect(queries).toHaveLength(8);
+        // Hono serves the facet list from its isolate cache after the first
+        // page; Kit re-reads it per page.
+        const gamesReads = twin === "Hono" && index > 0 ? 0 : 1;
+        expect(queries).toHaveLength(5 + gamesReads);
         expect(queries.every((query) => /^select\b/i.test(query.sql))).toBe(true);
-        expect(queries.filter((query) => /select\s+distinct/i.test(query.sql))).toHaveLength(1);
+        expect(queries.filter((query) => /select\s+distinct/i.test(query.sql))).toHaveLength(
+          gamesReads,
+        );
         const reads = queries.filter(
           (query) =>
             query.sql.includes('from "events"') &&
@@ -60,7 +65,7 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(first.status).toBe(200);
       const html = await first.text();
       const count = fixture.queries.length;
-      expect(count).toBe(8);
+      expect(count).toBe(6);
       const repeated = await fixture.request(twin, path);
       expect(await repeated.text()).toBe(html);
       expect(fixture.queries).toHaveLength(count);
@@ -117,7 +122,8 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(closed.status).toBe(200);
       expect(closedHtml).not.toContain("Past navigation gathering");
       expect(cardKeys(closedHtml)).toEqual(cardKeys(openHtml));
-      expect(fixture.queries.length - before).toBe(8);
+      // Hono reuses the facet list cached by the open request; Kit re-reads it.
+      expect(fixture.queries.length - before).toBe(twin === "Hono" ? 5 : 6);
       expect(closed.headers.get("cache-control")).toBe("public, max-age=60");
       expect(closed.headers.get("set-cookie")).toBeNull();
     });

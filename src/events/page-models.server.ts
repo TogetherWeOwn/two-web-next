@@ -111,6 +111,8 @@ export async function loadCalendarPageModel(args: {
   requestId?: string | null;
   /** Optional request-local diagnostics; framework callers outside staging omit it. */
   phases?: CalendarPhaseRecorder;
+  /** Preloaded facet list; when provided the model skips the games read. */
+  games?: string[];
 }): Promise<CalendarPageModel> {
   const { db, input, includeDrafts, discord, requestId, phases } = args;
   const now = args.now ?? new Date();
@@ -120,7 +122,7 @@ export async function loadCalendarPageModel(args: {
   // Only the web DB reads depend on the game list. Keep their whole pipeline
   // parallel with Discord, so a pending snapshot never delays the list reads.
   const canonicalRead = async () => {
-    const games = await listPublishedGames(db);
+    const games = args.games ?? (await listPublishedGames(db));
     const gameFilter = resolveGameFilter(games, rawGame);
     const opts = { includeDrafts, search: match, game: gameFilter };
 

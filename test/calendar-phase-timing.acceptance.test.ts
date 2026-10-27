@@ -468,12 +468,14 @@ describe("real calendar route to final request-log acceptance", () => {
     expect(entries()).toEqual([]);
     now = 5;
     guard.released.resolve();
-    await Promise.all([games.entered.promise, discord.entered.promise]);
-    expect(s.steps).toEqual(["guard", "db", "session", "games", "discord"]);
+    // The route loads the facet list before the model starts, so Discord
+    // waits for games instead of overlapping it.
+    await games.entered.promise;
+    expect(s.steps).toEqual(["guard", "db", "session", "games"]);
     now = 10;
     games.released.resolve();
-    await Promise.all([upcoming.entered.promise, past.entered.promise]);
-    expect(s.steps).toEqual(["guard", "db", "session", "games", "discord", "upcoming", "past"]);
+    await Promise.all([upcoming.entered.promise, past.entered.promise, discord.entered.promise]);
+    expect(s.steps).toEqual(["guard", "db", "session", "games", "upcoming", "past", "discord"]);
     now = 20;
     upcoming.released.resolve();
     past.released.resolve();
@@ -513,20 +515,22 @@ describe("real calendar route to final request-log acceptance", () => {
       "db",
       "session",
       "games",
-      "discord",
       "upcoming",
       "past",
+      "discord",
       "dedupe",
       "render",
       "settle",
     ]);
     expect([s.clones, s.bodyReads]).toEqual([1, 1]);
     expect(entries()).toHaveLength(1);
+    // The model starts after the route-level games read, so its phases run
+    // 10-35 instead of 5-35; canonical no longer contains the games wait.
     finalEntry(RAY_A, 42, {
       public_read_guard: 5,
-      calendar_model: 30,
-      canonical_read: 15,
-      discord_snapshot: 25,
+      calendar_model: 25,
+      canonical_read: 10,
+      discord_snapshot: 20,
       discord_dedupe: 5,
       render_cache: 7,
     });
@@ -545,29 +549,40 @@ describe("real calendar route to final request-log acceptance", () => {
     expect(await response.text()).toBe(body);
     expect(response.headers.get("cache-control")).toBe("public, max-age=60");
     expect(response.headers.get("vary")).toBe("Cookie, X-Two-Island");
-    expect(s.steps).toEqual(["guard", "db", "session", "render"]);
+    // The cookieless hit serves before admission: render only.
+    expect(s.steps).toEqual(["render"]);
     expect([s.clones, s.bodyReads]).toEqual([0, 0]);
     const times = requestEntry(RAY_B).calendar_phase_ms;
     bounded(times);
-    expect(times).toMatchObject({ public_read_guard: 0 });
-    for (const phase of ["calendar_model", "canonical_read", "discord_snapshot", "discord_dedupe"])
+    expect(times).toHaveProperty("render_cache");
+    for (const phase of [
+      "public_read_guard",
+      "calendar_model",
+      "canonical_read",
+      "discord_snapshot",
+      "discord_dedupe",
+    ])
       expect(times).not.toHaveProperty(phase);
   });
 
   it("does not force cache eligibility for an anonymous request carrying a stray cookie", async () => {
     const s = scenario();
     for (const ray of [RAY_A, RAY_B]) {
+      // Fresh games facet per iteration: the isolate cache would otherwise
+      // serve the first iteration's facet on the second request.
+      __resetAnonEventCacheForTests();
       s.steps = [];
       const response = await get(s, "/events", ray, { headers: { cookie: "stray=fixture" } });
       expect(response.status).toBe(200);
+      // Route-level games first, then the model branches (lists before Discord).
       expect(s.steps).toEqual([
         "guard",
         "db",
         "session",
         "games",
-        "discord",
         "upcoming",
         "past",
+        "discord",
         "dedupe",
         "render",
       ]);

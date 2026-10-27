@@ -18,7 +18,7 @@ import {
   writeAnonCache,
 } from "./anon-cache";
 import { discordEventsSource } from "./discord-transients";
-import { listPast, normalizePastPage } from "./reads";
+import { cachedListPublishedGames, listPast, listPublishedGames, normalizePastPage } from "./reads";
 import { matchQuery } from "./search-log";
 import { EventsCalendarPage, EventsSearchTooLongPage, PastEventsPage } from "./pages";
 import { eventsUnavailable, publicReadGuard, type App, type SessionReader } from "./routes-shared";
@@ -43,6 +43,42 @@ export function registerCalendarRoutes(
       return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} />, 422);
     }
     let phases = c.get("calendarPhaseRecorder");
+    // Cookieless fast path: with no Cookie header there is no session and no
+    // join flash to resolve (both travel by cookie alone), so shared-byte
+    // eligibility is known before admission. A hit returns here without
+    // touching the throttle store or the database; a miss falls through to
+    // the normal path, which throttles first and re-checks the cache after
+    // session resolution (a settle may land in between). Hit serving mirrors
+    // the session-aware check below; throttle still guards every miss, so
+    // cache-busting query strings cannot bypass admission.
+    if (
+      (c.req.method === "GET" || c.req.method === "HEAD") &&
+      c.req.header("cookie") === undefined &&
+      !input.searching
+    ) {
+      const earlySource = anonCacheSource(c.env);
+      let earlyPath = "";
+      try {
+        const u = new URL(c.req.url);
+        earlyPath = u.pathname + u.search;
+      } catch {
+        earlyPath = "/events";
+      }
+      const earlyHit = readAnonCache(
+        anonEventsKey(c.req.method, earlyPath, c.req.header("x-two-island") === "events-calendar"),
+        earlySource,
+      );
+      if (earlyHit) {
+        c.header(
+          "cache-control",
+          earlyHit.cacheControl.replace(/max-age=\d+/, `max-age=${earlyHit.maxAgeSeconds}`),
+        );
+        if (earlyHit.vary) c.header("vary", earlyHit.vary);
+        return phases
+          ? phases.measure("render_cache", () => c.html(earlyHit.body, earlyHit.status as 200))
+          : c.html(earlyHit.body, earlyHit.status as 200);
+      }
+    }
     const limited = await (phases
       ? phases.measure("public_read_guard", () => publicReadGuard(c))
       : publicReadGuard(c));
@@ -120,6 +156,15 @@ export function registerCalendarRoutes(
     // that commits (and retires) while this render awaits its reads must stop
     // the stale bytes from settling below.
     const anonGen = anonSource ? anonCacheGeneration() : 0;
+    // Facet list from the isolate cache (a hit skips the sequential games
+    // read inside the model). Scoped like the cards; signed-in and searching
+    // renders share it too, since games carry no viewer state. The loader is
+    // the route's reads import so hermetic suites keep faking the facet.
+    const facetGames = await cachedListPublishedGames(
+      db,
+      anonCacheSource(c.env),
+      listPublishedGames,
+    );
     const loadModel = () =>
       loadCalendarPageModel({
         db,
@@ -129,6 +174,7 @@ export function registerCalendarRoutes(
         now,
         requestId: c.get("requestId"),
         phases,
+        games: facetGames,
       });
     const model = await (phases ? phases.measure("calendar_model", loadModel) : loadModel());
     const {

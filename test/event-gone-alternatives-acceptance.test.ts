@@ -107,6 +107,8 @@ function honoFixture(opts: { related?: EventLink[]; relatedError?: Error } = {})
   const columns = Object.keys(getTableColumns(events)) as (keyof CancelledRow)[];
   const db = drizzle(async (sql, params) => {
     if (sql.includes('from "rsvps"')) {
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return { rows: [[row.id, 0, 0]] };
       return sql.includes("count(*)") ? { rows: [[row.id, 0]] } : { rows: [] };
     }
     if (sql.includes('from "events"')) {

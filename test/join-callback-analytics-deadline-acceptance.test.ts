@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 // route-inventory: GET /join/discord
 // route-inventory: GET /join/callback
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import type { Env } from "../src/env";
 import { checkJoinThrottle, recordAttempt } from "../src/join/service";
@@ -1064,6 +1064,13 @@ describe("recordAttempt with a never-settling INSERT (direct)", () => {
 });
 
 describe("checkJoinThrottle with a never-settling prune DELETE (direct)", () => {
+  beforeEach(() => {
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
   it("returns the decided refusal within the bound and warns exactly ThrottlePruneDeadline; a late rejection is inert", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
     const fake = fakePruneSql({ refused: true });

@@ -9,7 +9,7 @@
 // still records exactly one. A backlog below the batch size must still
 // drain completely in one request (controls). Live against agent-testdb
 // (skipped without DATABASE_URL, like test/throttle-prune.test.ts).
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkJoinThrottle, THROTTLE_COUNTER_RETENTION_MINUTES } from "../src/join/service";
 import type { Sql } from "../src/sessions";
 import {
@@ -44,6 +44,11 @@ describe.skipIf(!process.env.DATABASE_URL)("join throttle prune batch (agent-tes
   beforeEach(async () => {
     await fixture.reset();
     await fixture.client`delete from web_throttle_hits`;
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
   afterAll(async () => {
     await fixture?.dispose();

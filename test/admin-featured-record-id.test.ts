@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { parseRecordId } from "../src/admin/record-id";
 import {
@@ -95,6 +95,8 @@ const row: FeaturedRow = {
 
 beforeEach(() => {
   vi.resetAllMocks();
+  // Pin the prune sample: statement counts below include the expiry prune.
+  vi.spyOn(Math, "random").mockReturnValue(0);
   vi.mocked(getFeatured).mockImplementation(async (_, id) => ({
     ...row,
     id,
@@ -104,6 +106,10 @@ beforeEach(() => {
   vi.mocked(updateFeatured).mockImplementation(async (_, __, id) => ({ ...row, id }));
   vi.mocked(deleteFeatured).mockResolvedValue(undefined);
   vi.mocked(recordAccess).mockResolvedValue(true);
+});
+
+afterEach(() => {
+  vi.restoreAllMocks();
 });
 
 function expectNoRecordAccess() {

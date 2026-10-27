@@ -143,8 +143,8 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     // The teaser caps at 3 soonest rows; every one carries its going-only count.
     expect(rows).toHaveLength(3);
     for (const row of rows) expect(row.goingCount).toBe(3);
-    // BEGIN + set_config + events SELECT + two batched going aggregates
-    // (attributable + occupancy) + COMMIT.
+    // BEGIN + set_config + events SELECT + one combined going aggregate
+    // (named + occupancy) + COMMIT.
     expect(firstPass).toBeLessThanOrEqual(6);
     // No per-row queries: doubling the seeded rows changes nothing.
     await seedEvents(10, "H2");
@@ -168,55 +168,55 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     expect(roundTrips.length).toBe(firstPass);
   });
 
-  it("JSON collection: four round trips at both sizes, going-only counts", async () => {
+  it("JSON collection: three round trips at both sizes, going-only counts", async () => {
     // Standalone-safe: top up to 10 collection-visible rows whatever ran before.
     const existing = await db.select().from(events);
     if (existing.length < 10) await seedEvents(10 - existing.length, "C");
     roundTrips = [];
     const { rows } = await listJson(db, { limit: 10, offset: 0 });
     expect(rows).toHaveLength(10);
-    // One total COUNT + one rows SELECT + two batched going aggregates
-    // (attributable + occupancy): no per-row queries.
-    expect(roundTrips.length).toBe(4);
+    // One total COUNT + one rows SELECT + one combined going aggregate
+    // (named + occupancy): no per-row queries.
+    expect(roundTrips.length).toBe(3);
     for (const row of rows) expect(row.goingCount).toBe(3);
     // Growing the collection keeps the count identical: growth is bounded.
     await seedEvents(10, "C2");
     roundTrips = [];
     const { rows: grown } = await listJson(db, { limit: 100, offset: 0 });
     expect(grown.length).toBeGreaterThan(10);
-    expect(roundTrips.length).toBe(4);
+    expect(roundTrips.length).toBe(3);
     for (const row of grown) expect(row.goingCount).toBe(3);
   });
 
-  it("upcoming calendar page: four round trips at both sizes, going-only counts", async () => {
+  it("upcoming calendar page: three round trips at both sizes, going-only counts", async () => {
     const existing = await db.select().from(events);
     if (existing.length < 10) await seedEvents(10 - existing.length, "U");
     roundTrips = [];
     const first = await listUpcoming(db, NOW, {}, 1);
     expect(first.rows.length).toBeGreaterThan(0);
     expect(first.rows.length).toBeLessThanOrEqual(20);
-    // One total COUNT + one page SELECT + two batched going aggregates: no
-    // per-row queries, and page two costs the same four.
-    expect(roundTrips.length).toBe(4);
+    // One total COUNT + one page SELECT + one combined going aggregate: no
+    // per-row queries, and page two costs the same three.
+    expect(roundTrips.length).toBe(3);
     for (const row of first.rows) expect(row.goingCount).toBe(3);
     roundTrips = [];
     const second = await listUpcoming(db, NOW, {}, 2);
-    expect(roundTrips.length).toBe(4);
+    expect(roundTrips.length).toBe(3);
     expect(second.total).toBe(first.total);
     // Growing the collection keeps the count identical: growth is bounded.
     await seedEvents(10, "U2");
     roundTrips = [];
     const regrown = await listUpcoming(db, NOW, {}, 1);
     expect(regrown.rows).toHaveLength(20);
-    expect(roundTrips.length).toBe(4);
+    expect(roundTrips.length).toBe(3);
   });
 
-  it("single event: three round trips, going count excludes maybe/waitlisted", async () => {
+  it("single event: two round trips, going count excludes maybe/waitlisted", async () => {
     const [seeded] = await seedEvents(1, "S");
     roundTrips = [];
     const row = await getPublicEvent(db, seeded!.key);
-    // One row SELECT + two going aggregates (attributable + occupancy).
-    expect(roundTrips.length).toBe(3);
+    // One row SELECT + one combined going aggregate (named + occupancy).
+    expect(roundTrips.length).toBe(2);
     expect(row?.goingCount).toBe(3);
   });
 });

@@ -73,6 +73,9 @@ function makeCaseSensitiveDb(rows: FakeRow[]) {
         innerJoin(..._args: unknown[]) {
           return chain;
         },
+        leftJoin(..._args: unknown[]) {
+          return chain;
+        },
         orderBy(..._args: unknown[]) {
           return chain;
         },

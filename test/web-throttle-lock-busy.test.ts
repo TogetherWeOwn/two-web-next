@@ -1,7 +1,7 @@
 /// <reference types="vite/client" />
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   checkJoinThrottle,
   migrateJoin,
@@ -108,6 +108,13 @@ describe.skipIf(!raw)("web-throttle lock waits are busy-bounded (test database)"
 
   beforeEach(async () => {
     await client`DELETE FROM web_throttle_hits`;
+    // Pin the prune sample so the control case exercises the prune
+    // deterministically; sampling itself is pinned separately.
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   afterAll(async () => {

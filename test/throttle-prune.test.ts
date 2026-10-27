@@ -2,7 +2,7 @@
 // a fresh row survives, on both prune paths (the join allow-path DELETE and
 // the RSVP pre-charge pruneThrottle). Every older throttle double stubbed the
 // DELETE away, so nothing proved an expired row is actually removed.
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { newEventKey } from "../src/admin/validation";
 import { events } from "../src/db/admin-schema";
 import { writeRsvp } from "../src/events/rsvp";
@@ -33,6 +33,12 @@ describe.skipIf(!process.env.DATABASE_URL)("throttle-hit prune (agent-testdb)", 
   beforeEach(async () => {
     await fixture.reset();
     await fixture.client`delete from web_throttle_hits`;
+    // Pin the prune sample so these cases exercise the prune
+    // deterministically; sampling itself is pinned separately.
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
   afterAll(async () => {
     await fixture?.dispose();

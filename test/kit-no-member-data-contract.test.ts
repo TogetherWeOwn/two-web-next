@@ -300,7 +300,30 @@ function fakeDb(stored: FakeStored): Db {
     }
     if (sql.includes('from "rsvps"')) {
       // The going-count pair: the named leg joins users and drops nameless
-      // rows, the occupancy leg counts every going row.
+      // rows, the occupancy leg counts every going row. The combined
+      // aggregate returns (event_id, named, occupied) in one row.
+      const countFor = (eventId: number, namedOnly: boolean) => {
+        let n = 0;
+        for (const rsvp of stored.rsvps) {
+          if (rsvp.eventId !== eventId || rsvp.status !== "going") continue;
+          if (namedOnly) {
+            const user = stored.users.find((u) => u.id === rsvp.userId);
+            if (!user || user.username === "") continue;
+          }
+          n += 1;
+        }
+        return n;
+      };
+      if (sql.includes('left join "users"') && sql.includes("group by")) {
+        const ids = new Set(stored.rsvps.filter((r) => r.status === "going").map((r) => r.eventId));
+        return {
+          rows: [...ids].map((eventId) => [
+            eventId,
+            countFor(eventId, true),
+            countFor(eventId, false),
+          ]),
+        };
+      }
       const namedOnly = sql.includes('"users"');
       const byEvent = new Map<number, number>();
       for (const rsvp of stored.rsvps) {

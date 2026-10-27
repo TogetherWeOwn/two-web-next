@@ -225,6 +225,8 @@ async function honoGuestHtml(
   const db = drizzle(async (sql, params) => {
     if (sql.includes("row_number()")) return { rows: [] };
     if (sql.includes('from "rsvps"') && sql.includes("count(")) {
+      if (sql.includes('left join "users"') && sql.includes("group by"))
+        return { rows: [[base.id, 0, 0]] };
       return { rows: [[base.id, 0]] };
     }
     if (sql.includes('"users"')) return { rows: [] };

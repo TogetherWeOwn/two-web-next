@@ -310,7 +310,8 @@ function page(
       return {
         rows: [cols.map((k) => (event[k] instanceof Date ? event[k].toISOString() : event[k]))],
       };
-    if (sql.includes("group by")) return { rows: [[event.id, 4]] };
+    // Combined going aggregate: (event_id, named, occupied).
+    if (sql.includes("group by")) return { rows: [[event.id, 4, 4]] };
     // The member-only attendees projection joins users and is empty in this
     // fixture; without this arm it would fall through to the answer lookup.
     if (sql.includes('inner join "users"')) return { rows: [] };

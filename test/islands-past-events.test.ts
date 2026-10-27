@@ -186,7 +186,8 @@ describe("PastEvents contract and SSR drift", () => {
     expect(keys(html)).toEqual(Array.from({ length: 20 }, (_, i) => `archive-${25 - i}`));
     expect(html).toContain('data-page="1"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
-    expect(source.queries).toHaveLength(4);
+    // Count + rows + one combined going aggregate.
+    expect(source.queries).toHaveLength(3);
     expect(source.queries[1]!.sql).not.toContain(" offset "); // Drizzle elides zero
   });
 
@@ -225,29 +226,27 @@ describe("PastEvents contract and SSR drift", () => {
     expect(pastEventsOutOfRangeCopy(2, 1)).toContain("There is 1 page.");
   });
 
-  it("uses one predicate for count/rows, stable newest-first paging and two grouped aggregates, never viewer answers", async () => {
+  it("uses one predicate for count/rows, stable newest-first paging and one combined aggregate, never viewer answers", async () => {
     const source = archive(25);
     await source.request("/events/past?page=2");
-    expect(source.queries).toHaveLength(4);
-    const [count, rows, named, occupancy] = source.queries;
+    expect(source.queries).toHaveLength(3);
+    const [count, rows, combined] = source.queries;
     expect(count!.sql.split(" where ")[1]).toBe(
       rows!.sql.split(" where ")[1]!.split(" order by ")[0],
     );
     expect(rows!.params.slice(0, 2)).toEqual(["past", "published"]);
     expect(rows!.params.slice(-2)).toEqual([21, 20]);
     expect(rows!.sql).toContain('order by "events"."starts_at" desc, "events"."id" desc');
-    expect(named!.sql).toContain('group by "rsvps"."event_id"');
-    expect(occupancy!.sql).toContain('group by "rsvps"."event_id"');
-    // Attributable count: joins users for the named-only rule, but never a
-    // viewer answer — params are event ids, the going status, and the
-    // non-empty-name bound, with no session id. Occupancy reuses the legacy
-    // all-rows shape with no join.
-    expect(named!.sql).toContain('inner join "users"');
-    expect(named!.sql).toContain('"users"."username" <>');
-    expect(named!.params.at(-1)).toBe("");
-    expect(occupancy!.sql).not.toContain('inner join "users"');
+    expect(combined!.sql).toContain('group by "rsvps"."event_id"');
+    // Combined aggregate: LEFT JOIN keeps every going row for occupancy while
+    // the conditional count admits only named rows for the badge — params are
+    // event ids and the going status only, with no session id and no
+    // non-empty-name bound (the empty string is a fixed literal).
+    expect(combined!.sql).toContain('left join "users"');
+    expect(combined!.sql).toContain("count(case when");
+    expect(combined!.sql).toContain('"users"."username" <>');
     expect(source.queries.every((q) => !/member_id/i.test(q.sql))).toBe(true);
-    expect(source.queries.filter((q) => /\bjoin\b/i.test(q.sql))).toEqual([named]);
+    expect(source.queries.filter((q) => /\bjoin\b/i.test(q.sql))).toEqual([combined]);
   });
 });
 

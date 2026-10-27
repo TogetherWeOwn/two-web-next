@@ -166,6 +166,9 @@ function honoFixture(
     if (sql.includes('from "rsvps"')) {
       const grouped = sql.includes("group by");
       const joined = sql.includes('join "users"');
+      // Combined aggregate: (event_id, named, occupied) in one row.
+      if (grouped && sql.includes('left join "users"'))
+        return { rows: [[row.id, counts.going, counts.occupancy]] };
       if (grouped && joined) return { rows: [[row.id, counts.going]] };
       if (grouped) return { rows: [[row.id, counts.occupancy]] };
       return { rows: [] };

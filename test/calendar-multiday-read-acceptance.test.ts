@@ -95,7 +95,7 @@ describe.skipIf(!url)("canonical multi-day month reads (disposable DB)", () => {
     ]);
   });
 
-  it("keeps the 200-row bound and three batched statements at both collection sizes", async () => {
+  it("keeps the 200-row bound and two batched statements at both collection sizes", async () => {
     const firstId = await seed("cap-000", "2027-02-15T12:00Z", "2027-02-16T12:00Z");
     await fixture.client`insert into users (id, username) values ('named-going', 'Going')`;
     await fixture.client`insert into rsvps (event_id, user_id, status) values
@@ -107,7 +107,7 @@ describe.skipIf(!url)("canonical multi-day month reads (disposable DB)", () => {
     const small = await listUpcomingForMonth(db, "2027-02", NOW);
     expect(small).toHaveLength(1);
     expect(small[0]!.goingCount).toBe(1);
-    expect(statements).toHaveLength(3);
+    expect(statements).toHaveLength(2);
     await fixture.client`
       insert into events (event_key, title, starts_at, ends_at, status)
       select 'cap-' || lpad(n::text, 3, '0'), 'Bounded interval',
@@ -120,7 +120,7 @@ describe.skipIf(!url)("canonical multi-day month reads (disposable DB)", () => {
     );
     expect(large[0]!.goingCount).toBe(1);
     expect(large.slice(1).every((row) => row.goingCount === 0)).toBe(true);
-    expect(statements).toHaveLength(3);
+    expect(statements).toHaveLength(2);
   });
 
   it("applies the same row and statement bounds when every admitted interval starts before the grid", async () => {
@@ -133,7 +133,7 @@ describe.skipIf(!url)("canonical multi-day month reads (disposable DB)", () => {
     expect(rows.map((row) => row.eventKey)).toEqual(
       Array.from({ length: 200 }, (_, n) => `overlap-${String(n).padStart(3, "0")}`),
     );
-    expect(statements).toHaveLength(3);
+    expect(statements).toHaveLength(2);
   });
 
   it.each(["banana", "0000-01", "10000-01", "2027-13"])(

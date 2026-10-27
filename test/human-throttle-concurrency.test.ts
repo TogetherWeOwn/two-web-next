@@ -1,6 +1,6 @@
 import { randomUUID } from "node:crypto";
 import postgres from "postgres";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { checkJoinThrottle, migrateJoin } from "../src/join/service";
 import type { Sql } from "../src/sessions";
 import { testDatabaseUrl } from "./helpers/member-data-db";
@@ -49,6 +49,11 @@ describe.skipIf(!raw)("human throttle real-transaction admission", () => {
 
   beforeEach(async () => {
     await client`DELETE FROM web_throttle_hits`;
+    vi.spyOn(Math, "random").mockReturnValue(0);
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
   });
 
   afterAll(async () => {
