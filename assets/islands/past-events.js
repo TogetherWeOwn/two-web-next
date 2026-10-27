@@ -55,6 +55,9 @@
       controller.abort();
     } catch {}
     active = null;
+    // Release this read's focus tracking now: an abort-ignoring fetch or body
+    // would otherwise keep the listener until its promise settles.
+    controller.release();
     root.removeAttribute("aria-busy");
     feedback.textContent = root.dataset.loadError;
     // Same reconciliation as an ordinary failure: a click that never pushed its
@@ -120,7 +123,11 @@
   }
 
   async function load(url, push) {
-    if (active) active.abort();
+    if (active) {
+      // Supersession: abort the old read and drop its focus tracking at once.
+      active.abort();
+      active.release();
+    }
     clearDeadline();
     var controller = new AbortController();
     // Back/forward reads must not be skipped by the fragment-only popstate rule.
@@ -137,6 +144,14 @@
       if (event && event.target !== focusAtStart) focusMoved = true;
     };
     document.addEventListener("focusin", trackFocus);
+    // One idempotent, per-read cleanup: success, failure, timeout and
+    // supersession all call it, and it only ever removes this read's listener.
+    var released = false;
+    controller.release = function () {
+      if (released) return;
+      released = true;
+      document.removeEventListener("focusin", trackFocus);
+    };
     root.setAttribute("aria-busy", "true");
     feedback.textContent = "Loading past events…";
     // The owned deadline covers the whole read: headers plus body. On expiry
@@ -239,7 +254,7 @@
       if (!push || pageAddress(new URL(window.location.href)) !== renderedAddress)
         window.location.assign(window.location.href);
     } finally {
-      document.removeEventListener("focusin", trackFocus);
+      controller.release();
       // Settlement owns the deadline only while still current: an expired or
       // superseded read has already released both, and a newer read owns them.
       if (active === controller) {
