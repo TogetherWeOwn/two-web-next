@@ -11,6 +11,8 @@ export const PAST_EVENTS_PRINT_SCOPE_TESTID = "past-events-print-scope";
  * One line naming the committed scope of the printed page: the surface, the
  * committed search text and game, and the page position when the schedule has
  * pages. It describes only what is on this page; it never claims a total.
+ * `pastOnly` names the search case where no upcoming page exists but past
+ * matches render: the stamp must not read "nothing listed" over event cards.
  */
 export function printScopeCopy(
   surface: string,
@@ -18,8 +20,13 @@ export function printScopeCopy(
   game: string | null,
   page: number,
   totalPages: number,
+  pastOnly = false,
 ): string {
-  return `${surface}${q ? ` · search “${q}”` : ""}${game ? ` · game ${game}` : ""} · ${
-    totalPages > 0 ? `page ${page} of ${totalPages}` : "nothing listed"
-  }. Only the events on this page are listed.`;
+  const position =
+    totalPages > 0
+      ? `page ${page} of ${totalPages}`
+      : pastOnly
+        ? "past matches only"
+        : "nothing listed";
+  return `${surface}${q ? ` · search “${q}”` : ""}${game ? ` · game ${game}` : ""} · ${position}. Only the events on this page are listed.`;
 }

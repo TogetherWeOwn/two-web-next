@@ -50,6 +50,7 @@ import {
 import { MonthGrid } from "./pages-calendar-grid";
 import { CalendarList, PastDrawer } from "./pages-calendar-list";
 import { type CalRow, isTransient, rowZone } from "./pages-calendar-row";
+import { matchQuery } from "./search-query";
 
 /**
  * The events calendar island (legacy Livewire EventsCalendar): one rowset
@@ -278,12 +279,21 @@ export const EventsCalendarPage: FC<{
               keep it current; the schedule sheet reveals it in print. */}
           {state.view === "list" ? (
             <p data-testid={EVENTS_PRINT_SCOPE_TESTID} hidden>
+              {/* matchQuery, not trim: the stamp must name exactly what the
+                  search matched, so a q that filters nothing (whitespace-only,
+                  NUL-only) prints no phantom search. pastOnly names the search
+                  case where past matches render without any upcoming page. */}
               {printScopeCopy(
                 "Upcoming events",
-                state.q.trim(),
+                matchQuery(state.q) ?? "",
                 gameFilter,
                 state.page,
                 totalPages,
+                totalPages === 0 &&
+                  upcoming.length === 0 &&
+                  emptyState === null &&
+                  showPast &&
+                  past.length > 0,
               )}
             </p>
           ) : null}
