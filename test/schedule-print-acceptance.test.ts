@@ -598,6 +598,12 @@ describe("schedule print stylesheet", () => {
       "[data-testid=signin]",
       "[data-testid=event-discord-rsvp]",
       "footer",
+      // Late read/search turns: read-failure retry and clear, the empty
+      // search clear, and the archive link inside the search status line.
+      "[data-testid=events-read-retry]",
+      "[data-testid=events-read-clear]",
+      "[data-testid=events-search-clear-empty]",
+      "a[href=/events/past]",
     ]) {
       expect(printHidden(rules, hook), `expected print to hide ${hook}`).toBe(true);
     }
@@ -861,6 +867,37 @@ describe("list print scope stamp", () => {
     expect(html).not.toContain(hostile);
     const stamp = stampText(html, LIST_PRINT_SCOPE_TESTID);
     expect(stamp).not.toBeNull();
+  });
+
+  it("[SP-22] blank or NUL-only search text stamps the unfiltered scope", async () => {
+    const unfiltered = "Upcoming events · page 1 of 1. Only the events on this page are listed.";
+    for (const path of ["/events?q=%00", "/events?q=%20%20", "/events"]) {
+      const src = printScheduleFixture({ upcoming: [eventRow({ title: "Normalized night" })] });
+      const res = await src.request(path);
+      expect(res.status, path).toBe(200);
+      const stamp = stampText(await res.text(), LIST_PRINT_SCOPE_TESTID);
+      expect(stamp, path).not.toBeNull();
+      expect(stamp!.toLowerCase(), path).not.toContain("search");
+      expect(stamp!, path).toBe(unfiltered);
+    }
+  });
+
+  it("[SP-23] a search matching only past events stamps past matches, not an empty list", async () => {
+    const src = printScheduleFixture({
+      upcoming: [],
+      past: [pastRow({ title: "Chess archive night", game: "Chess" })],
+    });
+    const res = await src.request("/events?q=chess");
+    expect(res.status).toBe(200);
+    const html = await res.text();
+    expect(cardCount(html)).toBeGreaterThanOrEqual(1);
+    const stamp = stampText(html, LIST_PRINT_SCOPE_TESTID);
+    expect(stamp).not.toBeNull();
+    expect(stamp!).toContain("past matches only");
+    expect(stamp!).not.toContain("nothing listed");
+    expect(stamp!).toBe(
+      "Upcoming events · search “chess” · past matches only. Only the events on this page are listed.",
+    );
   });
 });
 
