@@ -50,6 +50,18 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 const relative = (u: URL) => u.pathname + u.search + u.hash;
+// Body text as rendered, so search highlighting (<mark>) cannot split a title.
+function visibleText(html: string): string {
+  type Node = { nodeName: string; value?: string; childNodes?: Node[] };
+  const hidden = new Set(["head", "script", "style", "template"]);
+  const walk = (node: Node): string =>
+    node.nodeName === "#text"
+      ? (node.value ?? "")
+      : hidden.has(node.nodeName)
+        ? ""
+        : (node.childNodes ?? []).map(walk).join("");
+  return walk(parse(html) as unknown as Node);
+}
 async function detail(
   twin: ArchiveTwin,
   url: URL,
@@ -366,7 +378,7 @@ describe.each(SCHEDULE_TWINS)("%s upcoming schedule return", (twin) => {
 
   it("CONTROL: cancelled titles and Discord transients never acquire a detail link", async () => {
     const html = await (await calendar.render(twin, "/events?q=Cancelled")).text();
-    expect(html).toContain("Cancelled chess night");
+    expect(visibleText(html)).toContain("Cancelled chess night");
     expect(linksIn(html).some((l) => l.url.pathname === `/e/${scheduleRow(33).eventKey}`)).toBe(
       false,
     );

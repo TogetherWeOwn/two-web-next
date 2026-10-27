@@ -53,7 +53,18 @@ describe("upcoming schedule literal match explanations", () => {
     const heading = tag(card, "h3")[0]!;
     const link = tag(heading, "a")[0]!;
     expect(text(link)).toBe(title);
-    expect(attribute(link, "href")).toBe("/e/01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    // Native detail path, plus the bounded schedule origin for this live row.
+    const href = attribute(link, "href")!;
+    expect(href.startsWith("/")).toBe(true);
+    const detail = new URL(href, "https://example.com");
+    expect(detail.origin).toBe("https://example.com");
+    expect(detail.pathname).toBe("/e/01ARZ3NDEKTSV4RRFFQ69G5FAV");
+    expect(detail.hash).toBe("");
+    expect([...detail.searchParams].sort()).toEqual([
+      ["scheduleGame", "Tabletop"],
+      ["schedulePage", "1"],
+      ["scheduleQuery", "needle"],
+    ]);
     expect(tag(heading, "mark").map(text)).toEqual(["NEEDLE", "needle"]);
     expect(tag(passage(card), "mark")).toHaveLength(0);
     expect(tag(card, "details")).toHaveLength(0);

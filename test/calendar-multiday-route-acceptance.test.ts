@@ -23,6 +23,16 @@ const url = raw ? testDatabaseUrl(raw).href : undefined;
 const origin = "https://calendar.example.test";
 const discord = { upcoming: async () => [], lastReadFailed: () => false };
 
+// The live persisted card's native detail link, parsed so the bounded schedule
+// origin is pinned exactly rather than matched as a bare legacy href.
+function detailLinks(html: string, eventKey: string): URL[] {
+  return [...html.matchAll(/<a\b[^>]*\bhref="([^"]*)"/g)]
+    .map((match) => match[1]!.replaceAll("&amp;", "&"))
+    .filter((href) => href.startsWith("/"))
+    .map((href) => new URL(href, origin))
+    .filter((url) => url.pathname === `/e/${eventKey}`);
+}
+
 describe.skipIf(!url)("multi-day route-to-card acceptance (disposable DB)", () => {
   let fixture: MemberDataFixture;
   const app = new Hono<{ Bindings: Env }>();
@@ -92,7 +102,16 @@ describe.skipIf(!url)("multi-day route-to-card acceptance (disposable DB)", () =
           const list = await request(twin, link.href, island);
           expect([...list.matchAll(/data-testid="event-card"/g)]).toHaveLength(1);
           expect([...list.matchAll(new RegExp(`id="event-${gatheringKey}"`, "g"))]).toHaveLength(1);
-          expect(list).toContain(`href="/e/${gatheringKey}"`);
+          const details = detailLinks(list, gatheringKey);
+          expect(details).toHaveLength(1);
+          expect(details[0]!.origin).toBe(origin);
+          expect(details[0]!.hash).toBe("");
+          // The grid jump's calendar origin survives to the list card's detail link.
+          expect([...details[0]!.searchParams].sort()).toEqual([
+            ["scheduleMonth", "2027-02"],
+            ["schedulePage", "1"],
+            ["scheduleView", "calendar"],
+          ]);
         }
       });
 

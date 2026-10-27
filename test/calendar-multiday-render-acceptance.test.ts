@@ -16,6 +16,30 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+const appUrl = "https://calendar.example.test";
+
+// Live persisted entries carry bounded schedule origin scalars; parse the URL so
+// a lost or wrong origin fails without relaxing the native path/anchor target.
+function expectEntryUrl(
+  href: string,
+  path: string,
+  hash: string,
+  params: [string, string][],
+): void {
+  const url = new URL(href, appUrl);
+  expect(href.startsWith("/")).toBe(true);
+  expect(url.origin).toBe(appUrl);
+  expect(url.pathname).toBe(path);
+  expect(url.hash).toBe(hash);
+  expect([...url.searchParams].sort()).toEqual([...params].sort());
+}
+
+function detailHrefs(html: string, eventKey: string): string[] {
+  return [...html.matchAll(/<a\b[^>]*\bhref="([^"]*)"/g)]
+    .map((match) => match[1]!.replaceAll("&amp;", "&"))
+    .filter((href) => new URL(href, appUrl).pathname === `/e/${eventKey}`);
+}
+
 for (const twin of ["Hono", "Kit"] as const) {
   describe(`${twin}: canonical interval day membership`, () => {
     it.each(intervalCases)("plots $name on the hand-derived host days only", async (fixture) => {
@@ -30,9 +54,13 @@ for (const twin of ["Hono", "Kit"] as const) {
       const links = calendarLinks(html);
       expect(links.map((link) => link.day)).toEqual(fixture.days);
       expect(new Set(links.map((link) => link.day)).size).toBe(links.length);
-      expect(
-        links.every((link) => link.href === `/events?event=${gatheringKey}#event-${gatheringKey}`),
-      ).toBe(true);
+      for (const link of links)
+        expectEntryUrl(link.href, "/events", `#event-${gatheringKey}`, [
+          ["event", gatheringKey],
+          ["schedulePage", "1"],
+          ["scheduleView", "calendar"],
+          ["scheduleMonth", fixture.month],
+        ]);
     });
 
     it("labels a continuation rather than announcing the original start again", async () => {
@@ -78,7 +106,9 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(calendarLinks(grid)).toHaveLength(2);
       expect([...list.matchAll(/data-testid="event-card"/g)]).toHaveLength(1);
       expect([...list.matchAll(new RegExp(`id="event-${gatheringKey}"`, "g"))]).toHaveLength(1);
-      expect(list).toContain(`href="/e/${gatheringKey}"`);
+      const details = detailHrefs(list, gatheringKey);
+      expect(details).toHaveLength(1);
+      expectEntryUrl(details[0]!, `/e/${gatheringKey}`, "", [["schedulePage", "1"]]);
       for (const html of [grid, list]) {
         const ids = [...html.matchAll(/\sid="([^"]+)"/g)].map((match) => match[1]);
         expect(new Set(ids).size).toBe(ids.length);
