@@ -39,6 +39,10 @@ independently by the Test Author and incorporated byte-for-byte
 (`ci/check-kit-perf.test.mjs` sha256 `02dfb4ab54ce5d04c97bc271dc1dba62d95afb3ef52ba4a6fe8e618990bb409c`,
 `ci/budget-fragments.test.mjs` sha256 `c2386e547fa6c9c6f19b482f789e1737ce79451cf5c6eb773541d48ee84981bf`).
 
+Merging main `ba58281d2` added only main's own 335616 server-gzip tier to the
+ladder in `ci/check-kit-perf.test.mjs` (all delivered tiers kept; the file's
+sha256 is now `ab552c3c1016fc982997f669891e4513e962f051657053a5b7c03da50781c578`).
+
 ACT: allocate these three measured steps through independent review.
 WHY: the exact feature composition exhausts them on current main; the earlier
 shared-component experiment did not recover the capacity.
@@ -46,6 +50,33 @@ UNDO: reviewed revert of these three fragment values and the matching
 acceptance delta, retaining every earlier decision; coordinate with the
 dependent feature. This is not feature, staging, deployment or release
 approval; the feature must reverify its actual integrated head.
+
+## Re-measurement on main `ba58281d211479b934ff268f54f296d2d29adfaa`
+
+Main moved three Kit-relevant commits (#1850 admin bearer rotation, #1806,
+#1838) and merged-in budget history. The decision above stands unchanged;
+the numbers were re-taken on this base. Main `ba58281d2` and feature
+`7d390f4b8c54e30b0da703c2085530d1876c78f4` merge cleanly to tree
+`a3275f95c09d16b766628a6dafe971c330dc31dd` (main alone: tree
+`b567726b3a2a174e57c54bc9ee635449921f5efb`). Node 24.22.1, npm 11.19.1,
+identical locked dependencies, two builds per tree through the canonical
+`node ci/check-kit-perf.mjs --format json`:
+
+| Measurement | Main build 1 / 2 | Combined build 1 / 2 |
+| --- | ---: | ---: |
+| Server JS raw | 1185439 / 1185441 | 1189083 / 1189083 |
+| Server JS gzip | 335351 / 335353 | 336203 / 336204 |
+| Client JS raw | 254926 / 254926 | 256675 / 256675 |
+| Client JS gzip | 102621 / 102621 | 103386 / 103386 |
+| Server / client JS files | 116 / 54 both | 116 / 55 both |
+
+Main fits its own ceilings (server margin 7 B); the combined output breaches
+main's server gzip 335360 (+844 B), client raw 256000 (+675 B) and client gzip
+103168 (+218 B), so all three allocations are still required. The proposed
+ceilings pass the combined output with margins 180 B (server gzip), 349 B
+(client raw) and 38 B (client gzip); each single step lower (336128, 256512,
+103168) rejects it. The fixed test intervals (336190 server) from the earlier
+base stay inside the (336128, 336384] interval and are not changed.
 
 ## Superseded decision (client gzip only, main 0f8fdd17f)
 
