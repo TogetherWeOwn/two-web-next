@@ -80,13 +80,16 @@ acceptance contract, not recoverable in-feature.
 
 ## Shipping tests
 
-No test, checker, source, workflow, mask or exclusion changes ship here.
+No checker, source, workflow, mask or exclusion changes ship here.
 `ci/check-kit-perf.test.mjs` already carries 103424 in its
 `SHIPPING_CLIENT_GZIP_ALLOCATIONS` (interval 103302, exact 103424, one
-byte over 103425), and `ci/budget-fragments.test.mjs` pins no
-client-gzip allocation list, so the fragment raise needs no oracle edit.
-The budget suites (`check-kit-perf`, `budget-fragments`,
-`bundle-inventory-acceptance`) run unchanged against the new fragment.
+byte over 103425). The aggregate `SHIPPING_KIT_BUDGET` in
+`ci/budget-fragments.test.mjs` mirrors the shipped fragments, so its
+`client.js.maxGzipBytes` literal moves 103168 -> 103424 in this same PR
+(one line, authored independently of the budget change; with that line
+reverted the suite fails 1 of 33). The budget suites (`check-kit-perf`,
+`budget-fragments`, `bundle-inventory-acceptance`) run against the new
+fragment: 124 tests, 124 pass, 0 fail on Node 24.22.1.
 
 Sibling open PRs also target client gzip (event-detail second step at
 257536/103424, featured editorial-limits and profile-review at
