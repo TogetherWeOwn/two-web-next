@@ -1,10 +1,12 @@
-// Orthographic joiners stay accepted: a ZWJ/ZWNJ immediately after a
-// nonspacing mark is an Indic-style conjunct control (Sinhala RAKAARAANSAYA
-// U+0DCA U+200D U+0DBB, Unicode 17.0 section 13.2.1 Table 13-3), not a
-// standalone invisible. The shared containsControlCharacters rule exempts
-// that context in every writer; profiles must save such text verbatim while
-// a lone joiner between letters, bidi controls and the other targeted
-// invisibles still refuse.
+// Orthographic joiners stay accepted under RFC 5892 Appendix A.1/A.2: a
+// ZWJ/ZWNJ immediately after a virama (ccc=9, Mn or Mc -- Sinhala
+// RAKAARAANSAYA U+0DCA U+200D U+0DBB, Unicode 17.0 section 13.2.1 Table 13-3,
+// plus Mc viramas like Balinese U+1B44, Javanese U+A9C0, Grantha U+1134D)
+// and a ZWNJ between Arabic joining letters (Persian orthography). The
+// shared containsControlCharacters rule exempts those contexts in every
+// writer; profiles must save such text verbatim while a lone joiner between
+// letters, a non-virama Mn-adjacent joiner, a Mn-adjacent ZWSP, bidi
+// controls and the other targeted invisibles still refuse.
 //
 // Special characters as explicit code points (never literal bytes: joiners
 // and bidi controls are invisible in diffs).
@@ -30,18 +32,48 @@ const DOUBLED_JOINER = F(0x0dca, 0x200d, 0x200d);
 const BIDI_OVERRIDE = F(0x202e);
 const ZWSP = F(0x200b);
 const BOM = F(0xfeff);
+// Non-virama Mn plus joiner/ZWSP must still refuse: e + combining acute is
+// an Mn but not a virama (ccc=9), so the contextual exemption must not fire.
+const NON_VIRAMA_MN_ZWNJ = F(0x65, 0x0301, 0x200c, 0x78);
+const MN_ZWSP = F(0x65, 0x0301, 0x200b);
+// A virama followed by ZWSP must still refuse: the exemption covers only
+// ZWJ/ZWNJ, so widening it to U+200B must turn the suite red.
+const VIRAMA_ZWSP = F(0x0dca, 0x200b);
+// Two accepted clusters in one value: pins every occurrence, not just the first.
+const MULTI_SINHALA = `${SINHALA} ${SINHALA}`;
+// RFC 5892 A.2 Persian ZWNJ: Farsi yeh/beh are Lo joining letters, not Mn.
+const PERSIAN_WANT = F(0x0645, 0x06cc, 0x200c, 0x062e, 0x0648, 0x0627, 0x0647, 0x0645);
+const PERSIAN_BOOKS = F(0x06a9, 0x062a, 0x0627, 0x200c, 0x0647, 0x0627);
+// Mc viramas (ccc=9, General_Category Mc): Balinese, Javanese, Grantha.
+const BALINESE_ZWNJ = F(0x1b13, 0x1b44, 0x200c);
+const JAVANESE_ZWJ = F(0xa98f, 0xa9c0, 0x200d);
+const GRANTHA_ZWJ = F(0x11315, 0x1134d, 0x200d);
 
 const valid = { bio: "Hello", games: ["Halo"], timezone: "Europe/London" };
 
 describe("the shared oracle exempts orthographic joiners only", () => {
   it("accepts virama-led ZWJ/ZWNJ clusters and still refuses lone joiners and bidi controls", () => {
-    for (const value of [SINHALA, `a${SINHALA}b`, DEVANAGARI_ZWJ, VIRAMA_ZWNJ]) {
+    for (const value of [
+      SINHALA,
+      `a${SINHALA}b`,
+      DEVANAGARI_ZWJ,
+      VIRAMA_ZWNJ,
+      MULTI_SINHALA,
+      PERSIAN_WANT,
+      PERSIAN_BOOKS,
+      BALINESE_ZWNJ,
+      JAVANESE_ZWJ,
+      GRANTHA_ZWJ,
+    ]) {
       expect(containsControlCharacters(value)).toBe(false);
     }
     for (const value of [
       LONE_ZWJ,
       LONE_ZWNJ,
       DOUBLED_JOINER,
+      NON_VIRAMA_MN_ZWNJ,
+      MN_ZWSP,
+      VIRAMA_ZWSP,
       `a${BIDI_OVERRIDE}b`,
       `a${ZWSP}b`,
       `${BOM}Halo`,
@@ -72,6 +104,16 @@ describe("validateProfile saves orthographic joiners verbatim", () => {
     expect(result.ok).toBe(false);
     if (result.ok) return;
     expect(result.errors.bio).toMatch(/invisible|directional/i);
+  });
+
+  it("accepts multi-cluster and Persian/Mc-virama text while refusing Mn-adjacent ZWSP", () => {
+    expect(validateProfile({ ...valid, bio: MULTI_SINHALA }).ok).toBe(true);
+    expect(validateProfile({ ...valid, games: [PERSIAN_WANT, PERSIAN_BOOKS] }).ok).toBe(true);
+    expect(validateProfile({ ...valid, games: [BALINESE_ZWNJ] }).ok).toBe(true);
+    const refused = validateProfile({ ...valid, bio: `ok ${MN_ZWSP}` });
+    expect(refused.ok).toBe(false);
+    if (refused.ok) return;
+    expect(refused.errors.bio).toMatch(/invisible|directional/i);
   });
 });
 
