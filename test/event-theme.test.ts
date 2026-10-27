@@ -207,6 +207,9 @@ describe("event detail theme", () => {
     // 6430: the chosen-timezone input rule (+216 bytes over 6125) themes the
     // native input with semantic tokens instead of shipping a white box on the
     // dark event theme; still no @import/url and far under the 7168 ceiling.
-    expect(css.length).toBeLessThan(6430);
+    // 6650: two hidden-row rules (+192 bytes over 6414) keep each deferred
+    // island row's laid-out size while hidden, so revealing it never shifts
+    // content (CLS); the 7168 ceiling is unchanged.
+    expect(css.length).toBeLessThan(6650);
   });
 });
