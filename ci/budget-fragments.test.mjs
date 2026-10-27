@@ -117,13 +117,14 @@ function kitFixture(t, fragments) {
 }
 
 // Admitted server.js maxGzipBytes allocations. The SHIPPING_KIT_BUDGET pin
-// above (335104) is the historical baseline; 335360 is the second,
-// independently measured saved-review allocation (combined worst 335164,
-// margin 196; lower 335104 rejects by 60); 335616 is the third,
-// independently measured adjacent-period allocation (combined worst 335465,
-// margin 151; lower 335360 rejects by 105; neighbor mutants 335615/335617
-// stay unsupported). Every other pin stays exact: the oracle rejects any
-// ceiling outside this list, then deep-compares the rest of the plan.
+// above (335360) is the landed baseline; 335104 is the historical allocation.
+// The saved-review 335360 allocation has a combined worst of 335164
+// (margin 196; lower 335104 rejects by 60). The adjacent-period 335616
+// allocation has a combined worst of 335465 (margin 151; lower 335360 rejects
+// by 105); its shared checker witness retains the larger featured-inventory
+// worst 335504 (margin 112; lower 335360 rejects by 144). Neighbor mutants
+// 335615/335617 stay unsupported. Every other pin stays exact: the oracle
+// rejects any ceiling outside this list, then deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335616];
 
 function assertShippingKitBudget(actual) {
