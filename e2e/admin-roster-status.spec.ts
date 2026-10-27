@@ -141,9 +141,21 @@ for (const renderer of ["Hono", "Kit"] as const) {
         const firstUrl = page.url();
         // Click, not locator.press("Enter"): press's programmatic focus plus
         // injected Enter once issued no navigation in CI (waitForURL hung to
-        // the 30 s test timeout). Keyboard access to this roster stays
-        // covered by RAF-B01's real Tab journey above.
-        await Promise.all([page.waitForURL((url) => url.href !== firstUrl), first.click()]);
+        // the 30 s test timeout). RAF-B01 covers keyboard access to the facet
+        // select and submit button only, not these recovery links; the
+        // useKeyboard cell keeps focus() + keyboard Enter per link so keyboard
+        // activation of both recovery links stays covered.
+        const useKeyboard = renderer === "Hono" && javaScriptEnabled;
+        if (useKeyboard) {
+          await first.focus();
+          await expect(first).toBeFocused();
+          await Promise.all([
+            page.waitForURL((url) => url.href !== firstUrl),
+            page.keyboard.press("Enter"),
+          ]);
+        } else {
+          await Promise.all([page.waitForURL((url) => url.href !== firstUrl), first.click()]);
+        }
         await expect(page.getByTestId("roster-range")).toContainText(/1\s*[-–]\s*100 of 105/);
         expect(new URL(page.url()).hash).toBe("#rsvp-roster");
         expect(new URL(page.url()).searchParams.get("roster_status")).toBe("waitlisted");
@@ -151,9 +163,21 @@ for (const renderer of ["Hono", "Kit"] as const) {
         await page.getByTestId("rsvp-roster").getByRole("searchbox").fill("Nobody <&>");
         await page.getByTestId("rsvp-roster").locator('button[type="submit"]').click();
         await expect(page.getByTestId("roster-range")).toContainText(/0\s*[-–]\s*0 of 0/);
+        await expect(
+          page.getByRole("link", { name: "First page of these responses", exact: true }),
+        ).toHaveCount(0);
         const clear = page.getByRole("link", { name: "Clear roster filters", exact: true });
         const filteredUrl = page.url();
-        await Promise.all([page.waitForURL((url) => url.href !== filteredUrl), clear.click()]);
+        if (useKeyboard) {
+          await clear.focus();
+          await expect(clear).toBeFocused();
+          await Promise.all([
+            page.waitForURL((url) => url.href !== filteredUrl),
+            page.keyboard.press("Enter"),
+          ]);
+        } else {
+          await Promise.all([page.waitForURL((url) => url.href !== filteredUrl), clear.click()]);
+        }
         await expect(page.getByTestId("roster-range")).toContainText(/of 420/);
         const url = new URL(page.url());
         expect(url.hash).toBe("#rsvp-roster");
