@@ -25,7 +25,7 @@ on:
   # Nightly full proof: schedule events run unconditionally (the scope step
   # only fast-passes pull requests), catching client/server image drift.
   schedule:
-    - cron: '37 2 * * *'
+    - cron: "37 2 * * *"
   workflow_dispatch:
 
 permissions:

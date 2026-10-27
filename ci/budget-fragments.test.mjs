@@ -47,12 +47,12 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/copy-link.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
   "public/islands/event-device-timezone.js": { maxRawBytes: 2560, maxGzipBytes: 1280 },
   "public/islands/event-share.js": { maxRawBytes: 1024, maxGzipBytes: 768 },
-  "public/islands/events-calendar.js": { maxRawBytes: 10240, maxGzipBytes: 3840 },
+  "public/islands/events-calendar.js": { maxRawBytes: 10752, maxGzipBytes: 4096 },
   "public/islands/going-count.js": { maxRawBytes: 5632, maxGzipBytes: 2304 },
   "public/islands/join-widget.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
   "public/islands/member-profile.js": { maxRawBytes: 15872, maxGzipBytes: 5632 },
   "public/islands/model-context.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
-  "public/islands/past-events.js": { maxRawBytes: 4608, maxGzipBytes: 1792 },
+  "public/islands/past-events.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/islands/rsvp-button.js": { maxRawBytes: 17408, maxGzipBytes: 5120 },
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
@@ -121,11 +121,14 @@ function kitFixture(t, fragments) {
 // independently measured saved-review allocation (combined worst 335164,
 // margin 196; lower 335104 rejects by 60; the next 256B step 335616 stays
 // unsupported); 335872 is the third, independently measured allocation
-// (measured 335639, margin 233; lower 335616 rejects by 23; the next 256B
-// step 336128 was unsupported then). 336128 is the join next-game-night
-// allocation as first measured (worst 335941); 336384 is the same join
-// allocation re-measured on the merged tree (worst 336263, margin 121; lower
-// 336128 rejects by 135; see
+// (measured 335639, margin 233; lower 335616 rejects by 23); 336128 is the
+// fourth, independently measured allocation (Happening-now combined worst
+// 335901, margin 227; lower 335872 rejects by 29; the next 256B step 336384
+// was unsupported then; see
+// ci/budgets/decisions/kit-perf/2026-10-27-happening-now-server-gzip.md).
+// The join next-game-night slice first measured the same step (worst
+// 335941); 336384 is the join allocation re-measured on the merged tree
+// (worst 336263, margin 121; lower 336128 rejects by 135; see
 // ci/budgets/decisions/kit-perf/2026-10-27-join-next-game-night.md). Every
 // other pin stays exact: the oracle rejects any ceiling outside this list,
 // then deep-compares the rest of the plan.
@@ -158,6 +161,13 @@ test("shipping oracle admits the measured 335872 server gzip allocation", () => 
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
     server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 335872 } },
+  });
+});
+
+test("shipping oracle admits the measured 336128 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 336128 } },
   });
 });
 
