@@ -9,11 +9,11 @@ not x1.25 bloat.
 ## public/schedule-theme.css: 6144/1792 -> 8704/2304
 
 - Measured on the feature branch composed with main cd50096f3,
-  `npm run budget`: 8624 raw / 2083 gzip bytes (6142 raw before the slice).
-- Old ceilings 6144 raw / 1792 gzip. Measured bytes exceed raw by 2480B
+  `npm run budget`: 8637 raw / 2083 gzip bytes (6142 raw before the slice).
+- Old ceilings 6144 raw / 1792 gzip. Measured bytes exceed raw by 2493B
   and gzip by 291B.
 - New ceilings 8704 raw / 2304 gzip: raw is five 512B steps over the old
-  ceiling (80B margin); gzip is two 256B steps over it (221B margin). Far
+  ceiling (67B margin); gzip is two 256B steps over it (221B margin). Far
   below x1.25 (10763/2600).
 - Why: the print block hides search, navigation, subscription and sign-in
   controls, turns the dark card chrome into high-contrast rows with kept-
