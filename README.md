@@ -143,9 +143,15 @@ For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-Always supply the test URL for full-suite runs. Live suites skip when
-`DATABASE_URL` is unset; `test/review-p1-verify.test.ts` gates its live-DB
-proofs behind the same skip and keeps its P1-3 refusal proofs offline.
+Always supply the test URL for full-suite SQL coverage. The DB-free lane
+(`env -u DATABASE_URL npm run check`) runs fixture-only checks; existing live
+suites skip when `DATABASE_URL` is unset. `test/review-p1-verify.test.ts` keeps
+its P1-3 refusal proofs offline. Featured-unpublish SQL proofs run under the
+pre-existing integration gate in `test/admin.test.ts`; the six registration
+and rendering proofs in `test/admin-featured-unpublish-acceptance.test.ts`
+and `test/admin-featured-unpublish-invariants.test.ts` remain ungated. This
+preserves the DB-free lane without adding a conditional skip. It does not
+replace disposable-DB verification or browser evidence.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
@@ -584,6 +590,9 @@ network-free (it checks resolved config) and the smoke requires a valid
 root dot, and rejects redirects. Both URLs must be HTTP(S), without credentials,
 query strings or fragments. A distinct hostname alone does not prove staging
 isolation: the runtime/receiver/custody holds still apply.
+The smoke and drill examples below are **preview-only**: they perform no bot
+actions. Real execution requires `--apply` and the prerequisites in the
+[bot probe staging procedure](docs/bot-probe-staging.md).
 
 ```sh
 npm run check:worker-moderators                   # source deployment preflight
