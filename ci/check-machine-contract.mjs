@@ -331,8 +331,13 @@ const RESULT_SUBJECT =
 // Count nouns need a direct declaration, not unrelated availability/venue prose.
 // Only bound qualifiers/abbreviations may precede the numeric count, never
 // unrelated suffix text. Direct limit nouns and explicit no-limit claims count too.
-const COUNT_BOUNDARY =
-  /\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+(?:caps?|limits?|bounds?|ceilings?)\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*(?:caps?|limits?|bounds?|ceilings?)\b)(?:\s+(?:at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|up|most|least|e\.g\.|i\.e\.))*\s+\d+\b)/i;
+const COUNT_NUMBER = String.raw`(?:[<>≤≥]=?|=)?\s*[+\-−]?\d+(?:[.,]\d+)*\b`;
+// Wrappers must enclose the numeric token, not a phrase such as "8-bit entries".
+const COUNT_VALUE = String.raw`(?:${COUNT_NUMBER}|(?:[\[({"'“‘]\s*)+${COUNT_NUMBER}(?:\s*[\])}"'”’])+)`;
+const COUNT_BOUNDARY = new RegExp(
+  String.raw`\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+(?:caps?|limits?|bounds?|ceilings?)\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*(?:caps?|limits?|bounds?|ceilings?)\b)(?:\s+(?:at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|up|most|least|e\.g\.|i\.e\.))*\s*(?:[:,]\s*)*${COUNT_VALUE})`,
+  "i",
+);
 const SIZE_PREDICATE =
   /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
 // Abbreviations carry periods that are not sentence ends; rejoin fragments
@@ -348,7 +353,7 @@ for (const fragment of rawFragments) {
 }
 for (const sentence of outsideSentences) {
   const flat = sentence.trim();
-  // Formatting must not hide a count noun, bound predicate or numeric value.
+  // Markdown must not hide a count noun, bound predicate or numeric value.
   const countText = flat.replace(/[`*_~]/g, "");
   if (
     flat &&
