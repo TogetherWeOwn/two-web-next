@@ -150,13 +150,29 @@ export async function main(
 ) {
   const extraArgs = argv.filter((a) => a !== "--selftest");
   // This fixture gate uses the checked-in collection plan, not a custom crawl.
+  // LHCI reads both flat and nested environment aliases; reject the full prefix
+  // rather than maintain a partial list that silently drifts with its parser.
   // Never launch a different plan and judge it against these fixed quotas.
-  if (extraArgs.some((arg) => /^--(?:no-?)?(?:collect|config|lighthouserc)(?:[.=]|$)/i.test(arg))) {
+  if (
+    extraArgs.some((arg) => /^--(?:no-?)?(?:collect|config|lighthouserc)(?:[.=]|$)/i.test(arg)) ||
+    Object.keys(env).some((key) => key.startsWith("LHCI_"))
+  ) {
     log(
-      "Unsupported collection override: the fixture runner uses ci/lighthouserc.cjs. " +
-        "Run lhci autorun directly for a custom collection.",
+      "Unsupported collection override: the fixture runner uses ci/lighthouserc.cjs " +
+        "without LHCI_* environment overrides. Run lhci autorun directly for a custom collection.",
     );
     return 1;
+  }
+  // Native informational commands do not collect. Print once, preserve prior
+  // evidence and propagate their status without initializing retry accounting.
+  if (extraArgs.some((arg) => /^--(?:help|version)(?:=true)?$/.test(arg))) {
+    if (!extraArgs.every((arg) => /^--(?:help|version)(?:=true)?$/.test(arg))) {
+      log(
+        "Run --help or --version without other arguments; mixed informational flags are unsupported.",
+      );
+      return 1;
+    }
+    return (await run({ env, extraArgs })).exitCode;
   }
   const { collect, expected, mode } = expectedLhrs();
   mkdirSync(join(logFile, ".."), { recursive: true });
@@ -330,6 +346,9 @@ async function selftest() {
     Array.from({ length: fixture.collect.numberOfRuns }, () => url),
   );
 
+  const { inputSelftest, launcherSelftest } = await import("./lighthouse-perf-selftest.mjs");
+  await inputSelftest(main);
+
   // Green first attempt: no retry, no diagnosis, exit 0.
   {
     const { code, calls, caseDir } = await runCase([{ exitCode: 0, urls: fixtureUrls }]);
@@ -479,6 +498,20 @@ async function selftest() {
     assert.match(diagnosis, /attempt 2: exit 3, 6 LHRs/);
     assert.match(readFileSync(join(caseDir, "collect.log"), "utf8"), /stub attempt 1/);
   }
+  launcherSelftest(
+    fixtureUrls.map((url) => ({
+      ...lhr(url),
+      audits: Object.fromEntries(
+        [
+          "largest-contentful-paint",
+          "cumulative-layout-shift",
+          "server-response-time",
+          "total-blocking-time",
+          "first-contentful-paint",
+        ].map((audit) => [audit, { numericValue: 0 }]),
+      ),
+    })),
+  );
   console.log("lighthouse-perf-run selftest: ok");
 }
 
