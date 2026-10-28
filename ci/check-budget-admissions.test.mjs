@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  readdirSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -1021,4 +1029,48 @@ test("a PR cannot create artificial headroom pressure by tightening and raising 
   writeFileSync(decisionFile, readFileSync(decisionFile, "utf8").replace("100400", "99950"));
   const head = fx.commit("tighten and admit");
   await assert.rejects(fx.check("pull_request", prEvent(fx.base, head)), /tighten.*admission/);
+});
+
+test("top-level fragment metadata can change without altering the budget", async (t) => {
+  const fx = fixture(t);
+  const file = "ci/budgets/kit/client.json";
+  const data = JSON.parse(readFileSync(join(fx.root, file), "utf8"));
+  data.$comment = "Current admission instructions";
+  fx.put(file, JSON.stringify(data));
+  const head = fx.commit("correct metadata");
+  await assert.doesNotReject(fx.check("pull_request", prEvent(fx.base, head)));
+});
+
+test("metadata edits cannot conceal changes to ceilings or nested fields", async (t) => {
+  for (const change of [
+    (data) => {
+      data.client.js.maxGzipBytes++;
+    },
+    (data) => {
+      data.client.js.$comment = "nested";
+    },
+    (data) => {
+      data.client.js.maxFiles++;
+    },
+  ]) {
+    const fx = fixture(t);
+    const file = "ci/budgets/kit/client.json";
+    const data = JSON.parse(readFileSync(join(fx.root, file), "utf8"));
+    data.$comment = "Current admission instructions";
+    change(data);
+    fx.put(file, JSON.stringify(data));
+    const head = fx.commit("invalid metadata edit");
+    await assert.rejects(fx.check("pull_request", prEvent(fx.base, head)), /frozen/);
+  }
+});
+
+test("fragment comments point to additive admissions rather than archived decisions", () => {
+  for (const dir of ["kit", "bundle"]) {
+    const root = new URL(`./budgets/${dir}/`, import.meta.url);
+    for (const name of readdirSync(root).filter((file) => file.endsWith(".json"))) {
+      const data = JSON.parse(readFileSync(new URL(name, root), "utf8"));
+      assert.match(data.$comment, /decisions\/<unit>\//, name);
+      assert.doesNotMatch(data.$comment, /decisions\/(kit-perf|bundle)\//, name);
+    }
+  }
 });

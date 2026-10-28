@@ -71,7 +71,7 @@ closed. File counts and startup time are deliberately not admissible units.
 Unknown units, duplicate identities/keys, symlinks, malformed records, noninteger
 or nonpositive deltas, unsafe totals and unsupported provenance fail closed.
 
-Only decrease existing `maxRawBytes` or `maxGzipBytes` fields in a base; all other fields and historical decisions remain frozen. The policy gate checks each queued contribution, so a later PR cannot undo an earlier tightening. Current head bases are used conservatively for allowance calculations; a unit cannot be tightened and receive an admission in the same PR or queue batch. A PR/unit admission must have a recorded after measurement above the current effective ceiling. Measurements are review evidence, not automatically verified against build artifacts. Larger/unexplained growth and
+Only decrease existing `maxRawBytes` or `maxGzipBytes` fields in a base; all other operational fields and historical decisions remain frozen. Top-level `$` metadata in Kit and bundle fragments may be updated because the loaders ignore it. The policy gate checks each queued contribution, so a later PR cannot undo an earlier tightening. Current head bases are used conservatively for allowance calculations; a unit cannot be tightened and receive an admission in the same PR or queue batch. A PR/unit admission must have a recorded after measurement above the current effective ceiling. Measurements are review evidence, not automatically verified against build artifacts. Larger/unexplained growth and
 exhausted allowance need an explicit maintainer performance decision outside
 this delegated admission path.
 

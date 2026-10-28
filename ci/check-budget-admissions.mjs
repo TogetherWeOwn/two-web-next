@@ -153,15 +153,13 @@ function oldSquashTime(root, commit, pr, now) {
   return Number.isFinite(time) && time <= Date.parse(now) - 7 * 86400000 ? date : null;
 }
 
-// Permit only strict decreases of existing byte ceilings; all other data,
-// including file counts, metadata and object structure, remains immutable.
-function isTightening(before, after) {
-  let decreased = false;
-  function compare(a, b, key = "") {
+// Only top-level $ metadata is ignored by the fragment loaders. Permit its
+// edits and byte-ceiling decreases; all operational data remains frozen.
+function isSafeFragmentChange(before, after) {
+  function compare(a, b, key = "", depth = 0) {
     if (a === b) return true;
     if (key === "maxRawBytes" || key === "maxGzipBytes") {
       if (Number.isSafeInteger(a) && Number.isSafeInteger(b) && b > 0 && b < a) {
-        decreased = true;
         return true;
       }
       return false;
@@ -175,13 +173,14 @@ function isTightening(before, after) {
       Array.isArray(b)
     )
       return false;
-    const keys = Object.keys(a);
+    const keys = Object.keys(a).filter((k) => depth !== 0 || !k.startsWith("$"));
+    const otherKeys = Object.keys(b).filter((k) => depth !== 0 || !k.startsWith("$"));
     return (
-      keys.length === Object.keys(b).length &&
-      keys.every((k) => Object.hasOwn(b, k) && compare(a[k], b[k], k))
+      keys.length === otherKeys.length &&
+      keys.every((k) => Object.hasOwn(b, k) && compare(a[k], b[k], k, depth + 1))
     );
   }
-  return compare(before, after) && decreased;
+  return compare(before, after);
 }
 
 function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly) {
@@ -258,7 +257,7 @@ function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly
       continue;
     try {
       if (
-        isTightening(
+        isSafeFragmentChange(
           JSON.parse(git(root, "cat-file", "blob", blob)),
           JSON.parse(git(root, "cat-file", "blob", headFiles.get(file))),
         )
@@ -504,7 +503,7 @@ async function main() {
     "## Budget admission policy",
     "",
     `Validated ${result.proposed.length} new decisions and ${result.historical.length} historical decisions.`,
-    "History frozen and bases only tightened; aggregate per-PR 0.5% and trusted rolling 7-day 2% caps passed.",
+    "History frozen and operational bases only tightened; aggregate per-PR 0.5% and trusted rolling 7-day 2% caps passed.",
     result.authoritative
       ? "Authoritative combined-main/queue validation."
       : "Prequeue policy validation; merge-group measurement remains authoritative.",
