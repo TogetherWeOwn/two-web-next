@@ -2,9 +2,11 @@
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
+import { ONGOING_COPY } from "../../../src/events/ongoing";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
 import {
   EVENT_FULL_TESTID,
+  EVENT_ONGOING_TESTID,
   RSVP_BUTTON_ISLAND,
   RSVP_CHECK_TESTID,
   RSVP_CLOSED_TESTID,
@@ -176,6 +178,9 @@ const lineup = $derived(
     {/if}
     {#if model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
+    {/if}
+    {#if model.isOngoing}
+      <p class="notice" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</p>
     {/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
