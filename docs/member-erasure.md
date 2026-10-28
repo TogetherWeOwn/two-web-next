@@ -115,6 +115,26 @@ For ONE Discord id, in one transaction:
 | `web_sessions` | `user_id` (this signs the member out everywhere) |
 | `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
+| `overlay_configs` | `member_id` (Discord id; custom elements and theme) |
+| `overlay_tokens` | `member_id` (all statuses, bearer hashes and telemetry) |
+
+Overlay erasure takes the same per-member transaction advisory lock as token
+mint, rotate and member-wide revoke (`src/overlay-member-lock.ts`), before any
+row locks. Each mutation is a separate statement after acquiring that lock, so
+its READ COMMITTED snapshot sees a preceding writer's committed successor or
+first mint, even when there was no visible row to lock. The fence is held until
+commit, including across config and token deletion. Future overlay config
+writers must take the same lock before accessing a member's overlay rows.
+Different members do not share a lock (except harmless hash collisions).
+
+This serializes overlapping lifecycle operations; it is not a permanent ban on
+future writes. A subsequent authorized mint remains supported after revocation
+or erasure. Callers must enforce current membership/eligibility; this data-only
+slice ships no overlay routes. The PostgreSQL regressions in
+`test/overlay-schema-token-lifecycle-acceptance.test.ts` park real rotations and
+first mints before commit, then verify both revoke and erase wait and remove
+their results. They also check dry-run, repeat apply and preservation of another
+member's overlay data.
 
 The output counts carry one key per table: `web_sessions` counts live
 session rows and `web_session_grace` counts retired predecessor records, so a

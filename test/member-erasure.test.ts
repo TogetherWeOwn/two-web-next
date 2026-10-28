@@ -431,6 +431,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: (s as { n: number }).n,
       web_session_grace: (g as { n: number }).n,
       join_attempts: (j as { n: number }).n,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     };
   };
 
@@ -470,6 +472,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     });
     const preview = await eraseMember(
       fixture.client as unknown as Parameters<typeof eraseMember>[0],
@@ -494,6 +498,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
       passes: 1,
       deletesPerPass: [2],
     });
@@ -504,6 +510,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     });
     expect(await countsFor(MEMBER_B)).toEqual({
       users: 1,
@@ -512,6 +520,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     });
     // The event itself survives: erasure removes answers, never content.
     expect(
@@ -535,6 +545,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      overlay_configs: 0,
+      overlay_tokens: 0,
       passes: 1,
       deletesPerPass: [0],
     });
@@ -545,6 +557,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     });
   });
 });

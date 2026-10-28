@@ -61,6 +61,43 @@ function testAdminUrl() {
   return url;
 }
 
+async function dropOwnedRuntimeRole(admin, fixtureFailed = false) {
+  try {
+    await admin.unsafe("DROP ROLE two_web_app");
+  } catch (error) {
+    // A 2BP01 here means a concurrent suite on a shared cluster adopted the
+    // role and recorded grants in its own database; leave it like any adopted
+    // leftover instead of failing teardown.
+    if (error?.code === "2BP01") return;
+    if (!fixtureFailed) throw error;
+    // Keep the fixture's pending rejection as the primary failure. Report
+    // this teardown error without leaking driver text or hiding a clean-run
+    // failure: a failed role drop still rejects when the fixture succeeded.
+    console.error("Runtime-role cleanup failed after an earlier fixture failure.");
+  }
+}
+
+test("runtime-role cleanup preserves an earlier fixture failure but fails on its own", async (t) => {
+  const diagnostics = [];
+  t.mock.method(console, "error", (message) => diagnostics.push(message));
+  const cleanupError = new Error("fixture role-drop failure");
+  const admin = {
+    async unsafe() {
+      throw cleanupError;
+    },
+  };
+  await assert.rejects(dropOwnedRuntimeRole(admin), (error) => error === cleanupError);
+  await assert.doesNotReject(dropOwnedRuntimeRole(admin, true));
+  await assert.doesNotReject(
+    dropOwnedRuntimeRole({
+      async unsafe() {
+        throw Object.assign(new Error("adopted role"), { code: "2BP01" });
+      },
+    }),
+  );
+  assert.deepEqual(diagnostics, ["Runtime-role cleanup failed after an earlier fixture failure."]);
+});
+
 async function fixture(callback) {
   const url = testAdminUrl();
   const name = `web_migrate_test_${randomUUID().replaceAll("-", "")}`;
@@ -74,7 +111,25 @@ async function fixture(callback) {
   const admin = postgres(url.href, options);
   let client;
   let created = false;
+  // Migrations carry runtime GRANTs to two_web_app
+  // (ci/migration-runtime-rights.mjs), so every apply target provisions the
+  // role first: CI workflows create it on the service cluster, staging/prod
+  // carry it provisioned. The fixture mirrors that prerequisite for
+  // standalone runs: adopt a pre-existing role, else create and own it.
+  // Never drop a role this run did not create.
+  let ownedRuntimeRole = false;
+  let fixtureFailed = false;
   try {
+    const [runtimeRole] = await admin`select 1 from pg_roles where rolname = 'two_web_app'`;
+    if (!runtimeRole) {
+      try {
+        await admin.unsafe("CREATE ROLE two_web_app NOLOGIN");
+        ownedRuntimeRole = true;
+      } catch (error) {
+        // Lost a concurrent create on a shared cluster; adopt the winner.
+        if (error?.code !== "42710") throw error;
+      }
+    }
     await admin.unsafe(`create database "${name}"`);
     created = true;
     url.pathname = `/${name}`;
@@ -94,10 +149,17 @@ async function fixture(callback) {
         { testDatabase: true, report: (line) => output.push(line) },
       );
     await callback({ client, run, env, output });
+  } catch (error) {
+    fixtureFailed = true;
+    throw error;
   } finally {
     try {
       if (client) await client.end();
       if (created) await admin.unsafe(`drop database "${name}" with (force)`);
+      // After the database drop: the grants this apply recorded are gone
+      // with it. (The helper swallows 2BP01 for a concurrently adopted role;
+      // it lives outside this finally so no throw sits inside it.)
+      if (ownedRuntimeRole) await dropOwnedRuntimeRole(admin, fixtureFailed);
     } finally {
       await admin.end();
     }
@@ -496,12 +558,9 @@ test("another role's default ACL does not block this migration", async () => {
 
 test("runtime-role connection is refused while the reviewed sequence default passes", async () => {
   await fixture(async ({ client, run }) => {
-    const [existing] = await client`select 1 from pg_roles where rolname = 'two_web_app'`;
-    if (existing) {
-      console.log("SKIP: two_web_app already exists (another suite owns it); refusing to collide.");
-      return;
-    }
-    await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+    // The fixture provisions two_web_app (adopted or owned); this test only
+    // uses it and never drops it, so it runs on provisioned clusters instead
+    // of skipping. The fixture drops the role only when it created it.
     try {
       await client.unsafe(
         "ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE ON SEQUENCES TO two_web_app",
@@ -529,7 +588,6 @@ test("runtime-role connection is refused while the reviewed sequence default pas
           "ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE ALL ON SEQUENCES FROM two_web_app",
         )
         .catch(() => {});
-      await client.unsafe("DROP ROLE two_web_app");
     }
   });
 });

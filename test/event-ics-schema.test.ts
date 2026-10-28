@@ -36,7 +36,7 @@ it.each([false, true])(
     );
     try {
       mkdirSync(join(scratch, "src/db"), { recursive: true });
-      for (const file of ["schema.ts", "admin-schema.ts"])
+      for (const file of ["schema.ts", "admin-schema.ts", "overlay-schema.ts"])
         cpSync(join(root, "src/db", file), join(scratch, "src/db", file));
       cpSync(join(root, "drizzle"), join(scratch, "drizzle"), { recursive: true });
       cpSync(join(root, "drizzle.config.ts"), join(scratch, "drizzle.config.ts"));

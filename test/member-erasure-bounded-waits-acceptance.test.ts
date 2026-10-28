@@ -181,6 +181,8 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: (s as { n: number }).n,
       web_session_grace: (g as { n: number }).n,
       join_attempts: (j as { n: number }).n,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     };
   };
 
@@ -326,6 +328,8 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
         web_sessions: 2,
         web_session_grace: 0,
         join_attempts: 1,
+        overlay_configs: 0,
+        overlay_tokens: 0,
       },
       passes: 0,
       deletesPerPass: [],
@@ -337,6 +341,8 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     };
     expect(await countsFor(MEMBER_A)).toEqual(seeded);
 
@@ -356,6 +362,8 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     };
     expect(await countsFor(MEMBER_A)).toEqual(empty);
     expect(await countsFor(MEMBER_B)).toEqual(seeded);
@@ -393,6 +401,8 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     };
     expect(await countsFor(MEMBER_A)).toEqual(seeded);
     expect(await countsFor(MEMBER_B)).toEqual(seeded);
@@ -414,6 +424,8 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     };
     expect(await countsFor(MEMBER_A)).toEqual(seeded);
     expect(await countsFor(MEMBER_B)).toEqual(seeded);
@@ -439,6 +451,8 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     };
     expect(JSON.parse(result.stdout)).toEqual({
       ok: true,
@@ -454,6 +468,8 @@ describe.skipIf(!ambientUrl)("erase-member bounded waits: CLI against disposable
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     });
     expect(await countsFor(MEMBER_B)).toEqual(seeded);
   }, 60_000);

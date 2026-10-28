@@ -1533,11 +1533,19 @@ describe("retention ledger L8b core member tables", () => {
       "web_sessions",
       "web_session_grace",
       "join_attempts",
+      "overlay_configs",
+      "overlay_tokens",
     ]);
     const erasure = read("src/member-erasure.ts");
     expect(erasure).toContain("delete from users where id = ${discordId} returning 1");
     expect(erasure).toContain("delete from profiles where user_id = ${discordId} returning 1");
     expect(erasure).toContain("delete from rsvps where user_id = ${discordId} returning 1");
+    expect(erasure).toContain(
+      "delete from overlay_configs where member_id = ${discordId} returning 1",
+    );
+    expect(erasure).toContain(
+      "delete from overlay_tokens where member_id = ${discordId} returning 1",
+    );
     // The roster write refreshes in place and never deletes.
     const roster = read("src/db/roster.ts");
     expect(roster).toContain("ON CONFLICT (id) DO UPDATE");

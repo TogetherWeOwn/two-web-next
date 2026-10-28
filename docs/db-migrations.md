@@ -208,6 +208,15 @@ runner selftests use disposable Postgres only; this check does not authorize a
 staging or production connection or any live grant, revoke, role, or
 default-ACL change.
 
+Every apply target provisions the `two_web_app` role before migrations run:
+CI workflows create it on the job-private Postgres service (dropping it again
+before the catalog-preflight live test, which fails closed on pre-existing
+fixture roles), and staging/production must carry it provisioned by the
+Operator before a grant-bearing migration applies there. Grants ride inside
+the creating migration, never out-of-band, so an apply on a target without
+the role fails loudly at the first `GRANT` instead of silently skipping
+runtime rights.
+
 ## Audit tables are append-only (deployed-role prerequisite)
 
 `drizzle/1018_audit-immutability.sql` guards `agent_event_audits`,

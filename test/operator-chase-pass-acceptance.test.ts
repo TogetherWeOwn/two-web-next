@@ -5,7 +5,7 @@
 // this file pins pass-count forensics only.
 //
 // Contract for the build:
-// - eraseMember apply returns its six table counts plus `passes` (number of
+// - eraseMember apply returns its eight table counts plus `passes` (number of
 //   session-chase passes executed) and `deletesPerPass` (session rows deleted
 //   in each pass, in order). Dry-run returns `passes: 0` and
 //   `deletesPerPass: []` (no chase ran). passes === deletesPerPass.length and
@@ -58,6 +58,8 @@ type EraseResultWithPasses = {
   web_sessions: number;
   web_session_grace: number;
   join_attempts: number;
+  overlay_configs: number;
+  overlay_tokens: number;
   passes: number;
   deletesPerPass: number[];
 };
@@ -81,6 +83,8 @@ function makeEraseDouble(opts: {
   rsvps?: number;
   grace?: number;
   attempts?: number;
+  configs?: number;
+  tokens?: number;
   sessionDeletes?: number[];
   sessionRemainings?: number[];
   failOnSessionPass?: number;
@@ -89,6 +93,8 @@ function makeEraseDouble(opts: {
   let pass = 0;
   const tag = async (strings: TemplateStringsArray): Promise<Record<string, unknown>[]> => {
     const text = strings.join(" ");
+    if (text === "select pg_advisory_xact_lock(hashtextextended('two:overlay:' ||  , 0))")
+      return [];
     if (text.startsWith("delete from web_sessions")) {
       if (pass === opts.failOnSessionPass)
         throw opts.failWith ?? new Error("synthetic chase failure");
@@ -99,6 +105,8 @@ function makeEraseDouble(opts: {
     if (text.startsWith("delete from rsvps")) return rows(opts.rsvps ?? 0);
     if (text.startsWith("delete from web_session_grace")) return rows(opts.grace ?? 0);
     if (text.startsWith("delete from join_attempts")) return rows(opts.attempts ?? 0);
+    if (text.startsWith("delete from overlay_configs")) return rows(opts.configs ?? 0);
+    if (text.startsWith("delete from overlay_tokens")) return rows(opts.tokens ?? 0);
     if (text.startsWith("select count") && text.includes("from web_sessions")) {
       const remaining = opts.sessionRemainings?.[pass] ?? 0;
       pass++;
@@ -114,6 +122,10 @@ function makeEraseDouble(opts: {
       return [{ n: opts.grace ?? 0 }];
     if (text.startsWith("select count") && text.includes("from join_attempts"))
       return [{ n: opts.attempts ?? 0 }];
+    if (text.startsWith("select count") && text.includes("from overlay_configs"))
+      return [{ n: opts.configs ?? 0 }];
+    if (text.startsWith("select count") && text.includes("from overlay_tokens"))
+      return [{ n: opts.tokens ?? 0 }];
     throw new Error(`unexpected statement: ${text.slice(0, 120)}`);
   };
   (tag as unknown as Record<string, unknown>).begin = (fn: (tx: unknown) => Promise<unknown>) =>
@@ -160,11 +172,19 @@ const lockTimeout = () =>
 
 describe("chase-pass forensics: eraseMember reports passes (mock, no database)", () => {
   it("reports one quiescent pass with its per-pass deletes", async () => {
-    const sql = makeEraseDouble({ users: 1, sessionDeletes: [2], sessionRemainings: [0] });
+    const sql = makeEraseDouble({
+      users: 1,
+      configs: 2,
+      tokens: 3,
+      sessionDeletes: [2],
+      sessionRemainings: [0],
+    });
     const result = (await eraseMember(sql, MEMBER, {
       dryRun: false,
     })) as unknown as EraseResultWithPasses;
     expect(result.web_sessions).toBe(2);
+    expect(result.overlay_configs).toBe(2);
+    expect(result.overlay_tokens).toBe(3);
     expect(result.passes).toBe(1);
     expect(result.deletesPerPass).toEqual([2]);
     expect(result.passes).toBe(result.deletesPerPass.length);

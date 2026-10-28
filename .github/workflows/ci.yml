@@ -176,6 +176,11 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --no-audit --no-fund
+      # Fixture suites apply migrations carrying runtime GRANTs to two_web_app
+      # (ci/migration-runtime-rights.mjs). Fresh service cluster: plain
+      # CREATE, never pre-existing. (Job-level if covers the scope gate.)
+      - name: Provision runtime role for migration apply
+        run: psql "postgres://postgres:ci@localhost:5432/postgres" -v ON_ERROR_STOP=1 -c "CREATE ROLE two_web_app NOLOGIN"
       - name: Cache Playwright Chromium
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -503,6 +508,13 @@ jobs:
       - name: Public-route smoke selftest (loopback fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:smoke
+      # Migrations carry runtime GRANTs to two_web_app
+      # (ci/migration-runtime-rights.mjs), so the role must exist before any
+      # apply. Fresh service cluster: plain CREATE, never pre-existing.
+      # Dropped again before the catalog-preflight selftest below.
+      - name: Provision runtime role for migration apply
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: psql "postgres://postgres:ci@localhost:5432/postgres" -v ON_ERROR_STOP=1 -c "CREATE ROLE two_web_app NOLOGIN"
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
@@ -681,6 +693,24 @@ jobs:
       - name: Shadow-compare selftest (loopback only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:shadow
+      # The catalog-preflight live test fails closed when fixture roles
+      # pre-exist, so the transient apply role leaves before it runs. Nothing
+      # after this step applies migrations. always(): a mid-job failure must
+      # still restore the role-less cluster the test expects. DROP OWNED
+      # first: the apply recorded grants to the role, which block the drop.
+      # Fully idempotent: an absent role (failed create) is a silent no-op.
+      - name: Drop transient runtime role before catalog preflight
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: |
+          psql "postgres://postgres:ci@localhost:5432/postgres" -v ON_ERROR_STOP=1 <<'SQL'
+          DO $do$
+          BEGIN
+            IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'two_web_app') THEN
+              DROP OWNED BY two_web_app;
+              DROP ROLE two_web_app;
+            END IF;
+          END $do$;
+          SQL
       - name: Inert rights inventory negative and leak selftests (no sockets or DB)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/staging-rights-inventory.test.mjs
@@ -941,6 +971,12 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      # Migrations carry runtime GRANTs to two_web_app
+      # (ci/migration-runtime-rights.mjs), so the role must exist before any
+      # apply. Fresh service cluster: plain CREATE, never pre-existing.
+      - name: Provision runtime role for migration apply
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: psql "postgres://postgres:ci@localhost:5432/postgres" -v ON_ERROR_STOP=1 -c "CREATE ROLE two_web_app NOLOGIN"
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate

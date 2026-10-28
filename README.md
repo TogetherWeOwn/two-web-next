@@ -143,15 +143,16 @@ For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-Always supply the test URL for full-suite SQL coverage. The DB-free lane
-(`env -u DATABASE_URL npm run check`) runs fixture-only checks; existing live
-suites skip when `DATABASE_URL` is unset. `test/review-p1-verify.test.ts` keeps
-its P1-3 refusal proofs offline. Featured-unpublish SQL proofs run under the
-pre-existing integration gate in `test/admin.test.ts`; the six registration
-and rendering proofs in `test/admin-featured-unpublish-acceptance.test.ts`
-and `test/admin-featured-unpublish-invariants.test.ts` remain ungated. This
-preserves the DB-free lane without adding a conditional skip. It does not
-replace disposable-DB verification or browser evidence.
+Always supply the test URL for full-suite SQL coverage. `npm run check` now
+requires it: the overlay lifecycle and revocation suites fail without
+`DATABASE_URL`, rather than silently leaving their PostgreSQL regressions
+unexecuted. Individual hermetic suites can still run without a database;
+that subset does not replace full disposable-DB verification or browser
+evidence. `test/review-p1-verify.test.ts` keeps its P1-3 refusal proofs offline.
+Featured-unpublish SQL proofs run under the pre-existing integration gate in
+`test/admin.test.ts`; the six registration and rendering proofs in
+`test/admin-featured-unpublish-acceptance.test.ts` and
+`test/admin-featured-unpublish-invariants.test.ts` remain ungated.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.

@@ -108,6 +108,7 @@ timing check to fake timers; do not retry the job until it passes.
 
 | Test | Limit | Why it stays |
 | --- | --- | --- |
+| `test/overlay-schema-token-lifecycle-acceptance.test.ts` (2× 15 s) | 15 s per race case; each observed lock wait is bounded at 5 s | Rotation/first-mint versus revoke/erase races hold a transaction open deliberately. The two lock-wait probes must establish ordering before releasing it; the outer cap detects a deadlocked fence or cleanup rather than letting a broken race hang the suite. |
 | `test/up-db.test.ts` (5× 10 s) | 10 s per test; elapsed `< 3500`/`< 4000` ms | Asserts the up-probe's own DB deadlines |
 | `test/db-ping-cli.test.mjs` (1× 10 s) | 10 s; elapsed `< 500`/`< 2500` ms | Asserts the CLI's probe and cleanup deadlines |
 | `test/counts-worker.test.ts` (4× 10 s) | 10 s per test | Bounds the miniflare counts Worker runs |

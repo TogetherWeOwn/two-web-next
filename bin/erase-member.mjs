@@ -3,7 +3,7 @@
 // (src/privacy-content.ts "Deletion"): for ONE Discord id, remove that
 // member's rows in one transaction across users, profiles, rsvps,
 // web_sessions (signs them out everywhere), web_session_grace (retired
-// predecessor records) and join_attempts.
+// predecessor records), join_attempts, overlay_configs and overlay_tokens.
 //
 //   node --import ./bin/ts-hook.mjs bin/erase-member.mjs --discord-id=<snowflake> [--dry-run | --apply] [--target staging|production] [--confirm <host>]
 //

@@ -140,6 +140,7 @@ probes fail and health has stayed red for over two minutes.
 
 Read from: [src/db/schema.ts](../src/db/schema.ts),
 [src/db/admin-schema.ts](../src/db/admin-schema.ts),
+[src/db/overlay-schema.ts](../src/db/overlay-schema.ts),
 [src/sessions.ts](../src/sessions.ts),
 [src/oauth-journeys.ts](../src/oauth-journeys.ts),
 [docs/web-v1-contract.md](./web-v1-contract.md).
@@ -151,7 +152,11 @@ The web owns and migrates its own tables. In
 `profiles`, `job_unique_locks`, `queue_jobs`, `queue_failed_jobs`. In
 [src/db/admin-schema.ts](../src/db/admin-schema.ts): `events`,
 `eventSyncAttempts`, `featuredContents`, `memberDataAccessLogs`,
-`activityLog`, `rsvps`, `eventSearchLogs`. Sessions live in `web_sessions`
+`activityLog`, `rsvps`, `eventSearchLogs`. In
+[src/db/overlay-schema.ts](../src/db/overlay-schema.ts): `overlay_configs`
+and `overlay_tokens`. These migration definitions stay outside the page
+database schema namespace: the overlay store uses raw SQL and ships no routes
+in this slice. Sessions live in `web_sessions`
 and OAuth journey records in `web_oauth_journeys`
 ([src/sessions.ts](../src/sessions.ts),
 [src/oauth-journeys.ts](../src/oauth-journeys.ts)).
@@ -328,6 +333,8 @@ exactly once.
 | `src/not-found-suggestions.ts` | content |
 | `src/oauth-code-state-length.ts` | auth |
 | `src/oauth-journeys.ts` | auth |
+| `src/overlay-member-lock.ts` | auth |
+| `src/overlay-tokens.ts` | auth |
 | `src/page-shell.tsx` | content |
 | `src/pages.tsx` | content |
 | `src/pinned-assets.ts` | content |
