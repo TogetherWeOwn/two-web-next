@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { resolveFeaturedReuse } from "../src/admin/featured-reuse";
 import { adminApp } from "../src/admin/routes";
 import { parseRecordId } from "../src/admin/record-id";
 import {
@@ -240,3 +241,68 @@ for (const route of routes) {
     }
   });
 }
+
+// Reuse failure contracts (review pins in this owned suite; the independent
+// reuse acceptance file stays untouched). The resolver distinguishes three
+// outcomes the acceptance fixture cannot reach: no database at all, a
+// classified transport outage, and an ordinary programming error. Collapsing
+// any of them into another must fail here.
+describe("featured reuse resolver: failure contracts", () => {
+  it("a missing database is exactly unavailable, never an empty recovery, with zero reads", async () => {
+    const calls: Array<[Db, number]> = [];
+    const get = async (handle: Db, id: number) => {
+      calls.push([handle, id]);
+      return null;
+    };
+    const outcome = await resolveFeaturedReuse(
+      new URLSearchParams("source=41"),
+      async () => null,
+      get,
+    );
+    expect(outcome).toEqual({ kind: "unavailable" });
+    expect(Object.keys(outcome)).toEqual(["kind"]);
+    expect(calls).toEqual([]);
+  });
+
+  it("a classified transport outage is unavailable after one read", async () => {
+    const outage = Object.assign(new Error("transport down"), { code: "ECONNRESET" });
+    const calls: Array<[Db, number]> = [];
+    const get = async (handle: Db, id: number): Promise<never> => {
+      calls.push([handle, id]);
+      throw outage;
+    };
+    await expect(
+      resolveFeaturedReuse(new URLSearchParams("source=41"), async () => db, get),
+    ).resolves.toEqual({ kind: "unavailable" });
+    expect(calls).toEqual([[db, 41]]);
+  });
+
+  it("an ordinary programming error propagates unchanged instead of becoming downtime", async () => {
+    const failure = new TypeError("fixture programming error");
+    const calls: Array<[Db, number]> = [];
+    const get = async (handle: Db, id: number): Promise<never> => {
+      calls.push([handle, id]);
+      throw failure;
+    };
+    await expect(
+      resolveFeaturedReuse(new URLSearchParams("source=41"), async () => db, get),
+    ).rejects.toBe(failure);
+    expect(calls).toEqual([[db, 41]]);
+  });
+});
+
+describe("GET featured/new reuse with an unconfigured database (synthetic stores)", () => {
+  it("answers 503 private/no-store for source=41 with no record lookup", async () => {
+    const sessions = createMemorySessionStore();
+    const cookie = await cookieFor(sessions, MODERATOR);
+    const res = await adminApp({ sessionStore: sessions, db }).request(
+      "/featured/new?source=41",
+      { headers: { cookie } },
+      env,
+    );
+    expect(res.status).toBe(503);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(await res.text()).toContain("Admin temporarily unavailable");
+    expectNoRecordAccess();
+  });
+});

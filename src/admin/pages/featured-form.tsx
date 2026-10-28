@@ -32,7 +32,9 @@ export const FeaturedFormPage: FC<{
   now?: Date;
   appUrl: string;
   imageHosts?: string;
-}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts }) => {
+  /** New mode only: a reuse prefill to explain, or a failed reuse to recover from. */
+  reuseNotice?: "prefill" | "recovery" | null;
+}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts, reuseNotice }) => {
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked =
     values.is_published === "on" || values.is_published === true || values.is_published === "true";
@@ -43,6 +45,19 @@ export const FeaturedFormPage: FC<{
     <Shell title={mode === "new" ? "New featured slot" : `Edit ${row!.title}`}>
       <section class="featured-form">
         <h1>{mode === "new" ? "New featured slot" : `Edit ${row!.title}`}</h1>
+        {mode === "edit" && row ? (
+          <p>
+            <a href={`/admin/featured/new?source=${row.id}`}>Reuse as new slot</a>
+          </p>
+        ) : null}
+        {mode === "new" && reuseNotice ? (
+          <p>
+            {reuseNotice === "prefill"
+              ? "Unsaved new slot: content copied from a saved slot, original unchanged. Published, window and position use new-slot defaults; nothing saves until Create."
+              : "Could not reuse that saved slot. Nothing was copied or saved."}{" "}
+            <a href="/admin/featured/new">Start with an empty new slot</a>
+          </p>
+        ) : null}
         {mode === "edit" && row ? (
           <section
             class="featured-preview"

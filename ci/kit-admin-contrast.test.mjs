@@ -87,6 +87,18 @@ before(async () => {
       {
         name: "offline-kit-admin-data",
         setup(plugin) {
+          // SSR grouping may co-locate real loaders with the rendered admin
+          // components. Resolve their Worker-only import, but fail if a loader
+          // escapes the fixture data boundary and tries to read a real binding.
+          plugin.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+            path: "cloudflare:workers",
+            namespace: "offline-admin-worker",
+          }));
+          plugin.onLoad({ filter: /.*/, namespace: "offline-admin-worker" }, () => ({
+            contents: `export const env = new Proxy({}, {
+              get: () => { throw new Error('Worker binding outside admin render fixture'); }
+            });`,
+          }));
           plugin.onLoad({ filter: /[/\\]entries[/\\]hooks\.server\.js$/ }, () => ({
             contents: "export const handle = ({event, resolve}) => resolve(event);",
           }));
