@@ -65,7 +65,7 @@ dry-run builds byte-identical output, so one ceiling covers both):
 | `dist/worker.js` | 2486680 / 499001 | 3108352 / 623872 |
 
 Ceilings are measured size x1.25 rounded up (raw to 512 B, gzip to 256 B),
-the repository x1.25 rule from `ci/bundle-budget.json`. Never relax a
+the repository x1.25 rule in `ci/budgets/README.md`. Never relax a
 ceiling to turn a build green; a raise needs its own reviewed decision
 explaining what grew and why.
 
@@ -80,8 +80,8 @@ are checked in so every test executes exactly what ships. Edit
 the source, then regenerate and commit the output.
 Top-level theme stylesheets (`public/theme.css`, `public/*-theme.css`) are
 authored in place with no `assets/` source, so they are budgeted but never
-minified. A new authored stylesheet needs two edits: a ceiling in
-`ci/bundle-budget.json` and an entry in `AUTHORED_CSS` in
+minified. A new authored stylesheet needs two edits: a ceiling fragment in
+`ci/budgets/bundle/` and an entry in `AUTHORED_CSS` in
 `ci/minify-assets.mjs`. A budgeted stylesheet with no `assets/` source and no
 `AUTHORED_CSS` entry fails `build:assets:check` with an explicit "add to
 AUTHORED_CSS or create assets/<name>" message:
@@ -184,7 +184,7 @@ executed gates. For screenshot/spec discovery, see the
 | Stable check / group ID | Read-only command | Input / machine-readable result |
 | --- | --- | --- |
 | `worker.bundle`, `worker.bundle.dist/worker.js` | `node ci/check-worker-bundle.mjs --dry-run --format json` | Existing `dist/worker.js` plus `ci/worker-bundle-budget.json`; versioned JSON with measured bytes, `ok`, `exitCode`, and `error.code` / `error.next_action` on refusal |
-| `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` | `node ci/check-kit-perf.mjs --dry-run --format json` | Existing `web/.svelte-kit/` build outputs plus `ci/kit-perf-budget.json`; the same versioned budget-report shape |
+| `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` | `node ci/check-kit-perf.mjs --dry-run --format json` | Existing `web/.svelte-kit/` build outputs plus the `ci/budgets/kit/` fragments; the same versioned budget-report shape |
 | Web standards route/check IDs | `node ci/web-standards.mjs --dry-run --format json` | Planned routes and stable check IDs only, not an execution verdict; real local Hono Lighthouse reports use `lighthouse-<sha>` from `ci.yml` |
 
 The bundle checkers exit 0 for a measured fit, 1 for a breach, 2 when enforcement
@@ -437,15 +437,34 @@ accounting reads only its fresh top-level LHRs, never these mobile archives.
 For deployed mobile collection, an informative, unscored `main-document-timing`
 audit reads the same already-collected main resource as `server-response-time`.
 Each archived LHR's `audits["main-document-timing"].details` contains schema
-version 1, UTC request timestamp, validated `requestId` / `cfRay`, protocol,
+version 2, UTC request timestamp, validated `requestId` / `cfRay`, the bounded
+`cfCacheStatus`, `ageSeconds` and `serverTiming` response headers, protocol,
 `edgeColo` from the response ray suffix, `servingRevision`, CDP `timingMs`
 (DNS/connect/TLS/send/receive-header offsets), and `serverWaitMs`
-(`receiveHeadersStart - sendEnd`, matching the native audit). Missing or invalid
-fields are `unknown`. The served revision is currently unknown: a checkout SHA
-is not evidence of the revision that served the response. Existing `fetchTime`
-and requested URL identify each LHR; the new diagnostic fields contain no URL,
-query values, arbitrary headers, credentials, response bodies or raw CDP log.
-No additional navigation or probe is made. The audit has no category weight,
+(`receiveHeadersStart - sendEnd`, matching the native audit). Missing, duplicated
+or invalid fields are `unknown`. The per-navigation `servingRevision` stays
+unknown: a checkout SHA is not evidence of the revision that served the response.
+Existing `fetchTime` and requested URL identify each LHR; the diagnostic fields
+contain no URL, query values, arbitrary headers, credentials, response bodies or
+raw CDP log. The audit itself makes no additional navigation or probe.
+
+`watch-summary.md` and `watch-summary.json` surface that evidence for every
+mobile navigation in a "Serving evidence per navigation" table, so an
+over-budget `/events` sample can be read next to its edge cache disposition,
+age and `Server-Timing` without opening the LHR archive. The runner also issues
+one read-only `GET /up` immediately before and after each mobile collect attempt
+and records `revision.commit` for both ("Served revision" table, JSON
+`servedRevision`): a deploy landing mid-collect shows as `changed during collect`
+instead of a silently mixed sample. Two equal reads are only `same at both reads`:
+they do not prove every navigation in between reached that revision during a
+rollout. `/up` failures (including a read that exceeds its 10-second bound, or only
+one of the two reads failing) record `unknown`; they never change a verdict, retry
+or budget. `origin-collect-diagnosis.md` lists each attempt's revision reads and
+stops calling a twice-breached marginal retry "systematic" when any attempt's
+verdict is `changed during collect` (`unknown` alone does not qualify it). `Server-Timing` is kept only when every
+comma-separated metric is a token with numeric `dur=` and/or token or quoted `desc=`
+params without pipes, markup or backslashes; the summary re-validates every stored
+field and shows `unknown` for anything else, including numeric fields stored as text. The audit has no category weight,
 assertion, or role in sample quotas, budget values or retry decisions.
 
 To investigate, use **all three mobile samples for a route**, not the
@@ -504,7 +523,8 @@ top-level `lhr-*.json` files are read; nested attempt archives never fill
 quotas.
 
 The byte ceilings are specific to Next's unbundled assets, based on the measured
-2026-09-30 sizes documented in `ci/bundle-budget.json`, with roughly 25–45%
+2026-09-30 sizes documented in the `ci/budgets/bundle/` fragments (then
+`ci/bundle-budget.json`), with roughly 25–45%
 headroom. They are not copied from legacy Vite/Filament bundles that Next does not
 serve. The checker exits **0** if every asset fits, **1** for size breaches or
 missing budgeted assets, **2** for missing/invalid configuration or unenforced
@@ -546,7 +566,7 @@ Historical minification measurements: the table below records the follow-up's
 `esbuild --minify` output of `assets/` using esbuild `0.28.1`, with later dated
 updates noted below. These are historical evidence, not current dependency
 pins or a fresh measurement of HEAD. Current served-asset ceilings live in
-[`ci/bundle-budget.json`](../ci/bundle-budget.json); use `npm run budget` to
+the [`ci/budgets/bundle/`](../ci/budgets/bundle) fragments; use `npm run budget` to
 measure the checked-out bytes. The recorded ceilings used measured ×1.25,
 rounded up to 512 B raw / 256 B gzip:
 

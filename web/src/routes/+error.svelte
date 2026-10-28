@@ -25,4 +25,4 @@ const adminBack = $derived(adminWayBackForStatus(status, page.url?.pathname ?? "
   <meta name="robots" content="noindex, nofollow" />
 </svelte:head>
 
-<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} adminBack={adminBack} />
+<ErrorShell code={status} inviteUrl={FALLBACK_INVITE} supportReference={page.data.requestId} adminBack={adminBack} />
