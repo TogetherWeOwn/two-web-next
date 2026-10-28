@@ -9,7 +9,7 @@ import { canonicalUrl } from "../seo";
 import type { HeatGrid } from "./aggregates";
 import { HOTZONE_SIGNALS, WEEKDAY_NAMES } from "./aggregates";
 import type { HotzoneSignal } from "./aggregates";
-import { utcPeriodShortcuts } from "./season";
+import { adjacentSeasonLabels, parseSeasonParam, utcPeriodShortcuts } from "./season";
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
 
@@ -66,6 +66,11 @@ export const renderHotzoneGrid = (cells: HeatGrid, caption: string) =>
 // no query state, keeping the canonical URL bare.
 const PeriodPicker: FC<{ action: string; season: string }> = ({ action, season }) => {
   const { month, quarter } = utcPeriodShortcuts();
+  // The routes refuse invalid seasons before rendering, so the fallback only
+  // guards a hand-built render: all-time renders no adjacent-period links.
+  const neighbors = adjacentSeasonLabels(
+    parseSeasonParam(season) ?? { kind: "all" as const, label: "all" },
+  );
   return (
     <section aria-labelledby="hotzone-period-heading">
       <h2 id="hotzone-period-heading">Choose a period</h2>
@@ -89,6 +94,19 @@ const PeriodPicker: FC<{ action: string; season: string }> = ({ action, season }
         <a href={`${action}?season=${quarter}`}>This quarter</a> ·{" "}
         <a href={action}>All available data</a>
       </p>
+      {neighbors.previous === null && neighbors.next === null ? null : (
+        <nav aria-label="Adjacent periods">
+          {neighbors.previous === null ? null : (
+            <a href={`${action}?season=${neighbors.previous}`}>
+              Previous period: {neighbors.previous}
+            </a>
+          )}
+          {neighbors.previous === null || neighbors.next === null ? null : " · "}
+          {neighbors.next === null ? null : (
+            <a href={`${action}?season=${neighbors.next}`}>Next period: {neighbors.next}</a>
+          )}
+        </nav>
+      )}
     </section>
   );
 };

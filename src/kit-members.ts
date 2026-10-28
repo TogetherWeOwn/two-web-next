@@ -12,7 +12,12 @@ import {
   type QueueBoardView,
   type RecordBoardView,
 } from "./hotzones/board-log";
-import { parseSeasonParam, type SeasonWindow } from "./hotzones/season";
+import {
+  adjacentSeasonLabels,
+  parseSeasonParam,
+  type AdjacentSeasonLabels,
+  type SeasonWindow,
+} from "./hotzones/season";
 import { safeNext } from "./join/service";
 import {
   boardRows,
@@ -245,6 +250,8 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   viewerUsername: string;
   available: boolean;
   appUrl: string;
+  /** Grammar-valid adjacent seasons for Previous/Next browsing; null names no link. */
+  neighbors: AdjacentSeasonLabels;
 }> {
   // Same gate order as the Hono handler: session gate before any grammar,
   // grammar before any read. Every refusal carries explicit no-store except
@@ -314,5 +321,7 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
     viewerUsername: args.session.username ?? "",
     available: db !== null,
     appUrl: args.env.APP_URL,
+    // Computed server-side so the client node never bundles season arithmetic.
+    neighbors: adjacentSeasonLabels(season),
   };
 }
