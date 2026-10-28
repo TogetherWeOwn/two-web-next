@@ -26,9 +26,14 @@ type Answer = { status: string; syncedToDiscordAt: Date | null };
 
 function fixture(
   over: Partial<typeof events.$inferSelect> = {},
-  opts: { going?: number; answers?: Record<string, Answer>; attendees?: EventAttendee[] } = {},
+  opts: {
+    going?: number;
+    occupancy?: number;
+    answers?: Record<string, Answer>;
+    attendees?: EventAttendee[];
+  } = {},
 ) {
-  const { going = 3, answers = {}, attendees = [] } = opts;
+  const { going = 3, occupancy, answers = {}, attendees = [] } = opts;
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect = {
     id: 1,
@@ -81,7 +86,12 @@ function fixture(
       };
     }
     if (sql.includes('from "rsvps"')) {
-      if (sql.includes("count(*)") || sql.includes("group by")) return { rows: [[row.id, going]] };
+      if (sql.includes("count(*)") || sql.includes("group by")) {
+        // The named going count joins users; seat occupancy does not. They
+        // diverge when a nameless going row holds a seat.
+        const n = sql.includes('inner join "users"') ? going : (occupancy ?? going);
+        return { rows: [[row.id, n]] };
+      }
       const answer = (answers as Record<string, ViewerRsvp | Answer>)[String(params[1])];
       if (params[0] !== row.id || !answer) return { rows: [] };
       const userId = String(params[1]);
@@ -185,12 +195,15 @@ describe("Event detail share matrix (fixture-only)", () => {
     ).toHaveLength(0);
   });
 
-  it("shows a guest on a zero-RSVP event its own nudge line, never a 0-going line", async () => {
+  it("shows a guest on a zero-named-going event its own nudge line, never a 0-going line", async () => {
     const source = fixture({}, { going: 0 });
     const html = await (await source.request()).text();
     expect(html).toContain('data-testid="event-roster-guest-nudge"');
-    expect(html).toContain("No RSVPs yet");
-    expect(html).toContain("sign in to be the first");
+    // The roster lists named going rows only: an empty list never claims
+    // there are no RSVP responses, and never promises a first going seat.
+    expect(html).toContain("No one is listed as going yet.");
+    expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+    expect(html).not.toContain("sign in to be the first");
     expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(PATH)}"`);
     // The old nudge line is gone; the lineup's "0 of 10 going" stays.
     expect(html).not.toContain("0 going —");
@@ -294,7 +307,8 @@ describe("Event detail closed/paused roster copy (fixture-only)", () => {
       const html = await response.text();
       expect(html).toContain(verdict);
       expect(html).toContain('data-testid="event-roster-empty"');
-      expect(html).toContain("No RSVPs.");
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
       expect(html).not.toContain("RSVP to start the list");
     },
   );
@@ -304,7 +318,7 @@ describe("Event detail closed/paused roster copy (fixture-only)", () => {
     ["ended event", { startsAt: PAST_START, endsAt: PAST_END }, "This one has been and gone"],
     ["paused RSVPs", { rsvpOpen: false }, "Log in with Discord"],
   ])(
-    "guest on a zero-RSVP event sees a plain line on %s, never a be-the-first nudge",
+    "guest on a zero-named-going event sees a plain line on %s, never a be-the-first nudge",
     async (_label, over, rsvpCopy) => {
       const source = fixture(over, { going: 0, attendees: [] });
       const response = await source.request();
@@ -312,10 +326,56 @@ describe("Event detail closed/paused roster copy (fixture-only)", () => {
       const html = await response.text();
       expect(html).toContain(rsvpCopy);
       expect(html).toContain('data-testid="event-roster-guest-nudge"');
-      expect(html).toContain("No RSVPs.");
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
       expect(html).not.toContain("sign in to be the first");
     },
   );
+
+  it.each([
+    ["maybe", "maybe", /down as a maybe/i],
+    ["waitlisted", "waitlisted", /on the waitlist/i],
+  ])(
+    "member with a current %s answer and no listed going sees no listed going, never 'no RSVPs'",
+    async (_label, status, answerCopy) => {
+      // Correction: the roster lists named going rows only, so an existing
+      // maybe/waitlisted answer beside an empty roster must not be
+      // contradicted by a "no RSVP responses" claim.
+      const source = fixture(
+        {},
+        {
+          going: 0,
+          attendees: [],
+          answers: { [MEMBER_ID]: { status, syncedToDiscordAt: null } },
+        },
+      );
+      const response = await source.request(await source.cookie());
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toMatch(answerCopy);
+      expect(html).toContain('data-testid="event-roster-empty"');
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+      expect(html).not.toContain("RSVP to start the list");
+    },
+  );
+
+  it("full by a nameless seat: waitlist action beside a neutral empty roster, never a first-going invite", async () => {
+    // Correction: capacity 1, goingOccupancy 1, named goingCount 0 and an
+    // empty named roster — the divergent fixture shape from the
+    // going-count/roster agreement contract. The adjacent action offers
+    // only the waitlist, so roster copy must not invite a going RSVP.
+    const source = fixture({ capacity: 1 }, { going: 0, occupancy: 1, attendees: [] });
+    const response = await source.request(await source.cookie());
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    expect(html).toContain("<span data-count>0 of 1 going</span>");
+    expect(html).toContain('data-testid="waitlist-join"');
+    expect(html).not.toContain('data-testid="rsvp-going"');
+    expect(html).toContain('data-testid="event-roster-empty"');
+    expect(html).toContain("No one is listed as going yet.");
+    expect(html).not.toMatch(/No RSVPs(\.| yet)|RSVP to start the list|sign in to be the first/);
+  });
 
   it("guest on a past event with RSVPs keeps the sign-in nudge for a roster they can still see", async () => {
     const source = fixture(

@@ -845,7 +845,7 @@ describe("Kit detail presentation", () => {
     expect(html).not.toContain(">ann<");
   });
 
-  it("renders the guest zero-RSVP nudge line, never a 0-going line", async () => {
+  it("renders the guest zero-named-going nudge line, never a 0-going line", async () => {
     const { outcome } = await resolve(
       KEY,
       fakeStore({ event: { ...row(), goingCount: 0 } as PublicEvent }),
@@ -856,8 +856,11 @@ describe("Kit detail presentation", () => {
     const { renderDetail } = await buildKitEventDetailBundle();
     const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
     expect(html).toContain('data-testid="event-roster-guest-nudge"');
-    expect(html).toContain("No RSVPs yet");
-    expect(html).toContain("sign in to be the first");
+    // The roster lists named going rows only: an empty list never claims
+    // there are no RSVP responses, and never promises a first going seat.
+    expect(html).toContain("No one is listed as going yet.");
+    expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+    expect(html).not.toContain("sign in to be the first");
     expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(`/e/${KEY}`)}"`);
     // The old nudge line is gone; the lineup's "0 of 10 going" stays.
     expect(html).not.toContain("0 going —");
@@ -894,7 +897,8 @@ describe("Kit detail presentation", () => {
       const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
       expect(html).toContain(verdict);
       expect(html).toContain('data-testid="event-roster-empty"');
-      expect(html).toContain("No RSVPs.");
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
       expect(html).not.toContain("RSVP to start the list");
     },
   );
@@ -908,7 +912,7 @@ describe("Kit detail presentation", () => {
     ],
     ["paused RSVPs", { rsvpOpen: false }, "Log in with Discord"],
   ])(
-    "renders a plain guest zero-RSVP line on %s, never a be-the-first nudge",
+    "renders a plain guest zero-named-going line on %s, never a be-the-first nudge",
     async (_label, over, rsvpCopy) => {
       // Drafts 403 for non-moderators, so the draft guest has no roster
       // surface to pin.
@@ -926,7 +930,8 @@ describe("Kit detail presentation", () => {
       const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
       expect(html).toContain(rsvpCopy);
       expect(html).toContain('data-testid="event-roster-guest-nudge"');
-      expect(html).toContain("No RSVPs.");
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
       expect(html).not.toContain("sign in to be the first");
     },
   );
@@ -985,6 +990,64 @@ describe("Kit detail presentation", () => {
     // The lineup spots line reads occupancy too, not the named count.
     expect(html).toContain('data-testid="event-spots-left"');
     expect(html).toContain(">Full<");
+  });
+
+  it.each([
+    ["maybe", "maybe", /down as a maybe/i],
+    ["waitlisted", "waitlisted", /on the waitlist/i],
+  ])(
+    "member with a current %s answer and no listed going sees no listed going, never 'no RSVPs'",
+    async (_label, status, answerCopy) => {
+      // Correction: the roster lists named going rows only, so an existing
+      // maybe/waitlisted answer beside an empty roster must not be
+      // contradicted by a "no RSVP responses" claim.
+      const { outcome } = await resolve(
+        KEY,
+        fakeStore({
+          event: { ...row(), goingCount: 0 } as PublicEvent,
+          attendees: [],
+          answer: { status, syncedToDiscordAt: null },
+        }),
+        memberSession(),
+      );
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error("unreachable");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html).toMatch(answerCopy);
+      expect(html).toContain('data-testid="event-roster-empty"');
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+      expect(html).not.toContain("RSVP to start the list");
+    },
+  );
+
+  it("full by a nameless seat: waitlist CTA beside a neutral empty roster, never a first-going invite", async () => {
+    // Correction: capacity 1, goingOccupancy 1, named goingCount 0 and an
+    // empty named roster — the divergent fixture shape from the
+    // going-count/roster agreement contract. The page offers only the
+    // waitlist, so roster copy must not invite a going RSVP.
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: { ...row({ capacity: 1 }), goingCount: 0, goingOccupancy: 1 } as PublicEvent,
+        attendees: [],
+        answer: null,
+      }),
+      memberSession(),
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.goingCount).toBe(0);
+    expect(outcome.model.goingOccupancy).toBe(1);
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain("0 of 1 going");
+    expect(html).toContain('data-testid="waitlist-join"');
+    expect(html).not.toContain('data-testid="rsvp-going"');
+    expect(html).toContain('data-testid="event-roster-empty"');
+    expect(html).toContain("No one is listed as going yet.");
+    expect(html).not.toMatch(/No RSVPs(\.| yet)|RSVP to start the list|sign in to be the first/);
   });
 
   it("renders draft and past states with their notices and noindex", async () => {

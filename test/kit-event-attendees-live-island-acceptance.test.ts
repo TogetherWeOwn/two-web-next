@@ -537,15 +537,18 @@ async function browser(opts: {
   after: EventAttendee[];
   viewerGoingBefore: boolean;
   failReads?: boolean;
+  afterHtml?: string;
 }) {
   const html = await kitHtml({
     attendees: opts.before,
     answer: opts.viewerGoingBefore ? goingAnswer : null,
   });
-  const afterHtml = await kitHtml({
-    attendees: opts.after,
-    answer: opts.viewerGoingBefore ? null : goingAnswer,
-  });
+  const afterHtml =
+    opts.afterHtml ??
+    (await kitHtml({
+      attendees: opts.after,
+      answer: opts.viewerGoingBefore ? null : goingAnswer,
+    }));
   const page = parseHtml(html);
   const requests: PendingRequest[] = [];
   const broadcasts: { type: string; detail: unknown }[] = [];
@@ -1027,4 +1030,64 @@ describe("Kit who's-going roster live refresh", () => {
       "a failed refresh must surface a visible stale/retry signal",
     ).toBe(true);
   });
+
+  it.each([
+    ["guest", "event-roster-guest-nudge", /sign in to see who's in/i, GUEST],
+    [
+      "non-member",
+      "event-roster-members-only",
+      /members only/i,
+      {
+        status: "authenticated",
+        session: {
+          userId: MEMBER_ID,
+          username: "vera",
+          avatar: null,
+          member: false,
+          moderator: false,
+        },
+      } as KitRequestSession,
+    ],
+  ])(
+    "mounts the authoritative %s shell when the session downgrades before the refresh read",
+    async (_label, shellTestid, shellCopy, downgradedSession) => {
+      // Correction (shared-island parity): the RSVP write succeeds as a
+      // member, but the fragment read answers the authoritative Kit page
+      // for the downgraded audience. The refresh must remove every
+      // private name AND mount the returned shell — exactly one, focus
+      // restored into it, no reload.
+      const downgradedHtml = await kitHtml({
+        attendees: [],
+        answer: null,
+        session: downgradedSession,
+      });
+      const b = await browser({
+        before: [HOST, VIEWER],
+        after: [],
+        viewerGoingBefore: true,
+        afterHtml: downgradedHtml,
+      });
+      expect(rosterNames(b)).toEqual([HOST.name, VIEWER.name]);
+
+      b.byTestId("rsvp-withdraw")!.click();
+      const write = await b.answerWrite();
+      expect(write.init.method).toBe("DELETE");
+      // Focus inside the private roster while the read is in flight.
+      b.byTestId("event-attendees")!.querySelector("a")!.focus();
+      await b.answerReads();
+
+      expect(b.reloads()).toBe(0);
+      expect(b.byTestId("event-attendees"), "private roster must be pruned").toBeNull();
+      expect(rosterNames(b)).toEqual([]);
+      expect(b.page.textContent).not.toContain(HOST.name);
+      expect(b.page.textContent).not.toContain(VIEWER.name);
+      const shells = b.page.querySelectorAll(`[data-testid="${shellTestid}"]`);
+      expect(shells, "exactly one audience shell").toHaveLength(1);
+      expect(shells[0]!.textContent).toMatch(shellCopy);
+      expect(b.page.textContent).not.toMatch(/could not refresh/i);
+      const heading = shells[0]!.querySelector("#event-roster-heading")!;
+      expect(heading.focused, "focus restored into the mounted shell").toBe(true);
+      expect(heading.getAttribute("tabindex")).toBe("-1");
+    },
+  );
 });
