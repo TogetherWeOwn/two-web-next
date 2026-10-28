@@ -56,9 +56,11 @@ export default defineConfig({
                   name: "profiles",
                   test: /\/src\/(?:profiles\/|lib\/ProfileView\.svelte$)/,
                 },
+                // Co-compress detail entrypoints with the event views they render;
+                // loaders and layouts retain their existing server boundaries.
                 {
                   name: "events",
-                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$|lib\/Event(?:Detail|Card|Missing|Gone)\.svelte$|routes\/events\/past\/\+page\.svelte$)/,
+                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$|lib\/Event(?:Detail|Card|Missing|Gone)\.svelte$|routes\/events\/past\/\+page\.svelte$|routes\/e\/\[key\]\/\+(?:page|error)\.svelte$)/,
                 },
               ],
             },

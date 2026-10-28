@@ -114,7 +114,12 @@ export const EventPage: FC<{
   const canonical = canonicalUrl(appUrl, path);
   const accessibilityNotes = e.accessibilityNotes?.trim();
   const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
+  // One render instant for the RSVP verdict and the share box: an elapsed
+  // published row (the */10 reconcile hasn't flipped it yet) already reads
+  // "This one has been and gone", so the share box follows that verdict
+  // instead of the persisted status alone. Drafts keep the live box.
   const now = new Date();
+  const shareAsPast = e.status === "past" || (e.status === "published" && e.endsAt <= now);
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -356,52 +361,66 @@ export const EventPage: FC<{
             </section>
           ) : null}
         </div>
-        <section class="event-share" aria-labelledby="event-share-heading">
-          <h2 id="event-share-heading">Save the date</h2>
-          <p>
-            <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">
-              Add to calendar (.ics)
-            </a>
-            {gcalUrl ? (
-              <>
-                {" · "}
-                <a href={gcalUrl} data-testid="event-google-calendar" rel="noopener">
-                  Google Calendar
-                </a>
-              </>
-            ) : null}
-            {" · "}
-            <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
-              Copy link
-            </a>
-            {e.status === "published" ? (
-              <>
-                <span hidden data-native-share-sep aria-hidden="true">
+        {shareAsPast ? (
+          <section class="event-share" aria-labelledby="event-share-heading">
+            <h2 id="event-share-heading">Share this event</h2>
+            <p>
+              <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
+                Copy link
+              </a>
+              {" · "}
+              <a href="/events/past">Browse past events</a>
+            </p>
+            <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+          </section>
+        ) : (
+          <section class="event-share" aria-labelledby="event-share-heading">
+            <h2 id="event-share-heading">Save the date</h2>
+            <p>
+              <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">
+                Add to calendar (.ics)
+              </a>
+              {gcalUrl ? (
+                <>
                   {" · "}
-                </span>
-                <button
-                  type="button"
-                  hidden
-                  data-native-share
-                  data-share-title={e.title}
-                  data-share-url={canonical}
-                  data-testid="event-share"
-                >
-                  Share
-                </button>
-              </>
+                  <a href={gcalUrl} data-testid="event-google-calendar" rel="noopener">
+                    Google Calendar
+                  </a>
+                </>
+              ) : null}
+              {" · "}
+              <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
+                Copy link
+              </a>
+              {e.status === "published" ? (
+                <>
+                  <span hidden data-native-share-sep aria-hidden="true">
+                    {" · "}
+                  </span>
+                  <button
+                    type="button"
+                    hidden
+                    data-native-share
+                    data-share-title={e.title}
+                    data-share-url={canonical}
+                    data-testid="event-share"
+                  >
+                    Share
+                  </button>
+                </>
+              ) : null}
+            </p>
+            <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+            {e.status === "published" ? (
+              <p
+                role="status"
+                aria-live="polite"
+                data-testid="event-share-status"
+                data-native-share-status
+              ></p>
             ) : null}
-          </p>
-          <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
-          {e.status === "published" ? (
-            <p
-              role="status"
-              aria-live="polite"
-              data-testid="event-share-status"
-              data-native-share-status
-            ></p>
-          ) : null}
-        </section>
+          </section>
+        )}
       </div>
       {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
         <section

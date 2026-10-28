@@ -2,7 +2,7 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -118,7 +118,7 @@ function fixture(
     row,
     queries,
     env,
-    async cookie() {
+    async cookie(moderator = false) {
       const token = newSessionToken();
       await store.create({
         tokenHash: await hashToken(token),
@@ -126,7 +126,7 @@ function fixture(
         username: "member",
         avatar: null,
         member: true,
-        moderator: false,
+        moderator,
         expiresAt: new Date(Date.now() + 3600_000),
       });
       return (
@@ -145,6 +145,28 @@ function fixture(
 }
 
 describe("Event detail share matrix (fixture-only)", () => {
+  it("keeps the calendar share box for an elapsed draft previewed by a moderator", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
+    try {
+      const source = fixture({
+        status: "draft",
+        startsAt: new Date("2020-01-10T20:00:00Z"),
+        endsAt: new Date("2020-01-10T22:00:00Z"),
+      });
+      const response = await source.request(await source.cookie(true));
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain('<h2 id="event-share-heading">Save the date</h2>');
+      expect(html).toContain(`href="/events/${KEY}.ics" data-testid="event-ics"`);
+      expect(html).toContain('data-testid="event-google-calendar"');
+      expect(html).not.toContain('<h2 id="event-share-heading">Share this event</h2>');
+      expect(html).not.toContain('href="/events/past"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders the share matrix: canonical, title, time, venue and description", async () => {
     const html = await (await fixture().request()).text();
     expect(html).toContain(`rel="canonical" href="${CANONICAL}"`);
@@ -161,6 +183,25 @@ describe("Event detail share matrix (fixture-only)", () => {
     expect(html).toContain("<p>Bring a friend &amp; a board.</p>");
     expect(html).toContain('property="og:description" content="Bring a friend &amp; a board."');
     expect(html).toContain("3 of 10 going");
+  });
+
+  it("renders the honest past share box for an elapsed published event", async () => {
+    const html = await (
+      await fixture({
+        status: "published",
+        startsAt: new Date("2020-01-10T20:00:00Z"),
+        endsAt: new Date("2020-01-10T22:00:00Z"),
+      }).request()
+    ).text();
+    // The RSVP verdict already reads closed for the elapsed row; the share
+    // box must agree instead of offering Save the date.
+    expect(html).toContain('data-testid="rsvp-closed">This one has been and gone');
+    const share = html.match(/<section class="event-share"[\s\S]*?<\/section>/)?.[0] ?? "";
+    expect(share).toContain("Share this event");
+    expect(share).not.toContain("Save the date");
+    expect(share).not.toContain("Add to calendar");
+    expect(share).not.toContain('data-testid="event-ics"');
+    expect(share).toContain('href="/events/past">Browse past events</a>');
   });
 
   it("shows a guest the join pitch and never attendee names, even with attendees stored", async () => {
@@ -229,20 +270,27 @@ describe("Event detail share matrix (fixture-only)", () => {
   });
 
   it.each([
-    ["expanded endsAt only", "2030-01-10T20:00:00Z", "+010000-01-10T22:00:00Z"],
-    ["negative startsAt only", "-000001-01-10T20:00:00Z", "2030-01-10T22:00:00Z"],
-    ["expanded", "+010000-01-10T20:00:00Z", "+010000-01-10T22:00:00Z"],
-    ["negative", "-000001-01-10T20:00:00Z", "-000001-01-10T22:00:00Z"],
+    ["expanded endsAt only", "2030-01-10T20:00:00Z", "+010000-01-10T22:00:00Z", false],
+    ["negative startsAt only", "-000001-01-10T20:00:00Z", "2030-01-10T22:00:00Z", false],
+    ["expanded", "+010000-01-10T20:00:00Z", "+010000-01-10T22:00:00Z", false],
+    ["negative", "-000001-01-10T20:00:00Z", "-000001-01-10T22:00:00Z", true],
   ])(
     "keeps the page 200 with the other share links for %s-year boundaries",
-    async (_label, startsAt, endsAt) => {
+    async (_label, startsAt, endsAt, elapsed) => {
       // Read-eligible (finite) but not ICS-wire-formattable: the page must
-      // survive by omitting only the Google Calendar deep link.
+      // survive by omitting only the Google Calendar deep link. An elapsed
+      // row honestly renders the past share box instead of the live one.
       const source = fixture({ startsAt: new Date(startsAt), endsAt: new Date(endsAt) });
       const response = await source.request();
       expect(response.status).toBe(200);
       const html = await response.text();
-      expect(html).toContain('data-testid="event-ics"');
+      if (elapsed) {
+        expect(html).toContain("Share this event");
+        expect(html).not.toContain('data-testid="event-ics"');
+        expect(html).toContain('href="/events/past">Browse past events</a>');
+      } else {
+        expect(html).toContain('data-testid="event-ics"');
+      }
       expect(html).toContain('data-testid="event-copy-link"');
       expect(html).not.toContain('data-testid="event-google-calendar"');
       expect(html).not.toContain("calendar.google.com");

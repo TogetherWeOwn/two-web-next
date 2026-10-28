@@ -76,8 +76,15 @@ describe("calendar subscription affordance SSR", () => {
     }
 
     it(`preserves the per-event ICS and Google Calendar links at ${appUrl}`, async () => {
+      // A live event: the per-event calendar links only render before the
+      // row elapses (elapsed rows honestly show the past share box).
+      const live = {
+        ...event,
+        startsAt: new Date("2030-01-10T20:00:00Z"),
+        endsAt: new Date("2030-01-10T22:00:00Z"),
+      };
       const html = await EventPage({
-        e: event,
+        e: live,
         neighbors: { previous: null, next: null },
         related: [],
         appUrl,
@@ -87,7 +94,7 @@ describe("calendar subscription affordance SSR", () => {
         `<a href="/events/${event.eventKey}.ics" data-testid="event-ics">Add to calendar (.ics)</a>`,
       );
       expect(html).toContain(
-        'href="https://calendar.google.com/calendar/render?action=TEMPLATE&amp;text=Chess%20%26%20%3Cfriends%3E&amp;dates=20261010T200000Z%2F20261010T220000Z&amp;details=Bring%20a%20board%20%26%20%3Csnacks%3E.&amp;location=Lobby%20%26%20lounge" data-testid="event-google-calendar" rel="noopener">Google Calendar</a>',
+        'href="https://calendar.google.com/calendar/render?action=TEMPLATE&amp;text=Chess%20%26%20%3Cfriends%3E&amp;dates=20300110T200000Z%2F20300110T220000Z&amp;details=Bring%20a%20board%20%26%20%3Csnacks%3E.&amp;location=Lobby%20%26%20lounge" data-testid="event-google-calendar" rel="noopener">Google Calendar</a>',
       );
       expect(html).toContain("Chess &amp; &lt;friends&gt;");
       expect(html).toContain("Bring a board &amp; &lt;snacks&gt;.");

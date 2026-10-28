@@ -49,6 +49,39 @@ function booleanProperty(object: Node, name: string): boolean {
   return value.value;
 }
 
+describe("event representation server chunking", () => {
+  it("co-compresses detail entrypoints with their event views", () => {
+    const pattern = groupPattern("events");
+    for (const module of [
+      "src/events/pages-detail.tsx",
+      "web/src/lib/EventDetail.svelte",
+      "web/src/lib/EventGone.svelte",
+      "web/src/lib/EventMissing.svelte",
+      "web/src/routes/e/[key]/+page.svelte",
+      "web/src/routes/e/[key]/+error.svelte",
+      "web/src/routes/events/past/+page.svelte",
+    ]) {
+      expect(pattern.test(`/checkout/${module}`), module).toBe(true);
+    }
+  });
+
+  it("does not capture loaders, layouts or unrelated pages", () => {
+    const pattern = groupPattern("events");
+    for (const module of [
+      "src/ai-friendly/routes.ts",
+      "src/admin/reads.ts",
+      "web/src/routes/e/[key]/+page.server.ts",
+      "web/src/routes/e/[key]/+layout.server.ts",
+      "web/src/routes/e/[key]/+page.svelte.backup",
+      "web/src/routes/+error.svelte",
+      "web/src/routes/+page.svelte",
+      "web/src/routes/profile/+page.svelte",
+    ]) {
+      expect(pattern.test(`/checkout/${module}`), module).toBe(false);
+    }
+  });
+});
+
 describe("native admin error server chunking", () => {
   it("co-compresses both boundaries with their pure shell and retry helper", () => {
     const pattern = groupPattern("admin-errors");

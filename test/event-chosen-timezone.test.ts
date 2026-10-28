@@ -23,7 +23,7 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { build } from "esbuild";
 import type { Browser, BrowserContext, Page } from "playwright";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -334,7 +334,22 @@ function kitBundle() {
   return kitPromise;
 }
 
+// The fixtures are fixed 2026 civil instants (DST folds and gaps), so the
+// render clock is pinned before every case: the real clock would read the
+// elapsed ones as past events, which share without calendar adds.
+const FIXTURE_NOW = new Date("2026-01-01T00:00:00Z");
+
 async function renderFixture(view: View, range: RangeCase) {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(FIXTURE_NOW);
+  try {
+    return await renderFixtureAtPinnedClock(view, range);
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+async function renderFixtureAtPinnedClock(view: View, range: RangeCase) {
   const row = eventRow(range);
   const env = {
     APP_URL: ORIGIN,

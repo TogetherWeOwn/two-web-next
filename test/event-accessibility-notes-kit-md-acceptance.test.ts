@@ -255,8 +255,8 @@ const mdRow = (o: Partial<MdEvent> = {}): MdEvent => ({
   title: "Friday night Helldivers",
   game: "Helldivers",
   description: "Bring stims.",
-  startsAt: new Date("2026-07-15T18:00:00Z"),
-  endsAt: new Date("2026-07-15T20:00:00Z"),
+  startsAt: new Date("2030-07-15T18:00:00Z"),
+  endsAt: new Date("2030-07-15T20:00:00Z"),
   timezone: "Europe/London",
   location: "Voice: General",
   capacity: null,
@@ -277,8 +277,8 @@ const NO_NOTES_GOLDEN = `# Friday night Helldivers
 > Canonical page: https://togetherweown.com/e/01J0000000000000000000ABCD · Markdown alternate: https://togetherweown.com/e/01J0000000000000000000ABCD.md
 
 - Status: scheduled
-- Starts: Wednesday, 15 July 2026 at 19:00 GMT+01:00 (Europe/London)
-- Ends: Wednesday, 15 July 2026 at 21:00 GMT+01:00 (Europe/London)
+- Starts: Monday, 15 July 2030 at 19:00 GMT+01:00 (Europe/London)
+- Ends: Monday, 15 July 2030 at 21:00 GMT+01:00 (Europe/London)
 - Game: Helldivers
 - Where: Voice: General
 - Lineup: 7 going
