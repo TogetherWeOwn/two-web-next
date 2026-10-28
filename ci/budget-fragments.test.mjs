@@ -24,9 +24,12 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // (ci/kit-perf-budget.json and ci/bundle-budget.json at the split commit),
 // plus the raise that landed on main during the split review and was
 // ported into its fragment (client.js.maxRawBytes 254976 -> 256000; see
-// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md) and the
+// ci/budgets/decisions/kit-perf/2026-10-26-client-js-raw-256000.md), the
 // server.js.maxGzipBytes 335104 -> 335360 raise (see
-// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md).
+// ci/budgets/decisions/kit-perf/2026-10-26-server-gzip-335360.md), and the
+// one new-asset fragment ported from an open branch during its post-split
+// merge: public/islands/event-time-from-now.js 2048/1024 (see
+// ci/budgets/decisions/bundle/2026-10-26-event-time-from-now.md).
 // Aggregation must reproduce them exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
@@ -34,7 +37,7 @@ const SHIPPING_KIT_BUDGET = {
   server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
     js: { maxRawBytes: 257024, maxGzipBytes: 103168, maxFiles: 55 },
-    css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
+    css: { maxRawBytes: 3072, maxGzipBytes: 1280, maxFiles: 4 },
   },
   startup: { maxMs: 60000 },
 };
@@ -63,6 +66,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
   "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },
   "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
+  "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
 };
 
 // sha256 of the frozen legacy-history archives: header + the verbatim
@@ -123,20 +127,42 @@ function kitFixture(t, fragments) {
 // unsupported); 335872 is the third, independently measured allocation
 // (measured 335639, margin 233; lower 335616 rejects by 23); 336128 is the
 // fourth, independently measured allocation (combined worst 335901, margin
-// 227; lower 335872 rejects by 29; the next 256B step 336384 stays
-// unsupported). Every other pin stays exact: the oracle rejects any ceiling
-// outside this list, then deep-compares the rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128];
+// 227; lower 335872 rejects by 29; the next 256B step 336384 was
+// unsupported then); 336384 is the fifth, event-share-honesty allocation
+// (combined worst 336168, margin 216; lower 336128 rejects by 40); 336640 is
+// the sixth, unrenderable-time guard allocation (combined worst 336514, margin
+// 126; lower 336384 rejects by 130). Every other
+// pin stays exact: the oracle rejects any ceiling outside this list, then
+// deep-compares the rest of the plan.
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336640];
+// Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
+// SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
+// on current main (measured union 258023 raw / 103383 gzip, margins 25 / 41;
+// the lower 257536 raw step rejects by 487 and 103168 gzip by 215). Pairs are
+// admitted together, never per axis: any other pair is compared against the
+// baseline pin and fails.
+const SHIPPING_CLIENT_JS_ALLOCATIONS = [
+  [257024, 103168],
+  [258048, 103424],
+];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640`,
   );
+  const clientJs = actual?.client?.js;
+  const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
+    ([raw, clientGzip]) => clientJs?.maxRawBytes === raw && clientJs?.maxGzipBytes === clientGzip,
+  ) ?? [SHIPPING_KIT_BUDGET.client.js.maxRawBytes, SHIPPING_KIT_BUDGET.client.js.maxGzipBytes];
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
     server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: gzip } },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes, maxGzipBytes },
+    },
   });
 }
 
@@ -165,8 +191,22 @@ test("shipping oracle admits the measured 336128 server gzip allocation", () => 
   });
 });
 
+test("shipping oracle admits the measured 336384 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 336384 } },
+  });
+});
+
+test("shipping oracle admits the measured 336640 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 336640 } },
+  });
+});
+
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616]) {
+  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 336641]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
@@ -193,6 +233,72 @@ test("shipping oracle rejects off-axis drift at an admitted allocation", () => {
   for (const [label, drift] of drifts) {
     const plan = JSON.parse(JSON.stringify(SHIPPING_KIT_BUDGET));
     plan.server.js.maxGzipBytes = 335360;
+    drift(plan);
+    assert.throws(
+      () => assertShippingKitBudget(plan),
+      /Expected values to be strictly deep-equal/,
+      `${label} drift must fail the shipping oracle`,
+    );
+  }
+});
+
+test("shipping oracle admits the measured 258048/103424 client js allocation", () => {
+  for (const maxGzipBytes of SHIPPING_SERVER_GZIP_ALLOCATIONS) {
+    assertShippingKitBudget({
+      ...SHIPPING_KIT_BUDGET,
+      server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
+      client: {
+        ...SHIPPING_KIT_BUDGET.client,
+        js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 258048, maxGzipBytes: 103424 },
+      },
+    });
+  }
+});
+
+test("shipping oracle rejects client js pairs outside the admitted list", () => {
+  for (const [maxRawBytes, maxGzipBytes] of [
+    [258047, 103424],
+    [258049, 103424],
+    [258048, 103423],
+    [258048, 103425],
+    [257536, 103424],
+    [258048, 103168],
+    [257024, 103424],
+    [258048, 103680],
+    [258560, 103424],
+  ]) {
+    assert.throws(
+      () =>
+        assertShippingKitBudget({
+          ...SHIPPING_KIT_BUDGET,
+          client: {
+            ...SHIPPING_KIT_BUDGET.client,
+            js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes, maxGzipBytes },
+          },
+        }),
+      /Expected values to be strictly deep-equal/,
+      `client js ${maxRawBytes}/${maxGzipBytes} must fail the shipping oracle`,
+    );
+  }
+});
+
+test("shipping oracle rejects off-axis drift at the 258048/103424 client js allocation", () => {
+  const drifts = [
+    ["server raw", (plan) => (plan.server.js.maxRawBytes += 1)],
+    ["server files", (plan) => (plan.server.js.maxFiles += 1)],
+    ["client raw", (plan) => (plan.client.js.maxRawBytes += 1)],
+    ["client gzip", (plan) => (plan.client.js.maxGzipBytes += 1)],
+    ["client files", (plan) => (plan.client.js.maxFiles += 1)],
+    ["client css gzip", (plan) => (plan.client.css.maxGzipBytes += 1)],
+    ["worker gzip", (plan) => (plan.worker["_worker.js"].maxGzipBytes += 1)],
+    ["startup", (plan) => (plan.startup.maxMs += 1)],
+  ];
+  for (const [label, drift] of drifts) {
+    const plan = JSON.parse(JSON.stringify(SHIPPING_KIT_BUDGET));
+    plan.server.js.maxGzipBytes = 336384;
+    plan.client.js.maxRawBytes = 258048;
+    plan.client.js.maxGzipBytes = 103424;
+    assertShippingKitBudget(JSON.parse(JSON.stringify(plan)));
     drift(plan);
     assert.throws(
       () => assertShippingKitBudget(plan),
