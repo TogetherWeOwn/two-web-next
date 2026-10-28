@@ -39,5 +39,6 @@ export function isFeaturedPubliclyVisible(row: FeaturedWindow, now: Date = new D
 export const FEATURED_WRITE_ROUTES = [
   "POST /admin/featured",
   "POST /admin/featured/:id",
+  "POST /admin/featured/:id/unpublish",
   "POST /admin/featured/:id/delete",
 ] as const;
