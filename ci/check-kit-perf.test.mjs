@@ -415,7 +415,7 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // independently justified 336896 ceiling for the bounded homepage reads (two
 // merged builds 336673 and 336672; margin 223; lower 336640 rejects by 33), and the
 // independently justified 337408 ceiling (profile review re-measured combined
-// worst 337206, margin 202; lower 337152 rejects by 54).
+// worst 337207, margin 201; lower 337152 rejects by 55).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -436,7 +436,7 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   336128: { intervalBytes: 335977, exactBytes: 336128, overBytes: 336129 },
   336384: { intervalBytes: 336192, exactBytes: 336384, overBytes: 336385 },
   336896: { intervalBytes: 336673, exactBytes: 336896, overBytes: 336897 },
-  337408: { intervalBytes: 337206, exactBytes: 337408, overBytes: 337409 },
+  337408: { intervalBytes: 337207, exactBytes: 337408, overBytes: 337409 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
@@ -732,7 +732,7 @@ function shippingServerGzipCases() {
         name: "server gzip newly allowed interval",
         group: "kit.server.js",
         axis: "gzip",
-        bytes: 337206,
+        bytes: 337207,
       },
       { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 337408 },
       {
@@ -920,7 +920,7 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
     name: "server gzip profile review measured tree fits",
     group: "kit.server.js",
     axis: "gzip",
-    bytes: 337206,
+    bytes: 337207,
   },
   {
     // Unconditional: reverting the client raw fragment below the measured
