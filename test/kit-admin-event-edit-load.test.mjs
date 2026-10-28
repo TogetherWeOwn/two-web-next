@@ -107,6 +107,17 @@ function rowsDb(eventRows, countRows, rosterRows) {
   const queries = [];
   return {
     queries,
+    execute: async (statement) => {
+      queries.push({ raw: new PgDialect().sqlToQuery(statement) });
+      const rows = outstanding.length > 1 ? outstanding.shift() : outstanding[0];
+      return rows.map((row) => ({
+        user_id: row.userId,
+        username: row.username,
+        status: row.status,
+        updated_at: row.answeredAt,
+        position: row.waitlistPosition ?? null,
+      }));
+    },
     select: () => {
       const query = {};
       queries.push(query);
@@ -309,18 +320,16 @@ describe("Kit admin event-edit load: guard and failure wiring", () => {
     expect(countPredicate.sql).toContain('"users"."username" ilike');
     expect(countPredicate.params).toContain("EVT1");
     expect(countPredicate.params).toContain("%alice%");
-    const predicate = dialect.sqlToQuery(rosterRead.where[0][0]);
-    expect(predicate.sql).toContain('"events"."event_key" =');
-    expect(predicate.sql).toContain('"users"."username" ilike');
-    expect(predicate.params).toContain("EVT1");
-    expect(predicate.params).toContain("%alice%");
-    const ordering = rosterRead.orderBy[0].map(
-      (expression) => dialect.sqlToQuery(expression.getSQL?.() ?? expression).sql,
-    );
-    expect(ordering[0]).toContain('"rsvps"."status" asc');
-    expect(ordering[1]).toBe('"rsvps"."user_id"');
-    expect(rosterRead.limit).toEqual([[100]]);
-    expect(rosterRead.offset).toEqual([[100]]);
+    const { sql, params } = rosterRead.raw;
+    expect(sql).toContain("events.event_key =");
+    expect(sql).toContain("users.username ilike");
+    expect(params).toContain("EVT1");
+    expect(params).toContain("%alice%");
+    expect(sql).toContain("order by line.status asc");
+    expect(sql).toMatch(/,\s*line\.user_id asc\s+limit/);
+    expect(sql).toMatch(/limit 100 offset \$\d+\s*$/);
+    const offset = sql.match(/offset \$(\d+)/)[1];
+    expect(params[Number(offset) - 1]).toBe(100);
   });
 
   it("shapes the stored row and roster page for the Svelte contract", async () => {
@@ -343,7 +352,12 @@ describe("Kit admin event-edit load: guard and failure wiring", () => {
     expect(data.view.showPublish).toBe(true);
     expect(data.view.roster.total).toBe(1);
     expect(data.view.roster.entries).toEqual([
-      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
+      {
+        member: "mod",
+        status: "going",
+        answeredAt: "2026-06-01T12:00:00.000Z",
+        waitlistPosition: null,
+      },
     ]);
     for (const entry of data.view.roster.entries) {
       expect(entry).not.toHaveProperty("userId");

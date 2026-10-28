@@ -10,7 +10,7 @@ export {
   featuredListUrl,
   featuredEmptyText,
 } from "./featured-list-query";
-export type RosterSort = "status" | "answered";
+export type RosterSort = "status" | "answered" | "waitlist";
 /** RSVP-answer facet: exact allowlist values; "" reads as All. */
 export type RosterStatus = "" | "going" | "waitlisted" | "maybe" | "not_going";
 export const ROSTER_STATUSES: { value: RosterStatus; label: string }[] = [
@@ -68,7 +68,10 @@ export function parseRosterQuery(params: ListParams): RosterQuery {
   return {
     q: boundFreeText(withoutNul(params.roster_q).trim()),
     status,
-    sort: params.roster_sort === "status" ? "status" : "answered",
+    sort:
+      params.roster_sort === "status" || params.roster_sort === "waitlist"
+        ? params.roster_sort
+        : "answered",
     order: params.roster_order === "asc" ? "asc" : "desc",
     page: validPage ? page : 1,
   };

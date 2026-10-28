@@ -94,6 +94,24 @@ app.get("/fixture/:surface/:mode", async (c) => {
         entries.push(query.params);
         return [];
       }
+      if (
+        statement
+          .replace(/\s+/g, " ")
+          .trim()
+          .startsWith(
+            "select line.user_id, users.username, line.status, line.updated_at, line.position from (",
+          )
+      ) {
+        if (mode === "empty") return [];
+        const row = {
+          user_id: mode === "invalid" || mode === "partial" ? "invalid-key" : owner,
+          username: rowsByTable.users!.username,
+          status: rowsByTable.rsvps!.status,
+          updated_at: rowsByTable.rsvps!.updated_at,
+          position: null,
+        };
+        return mode === "partial" ? [{ ...row, user_id: owner }, row] : [row];
+      }
       if (!fields?.length) return []; // fixed timeouts / empty self waitlist
       if (
         statement.includes('from "event_search_logs"') ||

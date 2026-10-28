@@ -30,15 +30,28 @@ beforeAll(async () => {
 });
 const qs = (values: Record<string, string>) => new URLSearchParams(values).toString();
 const rosterReads = (fixture: ReturnType<typeof rosterDb>) =>
-  fixture.statements.filter((s) => s.sql.includes('from "rsvps"'));
+  fixture.statements.filter((s) => /from "?rsvps"? /.test(s.sql));
 const where = (sql: string) => sql.split(" where ")[1]!.split(/ order by | limit /)[0]!;
-const predicate = (sql: string, params: unknown[]) =>
-  where(sql).replace(/\$(\d+)/g, (_, n) => JSON.stringify(params[Number(n) - 1]));
+const predicate = (sql: string, params: unknown[]) => {
+  const unquoted = sql.replaceAll('"', "");
+  const clauses = unquoted.startsWith("select count(*)")
+    ? where(unquoted).replace(/[()]/g, "")
+    : [
+        unquoted.match(/ where (events\.event_key = \$\d+) \) line /)![1],
+        unquoted.match(
+          /\) line left join users on users\.id = line\.user_id where (.*?) order by/,
+        )?.[1],
+      ]
+        .filter(Boolean)
+        .join(" and ")
+        .replaceAll("line.status", "rsvps.status");
+  return clauses.replace(/\$(\d+)/g, (_, n) => JSON.stringify(params[Number(n) - 1]));
+};
 function displayedRows(html: string) {
   const body = rosterHtml(html).match(/<tbody>([\s\S]*?)<\/tbody>/)![1]!;
   return [...body.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)]
     .map((r) => [...r[1]!.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map((c) => text(c[1]!)))
-    .filter((r) => r.length === 3);
+    .filter((r) => r.length === 4);
 }
 function normalizedLink(href: string) {
   const url = new URL(href, "https://next.example.test");
@@ -52,17 +65,13 @@ function assertBounded(fixture: ReturnType<typeof rosterDb>) {
   expect(reads[0]!.sql).toMatch(/^select count\(\*\) /);
   expect(reads[0]!.fields).toEqual(["n"]);
   expect(reads[0]!.sql).not.toMatch(/limit|offset|group by|union/i);
-  expect(reads[1]!.fields.sort()).toEqual([
-    "answeredAt",
-    "memberId",
-    "status",
-    "userId",
-    "username",
-  ]);
-  const slot = reads[1]!.sql.match(/ limit \$(\d+)/)![1]!;
-  expect(reads[1]!.params[Number(slot) - 1]).toBe(100);
+  expect(reads[1]!.fields).toEqual([]); // execute() returns the raw projection below.
   expect(reads[1]!.sql).toMatch(
-    /order by "rsvps"\."(?:updated_at|status)" (?:asc|desc), "rsvps"\."user_id"/,
+    /^select line\.user_id, users\.username, line\.status, line\.updated_at, line\.position from \( /,
+  );
+  expect(reads[1]!.sql).toMatch(/ limit 100 offset \$\d+$/);
+  expect(reads[1]!.sql).toMatch(
+    /order by line\.(?:updated_at|status) (?:asc|desc)\s*, line\.user_id asc limit/,
   );
   expect(
     fixture.statements.filter(
@@ -89,7 +98,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
         const range = text(section.match(/data-testid="roster-range"[^>]*>([\s\S]*?)<\/p>/)![1]!);
         expect(range).toMatch(/1\s*[-–]\s*100 of 105\b/);
         expect(range).toMatch(/responses/i);
-        expect(text(section)).not.toMatch(/\b(?:seats|attendance|attended|occupancy)\b/i);
+        expect(range).not.toMatch(/\b(?:seats|attendance|attended|occupancy)\b/i);
         const next = links(section).find((l) => l.rel === "next");
         expect(next).toBeDefined();
         expect(normalizedLink(next!.href).get("roster_status")).toBe(status);
@@ -378,7 +387,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
       const reads = rosterReads(fixture);
       expect(reads[0]!.params).toContain(`%${"界".repeat(128)}%`);
       expect(where(reads[0]!.sql)).toMatch(/"rsvps"\."status" = \$\d+/);
-      expect(reads[1]!.sql).toContain('order by "rsvps"."updated_at" desc, "rsvps"."user_id"');
+      expect(reads[1]!.sql).toMatch(/order by line\.updated_at desc\s*, line\.user_id asc/);
       expect(reads[1]!.sql).not.toMatch(/drop table|9007199254740991/i);
       const offsetSlot = reads[1]!.sql.match(/ offset \$(\d+)/)?.[1];
       expect(offsetSlot ? reads[1]!.params[Number(offsetSlot) - 1] : 0).toBe(0);

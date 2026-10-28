@@ -235,6 +235,11 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
   <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
     <h2>RSVPs ({roster.total})</h2>
     <p class="hint">Save event changes before searching or sorting the roster.</p>
+    <p class="hint">
+      Waitlist position is global queue order, not a promised seat or attendance. Searching and
+      filtering do not renumber it; Answered shows the latest update, not priority. Paused or
+      closed queues do not advance.
+    </p>
     <p data-testid="roster-range">
       {roster.rangeText}
     </p>
@@ -285,7 +290,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         <tbody>
           {#if roster.entries.length === 0}
             <tr>
-              <td colspan={3} data-testid="roster-empty">{roster.emptyText}</td>
+              <td colspan={4} data-testid="roster-empty">{roster.emptyText}</td>
             </tr>
           {:else}
             {#each roster.entries as r, i (`${r.answeredAt}-${i}`)}
@@ -293,6 +298,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
                 <td>{r.member}</td>
                 <td>{r.status}</td>
                 <td>{r.answeredAt}</td>
+                <td>{r.waitlistPosition ?? "—"}</td>
               </tr>
             {/each}
           {/if}
