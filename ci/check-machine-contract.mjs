@@ -302,8 +302,9 @@ const CANONICAL_LIMITS = [
   "- Events are published-only: drafts and cancelled rows read as not found.",
   "- Unknown counts read as `null`, never `0` (`going_count`, `going_occupancy`, `member_count`, `online_count`).",
 ].join(" ");
-const flatGuide = guide.replace(/\s+/g, " ");
-const limitsMatch = /(?:^|\n)## Limits\n([\s\S]*?)(?=\n## |$)/.exec(guide);
+const normalizedGuide = guide.replace(/\r\n/g, "\n");
+const flatGuide = normalizedGuide.replace(/\s+/g, " ");
+const limitsMatch = /(?:^|\n)## Limits[\t ]*\n([\s\S]*?)(?=\n##[\t ]|$)/.exec(normalizedGuide);
 const limitsSection = (limitsMatch?.[1] ?? "").replace(/\s+/g, " ").trim();
 check(
   "guide `## Limits` section states the canonical boundary exactly",
@@ -311,23 +312,25 @@ check(
 );
 check(
   "guide has exactly one `## Limits` section",
-  (guide.match(/^## Limits\s*$/gm) ?? []).length === 1,
+  (normalizedGuide.match(/^## Limits[\t ]*$/gm) ?? []).length === 1,
 );
 let outsideLimits = limitsMatch
   ? flatGuide.replace(limitsMatch[0].replace(/\s+/g, " ").trim(), " ")
   : flatGuide;
-// Pre-existing sentences that use a measure word for another meaning.
-const ALLOWED_OUTSIDE = [
-  "Same DTOs as the MCP tools, byte for byte.",
-  "success results carry `structuredContent` matching it.",
-  "Shared public-read budget exhausted.",
-];
-const MEASURE_WORDS =
-  /\b\d[\d,._]*\s*(?:[KMG]i?B|bytes?|kilobytes?|megabytes?)\b|\b(?:KiB|KB|kB|MiB|MB)\b|\b(?:budgets?|caps?|capped|limits?|limited|fits?|fitting|within|ceilings?|framing|wrapper|envelope|overhead|twice|double|duplicat\w*|escap\w*|measure[sd]?|measuring|counted|DTOs?|CallToolResult|structuredContent|request\s+IDs?|transport|HTTP\s+(?:response|body|reply)|JSON-RPC\s+(?:response|reply|body|message|result))\b/i;
-for (const allowed of ALLOWED_OUTSIDE) outsideLimits = outsideLimits.replace(allowed, " ");
+// Existing parity prose describes equality, not a size boundary.
+outsideLimits = outsideLimits.replace("Same DTOs as the MCP tools, byte for byte.", " ");
+// A number with a byte unit or the bare ceiling is a size claim on its own.
+// Otherwise require both a result/transport subject and a measurement
+// predicate. Bare "fits", "bytes", "within" or "counted" can describe schemas,
+// field documentation, retry timing or operational counts, not a boundary.
+const SIZE_LITERAL = /\b\d[\d,._]*\s*(?:[KMGT]i?B|bytes?|kilobytes?|megabytes?)\b|\b32[ ,_]?768\b/i;
+const RESULT_SUBJECT =
+  /\b(?:events?|results?|responses?|replies|reply|payloads?|bod(?:y|ies)|DTOs?|CallToolResult|structuredContent|request\s+IDs?|transport|framing|wrappers?|envelopes?|overhead|text|JSON)\b/i;
+const SIZE_PREDICATE =
+  /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measure[sd]?|measuring|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
 for (const sentence of outsideLimits.split(/(?<=[.;!?])\s+/)) {
   const flat = sentence.trim();
-  if (flat && MEASURE_WORDS.test(flat))
+  if (flat && (SIZE_LITERAL.test(flat) || (RESULT_SUBJECT.test(flat) && SIZE_PREDICATE.test(flat))))
     check(
       `guide states a size or measurement claim outside the canonical Limits: "${flat.slice(0, 80)}"`,
       false,

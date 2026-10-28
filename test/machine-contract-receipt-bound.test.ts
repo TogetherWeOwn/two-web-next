@@ -58,18 +58,76 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     "Every JSON body fits 32 KB.",
     "Responses are capped at 32 kB, including the HTTP framing.",
     "The JSON-RPC reply fits the budget.",
+    "Estimate the result as 2x the text length.",
+    "Event results are unbounded.",
+    "Responses occupy 33 KB.",
+    "Responses occupy 33 bytes.",
+    "The result occupies 32768.",
+    "The result is 2x the text.",
+    "The result is 2× the text.",
+    "Events are unbounded.",
+    "The event is unlimited.",
   ];
 
   it.each(claims)("refuses the paraphrase %j appended after the Limits", (claim) => {
     const result = run(`${guide}\n${claim}\n`);
     expect(result.status, result.stdout + result.stderr).toBe(1);
-    expect(JSON.parse(result.stdout).verdict).toBe("fail");
+    const receipt = JSON.parse(result.stdout);
+    expect(receipt.verdict).toBe("fail");
+    expect(receipt.failures).toContain(
+      `guide states a size or measurement claim outside the canonical Limits: "${claim}"`,
+    );
   });
 
   it.each(claims)("refuses the paraphrase %j added inside the Limits", (claim) => {
     const result = run(guide.replace("## Limits\n", `## Limits\n\n- ${claim}\n`));
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(JSON.parse(result.stdout).verdict).toBe("fail");
+  });
+
+  it.each(
+    [
+      "Event results",
+      "HTTP responses",
+      "JSON-RPC replies",
+      "DTOs",
+      "Payloads",
+      "JSON bodies",
+    ].flatMap((subject) =>
+      ["are unbounded", "are unlimited", "have no size bound", "have twice the length"].map(
+        (predicate) => `${subject} ${predicate}.`,
+      ),
+    ),
+  )("refuses a subject/measurement claim %j", (claim) => {
+    const result = run(`${guide}\n${claim}\n`);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout).verdict).toBe("fail");
+  });
+
+  it.each([
+    "Wait and try again within a minute.",
+    "The structuredContent object matches the advertised schema.",
+    "Successful reads are counted in operational dashboards.",
+    "DTO fields are documented by the schema.",
+    "The response arrives within a minute.",
+    "See the KB article for details.",
+    "The response fits the advertised schema.",
+    "The text fits the schema.",
+    "DTO bytes are documented.",
+  ])("allows unrelated prose %j", (prose) => {
+    const result = run(`${guide}\n${prose}\n`);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).verdict).toBe("pass");
+  });
+
+  it.each([
+    ["CRLF line endings", guide.replace(/\n/g, "\r\n")],
+    ["trailing heading space", guide.replace("## Limits\n", "## Limits \n")],
+    ["trailing heading tab", guide.replace("## Limits\n", "## Limits\t\n")],
+  ])("accepts unchanged Markdown with %s", (_name, text) => {
+    const result = run(text);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).verdict).toBe("pass");
   });
 
   it.each([
