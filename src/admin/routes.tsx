@@ -818,10 +818,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Featured content not found");
         if (err instanceof StaleFeaturedSaveError) {
-          // A commit may have landed between the pre-read and the lock: show
-          // the current row so the preview never labels a stale one last-saved.
-          const current = await getFeatured(db, id);
-          return featuredSaveConflict(c, current ?? existing, values, submitted);
+          // The locked refusal already has the saved snapshot. A reread can
+          // fail (or race a delete) and must never discard the refused draft.
+          return featuredSaveConflict(c, err.current, values, submitted);
         }
         throw err;
       }

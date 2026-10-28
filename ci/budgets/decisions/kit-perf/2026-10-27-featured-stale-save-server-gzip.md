@@ -97,6 +97,25 @@ exact-fit / one-byte-over boundary evidence. Main's separate unpublish
 decision remains unchanged. Undo: revert this fragment step, its additive
 allocation proofs and this subsection together with the feature.
 
+## Conflict-flow review corrections: no further ceiling change
+
+Two locked production rebuilds after the incarnation/snapshot/history/session
+corrections measure **337653 / 337652 gzip bytes**, both within the unchanged
+337664 ceiling (worst margin 11B). Server raw is 1196925 / 1196923; files stay
+116. Relative to `936cd8f6a` above, the combined correction adds about 150 gzip
+bytes: tuple-incarnation preconditions, carrying the locked snapshot instead
+of rereading, and loading the small featured-only history controller plus the
+existing auth-status controller on conflicts. No new server import/dependency
+is added. Redundant error metadata and a redundant property descriptor value
+were removed rather than raising this ceiling again.
+
+Client JS measures 257272 raw / 103255 gzip, still within 258048 / 103424;
+Worker and CSS are unchanged. The new served history island has its own
+initial measured asset allocation; the generic editor stays byte-identical.
+No existing numeric ceiling or class-A threshold changes in this correction.
+Local a11y passes; local Lighthouse cannot complete because the sandbox lacks
+`ps`, so it is unverified, not green. Exact-head CI must supply that proof.
+
 ## Why one PR
 
 Repo routing for budget conflicts: a feature PR carries its measured

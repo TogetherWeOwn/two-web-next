@@ -25,7 +25,10 @@ import type { PageProps } from "./$types";
 // destructive actions are never links — so crawlers and prefetchers cannot
 // trigger them.
 let { data }: PageProps = $props();
-const island = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
+const island =
+  '<script src="/islands/featured-edit-history.js" defer></' +
+  'script><script src="/islands/admin-event-editor.js" defer></' +
+  "script>";
 </script>
 
 <AdminShell title={`Edit ${data.view.title}`}>
@@ -73,7 +76,7 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
       {data.view.windowRules}
     </p>
   </section>
-  <form method="post" action={`/admin/featured/${data.view.id}`} data-event-editor="">
+  <form method="post" action={`/admin/featured/${data.view.id}`} data-event-editor="" autocomplete="off">
     <input type="hidden" name="saved_baseline" value={data.view.baseline} />
     <!-- Native maxlength counts UTF-16 units and truncates supplementary
         characters early; the 255-code-point limits belong to the server

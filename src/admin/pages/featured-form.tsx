@@ -107,6 +107,7 @@ export const FeaturedFormPage: FC<{
         <form
           method="post"
           action={action}
+          autocomplete="off"
           data-event-editor=""
           data-event-draft={Object.keys(errors).length > 0 || conflict ? "" : undefined}
         >
@@ -203,7 +204,9 @@ export const FeaturedFormPage: FC<{
           </form>
         ) : null}
       </section>
+      {mode === "edit" ? <script src="/islands/featured-edit-history.js" defer /> : null}
       <script src="/islands/admin-event-editor.js" defer />
+      {conflict ? <script src="/islands/auth-status.js" defer /> : null}
     </Shell>
   );
 };

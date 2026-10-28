@@ -25,6 +25,8 @@ export type FeaturedRow = typeof featuredContents.$inferSelect;
 export type FeaturedEditRow = FeaturedRow & {
   startsAtText: string | null;
   endsAtText: string | null;
+  /** Tuple incarnation, kept as text so JS never rounds it. */
+  revision?: string;
 };
 
 // Date decoding loses imported microseconds and cannot represent infinity.
@@ -42,11 +44,21 @@ const featuredEditSelection = {
     ELSE ${featuredContents.endsAt}::text END`,
 };
 
+// Only precondition reads need the tuple incarnation, not mutation receipts.
+// A content hash alone admits ABA (publish, then withdraw). xmin changes
+// across committing writers even when content and JS-millisecond times match.
+const featuredSaveSelection = { ...featuredEditSelection, revision: sql<string>`xmin::text` };
+
 function featuredTimestamp(date: Date | null, text: string | null | undefined) {
   return text === undefined ? date : text === null ? null : sql`${text}::timestamptz`;
 }
 
-function featuredAuditValues({ startsAtText, endsAtText, ...row }: FeaturedEditRow) {
+function featuredAuditValues({
+  startsAtText,
+  endsAtText,
+  revision: _revision,
+  ...row
+}: FeaturedEditRow) {
   return { ...row, startsAt: startsAtText, endsAt: endsAtText };
 }
 
@@ -67,8 +79,8 @@ const NULL_FEATURED_SNAPSHOT = {
 
 /** A form Save arrived with a baseline that no longer matches the saved row. */
 export class StaleFeaturedSaveError extends Error {
-  constructor(readonly slotId: number) {
-    super(`featured content ${slotId} changed since the form was rendered`);
+  constructor(readonly current: FeaturedEditRow) {
+    super("featured content changed since the form was rendered");
   }
 }
 
@@ -84,12 +96,15 @@ function timingSafeEqualHex(a: string, b: string): boolean {
  * The payload mirrors featuredValues()/KitFeaturedEditValues field-for-field —
  * title, body, url, image fields, publish flag, position and the microsecond
  * window texts — so any saved change, even two updates inside one JavaScript
- * millisecond or one microsecond apart, mints a different baseline, while a
- * content-identical re-read mints the same one. updatedAt is deliberately
- * excluded: it is not displayed and must not invalidate a fresh form.
+ * millisecond or one microsecond apart, mints a different baseline. Bind it
+ * to the slot and tuple incarnation too: reverting content must not revive
+ * a refused form. A read alone does not invalidate it. updatedAt is excluded
+ * because JS timestamps cannot distinguish all committing writers.
  */
 export async function featuredSaveBaseline(row: FeaturedEditRow): Promise<string> {
   const payload = JSON.stringify({
+    id: row.id,
+    revision: row.revision,
     title: row.title,
     body: row.body ?? "",
     url: row.url ?? "",
@@ -151,7 +166,7 @@ export async function updateFeatured(
   const row = await db.transaction(async (tx) => {
     await boundModeratorWrite(tx);
     const [locked] = await tx
-      .select(featuredEditSelection)
+      .select(featuredSaveSelection)
       .from(featuredContents)
       .where(eq(featuredContents.id, id))
       .for("update");
@@ -163,7 +178,8 @@ export async function updateFeatured(
     // baseline keep the unconditional low-level contract.
     if (opts?.expectedBaseline !== undefined) {
       const current = await featuredSaveBaseline(locked);
-      if (!timingSafeEqualHex(current, opts.expectedBaseline)) throw new StaleFeaturedSaveError(id);
+      if (!timingSafeEqualHex(current, opts.expectedBaseline))
+        throw new StaleFeaturedSaveError(locked);
     }
     const [row] = await tx
       .update(featuredContents)
@@ -310,7 +326,10 @@ export async function getFeaturedIdByLegacyId(db: Db, legacyId: string): Promise
 
 export async function getFeatured(db: Db, id: number): Promise<FeaturedEditRow | null> {
   const [row] = await nonSensitiveRead("featured", () =>
-    db.select(featuredEditSelection).from(featuredContents).where(eq(featuredContents.id, id)),
+    db.select(featuredSaveSelection).from(featuredContents).where(eq(featuredContents.id, id)),
   );
+  // Internal precondition metadata must not alter the existing enumerable row
+  // or audit/serialization contracts. Only featuredSaveBaseline consumes it.
+  if (row) Object.defineProperty(row, "revision", { enumerable: false });
   return row ?? null;
 }
