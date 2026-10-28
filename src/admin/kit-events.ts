@@ -18,6 +18,7 @@ import {
   type EventListQuery,
 } from "./event-list";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { renderEventStartsInputsHtml } from "./event-starts-inputs";
 import type { EventListRow } from "./store-event-reads";
 
 /** One events-table row with its timestamps pre-rendered, exactly as the
@@ -46,6 +47,8 @@ export type KitEventListView = {
   /** Active UTC window sentence, built on the server so the client bundle
    * ships neither the formatter nor its copy. */
   windowSummary: string | null;
+  /** Escaped native date controls; no duplicate labels/template in client JS. */
+  startsInputsHtml: string;
   /** Pre-rendered pause-review HTML keyed by event key, for published rows
    * with open RSVPs; the page injects it via {@html} so the client bundle
    * carries no review strings or disclosure markup (client gzip ceiling).
@@ -93,6 +96,7 @@ export function buildEventListView(
     hasNext: fetched.length > EVENT_PAGE_SIZE,
     emptyText: eventEmptyText(query),
     windowSummary: eventStartsWindowSummary(query.startsWindow),
+    startsInputsHtml: renderEventStartsInputsHtml(query.startsWindow),
     pauseReviews,
   };
 }
