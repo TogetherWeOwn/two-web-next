@@ -329,10 +329,10 @@ const SIZE_BARE_SUFFIX = /\b\d[\d,._]*\s*[kKMGT]\b/;
 const RESULT_SUBJECT =
   /\b(?:events?|results?|responses?|replies|reply|payloads?|bod(?:y|ies)|DTOs?|CallToolResult|structuredContent|request\s+IDs?|transport|framing|wrappers?|envelopes?|overhead|text|JSON)\b/i;
 // Count nouns need a direct declaration, not unrelated availability/venue prose.
-// Numeric declarations may contain qualifiers or abbreviations before the count;
-// noun constructions such as "have a limit" and explicit no-limit claims count too.
+// Only bound qualifiers/abbreviations may precede the numeric count, never
+// unrelated suffix text. Direct limit nouns and explicit no-limit claims count too.
 const COUNT_BOUNDARY =
-  /\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+(?:caps?|limits?|bounds?|ceilings?)\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*(?:caps?|limits?|bounds?|ceilings?)\b).*\d)/i;
+  /\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+(?:caps?|limits?|bounds?|ceilings?)\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*(?:caps?|limits?|bounds?|ceilings?)\b)(?:\s+(?:at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|up|most|least|e\.g\.|i\.e\.))*\s+\d+\b)/i;
 const SIZE_PREDICATE =
   /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
 // Abbreviations carry periods that are not sentence ends; rejoin fragments

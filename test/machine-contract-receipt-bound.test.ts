@@ -79,6 +79,8 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     "Rows are limited to __30__.",
     "Items have an upper bound of 30.",
     "Rows are limited to no more than 30.",
+    "Rows are limited to at most 30.",
+    "Rows are limited to exactly 30.",
     "Rows have a maximum limit of 30.",
     "Rows have a hard limit of 30.",
     "Rows are capped at only 30.",
@@ -161,6 +163,13 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     "Collections have a limited edition of 30 items.",
     "Rows have a venue with a limit of 30 guests.",
     "Rows have a venue limit of 30 guests.",
+    "Rows are limited in availability across 30 venues.",
+    "Rows are limited to published entries from 30 venues.",
+    "Collections are capped by availability in 30 venues.",
+    "Items are bounded by source inventory across 30 venues.",
+    "Rows have a limit documented in version 30.",
+    "Rows have a limit field with 30 examples.",
+    "Rows are limited to 3rd-party entries.",
   ])("allows unrelated prose %j", (prose) => {
     const result = run(`${guide}\n${prose}\n`);
     expect(result.status, result.stdout + result.stderr).toBe(0);
