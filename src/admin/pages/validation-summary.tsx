@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource hono/jsx */
 import type { FC } from "hono/jsx";
 import { validationSummary } from "../form-errors";
 

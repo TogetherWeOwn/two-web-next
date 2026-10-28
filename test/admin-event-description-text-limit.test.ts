@@ -9,6 +9,7 @@ import { runInNewContext } from "node:vm";
 import { fileURLToPath, URL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { EventFormPage } from "../src/admin/pages";
+import { EventFormFields } from "../src/admin/pages/event-form-fields";
 import type { EventRow } from "../src/admin/store";
 
 const DESCRIPTION_MAX = 1000;
@@ -78,7 +79,18 @@ describe("event description text limit templates", () => {
     "%s page annotates the description textarea with the 1000 code-point limit",
     (_label, path) => {
       const source = readFileSync(fileURLToPath(new URL(path, import.meta.url).href), "utf8");
-      const tag = textareaTag(source);
+      // The edit page places canonical server markup, not a second textarea template.
+      const markup = path.includes("[key]")
+        ? EventFormFields({
+            mode: "edit",
+            row,
+            values: base,
+            errors: {},
+            action: `/admin/events/${row.eventKey}`,
+          }).toString()
+        : source;
+      if (path.includes("[key]")) expect(source).toContain("{@html view.formHtml}");
+      const tag = textareaTag(markup);
       expect(tag).toMatch(
         new RegExp(`data-event-text-limit=(?:"${DESCRIPTION_MAX}"|\\{${DESCRIPTION_MAX}\\})`),
       );

@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource hono/jsx */
 // Admin event-form RSVP roster (split from event-form.tsx; zero behavior change).
 // Edit-only roster: search filter, sortable table, range line and prev/next pagination.
 
