@@ -10,7 +10,7 @@ import { readFileSync } from "node:fs";
 import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { DiscordWidgetSnapshot } from "../src/discord-widget";
-import { joinPageCacheControl } from "../src/join/kit-page";
+import { joinPageCacheControl, parseJoinNotice } from "../src/join/kit-page";
 
 const snapshot = {
   guildId: "326474832151838730",
@@ -39,6 +39,27 @@ describe("Kit GET /join cache contract (Hono joinPage parity)", () => {
   it("the static page without presence or flash keeps 3600 s", () => {
     expect(joinPageCacheControl(null, null)).toBe("public, max-age=3600");
     expect(joinPageCacheControl(null, undefined)).toBe("public, max-age=3600");
+  });
+});
+
+describe("Kit GET /join notice allowlist (Hono route-page parity)", () => {
+  it("accepts exactly start-failed", () => {
+    expect(parseJoinNotice("start-failed")).toBe("start-failed");
+  });
+
+  it("rejects null, empty, mistyped, hostile and case variants", () => {
+    for (const value of [
+      null,
+      "",
+      "bogus",
+      "START-FAILED",
+      "start-failed ",
+      " start-failed",
+      "start_failed",
+      "<script>alert(1)</script>",
+    ]) {
+      expect(parseJoinNotice(value), `notice ${String(value)}`).toBeNull();
+    }
   });
 });
 
@@ -91,10 +112,21 @@ describe("Kit GET /join markup contract (src/screens/join.tsx parity)", () => {
     expect(page).not.toContain("<iframe");
   });
 
-  it("renders the one-shot flash banner with the Hono copy", () => {
-    expect(page).toContain("You are in. Finish Discord");
-    expect(page).toContain("You are already in the server.");
-    expect(page).toContain("Rejoin with the Discord invite");
+  it("renders the one-shot flash banner from the shared Hono copy", () => {
+    // Single-sourced: the sentences live in src/home-copy.ts (the same module
+    // the Hono banner renders) and ride to this page as load data, never as
+    // duplicated literals in the page source.
+    expect(page).toContain("HOME_JOIN_RESULT_COPY.added");
+    expect(page).toContain("HOME_JOIN_RESULT_COPY.alreadyInServer");
+    expect(page).toContain("HOME_JOIN_RESULT_COPY.reinvite");
+    expect(load).toContain("HOME_JOIN_RESULT_COPY");
+  });
+
+  it("passes the shared copy values through the load unswapped", () => {
+    // Exact-shape pin: both values are strings, so swapping them (banner
+    // sentence as the lead paragraph) would typecheck and stay green under
+    // identifier-presence pins. This needle fails that swap first.
+    expect(load).toContain("joinCopy: { HOME_JOIN_RESULT_COPY, JOIN_INTRO }");
   });
 
   it("renders presence aggregates only, never member names", () => {

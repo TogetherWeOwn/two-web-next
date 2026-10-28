@@ -19,6 +19,9 @@ export type Env = AgentEventsEnv & {
   // Optional: surfaces the "Last updated" stamp on /rules (YYYY-MM-DD). Empty or unparseable
   // hides the stamp instead of 500ing (ports two-web TOG-7323).
   RULES_LAST_UPDATED?: string;
+  // Optional: surfaces the "Last reviewed" stamp on /faq (YYYY-MM-DD). Empty or unparseable
+  // hides the stamp instead of 500ing, mirroring /rules.
+  FAQ_LAST_REVIEWED?: string;
   // Hyperdrive → shared Postgres for web reads, agent events, sessions,
   // roster writes and /up. DATABASE_URL overrides it for local/dev use. An
   // optional AGENT_DB binding overrides the store for agent-event ingress only.
@@ -31,8 +34,7 @@ export type Env = AgentEventsEnv & {
   SESSION_SECRET: string;
   // Optional explicit Postgres URL (agent-testdb locally); web DB consumers
   // use DB.connectionString when absent. `QA_AUTH_TOKEN` enables the staging-only
-  // QA seam; unset elsewhere, the route 404s. `MEMBER_ACCESS_LOG_ENFORCE`
-  // defaults to true (a log write failure refuses the read; "false" degrades).
+  // QA seam; unset elsewhere, the route 404s.
   DATABASE_URL?: string;
   // Bot database for the homepage counts' and profile stats' `web_v1` views
   // (bot-owned, read-only `two_web_reader` grant). Hyperdrive binding `BOT_DB`
@@ -59,7 +61,6 @@ export type Env = AgentEventsEnv & {
   SOURCE_EVIDENCE_VERIFIER_EXPIRES_AT?: string;
   // The staging alert probe uses the same internal queue as JobsEnv, without a DB fixture.
   INTERNAL_ACTION_QUEUE?: Queue<QueueMessage>;
-  MEMBER_ACCESS_LOG_ENFORCE?: string;
   // CSP violation sink (TOG-10107): fraction of valid reports (0.0–1.0)
   // written to the log. Unset or unparseable falls back to 1.0 (log
   // everything); out-of-range values clamp. Lower it if report volume ever
@@ -87,10 +88,23 @@ export type Env = AgentEventsEnv & {
   // stays disabled until the companion passes; honoured only for an http
   // loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+  // Staging Kit rollout controls (web/wrangler.staging.jsonc only). The exact
+  // staging APP_URL activates a fail-closed route manifest: unset or malformed
+  // values keep archive and static families on Hono. Preview fixture workers
+  // and production do not set these flags.
+  KIT_ROUTE_ARCHIVE?: string;
+  KIT_ROUTE_STATIC?: string;
   // B1 read-only WebMCP pilot: only the exact strings "true"/"1" inject the
   // model-context island on the four pilot pages; unset or anything else
   // leaves pages byte-identical. No session, cookie or database read.
   WEBMCP_PILOT_ENABLED?: string;
+  // CI loopback workers only (e2e/wrangler.jsonc and the generated Kit
+  // fixture in ci/kit-worker-dev.mjs set it, never a deployed config):
+  // overrides the shared public-read admission budget for those workers,
+  // whose sequential suites present one `anon` client key off-edge. Positive
+  // integers only; unset or anything else keeps the production 60
+  // (src/events/routes-shared.ts publicReadBudget).
+  E2E_PUBLIC_READ_BUDGET?: string;
 };
 
 // Worker-only bindings added by W13; the web app (Hono) and its tests only need `Env`.
@@ -116,6 +130,11 @@ export type Session = {
   member: boolean;
   moderator: boolean;
 };
+
+// What the site header reads from a session: the viewer name plus the member
+// bit (board link). Narrower than Session so crossings that only feed chrome
+// carry nothing else — never ids, avatars or tokens.
+export type HeaderSession = Pick<Session, "username" | "member">;
 
 // W14: agent-events ingress. Postgres comes through a Hyperdrive binding in the worker; tests
 // and `wrangler dev` inject a connection string via the same shape (agent-testdb only).

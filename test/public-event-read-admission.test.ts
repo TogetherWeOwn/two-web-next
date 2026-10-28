@@ -1,12 +1,17 @@
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { Hono } from "hono";
-import { describe, expect, it, vi } from "vitest";
+import { serializeSigned } from "hono/utils/cookie";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { PUBLIC_EVENT_READS_PER_MINUTE, registerEventRoutes } from "../src/events/routes";
 import { MAX_QUERY_LENGTH } from "../src/events/search-log";
 import { EVENTS_SEARCH_TOO_LONG_COPY } from "../src/islands/contracts-calendar";
-import type { Sql } from "../src/sessions";
+import production from "../src/index";
+import { registerPublicApiRoutes } from "../src/public-data/routes";
+import { registerSeoLeaves } from "../src/seo-leaves";
+import { SESSION_COOKIE } from "../src/session-cookie";
+import { createMemorySessionStore, hashToken, newSessionToken, type Sql } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
 
 const PATHS = [
@@ -15,12 +20,17 @@ const PATHS = [
   "/events.rss",
   "/events.ics",
   "/events/01ARZ3NDEKTSV4RRFFQ69G5FAA.ics",
+  "/events/01ARZ3NDEKTSV4RRFFQ69G5FAA",
   "/e/01ARZ3NDEKTSV4RRFFQ69G5FAA",
+  "/sitemap_index.xml",
 ];
 const IP = "192.0.2.17";
 
+const SECRET = "event-detail-read-budget-fixture-secret";
+const DETAIL_PATH = "/events/01ARZ3NDEKTSV4RRFFQ69G5FAA";
+
 // Exercise the real admission transaction with local statement doubles only.
-function fixture(db: Db | null = null) {
+function fixture(db: Db | null = null, routes: "events" | "production" = "events") {
   let now = Date.now();
   const hits: { bucket: string; at: number }[] = [];
   const sql = Object.assign(
@@ -43,15 +53,29 @@ function fixture(db: Db | null = null) {
       if (statement.includes("DELETE FROM web_throttle_hits")) return [];
       throw new Error("Unexpected throttle statement");
     },
-    { begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql) },
+    {
+      begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql),
+      // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before
+      // the advisory lock; the double passes it through.
+      unsafe: async () => [],
+    },
   );
   const throttleStore = vi.fn(async () => sql as unknown as Sql);
   const eventStore = vi.fn(() => db);
   const readSession = vi.fn(async () => null);
   const app = new Hono<{ Bindings: Env }>();
-  registerEventRoutes(app, readSession, readSession);
+  if (routes === "production") {
+    app.route("/", production);
+  } else {
+    registerEventRoutes(app, readSession, readSession);
+    registerSeoLeaves(app);
+    registerPublicApiRoutes(app);
+  }
+  const sessions = createMemorySessionStore();
   const env = {
     APP_URL: "https://next.example.test",
+    SESSION_SECRET: SECRET,
+    SESSION_STORE: sessions,
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
     THROTTLE_STORE: throttleStore,
     get ADMIN_DB() {
@@ -59,17 +83,44 @@ function fixture(db: Db | null = null) {
     },
   } as unknown as EnvWithThrottle;
   const request = (path: string, init: RequestInit = {}) =>
-    app.request(path, { ...init, headers: { "cf-connecting-ip": IP, ...init.headers } }, env);
+    app.request(
+      new URL(path, env.APP_URL),
+      { ...init, headers: { "cf-connecting-ip": IP, ...init.headers } },
+      env,
+    );
   const exhaust = async () => {
     for (let n = 0; n < PUBLIC_EVENT_READS_PER_MINUTE; n++) {
       const response = await request(`/events?q=probe${n}`);
       expect(response.status).not.toBe(429);
     }
+    expect(hits).toHaveLength(PUBLIC_EVENT_READS_PER_MINUTE);
+  };
+  const login = async () => {
+    const token = newSessionToken();
+    await sessions.create({
+      tokenHash: await hashToken(token),
+      userId: "100000000000000001",
+      username: "Fixture member",
+      avatar: null,
+      member: true,
+      moderator: false,
+      expiresAt: new Date(now + 3_600_000),
+    });
+    return (
+      await serializeSigned(SESSION_COOKIE, token, SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
   };
   return {
     app,
     env,
     request,
+    sessions,
+    login,
     exhaust,
     hits,
     throttleStore,
@@ -80,6 +131,10 @@ function fixture(db: Db | null = null) {
     },
   };
 }
+
+afterEach(() => {
+  vi.restoreAllMocks();
+});
 
 describe("public event read admission", () => {
   it("shares one budget across pages, feeds and distinct search values before event/session reads", async () => {
@@ -92,16 +147,85 @@ describe("public event read admission", () => {
       expect(response.status, path).toBe(429);
       expect(response.headers.get("retry-after")).toBe("60");
       expect(response.headers.get("cache-control")).toBe("no-store, private");
-      expect(await response.json()).toEqual({
-        reason: "rate_limited",
-        message: "Too many requests. Try again in 60 seconds.",
-        retry_after: 60,
-      });
+      if (path.endsWith(".rss") || path.endsWith(".ics")) {
+        // Throttled feed reads keep the non-HTML contract even for an
+        // explicit JSON Accept: plain text, never the envelope or the
+        // branded page (same branch shape as the 403/410 feed refusals).
+        expect(response.headers.get("content-type")).toMatch(/text\/plain/);
+        expect(await response.text()).toBe("Too many requests");
+      } else {
+        expect(await response.json()).toEqual({
+          code: "rate_limited",
+          reason: "rate_limited",
+          message: "Too many requests. Try again in 60 seconds.",
+          retry_after: 60,
+          next: "Wait for Retry-After, then retry.",
+        });
+      }
     }
     expect(f.hits).toHaveLength(PUBLIC_EVENT_READS_PER_MINUTE);
     expect(new Set(f.hits.map((hit) => hit.bucket))).toEqual(new Set([`events-read:${IP}`]));
     expect(f.eventStore).not.toHaveBeenCalled();
     expect(f.readSession).not.toHaveBeenCalled();
+  });
+
+  it("charges sitemap reads once and refuses before the event scan without XML success headers", async () => {
+    const scan = vi.fn(async () => ({ rows: [] }));
+    const f = fixture(drizzle(scan) as unknown as Db);
+    const admitted = await f.request("/sitemap_index.xml");
+    expect(admitted.status).toBe(200);
+    expect(admitted.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(admitted.headers.get("content-type")).toBe("application/xml; charset=UTF-8");
+    expect(f.hits).toEqual([{ bucket: `events-read:${IP}`, at: expect.any(Number) }]);
+    expect(scan).toHaveBeenCalledOnce();
+    // Spend the rest through another route, then prove both GET and HEAD stop before dbFor.
+    f.eventStore.mockReturnValue(null);
+    for (let n = 1; n < PUBLIC_EVENT_READS_PER_MINUTE; n++) await f.request("/events");
+    f.eventStore.mockReturnValue(drizzle(scan) as unknown as Db);
+    f.eventStore.mockClear();
+    scan.mockClear();
+    for (const method of ["GET", "HEAD"]) {
+      const response = await f.request("/sitemap_index.xml", { method });
+      expect(response.status).toBe(429);
+      expect(response.headers.get("retry-after")).toBe("60");
+      expect(response.headers.get("cache-control")).toBe("no-store, private");
+      expect(response.headers.get("content-type")).toContain("text/html");
+      expect(await response.text()).toEqual(
+        method === "HEAD" ? "" : expect.stringContaining("Slow down a little"),
+      );
+    }
+    expect(f.eventStore).not.toHaveBeenCalled();
+    expect(scan).not.toHaveBeenCalled();
+    expect(f.hits).toHaveLength(PUBLIC_EVENT_READS_PER_MINUTE);
+  });
+
+  it("keeps static sitemap fallback during an outage and leaves static discovery routes unguarded", async () => {
+    const f = fixture();
+    const missing = await f.request("/sitemap_index.xml");
+    expect(missing.status).toBe(200);
+    const staticXml = await missing.text();
+    expect(staticXml).toContain("<loc>https://next.example.test/events</loc>");
+    f.eventStore.mockReturnValue(
+      drizzle(async () => {
+        throw new Error("DB outage");
+      }) as unknown as Db,
+    );
+    f.env.THROTTLE_STORE = async () => {
+      throw new Error("Limiter outage");
+    };
+    const outage = await f.request("/sitemap_index.xml");
+    expect(outage.status).toBe(200);
+    expect(outage.headers.get("cache-control")).toBe("public, max-age=3600");
+    expect(await outage.text()).toBe(staticXml);
+    const staticRoutes = fixture();
+    await staticRoutes.exhaust();
+    staticRoutes.throttleStore.mockClear();
+    staticRoutes.eventStore.mockClear();
+    for (const path of ["/robots.txt", "/openapi.json"]) {
+      expect((await staticRoutes.request(path)).status).toBe(200);
+    }
+    expect(staticRoutes.throttleStore).not.toHaveBeenCalled();
+    expect(staticRoutes.eventStore).not.toHaveBeenCalled();
   });
 
   it("renders a private branded browser refusal and guards HEAD and island reads", async () => {
@@ -132,14 +256,106 @@ describe("public event read admission", () => {
     expect((await f.request("/events")).status).toBe(503);
   });
 
-  it("does not change guest refusals on the session-only JSON endpoints", async () => {
+  it("refuses exhausted guests before authentication on both session-only JSON endpoints", async () => {
     const f = fixture();
     await f.exhaust();
-    for (const path of ["/events.json", "/events/01ARZ3NDEKTSV4RRFFQ69G5FAA"]) {
-      expect((await f.request(path)).status).toBe(401);
-    }
+    expect((await f.request("/events.json")).status).toBe(429);
+    expect((await f.request(DETAIL_PATH)).status).toBe(429);
     expect(f.hits).toHaveLength(PUBLIC_EVENT_READS_PER_MINUTE);
   });
+
+  it.each(["GET", "HEAD"])(
+    "refuses exhausted signed-cookie detail %s before session or event-store work",
+    async (method) => {
+      const f = fixture(null, "production");
+      const cookie = await f.login();
+      await f.exhaust();
+      const get = vi.spyOn(f.sessions, "get");
+      f.eventStore.mockClear();
+      for (const path of [DETAIL_PATH, `${DETAIL_PATH.toLowerCase()}?view=detail`]) {
+        for (const accept of ["*/*", "application/json", "text/html"]) {
+          const response = await f.request(path, { method, headers: { cookie, accept } });
+          expect(response.status, `${method} ${path} ${accept}`).toBe(429);
+          expect(response.headers.get("retry-after")).toBe("60");
+          expect(response.headers.get("cache-control")).toBe("no-store, private");
+          expect(response.headers.get("vary")).toContain("Accept");
+          expect(response.headers.getSetCookie()).toEqual([]);
+          expect(get).not.toHaveBeenCalled();
+          expect(f.eventStore).not.toHaveBeenCalled();
+          if (method === "HEAD") {
+            expect(await response.text()).toBe("");
+          } else if (accept !== "application/json") {
+            expect(await response.text()).toContain("Slow down a little");
+          } else {
+            expect(await response.json()).toMatchObject({
+              reason: "rate_limited",
+              message: "Too many requests. Try again in 60 seconds.",
+              retry_after: 60,
+              request_id: expect.any(String),
+            });
+          }
+        }
+      }
+      expect(get).not.toHaveBeenCalled();
+      expect(f.eventStore).not.toHaveBeenCalled();
+      expect(f.hits).toHaveLength(PUBLIC_EVENT_READS_PER_MINUTE);
+    },
+  );
+
+  it("charges admitted detail reads once and preserves guest, member and alias responses", async () => {
+    const f = fixture(null, "production");
+    const cookie = await f.login();
+    const get = vi.spyOn(f.sessions, "get");
+    const guest = await f.request(DETAIL_PATH);
+    expect(guest.status).toBe(401);
+    expect(await guest.json()).toEqual({ error: "unauthenticated" });
+    expect(get).not.toHaveBeenCalled();
+    expect(f.eventStore).not.toHaveBeenCalled();
+    expect(f.hits).toHaveLength(1);
+    for (const method of ["GET", "HEAD"]) {
+      get.mockClear();
+      f.eventStore.mockClear();
+      const member = await f.request(DETAIL_PATH, { method, headers: { cookie } });
+      expect(member.status).toBe(503);
+      expect(await member.text()).toBe(method === "HEAD" ? "" : '{"error":"db_unavailable"}');
+      expect(member.headers.getSetCookie()).toEqual([]);
+      expect(get).toHaveBeenCalledOnce();
+      expect(f.eventStore).toHaveBeenCalledOnce();
+    }
+    expect(f.hits).toHaveLength(3);
+    get.mockClear();
+    f.eventStore.mockClear();
+    const alias = await f.request(`${DETAIL_PATH.toLowerCase()}?view=detail`, {
+      headers: { cookie },
+    });
+    expect(alias.status).toBe(301);
+    expect(alias.headers.get("location")).toBe(`${DETAIL_PATH}?view=detail`);
+    expect(get).not.toHaveBeenCalled();
+    expect(f.eventStore).not.toHaveBeenCalled();
+    expect(f.hits).toHaveLength(4);
+  });
+
+  it.each(["missing", "throwing"])(
+    "keeps detail reads fail-open with a %s throttle store",
+    async (state) => {
+      const f = fixture(null, "production");
+      const cookie = await f.login();
+      const get = vi.spyOn(f.sessions, "get");
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      f.env.THROTTLE_STORE = async () => {
+        if (state === "throwing") throw new Error("private driver diagnostic");
+        return null;
+      };
+      const response = await f.request(DETAIL_PATH, { headers: { cookie } });
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: "db_unavailable" });
+      expect(get).toHaveBeenCalledOnce();
+      expect(f.eventStore).toHaveBeenCalledOnce();
+      expect(f.hits).toHaveLength(0);
+      expect(warn).toHaveBeenCalledOnce();
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("private driver diagnostic");
+    },
+  );
 
   it("preserves the missing/failed limiter store outage behavior without exposing driver errors", async () => {
     const f = fixture();
@@ -150,7 +366,15 @@ describe("public event read admission", () => {
     };
     const response = await f.request("/events?q=chess");
     expect(response.status).toBe(503);
-    expect(await response.text()).toBe("Events temporarily unavailable");
+    // The guard fails open, so the limiter outage is invisible: with no
+    // database this answers the negotiated databaseUnavailable envelope
+    // (branded HTML by default), never the legacy bare-text bytes, and the
+    // driver diagnostic stays out of the response.
+    expect(response.headers.get("content-type")).toContain("text/html");
+    const body = await response.text();
+    expect(body).toContain("We will be right back");
+    expect(body).toContain('id="error-heading"');
+    expect(body).not.toContain("private driver diagnostic");
     expect(f.hits).toHaveLength(0);
   });
 

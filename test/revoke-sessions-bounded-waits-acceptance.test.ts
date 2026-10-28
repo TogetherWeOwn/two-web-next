@@ -237,16 +237,15 @@ describe.skipIf(!ambientUrl)(
       }
     };
 
-    const waitForCliLockWait = async () => {
+    const waitForLockWaiters = async (client: postgres.Sql, db: string, count: number) => {
       const deadline = Date.now() + 10_000;
       while (Date.now() < deadline) {
         const waiting = await client`select pid from pg_stat_activity
-          where datname = ${DB_NAME} and application_name = 'revoke-sessions'
-            and wait_event_type = 'Lock'`;
-        if (waiting.length) return;
+          where datname = ${db} and wait_event_type = 'Lock'`;
+        if (waiting.length >= count) return;
         await new Promise((resolve) => setTimeout(resolve, 25));
       }
-      throw new Error("expected the CLI backend to reach the held lock");
+      throw new Error(`expected ${count} backend(s) waiting on the held lock`);
     };
 
     const expectRedacted = (result: CliResult) => {
@@ -267,18 +266,36 @@ describe.skipIf(!ambientUrl)(
       const dry = await startCli([`--discord-id=${MEMBER_A}`], cliEnv());
       expect(dry.timedOut).toBe(false);
       expect(dry.status).toBe(0);
-      expect(JSON.parse(dry.stdout)).toEqual({ mode: "dry-run", counts: { web_sessions: 1 } });
+      expect(JSON.parse(dry.stdout)).toEqual({
+        ok: true,
+        mode: "dry-run",
+        counts: { web_sessions: 1 },
+        passes: 0,
+        stampsPerPass: [],
+      });
       expect(await activeCount(MEMBER_A)).toBe(1);
 
       const applied = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
       expect(applied.status).toBe(0);
-      expect(JSON.parse(applied.stdout)).toEqual({ mode: "apply", counts: { web_sessions: 1 } });
+      expect(JSON.parse(applied.stdout)).toEqual({
+        ok: true,
+        mode: "apply",
+        counts: { web_sessions: 1 },
+        passes: 1,
+        stampsPerPass: [1],
+      });
       expect(await activeCount(MEMBER_A)).toBe(0);
       expect(await activeCount(MEMBER_B)).toBe(1);
 
       const again = await startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
       expect(again.status).toBe(0);
-      expect(JSON.parse(again.stdout)).toEqual({ mode: "apply", counts: { web_sessions: 0 } });
+      expect(JSON.parse(again.stdout)).toEqual({
+        ok: true,
+        mode: "apply",
+        counts: { web_sessions: 0 },
+        passes: 1,
+        stampsPerPass: [0],
+      });
       expect(await activeCount(MEMBER_B)).toBe(1);
 
       // Budgets are this CLI session's own settings, never database- or
@@ -293,7 +310,7 @@ describe.skipIf(!ambientUrl)(
       await client.begin(async (tx) => {
         await tx`select token_hash from web_sessions where token_hash = 'active-a' for update`;
         const running = startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
-        await waitForCliLockWait();
+        await waitForLockWaiters(client, DB_NAME, 1);
         result = await running;
       });
       // Bounded server-side failure: the CLI ends itself, nonzero, instead
@@ -302,6 +319,10 @@ describe.skipIf(!ambientUrl)(
       expect(result!.timedOut).toBe(false);
       expect(result!.status).toBe(1);
       expect(result!.stdout).not.toContain('"mode":"apply"');
+      // The lock-timeout rollback maps to its distinct retry message, not the
+      // generic failure text: pin the 55P03 marker and the retry instruction.
+      expect(result!.stderr).toContain("55P03");
+      expect(result!.stderr).toContain("Retry once the lock clears");
       expectRedacted(result!);
       // All-or-nothing: the unlocked sibling session was not revoked either.
       expect(await activeCount(MEMBER_A)).toBe(2);
@@ -313,12 +334,16 @@ describe.skipIf(!ambientUrl)(
       await client.begin(async (tx) => {
         await tx.unsafe("lock table web_sessions in access exclusive mode");
         const running = startCli([`--discord-id=${MEMBER_A}`], cliEnv());
-        await waitForCliLockWait();
+        await waitForLockWaiters(client, DB_NAME, 1);
         result = await running;
       });
       expect(result!.timedOut).toBe(false);
       expect(result!.status).toBe(1);
       expect(result!.stdout).not.toContain('"mode":"dry-run"');
+      // The lock-timeout rollback maps to its distinct retry message, not the
+      // generic failure text: pin the 55P03 marker and the retry instruction.
+      expect(result!.stderr).toContain("55P03");
+      expect(result!.stderr).toContain("Retry once the lock clears");
       expectRedacted(result!);
       expect(await activeCount(MEMBER_A)).toBe(1);
       expect(await activeCount(MEMBER_B)).toBe(1);
@@ -329,13 +354,21 @@ describe.skipIf(!ambientUrl)(
       await client.begin(async (tx) => {
         await tx`select token_hash from web_sessions where token_hash = 'active-a' for update`;
         running = startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
-        await waitForCliLockWait();
-        await new Promise((resolve) => setTimeout(resolve, 250));
+        await waitForLockWaiters(client, DB_NAME, 1);
+        // Re-observe the waiter still queued before releasing, so the release
+        // (not CLI startup) is what unblocks it; no fixed sleep.
+        await waitForLockWaiters(client, DB_NAME, 1);
       });
       const result = await running!;
       expect(result.timedOut).toBe(false);
       expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ mode: "apply", counts: { web_sessions: 1 } });
+      expect(JSON.parse(result.stdout)).toEqual({
+        ok: true,
+        mode: "apply",
+        counts: { web_sessions: 1 },
+        passes: 1,
+        stampsPerPass: [1],
+      });
       expect(await activeCount(MEMBER_A)).toBe(0);
       expect(await activeCount(MEMBER_B)).toBe(1);
     }, 60_000);
@@ -356,30 +389,32 @@ describe.skipIf(!ambientUrl)(
         expiresAt: expiresLater as unknown as Date,
       };
       await store.create(source);
-      const waitForLockWaiters = async (count: number) => {
-        const deadline = Date.now() + 10_000;
-        while (Date.now() < deadline) {
-          const waiting = await client`select pid from pg_stat_activity
-            where datname = ${DB_NAME} and wait_event_type = 'Lock'`;
-          if (waiting.length >= count) return;
-          await new Promise((resolve) => setTimeout(resolve, 25));
-        }
-        throw new Error(`expected ${count} backends waiting on the held row lock`);
-      };
       let rotation: Promise<boolean> | undefined;
       let running: Promise<CliResult> | undefined;
       await client.begin(async (tx) => {
         await tx`select token_hash from web_sessions where token_hash = ${source.tokenHash} for update`;
         rotation = store.rotate(source.tokenHash, { ...source, tokenHash: "race-replacement" });
-        await waitForLockWaiters(1);
+        await waitForLockWaiters(client, DB_NAME, 1);
         running = startCli([`--discord-id=${MEMBER_A}`, "--apply"], cliEnv());
-        await waitForLockWaiters(2);
+        await waitForLockWaiters(client, DB_NAME, 2);
       });
       expect(await rotation!).toBe(true);
       const result = await running!;
       expect(result.timedOut).toBe(false);
       expect(result.status).toBe(0);
-      expect(JSON.parse(result.stdout)).toEqual({ mode: "apply", counts: { web_sessions: 1 } });
+      // Pass count depends on the race interleaving, so pin the counts plus
+      // the pass invariants rather than an exact pass array.
+      const parsed = JSON.parse(result.stdout) as {
+        mode: string;
+        counts: { web_sessions: number };
+        passes: number;
+        stampsPerPass: number[];
+      };
+      expect(parsed).toMatchObject({ mode: "apply", counts: { web_sessions: 1 } });
+      expect(parsed.passes).toBe(parsed.stampsPerPass.length);
+      expect(parsed.stampsPerPass.reduce((total, stamped) => total + stamped, 0)).toBe(
+        parsed.counts.web_sessions,
+      );
       expect(await activeCount(MEMBER_A)).toBe(0);
       expect(await activeCount(MEMBER_B)).toBe(1);
     }, 60_000);

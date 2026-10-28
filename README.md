@@ -21,11 +21,39 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 - Homepage member/online counts and rank reads come from bot-owned `web_v1` views, are cached for 60 seconds, and hide missing or stale counts; the page degrades when reads fail. House rules, the versioned privacy page, branded error pages, manifest/icons, canonical metadata, sitemap, robots, and security/cache headers are also implemented ([`src/counts.ts`](src/counts.ts), [`src/pages.tsx`](src/pages.tsx), [`src/index.tsx`](src/index.tsx), [`src/seo.ts`](src/seo.ts), [`test/home-counts.test.ts`](test/home-counts.test.ts), [`test/seo.test.ts`](test/seo.test.ts), [`test/n2-manifest-errors.test.ts`](test/n2-manifest-errors.test.ts)). `/.well-known/security.txt` serves the RFC 9116 disclosure file ([`src/security-txt.ts`](src/security-txt.ts), [`src/index.tsx`](src/index.tsx), [`test/security-txt.test.ts`](test/security-txt.test.ts)).
 - Discord sign-in requests `identify` + `guilds.join`; the join journey includes an invite fallback and join-attempt audit. The OAuth access token is used for the join request and not stored. OAuth state and return-journey cookies are signed; persisted session tokens are hashed, rotated on authenticated reads, and revoked on logout ([`src/index.tsx`](src/index.tsx), [`src/join/route.ts`](src/join/route.ts), [`src/sessions.ts`](src/sessions.ts), [`test/auth-acceptance.test.ts`](test/auth-acceptance.test.ts), [`test/sessions.test.ts`](test/sessions.test.ts)).
 - Moderator status is recomputed at login by matching Discord snowflake role IDs, not names; a blank allowlist or failed lookup denies moderator status. QA sign-in requires its configured token and exact staging `APP_URL`; this is not a request-host allowlist ([`src/index.tsx`](src/index.tsx), [`src/roles.ts`](src/roles.ts), [`src/qa.ts`](src/qa.ts), [`test/auth-acceptance.test.ts`](test/auth-acceptance.test.ts), [`test/qa-identity-admission.test.ts`](test/qa-identity-admission.test.ts)).
-- `/profile` and `/members/:user` are member-gated; profile edits are self-only. Reads of another member's data are recorded, and these profile/member reads are refused if audit recording fails ([`src/profiles/routes-gate.ts`](src/profiles/routes-gate.ts), [`src/profiles/routes-admission.ts`](src/profiles/routes-admission.ts), [`src/member-reads.ts`](src/member-reads.ts), [`test/profiles.test.ts`](test/profiles.test.ts), [`test/profile-self-only.test.ts`](test/profile-self-only.test.ts), [`test/member-data-access.test.ts`](test/member-data-access.test.ts)).
+- `/profile` and `/members/:user` are member-gated; profile edits are self-only. Reads of another member's data are recorded, and these profile/member reads are refused if audit recording fails. Another member's page marks each listed game the viewer also plays; own pages stay unmarked ([`src/profiles/routes-gate.ts`](src/profiles/routes-gate.ts), [`src/profiles/routes-admission.ts`](src/profiles/routes-admission.ts), [`src/member-reads.ts`](src/member-reads.ts), [`src/profiles/shared-games.ts`](src/profiles/shared-games.ts), [`test/profiles.test.ts`](test/profiles.test.ts), [`test/profile-self-only.test.ts`](test/profile-self-only.test.ts), [`test/member-data-access.test.ts`](test/member-data-access.test.ts), [`test/profile-shared-games-acceptance.test.ts`](test/profile-shared-games-acceptance.test.ts)).
 - Event listing, calendar and past-event islands, event detail/search, iCalendar and Google Calendar links, event feeds, RSVP/leave endpoints, and going counts are implemented. The event detail page mounts the RSVP-button island. Discord-native calendar rows use [shared expiring snapshots](docs/discord-snapshots.md) and atomic refresh admission in Postgres; they are display-only, not canonical events ([`src/events/pages.tsx`](src/events/pages.tsx), [`src/events/routes.tsx`](src/events/routes.tsx), [`src/events/reads.ts`](src/events/reads.ts), [`test/events.test.ts`](test/events.test.ts), [`test/event-page.test.ts`](test/event-page.test.ts), [`test/islands-rsvp-button.test.ts`](test/islands-rsvp-button.test.ts), [`test/event-feeds.test.ts`](test/event-feeds.test.ts), [`test/discord-snapshot-postgres.test.ts`](test/discord-snapshot-postgres.test.ts)).
 - Moderator admin screens include event and featured-event CRUD, a read-only RSVP roster, join-attempt audit, and a funnel summary ([`src/admin/routes.tsx`](src/admin/routes.tsx), [`src/admin/reads.ts`](src/admin/reads.ts), [`test/admin.test.ts`](test/admin.test.ts), [`test/admin-reads.test.ts`](test/admin-reads.test.ts)). They also include a read-only activity-log viewer showing who changed what, with subject and causer filters ([`src/admin/routes.tsx`](src/admin/routes.tsx), [`src/admin/reads.ts`](src/admin/reads.ts), [`src/admin/pages.tsx`](src/admin/pages.tsx), [`test/admin-activity-log.test.ts`](test/admin-activity-log.test.ts)).
 - Agent-event ingress validates its caller and guild, supports idempotency, and applies an outer rate limit. CSP report ingestion and human-route throttles have fixture coverage; the human throttle uses `DATABASE_URL` when set, otherwise Hyperdrive's `DB.connectionString`. Shared throttle middleware allows when no store is configured or a store operation fails; `/join/discord` and `/join/callback` use a separate check that can fail if its configured store errors ([`src/agent-events/route.ts`](src/agent-events/route.ts), [`src/agent-events/service.ts`](src/agent-events/service.ts), [`src/throttle.ts`](src/throttle.ts), [`src/join/route.ts`](src/join/route.ts), [`src/db/connection.ts`](src/db/connection.ts), [`test/agent-events.test.ts`](test/agent-events.test.ts), [`test/agent-events-shield.test.ts`](test/agent-events-shield.test.ts), [`test/csp-reports.test.ts`](test/csp-reports.test.ts), [`test/throttle-db-connection.test.ts`](test/throttle-db-connection.test.ts)).
 - Queue and scheduler code includes retries, locking, a queue ledger, `events:reconcile`, retention pruning, and `/up` readiness (503 on DB/schema failure, on a missing `SESSION_SECRET`, `DISCORD_CLIENT_SECRET`, or `DISCORD_BOT_TOKEN`, or on a weak `SESSION_SECRET` under the documented strength floor). The jobs worker uses a bot client and Postgres event store; missing bot endpoint/key/secret configuration makes bot calls fail as terminal jobs. Internal-action producer/consumer logic and its Wrangler queue binding exist, but the alert probe is the only sender to the internal-action queue; this does not claim normal web dispatch or end-to-end live bot parity ([`src/jobs/worker.ts`](src/jobs/worker.ts), [`src/jobs/call-internal-action.ts`](src/jobs/call-internal-action.ts), [`src/bot/client.ts`](src/bot/client.ts), [`src/alert-probe.ts`](src/alert-probe.ts), [`src/up.ts`](src/up.ts), [`wrangler.jsonc`](wrangler.jsonc), [`test/jobs.test.ts`](test/jobs.test.ts), [`test/jobs-worker-config.test.ts`](test/jobs-worker-config.test.ts), [`test/callinternalaction-no-web-dispatch.test.ts`](test/callinternalaction-no-web-dispatch.test.ts), [`test/up.test.ts`](test/up.test.ts)). Guarded one-row re-dispatch applies a single `replay` advice by queueing a fresh sync-event via `POST /admin/queue/failed/:id/redispatch`; it is staging-only and disabled until separately authorized ([queue-redrive runbook](docs/queue-redrive-runbook.md)) ([`src/admin/queue-redispatch.ts`](src/admin/queue-redispatch.ts), [`src/admin/routes.tsx`](src/admin/routes.tsx), [`test/queue-redispatch-route.test.ts`](test/queue-redispatch-route.test.ts), [`test/queue-redispatch-postgres.test.ts`](test/queue-redispatch-postgres.test.ts)).
+
+## Event search
+
+Upcoming text searches mark locatable title matches and show a relevant, bounded
+passage from the description. Open **Full description** to read the original text.
+Search text is literal, including `%`, `_` and backslash. Matching stays database-led:
+a returned event can show an unmarked excerpt when its match cannot be located
+faithfully for display. Clear the text search to restore ordinary compact cards.
+
+The upcoming schedule's **Filter by game** select works in list and calendar views.
+Choose a game and submit **Search**, with or without JavaScript; combine it with a
+title/description search when needed. Share the resulting `?game=` URL. Matching
+ignores case and surrounding whitespace. Blank or unknown games show **All games**.
+Options come from one published-only distinct read, capped at 100 games per request.
+The facet stays on schedule paging, view changes, month jumps and the past drawer;
+the separate past-event archive is not game-filtered. The calendar collection
+`/events.ics` accepts the same `?game=` scope: on a filtered schedule the
+Subscribe link, the `.ics` download and the copyable feed URL all carry the
+committed game, and the calendar label names it. Blank means every game; a valid
+unknown game yields an empty scoped calendar, never all games.
+
+Calendar past searches preview up to 20 matches. Use **Continue search in past events**
+to page through older matches without losing the query; **Clear search** returns to
+the ordinary archive. See the [archive search contract](docs/past-archive-search.md)
+for matching rules, empty-state recovery and cache boundaries. Archive cards retain
+the query and page when opening an event, including in another tab; the detail
+page's [archive return link](docs/archive-detail-return.md) takes you back to those
+results without changing the event's canonical or share URLs.
 
 ## Moderator guides
 
@@ -41,6 +69,8 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
   qualitative event learning, separate from attendance and activity counts.
 - [Troubleshooting join and Discord sign-in](docs/troubleshooting-join.md):
   current notices, recovery pages, and the invite fallback.
+- [RSVP states and safe recovery](docs/rsvp-recovery.md): seats, waitlist positions,
+  pending Discord mirrors, uncertain writes, and bounded support steps.
 
 ## Develop and test safely
 
@@ -60,6 +90,20 @@ Install development dependencies even when
 npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
+
+Root and `web/` installs generate the ignored critical-CSS module through
+`postinstall`. If install scripts are disabled (`npm ci --ignore-scripts`),
+run the generator explicitly **from the repository root before typecheck,
+tests or bundling**:
+
+```sh
+node ci/build-leaf-css.mjs
+# Or, from the root: npm run build:leaf-css
+```
+
+The generator uses only Node builtins, so it also works before dependency
+installation. See [security-pin contracts](docs/security-pin-contracts.md)
+for the offline static gate and generated-hash review evidence.
 
 Set the local origin in `.dev.vars` to match Wrangler's local server and the
 Discord application's registered callbacks (`${APP_URL}/auth/discord/callback`
@@ -99,14 +143,42 @@ For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-Always supply the test URL for full-suite runs. Live suites skip when
-`DATABASE_URL` is unset; `test/review-p1-verify.test.ts` gates its live-DB
-proofs behind the same skip and keeps its P1-3 refusal proofs offline.
+Always supply the test URL for full-suite SQL coverage. The DB-free lane
+(`env -u DATABASE_URL npm run check`) runs fixture-only checks; existing live
+suites skip when `DATABASE_URL` is unset. `test/review-p1-verify.test.ts` keeps
+its P1-3 refusal proofs offline. Featured-unpublish SQL proofs run under the
+pre-existing integration gate in `test/admin.test.ts`; the six registration
+and rendering proofs in `test/admin-featured-unpublish-acceptance.test.ts`
+and `test/admin-featured-unpublish-invariants.test.ts` remain ungated. This
+preserves the DB-free lane without adding a conditional skip. It does not
+replace disposable-DB verification or browser evidence.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
 
+### Public-payload privacy contract
+
+Run `npm run check:hono-payloads -- --format json` for the fixture-only Hono
+no-member-data check with stable per-route IDs. See the
+[contract, detector limits and route-addition rules](docs/hono-public-payloads.md).
+
+### Machine-docs check
+
+Agents fetch `/join.md`, `/llms.txt` and `/events.md` literally, so this one
+command re-proves the three truths after any machine-doc change: the join
+invite resolves through the sanitized floor, llms.txt guidance matches its
+content, and documented per-event URLs are fetchable or marked templates.
+
+```sh
+npx vitest run test/machine-docs-followable-links-acceptance.test.ts test/ai-friendly-md.test.ts
+```
+
 ## Coverage ratchet
+
+For added-line coverage, JSON receipts and the hermetic fixture check, see the
+[patch coverage CLI](docs/quality-gates.md#patch-coverage-cli) or run
+`node ci/patch-coverage.mjs --help`. The 80% patch floor remains WARN by default;
+missing or malformed coverage evidence fails in every mode.
 
 ```sh
 # Choose a fresh, unused numeric suffix for each run.
@@ -129,7 +201,7 @@ area floors (`src/admin`, `src/events`, `src/join`, `src/sessions.ts`, `src/jobs
 `src/seo.ts`) live in `vitest.config.ts`. The
 baseline uses the full suite with the test database; without it, skipped live
 suites may put coverage below the floors. CI's
-required `check` job runs the configuration drift check, Biome lint/format gate,
+`check` job runs the configuration drift check, Biome lint/format gate,
 typecheck and the coverage gate against its Postgres service, writes a job summary
 with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
@@ -170,6 +242,12 @@ them with esbuild into the checked-in `public/islands/*.js` and
 frontend framework bundle to generate. Island and stylesheet tests execute the
 minified bytes, so edit the source, rebuild, and commit both.
 
+Successful calendar fragment navigation and Back/Forward keep guest header sign-in,
+hero Join and card sign-in destinations aligned with the committed URL, retaining
+ordinary-login versus join endpoints and attribution parameters. Unsent search
+drafts and failed, superseded or invalid fragments do not install new destinations;
+replacement links and zones are admitted together without replacing the search input.
+
 ```sh
 npm run build:assets                 # regenerate public/ from assets/
 npm run build:assets:check           # fail when the output drifted
@@ -177,15 +255,47 @@ npm run config:check                 # drift check + its local-fixture selftests
 npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
 ```
 
+WebMCP tool errors (`assets/islands/model-context.js`): every tool call owns
+a 10 s deadline over fetch plus body consumption and a 32 KiB body cap
+(mirroring `API_PUBLIC_BOUNDS.maxBodyBytes`, enforced while streaming when a
+reader exists); settlement aborts the per-call fetch and releases its queue
+entry and pagehide forwarder. Failures reject with an `Error` carrying a
+stable `.code`, a safe `.message` naming the next step, and `.retryAfter`
+seconds (1–86400) on rate limits only. Codes: `timeout`,
+`invalid_response` (oversize, malformed, or unexpected redirect),
+`unavailable` (5xx, transport, or pagehide), `rate_limited` (429, never
+retried automatically), `not_found` (unknown event key, no retry),
+`invalid_request` (bad event key, thrown synchronously). Local check,
+fixtures only:
+
+```sh
+npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands-model-context.test.ts
+```
+
 ### Browser regressions
 
-These suites skip their browser cases unless the opt-in variable is `"true"`, so
+Except for the unconditional suites (Kit member-auth, Kit admin contrast,
+native event share and the three `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
-named suite passed and at least the minimum ran. The RSVP `node --test` suite
-writes a TAP report and runs `ci/rsvp-focus-require-executed.mjs` the same way.
-The minimums live in `.github/workflows/ci.yml`. Run any listed command locally
+named suite passed and at least the minimum ran. The RSVP and Kit member-auth `node --test` suites
+write TAP reports and run `ci/rsvp-focus-require-executed.mjs` the same way.
+Both verifiers admit evidence through one shared authority
+(`ci/execution-receipt-authority.mjs`): the named suite must appear with
+distinct passed cases, so counters-only summaries, unrelated-suite
+substitution, skipped/todo/cancelled cases and malformed or duplicate
+identities all fail the step. Add `--format json` for a versioned machine
+receipt (`version`, `suite_id`, `cases[].case_id`, `counts`, `verdict`,
+`error_code`, `next_action`); human output stays one line. Failure evidence
+anywhere in the report (including suite teardown failures and unrelated cases)
+refuses admission. JSON stdout is capped at 16 KiB including its newline; an
+oversized receipt fails before any success output or CI-summary append rather
+than dropping case identities. Human output can still verify larger suites.
+The minimums live in `.github/workflows/ci.yml`. The `SUITES` registry in
+`ci/a11y-native-browser-suites.test.mjs` is the single source of truth that
+every gated file and browser Vitest config is wired there; check it with
+`node --test ci/a11y-native-browser-suites.test.mjs`. Run any listed command locally
 to execute the same Chromium proof.
 
 | Suite | Opt-in variable | Local command |
@@ -193,17 +303,35 @@ to execute the same Chromium proof.
 | `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
 | `test/calendar-search-unicode-boundaries.test.ts` | `CALENDAR_SEARCH_BROWSER_TESTS` | `CALENDAR_SEARCH_BROWSER_TESTS=true npx vitest run test/calendar-search-unicode-boundaries.test.ts` |
+| `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
+| `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `ci/event-time-from-now.test.mjs` | None—always runs | `node --import tsx --test ci/event-time-from-now.test.mjs` (56 real Chromium cases on Hono and Kit renders with a frozen clock and the shipped minified island; TAP-verified in `a11y`; see [docs/event-time-from-now.md](docs/event-time-from-now.md)) |
+| `test/event-chosen-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-chosen-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/profile-local-time-comparison-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-comparison-acceptance.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `test/profile-local-time-save.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-save.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-native-length.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-native-length.test.ts` |
 | `test/member-profile-native-422-baseline.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/member-profile-native-422-baseline.test.ts` |
+| `test/profile-composition-browser.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-composition-browser.test.ts` |
+| `test/profile-refused-draft-recovery-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-refused-draft-recovery-acceptance.test.ts` |
 | `test/kit-error-shell-render.test.ts` | `KIT_ERROR_SHELL_BROWSER_TESTS` | `KIT_ERROR_SHELL_BROWSER_TESTS=true npx vitest run test/kit-error-shell-render.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/admin-editor-expiry-departure.test.ts` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS` | `ADMIN_EDITOR_EXPIRY_BROWSER_TESTS=true npx vitest run test/admin-editor-expiry-departure.test.ts` |
 | `ci/audit-lifecycle.test.mjs` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run ci/audit-lifecycle.test.mjs` |
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
+| `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
+| `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
+| `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (34 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
+| `ci/schedule-search-context-browser.test.ts` | None—always runs | `npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts` (5 Hono and 5 Kit real Chromium cases; requires Kit dependencies and Chromium; JSON-verified in `a11y` via `ci/a11y-require-executed.mjs`) |
+| `ci/calendar-subscription-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts` (10 cases on each of the four calendar surfaces; intercepted clipboard fixtures; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
+| `ci/calendar-game-recovery-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-game-recovery-browser.vitest.ts ci/calendar-game-recovery-browser.test.ts` (16 cases for each Hono/Kit and source/shipped bundle pairing, enforced minimum 14; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
+| `ci/calendar-navigation-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-navigation-browser.vitest.ts ci/calendar-navigation-browser.test.ts` (shipped schedule navigation on Hono and Kit, enforced minimum 16 per surface; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
-with memory stores. None needs a database, staging or the network. Install the
-browser once, then run a suite with its variable set:
+with memory stores. None needs a database, staging or the network. For rows that
+require Kit dependencies, install them once with `npm ci --prefix web --include=dev`.
+Install the browser once, then run a suite with its variable set:
 
 ```sh
 npx playwright install --with-deps chromium
@@ -220,16 +348,22 @@ Do not use `npm run deploy` as a test or build command.
 
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
 gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
-`CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com`.
+`CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
 The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,
 Discord and guest auth redirects, and a branded 404. It checks CSP and nosniff
 on every response and staging noindex on returned HTML (the application's header
 contract). `/up` requires HTTP 200 with `db:ok` and `pending_migrations:0` (DB/schema
-readiness); degraded or unknown queue health alone does not fail deployment. Redirects are not followed; each
+readiness) plus the queue envelope (`warn_at:20`, `critical_at:100`); with the staging
+strict flag a literal `unknown` in `queue.status` or `ready_wait_severity`, or a `critical`
+`ready_wait_severity`, fails the deploy even though `/up` itself still returns 200. Queue
+`degraded` passes. The strict flag is staging-only: production and post-rollback smoke omit
+it (`critical` only warns, `unknown` passes), so a blind or stuck queue cannot block its own
+fix. Redirects are not followed; each
 request/body has a 5-second timeout. A failure names the route and expected versus
 actual result and fails the deploy job after six attempts. That workflow remains
-staging-only; the separate production workflow below is gated and runs only
-when manually authorized.
+staging-only; the separate production workflow below is gated and promotes
+automatically once staging verifies a commit (with a daily backstop), keeping
+manual dispatch for explicit redeploys and recovery.
 Full procedures live in [docs/runbook.md](docs/runbook.md).
 
 `npm run test:smoke` runs both checkers against loopback stub servers with local
@@ -265,7 +399,7 @@ proof of environment isolation. The separate `env.production` block below
 configures the production Worker; it is not authorization for a deployment,
 database probe or production test.
 
-### Production (gated manual deployment)
+### Production (gated automatic promotion)
 
 Cutover decision state is recorded in `docs/cutover-gates.md` and the release
 contract in `docs/releases.md`; this section describes the deployment contract,
@@ -273,9 +407,27 @@ not the currently serving version. Worker code reaches production only through
 `.github/workflows/deploy-production.yml` (rollbacks through
 `.github/workflows/rollback-production.yml`; production migrations through
 `.github/workflows/db-migrate.yml`), all require `PRODUCTION_DEPLOY_ENABLED` to be
-exactly `true`, and each requires a
-manually authorized dispatch. The workflow accepts only `workflow_dispatch` on
-`main`; it never deploys on push, PR or release. Before the deploy job can start,
+exactly `true`. The production workflow promotes automatically when
+`e2e-staging` completes plus a daily 14:17 UTC schedule backstop, and keeps a
+manually authorized dispatch for explicit redeploys; it never deploys on push,
+PR or release. Automatic runs promote only a staging green that soaked 30
+minutes with no newer red staging run, skip cleanly when production already
+serves the target (`/up` revision marker) or there is nothing soaked and green,
+and read the live production ledger via `/up` when the target journal has
+entries production lacks: when the ledger holds every target web entry (set
+inclusion), the run clears automatically; otherwise it stops with a clear
+error (ledger lacks entries, ledger read failed, unusable target timestamp,
+non-ok database, or a live Worker that predates the ledger signal —
+automatic migration otherwise waits on the least-privilege migrator). An
+unknown live commit after three `/up` reads also stops promotion. A manual
+re-dispatch with `migrations_applied: true` records an audited continuation
+past any stop once `db-migrate.yml` (target production) has applied the
+target's migrations; automatic runs ignore that input and halt on those stops
+unless the ledger already proves the target applied. The first promotion
+after the ledger signal ships needs one manual dispatch because the live
+Worker predates it. Repo
+variable `PRODUCTION_HOLD_UNTIL` (ISO-8601 UTC, at most 24h ahead) pauses all
+promotion while now is before its value. Before the deploy job can start,
 `ci/production-deploy-gate.mjs` requires the repository variable
 `PRODUCTION_DEPLOY_ENABLED` to be exactly `true`, verifies the live GitHub
 Environment `production` protection and rejects the placeholder Hyperdrive id.
@@ -311,7 +463,8 @@ migrations/tests on production. Its post-deploy smoke runs
 the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`
 requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting
-degraded/unknown queue states like staging, and the remaining 15 routes assert
+degraded queue states; unlike staging it omits `--fail-on-ready-wait-critical`,
+so `critical` queue readiness only warns and `unknown` passes, and the remaining 15 routes assert
 status/body/CSP/nosniff/content-type/redirect plus the apex indexing posture
 (indexable HTML omits the staging noindex). No auth, no writes, no PII.
 After the promotion reaches 100%, the workflow probes the apex again with the
@@ -437,6 +590,9 @@ network-free (it checks resolved config) and the smoke requires a valid
 root dot, and rejects redirects. Both URLs must be HTTP(S), without credentials,
 query strings or fragments. A distinct hostname alone does not prove staging
 isolation: the runtime/receiver/custody holds still apply.
+The smoke and drill examples below are **preview-only**: they perform no bot
+actions. Real execution requires `--apply` and the prerequisites in the
+[bot probe staging procedure](docs/bot-probe-staging.md).
 
 ```sh
 npm run check:worker-moderators                   # source deployment preflight
@@ -447,20 +603,28 @@ APP_URL=https://next.togetherweown.com npm run drill:internal-action -- \
   --discord-id=<drill identity> --role-key=<key> --channel-key=<throwaway>
 ```
 
-The deployment preflight parses the **top-level** `vars.DISCORD_MODERATOR_ROLE_IDS`
-and `vars.DISCORD_GUILD_ID` in `wrangler.jsonc` and requires exactly the
-guild-bound Owner+Moderator pair (staging guild `1545644954272137297`:
+`npm run check:moderators -- --help` prints usage to stdout and reads nothing;
+`--json` emits the findings verdict. Both this probe and `audit:moderator-roles`
+use the [offline operator-probe contract](docs/operator-probes.md): usage/input
+refusals with `--json` are one versioned safe error on stderr, stdout empty,
+exit 2. Comparison verdicts and exits 0/1 are unchanged.
+`npm run check:worker-moderators` parses
+the top-level `vars.DISCORD_MODERATOR_ROLE_IDS` and `vars.DISCORD_GUILD_ID` in
+`web/wrangler.staging.jsonc`; `npm run check:worker-moderators-production` parses
+`env.production.vars` in `wrangler.jsonc`. Each requires exactly its guild-bound
+Owner+Moderator pair (staging guild `1545644954272137297`:
 `1546211363578191873,1545648550329851946`; production guild
-`326474832151838730`: `1546777855801954408,1546777856984481792`), before any queue
-creation or deployment. `wrangler deploy --config wrangler.jsonc` consumes that
-same source value, without `--env`/`--var` overrides; a separate GitHub moderator
-secret cannot make the gate pass. `keep_vars` retains unrelated remote plaintext
-vars, and Wrangler retains remote secrets. No binding values are read back or
-copied. The preflight proves source configuration, **not live isolation or a
-successful deployment**. Blank config remains a valid local revocation state,
-but unapproved extra roles (including duplicates) fail the probe, as does a
-pair that belongs to the other guild — role IDs are guild-scoped, so a
-production pair in the staging config matches nobody while looking configured.
+`326474832151838730`: `1546777855801954408,1546777856984481792`) before deployment.
+The staging workflow deploys `web/wrangler.staging.jsonc` and supplies only the
+validated `KIT_ROUTE_ARCHIVE` and `KIT_ROUTE_STATIC` route flags with `--var`;
+it does not override either moderator var. A separate GitHub moderator secret
+cannot make the gate pass. `keep_vars` retains unrelated remote plaintext vars,
+and Wrangler retains remote secrets. No binding values are read back or copied.
+The preflight proves source configuration, **not live isolation or a successful
+deployment**. Blank config remains a valid local revocation state, but
+unapproved extra roles (including duplicates) fail the probe, as does a pair
+that belongs to the other guild — role IDs are guild-scoped, so a production
+pair in the staging config matches nobody while looking configured.
 
 The live smoke runs manually via the `staging-smoke` workflow in a job container
 (`[self-hosted, two-selfhosted]` while the repo is private, GitHub-hosted while
@@ -471,6 +635,11 @@ Pass `--announcement-only` (workflow input `announcement_only`) to run only
 `announcement.post` and its same-key replay check, for a receiver that does not
 implement `role.assign` or `event.upsert`; then only `--channel-key` is needed.
 Both probes are fixture-tested in `check` without real secrets.
+
+For smoke/drill help, effect-free preview (default or `--dry-run`), explicit
+apply, JSON errors and repeat-run identities, use the single
+[bot probe staging procedure](docs/bot-probe-staging.md). Both tools' `--help`
+links there without reading target or credential configuration.
 
 The CallInternalAction drill (`drill:internal-action`) ports the remaining
 drill-only half of `docs/parity.md` §6: production web never dispatches
@@ -494,8 +663,8 @@ These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 
 Squash-merge only; PR titles follow Conventional Commits and the body follows the
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
-`check`, `gitleaks` and `pr-lint` are required. Review the exact green head before
-merge. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
+`ci-ok`, `gitleaks`, `e2e-ok` and `pr-lint` are required, plus Paperclip Review 5/5
+on the exact green head. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
 
 ## License
 

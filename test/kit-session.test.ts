@@ -35,6 +35,7 @@ import {
 import { EXPIRED_WRITE_COOKIE } from "../src/write-recovery";
 import {
   createRequestSessionCache,
+  kitAdminRenewalFor,
   kitAuthStatusCookieFor,
   kitSessionBridge,
   readReturnJourney,
@@ -43,6 +44,7 @@ import {
 } from "../src/kit-session";
 import {
   dispatchHookRequest,
+  ROUTE_MANIFEST,
   type HookDispatchDeps,
   type HookEventLike,
 } from "../src/route-ownership";
@@ -447,7 +449,7 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     expect(res.headers.getSetCookie()).toEqual([]);
   });
 
-  it("a public Kit-owned request never invokes the session bridge and resolves without locals", async () => {
+  it("a public Kit-owned request never invokes the session bridge and resolves with correlation-only locals", async () => {
     // Public routes render outside the member-read boundary: even a session
     // cookie must not trigger a bridge read. Member-merge detail is pinned in
     // kit-member-dispatch; the real-bridge composition is pinned below.
@@ -467,11 +469,13 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     const res = await dispatchHookRequest(event, deps);
     expect(sessionFor).not.toHaveBeenCalled();
     expect(deps.resolve).toHaveBeenCalledTimes(1);
-    expect(seen[0]!.locals).toBeUndefined();
+    // Correlation is not session data: the dispatch merges only the validated
+    // request id, never bridge/session keys, into a public render.
+    expect(seen[0]!.locals).toEqual({ requestId: expect.any(String) });
     expect(res.status).toBe(200);
   });
 
-  it("a failing bridge never 500s a Kit render: resolve still runs without locals", async () => {
+  it("a failing bridge never 500s a Kit render: resolve still runs with correlation-only locals", async () => {
     const deps = depsFor({
       manifest: KIT_MANIFEST,
       sessionFor: vi.fn(async () => {
@@ -481,8 +485,46 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     const event = eventFor("/events/past");
     const res = await dispatchHookRequest(event, deps);
     expect(deps.resolve).toHaveBeenCalledTimes(1);
-    expect(event.locals).toBeUndefined();
+    // The failed bridge merges nothing; only the dispatch's correlation id
+    // reaches the render.
+    expect(event.locals).toEqual({ requestId: expect.any(String) });
     expect(res.status).toBe(200);
+  });
+
+  it("a throwing probe never fails an authorized admin render: 200 with no Set-Cookie", async () => {
+    const body = "<h1>admin</h1>";
+    const resolve = vi.fn(
+      async () => new Response(body, { headers: { "content-type": "text/html" } }),
+    );
+    const authStatusCookieFor = vi.fn(async (_event: HookEventLike) => {
+      throw new Error("probe unavailable");
+    });
+    const deps = depsFor({
+      manifest: [{ method: "GET", path: "/admin", enabled: true, reads: "public" as const }],
+      authStatusCookieFor,
+      resolve,
+    });
+    const request = new Request("https://next.example.test/admin", {
+      headers: { host: "next.example.test" },
+    });
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        status: "authenticated",
+        session: { userId: "42", username: "Rick", avatar: null, member: true, moderator: true },
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      },
+    };
+    const res = await dispatchHookRequest(event, deps);
+    expect(resolve).toHaveBeenCalledTimes(1);
+    expect(authStatusCookieFor).toHaveBeenCalledTimes(1);
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(body);
+    expect(res.headers.getSetCookie()).toEqual([]);
   });
 
   it("an untrusted host bypasses the bridge straight to Hono", async () => {
@@ -494,12 +536,12 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     expect(deps.honoFetch).toHaveBeenCalledTimes(1);
   });
 
-  it("without a bridge the dispatch behaves exactly as before (no locals)", async () => {
+  it("without a bridge the dispatch merges only the correlation id (no session locals)", async () => {
     const deps = depsFor({ manifest: KIT_MANIFEST });
     const event = eventFor("/events/past");
     await dispatchHookRequest(event, deps);
     expect(deps.resolve).toHaveBeenCalledTimes(1);
-    expect(event.locals).toBeUndefined();
+    expect(event.locals).toEqual({ requestId: expect.any(String) });
   });
 });
 
@@ -652,6 +694,57 @@ describe("kitSessionBridge (production hook composition)", () => {
     expect((seen[0]!.locals as KitLocals).session?.userId).toBe(viewer);
     expect(res.status).toBe(200);
     expect(audited).toHaveLength(1);
+  });
+
+  it("preserves a valid join flash on a released non-profile member page", async () => {
+    const store = createMemorySessionStore();
+    const viewer = "100000000000000101";
+    const { token } = await seedSession(store, { userId: viewer });
+    const request = new Request("https://next.example.test/leaderboards/members", {
+      headers: {
+        host: "next.example.test",
+        cookie: [await pair(SESSION_COOKIE, token), await pair(JOIN_RESULT_COOKIE, "added")].join(
+          "; ",
+        ),
+      },
+    });
+    const event: HookEventLike = {
+      request,
+      url: new URL(request.url),
+      route: { id: "/leaderboards/members" },
+    };
+    const audited: AccessEntry[] = [];
+    const res = await dispatchHookRequest(event, {
+      appUrl: "https://next.example.test",
+      honoFetch: async () => new Response("hono", { status: 200 }),
+      manifest: ROUTE_MANIFEST,
+      resolve: async () =>
+        new Response(
+          await keyedMemberRead(async () => {
+            memberQueryPermit();
+            declareMemberResult(["100000000000000102"]);
+            return "<html>members</html>";
+          }),
+          {
+            status: 200,
+            headers: { "content-type": "text/html" },
+          },
+        ),
+      sessionFor: kitSessionBridge(bridgeEnvFor(store)),
+      accessSink: async () => async (entry) => {
+        audited.push(entry);
+        return true;
+      },
+    });
+
+    expect((event.locals as KitLocals).status).toBe("authenticated");
+    expect((event.locals as KitLocals).joinResult).toBe("added");
+    expect(res.status).toBe(200);
+    expect(audited).toHaveLength(1);
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
+    expect(
+      res.headers.getSetCookie().some((cookie) => cookie.startsWith(`${JOIN_RESULT_COOKIE}=`)),
+    ).toBe(false);
   });
 });
 
@@ -806,5 +899,67 @@ describe("kitAuthStatusCookieFor (moderator admin documents only)", () => {
       vi.spyOn(store, "statusHash").mockResolvedValueOnce(bad);
       expect(await writeCookie(event)).toBeNull();
     }
+  });
+});
+
+describe("kitAdminRenewalFor (the live row, not locals, authorizes rotation)", () => {
+  const adminEvent = async (
+    token: string,
+    session: KitLocals["session"],
+  ): Promise<HookEventLike> => {
+    const request = requestWith([await pair(SESSION_COOKIE, token)], "GET", "/admin");
+    return {
+      request,
+      url: new URL(request.url),
+      route: { id: "/admin" },
+      locals: {
+        status: "authenticated",
+        session,
+        returnTo: null,
+        joinResult: null,
+        expiredWrite: null,
+      },
+    };
+  };
+  const renewalFor = (store: SessionStore) =>
+    kitAdminRenewalFor({ SESSION_SECRET: SECRET, SESSION_STORE: store } as unknown as Env);
+
+  it("refuses forged moderator locals behind a valid non-moderator bearer", async () => {
+    const store = createMemorySessionStore();
+    const { token, row } = await seedSession(store, { moderator: false });
+    const rotate = vi.spyOn(store, "rotate");
+    const event = await adminEvent(token, {
+      userId: "42",
+      username: "Rick",
+      avatar: null,
+      member: true,
+      moderator: true,
+    });
+    expect(await renewalFor(store)(event)).toBeNull();
+    expect(rotate).not.toHaveBeenCalled();
+    expect(await store.get(row.tokenHash)).toMatchObject({ moderator: false });
+  });
+
+  it("carries the row's identity bits into the successor, not stale locals bits", async () => {
+    const store = createMemorySessionStore();
+    const { token } = await seedSession(store, { moderator: true, username: "Rick" });
+    const event = await adminEvent(token, {
+      userId: "999",
+      username: "Mutated",
+      avatar: "mutated-avatar",
+      member: false,
+      moderator: true,
+    });
+    const setCookie = await renewalFor(store)(event);
+    expect(setCookie).not.toBeNull();
+    const replacement = (await parseSigned(setCookie!, SECRET))[SESSION_COOKIE];
+    expect(typeof replacement).toBe("string");
+    expect(await store.get(await hashToken(replacement as string))).toMatchObject({
+      userId: "42",
+      username: "Rick",
+      avatar: null,
+      member: true,
+      moderator: true,
+    });
   });
 });

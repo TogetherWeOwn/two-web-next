@@ -6,10 +6,15 @@ the 60-second window, and the shared 429 response do not change.
 
 ## Address selection
 
-The address is `CF-Connecting-IP` when present, otherwise the trimmed first hop
-of `X-Forwarded-For`, otherwise `anon`. Cloudflare supplies `CF-Connecting-IP`
-on edge requests; the other cases support off-edge tests and local runs. This
-change does not make other forwarded headers trusted or change their precedence.
+The address is the trimmed `CF-Connecting-IP` when it is non-empty, otherwise
+the first non-empty trimmed `X-Forwarded-For` hop, otherwise `anon`. Empty or
+whitespace-only `CF-Connecting-IP` falls through to `X-Forwarded-For`; empty
+hops are skipped, so an empty first hop never collapses clients into a shared
+empty-suffix bucket. Only a request with no usable identity in either header
+lands in the existing documented `anon` fallback bucket, exactly like a
+headerless request. Cloudflare supplies `CF-Connecting-IP` on edge requests;
+the other cases support off-edge tests and local runs. This change does not
+make other forwarded headers trusted or change their precedence.
 
 ## Normalization
 
@@ -23,8 +28,16 @@ change does not make other forwarded headers trusted or change their precedence.
   produce the same key for the same prefix. The runtime's
   [URL IPv6 parser](https://url.spec.whatwg.org/#concept-ipv6-parser)
   validates addresses before the canonical pieces are expanded.
-- Missing addresses still share `anon`. Malformed off-edge values retain their
-  existing key; a parse failure never skips the throttle store.
+- Missing or wholly empty addresses share the documented `anon` fallback, never
+  an empty-suffix bucket. Malformed off-edge values retain their existing key;
+  a parse failure never skips the throttle store.
+- The normalized client segment is capped at 64 characters
+  (`MAX_CLIENT_KEY_SEGMENT` in [`src/throttle.ts`](../src/throttle.ts)),
+  applied before any store call. The longest valid IP text form is 45
+  characters, so the cap never truncates a valid address; only over-bound
+  malformed or hostile values are truncated, deterministically, with values
+  differing inside the bound keeping distinct buckets. No header bytes are
+  logged.
 
 This limits address rotation within one /64. It does not prevent clients with
 multiple /64 allocations from consuming multiple budgets. Devices sharing a
@@ -39,7 +52,9 @@ bucket stamped in the last 60 seconds; at or over budget refuses with the
 shared 429 response and a `Retry-After` of at least 1 second (the ceiling of
 oldest-hit-plus-window minus now), otherwise the admission inserts one hit row
 and lets the request through. The count-then-insert runs under a per-bucket
-Postgres advisory lock so concurrent bursts cannot overshoot. Failure posture
+Postgres advisory lock so concurrent bursts cannot overshoot; the lock waits
+at most `WEB_THROTTLE_LOCK_TIMEOUT_MS` (`SET LOCAL lock_timeout` in
+[`checkJoinThrottle`](../src/join/service.ts)). Failure posture
 differs by call site:
 
 - Absent store allows: [`checkJoinThrottle`](../src/join/service.ts) returns
@@ -47,24 +62,46 @@ differs by call site:
   with no injected test store lets the request through. This holds for both
   the generic middleware (via [`throttleStore`](../src/throttle.ts)) and the
   direct join helper (via [`joinStore`](../src/join/route-shared.ts)).
+- Held-bucket lock contention refuses: a timed-out admission-lock wait (55P03)
+  resolves inside [`checkJoinThrottle`](../src/join/service.ts) to
+  `{ limited: true, retryAfter: 1 }` with no hit charged — contention on a
+  per-client bucket is that same client's burst, so the busy pass answers the
+  shared 429 rather than admitting free — and the busy pass still runs the
+  best-effort expiry prune below. Any other store error still propagates
+  (generic middleware allows, direct join keeps its outage envelope).
 - Generic middleware catches count failures:
   [`throttleGuard`](../src/throttle.ts) catches any throw from store
   acquisition or the count/insert and allows — a missed count beats a 500 on
   that path.
-- Direct join propagates configured-store failures:
+- Direct join allows unclassified store failures, propagates outages:
   [`throttled`](../src/join/route-shared.ts) awaits the configured store and
-  [`checkJoinThrottle`](../src/join/service.ts) with no catch. A
-  configured-but-unreachable store throws; the global handler maps only
-  classified transport/server outages to the shared 503 envelope (see
-  [`isDatabaseUnavailable`](../src/db/errors.ts) and
-  [`internalErrorHandler`](../src/error-responses.tsx)) and leaves other
-  errors as 500s. The outage matrix pins the classified case:
-  `GET /join/discord` and `GET /join/callback` answer 503 on a refused
-  Postgres socket (see [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)).
+  [`checkJoinThrottle`](../src/join/service.ts) and allows on any throw
+  except a classified transport/server outage (see
+  [`isDatabaseUnavailable`](../src/db/errors.ts)), which it rethrows so the
+  global handler renders the shared 503 envelope (see
+  [`internalErrorHandler`](../src/error-responses.tsx)). The outage matrix pins
+  the classified case: `GET /join/discord` and `GET /join/callback` answer 503
+  on a refused Postgres socket (see
+  [`test/db-outage-matrix.test.ts`](../test/db-outage-matrix.test.ts)). Non-error
+  oversized callbacks skip the throttle but run a read-only availability query
+  before the expired-link recovery, preserving that classified-outage 503 with
+  no count, lock, hit insertion or prune. Missing stores still allow recovery;
+  unclassified query failures are ignored without logging their details.
+- Profile write allows store failures:
+  [`admitWrite`](../src/profiles/routes-admission.ts) catches any throw from
+  the throttle check and allows, and a missing database URL allows without a
+  store — a missed count beats a 500 on that path.
+- RSVP propagates store failures:
+  [`writeRsvp` and `withdrawRsvp`](../src/events/rsvp.ts) run the
+  [`chargeThrottle`](../src/events/rsvp.ts) count/insert inside the write
+  transaction with no catch: a timed-out lock wait resolves to the limited
+  verdict with no hit charged, but any other store error aborts the write and
+  propagates instead of allowing.
 - Prune is best-effort: [`checkJoinThrottle`](../src/join/service.ts) logs a
-  one-line warning and swallows a throwing expiry DELETE, then returns the
-  decided verdict, so a prune failure never flips a refusal into an admission
-  on the generic path or a 500 on the direct join path.
+  one-line warning carrying the exception class (never the message, which can
+  quote statement bindings) and swallows a throwing expiry DELETE, then
+  returns the decided verdict, so a prune failure never flips a refusal into
+  an admission on the generic path or a 500 on the direct join path.
 - Allowance is admission only: passing the throttle does not guarantee the
   downstream handler succeeds — the journey store, bot call, or session mint
   can still refuse or fail.
@@ -74,13 +111,14 @@ RSVP writes use
 
 | Budget | Value | Constant | Buckets and routes |
 | --- | --- | --- | --- |
-| Auth | 10 / 60 s | `AUTH_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `login-redirect` (`GET /auth/discord`), `login-callback` (`GET /auth/discord/callback`), `qa-login` (`POST /auth/qa/:identity`) in [`src/index.tsx`](../src/index.tsx), `alert-probe` in [`src/alert-probe.ts`](../src/alert-probe.ts) |
+| Auth | 10 / 60 s | `AUTH_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `login-redirect` (`GET /auth/discord`), `login-callback` (`GET /auth/discord/callback`), `qa-login` (`POST /auth/qa/:identity`) in [`src/auth/routes.ts`](../src/auth/routes.ts), `login-recover` (`GET /auth/recover`, oversized `?next=` skips spend) in [`src/write-recovery.tsx`](../src/write-recovery.tsx), `alert-probe` in [`src/alert-probe.ts`](../src/alert-probe.ts) |
 | Join | 10 / 60 s | `JOIN_THROTTLE_PER_MINUTE` with `JOIN_THROTTLE_BUCKET = "join"` in [`src/join/service.ts`](../src/join/service.ts) | `join:<clientKey>` shared by `GET /join/discord` and `GET /join/callback` in [`src/join/route-shared.ts`](../src/join/route-shared.ts) (`GET /join` lives in [`src/join/route-page.ts`](../src/join/route-page.ts)) |
-| Write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `logout` (`POST /logout`) in [`src/index.tsx`](../src/index.tsx), `event-write` on the moderator event writes in [`src/events/routes.tsx`](../src/events/routes.tsx) |
-| Profile write | 30 / 60 s | `PROFILE_WRITE_THROTTLE_PER_MINUTE` in [`src/profiles/routes-admission.ts`](../src/profiles/routes-admission.ts) | `profile-write:<viewerId>` per member on profile writes |
+| Write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `logout` (`POST /logout`) in [`src/auth/routes.ts`](../src/auth/routes.ts), which `POST /logout/everywhere` shares as one budget; `event-write` on `POST /events`, `PATCH /events/:key` and `POST /events/:key/{publish,cancel,duplicate,rsvp-pause,rsvp-reopen}` in [`src/events/routes-writes.ts`](../src/events/routes-writes.ts) |
+| Admin write | 30 / 60 s | `WRITE_THROTTLE_PER_MINUTE` in [`src/throttle.ts`](../src/throttle.ts) | `admin-write:<clientKey>` shared by all admin writes in [`src/admin/routes.tsx`](../src/admin/routes.tsx): `POST /admin/queue/failed/:id/redispatch`, `POST /admin/events`, `POST /admin/events/:key`, `POST /admin/events/:key/{publish,cancel,duplicate,rsvp-pause,rsvp-reopen}`, `POST /admin/featured`, `POST /admin/featured/:id`, `POST /admin/featured/:id/unpublish`, `POST /admin/featured/:id/delete` |
+| Profile write | 30 / 60 s | `PROFILE_WRITE_THROTTLE_PER_MINUTE` in [`src/profiles/routes-admission.ts`](../src/profiles/routes-admission.ts) | `profile-write:<viewerId>` per member on `PATCH /members/:user` and form-override `POST /members/:user` in [`src/profiles/routes-writes.tsx`](../src/profiles/routes-writes.tsx) via [`admitWrite`](../src/profiles/routes-admission.ts) |
 | Public event reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` in [`src/events/routes-shared.ts`](../src/events/routes-shared.ts) | `events-read:<clientKey>` across public event pages and feeds; see [`event-read-admission.md`](event-read-admission.md) |
-| Shared public reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` via `publicReadGuard` in [`src/events/routes-shared.ts`](../src/events/routes-shared.ts) | `events-read:<clientKey>`, the same bucket as public event reads, shared by `GET /api/public/*` (via `admitted` in [`src/public-data/routes.ts`](../src/public-data/routes.ts)) and `POST /mcp` (via `admitted` in [`src/mcp/routes.ts`](../src/mcp/routes.ts)) |
-| RSVP write | 12 / 60 s | `RSVP_RATE_LIMIT` (`maxAttempts: 12`, `decaySeconds: 60`) in [`src/islands/contracts.ts`](../src/islands/contracts.ts) | `rsvp-write:<userId>` per member, shared by RSVP PUT and DELETE across events in [`src/events/rsvp.ts`](../src/events/rsvp.ts) |
+| Shared public reads | 60 / 60 s | `PUBLIC_EVENT_READS_PER_MINUTE` via `publicReadGuard` in [`src/events/routes-shared.ts`](../src/events/routes-shared.ts) | `events-read:<clientKey>`, the same bucket as public event reads, shared by `GET /api/public/*` (via `admitted` in [`src/public-data/routes.ts`](../src/public-data/routes.ts)) and `POST /mcp` (via `mcpRefused` in [`src/mcp/routes.ts`](../src/mcp/routes.ts)) |
+| RSVP write | 12 / 60 s | `RSVP_RATE_LIMIT` (`maxAttempts: 12`, `decaySeconds: 60`) in [`src/islands/contracts-rsvp-button.ts`](../src/islands/contracts-rsvp-button.ts) | `rsvp-write:<userId>` per member, shared by RSVP PUT and DELETE across events in [`src/events/rsvp.ts`](../src/events/rsvp.ts) |
 
 The `qa-login` Auth budget is per runner IP and shared across every suite in
 a run, including local runs: the whole sequential smoke presents a single
@@ -89,24 +127,47 @@ runner IP, and each `qaLogin` in
 `qa-login:<clientKey>` bucket, so the 11th login inside one 60-second window
 is refused with the shared 429. The count lives in the `e2e/qa-login-budget`
 static guard (`e2e/qa-login-budget.test.mjs`, shipped with the local-smoke
-budget fix #665): it totals `qaLogin` call sites across the specs and fails when a
-run would exceed the budget — merge journeys onto fewer logins instead of
-retrying across the window. Bounded retry handling for an
+budget fix #665): it totals `qaLogin` call sites across the journey specs and
+pins every login outside them — the DB-direct teardown sweep, which holds no
+login call site at all, plus the parity step's one (pinned exactly; the
+renewal session is DB-minted) and the auth-perf step's pair. A 70 s workflow
+pacing sleep stands between the browser suite, the parity step, and the
+auth-perf step, so each 60 s window holds only its own step's logins. It fails
+when a run would exceed the budget — merge journeys onto fewer logins instead
+of retrying across the window. Bounded retry handling for an
 already-throttled staging login lives in
 [`e2e/qa-login-retry.mjs`](../e2e/qa-login-retry.mjs); the local `qaLogin`
-fails hard on the first 429.
+fails hard on the first 429. The public-reads budget has the same CI-sharing
+shape — every suite in the `browser-smoke` job lands in `events-read:anon` —
+but reads have no static call-site count, so the loopback workers raise the
+budget instead: `e2e/wrangler.jsonc` and the generated Kit fixture
+(`ci/kit-worker-dev.mjs`) set `E2E_PUBLIC_READ_BUDGET` to `600` while
+production keeps 60 (see
+[`event-read-admission.md`](event-read-admission.md)).
+
+The `admin-write` budget is per client IP and shared across every admin
+write route in [`src/admin/routes.tsx`](../src/admin/routes.tsx), including
+featured unpublish (lifecycle actions share one registration loop):
+30 admitted writes per 60-second window total,
+not per route. A burst on any one route — bulk event edits, featured saves,
+or a retry loop — spends the same `admin-write:<clientKey>` bucket and can
+429 the other admin writes from that IP. Moderators behind one IPv4 NAT share
+it, like the `events-read` NAT sharing above. Staging and QA runs presenting
+one runner IP must budget admin writes across suites, the same shape as the
+`qa-login` count: the incident to avoid is one suite's admin burst locking
+out another suite's admin writes inside the same window.
 
 Generic and join buckets key on the client key above (`<name>:<clientKey>`);
 RSVP and profile-write buckets key on the member id instead, so switching verb
 or path cannot multiply the budget. The join bucket carries no minute segment:
 the 60-second row window alone judges admission, so a burst straddling a
 wall-clock minute still spends one budget. RSVP PUT
-policy refusals (`not_found`, closed events) return before the charge in
+policy refusals (`not_found`, closed events) and DELETE `not_found` return
+before the charge in
 [`chargeThrottle`](../src/events/rsvp.ts) and spend nothing; other paths spend
 before policy is judged — the generic middleware charges before the handler
-runs, profile-write 403s charge before the owner check in
-[`admitWrite`](../src/profiles/routes-admission.ts), and RSVP DELETE on a missing event
-charges in [`withdrawRsvp`](../src/events/rsvp.ts). The QA seam is the
+runs, and profile-write 403s charge before the owner check in
+[`admitWrite`](../src/profiles/routes-admission.ts). The QA seam is the
 exception: its identity/token gate runs before `throttle("qa-login", …)` (same
 shape as `/__probe/alert` in [`src/alert-probe.ts`](../src/alert-probe.ts)),
 so unauthenticated probes 404 without spending the shared `qa-login` bucket and
@@ -120,11 +181,13 @@ two call sites, both with a 5-minute bound:
 
 - [`src/join/service.ts`](../src/join/service.ts) (`checkJoinThrottle`): after
   the admission verdict — admitted or refused — outside the per-bucket
-  admission lock transaction,
-  `DELETE FROM web_throttle_hits WHERE at < now() - interval '5 minutes'`.
-  The cleanup stays outside the lock so it never prolongs it; refused
-  requests prune the same age-only rows instead of letting expired rows
-  accumulate until some request is admitted.
+  admission lock transaction, at most one 1,000-row oldest-first batch of
+  `where at < now() - interval '5 minutes'` via
+  `order by id limit 1000 for update skip locked`, so rows locked by unrelated
+  transactions are skipped for a later pass. The cleanup stays outside the lock
+  so it never prolongs it; refused requests prune the same age-only rows
+  instead of letting expired rows accumulate until some request is admitted.
+  Best-effort: a throwing prune keeps the decided verdict.
 - [`src/events/rsvp.ts`](../src/events/rsvp.ts) (`pruneThrottle`, called from
   `writeRsvp` and both `withdrawRsvp` paths): inside the same transaction,
   before the budget charge and the write, at most one 1,000-row batch of

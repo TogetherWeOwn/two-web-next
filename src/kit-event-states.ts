@@ -13,10 +13,12 @@
 // database failure is a branded 503. Published and past rows defer to the
 // full-detail companion (card 25/43): collapsing them into a snapshot here
 // would fork the detail contract.
+import { alertRequestError, exceptionClass } from "./alerts";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
 import { canonicalEventKey, eventKeyAllowed } from "./events/keys";
 import { fmt } from "./events/pages-shared";
+import { safeRequestId } from "./request-log";
 import type { EventLink, PublicEvent } from "./events/reads";
 import type { SuggestedEvent } from "./events/suggestions";
 import { eventJsonLd, siteJsonLd } from "./seo-json-ld";
@@ -39,12 +41,16 @@ export interface EventStateRequest {
   /** Called exactly once per resolution: SvelteKit throws on a double-set. */
   setHeaders: (headers: Record<string, string>) => void;
   store: EventStateStore;
+  /** Optional correlation ID from the caller (validated before logging, omitted otherwise). */
+  requestId?: string;
 }
 
 export interface EventGoneAlternative {
   key: string;
   title: string;
   whenText: string;
+  /** Full instant for the <time> element, as served. */
+  datetime: string;
   location: string | null;
 }
 
@@ -52,6 +58,10 @@ export interface EventGoneModel {
   title: string;
   game: string | null;
   eventKey: string;
+  /** Retained answer count, rendered as history (existingResponsesText) with
+   * no capacity: the cancelled schedule card's line. Carried from the
+   * already-loaded event row; never a new read. */
+  existingResponses: number;
   /** Per-event calendar download; the feed serves cancelled rows. */
   icsUrl: string;
   markdownAlternate: string;
@@ -97,7 +107,7 @@ function missingSuggestion(s: SuggestedEvent): EventMissingSuggestion {
 }
 
 export async function resolveEventState(req: EventStateRequest): Promise<EventStateOutcome> {
-  const { key, search, path, env, setHeaders, store } = req;
+  const { key, search, path, env, setHeaders, store, requestId } = req;
   const appUrl = env.APP_URL;
 
   // One canonical key form per event: a valid key in another letter case
@@ -116,7 +126,14 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
     let db: Db | null;
     try {
       db = await store.dbForFn({ env });
-    } catch {
+    } catch (err) {
+      // A code bug (no branded status) must never look like a downstream
+      // outage: emit the leak-free error.alert diagnostic, mirroring the Kit
+      // hot-zone boundary (src/kit-hotzones.ts). Branded throws stay silent.
+      // The unavailable outcome and headers are unchanged either way.
+      if (typeof (err as { status?: unknown })?.status !== "number") {
+        alertRequestError(err, { method: "GET", route: "/e/:key", requestId });
+      }
       const headers = { ...NO_STORE };
       setHeaders(headers);
       return { kind: "unavailable", status: 503, headers };
@@ -129,7 +146,10 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
     let event: PublicEvent | null;
     try {
       event = await store.getEventFn(db, key);
-    } catch {
+    } catch (err) {
+      if (typeof (err as { status?: unknown })?.status !== "number") {
+        alertRequestError(err, { method: "GET", route: "/e/:key", requestId });
+      }
       const headers = { ...NO_STORE };
       setHeaders(headers);
       return { kind: "unavailable", status: 503, headers };
@@ -143,7 +163,14 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
         let related: EventLink[] = [];
         try {
           related = await store.relatedFn(db, event);
-        } catch {
+        } catch (err) {
+          // The cancelled page still serves with an empty alternatives list;
+          // warn once with the exception class so the degrade is visible.
+          // Class only, never the message: it can carry SQL or wire detail.
+          console.warn("Event alternatives unavailable; serving the empty list.", {
+            request_id: safeRequestId(requestId),
+            exception: exceptionClass(err),
+          });
           related = [];
         }
         const headers = { ...NO_STORE, "x-robots-tag": NOINDEX };
@@ -156,6 +183,7 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
             title: event.title,
             game: event.game,
             eventKey: event.eventKey,
+            existingResponses: event.goingCount,
             icsUrl: `/events/${event.eventKey}.ics`,
             markdownAlternate: `/e/${event.eventKey}.md`,
             upcomingUrl: "/events",
@@ -163,6 +191,7 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
               key: link.eventKey,
               title: link.title,
               whenText: fmt(link.startsAt, link.timezone),
+              datetime: link.startsAt.toISOString(),
               location: link.location,
             })),
             jsonLd: eventJsonLd(event, appUrl),
@@ -174,7 +203,7 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
       // session read, which this sessionless module never performs: the
       // full-detail companion owns that branch.
       if (event.status === "draft") {
-        const headers: Record<string, string> = {};
+        const headers: Record<string, string> = { ...NO_STORE };
         setHeaders(headers);
         return { kind: "forbidden", status: 403, headers };
       }
@@ -190,7 +219,7 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
     suggestions = [];
   }
   missing = { suggestions: suggestions.map(missingSuggestion) };
-  const headers = { "x-robots-tag": NOINDEX };
+  const headers = { ...NO_STORE, "x-robots-tag": NOINDEX };
   setHeaders(headers);
   return { kind: "missing", status: 404, headers, model: missing };
 }

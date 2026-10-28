@@ -4,26 +4,39 @@ import Shell from "#lib/Shell.svelte";
 import {
   EVENTS_EMPTY_COPY,
   EVENTS_SUBSCRIBE_TESTID,
+  PAST_EVENTS_BACK_TESTID,
   PAST_EVENTS_COPY,
   PAST_EVENTS_EMPTY_TESTID,
   PAST_EVENTS_ISLAND,
   PAST_EVENTS_LIST_TESTID,
   PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_PAGER_NEWER_TESTID,
+  PAST_EVENTS_PAGER_OLDER_TESTID,
+  PAST_EVENTS_PAGER_TESTID,
+  PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
 } from "../../../../../src/islands/contracts";
 import { feedUrl, rssUrl, webcalUrl } from "../../../../../src/events/feeds";
+import { SUBSCRIPTION_GUIDANCE } from "../../../../../src/events/subscription-copy";
 import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
 // Markup contract of PastEventsPage (src/events/pages.tsx): the island
 // script, test ids and copy are shared, so the existing E2E and island apply.
 let { data }: PageProps = $props();
-const { rows, page, hasMore, totalPages, appUrl } = $derived(data);
-const destination = $derived(pastEventsUrl(page));
-// A component-level <script> is Svelte's own; the island tag is emitted as markup.
-const island = '<script src="/islands/past-events.js" defer></' + "script>";
+const { rows, page, hasMore, totalPages, appUrl, q = "" } = $derived(data);
+const destination = $derived(pastEventsUrl(page, q));
+const calendarFeedUrl = $derived(feedUrl(appUrl));
+// A component-level <script> is Svelte's own; the island tags are emitted as markup.
+const islands =
+  '<script src="/islands/copy-link.js" defer></' +
+  'script> <script src="/islands/past-events.js" defer></' +
+  "script>";
+// csr=false still emits a structural client route node. Keep the archive cards
+// server-only, like the home-event list, so that unused asset does not carry them.
+// Direct server compilation without Vite's env renders the cards normally.
 </script>
 
 <Shell
@@ -36,32 +49,58 @@ const island = '<script src="/islands/past-events.js" defer></' + "script>";
   mainClass="events-page"
   loginReturnTo={destination}
 >
-  <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
+  <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-query={q} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
     <div class="schedule-heading">
       <p class="strap">The archive</p>
       <h1 id="past-events-heading" tabindex="-1">Past events</h1>
-      <p>Game nights we’ve shared. Find the next one in the upcoming schedule.</p>
+      <p>Game nights we’ve shared. Find the next one in the <a href="/events">upcoming schedule</a>.</p>
     </div>
     <p>
       <a href={webcalUrl(appUrl)} data-testid={EVENTS_SUBSCRIBE_TESTID}>{EVENTS_EMPTY_COPY.subscribe}</a>{" "}
-      <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
+      <a href={rssUrl(appUrl)}>RSS feed</a> <a href={calendarFeedUrl}>Download calendar (.ics)</a>
     </p>
+    <!-- Static mirror of subscriptionHelp() (src/events/subscription-help.tsx):
+         {@html} inside this section leaves hydration anchors with no Hono
+         counterpart and breaks the cross-target section contract. -->
+    <details class="subscription-help" data-testid="subscription-help">
+      <summary>How to subscribe to the calendar</summary>
+      <p>{SUBSCRIPTION_GUIDANCE[0]}</p>
+      <p>{SUBSCRIPTION_GUIDANCE[1]}</p>
+      <label for="calendar-feed-url">Calendar feed URL</label>
+      <div class="subscription-copy">
+        <input id="calendar-feed-url" data-testid="subscription-feed-url" type="text" value={calendarFeedUrl} readonly /><button class="btn" type="button" data-testid="subscription-copy-button" data-copy-link={calendarFeedUrl} data-copy-feed="true" hidden>Copy feed URL</button>
+      </div>
+      <p data-testid="subscription-manual-copy">Select the feed URL and copy it manually in your calendar app.</p>
+      <p role="status" aria-atomic="true" data-copy-toast data-testid="subscription-copy-status"></p>
+      <p>{SUBSCRIPTION_GUIDANCE[2]}</p>
+    </details>
+    <!-- Plain GET navigation outside the binder's swapped zones: submitting
+        starts from page 1 with JS off, and fragment turns never swallow it.
+        Same shape as the calendar search form. -->
+    <form method="get" action="/events/past" role="search">
+      <label class="sr-only" for="past-events-search-input">Search past events</label>
+      <input id="past-events-search-input" type="search" name="q" value={q} placeholder="Search past events" />
+      <button class="btn" type="submit">Search</button>
+    </form>
     <div data-archive-state>
+      {#if q}<p role="status">Past events matching “{q}”. <a href="/events/past">Clear search</a></p>{/if}
       {#if rows.length === 0}
-        {#if totalPages === 0}
+        {#if totalPages === 0 && q}
+          <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>No past events match “{q}”. <a href="/events/past">Clear search</a></p>
+        {:else if totalPages === 0}
           <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
             <p>{PAST_EVENTS_COPY.empty}</p>
             <p><a href="/join">{PAST_EVENTS_COPY.join}</a></p>
           </div>
         {:else}
-          <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>{pastEventsOutOfRangeCopy(page, totalPages)}</p>
+          <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>{pastEventsOutOfRangeCopy(page, totalPages)}{" "}<a href={pastEventsUrl(1, q)}>Back to page 1</a></p>
         {/if}
       {/if}
     </div>
-    <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{#each rows as e (e.eventKey)}<EventCard {e} />{/each}</ul>
-    <nav aria-label="Past event pages" data-archive-pager>{#if page > 1 && totalPages > 0}<a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages))}>Newer</a>{/if}{" "}{#if hasMore}<a data-archive-page href={pastEventsUrl(page + 1)}>Older</a>{/if}</nav>
-    <p><a href="/events">Back to upcoming events</a></p>
+    <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{#if import.meta.env?.SSR !== false}{#each rows as e (e.eventKey)}<EventCard {e} {q} archive={{ page, q }} />{/each}{/if}</ul>
+    <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>{#if page > 1 && totalPages > 0}<a data-testid={PAST_EVENTS_PAGER_NEWER_TESTID} data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if totalPages > 0}<span>{`Page ${page} of ${totalPages}`}</span>{/if}{" "}{#if hasMore}<a data-testid={PAST_EVENTS_PAGER_OLDER_TESTID} data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
+    <p><a data-testid={PAST_EVENTS_BACK_TESTID} href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
   </section>
-  {@html island}
+  {@html islands}
 </Shell>

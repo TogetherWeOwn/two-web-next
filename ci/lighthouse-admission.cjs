@@ -48,7 +48,7 @@ function assertFixtureContent(path, response, html, before, after) {
     populated = html.match(/<ul\b[^>]*data-testid="home-events-list"[^>]*>([\s\S]*?)<\/ul>/)?.[1];
     assert.ok(populated, "Homepage populated teaser required");
     assert.match(populated, new RegExp(`href="/e/${key}"`), "Homepage fixture link");
-    assert.match(populated, /3 going/, "Homepage aggregate required");
+    assert.match(populated, /3 of 20 going/, "Homepage aggregate required");
     const featured = html.match(
       /<section\b[^>]*data-testid="featured-content"[^>]*>([\s\S]*?)<\/section>/,
     )?.[1];
@@ -110,8 +110,19 @@ function assertFixtureContent(path, response, html, before, after) {
     );
     const times = [...populated.matchAll(/<time\b[^>]*datetime="([^"]+)"/g)];
     assert.ok(times.length > 0, `${path}: rendered fixture time required`);
-    for (const [, instant] of times) {
-      const startsAt = Date.parse(instant);
+    const range = path === `/e/${key}` || path === "/events";
+    if (range) {
+      assert.equal(times.length, 2, `${path}: fixture start and end required`);
+      assert.equal(
+        Date.parse(times[1][1]) - Date.parse(times[0][1]),
+        7200_000,
+        `${path}: fixture two-hour duration required`,
+      );
+    }
+    for (const [index, [, instant]] of times.entries()) {
+      // Both detail and calendar expose the two-hour end. Normalize only that
+      // endpoint; retain the request-time/epoch guard for every rendered instant.
+      const startsAt = Date.parse(instant) - (range && index === 1 ? 7200_000 : 0);
       assert.ok(
         startsAt >= before + 7 * 86400_000 && startsAt <= after + 7 * 86400_000,
         `${path}: fixture must start seven days after this local request, not at workerd's module epoch`,

@@ -6,7 +6,9 @@
 // names, so existing importers keep working untouched.
 import type { Context } from "hono";
 import postgres from "postgres";
+import { warnAdmissionStoreFailure } from "../admission-diagnostics";
 import { rateLimitExceeded } from "../errors";
+import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { clientKey } from "../throttle";
@@ -23,6 +25,12 @@ export const JOIN_SOURCE_COOKIE = "__Host-two_join_source";
 export const JOIN_NEXT_COOKIE = "__Host-two_join_next";
 export const STATE_TTL_SECONDS = 600;
 export const JOURNEY_TTL_SECONDS = 600;
+
+// The fixed ?notice= value the store-down start bounce carries so the
+// journey page renders a visible explanation instead of a silent bounce
+// (E1). Fixed server-side, never member input; the page allowlists this
+// exact value and renders the plain page for anything else.
+export const JOIN_START_FAILED_NOTICE = "start-failed";
 
 /** Injectable at the call site (`{...env, JOIN_STORE: …}`), like SESSION_STORE. */
 export type JoinRouteDeps = {
@@ -68,12 +76,23 @@ export const joinRedirectUri = (env: Env) => `${env.APP_URL}/join/callback`;
 // minute-free bucket per client (legacy `throttle:10,1` keyed guests by IP), so
 // a burst straddling a wall-clock minute still spends one sliding 60 s budget.
 // No client can spend another's budget.
+//
+// A throwing store degrades to allow — the same verdict as throttleGuard
+// ("a missed count beats a 500") — unless the throw is a classified database
+// outage, which stays fail-closed: the global handler renders the branded 503
+// the outage matrix pins for both join routes. Only this generic throw-to-allow
+// leg warns here; the null-store allow already warns inside checkJoinThrottle.
+// Neither warning changes the admission policy.
 export async function throttled(c: Ctx): Promise<Response | null> {
-  const verdict = await checkJoinThrottle(
-    await joinStore(c),
-    `${JOIN_THROTTLE_BUCKET}:${clientKey(c)}`,
-    JOIN_THROTTLE_PER_MINUTE,
-  );
+  const verdict = await joinStore(c)
+    .then((sql) =>
+      checkJoinThrottle(sql, `${JOIN_THROTTLE_BUCKET}:${clientKey(c)}`, JOIN_THROTTLE_PER_MINUTE),
+    )
+    .catch((err: unknown) => {
+      if (isDatabaseUnavailable(err)) throw err;
+      warnAdmissionStoreFailure(c, "join", err);
+      return { limited: false } as const;
+    });
   if (!verdict.limited) return null;
   return rateLimitExceeded(c, verdict.retryAfter);
 }
@@ -101,7 +120,14 @@ export type JoinPageProps = {
   widgetUrl: string | null;
   widgetSnapshot?: import("../discord-widget").DiscordWidgetSnapshot | null;
   next?: string | null;
+  // Already passed sanitizeSource. Absent means the one-click link carries no
+  // attribution, the same as a request that arrived without ?source=.
+  source?: string | null;
   appUrl: string;
+  // The validated store-down notice (JOIN_START_FAILED_NOTICE) when the
+  // request carried exactly that ?notice= value; otherwise null and the
+  // page renders plain. Display-only: never echoed into the one-click href.
+  notice?: typeof JOIN_START_FAILED_NOTICE | null;
 };
 export type RecoveryProps = {
   title: string;

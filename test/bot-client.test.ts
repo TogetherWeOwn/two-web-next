@@ -277,6 +277,120 @@ describe("createBotClient (ported InternalActionClient)", () => {
     ).rejects.toThrow(BotTransportError);
   });
 
+  it("an unknown event.upsert outcome throws the fixed factory string, not the outcome", async () => {
+    const { client } = clientWith([
+      jsonResponse(200, {
+        ok: true,
+        result: { outcome: "mystery", event_id: "d1" },
+        request_id: "r",
+      }),
+    ]);
+    let thrown: unknown;
+    try {
+      await client.upsertEvent(
+        {
+          eventKey: "e",
+          name: "n",
+          startsAt: "2026-10-01T00:00:00Z",
+          endsAt: "2026-10-01T01:00:00Z",
+          location: "L",
+          description: null,
+        },
+        uuid,
+      );
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(BotTransportError);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toBe("an event.upsert outcome this release does not know");
+  });
+
+  it.each([
+    ["a missing", {}],
+    ["an empty", { event_id: "" }],
+    ["a blank", { event_id: "   " }],
+    ["a null", { event_id: null }],
+    ["a non-string", { event_id: 123 }],
+  ])(
+    "an event.upsert success with %s event_id throws the fixed factory string",
+    async (_label, extra) => {
+      const { client } = clientWith([
+        jsonResponse(200, {
+          ok: true,
+          result: { outcome: "created", ...extra },
+          request_id: "r",
+        }),
+      ]);
+      let thrown: unknown;
+      try {
+        await client.upsertEvent(
+          {
+            eventKey: "e",
+            name: "n",
+            startsAt: "2026-10-01T00:00:00Z",
+            endsAt: "2026-10-01T01:00:00Z",
+            location: "L",
+            description: null,
+          },
+          uuid,
+        );
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(BotTransportError);
+      expect(thrown).not.toBeInstanceOf(TypeError);
+      expect((thrown as Error).message).toBe("an event.upsert success with no event_id");
+    },
+  );
+
+  it("an unknown event.cancel outcome throws the fixed factory string, not the outcome", async () => {
+    const { client } = clientWith([
+      jsonResponse(200, {
+        ok: true,
+        result: { outcome: "mystery", event_id: "d1" },
+        request_id: "r",
+      }),
+    ]);
+    let thrown: unknown;
+    try {
+      await client.cancelEvent({ eventKey: "e" }, uuid);
+    } catch (e) {
+      thrown = e;
+    }
+    expect(thrown).toBeInstanceOf(BotTransportError);
+    expect(thrown).not.toBeInstanceOf(TypeError);
+    expect((thrown as Error).message).toBe("an event.cancel outcome this release does not know");
+  });
+
+  it.each([
+    ["a missing", {}],
+    ["an empty", { event_id: "" }],
+    ["a blank", { event_id: "   " }],
+    ["a null", { event_id: null }],
+    ["a non-string", { event_id: 123 }],
+  ])(
+    "an event.cancel success with %s event_id throws the fixed factory string",
+    async (_label, extra) => {
+      const { client } = clientWith([
+        jsonResponse(200, {
+          ok: true,
+          result: { outcome: "cancelled", ...extra },
+          request_id: "r",
+        }),
+      ]);
+      let thrown: unknown;
+      try {
+        await client.cancelEvent({ eventKey: "e" }, uuid);
+      } catch (e) {
+        thrown = e;
+      }
+      expect(thrown).toBeInstanceOf(BotTransportError);
+      expect(thrown).not.toBeInstanceOf(TypeError);
+      expect((thrown as Error).message).toBe("an event.cancel success with no event_id");
+    },
+  );
+
   it("compares offset-bearing event times as instants, not strings", async () => {
     const { client } = clientWith([
       jsonResponse(200, { ok: true, result: { outcome: "created", event_id: "d1" } }),
@@ -327,6 +441,7 @@ describe("createBotClient (ported InternalActionClient)", () => {
     "never forwards a signed POST across a %s redirect (loopback only)",
     async (status) => {
       let forwarded = 0;
+      let redirected = 0;
       const destination = createServer((_req, res) => {
         forwarded++;
         res.writeHead(200, { "content-type": "application/json" });
@@ -336,6 +451,7 @@ describe("createBotClient (ported InternalActionClient)", () => {
       await once(destination, "listening");
       const address = destination.address() as { port: number };
       const redirect = createServer((_req, res) => {
+        redirected++;
         res.writeHead(status, { location: `http://127.0.0.1:${address.port}/internal/actions` });
         res.end();
       });
@@ -343,10 +459,20 @@ describe("createBotClient (ported InternalActionClient)", () => {
       await once(redirect, "listening");
       try {
         const source = redirect.address() as { port: number };
-        const client = createBotClient({ ...opts, url: `http://127.0.0.1:${source.port}` });
-        await expect(client.assignRole({ userId: "1", roleKey: "r" })).rejects.toThrow(
-          BotTransportError,
+        // The client fetches only https: endpoints, so it gets one. This fetch
+        // hands the same request, init untouched, to the real runtime fetch on
+        // the plaintext loopback server: the redirect handling stays the
+        // runtime's own.
+        const fetchFn = (url: string, init: RequestInit) =>
+          fetch(url.replace(opts.url, `http://127.0.0.1:${source.port}`), init);
+        const client = createBotClient({ ...opts, fetchFn: fetchFn as unknown as typeof fetch });
+        const attempt = client.assignRole({ userId: "1", roleKey: "r" });
+        await expect(attempt).rejects.toThrow(BotTransportError);
+        // The 3xx reached the redirect refusal, not the endpoint guard.
+        await expect(attempt).rejects.toThrow(
+          `bot answered with a redirect (${status}); not followed`,
         );
+        expect(redirected).toBe(1);
         expect(forwarded).toBe(0);
       } finally {
         for (const server of [redirect, destination]) {
@@ -356,6 +482,23 @@ describe("createBotClient (ported InternalActionClient)", () => {
       }
     },
   );
+
+  const urlUser = "fixture-user";
+  const urlPass = "fixture-pass";
+  it.each([
+    ["plaintext", "http://bot-staging.internal.example"],
+    ["credentialed", `https://${urlUser}:${urlPass}@bot-staging.internal.example`],
+    ["unparseable", "bot-staging.internal.example"],
+  ])("a refused %s endpoint carries no cause: the raw URL rides nowhere", async (_label, url) => {
+    const fetchFn = vi.fn();
+    const client = createBotClient({ ...opts, url, fetchFn: fetchFn as unknown as typeof fetch });
+    const error = await client.assignRole({ userId: "1", roleKey: "r" }).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BotTransportError);
+    expect((error as Error).message).toBe("bot unreachable");
+    // A URL parser error would carry the raw input, credentials included.
+    expect((error as { cause?: unknown }).cause).toBeUndefined();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
 
   it("validates event times locally (ends after starts)", async () => {
     const { client, fetchFn } = clientWith([]);

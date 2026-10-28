@@ -19,6 +19,7 @@ import {
 import usersMigration from "../drizzle/0000_init-users.sql?raw";
 import joinMigration from "../drizzle/1000_join-attempts-throttle.sql?raw";
 import sessionsMigration from "../drizzle/1022_web-sessions-oauth-journeys.sql?raw";
+import graceMigration from "../drizzle/1030_session-predecessor-grace.sql?raw";
 
 const MOD_ROLE = "1546777856984481792";
 const SESSION_COOKIE = "__Host-two_session";
@@ -153,8 +154,12 @@ function sessionWrite(writes: Write[]): Record<string, unknown> {
   >;
 }
 
+// Select INSERT payloads only for positive row assertions; retain every recorded
+// statement and value for the independent carrier scan below.
 const rosterArgs = (writes: Write[]) =>
-  writes.filter((w) => w.op === "roster").map((w) => w.args.slice(1));
+  writes
+    .filter((w) => w.op === "roster" && /^\s*INSERT\s+INTO\s+users\b/i.test(String(w.args[0])))
+    .map((w) => w.args.slice(1));
 
 // Captured values with the marker replaced, so a failing diff never prints it.
 const redacted = (value: unknown, marker: string) =>
@@ -171,6 +176,63 @@ function carriers(writes: Write[], marker: string) {
     ...new Set(writes.filter((w) => JSON.stringify(w.args).includes(marker)).map((w) => w.op)),
   ];
 }
+
+describe("roster SQL recorder controls", () => {
+  it("selects every roster INSERT payload without discarding setup statements or values", async () => {
+    const writes: Write[] = [];
+    const sql = recordingSql(writes, "roster");
+    await sql`SET LOCAL statement_timeout = '500ms'`;
+    await sql`SELECT set_config('lock_timeout', ${"250ms"}, true)`;
+    expect(rosterArgs(writes)).toEqual([]);
+
+    for (let n = 0; n < 2; n++)
+      await sql`INSERT INTO users (id, username, avatar, member) VALUES (${"42"}, ${"Rick"}, ${"avatar-hash"}, ${true})`;
+    await recordingSql(writes, "join")`INSERT INTO users (id) VALUES (${"99"})`;
+    expect(writes).toEqual([
+      { op: "roster", args: ["SET LOCAL statement_timeout = '500ms'"] },
+      { op: "roster", args: ["SELECT set_config('lock_timeout', ?, true)", "250ms"] },
+      ...Array.from({ length: 2 }, () => ({
+        op: "roster",
+        args: [
+          "INSERT INTO users (id, username, avatar, member) VALUES (?, ?, ?, ?)",
+          "42",
+          "Rick",
+          "avatar-hash",
+          true,
+        ],
+      })),
+      { op: "join", args: ["INSERT INTO users (id) VALUES (?)", "99"] },
+    ]);
+    expect(rosterArgs(writes)).toEqual([
+      ["42", "Rick", "avatar-hash", true],
+      ["42", "Rick", "avatar-hash", true],
+    ]);
+  });
+
+  it.each(["statement text", "bound value"])(
+    "negative control: a marker in excluded roster setup %s is still reported",
+    async (location) => {
+      const marker = freshMarker();
+      const writes: Write[] = [];
+      const sql = recordingSql(writes, "roster");
+      if (location === "statement text") {
+        await (sql as unknown as { unsafe: (q: string) => Promise<unknown> }).unsafe(
+          `SET LOCAL app.test_marker = '${marker}'`,
+        );
+        expect(redacted(writes, marker)).toEqual([
+          { op: "roster", args: ["SET LOCAL app.test_marker = '<marker>'"] },
+        ]);
+      } else {
+        await sql`SELECT set_config('app.test_marker', ${marker}, true)`;
+        expect(redacted(writes, marker)).toEqual([
+          { op: "roster", args: ["SELECT set_config('app.test_marker', ?, true)", "<marker>"] },
+        ]);
+      }
+      expect(redacted(rosterArgs(writes), marker)).toEqual([]);
+      expect(carriers(writes, marker)).toEqual(["roster"]);
+    },
+  );
+});
 
 describe("successful-flow token non-persistence (injected seams)", () => {
   afterEach(() => vi.unstubAllGlobals());
@@ -254,6 +316,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       "join_attempts",
       "users",
       "web_oauth_journeys",
+      "web_session_grace",
       "web_sessions",
       "web_throttle_hits",
     ];
@@ -264,7 +327,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       admin = postgres(process.env.DATABASE_URL!, { max: 1 });
       await admin.unsafe(`CREATE SCHEMA ${schema}`);
       sql = postgres(process.env.DATABASE_URL!, { max: 4, connection: { search_path: schema } });
-      for (const file of [usersMigration, joinMigration, sessionsMigration])
+      for (const file of [usersMigration, joinMigration, sessionsMigration, graceMigration])
         for (const stmt of file.split("--> statement-breakpoint"))
           if (stmt.trim()) await sql.unsafe(stmt);
     });

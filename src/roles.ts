@@ -14,6 +14,15 @@ import { discordFetch } from "./discord-http";
 
 const API = "https://discord.com/api/v10";
 
+// Charset-bound Discord IDs, same contract as `isDiscordId` in `./discord`:
+// ASCII digits only, nonempty, tested as-is with no trimming, coercion or
+// decoding. Kept local (not imported) so the `bin/check-moderators.mjs`
+// strip-only CLI never loads `./discord`, whose parameter properties Node's
+// type-stripping cannot parse.
+function isDiscordId(value: unknown): value is string {
+  return typeof value === "string" && /^\d+$/.test(value);
+}
+
 export type GuildMemberRoles = { roles: string[]; joinedAt: string | null };
 
 export async function fetchMemberRoles(
@@ -21,29 +30,47 @@ export async function fetchMemberRoles(
   userId: string,
   botToken: string,
 ): Promise<GuildMemberRoles | null> {
+  // Charset admission first: a malformed guild or user id returns null before
+  // any header construction or fetch, so zero Discord requests are emitted.
+  if (!isDiscordId(guildId) || !isDiscordId(userId)) return null;
   // Fail closed on an unconfigured bot token (TOG-12687): no bot call is
   // emitted, so the caller degrades to a non-moderator flag.
   if (!botToken || botToken.trim().length === 0) return null;
-  const res = await discordFetch(`${API}/guilds/${guildId}/members/${userId}`, {
-    headers: { authorization: `Bot ${botToken}` },
-  });
+  const res = await discordFetch(
+    `${API}/guilds/${encodeURIComponent(guildId)}/members/${encodeURIComponent(userId)}`,
+    {
+      headers: { authorization: `Bot ${botToken}` },
+    },
+  );
   if (res.status === 404) return null;
   if (!res.ok) {
-    console.warn("moderator recompute lookup failed", { status: res.status });
+    console.warn("moderator recompute lookup failed", { status: res.status, guild_id: guildId });
     return null;
   }
   // Discord answers JSON here; a non-JSON edge response is a failed lookup, not a crash.
-  let body: { roles?: unknown; joined_at?: unknown };
+  let body: unknown;
   try {
-    body = (await res.json()) as { roles?: unknown; joined_at?: unknown };
+    body = await res.json();
   } catch {
-    console.warn("moderator recompute lookup returned non-JSON");
+    console.warn("moderator recompute lookup returned non-JSON", { guild_id: guildId });
     return null;
   }
-  const roles = Array.isArray(body.roles)
-    ? body.roles.filter((r): r is string => typeof r === "string")
-    : [];
-  return { roles, joinedAt: typeof body.joined_at === "string" ? body.joined_at : null };
+  // A valid-JSON body with no object shape (null, scalar) carries no roles;
+  // degrade to empty instead of throwing, so the recomputeModerator boundary
+  // never misreports a shape miss as a transport failure. The flag verdict is
+  // unchanged: empty roles still fail the allowlist intersection.
+  const shape =
+    typeof body === "object" && body !== null
+      ? (body as { roles?: unknown; joined_at?: unknown })
+      : null;
+  const roles =
+    shape !== null && Array.isArray(shape.roles)
+      ? shape.roles.filter((r): r is string => typeof r === "string")
+      : [];
+  return {
+    roles,
+    joinedAt: shape !== null && typeof shape.joined_at === "string" ? shape.joined_at : null,
+  };
 }
 
 /** Parse `DISCORD_MODERATOR_ROLE_IDS` ("id1,id2") into snowflakes. Blank = nobody. */
@@ -53,6 +80,21 @@ export function parseModeratorRoleIds(raw: string | undefined): string[] {
     .split(",")
     .map((s) => s.trim())
     .filter((s) => /^\d{10,25}$/.test(s));
+}
+
+/** Class-only classification of a lookup rejection: never the message, which can carry wire detail. */
+const MAX_LOOKUP_CLASS_LENGTH = 100;
+
+function lookupExceptionClass(err: unknown): string {
+  const raw =
+    err instanceof Error
+      ? err.name
+      : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+  // Only strings are sanitized: a non-string name must degrade to unknown
+  // instead of throwing the degrading catch into a rejection.
+  const name = typeof raw === "string" ? raw : "unknown";
+  // De-newline and bound: a hostile error name must not forge log lines.
+  return name.replace(/[\r\n]+/g, "_").slice(0, MAX_LOOKUP_CLASS_LENGTH) || "unknown";
 }
 
 /** ID intersection, never name matching. A blank allowlist fails closed. */
@@ -76,7 +118,18 @@ export async function recomputeModerator(opts: {
   // Fail closed before any lookup (TOG-12687): a blank bot token means no
   // bot-credentialed role fetch, so the flag stays non-moderator.
   if (!opts.botToken || opts.botToken.trim().length === 0) return false;
-  const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => null);
+  // The answered-path warns already fired inside fetchMemberRoles, so only a
+  // transport rejection reaches this catch: one line per degraded lookup,
+  // guild scope only, never member id, roles or credential.
+  const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(
+    (err: unknown) => {
+      console.warn("moderator recompute lookup transport failed", {
+        exception: lookupExceptionClass(err),
+        guild_id: opts.guildId,
+      });
+      return null;
+    },
+  );
   if (!member) return false;
   return isModerator(member.roles, opts.moderatorRoleIds);
 }

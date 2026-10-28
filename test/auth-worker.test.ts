@@ -183,16 +183,19 @@ describe("W15 auth/join in Miniflare", () => {
     expect(await view.text()).toContain("Worker Member");
     expect(cookie(view)).not.toBe(cookie(login));
     const replay = await request("/", { headers: { cookie: cookie(login) } });
-    expect(await replay.text()).toContain("Sign in with Discord");
+    expect(await replay.text()).toContain("Worker Member");
+    expect(replay.headers.getSetCookie()).toHaveLength(0);
     const out = await request("/logout", {
       method: "POST",
       headers: { cookie: cookie(view), origin: STAGING_APP_URL },
     });
     expect(out.status).toBe(303);
     expect(out.headers.getSetCookie().join("\n")).toContain("Max-Age=0");
-    expect(await (await request("/", { headers: { cookie: cookie(view) } })).text()).toContain(
-      "Sign in with Discord",
-    );
+    for (const revokedCookie of [cookie(login), cookie(view)]) {
+      expect(await (await request("/", { headers: { cookie: revokedCookie } })).text()).toContain(
+        "Sign in with Discord",
+      );
+    }
     expect(calls.map((c) => c.path)).toEqual(expectedPaths);
   });
 
@@ -284,10 +287,11 @@ describe("W15 auth/join in Miniflare", () => {
     expect(res.headers.get("location")).toBe("/?n=signin_failed");
     const cleared = res.headers.getSetCookie().join("\n");
     expect(cleared).not.toContain("__Host-two_session=");
-    // The failure path still consumes the journey — a stale next never leaks
-    // into a later sign-in.
-    expect(cleared).toContain("__Host-two_login_next=; Max-Age=0");
-    expect(cleared).toContain("__Host-two_login_intended=; Max-Age=0");
+    // A stray hit preserves the pending journey for the real hit that
+    // follows — nothing is cleared here. Only terminal (admitted) paths
+    // consume the journey, so no target sticks around after sign-in.
+    expect(cleared).not.toContain("__Host-two_login_next=; Max-Age=0");
+    expect(cleared).not.toContain("__Host-two_login_intended=; Max-Age=0");
     expect(calls).toHaveLength(0);
   });
 
@@ -358,13 +362,60 @@ describe("W15 auth/join in Miniflare", () => {
     expect(html).not.toContain(boundarySecret);
   });
 
-  it("renders consent-denial recovery with no upstream error echo", async () => {
+  it("renders the cancelled recovery for an unadmitted consent denial", async () => {
+    // No state and no journey cookies: this hit cannot be admitted to any
+    // journey, but a Cancel is still a Cancel, so it renders the
+    // cancelled-consent copy — still without echoing the provider detail,
+    // spending upstream work, or clearing a pending journey's cookies.
     const res = await request("/join/callback?error=access_denied&error_description=never-echo");
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain("Join cancelled");
+    expect(html).not.toContain("Join link expired");
     expect(html).not.toContain("never-echo");
     expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.getSetCookie().filter((c) => c.startsWith("__Host-two_join_"))).toEqual([]);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("renders consent-denial recovery for an admitted denial; the replay consumes nothing new", async () => {
+    const start = await request("/join/discord?source=web-homepage&next=%2Fevents");
+    const state = new URL(start.headers.get("location")!).searchParams.get("state");
+    const jar = cookie(start);
+    const denied = await request(
+      `/join/callback?error=access_denied&error_description=never-echo&state=${state}`,
+      { headers: { cookie: jar } },
+    );
+    expect(denied.status).toBe(200);
+    const html = await denied.text();
+    expect(html).toContain("Join cancelled");
+    expect(html).not.toContain("never-echo");
+    expect(denied.headers.get("cache-control")).toContain("no-store");
+    const cleared = denied.headers.getSetCookie().join("\n");
+    expect(cleared).toContain("__Host-two_join_state=; Max-Age=0");
+    expect(cleared).not.toContain("__Host-two_session=");
+    expect(calls).toHaveLength(0);
+
+    // One-use control: the same denial (or a success-shaped replay) is now
+    // a spent, unadmitted hit — it keeps the cancelled copy without
+    // consuming anything new, still no upstream work and no session.
+    const replay = await request(
+      `/join/callback?error=access_denied&error_description=never-echo&state=${state}`,
+      { headers: { cookie: jar } },
+    );
+    expect(replay.status).toBe(200);
+    const replayHtml = await replay.text();
+    expect(replayHtml).toContain("Join cancelled");
+    expect(replayHtml).not.toContain("Join link expired");
+    expect(replayHtml).not.toContain("never-echo");
+    expect(replay.headers.getSetCookie().filter((c) => c.startsWith("__Host-two_join_"))).toEqual(
+      [],
+    );
+    const replayAsSuccess = await request(`/join/callback?code=test-code&state=${state}`, {
+      headers: { cookie: jar },
+    });
+    expect(replayAsSuccess.headers.getSetCookie().join("\n")).not.toContain("__Host-two_session=");
+    expect(calls).toHaveLength(0);
   });
 
   it("uses POST-only QA fixtures and byte-identical failure responses in the runtime", async () => {

@@ -14,13 +14,16 @@ const REGION = /<div\b[^>]*\bdata-hotzone-scroll\b[^>]*>/g;
 const regionsOf = (html: string) => html.match(REGION) ?? [];
 
 // The grid table stays bare (ci/kit-parity-gates.mjs pins a literal "<table>"),
-// so the region wraps it rather than the table carrying the attributes.
+// so the region wraps it rather than the table carrying the attributes. The
+// shared renderer labels every caption with its UTC hour axis (visible
+// caption and region name alike), so callers pass the base caption here.
 const expectContainedGrid = (html: string, caption: string) => {
-  const region = `<div data-hotzone-scroll="true" role="region" aria-label="${caption}" tabindex="0">`;
+  const labelled = `${caption} (hours in UTC)`;
+  const region = `<div data-hotzone-scroll="true" role="region" aria-label="${labelled}" tabindex="0">`;
   const start = html.indexOf(region);
   expect(start, `region for "${caption}"`).toBeGreaterThanOrEqual(0);
   const inner = html.slice(start + region.length);
-  expect(inner.startsWith(`<table><caption>${caption}</caption>`)).toBe(true);
+  expect(inner.startsWith(`<table><caption>${labelled}</caption>`)).toBe(true);
   expect(inner.slice(0, inner.indexOf("</table>") + "</table>".length)).toContain("</tbody>");
   expect(inner.slice(inner.indexOf("</table>") + "</table>".length).startsWith("</div>")).toBe(
     true,
@@ -50,14 +53,14 @@ describe("hot-zone grid scroll region", () => {
     expect(regionsOf(html)).toHaveLength(3);
     expect(html.match(/<table>/g)).toHaveLength(3);
     expectContainedGrid(html, "Join activity for season all");
-    expectContainedGrid(html, "Estimated voice activity for season all");
-    expectContainedGrid(html, "Estimated games activity for season all");
+    expectContainedGrid(html, "Season-independent seeded estimate of voice activity");
+    expectContainedGrid(html, "Season-independent seeded estimate of games activity");
   });
 
   it.each([
     ["joins", "Join activity for season all"],
-    ["voice", "Estimated voice activity for season all"],
-    ["games", "Estimated games activity for season all"],
+    ["voice", "Season-independent seeded estimate of voice activity"],
+    ["games", "Season-independent seeded estimate of games activity"],
   ] as const)("%s signal page wraps its grid", (signal, caption) => {
     const html = String(
       HotzoneSignalPage({

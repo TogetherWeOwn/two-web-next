@@ -3,7 +3,14 @@
 import type { FC } from "hono/jsx";
 import type { EventListRow } from "../store";
 import { goingCountText } from "../../islands/contracts";
-import { eventEmptyText, eventListUrl, type EventListQuery, type EventSort } from "../event-list";
+import {
+  eventEmptyText,
+  eventListUrl,
+  eventListHasFilters,
+  eventListClearUrl,
+  type EventListQuery,
+  type EventSort,
+} from "../event-list";
 import { RsvpAction, Shell } from "./shell";
 
 const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuery }> = ({
@@ -59,8 +66,11 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
         <input type="hidden" name="sort" value={query.sort} />
         <input type="hidden" name="order" value={query.order} />
         <div class="field">
-          <label for="q">Search</label>
-          <input id="q" name="q" type="search" value={query.q} />
+          <label for="q">Search titles and games</label>
+          <input id="q" name="q" type="search" value={query.q} aria-describedby="q-help" />
+          <p class="hint" id="q-help">
+            Matches event titles and saved games.
+          </p>
         </div>
         <div class="field">
           <label for="status">Status</label>
@@ -121,6 +131,11 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
             Filter
           </button>
         </div>
+        {eventListHasFilters(query) ? (
+          <div class="field">
+            <a href={eventListClearUrl(query)}>Clear filters</a>
+          </div>
+        ) : null}
       </form>
       <p>
         <a class="btn" href="/admin/events/new" data-testid="new-event">
@@ -158,10 +173,29 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                 <tr key={r.eventKey}>
                   <td>
                     <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
+                    {r.game?.trim() ? (
+                      <span class="hint">
+                        <br />
+                        {r.game}
+                      </span>
+                    ) : null}
                   </td>
                   <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
                   <td>
-                    <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time>
+                    {Number.isFinite(r.startsAt.getTime()) ? (
+                      <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time>
+                    ) : (
+                      <span data-testid={`event-unrenderable-time-${r.eventKey}`}>
+                        Unrenderable time
+                      </span>
+                    )}
+                    {Number.isFinite(r.startsAt.getTime()) &&
+                    !Number.isFinite(r.endsAt.getTime()) ? (
+                      <span data-testid={`event-unrenderable-time-${r.eventKey}`}>
+                        {" "}
+                        (unrenderable end time)
+                      </span>
+                    ) : null}
                   </td>
                   <EventFillCell row={r} />
                   <td>
@@ -187,6 +221,11 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
           </tbody>
         </table>
       </div>
+      {rows.length === 0 && query.page > 1 ? (
+        <p>
+          <a href={eventListUrl(query, { page: 1 })}>First page of these results</a>
+        </p>
+      ) : null}
       <nav aria-label="Event pages" class="actions">
         {query.page > 1 ? (
           <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>

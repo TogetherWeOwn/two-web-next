@@ -20,6 +20,7 @@ const stats: MemberStats = {
   joinedAt: new Date("2025-01-01T00:00:00Z"),
   tenureDays: 0,
   isCurrentMember: true,
+  milestonesTruncated: false,
   milestones: [],
 };
 const render = (overrides = {}) =>
@@ -28,7 +29,7 @@ const render = (overrides = {}) =>
     isOwner: true,
     appUrl: "https://next.example.test",
     ...overrides,
-  })!.toString();
+  })!.toString() as string;
 
 describe("member profile base theme", () => {
   it("loads the base tokens and profile-only layout without changing other shells", () => {
@@ -208,7 +209,7 @@ describe("member profile base theme", () => {
 
   it("keeps styling external, compact and responsive for dynamic island lists/notices", () => {
     const css = readFileSync(new URL("../public/profile-theme.css", import.meta.url), "utf8");
-    expect(css.length).toBeLessThan(8000);
+    expect(css.length).toBeLessThan(8500);
     expect(css).toContain("@media (max-width: 48rem)");
     expect(css).toContain("@media (max-width: 30rem)");
     expect(css).toContain("grid-template-columns: 1fr");

@@ -4,8 +4,13 @@
  * existing import paths keep working.
  */
 
-export const pastEventsUrl = (page: number): string =>
-  page > 1 ? `/events/past?page=${page}` : "/events/past";
+export const pastEventsUrl = (page: number, q = ""): string => {
+  const params = new URLSearchParams();
+  if (page > 1) params.set("page", String(page));
+  if (q) params.set("q", q);
+  const search = params.toString();
+  return `/events/past${search ? `?${search}` : ""}`;
+};
 
 /* ---------------------------------------------------------------- past-events */
 
@@ -15,6 +20,11 @@ export const PAST_EVENTS_TESTID = "past-events";
 export const PAST_EVENTS_LIST_TESTID = "past-events-list";
 export const PAST_EVENTS_EMPTY_TESTID = "past-events-empty";
 export const PAST_EVENTS_OUT_OF_RANGE_TESTID = "past-events-out-of-range";
+export const PAST_EVENTS_PAGER_TESTID = "past-events-pager";
+export const PAST_EVENTS_PAGER_NEWER_TESTID = "past-events-pager-newer";
+export const PAST_EVENTS_PAGER_OLDER_TESTID = "past-events-pager-older";
+export const PAST_EVENTS_BACK_TESTID = "past-events-back";
+export const PAST_EVENTS_SEARCH_MISS_TESTID = "past-events-search-miss";
 export const PAST_EVENTS_COPY = {
   empty: "No past events yet.",
   join: "Join the community and help make the next one happen.",

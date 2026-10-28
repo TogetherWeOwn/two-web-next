@@ -9,6 +9,7 @@ import type { Env } from "./env";
 import { databaseOptions, databaseUrl } from "./db/connection";
 import { checkJoinThrottle } from "./join/service";
 import type { Sql } from "./sessions";
+import { createLogBudget } from "./log-budget";
 
 /** `throttle:10,1` — join redirect/callback, login callback, QA login. */
 export const AUTH_THROTTLE_PER_MINUTE = 10;
@@ -31,8 +32,18 @@ export async function throttleStore(c: Context<{ Bindings: Env }>): Promise<Sql 
   return postgres(url, databaseOptions) as unknown as Sql;
 }
 
+export const MAX_CLIENT_KEY_SEGMENT = 64;
+
 /** IPv6 clients share a /64; IPv4 and its mapped form share the IPv4 key. Shared with the agent-events shield so anonymous buckets match human throttles. */
 export function normalizeClientIp(ip: string): string {
+  return boundClientSegment(normalizeClientIpUnbounded(ip));
+}
+
+function boundClientSegment(value: string): string {
+  return value.length > MAX_CLIENT_KEY_SEGMENT ? value.slice(0, MAX_CLIENT_KEY_SEGMENT) : value;
+}
+
+function normalizeClientIpUnbounded(ip: string): string {
   if (!ip.includes(":") || !/^[0-9a-f:.]+$/i.test(ip)) return ip;
   try {
     // URL validates IPv6 and serializes embedded IPv4 as hex pieces.
@@ -67,12 +78,35 @@ export function normalizeClientIp(ip: string): string {
  * `x-forwarded-for` hop and "anon" only matter off-edge (local runs, tests).
  * See docs/throttling.md for prefix sharing and rollout behaviour.
  */
-export const clientKey = (c: Context) =>
-  normalizeClientIp(
-    c.req.header("cf-connecting-ip") ??
-      c.req.header("x-forwarded-for")?.split(",")[0]?.trim() ??
-      "anon",
-  );
+export const clientKey = (c: Context) => {
+  const cf = c.req.header("cf-connecting-ip")?.trim();
+  if (cf) return normalizeClientIp(cf) || "anon";
+  const xff = c.req.header("x-forwarded-for");
+  if (xff) {
+    for (const hop of xff.split(",")) {
+      const trimmed = hop.trim();
+      if (trimmed) return normalizeClientIp(trimmed) || "anon";
+    }
+  }
+  return "anon";
+};
+
+/** Class-only classification of a store rejection: never the message, which can quote statement bindings. */
+const MAX_THROTTLE_CLASS_LENGTH = 100;
+
+function exceptionClass(err: unknown): string {
+  const raw =
+    err instanceof Error
+      ? err.name
+      : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
+  // Only strings are sanitized: a non-string name must degrade to unknown
+  // instead of throwing the fail-open catch into a 500.
+  const name = typeof raw === "string" ? raw : "unknown";
+  // De-newline and bound: a hostile error name must not forge log lines.
+  return name.replace(/[\r\n]+/g, "_").slice(0, MAX_THROTTLE_CLASS_LENGTH) || "unknown";
+}
+
+const takeThrottleLogToken = createLogBudget("throttle.refused.shed");
 
 /** In-handler form for GET routes, where a middleware entry would widen the read inventory. */
 export async function throttleGuard(
@@ -80,10 +114,30 @@ export async function throttleGuard(
   name: string,
   max: number,
 ): Promise<Response | null> {
+  const bucket = `${name}:${clientKey(c)}`;
   const verdict = await throttleStore(c)
-    .then((sql) => checkJoinThrottle(sql, `${name}:${clientKey(c)}`, max))
-    .catch(() => ({ limited: false }) as const);
-  return verdict.limited ? await rateLimitExceeded(c, verdict.retryAfter) : null;
+    .then((sql) => checkJoinThrottle(sql, bucket, max))
+    .catch((err: unknown) => {
+      // Fail open with a throttle-naming, class-only line: the client segment
+      // is a member IP and must never be logged, and the message can quote
+      // statement bindings. Exactly one line per allow: the null-store
+      // allow already warned inside checkJoinThrottle (no throw, so this
+      // catch never runs for it), and the verdict transaction never warns
+      // before rethrowing.
+      console.warn("Throttle store failed; allowing the request.", {
+        throttle: name,
+        exception: exceptionClass(err),
+      });
+      return { limited: false } as const;
+    });
+  if (!verdict.limited) return null;
+  // Refusal telemetry: route class + outcome only — never the "<name>:<client>"
+  // bucket (the client segment is a member IP), never body bytes. One site
+  // covers the middleware and in-handler forms, over-budget and busy-path
+  // verdicts alike; the 429 itself is unchanged.
+  if (takeThrottleLogToken())
+    console.warn("throttle.refused", { throttle: name, outcome: "rate_limited" });
+  return rateLimitExceeded(c, verdict.retryAfter);
 }
 
 /**

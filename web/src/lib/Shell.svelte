@@ -14,6 +14,7 @@ let {
   theme,
   leafCss,
   activeNav,
+  member = false,
   mainClass,
   loginReturnTo = null,
   accountChrome,
@@ -30,7 +31,9 @@ let {
   /** Inlined leaf CSS for the content shell; see SiteMetadata for why this
     arrives as load data instead of an import. */
   leafCss?: string;
-  activeNav?: "home" | "events";
+  activeNav?: "home" | "events" | "event" | "leaderboard";
+  /** Already-available membership from the page load; offers the board link. */
+  member?: boolean;
   mainClass?: string;
   loginReturnTo?: string | null;
   /** Explicitly supplied session-aware chrome; the static shell never reads session state. */
@@ -58,7 +61,7 @@ const shellClass = $derived(
   restyle is a token swap in that one file. The content theme is the
   exception: it renders leaf-CSS classes only (see shellClass). -->
 <div class={shellClass} data-theme={theme}>
-  <SiteHeader {activeNav} {loginReturnTo} {accountChrome} {hideAccount} />
+  <SiteHeader {activeNav} {member} {loginReturnTo} {accountChrome} {hideAccount} />
   <main class={mainClass} id="main" tabindex="-1">{@render children()}</main>
   <SiteFooter {theme} />
 </div>

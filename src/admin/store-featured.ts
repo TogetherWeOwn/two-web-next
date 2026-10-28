@@ -11,7 +11,14 @@ import type { Db } from "../db/index";
 import { nonSensitiveRead } from "../member-reads";
 import { activityLog, featuredContents } from "../db/admin-schema";
 import type { FeaturedFormInput } from "./validation";
-import { audit, dirty, NotFoundError, type Actor } from "./store-shared";
+import {
+  audit,
+  boundInventoryRead,
+  boundModeratorWrite,
+  dirty,
+  NotFoundError,
+  type Actor,
+} from "./store-shared";
 import { retireHomeGuestCache } from "../home-cache";
 
 export type FeaturedRow = typeof featuredContents.$inferSelect;
@@ -43,12 +50,28 @@ function featuredAuditValues({ startsAtText, endsAtText, ...row }: FeaturedEditR
   return { ...row, startsAt: startsAtText, endsAt: endsAtText };
 }
 
+// Every editable field nulled out: diffed against the locked-row snapshot,
+// the delete audit reconstructs the slot. dirty() omits null-to-null fields,
+// so the receipt keeps the same sparse shape as create/update audits.
+const NULL_FEATURED_SNAPSHOT = {
+  title: null,
+  body: null,
+  url: null,
+  imageUrl: null,
+  imageAlt: null,
+  isPublished: null,
+  position: null,
+  startsAt: null,
+  endsAt: null,
+};
+
 export async function createFeatured(
   db: Db,
   actor: Actor,
   input: FeaturedFormInput,
 ): Promise<FeaturedRow> {
   const row = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     const [row] = await tx
       .insert(featuredContents)
       .values({
@@ -86,6 +109,7 @@ export async function updateFeatured(
   input: FeaturedFormInput,
 ): Promise<FeaturedRow> {
   const row = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     const [locked] = await tx
       .select(featuredEditSelection)
       .from(featuredContents)
@@ -127,11 +151,46 @@ export async function updateFeatured(
   return row;
 }
 
-/** Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited. */
+export async function unpublishFeatured(db: Db, actor: Actor, id: number): Promise<void> {
+  const changed = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
+    const [locked] = await tx
+      .select({ title: featuredContents.title, isPublished: featuredContents.isPublished })
+      .from(featuredContents)
+      .where(eq(featuredContents.id, id))
+      .for("update");
+    if (!locked) throw new NotFoundError("featured content");
+    if (!locked.isPublished) return false;
+    await tx
+      .update(featuredContents)
+      .set({ isPublished: false, updatedAt: new Date() })
+      .where(eq(featuredContents.id, id));
+    await audit(tx, {
+      subjectType: "FeaturedContent",
+      subjectId: String(id),
+      causerId: actor.id,
+      description: `unpublished featured content ${locked.title}`,
+      properties: dirty<Pick<FeaturedRow, "isPublished">>(
+        { isPublished: locked.isPublished },
+        { isPublished: false },
+      ),
+    });
+    return true;
+  });
+  // Only a committed change retires the cache; repeated withdrawals are no-ops.
+  if (changed) await retireHomeGuestCache();
+}
+
+/**
+ * Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited.
+ * The delete audit snapshots the full locked row (update-audit value shape, after null per field),
+ * so a mistaken delete stays reconstructable from the activity log alone. Receipt only: no restore.
+ */
 export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<void> {
   await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     const [locked] = await tx
-      .select()
+      .select(featuredEditSelection)
       .from(featuredContents)
       .where(eq(featuredContents.id, id))
       .for("update");
@@ -143,13 +202,21 @@ export async function deleteFeatured(db: Db, actor: Actor, id: number): Promise<
       subjectType: "FeaturedContent",
       subjectId: String(locked.id),
       causerId: actor.id,
-      properties: { title: { before: locked.title, after: null } },
+      properties: dirty(
+        featuredAuditValues(locked) as Record<string, unknown>,
+        NULL_FEATURED_SNAPSHOT,
+      ),
     });
   });
   // Committed: the homepage drops the slot on the next fetch.
   await retireHomeGuestCache();
 }
 
+/**
+ * Featured inventory: one transaction behind the shared transaction-local
+ * lock/statement bound, so a stalled table cancels server-side and the
+ * caller refuses only after the transaction settles.
+ */
 export async function listFeatured(
   db: Db,
   opts: { published?: boolean; q?: string; sort?: string; order?: string; page?: string | number },
@@ -160,22 +227,25 @@ export async function listFeatured(
     order: opts.order,
     page: opts.page === undefined ? undefined : String(opts.page),
   });
-  const conds: SQL[] = [];
-  if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
-  if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
-  const column =
-    query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
-  const order = query.order === "desc" ? desc(column) : asc(column);
-  // Fetch one extra row so pagination needs no separate count query.
-  return nonSensitiveRead("featured", () =>
-    db
-      .select()
-      .from(featuredContents)
-      .where(and(...conds))
-      .orderBy(order, asc(featuredContents.id))
-      .limit(FEATURED_PAGE_SIZE + 1)
-      .offset((query.page - 1) * FEATURED_PAGE_SIZE),
-  );
+  return db.transaction(async (tx) => {
+    await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
+    const conds: SQL[] = [];
+    if (opts.published !== undefined) conds.push(eq(featuredContents.isPublished, opts.published));
+    if (query.q) conds.push(ilike(featuredContents.title, `%${escapeLikeTerm(query.q)}%`));
+    const column =
+      query.sort === "updated_at" ? featuredContents.updatedAt : featuredContents.position;
+    const order = query.order === "desc" ? desc(column) : asc(column);
+    // Fetch one extra row so pagination needs no separate count query.
+    return nonSensitiveRead("featured", () =>
+      tx
+        .select()
+        .from(featuredContents)
+        .where(and(...conds))
+        .orderBy(order, asc(featuredContents.id))
+        .limit(FEATURED_PAGE_SIZE + 1)
+        .offset((query.page - 1) * FEATURED_PAGE_SIZE),
+    );
+  });
 }
 
 /** Imported source IDs are independent of native IDs; never fall back to a native match. */

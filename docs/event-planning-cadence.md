@@ -7,13 +7,13 @@ This is an operator calendar routine for planning community events. A planned sl
 - Name one **event planner** for each monthly cycle in the calendar record. That person owns the review, the week-by-week status, and the next review date.
 - On the first working day of the month, review the next four consecutive calendar weeks. Account for every week with either a planned event or an explicit `No event` entry and reason.
 - At the start of each week, reconcile the previous week's actual outcome, update cancellations or reschedules, and roll the window forward by one week so four upcoming weeks remain reviewed.
-- Record exact date ranges for the planning weeks. The authoritative goal, **The TWO Community**, does not define a reporting-week boundary or timezone; do not use this calendar routine to invent one. If the boundary needed for a consecutive-week comparison is not established by the goal's measurement source, leave that comparison unassessed.
+- Use the [weekly reporting convention](community-participation-metrics.md#weekly-reporting-convention) adopted 2026-10-20 for these calendar weeks: ISO `YYYY-Www`, Monday 00:00 UTC inclusive to next Monday 00:00 UTC exclusive, with exact UTC `[start, end)` timestamps. This is a reporting convention only, not a change to goal targets or policy. Keep event scheduling/display in each event's stated timezone; do not infer a goal result from an assigned bucket.
 
 ## Minimum calendar fields
 
 For each week, record:
 
-- The exact calendar date range.
+- The ISO reporting-week label and exact UTC half-open interval.
 - Event title and game/activity, when applicable.
 - Start and end date/time, with the event's timezone stated explicitly.
 - Location, venue, or joining channel.
@@ -27,7 +27,7 @@ These are planning fields. The existing [moderator event workflow](moderator-adm
 
 - Never leave a week blank. If no event is planned or held, set `No event` and record why. It is not a held event.
 - A cancelled event is not held in its original week. Record the original date/week and the cancellation reason.
-- For a reschedule, retain the original date/week and record the replacement date/week and reason. The event is not held in its original week; if it actually takes place later, record it as held only in the week it occurs. Do not count the same event in both weeks.
+- For a reschedule, retain the original date/week and record the replacement date/week and reason. Assign both buckets by their event start instants in UTC. The original schedule is not evidence of a held event; if the replacement actually takes place, record it as held only in the reporting week containing its actual start instant. Do not count the same event in both weeks.
 - If a separate event is held in a week whose other event was cancelled or moved, record that event separately; only the event that actually took place can be marked `held`.
 - `planned` means scheduled, not held. Mark `held` only after the event actually takes place.
 

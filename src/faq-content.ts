@@ -3,10 +3,13 @@
 // (web/src/routes/faq/). Pure data: no session, no cookie, no
 // database — importing this module must never connect to anything.
 
+import { SUBSCRIPTION_GUIDANCE } from "./events/subscription-copy";
+import { faqLastReviewed } from "./faq-last-reviewed";
+
 export const FAQS: Array<{
   section: string;
   sectionId: string;
-  items: Array<[string, string]>;
+  items: Array<[string, string, { label: string; href: string }?]>;
 }> = [
   {
     section: "Getting in",
@@ -71,8 +74,25 @@ export const FAQS: Array<{
         "On the site's Events page: game nights, tournaments, whatever the community puts on. Anyone can read it — including signed-out visitors arriving from a Discord link.",
       ],
       [
+        "How do I subscribe to events in my calendar?",
+        "On Events or Past events, open “How to subscribe to the calendar”. " +
+          SUBSCRIPTION_GUIDANCE.join(" ").replace("feed URL below", "feed URL shown there"),
+      ],
+      [
         "How do I RSVP, and what do the answers mean?",
-        "Log in with Discord first — signed-out visitors get a log-in prompt instead of a button. Then it's one tap: I'm in. One answer per member per event; changing your mind updates the same answer.",
+        "Log in with Discord first — signed-out visitors get a log-in prompt instead of a button. Use I'm in for an open seat, or Join the waitlist when full. Going (You're in) reserves a seat; it is not measured attendance. Waitlisted is a place in line, not a held seat. One answer per member per event: changing your mind updates the same answer. Use Can't make it to withdraw, or Leave the waitlist to leave the line, when those controls are available.",
+      ],
+      [
+        "How do waitlist promotions work?",
+        "While the event is published, taking RSVPs and not ended, a released seat promotes the earliest waiting member in first-in, first-out (FIFO) order. Reload the event to check your current answer and position. Do not rely on a notification: the site cannot guarantee Discord delivery. Leaving and rejoining is a new place in line, not your old priority.",
+      ],
+      [
+        "What if my RSVP is syncing, or I couldn't confirm it?",
+        "Saved. Syncing to Discord. means your answer is saved and the Discord mirror is pending, not that the reservation failed. Do not save again to force sync. An unknown result — We couldn't confirm your RSVP. Check the event before trying again. — is different: use Refresh the event and check your current answer before another write. For session expiry, throttling, closed events or a persistent mirror delay, follow the recovery guide.",
+        {
+          label: "RSVP recovery guide",
+          href: "https://github.com/TogetherWeOwn/two-web-next/blob/main/docs/rsvp-recovery.md",
+        },
       ],
     ],
   },
@@ -121,6 +141,17 @@ export const FAQS: Array<{
 // The Kit page renders this shape server-side: the questions, answer
 // semantics and section anchors stay byte-identical across renderers because
 // every renderer reads this module, never a pasted copy.
-export function faqPageData(appUrl: string): { appUrl: string; faqs: typeof FAQS } {
-  return { appUrl, faqs: FAQS };
+export type FaqPageData = {
+  appUrl: string;
+  faqs: typeof FAQS;
+  lastReviewed: ReturnType<typeof faqLastReviewed>;
+};
+
+// The Kit load function only reorders the same reads as the Hono handler
+// (src/static-leaves.tsx): APP_URL plus the config stamp, mapped through the
+// shared validator so an empty or unparseable value hides the stamp. Kept here
+// (not in the Kit route) so the root suite can pin it without importing
+// SvelteKit or worker code.
+export function faqPageData(appUrl: string, raw?: string | undefined): FaqPageData {
+  return { appUrl, faqs: FAQS, lastReviewed: faqLastReviewed(raw) };
 }

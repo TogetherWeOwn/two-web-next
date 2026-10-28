@@ -13,13 +13,14 @@ name: mutation-sessions-join
 # can never be blocked on a service.
 #
 # Non-blocking by design: this workflow gates no merge. The required checks
-# stay exactly `check`, `gitleaks` and `pr-lint`; there is deliberately no
+# stay exactly `ci-ok`, `gitleaks`, `e2e-ok` and `pr-lint`; there is
+# deliberately no
 # aggregator job here, so a red or skipped nightly never blocks anything.
 
 on:
   # After the ci nightly full run, on an off-minute so fleet wake-ups spread.
   schedule:
-    - cron: '41 3 * * *'
+    - cron: "41 3 * * *"
   workflow_dispatch:
 
 permissions:

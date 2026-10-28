@@ -60,9 +60,49 @@ test("default Playwright project ignores staging specs and wires a local-only te
 
   const teardown = readFileSync(new URL("./local-global-teardown.ts", import.meta.url), "utf8");
   assert.match(teardown, /requireGithubRunner\(\)/);
-  assert.match(teardown, /baseURL:\s*LOCAL_FIXTURE_ORIGIN/);
-  assert.match(teardown, /ignoreHTTPSErrors:\s*true/);
+  // DB-direct backstop: disposable CI Postgres only, zero QA logins, no HTTP.
+  assert.match(teardown, /requireTestDatabase\(process\.env\.DATABASE_URL\)/);
+  assert.match(teardown, /sweepLocalFixturesDb\(sql\)/);
+  assert.doesNotMatch(teardown, /\/auth\/qa|E2E_QA_TOKEN|request\.newContext/);
   assert.doesNotMatch(teardown, /stagingOrigin|playwright\.staging\.config/);
+});
+
+test("intentional RSVP controls suppress raw failure uploads with the exact predicate", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
+  const uploads = workflow
+    .split(/(?=^      - )/m)
+    .filter((step) => step.startsWith("      - name: Failure traces and report\n"));
+  assert.equal(uploads.length, 1);
+  const condition = uploads[0].match(/^        if: (.+)$/m)?.[1];
+  assert.equal(
+    condition,
+    "${{ failure() && !(github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'test/rsvp-pending-control-')) }}",
+  );
+  assert.match(uploads[0], /^        uses: actions\/upload-artifact@/m);
+});
+
+test("RSVP control upload predicate never gates browser checks or cleanup", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/e2e.yml", import.meta.url), "utf8");
+  const execution = workflow
+    .split(/(?=^      - )/m)
+    .filter((step) => !step.startsWith("      - name: Failure traces and report\n"))
+    .join("");
+  for (const name of [
+    "Verify CI isolation",
+    "Kit visual regression",
+    "Visual regression",
+    "Critical browser journeys",
+    "Kit journey parity (Hono vs built Kit Worker)",
+    "Kit parity ledger (no quiet green)",
+    "Authenticated perf budgets (session-cookie journeys)",
+    "Uncommitted visual baselines",
+    "Remove ephemeral QA material",
+    "Verdict",
+  ]) {
+    assert.ok(execution.includes(`      - name: ${name}\n`), `missing execution step: ${name}`);
+  }
+  // Exclude the upload step only: job-level gates and every other step stay checked.
+  assert.doesNotMatch(execution, /test\/rsvp-pending-control-/);
 });
 
 test("database guard permits only the disposable CI target", () => {

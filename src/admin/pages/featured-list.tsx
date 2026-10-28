@@ -3,7 +3,13 @@
 import type { FC } from "hono/jsx";
 import { FeaturedStatusBadge } from "../../featured-status";
 import type { FeaturedRow } from "../store";
-import { featuredEmptyText, featuredListUrl, type FeaturedListQuery } from "../table-list";
+import {
+  featuredEmptyText,
+  featuredListUrl,
+  featuredListHasFilters,
+  featuredListClearUrl,
+  type FeaturedListQuery,
+} from "../featured-list-query";
 import { Shell, TableSortHeader } from "./shell";
 
 export const FeaturedPage: FC<{
@@ -46,6 +52,11 @@ export const FeaturedPage: FC<{
             Filter
           </button>
         </div>
+        {featuredListHasFilters(query) ? (
+          <div class="field">
+            <a href={featuredListClearUrl(query)}>Clear filters</a>
+          </div>
+        ) : null}
       </form>
       <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
       <div
@@ -88,6 +99,13 @@ export const FeaturedPage: FC<{
                 <tr key={r.id}>
                   <td>
                     <a href={`/admin/featured/${r.id}`}>{r.title}</a>
+                    {r.isPublished ? (
+                      <form method="post" action={`/admin/featured/${r.id}/unpublish`}>
+                        <button type="submit" class="btn" aria-label={`Unpublish ${r.title}`}>
+                          Unpublish
+                        </button>
+                      </form>
+                    ) : null}
                   </td>
                   <td data-testid={`featured-status-${r.id}`}>
                     <FeaturedStatusBadge row={r} now={now} />
@@ -119,6 +137,11 @@ export const FeaturedPage: FC<{
           </tbody>
         </table>
       </div>
+      {rows.length === 0 && query.page > 1 ? (
+        <p>
+          <a href={featuredListUrl(query, { page: 1 })}>First page of these results</a>
+        </p>
+      ) : null}
       <nav aria-label="Featured content pages" class="actions">
         {query.page > 1 ? (
           <a rel="prev" href={featuredListUrl(query, { page: query.page - 1 })}>

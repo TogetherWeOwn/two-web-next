@@ -16,16 +16,17 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   in `sg-tests/fetch-await*.yml` and run under `npm run scan:rules-test`.
 - **Changed-lines coverage (WARN, 80%):** `ci/patch-coverage.mjs` intersects
   the PR diff with `coverage-final.json`; added TS lines nobody executes warn.
-  A missing `coverage-final.json` fails the step instead of skipping, so a
-  broken coverage run cannot silence the gate (docs-only and draft PRs skip
-  via the scope guard). Aggregate floors in `vitest.config.ts` stay. Flip to
-  `--strict` for HARD.
+  Missing or malformed `coverage-final.json` fails the step instead of skipping,
+  so broken evidence cannot silence the gate (docs-only and draft PRs skip
+  via the unchanged scope guard). Aggregate floors in `vitest.config.ts` stay.
+  Flip to `--strict` for HARD. See [CLI, JSON schema and recovery](#patch-coverage-cli).
 - **Semgrep TS + secrets (HARD):** `ci/semgrep-rules.yml` flags dangerous
   sinks (`eval`, string `setTimeout`, `innerHTML`, `document.write`) and
   secret-shaped literals. CI installs the pinned CLI into a Python virtual
   environment and runs `ci/semgrep-warn-selftest.mjs` against a planted finding
   before scanning the tree. Setup, selftest, partial-parse errors, scanner
-  failures, and findings block the required `check` job; the scan uses
+  failures, and findings fail the `check` job and therefore the required `ci-ok`;
+  the scan uses
   `--strict --error`. The regression test in `test/workflow-hardening.test.ts`
   pins the fail-closed workflow wiring. The selftest matches the rule id by
   suffix because Semgrep prefixes it with the config path. Full-history leak
@@ -33,10 +34,37 @@ not fail) unless marked HARD. All of them run on the existing runners only.
 - **Mutation nightly (non-blocking):** `ci/mutation-sessions-join.mjs` weakens
   one auth check at a time and runs the hermetic kill suite; survivors are
   coverage gaps in the report artifact, never a red build.
-- **Test inventory (WARN):** `ci/test-inventory.mjs` warns when a
-  `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The step
-  runs with `continue-on-error` and the `--selftest` is hermetic (fixture
-  trees only), so an orphan can never fail the job or skip later steps.
+- **Focused mutation (WARN):** `.github/workflows/mutation-roles-wall-time.yml`
+  runs the DB-free baseline plus only `R4`–`R7` and `W1`–`W3` on the existing
+  standard GitHub-hosted runner. It is not required and is separate from `ci`
+  (including `ci-ok` and its deployment consumer). The job and signal steps
+  use `continue-on-error`: survivors and infrastructure failures cannot fail
+  the overall check. JSON, Markdown and per-run Vitest evidence are retained
+  for 14 days, including on failure. The full nightly signal stays unchanged.
+- **Test inventory (HARD):** `ci/test-inventory.mjs` fails the job when a
+  `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The same
+  step gates Playwright specs: every `e2e/**/*.spec.ts` and
+  `e2e/**/*.visual.ts` must match a CI-referenced config's
+  testDir/testMatch and not be excluded by testIgnore (honoring workflow
+  file filters) or be imported transitively by such a spec. Import edges
+  are side-effect imports, re-exports and require calls: a named import of
+  a spec fails closed (Playwright's Babel elides unused bindings), as do
+  argument forwarding (bare positionals as well as `--`) and
+  `--prefix`/`--workspace` redirects on Playwright scripts. YAML run
+  scalars are decoded before shell scanning, with explicit block indentation
+  so leading command whitespace cannot hide later commands. Folded, plain
+  and quoted multiline values cannot hide forwarded arguments. A workflow
+  step or invoked package script that runs Playwright must run at the repo
+  root: any other `working-directory:` or a preceding `cd`, `pushd` or `popd`
+  fails closed (including compound shell commands, Bash `time [-p] [--]`
+  prefixes, quoted/empty assignment values, repeated `command`/`builtin`
+  wrappers and nested npm runs). The cwd scan consumes whole shell words;
+  whitespace or separators inside quotes cannot hide a following cwd change.
+  `--json` prints the Playwright
+  summary (`playwright-spec-reachability`, `OK`/`PLAYWRIGHT_SPEC_ORPHAN`,
+  `next_action`). The step runs `npm run test:inventory -- --strict` with
+  no `continue-on-error`; the `--selftest` stays hermetic (fixture trees
+  plus wiring checks that never depend on the tree having zero orphans).
 - **Tier-0 check (required):** `npm run test:tier0` runs the fast-check
   validator properties, the role x route authz matrix and the
   default-planner EXPLAIN seq-scan check from `tier0/` (own vitest config:
@@ -44,7 +72,9 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   stays isolated in its own runner). The `check`-job step runs against the
   job Postgres service and prints the changed query files beside the verdict.
 - **Floor guard (HARD):** `ci/floor-guard.mjs` enforces the CONSTRAINTS.md
-  floor on the PR diff: new suppressions, test skip calls, deleted test files
+  floor on the PR diff: new suppressions, test skips (unconditional calls and
+  conditional `.skipIf`/`.runIf`, options-object `skip:`, and ternary
+  suite/test selection forms), deleted test files
   (including `*-selftest` scripts), net-removed assertions, source-code stubs,
   new exception rows, lowered table thresholds, removed enforced-threshold
   rows, and added `.constraintsignore` lines fail `check`. Renamed threshold
@@ -60,7 +90,7 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   so `unfoldFloorWaiverLines` joins nonblank continuation lines after each
   `Floor-waiver:` line before matching; path-based waiver parsing removes
   wrap-inserted spaces within the path
-  (`ci/floor-guard.mjs:215-234, 236-262`).
+  (`ci/floor-guard.mjs:404-423, 425-451`).
   Waivers are reasoned commit trailers (`test-deleted`, `assertion-removed`,
   `threshold-removed`, `new-exemption`) and every active one is printed to the
   log and the job summary for reviewer visibility. The ignore list is pinned
@@ -68,7 +98,21 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `new-exemption` waiver. It scopes skip detection to test code and stub
   detection to source/test code; generated minified islands are exempted by
   `.constraintsignore`. An assertion paired with one added in the same test
-  file reads as a replacement. Failed or oversized diffs exit 2 rather than
+  file reads as a replacement. A conditional skip paired with a skip removed
+  from the same test file reads as a replacement; an unconditional skip added
+  in its place still fails. JavaScript/TypeScript skips are counted as syntax
+  constructs in complete merge-base and working-tree sources using the existing
+  Babel parser, without executing them or evaluating conditions. Wrapped
+  expressions and multiple gates on one line keep the same count; a skip in
+  any builder-chain segment (`it.skip.each`, including tagged-template
+  builders) counts once per registration; comments,
+  strings, fixture data and callback-local objects supply no replacement credit.
+  `skip:` keys count only in test-call options (including literal spreads), not
+  arbitrary nested objects. Other languages keep the legacy call spellings.
+  The `guardDiff` fixture API accepts complete source fragments; callers with
+  partial hunks must pass `sources: new Map([[path, { before, after }]])`.
+  Unparseable fragments throw. Unreadable or unparseable test sources make the
+  CLI fail closed with exit 2, as for failed or oversized diffs, rather than
   looking clean.
   Mirror every `Floor-waiver:` trailer from branch commits in canonical form
   in the PR body: `check_queue_visible_waivers` (`ci/pr-lint-output.py:26-71`) scans
@@ -98,16 +142,131 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `test/seo-headers.test.ts`, replaced with a mapping-table pin that asserts
   every documented section exists in the file.
 
-## Merge-blocking mutation proposal
+## Patch coverage CLI
 
-Nightly triage (2026-10-11, head `de850cf`): 20/20 mutants killed, zero
-survivors, so nothing is on fire. The blocking candidates are the seven new
-targeted mutants — `R4`–`R7` (`src/roles.ts`: blank-allowlist admit,
-fetch-failure admit, lookup-failure admit, any-role admits) and `W1`–`W3`
+`ci/patch-coverage.mjs` is the single patch-coverage authority. It reads the
+existing v8/Istanbul JSON report once, then compares the merge base of
+`origin/main` and `HEAD` with `HEAD`. Only added `.ts`/`.tsx` lines under
+`src/` and `tail/` are scored; it does not generate coverage, fetch Git refs,
+write files, retry, use the network, or act on a deployment/database.
+
+```sh
+node ci/patch-coverage.mjs --help
+node ci/patch-coverage.mjs --json --base origin/main
+node ci/patch-coverage.mjs --strict --json --base origin/main
+# Hermetic, no report/database/dependencies/network needed:
+npm run patch:coverage:selftest
+# Independent boundary corpus alone:
+node --test ci/patch-coverage-acceptance.test.mjs
+```
+
+`--json`, `--strict` and `--base <ref>` can be combined once each. `--help`
+and `--selftest` are standalone modes, read no inputs, and cannot be combined
+with scoring flags. Unknown/duplicate flags, missing/empty base values and
+leading-dash base options exit **2**, before reading inputs or running Git.
+Base values accept a local ref/hash using letters, digits, `_./@{}~^+-`
+(starting with a letter, digit or underscore); no shell interpolation occurs.
+Git failures/timeouts become `git_failed` with no raw Git diagnostics. Each
+of the two read-only Git commands has a 10s timeout and a 64MiB output cap.
+No `--dry-run` is needed or accepted: all modes are already read-only.
+
+### Scoring and evidence admission
+
+- Hunk counts distinguish metadata from source: `+++counter` is an added
+  `++counter` statement inside a hunk, and `---counter` consumes only the old
+  side. File/hunk changes, context, Git-quoted paths, the single TAB
+  terminator Git appends to space-containing `+++` headers, and no-newline
+  markers preserve new-side line numbers.
+- In a present file, only statement **start** lines enter the denominator.
+  Any positive statement hit on that line covers it. Other added lines
+  (including type-only lines, blanks and braces) are `skipped`, not missed.
+- A file absent from an otherwise valid report remains fully uncovered:
+  **all** its added TS/TSX lines count as missed. An empty report object is
+  valid evidence of no instrumented files, not a missing report.
+- A valid empty/non-TS diff or a present type-only file with empty maps has
+  `total=0`, `hit=0`, `pct=100`. Malformed evidence never gets that receipt,
+  even on an empty diff.
+- The report and every file entry must be objects, not null, arrays or scalars.
+  Each file requires `path`, `statementMap` and `s`. Map/hit IDs must match
+  exactly; locations require safe positive integer lines and either a safe
+  nonnegative integer column or an explicit null (the v8 reporter emits null
+  for unknown positions, and only start lines enter the score). The end must
+  be at or after the start, with same-line column order enforced only when
+  both columns are known. Hits must be safe nonnegative integers. Empty maps
+  are valid only when both are empty.
+- Keys and `path` must normalize to the same nonempty repo-relative path,
+  with no control characters or traversal outside the repo. Duplicate
+  normalized file entries are ambiguous and rejected. All entries, including
+  unchanged files, are validated **before** any score is emitted. Function
+  and branch maps are not used by this statement-start metric.
+
+### JSON v1 and recovery
+
+`--json` writes exactly one JSON object to stdout, with no annotations or
+stderr diagnostics. Keys are emitted in a fixed order; there are no timestamps,
+absolute paths or raw report data. `added`, `missed` and `skipped` hold complete
+repo-relative `file:line` IDs, sorted by file (code-unit order), then numeric
+line, independent of report order. The schema version changes if these
+semantics change. Extra fields may be added compatibly.
+
+```json
+{"schema_version":1,"floor":80,"verdict":"WARN","error_code":null,"next_action":"add_tests","total":4,"hit":3,"pct":75,"added":["src/a.ts:1","src/a.ts:2","src/a.ts:3","src/a.ts:4"],"missed":["src/a.ts:4"],"skipped":[]}
+```
+
+| Verdict / error_code | Exit | next_action |
+| --- | --- | --- |
+| `PASS` / null, at least 80% | 0 | `none` |
+| `WARN` / null, below 80% by default | 0 | `add_tests` |
+| `FAIL` / null, below 80% with `--strict` | 1 | `add_tests` |
+| `ERROR` / `missing_report` | 1 | `generate_coverage`: run `npm run test:coverage` in the disposable test environment |
+| `ERROR` / `invalid_coverage` | 1 | `fix_coverage_report`: regenerate a complete valid report; never hand-fill missing maps |
+| `ERROR` / `git_failed` | 1 | `check_base`: check the local ref/repository, then rerun |
+| `ERROR` / `invalid_arguments` | 2 | `fix_arguments`: follow `--help` |
+
+Errors set `total`, `hit` and `pct` to **null** and all line arrays to `[]`.
+They name only a fixed error code and safe next action, never a report value,
+path, parser exception or stack. Human mode retains its summary, at most
+30 uncovered lines (each ID bounded to 180 UTF-8 bytes plus a truncation
+marker), an omitted-line count and `::warning::` below the floor, even in
+strict mode. Errors retain bounded `::error::` diagnostics. Complete IDs
+remain available in JSON; human output sanitizes control characters.
+
+`npm run patch:coverage:selftest` runs the original seven checks, the
+independently authored acceptance corpus, and supplementary edge fixtures
+through the existing required CI step. Fixtures exercise real local Git and
+the shipped CLI: exact counts/line IDs, default/strict exits, malformed
+reports with canaries, repeatability, and no writes/network/timers/retries.
+They do not need a full coverage run. Generating a real report still requires
+the disposable test database described in [the README](../README.md#coverage-ratchet).
+
+## Focused mutation rollout (WARN-first)
+
+The fixed seven-mutant subset is `R4`–`R7` (`src/roles.ts`: blank-allowlist
+admit, fetch-failure admit, lookup-failure admit, any-role admits) and `W1`–`W3`
 (`src/admin/validation-wall-time.ts`: fold flip, gap admitted, unknown zone
-admitted) — because each is killed by a 2-file, 46-test subset
-(`moderator-malformed-success` + `event-time-validation`) that runs in ~3s
-DB-free. A blocking job (baseline + 7 mutants ≈ under 1 min on the existing
-runners) flips these from nightly-signal to merge-blocking without moving the
-slow session/join/admin mutants, which stay nightly. Not implemented yet:
-needs its own PR wiring the subset job in WARN first.
+admitted). It runs only `test/moderator-malformed-success.test.ts` and
+`test/event-time-validation.test.ts` (46 tests), with no database URLs inherited
+by Vitest. The slow session/join/admin mutants remain in the existing nightly
+job; that inventory, its safeguards and all coverage floors are unchanged.
+
+Run `env -u DATABASE_URL npm run mutation:roles-wall-time` locally. The runner
+refuses dirty targets, requires a green unmutated baseline, checks unique
+anchors, and reuses the nightly targeted restore with SHA-256 verification
+before proceeding to another mutant. Each Vitest child has a 20-second cap;
+the job has a five-minute cap. No whole-tree checkout or dirty-target bypass
+is offered. A restore mismatch stops further mutation and preserves unexpected
+bytes for inspection. Abrupt runner loss or an uncatchable process kill cannot
+promise cleanup; partial reports are saved before mutation and after each result.
+
+`artifacts/mutation-roles-wall-time/report.{json,md}` distinguishes surviving
+mutants (coverage gaps, exit 0) from infrastructure failures (exit 1): baseline
+failure, missing inputs, stale/ambiguous anchors, timeouts, signals, spawn/load
+errors and restore mismatches. Exit 1 from Vitest is not enough to count a kill:
+both suite files must produce complete, non-skipped assertion results with an
+actual failed test. Reports include per-mutant before/after hashes. The
+always-run workflow summary writes an infrastructure fallback if no runner
+report exists, and the always-run upload preserves available reports and logs.
+
+Run `npm run mutation:roles-wall-time:selftest` for hermetic harness and workflow
+wiring checks. Promotion to HARD remains a separate reviewed slice: this job
+is intentionally WARN-only and neither branch protection nor `ci-ok` reads it.

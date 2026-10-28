@@ -1,5 +1,10 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import {
+  featuredListUrl,
+  featuredListHasFilters,
+  featuredListClearUrl,
+} from "../../../../../src/admin/featured-list-query";
 import type { PageProps } from "./$types";
 
 // Markup contract of FeaturedPage (src/admin/pages/featured-list.tsx): the
@@ -44,6 +49,11 @@ let { data }: PageProps = $props();
     <div class="field">
       <button type="submit" class="btn">Filter</button>
     </div>
+    {#if featuredListHasFilters(data.query)}
+      <div class="field">
+        <a href={featuredListClearUrl(data.query)}>Clear filters</a>
+      </div>
+    {/if}
   </form>
   <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex: keyboard-scrollable
@@ -71,7 +81,16 @@ let { data }: PageProps = $props();
       <tbody>
         {#each data.rows as r (r.id)}
           <tr>
-            <td><a href={`/admin/featured/${r.id}`}>{r.title}</a></td>
+            <td>
+              <a href={`/admin/featured/${r.id}`}>{r.title}</a>
+              {#if r.status !== "unpublished"}
+                <form method="post" action={`/admin/featured/${r.id}/unpublish`}>
+                  <button type="submit" class="btn" aria-label={`Unpublish ${r.title}`}>
+                    Unpublish
+                  </button>
+                </form>
+              {/if}
+            </td>
             <td data-testid={`featured-status-${r.id}`}>
               <span class="featured-status featured-status-{r.status}" data-status={r.status}>
                 {r.status}
@@ -96,6 +115,11 @@ let { data }: PageProps = $props();
       </tbody>
     </table>
   </div>
+  {#if data.rows.length === 0 && data.query.page > 1}
+    <p>
+      <a href={featuredListUrl(data.query, { page: 1 })}>First page of these results</a>
+    </p>
+  {/if}
   <nav aria-label="Featured content pages" class="actions">
     {#if data.previousHref}
       <a rel="prev" href={data.previousHref}>Previous</a>

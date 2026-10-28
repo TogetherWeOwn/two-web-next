@@ -90,7 +90,7 @@ describe("admin free-text filter length bound (no DB)", () => {
         roster_order: "asc",
         roster_page: "3",
       }),
-    ).toEqual({ q: "", sort: "status", order: "asc", page: 3 });
+    ).toEqual({ q: "", status: "", sort: "status", order: "asc", page: 3 });
     expect(parseJoinAttemptsQuery({ q: huge, outcome: "denied", page: "2" })).toEqual({
       outcome: "denied",
       q: "",
@@ -250,7 +250,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const [event] = await fixture.db
         .insert(events)
         .values({
-          eventKey: "roster-bound",
+          eventKey: "01K00000000000000000000018",
           title: "roster-bound",
           startsAt: new Date("2099-10-01T20:00Z"),
           endsAt: new Date("2099-10-01T22:00Z"),
@@ -262,9 +262,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
         { eventId: event!.id, userId: "100000000000009002", status: "maybe" },
       ]);
       // Positive control: a normal search still filters.
-      expect(await request("/events/roster-bound?roster_q=alice")).toContain("RSVPs (1)");
+      expect(await request("/events/01K00000000000000000000018?roster_q=alice")).toContain(
+        "RSVPs (1)",
+      );
 
-      const html = await request(`/events/roster-bound?roster_q=${huge}`);
+      const html = await request(`/events/01K00000000000000000000018?roster_q=${huge}`);
       expect(html).toContain("RSVPs (2)");
       expect(html).not.toContain(huge.slice(0, 200));
     });

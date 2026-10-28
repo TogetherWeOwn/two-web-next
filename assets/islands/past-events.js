@@ -31,6 +31,39 @@
   // One shot per read, never a repeat; superseded timers are disarmed and an
   // obsolete timer that still fires cannot touch a newer read.
   var READ_DEADLINE_MS = 10000;
+
+  // Finite HTML byte cap for one discovery read (mirrors
+  // DISCOVERY_HTML_MAX_BYTES in src/islands/contracts-shared.ts). It counts
+  // bytes consumed from the body stream, never Content-Length (advisory), and
+  // cancels the stream on overflow, before DOMParser sees anything. A
+  // body-less response falls back to text(): that only bounds the parse, not
+  // the download, which the runtime has already buffered.
+  var HTML_MAX_BYTES = 1048576;
+
+  async function readHtml(response, signal) {
+    var reader = response.body && response.body.getReader && response.body.getReader();
+    var html = "";
+    if (!reader || typeof TextDecoder === "undefined") {
+      html = await response.text();
+      // UTF-8 byte length: each %XX escape is one byte, every other char is ASCII.
+      if (encodeURIComponent(html).replace(/%../g, "x").length > HTML_MAX_BYTES)
+        throw new Error("HTML too large");
+      return html;
+    }
+    var decoder = new TextDecoder();
+    var total = 0;
+    for (var step; !(step = await reader.read()).done; ) {
+      total += step.value.byteLength;
+      if (total > HTML_MAX_BYTES || signal.aborted) {
+        reader.cancel().catch(function () {});
+        throw signal.aborted
+          ? new DOMException("Aborted", "AbortError")
+          : new Error("HTML too large");
+      }
+      html += decoder.decode(step.value, { stream: true });
+    }
+    return html + decoder.decode();
+  }
   // The deadline needs both timer globals; harnesses without a fake clock keep
   // the pre-deadline admission behavior.
   var canTimeout = typeof setTimeout !== "undefined" && typeof clearTimeout !== "undefined";
@@ -55,6 +88,9 @@
       controller.abort();
     } catch {}
     active = null;
+    // Release this read's focus tracking now: an abort-ignoring fetch or body
+    // would otherwise keep the listener until its promise settles.
+    controller.release();
     root.removeAttribute("aria-busy");
     feedback.textContent = root.dataset.loadError;
     // Same reconciliation as an ordinary failure: a click that never pushed its
@@ -63,11 +99,24 @@
       window.location.assign(window.location.href);
   }
 
+  function archiveSearch(page, query) {
+    var params = new URL("/events/past", window.location.href).searchParams;
+    if (Number(page) > 1) params.set("page", String(page));
+    if (query) params.set("q", query);
+    var search = params.toString();
+    return search ? "?" + search : "";
+  }
+
   function archiveUrl(href, fromHistory) {
     var url = new URL(href, window.location.href);
+    var params = url.searchParams;
+    var valid = Array.from(params.keys()).every(function (key) {
+      return (key === "page" || key === "q") && params.getAll(key).length === 1;
+    });
+    var page = params.get("page");
     return url.origin === window.location.origin &&
       url.pathname === "/events/past" &&
-      (fromHistory || (/^(\?page=[1-9]\d*)?$/.test(url.search) && !url.hash))
+      (fromHistory || (valid && (!page || /^[1-9]\d*$/.test(page)) && !url.hash))
       ? url
       : null;
   }
@@ -106,7 +155,11 @@
   }
 
   async function load(url, push) {
-    if (active) active.abort();
+    if (active) {
+      // Supersession: abort the old read and drop its focus tracking at once.
+      active.abort();
+      active.release();
+    }
     clearDeadline();
     var controller = new AbortController();
     // Back/forward reads must not be skipped by the fragment-only popstate rule.
@@ -123,6 +176,14 @@
       if (event && event.target !== focusAtStart) focusMoved = true;
     };
     document.addEventListener("focusin", trackFocus);
+    // One idempotent, per-read cleanup: success, failure, timeout and
+    // supersession all call it, and it only ever removes this read's listener.
+    var released = false;
+    controller.release = function () {
+      if (released) return;
+      released = true;
+      document.removeEventListener("focusin", trackFocus);
+    };
     root.setAttribute("aria-busy", "true");
     feedback.textContent = "Loading past events…";
     // The owned deadline covers the whole read: headers plus body. On expiry
@@ -140,7 +201,7 @@
         signal: controller.signal,
       });
       if (!response.ok) throw new Error("Archive unavailable");
-      var html = await response.text();
+      var html = await readHtml(response, controller.signal);
       if (active !== controller || controller.signal.aborted) return;
       var page = new DOMParser().parseFromString(html, "text/html");
       var next = required(page, '[data-island="past-events"]');
@@ -171,12 +232,13 @@
       }
       var pageNumber = next.dataset.page;
       var totalPages = next.dataset.totalPages;
+      var query = next.dataset.query || "";
       if (
         !/^[1-9]\d*$/.test(pageNumber) ||
         !/^(0|[1-9]\d*)$/.test(totalPages) ||
         !Number.isSafeInteger(Number(pageNumber)) ||
         !Number.isSafeInteger(Number(totalPages)) ||
-        new URL(incoming.href).search !== (pageNumber === "1" ? "" : "?page=" + pageNumber)
+        new URL(incoming.href).search !== archiveSearch(pageNumber, query)
       ) {
         throw new Error("Invalid archive page");
       }
@@ -208,6 +270,7 @@
       });
       root.dataset.page = pageNumber;
       root.dataset.totalPages = totalPages;
+      root.dataset.query = query;
       live.canonical.href = incoming.href;
       live.og.content = incoming.href;
       if (push) window.history.pushState(null, "", url.pathname + url.search);
@@ -221,7 +284,7 @@
       if (!push || pageAddress(new URL(window.location.href)) !== renderedAddress)
         window.location.assign(window.location.href);
     } finally {
-      document.removeEventListener("focusin", trackFocus);
+      controller.release();
       // Settlement owns the deadline only while still current: an expired or
       // superseded read has already released both, and a newer read owns them.
       if (active === controller) {

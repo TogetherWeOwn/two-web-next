@@ -13,8 +13,10 @@
 // Cancel resets to the last accepted values and ignores pending completions,
 // but a newer save waits until the cancelled
 // write settles or its deadline expires. 422 → errors in the alert, input kept; 401/302-to-login/419 → session
-// expired notice with login link, input kept; anything else → save-failed
-// alert, input kept. Refusal alerts focus only when the member has not moved
+// expired notice with login link, input kept; 429 → throttled notice naming the
+// bounded Retry-After wait, input kept, never resent; 503 with the
+// profile_save_uncertain code → uncertain notice, input kept; anything else →
+// save-failed alert, input kept. Refusal alerts focus only when the member has not moved
 // on since the save started, like the saved confirmation. Copy and testids
 // mirror src/islands/contracts.ts.
 // While a write is unsettled the form is aria-busy and a polite progress line
@@ -189,12 +191,13 @@
       var game = line.trim();
       if (game && games.indexOf(game) < 0) games.push(game);
     });
-    var values = { bio: body.bio.trim(), games_text: games.join("\n"), timezone: body.timezone };
+    var zone = body.timezone;
+    var values = { bio: body.bio.trim(), games_text: games.join("\n"), timezone: zone };
     var unchanged = true;
     Object.keys(values).forEach(function (key) {
       if (form.elements[key].value !== body[key]) unchanged = false;
     });
-    acceptedDraft = { bio: body.bio, games_text: body.games_text, timezone: body.timezone };
+    acceptedDraft = { bio: body.bio, games_text: body.games_text, timezone: zone };
     // The switch is a checkbox, not text: pin its saved state so Cancel and
     // the dirty check agree with the server. Absent (an older page) leaves it.
     var optOut = optOutField();
@@ -218,15 +221,18 @@
       if (!kept && field.value === body[key]) field.value = values[key];
     });
     // Empty-state copy mirrors PROFILE_EMPTY_COPY; the binder only runs for the owner.
-    var isNew = !values.bio && !games.length && !values.timezone;
+    var isNew = !values.bio && !games.length && !zone;
     var bio = document.querySelector('[data-testid="profile-bio"]');
     if (bio)
       bio.textContent =
         values.bio || (isNew ? "New here. More soon." : "You have not added a bio yet.");
     var timezone = document.querySelector('[data-testid="profile-timezone"]');
-    if (timezone)
+    if (timezone) {
       timezone.textContent =
-        "Timezone: " + (values.timezone || "Add yours so people know when you are around.");
+        "Timezone: " + (zone || "Add yours so people know when you are around.");
+      // Only an accepted save advances dependent displays, never a live draft.
+      timezone.dispatchEvent?.(new CustomEvent("two:timezone", { detail: zone }));
+    }
     var newMember = document.querySelector('[data-testid="profile-new-member"]');
     if (newMember) newMember.hidden = !isNew;
     var list = document.querySelector('[data-testid="profile-games"]');
@@ -247,6 +253,8 @@
     // A successful accept clears obsolete field errors; called only while
     // the request still owns feedback (generation guard at the call site).
     clearFieldErrors();
+    // Counts follow the normalized live values, not the submitted draft.
+    refreshCounts();
     return unchanged;
   }
 
@@ -274,6 +282,64 @@
             ? "leaderboard_opt_out"
             : null;
   }
+
+  // Composition feedback: the SSR hint/count nodes (seeded copy mirrored
+  // from src/profiles/composition.ts) refresh after input, explicit reset
+  // and accepted-save normalization. Code-point counts mirror the server
+  // validator exactly; typing never requests, truncates, validates or
+  // announces. Older markup without the nodes is left alone, never rebuilt.
+  var BIO_LIMIT = 1000;
+  var GAMES_RAW_LIMIT = 1700;
+  var GAME_NAME_LIMIT = 80;
+  var GAMES_COUNT_LIMIT = 20;
+  function codePoints(s) {
+    return Array.from(s).length;
+  }
+  function parseGamesText(value) {
+    var names = [];
+    var overlong = [];
+    value.split(/\r\n|\r|\n/).forEach(function (line, index) {
+      var trimmed = line.trim();
+      if (Array.from(trimmed).length > GAME_NAME_LIMIT) overlong.push(index + 1);
+      if (trimmed !== "" && names.indexOf(trimmed) < 0) names.push(trimmed);
+    });
+    return { names: names, raw: Array.from(value).length, overlong: overlong };
+  }
+  function bioCountText(count) {
+    return count <= BIO_LIMIT
+      ? count + " of 1000 characters"
+      : count + " of 1000 characters (" + (count - BIO_LIMIT) + " over the limit)";
+  }
+  function gamesCountText(facts) {
+    var distinct = facts.names.length;
+    var games =
+      distinct <= GAMES_COUNT_LIMIT
+        ? distinct + " of 20 games"
+        : distinct + " of 20 games (" + (distinct - GAMES_COUNT_LIMIT) + " over the limit)";
+    var raw =
+      facts.raw <= GAMES_RAW_LIMIT
+        ? facts.raw + " of 1700 characters"
+        : facts.raw + " of 1700 characters (" + (facts.raw - GAMES_RAW_LIMIT) + " over the limit)";
+    var lines =
+      facts.overlong.length === 0
+        ? ""
+        : ", line" +
+          (facts.overlong.length === 1 ? "" : "s") +
+          " " +
+          facts.overlong.join(", ") +
+          " over 80 characters";
+    return games + ", " + raw + lines;
+  }
+  function refreshCounts() {
+    var bio = form.elements.bio;
+    var bioCount = root.querySelector('[id="profile-bio-count"]');
+    if (bio && bioCount) bioCount.textContent = bioCountText(codePoints(bio.value));
+    var games = form.elements.games_text;
+    var gamesCount = root.querySelector('[id="profile-games-text-count"]');
+    if (games && gamesCount) gamesCount.textContent = gamesCountText(parseGamesText(games.value));
+  }
+  // Reset-refresh timing lives at the reset listener: it must be a task, not
+  // a microtask (see below).
 
   function clientErrors(bio, games, tz) {
     var e = [];
@@ -395,6 +461,7 @@
       if (
         t === "profile-error" ||
         t === "profile-save-failed" ||
+        t === "profile-save-throttled" ||
         t === "profile-session-expired" ||
         t === "profile-saved" ||
         t === "profile-uncertain"
@@ -404,8 +471,38 @@
   }
 
   var SAVE_FAILED_COPY = "Could not save your profile. Your changes are still here — try again.";
+  // Mirrors PROFILE_COPY.saveUncertain: a settled save the store cancelled
+  // mid-write may still have committed, so this never claims it failed.
+  var SAVE_UNCERTAIN_COPY =
+    "Your save may still have gone through. Check your profile before trying again.";
+  var THROTTLED_PREFIX = "Too many requests. Your changes are still here — try again in ";
   var GENERIC_INVALID_COPY = "Could not save your profile. Check the form and try again.";
   var ERROR_BOUND = 500;
+  // Largest wait the throttled notice ever names (24h, like the server's
+  // MAX_RETRY_DELAY_SECONDS): representable-but-absurd values cap here
+  // instead of echoing raw.
+  var RETRY_AFTER_CAP_SECONDS = 86400;
+
+  // Bounded Retry-After for a throttled save, mirroring the server's
+  // parseRetryAfterSeconds (src/jobs/retry-delay.ts): numeric-only
+  // delta-seconds, fractions round up so the member never retries sooner than
+  // asked, values under a second are unusable, absurd caps, and anything else
+  // (dates, signs, words, overflow) falls back. The header wins; the JSON
+  // retry_after falls back.
+  function parseRetryAfterSeconds(value) {
+    var raw = value === null || value === undefined ? "" : String(value).trim();
+    if (!/^\d+(?:\.\d+)?$/.test(raw)) return undefined;
+    var n = Number(raw);
+    if (!isFinite(n) || n * 1000 > 8000000000000000) return undefined;
+    var seconds = Math.ceil(n);
+    if (seconds < 1) return undefined;
+    return Math.min(seconds, RETRY_AFTER_CAP_SECONDS);
+  }
+
+  function throttledCopy(seconds) {
+    if (seconds === undefined) return THROTTLED_PREFIX + "a moment.";
+    return THROTTLED_PREFIX + seconds + " second" + (seconds === 1 ? "" : "s") + ".";
+  }
 
   function boundError(text) {
     var chars = Array.from(String(text));
@@ -419,7 +516,9 @@
   function validationMessages(j) {
     var out = [];
     if (j && typeof j === "object" && !Array.isArray(j)) {
-      var bag = j.errors;
+      // Unified refusal envelope ({ error: "invalid", fields }); `errors` is the
+      // pre-unification key, read so a cached island survives the rollout.
+      var bag = j.fields || j.errors;
       if (bag && typeof bag === "object" && !Array.isArray(bag)) {
         Object.keys(bag).forEach(function (k) {
           var m = bag[k];
@@ -443,6 +542,78 @@
 
   function saveFailed(noFocus) {
     notice("profile-save-failed", "alert", SAVE_FAILED_COPY, false, noFocus);
+  }
+
+  // A throttled save keeps the draft and names the bounded wait; nothing is
+  // resent, and the member retries with the ordinary Save. Decided at settle
+  // time with the generation guard, like the 422 payload, so a body that
+  // arrives after Cancel stays inert.
+  function saveThrottled(res, request) {
+    var headerSeconds;
+    try {
+      headerSeconds =
+        res.headers && typeof res.headers.get === "function"
+          ? parseRetryAfterSeconds(res.headers.get("Retry-After"))
+          : undefined;
+    } catch {
+      headerSeconds = undefined;
+    }
+    var show = function (seconds) {
+      if (request !== generation) return;
+      notice("profile-save-throttled", "alert", throttledCopy(seconds), false, hasMovedOn());
+    };
+    if (headerSeconds !== undefined) {
+      show(headerSeconds);
+      return;
+    }
+    var fromBody = function (j) {
+      if (request !== generation) return;
+      show(
+        j && typeof j === "object" && !Array.isArray(j)
+          ? parseRetryAfterSeconds(j.retry_after)
+          : undefined,
+      );
+    };
+    var noBody = function () {
+      if (request !== generation) return;
+      show(undefined);
+    };
+    try {
+      var payload = res.json();
+      if (payload && typeof payload.then === "function") {
+        return payload.then(fromBody, noBody);
+      }
+      fromBody(payload);
+    } catch {
+      noBody();
+    }
+  }
+
+  // A settled 503 is either definitely failed (safe to retry) or a cancelled
+  // write that may still have committed: only the profile_save_uncertain code
+  // owns the uncertain notice, everything else keeps the failed-safe alert.
+  function settledUnavailable(res, request) {
+    var settle = function (j) {
+      if (request !== generation) return;
+      if (j && typeof j === "object" && !Array.isArray(j) && j.error === "profile_save_uncertain") {
+        notice("profile-uncertain", "status", SAVE_UNCERTAIN_COPY, false, hasMovedOn());
+      } else {
+        saveFailed(hasMovedOn());
+      }
+    };
+    var unproven = function () {
+      if (request !== generation) return;
+      saveFailed(hasMovedOn());
+    };
+    try {
+      var outcome = res.json();
+      if (outcome && typeof outcome.then === "function") {
+        return outcome.then(settle, unproven);
+      }
+      settle(outcome);
+    } catch {
+      unproven();
+    }
   }
 
   function expire(request) {
@@ -548,6 +719,11 @@
     form.hidden = false;
     if (editControl) editControl.hidden = true;
     clearNotices();
+    // Counts refresh from the restored values once native reset lands them.
+    // This must be a task: for a user-initiated reset the listener runs with
+    // an empty JS stack, so a microtask checkpoint fires right after the
+    // listener returns, before the restore step lands the defaults.
+    setTimeout(refreshCounts, 0);
     // The draft that "still finishing" promised to keep is gone: an unsettled
     // write goes back to the plain saving line.
     if (pending) setPending(true);
@@ -558,11 +734,54 @@
     }, 0);
   });
 
+  // Refusal pages render Cancel as a link to the saved profile so the no-JS
+  // path discards the rejected draft (there the draft is the controls' HTML
+  // default, which a native reset would restore). A plain click with the
+  // island live keeps the in-place reset above; modified clicks still open
+  // the fresh profile as the member asked.
+  var cancelLink = root.querySelector('[data-testid="profile-cancel"]');
+  if (cancelLink && cancelLink.tagName === "A")
+    cancelLink.addEventListener("click", function (ev) {
+      if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+      ev.preventDefault();
+      form.reset();
+    });
+
+  // Detection only offers a shortcut; it never changes a saved or live draft.
+  // Keep the browser's alias verbatim and leave final validation to the server.
+  (function deviceTimezoneHelper() {
+    var helper = root.querySelector("[data-device-timezone]");
+    var button = root.querySelector("[data-device-timezone-use]");
+    var field = form.elements.timezone;
+    if (!helper || !button || !field) return;
+    var zone;
+    try {
+      zone = new Intl.DateTimeFormat().resolvedOptions().timeZone;
+      if (typeof zone !== "string" || !/^[A-Za-z][A-Za-z0-9_+-]*(?:\/[A-Za-z0-9_+-]+)*$/.test(zone))
+        return;
+      new Intl.DateTimeFormat("en", { timeZone: zone });
+    } catch {
+      return;
+    }
+    button.addEventListener("click", function () {
+      field.value = zone;
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+      field.dispatchEvent(new Event("change", { bubbles: true }));
+    });
+    helper.hidden = false;
+  })();
+
   // Member work in the editor during an owned save: keep their focus, caret and draft.
   ["keydown", "pointerdown", "focusin", "input"].forEach(function (type) {
     form.addEventListener(type, function () {
       if (pending) editing = true;
     });
+  });
+
+  // Live composition counts refresh the SSR nodes in place: no request, no
+  // truncation, no validation, no announcement.
+  form.addEventListener("input", function () {
+    refreshCounts();
   });
 
   form.addEventListener("submit", function (ev) {
@@ -678,6 +897,8 @@
         ) {
           return expiredNotice();
         }
+        if (res.status === 429) return saveThrottled(res, request);
+        if (res.status === 503) return settledUnavailable(res, request);
         saveFailed(hasMovedOn());
       })
       .catch(function (err) {

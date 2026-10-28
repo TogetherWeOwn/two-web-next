@@ -228,11 +228,42 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
         const fetch = mockDiscord();
         const headers = { cookie: `${original.cookie}; ${prior.cookie}` };
         const path = `${callbackPath(flow)}?error=access_denied&code=fixture-code&state=${original.state}`;
+        // The first hit is admitted: it consumes the journey, so it owns the
+        // denial copy and the journey-cookie cleanup. The second hit replays
+        // a spent journey and is unadmitted: it must not clear whatever
+        // journey cookies the jar now holds. Join keeps the cancelled copy
+        // on the replay (a Cancel is still a Cancel); auth keeps its
+        // presented-state denial copy (a matching state cookie with an
+        // acquirable store), which keys off presentation rather than
+        // admission.
+        const journeyCookies =
+          flow === "join"
+            ? ["__Host-two_join_state", "__Host-two_join_source", "__Host-two_join_next"]
+            : ["__Host-two_oauth_state"];
+        const journeyDeletions = (res: Response) =>
+          res.headers
+            .getSetCookie()
+            .filter((c) => journeyCookies.some((name) => c.startsWith(`${name}=;`)));
+        const journeyHeaders = (res: Response) =>
+          res.headers
+            .getSetCookie()
+            .filter((c) => journeyCookies.some((name) => c.startsWith(`${name}=`)));
         for (let n = 0; n < 2; n++) {
+          const admitted = n === 0;
           const denied = await app.request(path, { headers }, f.env);
           expect(sessionCookie(denied)).toBeUndefined();
           if (flow === "auth") expect(denied.headers.get("location")).toBe("/?n=signin_denied");
-          else expect(await denied.text()).toContain("Join cancelled");
+          else if (admitted) {
+            const text = await denied.text();
+            expect(text).toContain("Join cancelled");
+            expect(text).not.toContain("Join link expired");
+          } else {
+            const text = await denied.text();
+            expect(text).toContain("Join cancelled");
+            expect(text).not.toContain("Join link expired");
+          }
+          if (admitted) expect(journeyDeletions(denied).length).toBeGreaterThan(0);
+          else expect(journeyHeaders(denied)).toEqual([]);
         }
         expect(await f.store.get(prior.hash)).toMatchObject({
           username: "Prior Member",
@@ -383,7 +414,7 @@ function contract(name: string, make: () => SessionStore, sql?: Sql) {
         const result = await app.request(startPath(flow), {}, f.env);
         expect(result.status).toBe(302);
         expect(result.headers.get("location")).toBe(
-          flow === "join" ? "/join" : "/?n=signin_failed",
+          flow === "join" ? "/join?notice=start-failed" : "/?n=signin_failed",
         );
         expect(result.headers.getSetCookie()).toHaveLength(0);
         expect(fetch).not.toHaveBeenCalled();

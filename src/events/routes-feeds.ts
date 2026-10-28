@@ -3,13 +3,23 @@
 import { dbFor } from "../admin/db";
 import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable, notFoundHandler } from "../errors";
-import { IcsSequenceRangeError, eventIcs, eventsIcsCollection, eventsRss } from "./feeds";
+import {
+  IcsSequenceRangeError,
+  IcsTimestampRangeError,
+  eventIcs,
+  eventsIcsCollection,
+  eventsRss,
+  isWireInstant,
+  latestWireUpdatedAt,
+  parseFeedGameScope,
+} from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { getEventRow, listFeed } from "./reads";
 import {
   eventsUnavailable,
   matchesIfNoneMatch,
   publicReadGuard,
+  unavailableFeed,
   type App,
   type Ctx,
   type SessionReader,
@@ -41,8 +51,11 @@ async function calendarFeedResponse(
   try {
     return feedResponse(c, build(), headers);
   } catch (error) {
+    if (error instanceof IcsTimestampRangeError) {
+      return unavailableFeed(c, "Calendar timestamp unavailable");
+    }
     if (!(error instanceof IcsSequenceRangeError)) throw error;
-    return c.text("Calendar revision unavailable", 503, { "cache-control": "no-store" });
+    return unavailableFeed(c, "Calendar revision unavailable");
   }
 }
 
@@ -52,8 +65,17 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
     if (limited) return limited;
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
-    const rows = await listFeed(db, ["published"]);
-    const built = rows.reduce((m, r) => (r.updatedAt > m ? r.updatedAt : m), new Date(0));
+    // Same status scope as the ICS collection: cancelled rows ship marked
+    // (`Cancelled: ` title prefix plus the one-line description note), so RSS
+    // subscribers never keep a stale "it's on" entry.
+    const rows = await listFeed(db, ["published", "cancelled"]);
+    const skippedUpdatedAt = rows.filter((r) => !isWireInstant(r.updatedAt)).length;
+    if (skippedUpdatedAt > 0) {
+      console.warn("eventsRss excluded non-wire updatedAt from lastBuildDate.", {
+        skipped: skippedUpdatedAt,
+      });
+    }
+    const built = latestWireUpdatedAt(rows);
     return feedResponse(c, eventsRss(rows, c.env.APP_URL, built), {
       "content-type": "application/rss+xml; charset=utf-8",
       "cache-control": "max-age=300, public",
@@ -63,10 +85,16 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
   app.get("/events.ics", async (c) => {
     const limited = await publicReadGuard(c);
     if (limited) return limited;
+    // Scope validation precedes any read and any conditional success: a
+    // malformed scope refuses instead of 304ing, with no reflected input.
+    const scope = parseFeedGameScope(c.req.query("game"));
+    if (scope === undefined) {
+      return c.text("Invalid game filter.", 400, { "cache-control": "no-store" });
+    }
     const db = await dbFor(c);
     if (!db) return eventsUnavailable(c);
-    const rows = await listFeed(db, ["published", "cancelled"]);
-    return calendarFeedResponse(c, () => eventsIcsCollection(rows, c.env.APP_URL), {
+    const rows = await listFeed(db, ["published", "cancelled"], new Date(), scope);
+    return feedResponse(c, eventsIcsCollection(rows, c.env.APP_URL, scope), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": 'inline; filename="events.ics"',
       "cache-control": "max-age=300, public",
@@ -118,6 +146,9 @@ export function registerFeedRoutes(app: App, readSession: SessionReader): void {
       }
       if (!session?.moderator) return c.text("Forbidden", 403);
     }
+    // A single-event download has no other rows to protect: a
+    // sequence- or timestamp-poison row answers the honest 503 with no-store
+    // (no ETag, no attachment) instead of an event-less 200 calendar.
     return calendarFeedResponse(c, () => eventIcs(e, c.env.APP_URL), {
       "content-type": "text/calendar; charset=utf-8",
       "content-disposition": `attachment; filename="${e.eventKey}.ics"`,

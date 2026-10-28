@@ -34,6 +34,17 @@ describe("required checks always report", () => {
     expect(named).toEqual(required);
   });
 
+  it("AGENTS.md and README.md name the live required set, not the retired check triple", () => {
+    for (const file of ["AGENTS.md", "README.md"]) {
+      const text = readFileSync(file, "utf8");
+      for (const context of required) {
+        expect(text).toContain(`\`${context}\``);
+      }
+      // The retired "`check`, `gitleaks` and `pr-lint`" triple must not come back.
+      expect(text).not.toMatch(/`check`, `gitleaks`/);
+    }
+  });
+
   it.each(required)(
     "%s is one job in a workflow with an unfiltered pull_request trigger",
     (context) => {

@@ -16,6 +16,7 @@ import { activityLog, events, rsvps } from "../db/admin-schema";
 import { joinAttempts, users } from "../db/schema";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
 import { declareMemberResult, keyedMemberRead, nonSensitiveRead } from "../member-reads";
+import { boundInventoryRead } from "./store-shared";
 
 /** config/join.php retention: attempts older than this are pruned (W13 cron). Canonical value lives in jobs/constants (legacy parity pin). */
 export const JOIN_RETENTION_DAYS = JOIN_ATTEMPT_RETENTION_DAYS;
@@ -38,13 +39,23 @@ export type RosterEntry = {
 export async function listRoster(
   db: Db,
   eventKey: string,
-  query: RosterQuery = { q: "", sort: "answered", order: "desc", page: 1 },
+  query: RosterQuery = { q: "", status: "", sort: "answered", order: "desc", page: 1 },
 ): Promise<{ rows: RosterEntry[]; total: number }> {
   const page = Number.isSafeInteger(query.page) && query.page > 0 ? query.page : 1;
   const search: SQL | undefined = query.q
     ? ilike(users.username, `%${escapeLikeTerm(query.q)}%`)
     : undefined;
-  const conds = search ? and(eq(events.eventKey, eventKey), search) : eq(events.eventKey, eventKey);
+  // The allowlisted answer facet joins the same normalized predicate the
+  // count and the page share, before paging. Condition order is pinned:
+  // event, status, member search (see the roster-count classifier shapes).
+  const facet: SQL | undefined = query.status ? eq(rsvps.status, query.status) : undefined;
+  const conds = facet
+    ? search
+      ? and(eq(events.eventKey, eventKey), facet, search)
+      : and(eq(events.eventKey, eventKey), facet)
+    : search
+      ? and(eq(events.eventKey, eventKey), search)
+      : eq(events.eventKey, eventKey);
   const column = query.sort === "status" ? rsvps.status : rsvps.updatedAt;
   const order = query.order === "asc" ? asc(column) : desc(column);
   const countRows = await nonSensitiveRead("roster-count", () => {
@@ -94,8 +105,8 @@ const attemptColumns = {
 
 /**
  * Viewer over the write-once trail, newest first, inside the retention
- * window. `q` is an EXACT match on discord_id or request_id (the bot-log
- * cross-reference) — never a substring scan over member ids.
+ * window. `q` is an EXACT match on discord_id or request_id (the web
+ * request-log correlation ID) — never a substring scan over member ids.
  */
 export async function listJoinAttempts(
   db: Db,
@@ -192,27 +203,35 @@ export async function listActivityLog(
     causer: opts.causer,
     page: String(opts.page ?? 1),
   });
-  const conds: SQL[] = [];
-  if (parsed.subject) {
-    const term = `%${escapeLikeTerm(parsed.subject)}%`;
-    conds.push(
-      or(
-        ilike(activityLog.subjectType, term),
-        ilike(activityLog.subjectId, term),
-        ilike(activityLog.description, term),
-      )!,
+  // One transaction behind the shared transaction-local lock/statement
+  // bound, so a stalled table cancels server-side and the caller refuses
+  // only after the transaction settles. Causers are declared from the
+  // retrieved rows after the transaction commits, never from a refusal.
+  const rows = await db.transaction(async (tx) => {
+    await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
+    const conds: SQL[] = [];
+    if (parsed.subject) {
+      const term = `%${escapeLikeTerm(parsed.subject)}%`;
+      conds.push(
+        or(
+          ilike(activityLog.subjectType, term),
+          ilike(activityLog.subjectId, term),
+          ilike(activityLog.description, term),
+        )!,
+      );
+    }
+    if (parsed.causer)
+      conds.push(ilike(activityLog.causerId, `%${escapeLikeTerm(parsed.causer)}%`));
+    return nonSensitiveRead("activity-log", () =>
+      tx
+        .select(activityLogColumns)
+        .from(activityLog)
+        .where(and(...conds))
+        .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
+        .limit(ACTIVITY_LOG_PAGE_SIZE + 1)
+        .offset((parsed.page - 1) * ACTIVITY_LOG_PAGE_SIZE),
     );
-  }
-  if (parsed.causer) conds.push(ilike(activityLog.causerId, `%${escapeLikeTerm(parsed.causer)}%`));
-  const rows = await nonSensitiveRead("activity-log", () =>
-    db
-      .select(activityLogColumns)
-      .from(activityLog)
-      .where(and(...conds))
-      .orderBy(desc(activityLog.createdAt), desc(activityLog.id))
-      .limit(ACTIVITY_LOG_PAGE_SIZE + 1)
-      .offset((parsed.page - 1) * ACTIVITY_LOG_PAGE_SIZE),
-  );
+  });
   // Only well-formed snowflakes become subjects; nulls (cron) and malformed
   // values never reach the access log as invented members.
   declareMemberResult(

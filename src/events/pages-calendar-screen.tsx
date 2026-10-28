@@ -1,7 +1,10 @@
 // Events calendar screen: composes the controls, empty states, list and month grid.
 import type { FC } from "hono/jsx";
+import type { HeaderSession, Session } from "../env";
 import { canonicalUrl } from "../seo";
 import {
+  CALENDAR_MONTH_EMPTY_RECOVERY_COPY,
+  CALENDAR_MONTH_EMPTY_TESTID,
   EVENTS_CAL_FEEDBACK,
   EVENTS_CALENDAR_FETCH_FAILED,
   EVENTS_CALENDAR_ISLAND,
@@ -10,13 +13,23 @@ import {
   EVENTS_LOADING_COPY,
   EVENTS_LOADING_ROWS,
   EVENTS_LOADING_TESTID,
+  EVENTS_PAST_DRAWER_LIMIT,
+  EVENTS_READ_CLEAR_COPY,
+  EVENTS_READ_CLEAR_TESTID,
+  EVENTS_READ_RETRY_COPY,
+  EVENTS_READ_RETRY_TESTID,
+  EVENTS_READ_STATUS_TESTID,
   EVENTS_SEARCH_MAX_LENGTH,
   EVENTS_SEARCH_TOO_LONG_COPY,
+  calendarGridRange,
+  calendarMonthEmptyCopy,
   calendarSearching,
   calendarShowingPast,
   calendarUrl,
+  canonicalIntervalDays,
   monthGrid,
   wallDateIso,
+  wallMonth,
   type CalendarEmptyState,
   type CalendarState,
 } from "../islands/contracts";
@@ -25,10 +38,16 @@ import type { JoinResult } from "../return-journey";
 import type { PublicEvent } from "./reads";
 import { ScheduleShell } from "./pages-shared";
 import { CalendarHead, CalendarLiveRegions, CalendarSearchForm } from "./pages-calendar-controls";
-import { EmptyError, EmptyGap, EmptyNever, SearchMiss } from "./pages-calendar-empty";
+import {
+  EmptyError,
+  EmptyGap,
+  EmptyNever,
+  PartialSourceNotice,
+  SearchMiss,
+} from "./pages-calendar-empty";
 import { MonthGrid } from "./pages-calendar-grid";
-import { CalendarList } from "./pages-calendar-list";
-import { type CalRow, rowZone } from "./pages-calendar-row";
+import { CalendarList, PastDrawer } from "./pages-calendar-list";
+import { type CalRow, isTransient, rowZone } from "./pages-calendar-row";
 
 /**
  * The events calendar island (legacy Livewire EventsCalendar): one rowset
@@ -43,13 +62,20 @@ export const EventsCalendarPage: FC<{
   state: CalendarState;
   upcoming: CalRow[];
   past: PublicEvent[];
+  pastMayBeTruncated?: boolean;
   zone: string;
   now: Date;
   /** Upcoming-list pages; the month grid is month-scoped and ignores it. */
   totalPages: number;
   emptyState: CalendarEmptyState;
   discordFailed: boolean;
+  /** Distinct published games backing the facet select. */
+  games: string[];
+  /** Effective facet: the canonical stored game, or null when unfiltered. */
+  gameFilter: string | null;
   member: boolean;
+  /** Signed-in viewer for the header account area; the shell gates members. */
+  session?: Session | HeaderSession | null;
   inviteUrl: string;
   appUrl: string;
   /** Rooted path the guest sign-in link carries as ?next= (null = bare link). */
@@ -66,12 +92,16 @@ export const EventsCalendarPage: FC<{
   state,
   upcoming,
   past,
+  pastMayBeTruncated: pastMayBeTruncatedProp = past.length >= EVENTS_PAST_DRAWER_LIMIT,
   zone,
   now,
   totalPages,
   emptyState,
   discordFailed,
+  games,
+  gameFilter,
   member,
+  session,
   inviteUrl,
   appUrl,
   loginReturnTo = null,
@@ -88,16 +118,68 @@ export const EventsCalendarPage: FC<{
   const outOfRange = state.view === "list" && upcoming.length === 0 && totalPages > 0;
   // An error state suppresses the miss block: a failed read must never read
   // as "no matches" (contract: error beats everything, including a search).
-  const searchMiss = searching && !hasVisibleResults && emptyState === null && !outOfRange;
+  const searchMiss =
+    emptyState === null &&
+    !discordFailed &&
+    !outOfRange &&
+    ((searching && !hasVisibleResults) ||
+      (!searching && gameFilter !== null && upcoming.length === 0 && totalPages === 0));
   const url = calendarUrl(state);
   const byDay = new Map<string, CalRow[]>();
-  for (const e of [...upcoming, ...(showPast ? past : [])]) {
-    const key = wallDateIso(e.startsAt, rowZone(e, zone));
-    const list = byDay.get(key) ?? [];
+  const pushDay = (day: string, e: CalRow) => {
+    const list = byDay.get(day) ?? [];
     list.push(e);
-    byDay.set(key, list);
+    byDay.set(day, list);
+  };
+  // Canonical upcoming rows occupy every host-zone day their finite interval
+  // touches, clipped to the grid before iteration; transients and past rows
+  // keep start-day-only plotting.
+  const gridRange = calendarGridRange(state.month);
+  for (const e of upcoming) {
+    if (!isTransient(e) && gridRange) {
+      for (const day of canonicalIntervalDays(
+        e.startsAt,
+        e.endsAt,
+        e.timezone,
+        gridRange.first,
+        gridRange.last,
+      )) {
+        pushDay(day, e);
+      }
+    } else {
+      pushDay(wallDateIso(e.startsAt, rowZone(e, zone)), e);
+    }
+  }
+  if (showPast) {
+    for (const e of past) {
+      pushDay(wallDateIso(e.startsAt, rowZone(e, zone)), e);
+    }
   }
   const weeks = monthGrid(state.month, wallDateIso(now, zone), byDay);
+  // Month-local emptiness follows occupied in-month cells, including canonical
+  // continuations, but never spillover cells. Count past start-days even with
+  // the drawer closed: the claim names the month, not just the visible rows.
+  // A truncated past drawer (at the cap) leaves months at or before the wall month
+  // incomplete — older in-month past rows may exist unread — so the claim is
+  // suppressed there; future months cannot hold past rows. A failed source
+  // suppresses the claim — October may only look empty — while the
+  // error/never/gap states keep their own precedence. A game-scoped miss
+  // already names the effective scope with its own broadening link, so it
+  // suppresses the unscoped month sentence: with game-filtered grid rows the
+  // sentence is false when another game occupies the month, and its
+  // Upcoming-events link would land back on the same filtered zero.
+  const monthHasInMonthRows =
+    weeks.some((week) => week.some((day) => day.inMonth && day.events.length > 0)) ||
+    past.some((e) => wallDateIso(e.startsAt, rowZone(e, zone)).startsWith(`${state.month}-`));
+  const pastMayBeTruncated = pastMayBeTruncatedProp;
+  const monthCouldHoldPast = state.month <= wallMonth(now, zone);
+  const monthEmpty =
+    emptyState === null &&
+    state.view === "calendar" &&
+    !discordFailed &&
+    !monthHasInMonthRows &&
+    !(pastMayBeTruncated && monthCouldHoldPast) &&
+    !searchMiss;
   return (
     <ScheduleShell
       title="Events"
@@ -105,6 +187,7 @@ export const EventsCalendarPage: FC<{
       description="Game nights, tournaments and whatever else the community puts on."
       robots={robots}
       member={member}
+      session={session}
       loginReturnTo={loginReturnTo}
       markdownAlternate={markdownAlternate ?? undefined}
     >
@@ -146,16 +229,38 @@ export const EventsCalendarPage: FC<{
           emptyState={emptyState}
           hasVisibleResults={hasVisibleResults}
           outOfRange={outOfRange}
+          gameFilter={gameFilter}
         />
 
-        <CalendarHead state={state} appUrl={appUrl} />
+        <CalendarHead state={state} appUrl={appUrl} gameFilter={gameFilter} />
 
-        <CalendarSearchForm state={state} searching={searching} />
+        <CalendarSearchForm
+          state={state}
+          searching={searching}
+          games={games}
+          gameFilter={gameFilter}
+        />
 
         {/* Beside the search box, so the over-limit notice shows where the query is typed. */}
         <p role="status" {...{ [EVENTS_CAL_FEEDBACK]: true }} />
 
-        <div data-cal-zone="miss">{searchMiss ? <SearchMiss state={state} /> : null}</div>
+        {/* Failed-read recovery host: hidden and inert until the binder observes
+            a failed read, then names the missed destination beside the kept
+            last-good zones with an explicit retry and a safe return. Outside
+            the swapped zones so fragment turns never re-create it. */}
+        <div>
+          <p role="status" data-testid={EVENTS_READ_STATUS_TESTID} />
+          <button type="button" class="link" data-testid={EVENTS_READ_RETRY_TESTID} hidden>
+            {EVENTS_READ_RETRY_COPY}
+          </button>{" "}
+          <button type="button" class="link" data-testid={EVENTS_READ_CLEAR_TESTID} hidden>
+            {EVENTS_READ_CLEAR_COPY}
+          </button>
+        </div>
+
+        <div data-cal-zone="miss">
+          {searchMiss ? <SearchMiss state={state} gameFilter={gameFilter} /> : null}
+        </div>
 
         {/* Skeleton: member-started re-renders only — typing is untargeted. */}
         <div data-testid={EVENTS_LOADING_TESTID} hidden>
@@ -166,6 +271,19 @@ export const EventsCalendarPage: FC<{
         </div>
 
         <div data-cal-zone="content" data-testid={EVENTS_CONTENT_TESTID}>
+          {/* Partial source: healthy rows stay useful beside the notice. An
+              empty state (including the failed-empty error) takes precedence,
+              and an out-of-range page keeps its turns back into the schedule.
+              The month grid renders whenever there is no empty state, so an
+              empty month of a non-empty schedule carries the notice too —
+              without it the month would read as definitively empty. Inside
+              the swapped zone so fragment turns add/remove the notice. */}
+          {discordFailed &&
+          emptyState === null &&
+          (hasVisibleResults || outOfRange || state.view === "calendar") ? (
+            <PartialSourceNotice url={url} inviteUrl={inviteUrl} />
+          ) : null}
+
           {emptyState === "error" ? (
             <EmptyError url={url} inviteUrl={inviteUrl} />
           ) : emptyState === "never" ? (
@@ -180,6 +298,7 @@ export const EventsCalendarPage: FC<{
               upcoming={upcoming}
               past={past}
               zone={zone}
+              now={now}
               totalPages={totalPages}
               outOfRange={outOfRange}
               showPast={showPast}
@@ -196,17 +315,50 @@ export const EventsCalendarPage: FC<{
               absence alone opens the grid, exactly like the old unpaged merge
               whose non-emptiness always implied visible rows. */}
           {emptyState === null && state.view === "calendar" ? (
-            <MonthGrid state={state} weeks={weeks} zone={zone} />
+            <MonthGrid state={state} weeks={weeks} zone={zone} now={now} />
+          ) : null}
+
+          {/* The past preview rides under the grid too: it is the same
+              bounded drawer the list renders, so a preview opened in either
+              view can be closed without switching views first. */}
+          {emptyState === null && state.view === "calendar" ? (
+            <PastDrawer
+              state={state}
+              past={past}
+              zone={zone}
+              now={now}
+              showPast={showPast}
+              member={member}
+              inviteUrl={inviteUrl}
+              loginReturnTo={loginReturnTo}
+            />
+          ) : null}
+
+          {monthEmpty ? (
+            <div data-testid={CALENDAR_MONTH_EMPTY_TESTID}>
+              <p>{calendarMonthEmptyCopy(state.month)}</p>
+              <p>
+                <a href={calendarUrl({ ...state, view: "list" })}>
+                  {CALENDAR_MONTH_EMPTY_RECOVERY_COPY}
+                </a>
+              </p>
+            </div>
           ) : null}
         </div>
       </section>
+      <script src="/islands/copy-link.js" defer />
       <script src="/islands/events-calendar.js" defer />
     </ScheduleShell>
   );
 };
 
-/** No-JS over-limit search: a notice with site chrome. It never echoes the query back. */
-export const EventsSearchTooLongPage: FC<{ appUrl: string }> = ({ appUrl }) => (
+/** No-JS over-limit search: a notice with site chrome. It never echoes the query back.
+ * Served for both the upcoming schedule and the past archive; the archive
+ * turn keeps archive searchers in context instead of ejecting them. */
+export const EventsSearchTooLongPage: FC<{ appUrl: string; archive?: boolean }> = ({
+  appUrl,
+  archive = false,
+}) => (
   <ScheduleShell
     title="Events"
     canonical={canonicalUrl(appUrl, "/events")}
@@ -218,7 +370,11 @@ export const EventsSearchTooLongPage: FC<{ appUrl: string }> = ({ appUrl }) => (
     </div>
     <p role="alert">{EVENTS_SEARCH_TOO_LONG_COPY}</p>
     <p>
-      <a href="/events">Back to events</a>
+      {archive ? (
+        <a href="/events/past">Back to past events</a>
+      ) : (
+        <a href="/events">Back to events</a>
+      )}
     </p>
   </ScheduleShell>
 );

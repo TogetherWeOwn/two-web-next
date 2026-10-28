@@ -35,6 +35,8 @@ export const PROFILE_ERROR_TESTID = "profile-error";
 export const PROFILE_SAVE_FAILED_TESTID = "profile-save-failed";
 export const PROFILE_SESSION_EXPIRED_TESTID = "profile-session-expired";
 export const PROFILE_UNCERTAIN_TESTID = "profile-uncertain";
+/** Throttled save: names the bounded Retry-After wait, keeps the draft, never resends. */
+export const PROFILE_SAVE_THROTTLED_TESTID = "profile-save-throttled";
 /** Polite status shown while a save is unsettled; the form carries aria-busy meanwhile. */
 export const PROFILE_PENDING_TESTID = "profile-pending";
 
@@ -60,6 +62,10 @@ export const PROFILE_COPY = {
   sessionExpired: "Your session expired. Your changes are still here.",
   uncertain:
     "Still saving — this is taking longer than expected. It may still have gone through; wait a moment, then save again if nothing changed.",
+  /** A settled save the store cancelled mid-write: may have committed, so the
+   * member checks before retrying. Never a failure claim ("not saved" would be
+   * a lie). Mirrored verbatim by the island binder. */
+  saveUncertain: "Your save may still have gone through. Check your profile before trying again.",
   saving: "Saving your profile…",
   stillSaving:
     "Still finishing your earlier save. Your changes are kept; press Save again in a moment.",
@@ -67,6 +73,9 @@ export const PROFILE_COPY = {
   edit: "Edit profile",
   save: "Save",
   cancel: "Cancel",
+  timezoneHelp: "Use an IANA timezone, such as Europe/London. Leave blank if you prefer.",
+  deviceTimezone: "Use this device's timezone",
+  deviceTimezoneHelp: "Fills this field from your device setting. Save to apply the change.",
 } as const;
 
 /**
@@ -186,6 +195,7 @@ export type ProfileOutcome =
   | "failed"
   | "session-expired"
   | "uncertain"
+  | "throttled"
   | "cancelled";
 
 /**
@@ -204,6 +214,8 @@ export function profileFocusTarget(outcome: ProfileOutcome): string | null {
       return PROFILE_SESSION_EXPIRED_TESTID;
     case "uncertain":
       return PROFILE_UNCERTAIN_TESTID;
+    case "throttled":
+      return PROFILE_SAVE_THROTTLED_TESTID;
     case "cancelled":
       return PROFILE_NAME_TESTID;
   }

@@ -11,6 +11,10 @@
   var initial = snapshot();
   // A rejected Save re-renders the draft, not a new persisted baseline.
   var draft = editor.hasAttribute("data-event-draft");
+  // One synchronous starting point for a rejected document, not a pageshow
+  // reset or an async validation result that could overwrite a newer draft.
+  var summary = draft && document.querySelector("[data-admin-validation-summary]");
+  if (summary) summary.focus();
   var saving = false;
   // An expired session vetoes the probe reload (the unsaved draft only exists
   // in this document). Departure protection stays armed; only a normal,
@@ -20,8 +24,13 @@
   var SUBMIT_LOCK_MS = 10000;
   var locked = false;
   var lockTimer = null;
+  // Both renderers provide an empty live region outside the busy form.
+  var status = document.querySelector("[data-admin-save-status]");
+  function announce(message) {
+    if (status) status.textContent = message;
+  }
   function unlock() {
-    if (lockTimer !== null) window.clearTimeout(lockTimer);
+    if (lockTimer !== null) clearTimeout(lockTimer);
     lockTimer = null;
     locked = false;
     // The Save departure never happened, so its one-shot exemption lapses too.
@@ -31,12 +40,17 @@
   editor.addEventListener("submit", function (event) {
     if (locked) {
       event.preventDefault();
+      announce("Already saving. Please wait.");
       return;
     }
     saving = true;
     locked = true;
     editor.setAttribute("aria-busy", "true");
-    lockTimer = window.setTimeout(unlock, SUBMIT_LOCK_MS);
+    announce("Saving… Please wait.");
+    lockTimer = setTimeout(function () {
+      unlock();
+      announce("Saving is not confirmed. Check the saved record before resubmitting.");
+    }, SUBMIT_LOCK_MS);
   });
   editor.addEventListener("input", function () {
     saving = false;
@@ -45,12 +59,17 @@
     saving = false;
     leavingForRecovery = false;
     unlock();
+    announce("");
   });
   // Same bar as safeNext (src/join/service.ts): a same-origin path or nothing.
   function samePath(raw) {
-    if (typeof raw !== "string" || raw === "" || /[\s\x00-\x1f\x7f]/.test(raw)) return null;
-    if (raw.charAt(0) !== "/" || raw.charAt(1) === "/" || raw.indexOf("\\") >= 0) return null;
-    if (/^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(raw)) return null;
+    if (
+      typeof raw !== "string" ||
+      /[\s\x00-\x1f\x7f\\]/.test(raw) ||
+      raw[0] !== "/" ||
+      raw[1] === "/"
+    )
+      return null;
     try {
       var origin = window.location.origin;
       if (new URL(raw, origin).origin !== origin) return null;
@@ -85,7 +104,7 @@
       )
         return;
       leavingForRecovery = true;
-      window.setTimeout(function () {
+      setTimeout(function () {
         leavingForRecovery = false;
       }, 0);
     });

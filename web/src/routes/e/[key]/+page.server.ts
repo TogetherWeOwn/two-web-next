@@ -40,6 +40,10 @@ export const load: PageServerLoad = async ({
     joinResult: locals.joinResult ?? null,
     setHeaders,
     store: kitEventDetailStore(env),
+    // The dispatch's served request id: the 503 page and x-request-id
+    // carry this same value, so the alert must name it too
+    // (safeRequestId inside the alert drops anything unvalidated).
+    requestId: locals.requestId,
   });
   // redirect()/error() never return: after these guards the outcome is ok.
   if (outcome.kind === "redirect") redirect(301, outcome.location);

@@ -136,7 +136,9 @@ describe("request-owned snapshot I/O deadlines", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
   it.each([
-    [429, "35.25", 35_250],
+    // Fractions ceil under the shared Retry-After parser: a 35.25s header
+    // holds the cache 36s and reports retryAfter 36, never sooner.
+    [429, "35.25", 36_000],
     [429, "soon", 10_000],
     [429, "0x20", 10_000],
     [429, "-1", 10_000],
@@ -155,6 +157,6 @@ describe("request-owned snapshot I/O deadlines", () => {
     const metadata = reader.lastReadFailure?.();
     if (metadata) metadata.retryAfter = 0;
     if (status === 429 && retry === "35.25")
-      expect(reader.lastReadFailure?.()?.retryAfter).toBe(35.25);
+      expect(reader.lastReadFailure?.()?.retryAfter).toBe(36);
   });
 });

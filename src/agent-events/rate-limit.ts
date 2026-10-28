@@ -1,17 +1,20 @@
 import type { Sql } from "postgres";
+import { ingressDenial } from "./envelope";
 import { ulid } from "./payload";
+import { pruneAgentEventHits } from "./prune-hits";
 import type { Answer, Grant, IngressConfig, Op } from "./types";
 
 /** One 429 shape for every throttle on this ingress (two-web TOG-6788). */
-export function throttleEnvelope(retryAfterSeconds: number): Answer {
+export function throttleEnvelope(retryAfterSeconds: number, requestId: string): Answer {
   const retry = Math.max(1, retryAfterSeconds);
   return {
     status: 429,
-    body: {
-      reason: "rate_limited",
-      message: `Too many requests. Try again in ${retry} seconds.`,
-      retry_after: retry,
-    },
+    body: ingressDenial(
+      "rate_limited",
+      `Too many requests. Try again in ${retry} seconds.`,
+      requestId,
+      { retry_after: retry },
+    ),
     headers: { "Retry-After": String(retry) },
   };
 }
@@ -20,11 +23,11 @@ export function throttleEnvelope(retryAfterSeconds: number): Answer {
 export function busyEnvelope(requestId: string): Answer {
   return {
     status: 503,
-    body: {
-      reason: "operation_busy",
-      message: "The rate limiter is busy admitting requests. Retry with the same idempotency key.",
-      request_id: requestId,
-    },
+    body: ingressDenial(
+      "operation_busy",
+      "The rate limiter is busy admitting requests. Retry with the same idempotency key.",
+      requestId,
+    ),
   };
 }
 
@@ -60,7 +63,7 @@ export async function rateLimit(
                              FROM agent_event_hits WHERE bucket = ${bucket} AND at > now() - interval '60 seconds'`;
         if (r!.n >= max) retry = Math.max(retry, Math.max(1, r!.wait));
       }
-      if (retry > 0) return throttleEnvelope(retry);
+      if (retry > 0) return throttleEnvelope(retry, requestId ?? ulid());
       for (const [bucket] of buckets)
         await tx`INSERT INTO agent_event_hits (bucket) VALUES (${bucket})`;
       return null;
@@ -68,27 +71,18 @@ export async function rateLimit(
   } catch (err) {
     if ((err as { code?: string }).code !== "55P03") throw err;
     // Inner-budget lock contention: the verdict transaction aborted with no
-    // hits inserted. Prune best-effort outside the bucket locks so a busy
-    // pass still drains expired rows, then answer retryable 503. The caller
-    // audits it once as error/operation_busy.
-    try {
-      await sql`WITH candidates AS (SELECT id FROM agent_event_hits WHERE at < now() - interval '5 minutes' ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) DELETE FROM agent_event_hits USING candidates WHERE agent_event_hits.id = candidates.id`;
-    } catch {
-      // The busy verdict stands even when housekeeping fails.
-    }
+    // hits inserted. Best-effort cleanup runs outside the bucket locks so a
+    // busy pass still attempts to drain expired rows, then answer retryable
+    // 503. The caller audits it once as error/operation_busy.
+    await pruneAgentEventHits(sql);
     return busyEnvelope(requestId ?? ulid());
   }
   // Expiry cleanup runs after the verdict — admitted or refused — outside the
-  // bucket advisory locks, so a prune never prolongs the admission lock and a
-  // bucket under sustained refused load still drains. Capped per pass at the
-  // outer shield's standard; the candidate select is SKIP LOCKED so expired
-  // rows held by unrelated transactions are left for a later pass instead of
-  // stalling admission. Best-effort: housekeeping must never flip a decided
-  // verdict into an admission or a 500.
-  try {
-    await sql`WITH candidates AS (SELECT id FROM agent_event_hits WHERE at < now() - interval '5 minutes' ORDER BY id LIMIT 1000 FOR UPDATE SKIP LOCKED) DELETE FROM agent_event_hits USING candidates WHERE agent_event_hits.id = candidates.id`;
-  } catch {
-    // The verdict above was already decided.
-  }
+  // bucket advisory locks, so a prune never prolongs the admission transaction
+  // and a bucket under sustained refused load still drains. It is single-flighted
+  // and lock-time-bounded; a held row or concurrent cleanup defers to a later
+  // pass. Housekeeping must never flip a decided verdict into an admission or a
+  // 500.
+  await pruneAgentEventHits(sql);
   return verdict;
 }

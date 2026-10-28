@@ -127,8 +127,9 @@ describe("member-profile session recovery", () => {
     formOpenedAt: Date.now() - 5000,
   };
 
-  it("keeps the rotated status probe active without letting an old signed login cookie read or write", async () => {
-    const { app, store, sessions, cookie } = await setup();
+  it("keeps the status probe active but refuses predecessor reads and writes at the grace deadline", async () => {
+    let now = Date.now();
+    const { app, store, sessions, cookie } = await setup(() => now);
     const originalToken = newSessionToken();
     const originalCookie = await cookie(ALICE, "alice", originalToken);
     const originalHash = await hashToken(originalToken);
@@ -149,6 +150,15 @@ describe("member-profile session recovery", () => {
     expect(await sessions.statusHash(replacementHash)).toBe(statusHash);
     expect(await sessions.isActive(statusHash)).toBe(true);
     expect(await sessions.statusHash(originalHash)).toBeNull();
+    expect(await sessions.get(originalHash)).toMatchObject({ userId: ALICE });
+    const graceRead = await app.request(
+      `/members/${ALICE}`,
+      { headers: { cookie: originalCookie } },
+      env,
+    );
+    expect(graceRead.status).toBe(200);
+    expect(graceRead.headers.get("set-cookie")).toBeNull();
+    now += 10_000;
     expect(await sessions.get(originalHash)).toBeNull();
     const read = await app.request(
       `/members/${ALICE}`,
@@ -161,7 +171,7 @@ describe("member-profile session recovery", () => {
     expect(rejected.status).toBe(401);
     expect(rejected.headers.get("location")).toBeNull();
     expect(await rejected.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fprofile",
     });
     expect(store.rows.get(ALICE)).toMatchObject({ bio: null, games: [], timezone: null });
@@ -204,7 +214,7 @@ describe("member-profile session recovery", () => {
       expect(json.status).toBe(401);
       expect(json.headers.get("location")).toBeNull();
       expect(await json.json()).toEqual({
-        error: "Unauthorized",
+        error: "unauthenticated",
         recovery: "/auth/recover?next=%2Fprofile",
       });
       const form = await app.request(
@@ -266,17 +276,22 @@ describe("member-profile states rendered", () => {
     for (const c of [
       PROFILE_COPY.saved,
       PROFILE_COPY.saveFailed,
+      PROFILE_COPY.saveUncertain,
       PROFILE_COPY.sessionExpired,
       PROFILE_COPY.logIn,
       PROFILE_COPY.saving,
       PROFILE_COPY.stillSaving,
     ])
       expect(unescaped).toContain(c);
+    // The throttled wait is dynamic, so only its stable prefix is pinned.
+    expect(unescaped).toContain("Too many requests. Your changes are still here — try again in ");
     for (const t of [
       "profile-saved",
       "profile-error",
       "profile-save-failed",
+      "profile-save-throttled",
       "profile-session-expired",
+      "profile-uncertain",
       PROFILE_PENDING_TESTID,
     ])
       expect(js).toContain(t);
@@ -286,6 +301,8 @@ describe("member-profile states rendered", () => {
     expect(profileFocusTarget("invalid")).toBe("profile-error");
     expect(profileFocusTarget("failed")).toBe("profile-save-failed");
     expect(profileFocusTarget("session-expired")).toBe("profile-session-expired");
+    expect(profileFocusTarget("uncertain")).toBe("profile-uncertain");
+    expect(profileFocusTarget("throttled")).toBe("profile-save-throttled");
     expect(profileFocusTarget("cancelled")).toBe("profile-name");
   });
   it("avatar: CDN srcset or null for the initial fallback; joined month", () => {
@@ -434,7 +451,7 @@ describe("member-profile spam trap", () => {
       formOpenedAt: Date.now(),
     });
     expect(r.status).toBe(422);
-    expect((await r.json()) as { errors: object }).toHaveProperty("errors.bio");
+    expect((await r.json()) as { fields: object }).toHaveProperty("fields.bio");
     expect(store.rows.get(ALICE)!.bio).toBeNull();
   });
 });

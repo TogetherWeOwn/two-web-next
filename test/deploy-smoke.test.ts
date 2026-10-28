@@ -347,7 +347,7 @@ describe("deploy public-route smoke (offline)", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8"));
     expect(pkg.scripts.check).toContain("npm run test:smoke");
     expect(pkg.scripts["test:smoke"]).toBe(
-      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs",
+      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs test/smoke-public-api-acceptance.test.mjs test/promotion-smoke-identity-acceptance.test.mjs test/operator-constants-parity.mjs",
     );
   });
 });
@@ -674,6 +674,7 @@ describe("production deploy smoke (offline)", () => {
 function postPromotionSmoke(
   succeedOnAttempt: number,
   prevVersion = "pre-promote-version-for-test",
+  promotedVersion = "22345678-1234-1234-1234-123456789abc",
 ) {
   const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
   const block = workflow.match(
@@ -693,14 +694,31 @@ function postPromotionSmoke(
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 const attempts = join(process.env.RUNNER_TEMP, "attempts");
+// The promotion step first validates PROMOTED_VERSION_ID via ` +
+        "`node -e`" +
+        `
+// before any probe: emulate that gate so a missing/malformed id fails closed
+// without counting a smoke attempt.
+if (process.argv[2] === "-e") {
+  const v = process.env.PROMOTED_VERSION_ID ?? "";
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)) {
+    console.error("::error::promoted-version-id missing or malformed; refusing to verify without a target identity");
+    process.exit(1);
+  }
+  process.exit(0);
+}
 appendFileSync(attempts, "x");
-if (process.argv.length !== 5 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://togetherweown.com" || process.argv[4] !== "--allow-indexable") {
+if (process.argv.length !== 7 || process.argv[2] !== "bin/smoke.mjs" || process.argv[3] !== "https://togetherweown.com" || process.argv[4] !== "--allow-indexable" || process.argv[5] !== "--expected-version-id" || process.argv[6] !== process.env.PROMOTED_VERSION_ID) {
+  console.error("unexpected checker invocation");
+  process.exit(2);
+}
+if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(process.argv[6] ?? "")) {
   console.error("unexpected checker invocation");
   process.exit(2);
 }
 const count = readFileSync(attempts, "utf8").length;
 const pass = count === Number(process.env.SMOKE_SUCCEED_ON_ATTEMPT);
-console.log(pass ? "smoke: 18 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
+console.log(pass ? "smoke: 24 routes, 0 failed assertions" : "FAIL /join: expected HTTP 200; actual HTTP 503");
 process.exit(pass ? 0 : 1);
 `,
       { mode: 0o700 },
@@ -733,6 +751,7 @@ process.exit(pass ? 0 : 1);
           RUNNER_TEMP: scratch,
           SMOKE_SUCCEED_ON_ATTEMPT: String(succeedOnAttempt),
           PREV_VERSION: prevVersion,
+          PROMOTED_VERSION_ID: promotedVersion,
         },
       },
     );
@@ -766,8 +785,9 @@ describe("production post-promotion verification (offline)", () => {
     expect(result.sleeps).toBe(5);
     expect(result.output).toContain("FAIL /join: expected HTTP 200; actual HTTP 503");
     expect(result.output).toContain(
-      "::error::post-promotion public-route smoke failed; promoted candidate remains live at 100%; release will not tag",
+      "::error::post-promotion public-route smoke failed; promoted candidate 22345678-1234-1234-1234-123456789abc remains live at 100%; release will not tag",
     );
+    expect(result.output).toContain("recorded restoration target pre-promote-version-for-test");
     expect(result.output).not.toContain("unexpected checker invocation");
   });
 
@@ -778,7 +798,9 @@ describe("production post-promotion verification (offline)", () => {
     // promoted candidate stays live at 100% with the tag withheld: the error
     // must name the live candidate, the recorded restoration target id, and
     // the restore path, without asserting the target is currently serving.
-    expect(result.output).toContain("promoted candidate remains live at 100%");
+    expect(result.output).toContain(
+      "promoted candidate 22345678-1234-1234-1234-123456789abc remains live at 100%",
+    );
     expect(result.output).toContain("release will not tag");
     expect(result.output).toContain("recorded restoration target");
     expect(result.output).toContain("aaaabbbb-cccc-dddd-eeee-ffffffffffff");
@@ -794,11 +816,20 @@ describe("production post-promotion verification (offline)", () => {
     // PREV_VERSION comes from the gradual action's recorded pre-promote
     // target, the same id its own rollback steps restore.
     expect(section).toContain("PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}");
+    // The promoted identity travels steps.gradual.outputs.promoted-version-id
+    // via env into the smoke's --expected-version-id on every attempt.
+    expect(section).toContain(
+      "PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}",
+    );
+    expect(section).toContain('--expected-version-id "$PROMOTED_VERSION_ID"');
+    expect(section).toContain("promoted-version-id missing or malformed");
     expect(section).toContain("rollback-production");
     // The failure annotation must name the promoted candidate as live and
     // PREV_VERSION as the recorded restoration target, never the target as
     // currently serving.
-    expect(section).toContain("promoted candidate remains live at 100%");
+    expect(section).toContain(
+      "promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%",
+    );
     expect(section).toContain("recorded restoration target");
     expect(section).not.toContain("still live at 100%");
     // No inline restore: the rollback workflow checks the target version's
@@ -825,6 +856,7 @@ describe("production post-promotion verification (offline)", () => {
     // Same shared checker and retry contract as the gradual live gate and the
     // rollback smoke, so the three post-deploy gates cannot drift.
     expect(block).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
+    expect(block).toContain('--expected-version-id "$PROMOTED_VERSION_ID"');
     expect(block).toContain("for i in 1 2 3 4 5 6");
     expect(block).not.toContain("curl ");
     // Live-traffic probe of the promoted apex: no version override, no
@@ -839,7 +871,7 @@ describe("production post-promotion verification (offline)", () => {
 describe("production release-docs contract (source)", () => {
   it("explains gradual promotion, manual restoration and release gating without static serving-state claims", () => {
     const readme = readFileSync("README.md", "utf8");
-    const heading = "### Production (gated manual deployment)";
+    const heading = "### Production (gated automatic promotion)";
     expect(readme).toContain(heading);
     expect(readme).not.toContain("### Production (not live");
     const section = readme.slice(
@@ -871,5 +903,79 @@ describe("production release-docs contract (source)", () => {
     ]) {
       expect(flat).not.toContain(stale);
     }
+  });
+});
+
+describe("staging readiness smoke docs contract (offline)", () => {
+  it("pins the staging invocation and posture in source", () => {
+    const workflow = readFileSync(".github/workflows/deploy.yml", "utf8");
+    expect(workflow).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    const smoke = readFileSync("bin/smoke.mjs", "utf8");
+    expect(smoke).toContain("known queue.status and ready_wait_severity (not unknown)");
+    expect(smoke).toContain("ready_wait_severity not critical");
+  });
+
+  it("states the strict staging command, DB/schema requirements and unknown/critical refusal in README", () => {
+    const readme = readFileSync("README.md", "utf8");
+    const deployAt = readme.indexOf("## Deploy");
+    expect(deployAt).toBeGreaterThan(-1);
+    const section = readme.slice(deployAt, readme.indexOf("Full procedures live in"));
+    expect(section).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    expect(section).toContain("`db:ok`");
+    expect(section).toContain("`pending_migrations:0`");
+    for (const phrase of ["`unknown`", "`critical`", "`ready_wait_severity`"]) {
+      expect(section, `README staging smoke misses ${phrase}`).toContain(phrase);
+    }
+    expect(section).toContain("staging-only");
+    expect(section).toContain("only warns");
+    // No liveness-only contradiction and no unknown-passes claim.
+    const flat = section.replace(/\s+/g, " ");
+    expect(flat).not.toContain("liveness only");
+    expect(flat).not.toContain("unknown queue health alone does not fail");
+    // Literal refusal only: never promise every malformed field is rejected.
+    expect(flat).not.toMatch(/malformed.*reject/i);
+  });
+
+  it("states the strict staging posture in the runbook deploy section without liveness-only language", () => {
+    const runbook = readFileSync("docs/runbook.md", "utf8");
+    const at = runbook.indexOf("The final staging smoke runs");
+    expect(at).toBeGreaterThan(-1);
+    const section = runbook.slice(
+      at,
+      runbook.indexOf("An explicitly authorized manual deployment"),
+    );
+    expect(section).toContain(
+      "node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical",
+    );
+    expect(section).toContain("`db:ok`");
+    expect(section).toContain("`pending_migrations:0`");
+    expect(section).toContain("`ready_wait_severity`");
+    expect(section).toContain("fails the deploy");
+    expect(section).toContain("Queue `degraded` passes");
+    expect(section).not.toContain("public-route liveness only");
+    expect(section).not.toMatch(/not DB\/schema readiness/);
+    expect(section).not.toMatch(/`unknown` is allowed/);
+    // Staging strict versus flag-less production posture in the same passage.
+    expect(section).toContain("node bin/smoke.mjs https://togetherweown.com --allow-indexable");
+    expect(section).toContain("without the strict flag");
+    expect(section).toContain("only warns");
+  });
+
+  it("separates /up 200 behavior from the staging smoke verdict in the readiness section", () => {
+    const runbook = readFileSync("docs/runbook.md", "utf8");
+    const at = runbook.indexOf("The staging deploy smoke requires");
+    expect(at).toBeGreaterThan(-1);
+    const section = runbook.slice(at, runbook.indexOf("requires a recorded, authorized staging"));
+    expect(section).toContain("--fail-on-ready-wait-critical");
+    expect(section).toContain("fails closed on a literal `unknown`");
+    expect(section).toContain("`critical` `ready_wait_severity`");
+    expect(section).toContain("only warns on `critical`");
+    const flat = section.replace(/\s+/g, " ");
+    expect(flat).toContain("still returns 200 from `/up` itself");
+    expect(flat).not.toContain("queue-only `unknown` does not");
   });
 });

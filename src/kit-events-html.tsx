@@ -16,7 +16,7 @@ export interface KitEventsHtml {
  * Props mirror src/events/routes-calendar.tsx exactly: the too-long branch
  * renders the notice screen with the app URL only (never the query), and the
  * list branch carries the same state/rows/zone/now/pagination/empty-state,
- * member chrome, invite URL, login return and one-shot flash. Status stays
+ * member chrome, header session, invite URL, login return and one-shot flash. Status stays
  * 200 here: the dispatch rewrites the marked too-long render to the Hono 422
  * on the way out, exactly like the Hono handler's c.html(..., 422).
  */
@@ -31,13 +31,17 @@ export async function renderEventsHtml(
       state={data.state}
       upcoming={data.upcoming}
       past={data.past}
+      pastMayBeTruncated={data.pastMayBeTruncated}
       zone={data.zone}
       now={data.now}
       totalPages={data.totalPages}
       emptyState={data.emptyState}
       robots={data.robots}
       discordFailed={data.discordFailed}
+      games={data.games}
+      gameFilter={data.gameFilter}
       member={data.member}
+      session={data.session}
       inviteUrl={data.inviteUrl}
       appUrl={data.appUrl}
       loginReturnTo={data.loginReturnTo}

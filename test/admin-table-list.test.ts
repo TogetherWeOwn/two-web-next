@@ -60,10 +60,16 @@ describe("admin table query state (no DB)", () => {
   });
 
   it("defaults and allowlists roster sort/order independently of event parameters", () => {
-    expect(parseRosterQuery({})).toEqual({ q: "", sort: "answered", order: "desc", page: 1 });
+    expect(parseRosterQuery({})).toEqual({
+      q: "",
+      status: "",
+      sort: "answered",
+      order: "desc",
+      page: 1,
+    });
     expect(
       parseRosterQuery({ roster_q: "  Alice  ", roster_sort: "status", roster_order: "asc" }),
-    ).toEqual({ q: "Alice", sort: "status", order: "asc", page: 1 });
+    ).toEqual({ q: "Alice", status: "", sort: "status", order: "asc", page: 1 });
     expect(
       parseRosterQuery({
         q: "wrong",
@@ -71,9 +77,10 @@ describe("admin table query state (no DB)", () => {
         roster_sort: injection,
         roster_order: injection,
       }),
-    ).toEqual({ q: "", sort: "answered", order: "desc", page: 1 });
+    ).toEqual({ q: "", status: "", sort: "answered", order: "desc", page: 1 });
     expect(parseRosterQuery({ roster_page: "3" })).toEqual({
       q: "",
+      status: "",
       sort: "answered",
       order: "desc",
       page: 3,
@@ -338,9 +345,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
       await seedRoster();
       const rosterCount = (html: string) => html.match(/RSVPs \((\d+)\)/)?.[1];
-      const allRsvps = rosterCount(await request("/events/roster"));
-      expect(rosterCount(await request("/events/roster?roster_q=%00"))).toBe(allRsvps);
-      expect(rosterCount(await request("/events/roster?roster_q=ali%00ce"))).toBe("2");
+      const allRsvps = rosterCount(await request("/events/01K00000000000000000000011"));
+      expect(rosterCount(await request("/events/01K00000000000000000000011?roster_q=%00"))).toBe(
+        allRsvps,
+      );
+      expect(
+        rosterCount(await request("/events/01K00000000000000000000011?roster_q=ali%00ce")),
+      ).toBe("2");
 
       await fixture.db.insert(joinAttempts).values([
         { outcome: "added", discordId: "100000000000004001", requestId: "one" },
@@ -367,9 +378,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const [event, other] = await fixture.db
         .insert(events)
         .values(
-          ["roster", "other"].map((eventKey) => ({
-            eventKey,
-            title: eventKey,
+          [
+            { eventKey: "01K00000000000000000000011", title: "roster" },
+            { eventKey: "01K00000000000000000000012", title: "other" },
+          ].map((row) => ({
+            ...row,
             startsAt: new Date("2099-10-01T20:00Z"),
             endsAt: new Date("2099-10-01T22:00Z"),
           })),
@@ -408,7 +421,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         },
         { eventId: other!.id, userId: "100000000000001004", status: "going" },
       ]);
-      return listRoster(fixture.db, "roster");
+      return listRoster(fixture.db, "01K00000000000000000000011");
     }
 
     it("roster member search is server-side, literal, event-scoped and access-logs only rendered members", async () => {
@@ -419,7 +432,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
         [injection, ["100000000000001003"]],
         ["Drew", []],
       ] as const) {
-        const html = await request(`/events/roster?roster_q=${encodeURIComponent(q)}`);
+        const html = await request(
+          `/events/01K00000000000000000000011?roster_q=${encodeURIComponent(q)}`,
+        );
         expect(html).toContain(`RSVPs (${ids.length})`);
         expect(html).toContain(
           `Showing ${ids.length === 0 ? "0-0" : `1-${ids.length}`} of ${ids.length}`,
@@ -448,10 +463,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
                 : a.answeredAt.getTime() - b.answeredAt.getTime();
             return (order === "asc" ? diff : -diff) || a.userId.localeCompare(b.userId);
           });
-          const page = await listRoster(fixture.db, "roster", query);
+          const page = await listRoster(fixture.db, "01K00000000000000000000011", query);
           expect(page.total).toBe(rows.length);
           expect(page.rows.map((r) => r.userId)).toEqual(expected.map((r) => r.userId));
-          const html = await request(`/events/roster?roster_sort=${sort}&roster_order=${order}`);
+          const html = await request(
+            `/events/01K00000000000000000000011?roster_sort=${sort}&roster_order=${order}`,
+          );
           const names = expected.map((r) => r.username ?? "Unknown member");
           // Table cell positions, not form values/encoded query strings.
           const positions = names.map((name) =>
@@ -463,12 +480,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
       },
     );
 
-    async function seedPagedRoster(size: number, eventKey: string) {
+    async function seedPagedRoster(size: number, eventKey: string, title: string) {
       const [event] = await fixture.db
         .insert(events)
         .values({
           eventKey,
-          title: eventKey,
+          title,
           startsAt: new Date("2099-10-01T20:00Z"),
           endsAt: new Date("2099-10-01T22:00Z"),
         })
@@ -489,10 +506,22 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
     it("roster pages hold 100 rows: 250 answers read 100/100/50 with the filtered total", async () => {
       expect(ROSTER_PAGE_SIZE).toBe(100);
-      await seedPagedRoster(2 * ROSTER_PAGE_SIZE + 50, "paged");
-      const first = await listRoster(fixture.db, "paged", parseRosterQuery({}));
-      const second = await listRoster(fixture.db, "paged", parseRosterQuery({ roster_page: "2" }));
-      const third = await listRoster(fixture.db, "paged", parseRosterQuery({ roster_page: "3" }));
+      await seedPagedRoster(2 * ROSTER_PAGE_SIZE + 50, "01K00000000000000000000013", "paged");
+      const first = await listRoster(
+        fixture.db,
+        "01K00000000000000000000013",
+        parseRosterQuery({}),
+      );
+      const second = await listRoster(
+        fixture.db,
+        "01K00000000000000000000013",
+        parseRosterQuery({ roster_page: "2" }),
+      );
+      const third = await listRoster(
+        fixture.db,
+        "01K00000000000000000000013",
+        parseRosterQuery({ roster_page: "3" }),
+      );
       for (const page of [first, second, third]) expect(page.total).toBe(250);
       expect(first.rows).toHaveLength(100);
       expect(second.rows).toHaveLength(100);
@@ -507,7 +536,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         .sort((a, b) => b.tick - a.tick || (a.id < b.id ? -1 : 1))
         .map((r) => r.id);
       expect([...first.rows, ...second.rows, ...third.rows].map((r) => r.userId)).toEqual(expected);
-      const one = await request("/events/paged");
+      const one = await request("/events/01K00000000000000000000013");
       expect(one).toContain("RSVPs (250)");
       expect(one).toContain("Showing 1-100 of 250");
       expect(one.match(/<td>Unknown member<\/td>/g)).toHaveLength(100);
@@ -519,10 +548,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
         roster_order: "desc",
         roster_page: "2",
       });
-      const two = await request(`/events/paged${next.search}`);
+      const two = await request(`/events/01K00000000000000000000013${next.search}`);
       expect(two).toContain("Showing 101-200 of 250");
       expect(new URL(link(two, "prev")!, env.APP_URL).searchParams.has("roster_page")).toBe(false);
-      const three = await request("/events/paged?roster_page=3");
+      const three = await request("/events/01K00000000000000000000013?roster_page=3");
       expect(three).toContain("Showing 201-250 of 250");
       expect(three.match(/<td>Unknown member<\/td>/g)).toHaveLength(50);
       expect(link(three, "next")).toBeUndefined();
@@ -538,7 +567,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const [event] = await fixture.db
         .insert(events)
         .values({
-          eventKey: "filtered",
+          eventKey: "01K00000000000000000000014",
           title: "filtered",
           startsAt: new Date("2099-10-01T20:00Z"),
           endsAt: new Date("2099-10-01T22:00Z"),
@@ -561,12 +590,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
       );
       const page = await listRoster(
         fixture.db,
-        "filtered",
+        "01K00000000000000000000014",
         parseRosterQuery({ roster_q: "filterme", roster_page: "2" }),
       );
       expect(page.total).toBe(120);
       expect(page.rows).toHaveLength(20);
-      const html = await request("/events/filtered?roster_q=filterme&roster_page=2");
+      const html = await request(
+        "/events/01K00000000000000000000014?roster_q=filterme&roster_page=2",
+      );
       expect(html).toContain("RSVPs (120)");
       expect(html).toContain("Showing 101-120 of 120");
       expect(link(html, "next")).toBeUndefined();
@@ -579,9 +610,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it.each(["", "0", "-1", "1.5", "1e2", "not-a-page", "9007199254740991"])(
       "roster falls back to page 1 for roster_page %s",
       async (roster_page) => {
-        await seedPagedRoster(ROSTER_PAGE_SIZE + 1, "invalid-page");
+        await seedPagedRoster(ROSTER_PAGE_SIZE + 1, "01K00000000000000000000015", "invalid-page");
         const html = await request(
-          `/events/invalid-page?roster_page=${encodeURIComponent(roster_page)}`,
+          `/events/01K00000000000000000000015?roster_page=${encodeURIComponent(roster_page)}`,
         );
         expect(html).toContain("Showing 1-100 of 101");
         expect(html).toContain("Page 1");
@@ -589,11 +620,15 @@ describe.skipIf(!process.env.DATABASE_URL)(
     );
 
     it("roster past-end pages stay empty with working navigation", async () => {
-      await seedPagedRoster(50, "short");
-      const page = await listRoster(fixture.db, "short", parseRosterQuery({ roster_page: "9" }));
+      await seedPagedRoster(50, "01K00000000000000000000016", "short");
+      const page = await listRoster(
+        fixture.db,
+        "01K00000000000000000000016",
+        parseRosterQuery({ roster_page: "9" }),
+      );
       expect(page.total).toBe(50);
       expect(page.rows).toEqual([]);
-      const html = await request("/events/short?roster_page=9");
+      const html = await request("/events/01K00000000000000000000016?roster_page=9");
       expect(html).toContain("RSVPs (50)");
       expect(html).toContain("Showing 0-0 of 50");
       expect(html).toContain("No RSVPs on this page.");
@@ -607,13 +642,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it("roster invalid sorts use newest-first; headers/search preserve state and missing names do not expose ids", async () => {
       await seedRoster();
       const fallback = await request(
-        `/events/roster?roster_sort=${encodeURIComponent(injection)}&roster_order=invalid`,
+        `/events/01K00000000000000000000011?roster_sort=${encodeURIComponent(injection)}&roster_order=invalid`,
       );
       expect(fallback.indexOf("Unknown member")).toBeLessThan(fallback.indexOf("Alice"));
       expect(fallback).not.toContain("100000000000001005");
       expect(fallback).toContain('aria-label="Sort by answered ascending"');
       const html = await request(
-        "/events/roster?roster_q=alice&roster_sort=status&roster_order=asc",
+        "/events/01K00000000000000000000011?roster_q=alice&roster_sort=status&roster_order=asc",
       );
       expect(html).toContain('aria-sort="ascending"');
       expect(html).toContain(
@@ -624,10 +659,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(html).toContain('id="roster-q" name="roster_q" type="search" value="alice"');
       expect(html).toContain('<script src="/islands/admin-event-editor.js" defer=""></script>');
       expect(html).toContain(
-        '<form method="post" action="/admin/events/roster" data-event-editor="">',
+        '<form method="post" action="/admin/events/01K00000000000000000000011" data-event-editor="">',
       );
       expect(html).toContain(
-        '<form method="get" action="/admin/events/roster#rsvp-roster" class="filters">',
+        '<form method="get" action="/admin/events/01K00000000000000000000011#rsvp-roster" class="filters">',
       );
       expect(html.match(/data-event-editor/g)).toHaveLength(1); // Only Save bypasses the dirty guard.
     });
@@ -636,7 +671,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       "keeps the returned draft dirty when Save rejects capacity=%s before or during update",
       async (capacity) => {
         await seedRoster();
-        const clean = await request("/events/roster");
+        const clean = await request("/events/01K00000000000000000000011");
         expect(clean).not.toContain("data-event-draft");
         const fields = {
           title: "Rejected draft",
@@ -646,7 +681,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           capacity,
         };
         const response = await adminApp({ sessionStore: store, db: fixture.db }).request(
-          "/events/roster",
+          "/events/01K00000000000000000000011",
           {
             method: "POST",
             headers: {
@@ -664,7 +699,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(html).toContain('data-event-editor="" data-event-draft=""');
         expect(html).toContain('<script src="/islands/admin-event-editor.js" defer=""></script>');
         const persisted = (await fixture.db.select().from(events)).find(
-          (r) => r.eventKey === "roster",
+          (r) => r.eventKey === "01K00000000000000000000011",
         )!;
         expect(persisted.title).toBe("roster");
         expect(persisted.capacity).toBeNull();
@@ -679,7 +714,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(b.values.get("title")).toBe("Rejected draft");
         expect(b.navigate("save").preventDefault).not.toHaveBeenCalled();
         const retry = await adminApp({ sessionStore: store, db: fixture.db }).request(
-          "/events/roster",
+          "/events/01K00000000000000000000011",
           {
             method: "POST",
             headers: {
@@ -692,7 +727,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           { ...env, ADMIN_DB: fixture.db },
         );
         expect(retry.status).toBe(303);
-        const saved = await request("/events/roster");
+        const saved = await request("/events/01K00000000000000000000011");
         expect(saved).toContain('name="title" type="text" value="Rejected draft"');
         expect(saved).not.toContain("data-event-draft");
         expect(
@@ -706,7 +741,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const [event] = await fixture.db
         .insert(events)
         .values({
-          eventKey: "missing-names",
+          eventKey: "01K00000000000000000000017",
           title: "Missing names",
           startsAt: new Date("2099-10-01T20:00Z"),
           endsAt: new Date("2099-10-01T22:00Z"),
@@ -726,7 +761,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       await fixture.db
         .insert(rsvps)
         .values(ids.map((userId) => ({ eventId: event!.id, userId, status: "going" as const })));
-      const html = await request("/events/missing-names");
+      const html = await request("/events/01K00000000000000000000017");
       expect(html.match(/<td>Unknown member<\/td>/g)).toHaveLength(3);
       expect(html).toContain("<td>Alice</td>");
       expect(html).not.toContain("<td></td>");
@@ -737,10 +772,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
     it("distinguishes unmatched roster/featured filters from a genuinely empty table", async () => {
       await seedRoster();
       await seedFeatured();
-      expect(await request("/events/roster?roster_q=absent")).toContain(
+      expect(await request("/events/01K00000000000000000000011?roster_q=absent")).toContain(
         "No RSVPs match this member search.",
       );
-      expect(await request("/events/other?roster_q=absent")).not.toContain("No RSVPs yet.");
+      expect(await request("/events/01K00000000000000000000012?roster_q=absent")).not.toContain(
+        "No RSVPs yet.",
+      );
       expect(await request("/featured?q=absent")).toContain(
         "No featured content matches these filters.",
       );
@@ -750,7 +787,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       );
       expect(await request("/featured")).toContain("No featured content yet.");
       await fixture.db.delete(rsvps);
-      expect(await request("/events/roster")).toContain("No RSVPs yet.");
+      expect(await request("/events/01K00000000000000000000011")).toContain("No RSVPs yet.");
     });
 
     it("join pages retain filters, reach older attempts, audit every retrieved owner, and keep stable id ordering", async () => {

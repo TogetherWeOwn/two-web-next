@@ -2,17 +2,20 @@ import type { Sql } from "postgres";
 import { sha256Hex } from "../bot/signer";
 import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
+import { retireApiPublicEventCache } from "../public-data/cache";
 import type { Answer, Grant, IngressConfig, IngressEffects, Op } from "./types";
 import { OPS } from "./types";
 import {
   digest,
   hasIngressControlBytes,
   isPlainObject,
+  PAYLOAD_TOO_DEEP_MESSAGE,
   PayloadTooDeepError,
   storedEventKey,
   ulid,
 } from "./payload";
-import { audit } from "./audit";
+import { audit, auditOperationBusy } from "./audit";
+import { ingressDenial } from "./envelope";
 import { normalizeClientIp } from "../throttle";
 import { checkGrant, findGrant } from "./grants";
 import { shield } from "./shield";
@@ -28,6 +31,18 @@ import { execute } from "./dispatch";
 // credential, exactly as an unknown short credential is answered.
 export const MAX_BEARER_CREDENTIAL_LENGTH = 512;
 
+// Pre-auth refusals insert zero audit rows. A sampled, constant-shape warn
+// keeps flood signal without recording attacker-controlled data: no
+// credential, body, operation, key or anything else the caller chose (the
+// request id is generated server-side). Deliberately probabilistic, not a
+// token bucket: a flood of distinct unknown credentials must not be able to
+// spend a shared budget to blind the sink.
+const PRE_AUTH_REFUSAL_WARN_RATE = 0.01;
+function warnPreAuthRefusal(requestId: string): void {
+  if (Math.random() >= PRE_AUTH_REFUSAL_WARN_RATE) return;
+  console.warn("agent-events.ingress.pre_auth_refusal", { request_id: requestId });
+}
+
 export async function handleAgentEvent(
   sql: Sql,
   cfg: IngressConfig,
@@ -40,7 +55,7 @@ export async function handleAgentEvent(
   return "handle" in admitted ? admitted.handle(body) : admitted;
 }
 
-/** Admission binds the body handler to this hit; HTTP callers run it before buffering. */
+/** Admission binds the body handler to this hit; HTTP callers run the byte cap first, so admission sees only bounded, buffered bodies. */
 export async function admitAgentEvent(
   sql: Sql,
   cfg: IngressConfig,
@@ -55,13 +70,10 @@ export async function admitAgentEvent(
   // envelope an unknown credential receives, so a granted overlong bearer is
   // indistinguishable from an unknown short one.
   if (credential !== null && credential.length > MAX_BEARER_CREDENTIAL_LENGTH) {
+    warnPreAuthRefusal(requestId);
     return {
       status: 401,
-      body: {
-        reason: "unauthenticated",
-        message: "A valid machine credential is required.",
-        request_id: requestId,
-      },
+      body: ingressDenial("unauthenticated", "A valid machine credential is required.", requestId),
     };
   }
 
@@ -72,11 +84,21 @@ export async function admitAgentEvent(
   // without ever running the recursive digest over untrusted JSON. A presented
   // credential buckets on its own hash (one guess never spends another's);
   // anonymous hits bucket per normalized IP, like human throttles (IPv6 /64,
-  // mapped-IPv4, malformed verbatim). Refused hits write nothing.
+  // mapped-IPv4, malformed verbatim). A refused hit writes no hit row and at
+  // most a sampled denied/rate_limited audit row with this admission's
+  // request_id, with every over-budget verdict counted in memory. Final 429s
+  // emit token-bucketed class/outcome telemetry or a bounded shed count; audit
+  // failures that return 503 emit neither refusal code (see shield.ts).
   const shieldKey = credential
     ? await sha256Hex(credential)
     : `ip:${normalizeClientIp(clientIp ?? "unknown")}`;
-  const shielded = await shield(sql, cfg, shieldKey, requestId);
+  const shielded = await shield(
+    sql,
+    cfg,
+    shieldKey,
+    requestId,
+    credential ? { kind: "credential", hash: shieldKey } : { kind: "anonymous" },
+  );
   if (shielded) return shielded;
   return { handle: (body) => processAgentEvent(sql, cfg, body, credential, requestId, effects) };
 }
@@ -90,6 +112,40 @@ async function processAgentEvent(
   effects: IngressEffects,
 ): Promise<Answer> {
   const doc: Record<string, unknown> = isPlainObject(body) ? body : {};
+
+  // Grant before digest: the presented credential is resolved before the
+  // recursive payload digest runs. A missing or unknown
+  // grant is refused with the existing 401 envelope without traversing or
+  // hashing the body — only the top-level envelope fields above are read,
+  // so the nested payload stays untouched — and without an audit row. The
+  // control-byte refusal stays ahead of auth here too, so a grantless
+  // hostile envelope keeps its existing 422 before any store touch.
+  // Admitted-then-grantless 401s stay at zero rows deliberately: the
+  // grantless-deep pins demand exact zero, and depth is unknowable without
+  // traversing the payload (forbidden pre-auth), so any per-hit 401 sampling
+  // would flake those pins — zero satisfies the bounded pins' lower bound.
+  // Throttling repudiation is the sampled outer-shield rows plus counters.
+  const grant = credential ? await findGrant(sql, credential) : null;
+  if (!grant) {
+    warnPreAuthRefusal(requestId);
+    if (hasIngressControlBytes(doc.op) || hasIngressControlBytes(doc.idempotency_key)) {
+      return {
+        status: 422,
+        body: ingressDenial(
+          "validation_failed",
+          "The `op` and `idempotency_key` fields must not contain control characters.",
+          requestId,
+        ),
+      };
+    }
+    return {
+      status: 401,
+      body: ingressDenial("unauthenticated", "A valid machine credential is required.", requestId),
+    };
+  }
+
+  // Granted only from here: the digest may traverse the payload, and an
+  // over-deep body keeps its 422 — now attributed to the resolved grant.
   let dig: string;
   try {
     dig = await digest(isPlainObject(body) ? body : {});
@@ -97,7 +153,7 @@ async function processAgentEvent(
     if (err instanceof PayloadTooDeepError) {
       await audit(
         sql,
-        null,
+        grant,
         "unknown",
         null,
         null,
@@ -108,7 +164,7 @@ async function processAgentEvent(
       );
       return {
         status: 422,
-        body: { reason: "payload_too_deep", message: err.message, request_id: requestId },
+        body: ingressDenial("payload_too_deep", PAYLOAD_TOO_DEEP_MESSAGE, requestId),
       };
     }
     throw err;
@@ -143,7 +199,7 @@ async function processAgentEvent(
     eventKey: string | null = null,
   ): Promise<Answer> => {
     await audit(sql, grant, op, eventKey, key, dig, requestId, result, reason);
-    return { status, body: { reason, message, request_id: requestId } };
+    return { status, body: ingressDenial(reason, message, requestId) };
   };
 
   if (!cfg.enabled) {
@@ -179,26 +235,17 @@ async function processAgentEvent(
   if (hasIngressControlBytes(op) || hasIngressControlBytes(idem)) {
     return {
       status: 422,
-      body: {
-        reason: "validation_failed",
-        message: "The `op` and `idempotency_key` fields must not contain control characters.",
-        request_id: requestId,
-      },
+      body: ingressDenial(
+        "validation_failed",
+        "The `op` and `idempotency_key` fields must not contain control characters.",
+        requestId,
+      ),
     };
   }
 
-  const grant = credential ? await findGrant(sql, credential) : null;
-  if (!grant)
-    return deny(
-      null,
-      op,
-      idem,
-      "denied",
-      "unauthenticated",
-      401,
-      "A valid machine credential is required.",
-    );
-
+  // The grant is resolved above, before the digest: every caller reaching
+  // this point is authenticated, so the admission checks below keep their
+  // existing grant-attributed audits.
   if (!(OPS as readonly string[]).includes(op))
     return deny(
       grant,
@@ -256,11 +303,15 @@ async function processAgentEvent(
         : "This grant is not bound to the admitted staging guild.",
     );
   }
-  // The guild comes from the grant, never the caller.
+  // The guild comes from the grant, never the caller. A supplied guild_id is
+  // admitted only when it is a string exactly equal to the grant guild: no
+  // String() coercion, so arrays, objects (including JSON null-conversion
+  // properties), booleans, numbers and boxed Strings refuse as wrong_guild
+  // instead of creating or throwing their way to a 500.
   if (
     doc.guild_id !== undefined &&
     doc.guild_id !== null &&
-    String(doc.guild_id) !== grant.guild_id
+    (typeof doc.guild_id !== "string" || doc.guild_id !== grant.guild_id)
   ) {
     return deny(
       grant,
@@ -281,8 +332,10 @@ async function processAgentEvent(
       if (limited.status === 503 && limited.body.reason === "operation_busy") {
         // Inner-budget lock contention: retryable load refusal, never a rate
         // denial. Audited once as error/operation_busy with the response
-        // request_id; the aborted verdict inserted no budget hits.
-        await audit(sql, grant, op, null, idem, dig, requestId, "error", "operation_busy");
+        // request_id; the aborted verdict inserted no budget hits. The audit
+        // runs in its own short deadline-bound transaction after admission
+        // settled; an expected audit timeout keeps this same 503.
+        await auditOperationBusy(sql, cfg.lockWaitMs, grant, op, null, idem, dig, requestId);
         return {
           status: limited.status,
           body: { ...limited.body, request_id: requestId },
@@ -306,9 +359,17 @@ async function processAgentEvent(
       // Replay identity spans operations and explicit/implicit event addresses.
       // Acquire its lock before the operation lock and transactional replay check.
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-idempotency:${grant.id}:${idem}`}, 0))`;
-      // Fast receipts can wait on the grant FK too; bound them after the
-      // idempotency lock, without an operation lock, inner budgets or effects.
-      if (replay) return replayAnswer(tx, grant, op, replay, dig, requestId, idem);
+      // Fast receipts waited on the idempotency lock too: revalidate liveness
+      // after the wait and hold the grant lock through the receipt, like
+      // execution and raced replays — without an operation lock, inner budgets
+      // or dispatch effects. Admission wins over replay semantics: a grant disabled,
+      // removed or expired during the wait is refused even when the stored
+      // receipt would otherwise replay (combined precedence owned here).
+      if (replay) {
+        const refused = await checkGrant(tx, grant, op, idem, dig, requestId, eventKeyIn, true);
+        if (refused) return refused;
+        return replayAnswer(tx, grant, op, replay, dig, requestId, idem);
+      }
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${lockName}, 0))`;
       // Admission can change while the operation lock waits. Do not replay a success
       // for a grant that has since expired or been disabled.
@@ -349,6 +410,7 @@ async function processAgentEvent(
       (committed.status === 200 || committed.status === 201)
     ) {
       retireAnonEventCaches();
+      retireApiPublicEventCache();
       await retireHomeGuestCache();
     }
     return { status: committed.status, body: committed.body };
@@ -356,36 +418,26 @@ async function processAgentEvent(
     const code = (err as { code?: string }).code;
     if (code === "55P03") {
       // A replay's grant may be held/deleted: do not wait on the same FK again.
-      // Bound the error receipt too; an unavailable audit table must not turn
-      // a retryable failure into a hung connection or an unaudited success.
-      try {
-        await sql.begin(async (tx) => {
-          await tx.unsafe(
-            `SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`,
-          );
-          await audit(
-            tx,
-            replaying ? null : grant,
-            op,
-            eventKeyIn,
-            idem,
-            dig,
-            requestId,
-            "error",
-            "operation_busy",
-          );
-        });
-      } catch (auditErr) {
-        if ((auditErr as { code?: string }).code !== "55P03") throw auditErr;
-      }
+      // The error receipt uses the shared bounded busy audit: its own short
+      // transaction with the admission's lock/statement deadlines, holding no
+      // admission lock. An expected audit timeout keeps the same retryable 503.
+      await auditOperationBusy(
+        sql,
+        cfg.lockWaitMs,
+        replaying ? null : grant,
+        op,
+        eventKeyIn,
+        idem,
+        dig,
+        requestId,
+      );
       return {
         status: 503,
-        body: {
-          reason: "operation_busy",
-          message:
-            "Another operation on this event is still running. Retry with the same idempotency key.",
-          request_id: requestId,
-        },
+        body: ingressDenial(
+          "operation_busy",
+          "Another operation on this event is still running. Retry with the same idempotency key.",
+          requestId,
+        ),
       };
     }
     throw err;

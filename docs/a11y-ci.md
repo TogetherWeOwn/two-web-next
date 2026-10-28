@@ -34,9 +34,10 @@ dynamic fixture, or failed negative control fails the `a11y` job and therefore
 - Public pages, homepage notices, event list/calendar/search/no-results/past
   states, published/draft/cancelled event details, owner profile + validation
   alert, another member's profile, moderator admin pages and missing records are
-  scanned at 360×780 and 1280×900. The matrix has 65 cases / 130 scans,
-  including seeded and missing moderator join-attempt details, populated counts
-  and profile stats/milestones, and explicit unavailable-counts/stats cases.
+  scanned at 360×780 and 1280×900. The matrix has 73 cases / 146 scans
+  (64 explicit cases plus 9 auto-derived static GETs), including seeded and
+  missing moderator join-attempt details, populated counts and profile
+  stats/milestones, and explicit unavailable-counts/stats cases.
   The extra states cover an archive page beyond the last seeded page, a selected
   calendar month other than the fixture default, and freeze/expired-write banners
   separately and together on the about page. Member event states cover a paused
@@ -118,7 +119,7 @@ marks incomplete still need human/manual assessment; that is outside this slice.
 
 ## Acceptance / reproduction
 
-- **Given** seeded local fixtures, **when** `npm run a11y` runs, **then** all 130
+- **Given** seeded local fixtures, **when** `npm run a11y` runs, **then** all 146
   document scans pass with zero WCAG A/AA violations and a rejected sentinel.
 - **Given** populated homepage fixtures, **when** either viewport renders,
   **then** the report records assertions for member/online counts and all five

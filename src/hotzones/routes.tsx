@@ -6,18 +6,33 @@
 // any aggregation (also on signal views). Same aggregate reads the Kit load
 // functions call, per web/src/routes/events/past/ precedent.
 import { dbFor } from "../admin/db";
-import type { App, Ctx } from "../events/routes-shared";
-import { HotzoneSignalPage, HotzonesIndexPage } from "./pages";
+import { publicReadGuard, type App, type Ctx } from "../events/routes-shared";
+import {
+  HotzoneBadSeasonPage,
+  HotzoneSignalNotFoundPage,
+  HotzoneSignalPage,
+  HotzonesIndexPage,
+} from "./pages";
 import { isHotzoneSignal, joinsRetentionNote, loadJoinsGrid, priorGrid } from "./aggregates";
 import { recordBoardView } from "./board-log";
 import { parseSeasonParam, seasonLabel } from "./season";
 
-const badSeason = (c: Ctx) => c.text("Unknown season", 400);
+const badSeason = (c: Ctx) => {
+  c.header("cache-control", "no-store, private");
+  return c.html(<HotzoneBadSeasonPage />, 400);
+};
+
+const unknownSignal = (c: Ctx) => {
+  c.header("cache-control", "no-store, private");
+  return c.html(<HotzoneSignalNotFoundPage />, 404);
+};
 
 async function renderIndex(c: Ctx) {
   const raw = c.req.query("season");
   const window = parseSeasonParam(raw ?? null);
   if (!window) return badSeason(c);
+  const limited = await publicReadGuard(c);
+  if (limited) return limited;
   const label = window.kind === "all" ? "all" : window.label;
   const db = await dbFor(c);
   const joins = await loadJoinsGrid(db, window);
@@ -25,12 +40,17 @@ async function renderIndex(c: Ctx) {
   const games = priorGrid("games");
   // Anonymous view log (fail-open, never blocks the board).
   if (db) {
-    await recordBoardView(db, {
-      boardKey: "hotzones",
-      scope: "overall",
-      season: label,
-      resultCount: joins.total,
-    }).catch(() => {});
+    await recordBoardView(
+      db,
+      {
+        boardKey: "hotzones",
+        scope: "overall",
+        season: label,
+        resultCount: joins.total,
+      },
+      undefined,
+      c.get("requestId"),
+    ).catch(() => {});
   }
   c.header("cache-control", "public, max-age=300");
   c.header("vary", "Cookie");
@@ -53,19 +73,26 @@ async function renderSignal(c: Ctx) {
   const window = parseSeasonParam(raw ?? null);
   if (!window) return badSeason(c);
   const signal = c.req.param("signal") ?? "";
-  if (!isHotzoneSignal(signal)) return c.notFound();
+  if (!isHotzoneSignal(signal)) return unknownSignal(c);
+  const limited = await publicReadGuard(c);
+  if (limited) return limited;
   const label = window.kind === "all" ? "all" : window.label;
   void seasonLabel(raw ?? null);
   const db = await dbFor(c);
   if (signal === "joins") {
     const joins = await loadJoinsGrid(db, window);
     if (db) {
-      await recordBoardView(db, {
-        boardKey: "hotzones/joins",
-        scope: "overall",
-        season: label,
-        resultCount: joins.total,
-      }).catch(() => {});
+      await recordBoardView(
+        db,
+        {
+          boardKey: "hotzones/joins",
+          scope: "overall",
+          season: label,
+          resultCount: joins.total,
+        },
+        undefined,
+        c.get("requestId"),
+      ).catch(() => {});
     }
     c.header("cache-control", "public, max-age=300");
     c.header("vary", "Cookie");
@@ -83,12 +110,17 @@ async function renderSignal(c: Ctx) {
   }
   const prior = priorGrid(signal);
   if (db) {
-    await recordBoardView(db, {
-      boardKey: `hotzones/${signal}`,
-      scope: "overall",
-      season: label,
-      resultCount: prior.total,
-    }).catch(() => {});
+    await recordBoardView(
+      db,
+      {
+        boardKey: `hotzones/${signal}`,
+        scope: "overall",
+        season: label,
+        resultCount: prior.total,
+      },
+      undefined,
+      c.get("requestId"),
+    ).catch(() => {});
   }
   c.header("cache-control", "public, max-age=300");
   c.header("vary", "Cookie");

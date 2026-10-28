@@ -53,6 +53,19 @@ caller-only write, decoy, lock and 12/minute bucket; successful submissions retu
 POST to that JSON resource still returns 405. The global same-origin guard
 applies to the HTML adapter as to all cookie-authenticated mutations.
 
+## Featured withdrawal (additive admin action)
+
+`POST /admin/featured/:id/unpublish` is the moderator-only native form action
+for withdrawing one featured slot without resubmitting its other saved fields.
+The shared same-origin guard still applies. The action body cap precedes the
+shared admin-write throttle; non-canonical or unknown IDs return 404. Success
+returns 303 to `/admin/featured`, including an already-unpublished no-op. Only a
+changed withdrawal writes the dirty publication audit and retires the guest
+homepage cache after commit. The full edit and delete routes are unchanged.
+Endpoint and cache/row-state proofs live in
+`test/admin-featured-unpublish-acceptance.test.ts` and
+`test/admin-featured-unpublish-invariants.test.ts`.
+
 ## Redirect map
 
 Legacy-only aliases ([TOG-11156](/TOG/issues/TOG-11156)); request proof:
@@ -255,6 +268,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /admin/events` | moderator | admin: draft create |
 | `POST /admin/events/:key` | moderator | admin: update |
 | `POST /admin/events/:key/cancel` | moderator | admin: cancel |
+| `POST /admin/events/:key/duplicate` | moderator | admin: duplicate as draft |
 | `POST /admin/events/:key/publish` | moderator | admin: publish |
 | `POST /admin/featured` | moderator | admin: featured create |
 | `POST /admin/featured/:id` | moderator | admin: featured update |
@@ -266,8 +280,10 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /csp-reports` | public | csp-reports: no-store violation sink |
 | `POST /events` | moderator | events: draft create |
 | `POST /events/:key/cancel` | moderator | events: cancel |
+| `POST /events/:key/duplicate` | moderator | events: duplicate as draft |
 | `POST /events/:key/publish` | moderator | events: publish |
 | `POST /logout` | public | app: optional session revoke + origin check |
+| `POST /logout/everywhere` | public | app: whole-live-set revoke for the acting member + origin check |
 | `POST /mcp` | public | mcp: stateless public read-only MCP (list_events, get_event, get_community, get_join); session-free, shared read budget, 32 KiB cap |
 | `POST /members/:user` | member-owner | profiles: `_method=PATCH` form adapter |
 | `PUT /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |

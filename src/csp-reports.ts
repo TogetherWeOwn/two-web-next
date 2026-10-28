@@ -10,11 +10,12 @@
 // keys, same cap, always-204) with two deliberate tightenings documented
 // below: unparseable sample rates fall back to 1.0 instead of blinding the
 // sink, non-scalar values collapse to null in the log line, and a
-// `{"csp-report": [...]}` list payload stays silent instead of logging an
-// all-null row.
+// `{"csp-report": [...]}` list payload counts as malformed instead of logging
+// an all-null violation row.
 //
 // Log flood control uses one in-memory token bucket per isolate, shared by
-// violation and oversize warnings. Sampling alone cannot bound log volume.
+// violation, oversize, malformed and sink-failure warnings. Sampling alone
+// cannot bound log volume.
 // This is not a global request limit: isolates refill/reset independently.
 // The route stays DB-free and always-204, even after its log budget is spent.
 
@@ -22,6 +23,7 @@ import type { Context } from "hono";
 import type { Env } from "./env";
 import { readCappedBody } from "./csp-report-body";
 import { redactCspReportUri } from "./csp-report-uri";
+import { createLogBudget } from "./log-budget";
 
 export { MAX_CSP_REPORT_BYTES, readCappedBody } from "./csp-report-body";
 export type { CappedBody } from "./csp-report-body";
@@ -125,22 +127,9 @@ export function shouldSampleReport(rate: number, random: () => number = Math.ran
   return random() <= rate;
 }
 
-const CSP_LOG_BURST = 20;
-const CSP_LOG_REFILL_MS = 3_000;
-let logTokens = CSP_LOG_BURST;
-let lastLogRefill = 0;
-
-// Fixed-size isolate state, no client keys or timers. Consume synchronously
-// just before logging so concurrent body reads cannot overspend the budget.
-function takeCspLogToken(): boolean {
-  const now = Date.now();
-  const elapsed = Math.max(0, now - lastLogRefill);
-  logTokens = Math.min(CSP_LOG_BURST, logTokens + elapsed / CSP_LOG_REFILL_MS);
-  lastLogRefill = Math.max(lastLogRefill, now);
-  if (logTokens < 1) return false;
-  logTokens -= 1;
-  return true;
-}
+// Same policy as refusal telemetry, but its own tokens and shed count: a
+// refusal flood must never spend the CSP sink's budget (or vice versa).
+const takeCspLogToken = createLogBudget("csp.report.shed");
 
 // No session, no cookie, no DB: an unauthenticated sink that must answer when
 // everything behind it is down. Every path — valid, malformed, oversized,
@@ -154,12 +143,35 @@ export async function cspReportsRoute(c: Context<{ Bindings: Env }>): Promise<Re
       return c.body(null, 204);
     }
     const report = extractCspReport(body.text);
-    if (report === null) return c.body(null, 204);
-    if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE)) && takeCspLogToken()) {
-      console.warn("csp.report.violation", cspReportLogFields(report));
+    if (report === null) {
+      // Empty is the quiet-sink heartbeat: no bytes, no accounting, still 204.
+      // Non-empty malformed input gets sampled bucket accounting like a
+      // violation, so a junk flood cannot hide behind silence — and the shared
+      // bucket plus shed signal bound it like any other warning. Bytes only:
+      // never the body, a URI, or member identity.
+      if (body.text !== "") {
+        if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE))) {
+          if (takeCspLogToken()) console.warn("csp.report.malformed", { bytes: body.bytes });
+        }
+      }
+      return c.body(null, 204);
+    }
+    if (shouldSampleReport(parseCspSampleRate(c.env.CSP_REPORT_SAMPLE_RATE))) {
+      if (takeCspLogToken()) console.warn("csp.report.violation", cspReportLogFields(report));
     }
     return c.body(null, 204);
-  } catch {
+  } catch (err) {
+    // Body-read failure: exception class only, bucket-bounded like oversize.
+    // Never the message (it can carry body bytes), a URI, or member identity.
+    // Guarded so the sink stays always-204 even if the logger itself throws.
+    try {
+      if (takeCspLogToken())
+        console.warn("csp.report.sink_failed", {
+          exception: err instanceof Error ? err.name : typeof err,
+        });
+    } catch {
+      // Logger down: the 204 below still stands; nothing else can record this.
+    }
     return c.body(null, 204);
   }
 }

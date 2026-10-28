@@ -9,6 +9,7 @@ import {
   type FailedJobReplayCandidate,
 } from "../jobs/preview";
 import { pgQueueLedger, pgUniqueLock } from "../jobs/postgres";
+import { queueExceptionClass } from "../jobs/queue-error";
 import { replayFailedSyncEvent } from "../jobs/replay";
 import { bufferedMemberJson } from "../member-reads";
 import { QA_IDENTITIES, STAGING_APP_URL } from "../qa";
@@ -163,10 +164,33 @@ async function recordAttemptOrRefuse(
   try {
     await recordQueueRedispatchAccess(c.env, c.get("adminActor").id, preview, outcome);
     return null;
-  } catch {
+  } catch (err) {
     // No raw exception message, SQL bindings or diagnostic payload in logs.
+    console.warn("Queue redispatch audit failed; refusing the dispatch.", {
+      exception: queueExceptionClass(err),
+      failure_id: preview.failure.id,
+    });
     return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
   }
+}
+
+/**
+ * I/O-free refusals that run before the admin-write throttle (cap still
+ * first). A non-operator moderator 403s and a malformed id / non-empty
+ * query 422s with zero throttle spend, even under an exhausted budget.
+ * The handler keeps the same checks as idempotent defense; everything that
+ * needs I/O (candidate load, dispatch, receipts) still runs after the
+ * throttle.
+ */
+export async function queueRedispatchPreThrottleRefusal(c: Context<QueuePreviewVars>, next: Next) {
+  if (c.get("adminActor").id !== configuredOperator(c.env)) {
+    return bufferedMemberJson(c, { error: "operator_required" }, 403);
+  }
+  const id = parseFailureId(c.req.param("id") ?? "");
+  // No payload, event key, idempotency key or query overrides are admitted.
+  if (id === null || new URL(c.req.url).search !== "")
+    return bufferedMemberJson(c, { error: "invalid_failure_id" }, 422);
+  await next();
 }
 
 export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
@@ -183,7 +207,11 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
   let candidate: FailedJobReplayCandidate | null;
   try {
     candidate = await (deps.loadCandidate ?? loadRedispatchCandidate)(c.env, id);
-  } catch {
+  } catch (err) {
+    console.warn("Queue redispatch candidate load failed.", {
+      exception: queueExceptionClass(err),
+      failure_id: id,
+    });
     return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
   }
   if (!candidate) return bufferedMemberJson(c, { error: "failure_not_found" }, 404);
@@ -207,8 +235,15 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
   }
   // The real producer path prerequisites fail closed before any write, the
   // same rule dispatchRedispatch enforces; the injected seam owns its path.
-  if (deps.dispatch === undefined && (!c.env.SYNC_EVENT_QUEUE || !databaseUrl(c.env)))
+  if (deps.dispatch === undefined && (!c.env.SYNC_EVENT_QUEUE || !databaseUrl(c.env))) {
+    // No producer prerequisites: the exception class is fixed (nothing threw),
+    // plus the failure id. Never the env, a URI, or any payload.
+    console.error("queue redispatch prerequisites missing; refusing redispatch.", {
+      exception: "MissingConfiguration",
+      failureId: id,
+    });
     return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
+  }
   // The receipt is written before the message is queued: a write that fails
   // refuses the dispatch, so no dispatch ever answers without a trail. When
   // the queue send itself fails afterwards, the 503 keeps the attempt
@@ -227,7 +262,11 @@ export async function queueRedispatchHandler(c: Context<QueuePreviewVars>) {
       deps.dispatch !== undefined
         ? await deps.dispatch(candidate.eventKey, key)
         : await dispatchRedispatch(c.env, candidate.eventKey, key);
-  } catch {
+  } catch (err) {
+    console.warn("Queue redispatch dispatch failed.", {
+      exception: queueExceptionClass(err),
+      failure_id: candidate.preview.failure.id,
+    });
     return bufferedMemberJson(c, { error: "redispatch_unavailable" }, 503);
   }
   if (!dispatched) {

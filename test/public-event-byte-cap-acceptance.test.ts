@@ -54,6 +54,17 @@ const UNAVAILABLE = {
   error: { code: "unavailable", message: "Event data is temporarily unavailable." },
 } as const;
 
+// The REST 503 shape: the same static code and message plus the request id
+// for correlation and the one safe next action. Tool errors keep UNAVAILABLE.
+const REST_UNAVAILABLE = {
+  error: {
+    code: "unavailable",
+    message: "Event data is temporarily unavailable.",
+    request_id: expect.any(String),
+    next: "Retry the read shortly.",
+  },
+};
+
 type RpcResponse = {
   status: number;
   headers: Headers;
@@ -90,7 +101,12 @@ describe.skipIf(!process.env.DATABASE_URL)("public event byte cap: irreducible m
         if (statement.includes("DELETE FROM web_throttle_hits")) return [];
         throw new Error("Unexpected throttle statement");
       },
-      { begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql) },
+      {
+        begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql),
+        // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before
+        // the advisory lock; the double passes it through.
+        unsafe: async () => [],
+      },
     );
     return sql;
   };
@@ -251,7 +267,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public event byte cap: irreducible m
     expect(res.headers.get("cache-control")).toBe("no-store, private");
     const raw = await res.text();
     expect(byteLength(raw)).toBeLessThanOrEqual(MAX_BYTES);
-    expect(JSON.parse(raw)).toEqual(UNAVAILABLE);
+    expect(JSON.parse(raw)).toEqual(REST_UNAVAILABLE);
     // No metadata leaks through in truncated form.
     expect(raw).not.toContain(ASTRAL);
   });
@@ -263,7 +279,7 @@ describe.skipIf(!process.env.DATABASE_URL)("public event byte cap: irreducible m
     expect(res.headers.get("cache-control")).toBe("no-store, private");
     const raw = await res.text();
     expect(byteLength(raw)).toBeLessThanOrEqual(MAX_BYTES);
-    expect(JSON.parse(raw)).toEqual(UNAVAILABLE);
+    expect(JSON.parse(raw)).toEqual(REST_UNAVAILABLE);
     expect(raw).not.toContain(ASTRAL);
   });
 
@@ -275,7 +291,14 @@ describe.skipIf(!process.env.DATABASE_URL)("public event byte cap: irreducible m
     eventStore.mockClear();
     const second = await get("/api/public/events");
     expect(second.status).toBe(503);
-    expect(await second.text()).toBe(firstBody);
+    // Same static envelope, but a fresh request id: the repeat re-executed
+    // instead of replaying cached bytes.
+    const firstParsed = JSON.parse(firstBody) as { error: Record<string, string> };
+    const secondParsed = (await second.json()) as { error: Record<string, string> };
+    expect(secondParsed.error.code).toBe(firstParsed.error.code);
+    expect(secondParsed.error.message).toBe(firstParsed.error.message);
+    expect(secondParsed.error.next).toBe(firstParsed.error.next);
+    expect(secondParsed.error.request_id).not.toBe(firstParsed.error.request_id);
     // A cached success would be served before any database read; the
     // overflow path must reach the store again instead of replaying one.
     expect(eventStore).toHaveBeenCalled();
@@ -294,11 +317,11 @@ describe.skipIf(!process.env.DATABASE_URL)("public event byte cap: irreducible m
     expect(res.headers.get("cache-control")).toBe("no-store, private");
     const raw = await res.text();
     expect(byteLength(raw)).toBeLessThanOrEqual(MAX_BYTES);
-    expect(JSON.parse(raw)).toEqual(UNAVAILABLE);
+    expect(JSON.parse(raw)).toEqual(REST_UNAVAILABLE);
     expect(raw).not.toContain(ASTRAL);
     const repeat = await get(`/api/public/events/${key(61)}`);
     expect(repeat.status).toBe(503);
-    expect(await repeat.json()).toEqual(UNAVAILABLE);
+    expect(await repeat.json()).toEqual(REST_UNAVAILABLE);
   });
 
   it("keeps a small max-metadata collection successful with metadata byte-identical", async () => {

@@ -1,6 +1,8 @@
 name: deploy-production
 
-# Cutover only. Never runs on a push, PR, release, or completion of another workflow.
+# Cutover only. Never runs on a push or PR. Automatic promotion runs when
+# e2e-staging completes and daily as a backstop (14:17 UTC); manual dispatch
+# stays for explicit redeploys and recovery.
 on:
   workflow_dispatch:
     inputs:
@@ -9,6 +11,16 @@ on:
         required: false
         type: string
         default: ""
+      migrations_applied:
+        description: "Set to true only after db-migrate.yml (target production) applied the target's migrations out of band. Audited manual continuation past a ledger-unproven stop (ledger lacks target entries, ledger read failed, unusable target timestamp, or unknown live commit after 3 /up reads); automatic runs ignore it and halt on those stops unless the live ledger already proves every target web migration applied. The first promotion after the ledger signal ships needs one manual dispatch because the live Worker predates it"
+        required: false
+        type: boolean
+        default: false
+  workflow_run:
+    workflows: [e2e-staging]
+    types: [completed]
+  schedule:
+    - cron: "17 14 * * *"
 
 # Both gate jobs need Actions read to GET the private repository's Environment.
 permissions:
@@ -22,12 +34,23 @@ concurrency:
 jobs:
   preflight:
     name: production-preflight
+    # Automatic runs (workflow_run, schedule) only promote a soaked green with
+    # no newer red staging run (ci/resolve-promotion-sha.mjs). A workflow_run
+    # from a failed or non-main staging run resolves nothing and skips cleanly.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
     outputs:
       sha: ${{ steps.target.outputs.sha }}
+      already_live: ${{ steps.live.outputs.already_live }}
+      live_sha: ${{ steps.live.outputs.live_sha }}
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
-    timeout-minutes: 5
+    timeout-minutes: 10
     steps:
       # Promote what staging last verified: merges keep landing on main, so the
       # newest main SHA is rarely staged yet. The gate below still requires the
@@ -46,7 +69,44 @@ jobs:
         env:
           INPUT_SHA: ${{ inputs.sha }}
           GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+      # Clean skip when automatic promotion has nothing soaked and green to
+      # promote: the resolver exits 0 with an empty sha, and every step below
+      # stands down so the run stays green without deploying.
+      - name: Check if production already serves the target
+        id: live
+        if: steps.target.outputs.sha != ''
+        run: node ci/production-deploy-gate.mjs --already-live
+        env:
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+      - name: Refuse pending production migrations before any deploy
+        # A target whose journal has entries production lacks reads the live
+        # production ledger via /up: when the ledger holds every target web
+        # entry (set inclusion), promotion clears automatically; otherwise it
+        # stops here with a clear error (ledger lacks entries, ledger read
+        # failed, unusable target timestamp, non-ok database, or a live Worker
+        # that predates the ledger signal). An unknown live commit after 3 /up
+        # reads also stops here. Manual dispatch can continue past any stop
+        # only on the audited migrations_applied=true confirmation after
+        # db-migrate.yml (target production); automatic runs ignore that input
+        # and halt on those stops unless the ledger proves the target applied.
+        # The first promotion after the ledger signal ships needs one manual
+        # dispatch because the live Worker predates it. Once the
+        # least-privilege migrator lands, this step becomes a db-migrate.yml
+        # (workflow_call, target production) call first. This check runs from
+        # the tip checkout on purpose, like --already-live above: after the
+        # re-checkout below, an older target's script could lack this flag and
+        # fall through to the full gate without its enable vars, blocking
+        # rescue redeploys of prior good commits.
+        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
+        run: node ci/production-deploy-gate.mjs --check-migrations
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+          LIVE_SHA: ${{ steps.live.outputs.live_sha }}
+          MIGRATIONS_APPLIED: ${{ inputs.migrations_applied }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
         with:
           ref: ${{ steps.target.outputs.sha }}
           persist-credentials: false
@@ -55,19 +115,27 @@ jobs:
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
         with:
           node-version: 24
-      - name: Refuse disabled, non-main, unprotected, untested or placeholder deployment
+      - name: Refuse disabled, held, non-main, unprotected, untested or placeholder deployment
+        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
         run: node ci/production-deploy-gate.mjs
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           PRODUCTION_AUTO_APPROVE: ${{ vars.PRODUCTION_AUTO_APPROVE }}
+          PRODUCTION_HOLD_UNTIL: ${{ vars.PRODUCTION_HOLD_UNTIL }}
           GITHUB_TOKEN: ${{ github.token }}
           DEPLOY_SHA: ${{ steps.target.outputs.sha }}
 
   deploy-production:
     name: deploy-production
     needs: preflight
+    # Clean skip when there is nothing to promote (automatic run with no
+    # soaked green) or production already serves the target: preflight
+    # succeeds with an empty sha or already_live=true, and this job stands
+    # down so the run stays green without deploying.
+    if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
@@ -105,6 +173,7 @@ jobs:
         env:
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           PRODUCTION_AUTO_APPROVE: ${{ vars.PRODUCTION_AUTO_APPROVE }}
+          PRODUCTION_HOLD_UNTIL: ${{ vars.PRODUCTION_HOLD_UNTIL }}
           GITHUB_TOKEN: ${{ github.token }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
       - run: npm ci --include=dev
@@ -194,16 +263,30 @@ jobs:
         # before the release job tags. Manual redirects keep the checks
         # unauthenticated and never visit Discord: no auth, no writes, no new
         # secrets. Same retry contract (6 attempts, 10s sleeps, fail closed).
-        # No automatic restore here: the gradual action's rollback steps only
+        # Ordinary-traffic identity is enforced below: the promoted version UUID
+        # travels steps.gradual.outputs.promoted-version-id -> env -> quoted
+        # shell variable and the smoke proves that version serves unpinned
+        # ordinary routing (no version-override header). A healthy unwanted
+        # version can satisfy every readiness assertion without proving the
+        # recorded target serves normal traffic, so identity is the gate: a
+        # missing, malformed or different revision.version_id fails even when
+        # health is green. An absent or malformed promoted id fails closed
+        # before any probe, never by silently omitting verification. No
+        # automatic restore here: the gradual action's rollback steps only
         # fire on failures inside the promotion, so a failed verification
-        # leaves the promoted candidate live at 100% and prints PREV_VERSION as
-        # the recorded restoration target; the operator restores it through the
-        # rollback-production workflow with that id. An inline wrangler
-        # rollback must stay out of this workflow: the rollback path checks
-        # the target version's secrets first (see rollback-production.yml).
+        # leaves the promoted candidate live at 100% and prints the live
+        # candidate plus PREV_VERSION as the recorded restoration target; the
+        # operator restores it through the rollback-production workflow with
+        # that id. An inline wrangler rollback must stay out of this workflow:
+        # the rollback path checks the target version's secrets first (see
+        # rollback-production.yml).
         run: |
+          if ! node -e 'const v = process.env.PROMOTED_VERSION_ID ?? ""; if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)) { console.error("::error::promoted-version-id missing or malformed; refusing to verify without a target identity"); process.exit(1); }'; then
+            echo "::error::post-promotion public-route smoke failed; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - restore it with the rollback-production workflow using that version id"
+            exit 1
+          fi
           for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs https://togetherweown.com --allow-indexable; then
+            if node bin/smoke.mjs https://togetherweown.com --allow-indexable --expected-version-id "$PROMOTED_VERSION_ID"; then
               echo "post-promotion production smoke ok (attempt $i)"
               exit 0
             fi
@@ -212,10 +295,46 @@ jobs:
               sleep 10
             fi
           done
-          echo "::error::post-promotion public-route smoke failed; promoted candidate remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - restore it with the rollback-production workflow using that version id"
+          echo "::error::post-promotion public-route smoke failed; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - restore it with the rollback-production workflow using that version id"
           exit 1
         env:
+          PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
           PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}
+      - name: Record successful production promotion
+        # Success-only and after identity-aware smoke. Write inline because the
+        # selected deployment checkout can predate this receipt protocol.
+        run: |
+          node <<'NODE'
+          const fs = require('node:fs');
+          const path = require('node:path');
+          const receipt = {
+            schema: 1,
+            repository: process.env.GITHUB_REPOSITORY,
+            workflow: '.github/workflows/deploy-production.yml',
+            job: 'deploy-production',
+            sha: process.env.DEPLOY_SHA,
+            promoted_version_id: process.env.PROMOTED_VERSION_ID,
+            run_id: process.env.GITHUB_RUN_ID,
+            run_attempt: process.env.GITHUB_RUN_ATTEMPT,
+          };
+          if (!/^[0-9a-f]{40}$/.test(receipt.sha ?? '') ||
+              !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(receipt.promoted_version_id ?? '') ||
+              !/^[1-9][0-9]*$/.test(receipt.run_id ?? '') ||
+              !/^[1-9][0-9]*$/.test(receipt.run_attempt ?? '')) {
+            throw new Error('Invalid production promotion receipt identity');
+          }
+          fs.writeFileSync(path.join(process.env.RUNNER_TEMP, 'promotion.json'), JSON.stringify(receipt) + '\n');
+          NODE
+        env:
+          DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
+      - name: Upload production promotion proof
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: production-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/promotion.json
+          if-no-files-found: error
+          retention-days: 30
 
   release:
     name: release
@@ -223,7 +342,10 @@ jobs:
     # preflight.outputs.sha is the promoted commit (DEPLOY_SHA), never main's tip.
     needs: [preflight, deploy-production]
     permissions:
+      actions: read # Read only this repository's promotion evidence.
       contents: write # Create the tag and its GitHub Release.
     uses: ./.github/workflows/release.yml
     with:
       sha: ${{ needs.preflight.outputs.sha }}
+      promotion_run_id: ${{ github.run_id }}
+      promotion_run_attempt: ${{ github.run_attempt }}

@@ -27,17 +27,35 @@ import {
 // admission succeeds. True 429 envelopes, free replays and grant checks are
 // unchanged.
 //
+// The configured lockWaitMs magnitude is pinned without reading the
+// JavaScript clock: every busy case holds its lock until the measured
+// verdict arrives, with a database-side self-release as backstop. The holder
+// acquires first (handshake); the measured call runs on a dedicated
+// connection while an observer polls pg_stat_activity for the measured
+// backend blocked by the holder. The 1s pg_sleep self-release starts only
+// after that block is observed, so pre-lock scheduling stalls (grant and
+// replay lookups under full-suite CI load) no longer consume the proof
+// window. A wait honoring the configured 50ms answers 503 long before the
+// 1s release; a wait ignoring it (the 1500ms test default or the 5s product
+// default) is still blocked at release time, sees the lock free, and is
+// admitted (200/201) instead of refused, failing the status assert.
+//
 // Lock acquisition is coordinated explicitly: the holder's advisory-lock
 // query resolving inside its open transaction is the handshake that the
-// lock is held; the measured call races a generous 4s bound only so an
-// unbounded wait fails fast instead of hanging the suite. No timing-only
-// sleep proves anything here.
+// lock is held, and the observer's blocked row (measured pid waiting on a
+// Lock with the holder in pg_blocking_pids) is the handshake that the
+// measured wait began. Arrival of the 503 verdict before the observer-timed
+// self-release IS the proof the configured lockWaitMs database lock_timeout
+// fired. An admitted verdict without any observed block, or neither verdict
+// nor block within 8s, fails with a stall-specific message, distinct from
+// the magnitude failure. An unbounded wait hangs past the vitest test
+// timeout instead. No wall-clock race, no fake timers, no timing-only sleep
+// proves anything here: the 8s JavaScript ceiling is liveness only.
 //
 // Live against the guarded test database in a throwaway schema. Skipped
 // when DATABASE_URL is unset. Never point this at production or staging.
 
 const CALLER = "inner-lock-busy-fixture";
-const BUSY_BOUND_MS = 4000;
 
 const cfg = (overrides: Partial<IngressConfig> = {}): IngressConfig => ({
   ...DEFAULT_CONFIG,
@@ -94,6 +112,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const grantId = grant!.id as string;
       const call = (body: unknown, config: IngressConfig = cfg()): Promise<Answer> =>
         handleAgentEvent(sql, config, body, credential, null);
+      const callOn = (
+        client: postgres.Sql,
+        body: unknown,
+        config: IngressConfig = cfg(),
+      ): Promise<Answer> => handleAgentEvent(client, config, body, credential, null);
       // Inner budget hits only: the outer shield bucket is a separate layer
       // and may legitimately record the attempt before the inner refusal.
       const innerHits = async () => {
@@ -113,12 +136,24 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(dump).not.toContain(credential);
         expect(dump).not.toContain(verifier);
       };
-      return { call, innerHits, auditsFor, stored, events, secretFree, grantId };
+      return { call, callOn, innerHits, auditsFor, stored, events, secretFree, grantId };
     }
 
-    // Hold `agent-event-hits:<bucket>` on a second connection until the
-    // returned release runs. Resolves only once the lock is actually held.
-    async function holdBucketLock(bucket: string) {
+    // Hold `agent-event-hits:<bucket>` until the caller releases it. The await
+    // resolves only once the lock is actually held (handshake); the caller
+    // then either releases immediately (verdict already observed) or starts
+    // the database-side self-release once the measured backend is observed
+    // blocked. The self-release stays on the database clock, timed from the
+    // observation rather than the acquisition, so pre-lock scheduling stalls
+    // never consume the magnitude window. A measured wait honoring the
+    // configured 50ms answers 503 before that release; a wait ignoring it is
+    // still blocked at release time, sees the lock free, and is admitted
+    // instead.
+    async function openBucketHolder(bucket: string): Promise<{
+      holderPid: number;
+      releaseNow: () => Promise<void>;
+      sleepThenRelease: (secs: number) => Promise<void>;
+    }> {
       const url = testDatabaseUrl(process.env.DATABASE_URL!);
       const holder = postgres(url.href, {
         max: 1,
@@ -127,42 +162,73 @@ describe.skipIf(!process.env.DATABASE_URL)(
         connection: { search_path: fixture.schemaName },
         onnotice: () => {},
       });
-      await holder.unsafe("BEGIN");
-      await holder`SELECT pg_advisory_xact_lock(hashtextextended(${"agent-event-hits:" + bucket}, 0))`;
       let released = false;
-      return async () => {
+      const releaseNow = async (): Promise<void> => {
         if (released) return;
         released = true;
-        await holder.unsafe("ROLLBACK");
-        await holder.end();
+        try {
+          await holder.unsafe("ROLLBACK");
+        } catch {
+          // Already closed; the lock is gone either way.
+        }
+        await holder.end().catch(() => {});
+      };
+      await holder.unsafe("BEGIN");
+      await holder`SELECT pg_advisory_xact_lock(hashtextextended(${"agent-event-hits:" + bucket}, 0))`;
+      const [self] = await holder`SELECT pg_backend_pid() AS pid`;
+      const holderPid = self!.pid as number;
+      return {
+        holderPid,
+        releaseNow,
+        sleepThenRelease: async (secs: number): Promise<void> => {
+          try {
+            await holder.unsafe(`SELECT pg_sleep(${secs})`);
+          } finally {
+            await releaseNow();
+          }
+        },
       };
     }
 
-    // Race the measured call against a generous bound. The bound is not the
-    // proof — the lock handshake is — it only turns an unbounded wait into a
-    // readable failure instead of a hung suite.
-    async function settleWithinBound(pending: Promise<Answer>, bucket: string): Promise<Answer> {
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        return await Promise.race([
-          pending,
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(
-              () =>
-                reject(
-                  new Error(
-                    `inner rate-budget lock wait on ${bucket} was not bounded: ` +
-                      `request still blocked after ${BUSY_BOUND_MS}ms with lockWaitMs=50 ` +
-                      `while the advisory lock holder remains locked`,
-                  ),
-                ),
-              BUSY_BOUND_MS,
-            );
-          }),
-        ]);
-      } finally {
-        if (timer) clearTimeout(timer);
+    // A dedicated backend for the measured call so the observer can attribute
+    // a Lock wait to it by pid. Single connection: the pid read here is the
+    // pid that later blocks on the held advisory lock.
+    async function openMeasuredClient(): Promise<{
+      measured: postgres.Sql;
+      measuredPid: number;
+    }> {
+      const url = testDatabaseUrl(process.env.DATABASE_URL!);
+      const measured = postgres(url.href, {
+        max: 1,
+        port: 5432,
+        password: () => url.password,
+        connection: { search_path: fixture.schemaName },
+        onnotice: () => {},
+      });
+      const [self] = await measured`SELECT pg_backend_pid() AS pid`;
+      return { measured, measuredPid: self!.pid as number };
+    }
+
+    // Poll until the measured backend is observed waiting on a Lock held by
+    // the holder (true), the verdict settles first (false), or the liveness
+    // ceiling passes (false). The ceiling is not proof: it only turns a hung
+    // pre-lock path into a stall-specific failure instead of a vitest timeout.
+    async function waitForBlockedOn(
+      measuredPid: number,
+      holderPid: number,
+      settled: () => boolean,
+      timeoutMs = 8000,
+    ): Promise<boolean> {
+      const deadline = Date.now() + timeoutMs;
+      while (Date.now() < deadline) {
+        if (settled()) return false;
+        const rows = await sql`SELECT 1 AS blocked FROM pg_stat_activity
+          WHERE pid = ${measuredPid} AND wait_event_type = 'Lock'
+            AND ${holderPid} = ANY(pg_blocking_pids(pid))`;
+        if (rows.length > 0) return true;
+        await new Promise((resolve) => setTimeout(resolve, 5));
       }
+      return false;
     }
 
     it("control: admits a valid create and read, charges one hit per inner bucket, leaks no secret", async () => {
@@ -286,17 +352,50 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await c.auditsFor(measuredKey)).toHaveLength(0);
         expect(await c.stored(measuredKey)).toHaveLength(0);
 
-        const release = await holdBucketLock(bucket);
-        let pending: Promise<Answer> | undefined;
+        const holder = await openBucketHolder(bucket);
+        const { measured, measuredPid } = await openMeasuredClient().catch(async (error) => {
+          await holder.releaseNow();
+          throw error;
+        });
+        let holderDone: Promise<void> | null = null;
         try {
-          const start = Date.now();
-          pending = c.call(measuredBody, busyConfig);
-          const busy = await settleWithinBound(pending, bucket);
-          const elapsed = Date.now() - start;
+          let settled = false;
+          const pending = c.callOn(measured, measuredBody, busyConfig);
+          void pending.then(
+            () => {
+              settled = true;
+            },
+            () => {
+              settled = true;
+            },
+          );
+          // Observe the block before timing the release: the 1s database-side
+          // self-release starts only after the measured backend is seen
+          // waiting on the holder, so CI-load pre-lock latency cannot spend
+          // the proof window. A 503 that lands before any observation is the
+          // fast path — the 50ms lock_timeout fired inside a poll gap — and
+          // the holder is released immediately with nothing dangling.
+          const blocked = await waitForBlockedOn(measuredPid, holder.holderPid, () => settled);
+          // Let a just-arrived verdict mark the flag before branching, so a
+          // verdict racing the deadline is judged as settled, not timed out.
+          await new Promise((resolve) => setTimeout(resolve, 0));
+          if (!blocked && !settled) {
+            throw new Error(
+              `inner-lock-busy scheduling stall: no verdict and no observed block within 8s for ${busyCase.name} (holder pid ${holder.holderPid}, measured pid ${measuredPid})`,
+            );
+          }
+          if (blocked) holderDone = holder.sleepThenRelease(1);
+          const busy = await pending;
+          if (!blocked && busy.status !== 503) {
+            throw new Error(
+              `inner-lock-busy scheduling stall: admitted ${busy.status} without any observed lock wait for ${busyCase.name} (holder pid ${holder.holderPid}, measured pid ${measuredPid}); the pre-lock path outran the holder or the wait bypassed the inner lock`,
+            );
+          }
 
-          // Every assertion below runs while the holder remains locked:
-          // releasing first could let a hung request complete and mask it.
-          expect(elapsed).toBeLessThan(BUSY_BOUND_MS);
+          // Every assertion below runs before the self-release resolves on the
+          // observed path (a hung request would have been admitted and failed
+          // the status assert); on the fast path the holder releases after the
+          // verdict in the finally below.
           expect(busy.status).toBe(503);
           expect(busy.body.reason).toBe("operation_busy");
           expect(busy.body.request_id).toBeTruthy();
@@ -322,10 +421,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
           expect(await c.stored(measuredKey)).toHaveLength(0);
           expect(await c.events()).toEqual(eventsBefore);
         } finally {
-          await release();
-          // Let a still-blocked call settle after release so no work dangles
-          // into the next test (on the unbounded path it now completes).
-          await pending?.catch(() => null);
+          // On the observed path wait out the database-side schedule so no
+          // work dangles into the next test (on the unbounded path it now
+          // completes); on the fast path release immediately. releaseNow is
+          // idempotent, so observer failures still clean up.
+          if (holderDone) await holderDone;
+          else await holder.releaseNow();
+          await measured.end().catch(() => {});
         }
 
         // After release, normal admission succeeds with a fresh key.

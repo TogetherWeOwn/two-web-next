@@ -19,8 +19,11 @@ export function registerAlertProbe(app: Hono<{ Bindings: Env }>): void {
         return c.notFound();
       await next();
     },
-    throttle("alert-probe", AUTH_THROTTLE_PER_MINUTE),
+    // Body cap BEFORE the throttle (cap-first): oversized probes get a 413
+    // without spending alert-probe throttle budget. The QA gate above still
+    // runs first, so disabled/bad-token calls 404 before either.
     requestBodyLimit("action"),
+    throttle("alert-probe", AUTH_THROTTLE_PER_MINUTE),
     async (c) => {
       if (!c.env.INTERNAL_ACTION_QUEUE) return c.json({ error: "probe_queue_unavailable" }, 503);
       // https://developers.cloudflare.com/workers/runtime-apis/web-crypto/#randomuuid

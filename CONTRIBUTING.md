@@ -95,6 +95,20 @@ failed, and the newer run's `ci-ok` decides the merge. Main pushes and the night
 run the full suite. The `ci-ok`-as-required-check ruleset cutover is an
 OPERATOR step after merge plus green probes — never part of a PR.
 
+During Node 22 lint/typecheck/tests, `ci/node22-progress.mjs` emits a
+`[node22-progress]` JSON snapshot immediately and every 60 seconds, at most
+43 times (through minute 42). Each snapshot has at most 32 process rows and
+8 KiB of output. It observes the step shell's main-thread descendant tree,
+excluding itself: numeric PIDs/parents, state, cumulative CPU ticks, RSS pages,
+thread counts and process-start ticks. Compare consecutive rows for CPU or
+resource changes alongside the existing test output; these are observations,
+not proof of a particular hang or its cause. `truncated` marks incomplete tree
+reads/caps; unavailable or replaced roots stop the sampler with a fixed message.
+No argv, environment, names, test output, stack/heap dumps or database queries
+are collected. The sidecar never signals the suite, and its cleanup does not
+replace the original command's exit status or extend the 45-minute job timeout.
+Its selftests use only local proc fixtures and controlled child processes.
+
 ### What fails `pr-lint` today vs what only warns
 
 `pr-lint` is a required job, so it must pass; inside the job, some findings
@@ -155,14 +169,14 @@ with `GITLEAKS_VERSION`.
 
 ## Dependency security and static analysis
 
-The required `check` job runs `npm run deps:audit:selftest` (local fixtures,
+The `check` job runs `npm run deps:audit:selftest` (local fixtures,
 including a loopback registry) and `npm run deps:audit` before installing
 dependencies. The audit reads every lockfile root (`package-lock.json` and
 `web/package-lock.json`), includes development/optional/peer dependencies, and
 blocks high, critical or unknown severity. It prints one result per lockfile
 (`.` and `web`) and fails when either has a non-excepted finding. A missing
-`web/package-lock.json` or an unreachable registry for either lockfile fails
-closed. It forces online auditing even when npm's environment or `.npmrc`
+lockfile for either root fails closed on every event. It forces online
+auditing even when npm's environment or `.npmrc`
 enables offline mode, using a fresh per-lockfile cache rather than the restored
 installation cache (which can retain stale advisory severity). The owned audit
 caches are removed on success or failure. A child-only Node preload also validates
@@ -170,7 +184,8 @@ the exact raw bulk advisory response before npm can normalize it. A clean `{}`
 is valid; `null`, arrays and missing/unknown advisory severities are not. The
 preload observes bounded HTTP/HTTPS bodies (including compressed responses),
 without changing registry selection, authentication or response bytes. Its
-separate validation pipe contains only counters/booleans, not registry data.
+separate validation pipe journals counters/booleans and fixed transport codes/statuses,
+not registry data. Progress is written before npm consumes it and survives a timeout kill.
 Missing/incomplete validation, unsupported audit redirects/legacy quick fallback,
 and a future npm transport that escapes observation fail closed. The gate requires
 an observed valid bulk response, even for a lockfile with no audit candidates.
@@ -178,6 +193,26 @@ Cyclic `via` references are traversed once per reachable package, retaining ever
 advisory ID and blocking severity. Invalid JSON, malformed/inconsistent severity
 counters, missing references, registry/process failures and invalid/expired
 exceptions also fail closed.
+Each lockfile gets 3 attempts with 5s/15s backoff and a fresh owned cache per
+attempt. When every attempt fails with a positively identified registry
+transport fault, the gate records that lockfile as unavailable, never clean:
+a 120s timeout with an observed bulk request still pending and no permanent
+validation failure, or a fault confirmed by the preload's observation of the
+bulk request: a typed request-error code (ECONNREFUSED,
+ECONNRESET, EPIPE, ETIMEDOUT, EAI_AGAIN, ENOTFOUND, ECONNABORTED, ENETUNREACH,
+EHOSTUNREACH, ENETRESET, ENETDOWN, EHOSTDOWN) at the bulk advisory endpoint, or
+an HTTP 5xx from that endpoint. Response-body/message/URL tokens never supply
+transport evidence. Invalid responses remain blocking even if npm later stalls;
+a timeout before any observed bulk request and mixed crash/outage exhaustion also
+remain blocking. Policy schema, duplicates and expiry are validated before any
+audit, independently of availability. The gate still audits the other lockfile,
+so an advisory there keeps blocking. On `pull_request` and `merge_group` an outage with no blocking
+finding annotates a bounded, redacted `::warning::` (lockfile, kind, attempts;
+no URLs, bodies, or tokens) and exits 0. On `push` (main), `schedule`,
+`workflow_dispatch`, and local runs the same outage fails closed with exit 1.
+Crashes, signal kills, HTTP 4xx (including 401/403), malformed bodies,
+unobserved transport, and a missing npm or preload always fail closed on every
+event; completed permanent failures never retry.
 Info/low/moderate findings do not block. Dependabot owns dependency upgrades;
 the gate never runs `npm audit fix`.
 
@@ -271,7 +306,14 @@ from TypeScript's module diagnostic. `assets/styles.css`, `public/styles.css`,
 `ci/a11y.mjs` are not formatted because existing regression tests assert exact stylesheet bytes,
 source-order substrings and single-line selector scoping. `ci/featured-proof/**` also retains its immutable,
 hash-verified proof inputs byte-for-byte. Their content, hashes and regression
-assertions remain unchanged. These formatter exemptions disable neither lint nor
+assertions remain unchanged. Biome 2.6 adds Markdown and YAML formatting; this
+repo adopts the YAML formatter, but Markdown (`**/*.md`) stays unformatted for
+now: the 2.6.2 Markdown formatter joins words around inline code in several
+docs, never reaches a fixed point on the retention-ledger table, and rewrites
+JSON fences that docs quote as exact machine output. Adopting it also keeps
+the published `content/privacy-policy-v*.md` texts byte-stable, as the
+privacy-history tests require. Revisit when upstream fixes those defects.
+These formatter exemptions disable neither lint nor
 typecheck. Lint exemptions are limited to `public/islands/**` and the hash-pinned
 `ci/featured-proof/fixtures/**`; `ci/a11y.mjs`, the other featured-proof files and the
 stylesheets are still linted.

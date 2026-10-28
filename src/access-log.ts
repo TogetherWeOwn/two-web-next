@@ -1,14 +1,9 @@
-// `member-access-log` middleware (W7, ports RecordMemberDataAccess): a route
-// that reads member data declares its subjects with `c.set("access", …)`; this
-// middleware writes ONE row per request after the handler and before the
-// response leaves. A read that cannot be recorded is not served: 503 under
-// enforce (the default), degrade-with-a-loud-log when MEMBER_ACCESS_LOG_ENFORCE
-// is "false". The admin guard (src/admin/guard.ts) carries the same contract
-// inline for the panel; this is the reusable form for member-facing routes.
-
-import type { Context, Next } from "hono";
-import type { Env } from "./env";
-import { databaseUnavailable } from "./errors";
+// Member-access audit primitives (W7, ports RecordMemberDataAccess). The
+// request-local declaration plus keyed read boundary in src/member-reads.ts
+// is the only production audit path since PR #145: a read that cannot be
+// recorded is never served, and there is no setting that changes that. The old
+// declare-subjects Hono middleware and its enforcement flag were retired —
+// production never serves unaudited, so no serve-unaudited page exists.
 
 export type AccessDecl = {
   resource: string;
@@ -46,14 +41,6 @@ export type AccessSink = (entry: AccessEntry) => Promise<boolean>;
  */
 export const MEMBER_ACCESS_AUDIT_TIMEOUT_MS = 5000;
 
-export function enforceOn(env: Env): boolean {
-  const raw = env.MEMBER_ACCESS_LOG_ENFORCE?.trim().toLowerCase();
-  if (raw === undefined || raw === "") return true;
-  return raw !== "false" && raw !== "0" && raw !== "no";
-}
-
-type Vars = { viewerId: string; access: AccessDecl };
-
 /**
  * Bound an audit write by MEMBER_ACCESS_AUDIT_TIMEOUT_MS. Late settlement is
  * inert: the sink is awaited exactly once, a late rejection is consumed here
@@ -76,43 +63,4 @@ export async function withAccessAuditDeadline<T>(pending: Promise<T>): Promise<T
   } finally {
     clearTimeout(timer);
   }
-}
-
-export function memberAccessLog(sink: (c: { env: Env }) => Promise<AccessSink | null>) {
-  return async (c: Context<{ Bindings: Env; Variables: Vars }>, next: Next) => {
-    await next();
-    if (c.res.status >= 400) return;
-    let decl: AccessDecl | undefined;
-    try {
-      decl = c.get("access");
-    } catch {
-      decl = undefined;
-    }
-    if (!decl) return;
-    const viewer = c.get("viewerId");
-    try {
-      const write = await sink(c);
-      if (!write) throw new Error("no access-log sink");
-      await withAccessAuditDeadline(
-        write({
-          viewerDiscordId: viewer,
-          viewerUserId: viewer,
-          resource: decl.resource,
-          action: decl.action,
-          subjectUserIds: decl.subjects,
-          route: decl.route,
-        }),
-      );
-    } catch (err) {
-      // Class name only: an error message can carry the failed INSERT's bindings.
-      console.error("Member data access could not be recorded; refusing to serve the read.", {
-        route: decl.route,
-        exception: (err as Error)?.constructor?.name ?? "unknown",
-      });
-      if (enforceOn(c.env)) {
-        c.res = await databaseUnavailable(c);
-        c.header("cache-control", "private, no-store");
-      }
-    }
-  };
 }

@@ -1,5 +1,5 @@
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
-import { test, expect } from "./fixtures";
+import { test, expect, memberStorageState, persistRotatedStorageState } from "./fixtures";
 import { loginQaMember } from "./qa-login";
 
 // Fresh member session per file: event pages rotate the bearer on read, so a
@@ -11,8 +11,13 @@ test.beforeAll(async () => {
   await loginQaMember();
 });
 
+// The next test creates a fresh context from disk; keep its bearer current.
+test.afterEach(async ({ context }) => {
+  await persistRotatedStorageState(context, memberStorageState);
+});
+
 // CI keyboard flow verbatim, against the staging QA member: 1100 ms spam
-// floor, Tab order Bio to Games to Timezone to Save, Enter submits.
+// floor, Tab order Bio to Games to Timezone to helper to Save, Enter submits.
 test("staging QA member edits and persists their profile using the keyboard", async ({ page }) => {
   await page.goto("/profile");
   await expect(page.getByRole("heading", { name: "QA Member", exact: true })).toBeVisible();
@@ -30,6 +35,10 @@ test("staging QA member edits and persists their profile using the keyboard", as
   await expect(page.getByLabel("Timezone", { exact: true })).toBeFocused();
   await page.keyboard.press("ControlOrMeta+A");
   await page.keyboard.type("Europe/London");
+  await page.keyboard.press("Tab");
+  await expect(
+    page.getByRole("button", { name: "Use this device's timezone", exact: true }),
+  ).toBeFocused();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "Save", exact: true })).toBeFocused();
   const saved = page.waitForResponse(

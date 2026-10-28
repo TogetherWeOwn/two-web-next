@@ -9,16 +9,24 @@
 // /events.json contract is untouched.
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
+import { containsControlCharacters } from "../admin/validation-shared";
+import { alertRequestError } from "../alerts";
 import { readCounts, type Counts } from "../counts";
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
+import { varyAccept } from "../errors";
+import { stagingRobots } from "../headers";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../events/reads";
-import { etagFor, publicReadGuard } from "../events/routes-shared";
+import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
+import { requestRoute } from "../request-log";
 import { JOIN_INTRO } from "../screens/join";
 import {
   API_PUBLIC_BOUNDS,
+  PUBLIC_API_GAME_MAX_LENGTH,
+  PUBLIC_DATA_ERROR_NEXT,
+  PUBLIC_DATA_INTERNAL_MESSAGE,
   PUBLIC_EVENT_STATUS,
   parsePublicEventId,
   type CommunitySnapshotDto,
@@ -30,12 +38,15 @@ import {
   type PublicEventId,
 } from "./contracts";
 import {
+  apiPublicCacheGeneration,
   apiPublicCacheKey,
+  findCachedClampTarget,
   readApiPublicCache,
   writeApiPublicCache,
   type ApiPublicCacheEntry,
 } from "./cache";
 import { getOpenApiDocument } from "./openapi";
+import { parseRetryAfterSeconds } from "../jobs/retry-delay";
 
 type Ctx = Context<{ Bindings: Env }>;
 
@@ -46,30 +57,73 @@ function apiError(
   c: Ctx,
   code: PublicDataErrorCode,
   message: string,
-  status: 422 | 404 | 503,
+  status: 422 | 404 | 500 | 503,
 ): Response {
-  const body: PublicDataErrorDto = { error: { code, message } };
+  const body: PublicDataErrorDto = {
+    error: {
+      code,
+      message,
+      request_id: c.get("requestId"),
+      next: PUBLIC_DATA_ERROR_NEXT[code],
+    },
+  };
   return c.json(body, status, { "cache-control": "no-store, private" });
 }
 
 /**
- * Shared admission for the read API: the same per-client fixed-window budget
- * as pages and feeds, before any event or database read. A 429 keeps the
- * shared Retry-After but speaks the new error envelope instead of the legacy
- * /events.json shape.
+ * Unexpected fault on an event read: alert once with the class fingerprint
+ * (the same privacy boundary as the global handler — class, never message)
+ * and answer the static `internal` envelope, never branded HTML, exception
+ * text, SQL or row data. Transport failures stay on the 503 path.
  */
-export async function admitted(c: Ctx): Promise<Response | null> {
+function internalFault(c: Ctx, err: unknown): Response {
+  alertRequestError(err, {
+    method: c.req.method,
+    route: requestRoute(c),
+    requestId: c.get("requestId"),
+  });
+  varyAccept(c);
+  return apiError(c, "internal", PUBLIC_DATA_INTERNAL_MESSAGE, 500);
+}
+
+/**
+ * Shared admission check for the read API: the same per-client fixed-window
+ * budget as pages and feeds, before any event or database read. Returns the
+ * validated Retry-After seconds when the budget is spent (usable upstream
+ * values pass through, absurd ones cap at 86400, absent/unparseable values
+ * fall back to 60), or null when the request is admitted. Stamps the
+ * validated value on the context header too, not just the per-response one:
+ * the guard chain already set a context-level Retry-After to the RAW upstream
+ * value, and on routes with middleware Hono merges those stale context
+ * headers over the returned response.
+ */
+export async function admissionRetryAfter(c: Ctx): Promise<number | null> {
   const limited = await publicReadGuard(c);
   if (!limited) return null;
-  const retryAfter = limited.headers.get("retry-after") ?? "60";
+  const retryAfterSeconds = parseRetryAfterSeconds(limited.headers.get("retry-after")) ?? 60;
+  c.header("retry-after", String(retryAfterSeconds));
+  return retryAfterSeconds;
+}
+
+/**
+ * Shared admission for the read API. A 429 speaks the error envelope instead
+ * of the legacy /events.json shape. The one validated value feeds both the
+ * message and the response header, so they can never disagree or echo raw
+ * upstream text.
+ */
+export async function admitted(c: Ctx): Promise<Response | null> {
+  const retryAfterSeconds = await admissionRetryAfter(c);
+  if (retryAfterSeconds === null) return null;
   const body: PublicDataErrorDto = {
     error: {
       code: "rate_limited",
-      message: `Too many requests. Try again in ${retryAfter} seconds.`,
+      message: `Too many requests. Try again in ${retryAfterSeconds} seconds.`,
+      request_id: c.get("requestId"),
+      next: PUBLIC_DATA_ERROR_NEXT.rate_limited,
     },
   };
   return c.json(body, 429, {
-    "retry-after": retryAfter,
+    "retry-after": String(retryAfterSeconds),
     "cache-control": "no-store, private",
   });
 }
@@ -90,6 +144,10 @@ export function serializeEvent(e: PublicApiEvent): PublicApiEventDto {
     location: e.location,
     capacity: e.capacity,
     going_count: e.goingCount,
+    // Attributable `going_count` can read a free seat a nameless row already
+    // holds, so the occupancy aggregate ships beside it for spots/full math.
+    // Both degrade to null (never 0) when the rollup is unavailable.
+    going_occupancy: e.goingOccupancy ?? e.goingCount,
     status: PUBLIC_EVENT_STATUS,
     rsvp_open: e.rsvpOpen,
     synced_to_discord: e.discordEventId !== null,
@@ -197,17 +255,38 @@ export function fitByteBudget(
   }
 }
 
-function cachedEntry(c: Ctx, entry: ApiPublicCacheEntry): Response {
-  if (c.req.header("if-none-match") === entry.headers.etag) {
-    return c.body(null, 304, {
-      etag: entry.headers.etag!,
-      "cache-control": entry.headers["cache-control"]!,
-    });
-  }
-  return c.body(entry.body, 200, entry.headers);
+/**
+ * Remaining TTL, rounded down: a hit served 59 s after the write tells the
+ * downstream cache `max-age=1`, never a fresh full window, so downstream
+ * freshness can never extend past the original expiry. A sub-second
+ * remainder — or a hit that crosses expiry between the cache read and this
+ * second clock sample — answers `max-age=0`: immediately stale, revalidate.
+ */
+function remainingMaxAge(expiresAt: number, now: number): number {
+  return Math.max(0, Math.floor((expiresAt - now) / 1000));
 }
 
-async function servePublicJson(c: Ctx, cacheKey: string, value: unknown): Promise<Response> {
+function cachedEntry(c: Ctx, entry: ApiPublicCacheEntry): Response {
+  const cacheControl = entry.headers["cache-control"]!.replace(
+    /max-age=\d+/,
+    `max-age=${remainingMaxAge(entry.expiresAt, Date.now())}`,
+  );
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), entry.headers.etag!)) {
+    return c.body(null, 304, {
+      etag: entry.headers.etag!,
+      "cache-control": cacheControl,
+    });
+  }
+  // Fresh object: the stored headers stay untouched for the next hit.
+  return c.body(entry.body, 200, { ...entry.headers, "cache-control": cacheControl });
+}
+
+async function servePublicJson(
+  c: Ctx,
+  cacheKey: string,
+  value: unknown,
+  expectedGeneration?: number,
+): Promise<Response> {
   const body = typeof value === "string" ? value : JSON.stringify(value);
   const etag = await etagFor(body);
   const headers = {
@@ -215,11 +294,43 @@ async function servePublicJson(c: Ctx, cacheKey: string, value: unknown): Promis
     "cache-control": PUBLIC_MAX_AGE,
     etag,
   };
-  writeApiPublicCache(cacheKey, { status: 200, headers, body });
-  if (c.req.header("if-none-match") === etag) {
-    return c.body(null, 304, { etag, "cache-control": PUBLIC_MAX_AGE });
+  const settled = writeApiPublicCache(
+    cacheKey,
+    { status: 200, headers, body },
+    Date.now(),
+    expectedGeneration,
+  );
+  // Overtaken by a retire: answer our own bytes, but never as reusable —
+  // a full max-age here would keep pre-mutation bytes fresh downstream.
+  if (!settled) headers["cache-control"] = "public, max-age=0, must-revalidate";
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
+    return c.body(null, 304, { etag, "cache-control": headers["cache-control"] });
   }
   return c.body(body, 200, headers);
+}
+
+/**
+ * Invalid and unknown games share the canonical empty page, but never occupy
+ * per-input entries in the shared 64-entry cache. Downstream caching and
+ * ETag/304 still apply, unless retirement overtook a database-backed read.
+ */
+async function emptyEventCollection(c: Ctx, expectedGeneration?: number): Promise<Response> {
+  const body = JSON.stringify(
+    serializeEventCollection([], 0, 1, API_PUBLIC_BOUNDS.defaultPageSize),
+  );
+  const etag = await etagFor(body);
+  const cacheControl =
+    expectedGeneration !== undefined && expectedGeneration !== apiPublicCacheGeneration()
+      ? "public, max-age=0, must-revalidate"
+      : PUBLIC_MAX_AGE;
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
+    return c.body(null, 304, { etag, "cache-control": cacheControl });
+  }
+  return c.body(body, 200, {
+    "content-type": "application/json; charset=UTF-8",
+    "cache-control": cacheControl,
+    etag,
+  });
 }
 
 function parseLimit(raw: string): number {
@@ -228,43 +339,118 @@ function parseLimit(raw: string): number {
     : API_PUBLIC_BOUNDS.defaultPageSize;
 }
 
+/**
+ * Raw page with the documented ceiling applied before any key or offset is
+ * built. Missing values, values without an integer prefix and sub-1 values
+ * fall back to 1 (never a 422); huge or unsafe integers cap at maxPage so the
+ * offset stays a safe integer. Lenient `parseInt` parsing is preserved:
+ * "2abc" and "2.9" still read as 2, with optional sign and leading whitespace.
+ */
+function parsePage(raw: string): number {
+  const n = Number.parseInt(raw, 10);
+  if (Number.isNaN(n) || n < 1) return 1;
+  if (!Number.isSafeInteger(n) || n > API_PUBLIC_BOUNDS.maxPage) return API_PUBLIC_BOUNDS.maxPage;
+  return n;
+}
+
 export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
   app.get("/api/public/events", async (c) => {
     const refused = await admitted(c);
     if (refused) return refused;
+    // Optional `game` facet: absent reads unfiltered (byte-identical CONTROL);
+    // present trims and bounds here, matches case-insensitively exact in the
+    // reader as a bound parameter. Present-but-blank, oversized and unknown
+    // degrade to the empty page, never a 422 and never unfiltered. The raw
+    // value is never reflected in a body, message or header.
+    const rawGame = c.req.query("game");
+    let game: string | null = null;
+    let gameKey: string | null = null;
+    if (rawGame !== undefined) {
+      const trimmed = rawGame.trim();
+      if (
+        trimmed === "" ||
+        [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH ||
+        containsControlCharacters(trimmed)
+      ) {
+        return emptyEventCollection(c);
+      }
+      game = trimmed;
+      // Cache by the lowercased form so `Chess` and `chess` share one entry;
+      // the reader lowercases again for the SQL binding.
+      gameKey = trimmed.toLowerCase();
+    }
     const limit = parseLimit(c.req.query("per_page") ?? c.req.query("limit") ?? "");
-    const page = Math.max(1, Number.parseInt(c.req.query("page") ?? "1", 10) || 1);
-    const key = apiPublicCacheKey("GET", "/api/public/events", `?limit=${limit}&page=${page}`);
+    const page = parsePage(c.req.query("page") ?? "1");
+    const canonicalQuery = gameKey
+      ? `?limit=${limit}&page=${page}&game=${encodeURIComponent(gameKey)}`
+      : `?limit=${limit}&page=${page}`;
+    const key = apiPublicCacheKey("GET", "/api/public/events", canonicalQuery);
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
+    // Out-of-range replay: only an entry at its own last page proves a clamp,
+    // so never combine metadata and bytes from different cached snapshots.
+    // The game isolates clamps: each game's past-the-end page replays only its
+    // own last page.
+    const clampTarget = findCachedClampTarget(limit, page, gameKey);
+    if (clampTarget !== null && clampTarget !== page) {
+      const clampedQuery = gameKey
+        ? `?limit=${limit}&page=${clampTarget}&game=${encodeURIComponent(gameKey)}`
+        : `?limit=${limit}&page=${clampTarget}`;
+      const clampedHit = readApiPublicCache(
+        apiPublicCacheKey("GET", "/api/public/events", clampedQuery),
+      );
+      if (clampedHit) return cachedEntry(c, clampedHit);
+    }
+    // Fence: a retire that lands while this read is in flight refuses the
+    // settle below, so pre-retire bytes never refill the retired entry.
+    const generation = apiPublicCacheGeneration();
     const db = await dbFor(c);
     if (!db) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    // A refused socket reads as the 503 envelope; programming errors stay 500s.
-    const listed = await listPublicApiEvents(db, {
-      limit,
-      offset: (page - 1) * limit,
-    }).catch((err: unknown) => {
-      if (!isDatabaseUnavailable(err)) throw err;
-      return null;
-    });
-    if (!listed) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    const { rows, total, page: clamped } = listed;
-    const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
+    // A refused socket reads as the 503 envelope; query, serializer and
+    // budget faults answer the static 500 envelope, never the branded page.
     let body: string;
+    let clamped: number = page;
     try {
-      body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
-        ...payload,
-        data: trimmed,
-      }));
+      const listed = await listPublicApiEvents(
+        db,
+        game === null
+          ? { limit, offset: (page - 1) * limit }
+          : { limit, offset: (page - 1) * limit, game },
+      );
+      if (!listed) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+      clamped = listed.page;
+      const { rows, total } = listed;
+      // A filtered total of zero answers the canonical default empty page,
+      // ignoring the requested paging: unknown and hostile games degrade to
+      // one representation, never a 422 and never unfiltered rows.
+      if (game !== null && total === 0) return await emptyEventCollection(c, generation);
+      const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
+      try {
+        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
+          ...payload,
+          data: trimmed,
+        }));
+      } catch (err) {
+        if (err instanceof EventByteCapExceededError)
+          return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+        throw err;
+      }
     } catch (err) {
-      if (err instanceof EventByteCapExceededError)
+      if (isDatabaseUnavailable(err))
         return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-      throw err;
+      return internalFault(c, err);
     }
     // Final guard: an oversized success is never cached or served.
     if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
       return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    return servePublicJson(c, key, body);
+    // Store under the clamped page the database answered, never the raw alias:
+    // N past-the-end pages occupy one entry and cannot evict page 1. Filtered
+    // entries carry the game so games never share bytes.
+    const storeQuery = gameKey
+      ? `?limit=${limit}&page=${clamped}&game=${encodeURIComponent(gameKey)}`
+      : `?limit=${limit}&page=${clamped}`;
+    const storeKey = apiPublicCacheKey("GET", "/api/public/events", storeQuery);
+    return servePublicJson(c, storeKey, body, generation);
   });
 
   app.get("/api/public/events/:key", async (c) => {
@@ -277,29 +463,34 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     const key = apiPublicCacheKey("GET", c.req.path, "");
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
+    // Fence: same as the collection route — a retire that lands mid-read
+    // refuses the settle, so a deferred 200 never resurrects a retired entry.
+    const generation = apiPublicCacheGeneration();
     const db = await dbFor(c);
     if (!db) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    let row;
-    try {
-      row = await getPublicApiEvent(db, raw);
-    } catch (err) {
-      if (!isDatabaseUnavailable(err)) throw err;
-      return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    }
-    if (!row) return apiError(c, "not_found", "No published event with that key.", 404);
-    const [dto] = [serializeEvent(row)];
+    // A refused socket reads as the 503 envelope; query, serializer and
+    // budget faults answer the static 500 envelope, never the branded page.
     let body: string;
     try {
-      body = fitByteBudget([dto!], API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => trimmed[0]);
+      const row = await getPublicApiEvent(db, raw);
+      if (!row) return apiError(c, "not_found", "No published event with that key.", 404);
+      const [dto] = [serializeEvent(row)];
+      try {
+        body = fitByteBudget([dto!], API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => trimmed[0]);
+      } catch (err) {
+        if (err instanceof EventByteCapExceededError)
+          return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+        throw err;
+      }
     } catch (err) {
-      if (err instanceof EventByteCapExceededError)
+      if (isDatabaseUnavailable(err))
         return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-      throw err;
+      return internalFault(c, err);
     }
     // Final guard: an oversized success is never cached or served.
     if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
       return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
-    return servePublicJson(c, key, body);
+    return servePublicJson(c, key, body, generation);
   });
 
   app.get("/api/public/community", async (c) => {
@@ -325,8 +516,14 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
 
   // Static discovery document, database-free like robots.txt: no admission,
   // no session, unchanged bytes per APP_URL with a long edge TTL.
-  app.get("/openapi.json", (c) => {
+  app.get("/openapi.json", async (c) => {
+    const body = JSON.stringify(getOpenApiDocument(c.env.APP_URL));
+    const etag = await etagFor(body);
     c.header("cache-control", "public, max-age=3600");
-    return c.json(getOpenApiDocument(c.env.APP_URL));
+    c.header("etag", etag);
+    const robots = stagingRobots(c);
+    if (robots) c.header("x-robots-tag", robots);
+    if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) return c.body(null, 304);
+    return c.body(body, 200, { "content-type": "application/json" });
   });
 }

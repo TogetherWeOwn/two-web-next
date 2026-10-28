@@ -1,7 +1,7 @@
 name: backup-restore-proof
 
 # Full dump-to-restore proof (docs/backup-restore-proof.md) on a disposable
-# PostgreSQL 18 service. The hermetic selftests in the required `check` job
+# PostgreSQL 18 service. The hermetic selftests in the `check` job
 # (ci/backup-restore-proof/selftest.py) prove fixtures with fake clients; this
 # workflow proves a real pg_dump archive restores with real pg_restore.
 # The Postgres service is disposable per job; the proof script itself refuses
@@ -25,7 +25,7 @@ on:
   # Nightly full proof: schedule events run unconditionally (the scope step
   # only fast-passes pull requests), catching client/server image drift.
   schedule:
-    - cron: '37 2 * * *'
+    - cron: "37 2 * * *"
   workflow_dispatch:
 
 permissions:

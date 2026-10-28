@@ -155,6 +155,13 @@ export function pageShellFixture(status = "published") {
       row[key] instanceof Date ? row[key].toISOString() : row[key],
     );
   const db = drizzle(async (sql, params) => {
+    if (
+      sql ===
+        "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)" &&
+      params[0] === "2000ms" &&
+      params[1] === "2000ms"
+    )
+      return { rows: [] };
     if (sql.includes('from "users"')) {
       return {
         rows: params.includes(MEMBER_ID)
@@ -234,6 +241,7 @@ export function pageShellFixture(status = "published") {
       };
     if (
       sql.includes('from "rsvps"') ||
+      sql.includes("from rsvps") ||
       sql.includes('from "event_search_log"') ||
       sql.startsWith('insert into "member_data_access_logs"') ||
       sql.startsWith("SET LOCAL")
@@ -241,10 +249,14 @@ export function pageShellFixture(status = "published") {
       return { rows: [] };
     throw new Error(`Unexpected page-shell fixture query: ${sql}`);
   });
-  // pg-proxy does not provide transactions; this test double keeps analytics reads local.
-  Object.assign(db, {
-    transaction: async (fn: (tx: Db) => Promise<unknown>) => fn(db as unknown as Db),
-  });
+  // pg-proxy has no transactions. Shim its session, not only db.transaction,
+  // so the member-read observer's cloned adapter keeps inventory reads local.
+  const session = (
+    db as unknown as {
+      session: { transaction: (fn: (tx: Db) => Promise<unknown>) => Promise<unknown> };
+    }
+  ).session;
+  session.transaction = async (fn) => fn(db as unknown as Db);
   const sessions = createMemorySessionStore();
   const env = {
     APP_URL: "https://next.example.test",

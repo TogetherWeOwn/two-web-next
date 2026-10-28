@@ -18,6 +18,9 @@ There are two different journeys:
   returns to the homepage. A validated same-site `next` path can instead take
   them back to another page without a homepage notice. Failures render a
   recovery page with **Try again** and **Join with an invite link instead**.
+  If the approval fails to start (a store outage at `/join/discord`), the
+  journey bounces back to `/join` with a "The Discord approval failed to
+  start — try again below." banner above the unchanged one-click button.
 - **Sign-in:** `/auth/discord` → Discord approval →
   `/auth/discord/callback` → homepage. This also attempts to add them to the
   server, but an auto-join failure does not prevent website sign-in.
@@ -31,19 +34,81 @@ mounted. Old `/auth/discord/redirect` links now redirect to a fresh
 
 ## Homepage notices
 
-These are the four recognized `n` notices. The text is a useful clue, not proof
-of membership or authentication: someone can type a notice query themselves.
+The home page recognizes exactly these six `n` notices. The query only selects
+which copy to display; anyone can type it. It does not prove that a callback ran,
+that sign-in succeeded, or that the person is a Discord member.
 
 | Notice | Exact text | What to tell the member |
 |---|---|---|
-| `joined` | "You're in. Welcome to the TWO Discord." | Open Discord and finish its rules/membership screening before posting. |
-| `already_member` | "Signed in. You're already in the TWO Discord." | Open the existing server; if posting is locked, check the rules screen. |
-| `join_failed` | "Signed in, but we couldn't add you to the Discord automatically. Use the invite link below." | Website sign-in succeeded, but automatic server entry failed. Use **Join with an invite link instead** or `/discord`, finish screening, then sign out and sign in again to refresh website membership. |
-| `signin_failed` | "Discord sign-in didn't complete. Please try again." | Start a fresh sign-in at `/auth/discord`. If it fails again, use `/discord` for server entry and report the repeated sign-in failure. |
+| `joined` | "You're in. Welcome to the TWO Discord." | On a real successful callback, automatic add reported a new member. Open Discord and finish its rules/membership screening before posting. The query itself is not a membership check. |
+| `already_member` | "Signed in. You're already in the TWO Discord." | On a real successful callback, Discord reported an existing member. Open the server and finish screening if needed; the notice is not a live membership check. |
+| `join_failed` | "Signed in, but we couldn't add you to the Discord automatically. Use the invite link below." | This sign-in flow could not add the person automatically and creates a non-member session. Use **Join with an invite link instead** or `/discord`, then finish Discord screening. Do not say membership was established. |
+| `signin_failed` | "Discord sign-in didn't complete. Please try again." | This is the generic sign-in failure, not a diagnosis of cancellation or a Discord outage. Start a fresh sign-in at `/auth/discord`; if it repeats, report the failure without sharing callback parameters. |
+| `signin_denied` | "You cancelled the Discord sign-in, so we didn't sign you in. Nothing changed — try again whenever you like." | This is the cancelled-consent outcome, distinct from a generic failure or provider outage. If the person wants to continue, follow the page's **Try signing in again** link to a fresh `/auth/discord` journey. The query alone does not prove that consent was cancelled. |
+| `signin_unavailable` | "Discord did not answer just now, so we could not sign you in. This is on Discord, not you — please try again in a minute." | This is the provider-unavailable outcome during code exchange or user lookup. Wait a minute and try a fresh sign-in; do not infer an outage from the generic `signin_failed` copy. |
 
-`join_failed` is the **sign-in** flow's result. The one-click join flow shows
-its own recovery page instead and does **not** issue a new signed-in session
+The browser shows only the site's own wording; it does not expose Discord's
+`error_description`. Do not treat a notice name or sentence as evidence of
+authentication, current membership, or the cause of a failure. The three
+sign-in failure notices (`signin_failed`, `signin_denied`,
+`signin_unavailable`) each render a **Try signing in again** link to a fresh
+`/auth/discord` journey; `join_failed` instead offers the invite link.
+
+`join_failed` belongs to the **sign-in** flow. A failed automatic add still
+issues a non-member session, so the notice does not mean the person joined.
+The one-click `/join` flow has its own recovery page and does **not** issue a new signed-in session
 when automatic entry fails. Do not promise that a recovery page signed them in.
+
+## Sign-in returns and failed auto-join
+
+When sign-in and automatic Discord entry succeed, the destination order is:
+an explicit safe `?next=` on the sign-in link, then the safe destination
+recorded when an unauthenticated visitor was bounced from a GET/HEAD page, then
+the callback's default landing. Returns are same-site paths: a value must start
+with one `/` and cannot be an absolute or protocol-relative URL, a backslash,
+whitespace, a scheme, control characters, or an oversized value. The saved
+destination values are signed and checked again when used. An admitted callback
+consumes the saved return journey; a stray callback does not, so a later valid
+callback can still use it. A missing or rejected value is ignored and the next
+available option is considered.
+
+If automatic Discord entry fails, the callback has a non-member session and
+lands at `/?n=join_failed` instead of sending the person to a protected page
+that would return 403 and hide the failed-auto-join explanation. That generic
+403 still offers an invite link, but not the reason automatic entry failed.
+When a safe return destination was recorded, it is kept as the intended
+destination for a plain retry. If this followed an expired write, its recovery notice also stays
+pending. A successful retry can return to the original safe page and show the
+one-shot resubmit notice; the failed auto-join or its notice does not prove
+membership. A bounced write goes to write recovery, never back into a resubmit.
+
+## Expired-write recovery
+
+When a guest or expired session tries to submit a write, the write is refused.
+A JSON request stays a **401** and includes a safe `recovery` URL; it does not
+silently redirect an API client through OAuth. Exception: event JSON writes from
+an unknown guest (no cookie or an invalid bearer) return **401** without
+`recovery`; a recognized expired bearer still gets the recovery URL.
+A native form submission gets a
+**303** to `/auth/recover?next=...`, where `next` is a safe GET destination —
+a same-origin safe Referer when available, otherwise the route's GET fallback.
+The write URL is never used as the return destination.
+
+The recovery page says: **“Your earlier changes were not saved. Sign in again,
+then review and submit them when you are ready.”** Follow **Log in with Discord**,
+then return to the page and review the values before explicitly submitting
+again. The earlier request body was not saved or replayed, and no write was
+performed. Do not promise draft restoration; re-enter anything that is missing
+and verify the form before resubmitting.
+
+After sign-in and successful automatic entry, the callback returns to the safe
+destination. The first eligible visible page shows a one-shot banner: **“You
+signed in again. Your earlier changes were not saved. Review and submit them
+again.”** The banner is a reminder, not a restored draft. If auto-join fails
+first, sign-in can still succeed with a non-member session, but the browser
+lands on `join_failed` while the recovery notice and safe retry destination
+remain pending. A later successful retry can return to the original page and
+display the banner.
 
 ## One-click join recovery pages
 
@@ -56,15 +121,35 @@ invite fallback. Do not reload, bookmark, share or replay `/join/callback`.
 | **Join didn't complete** | "Discord didn't complete the approval. Try again, or use the invite link below." | Discord returned another approval error. Try once afresh; repeated or widespread failures go to engineering. |
 | **Join link expired** | "That join link expired. Approvals last ten minutes — try again below." | Missing, mismatched or expired state/code; often a stale callback or lost journey cookie. Start again in the same browser and approve promptly. |
 | **Discord is unreachable** | "We couldn't reach Discord to complete the join. Try again in a moment, or use the invite link below." | Token exchange or user lookup failed; this recovery page returns 503. It does not establish the root cause. Try once later or use the invite. |
+| **Discord throttled the approval** | "Discord is rate-limiting approvals right now. Wait a moment, then try again below, or use the invite link." | Token exchange or user lookup was throttled (429); this recovery page returns 503 with `Retry-After` when Discord sent a usable backoff. Wait, then try once afresh or use the invite. |
 | **We couldn't add you automatically** | "You're nearly there — use the invite link below to join the server directly." | The automatic add was refused or failed. Use the invite; do not keep replaying the approval. |
+| **Discord throttled the automatic add** | "Discord is rate-limiting automatic adds right now. Wait a moment, then try again below, or use the invite link." | The automatic add was throttled (429); this recovery page returns 503 with `Retry-After` when Discord sent a usable backoff. Wait, then start a fresh journey or use the invite. |
 
 An expired Discord authorization code can also produce **Discord is
 unreachable**; Next does not expose a separate `invalid_grant` message.
-A 200 response on another recovery page is not a successful join.
+A 200 response on another recovery page is not a successful join: it does
+not mean joined and does not sign in.
 
-**Slow down a little** (429) means the request budget was exceeded. Wait for
-`Retry-After` if available, otherwise at least a minute, before starting a
-fresh journey. Do not repeatedly click, refresh or try to evade the limit.
+Throttling looks different depending on where it happened:
+
+**Slow down a little** is the website's own 429 page. A website 429 is local
+admission: the join budget was exceeded before Discord was contacted. It
+carries `Retry-After` from the website, records no join-attempt row, and
+never implies a session.
+
+A Discord automatic-add backoff renders the 503
+**Discord throttled the automatic add** recovery and records the distinct
+`rate_limited` attempt outcome. It carries the provider's `Retry-After`
+when the provider sent a usable backoff.
+
+A Discord 429 during token exchange renders the 503
+**Discord throttled the approval** recovery and records an `error` attempt.
+It carries `Retry-After` when the provider sent a usable backoff.
+
+In all three cases, wait for `Retry-After` if present (otherwise at least a
+minute), then start a fresh journey at `/join/discord` or use the invite
+link below. Do not repeatedly click, refresh, replay `/join/callback`, or
+try to evade the limit.
 
 ## Still locked out after a successful join
 
@@ -106,17 +191,28 @@ The join attempt outcomes are **not** the homepage notice names:
 | `denied` | Discord returned an approval error, including cancelled consent. |
 | `error` | State/code validation or token exchange/user lookup failed. |
 | `degraded` | Automatic server entry failed or was refused after identity lookup. |
+| `rate_limited` | Discord rate-limited the automatic add. The callback renders the 503 **Discord throttled the automatic add** recovery (with `Retry-After` when the provider sent a usable backoff). Wait, then start a fresh journey or use the invite. |
 
 The table is not a complete sign-in history: `/auth/discord/callback` does not
-write join-attempt rows, throttled requests do not reach the recorder, and a
-missing join store can leave no row. The current live add-member call also
-leaves Request ID empty; do not promise a trace ID or infer success from an
-absent row. List and detail reads attribute the returned rows' recorded Discord
-IDs directly, excluding the viewer, without requiring a current users row or
+write join-attempt rows, website-throttled (429 admission) requests do not reach
+the recorder, and a missing join store can leave no row. A Discord
+automatic-add backoff (`rate_limited`) is recorded; a local admission refusal
+is not. Which rows carry a Request ID depends on the outcome. The early
+`denied` and `error` rows record the website's correlation ID for that
+callback request: the ID the middleware stores in the request context, echoes
+as the `x-request-id` response header, and logs as `http.request.request_id`,
+so those rows join to request logs. The later add-member rows (`added`,
+`already_member`, `degraded`, `rate_limited`) instead carry the live adapter's
+`done.requestId`, which the production live adapter returns as null, so
+Request ID stays empty there. Not every error path records a row, and a
+callback without middleware context can still record null; do not promise a
+trace ID or infer success from an absent row. List and detail reads attribute
+the returned rows' recorded Discord IDs directly, excluding the viewer,
+without requiring a current users row or
 membership flag. Missing, invalid or partial member keys refuse the contents;
 they are not silently omitted from attribution. Empty lists and self-only reads
-create no access row. Audit-write failures always refuse protected contents,
-even with the legacy enforcement setting disabled. Any reported audit failure
+create no access row. Audit-write failures always refuse protected contents;
+no setting changes that. Any reported audit failure
 or 503 on member data is a stop condition, not a reason to find another access path.
 
 Escalate to the site maintainers/engineering with:
@@ -133,16 +229,39 @@ at once, an unusable invite, or sign-in failing for everyone need prompt
 engineering attention. Do not promise a fix time, change roles to bypass checks,
 reset credentials, edit database rows, deploy or restart anything.
 
+## Source-to-guide checklist
+
+- [x] **Notices:** [shared notice copy](../src/home-copy.ts) supplies all six exact
+  values; [auth routes](../src/auth/routes.ts) distinguish generic failure,
+  cancelled consent and provider unavailability. Mapped in
+  [Homepage notices](#homepage-notices), including the warning that `?n=` is
+  not proof of authentication or membership.
+- [x] **Return precedence:** [return journey](../src/return-journey.ts) selects
+  explicit `next`, then the gate-recorded intended page, then the caller's
+  default; [auth routes](../src/auth/routes.ts) preserve the safe retry target
+  after failed auto-join. Mapped in
+  [Sign-in returns and failed auto-join](#sign-in-returns-and-failed-auto-join).
+- [x] **Expired writes:** [write recovery](../src/write-recovery.tsx) defines
+  JSON 401 versus native 303, safe GET destinations and the recovery copy;
+  [auth routes](../src/auth/routes.ts) carry the notice through a failed
+  auto-join retry. Mapped in
+  [Expired-write recovery](#expired-write-recovery).
+
 ## Source references
 
 This guide describes the implementation, not a live staging certification:
 
 - [Join routes](../src/join/route.ts): journey cookies, ten-minute expiry,
   recovery wording, attempt recording and successful-session issuance.
-- [Join service](../src/join/service.ts): outcomes, safe return paths, throttling
-  and the direct Discord add-member call.
-- [Auth routes](../src/auth/routes.ts): `/auth/discord`, its callback and
-  logout; [app routes](../src/index.tsx): `/discord`;
+- [Join service](../src/join/service.ts): outcomes, safe return validation,
+  throttling and the direct Discord add-member call.
+- [Homepage notice copy](../src/home-copy.ts): the six recognized notices.
+- [Return journey](../src/return-journey.ts): signed explicit and intended
+  destinations and their precedence.
+- [Write recovery](../src/write-recovery.tsx): expired-write redirects,
+  recovery copy and one-shot notice behavior.
+- [Auth routes](../src/auth/routes.ts): `/auth/discord`, its callback, failed
+  auto-join retry and logout; [app routes](../src/index.tsx): `/discord`;
   [page text](../src/pages.tsx): notices, join/recovery pages and FAQ.
 - [Role lookup](../src/roles.ts) and [rate-limit response](../src/error-responses.tsx).
 - [Admin routes](../src/admin/routes.tsx), [admin pages](../src/admin/pages.tsx),

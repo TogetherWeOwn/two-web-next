@@ -28,17 +28,24 @@
 // no event delete anywhere on this resource.
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
+import { alertRequestError } from "../alerts";
+import { eventKeyAllowed } from "../events/keys";
 import {
   parseRosterQuery,
   ROSTER_PAGE_SIZE,
+  ROSTER_STATUSES,
   rosterEmptyText,
+  rosterRangeText,
+  rosterRecovery,
   rosterUrl,
   type ListParams,
   type RosterQuery,
   type RosterSort,
+  type RosterStatus,
   type SortOrder,
 } from "./table-list";
-import { utcToWall } from "./validation-wall-time";
+import { isKnownTimezone, utcToWall } from "./validation-wall-time";
+import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -73,16 +80,30 @@ export type KitEventEditSortHeader = {
   marker: string;
 };
 
+/** One native answer-facet option, mirroring the Hono roster select exactly. */
+export type KitEventEditStatusOption = {
+  value: RosterStatus;
+  label: string;
+  selected: boolean;
+};
+
 export type KitEventEditRosterView = {
   total: number;
   query: RosterQuery;
   entries: KitEventEditRosterEntry[];
   rangeStart: number;
   rangeEnd: number;
+  /** Shared Hono/Kit range copy: matching responses, never seats or attendance. */
+  rangeText: string;
+  /** Native answer-facet options in Hono order: All first, then each status. */
+  statusOptions: KitEventEditStatusOption[];
   hasPrev: boolean;
   hasNext: boolean;
   prevUrl: string | null;
   nextUrl: string | null;
+  /** Scoped recovery, exactly like the Hono section; null while rows render. */
+  clearUrl: string | null;
+  firstUrl: string | null;
   /** Past-end and zero-row copy, exactly like the Hono section; null when rows render. */
   emptyText: string | null;
   sortHeaders: KitEventEditSortHeader[];
@@ -105,6 +126,10 @@ export type KitEventEditView = {
   seriesNote: string | null;
   endsAt: string;
   roster: KitEventEditRosterView;
+  /** Pre-rendered pause-review HTML when rsvpAction is rsvp-pause, else null;
+   * the page injects it via {@html} so the client bundle carries no review
+   * strings or disclosure markup (client gzip ceiling). */
+  pauseReviewHtml: string | null;
 };
 
 export type KitEventEditOutcome =
@@ -137,6 +162,8 @@ export type KitEventEditRosterRow = {
 };
 
 export type KitEventEditDeps = {
+  /** The production load always supplies APP_URL; fixture-only callers may omit it. */
+  appUrl?: string;
   /** Null database answers the Hono dbOr503 503; the guard owns the rest. */
   db: Db | null;
   get: (db: Db, key: string) => Promise<KitEventEditRow | null>;
@@ -170,7 +197,9 @@ export async function resolveKitEventEdit(
   rawQuery: ListParams,
   deps: KitEventEditDeps,
 ): Promise<KitEventEditOutcome> {
-  if (!rawKey) return { kind: "notFound" };
+  if (!rawKey || (deps.appUrl !== undefined && !eventKeyAllowed(rawKey, deps.appUrl))) {
+    return { kind: "notFound" };
+  }
   if (!deps.db) return { kind: "unavailable" };
   let row: KitEventEditRow | null;
   try {
@@ -179,8 +208,11 @@ export async function resolveKitEventEdit(
     // A classified outage answers the shared 503 (the Hono guard's
     // memberReadBoundary turns the read's rethrown outage into the
     // databaseUnavailable envelope; SvelteKit would otherwise render its 500
-    // error page for the uncaught rejection). Anything else still throws.
+    // error page for the uncaught rejection). A code bug emits the leak-free
+    // error.alert diagnostic first so it never looks like a downstream
+    // outage, mirroring src/admin/kit-activity-log.ts, then still throws.
     if (isDatabaseUnavailable(err)) return { kind: "unavailable" };
+    alertRequestError(err, { method: "GET", route: "/admin/events/:key" });
     throw err;
   }
   if (!row) return { kind: "notFound" };
@@ -189,7 +221,10 @@ export async function resolveKitEventEdit(
   try {
     roster = await deps.list(deps.db, row.eventKey, query);
   } catch (err) {
+    // Same stable route as the get leg above: one fingerprint per load, so
+    // the 5-minute mute dedupes repeats across both legs.
     if (isDatabaseUnavailable(err)) return { kind: "unavailable" };
+    alertRequestError(err, { method: "GET", route: "/admin/events/:key" });
     throw err;
   }
   const now = deps.now ?? new Date();
@@ -202,6 +237,18 @@ export async function resolveKitEventEdit(
   const rangeEnd = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + entries.length : 0;
   const hasPrev = query.page > 1;
   const hasNext = query.page * ROSTER_PAGE_SIZE < roster.total;
+  const endFinite = Number.isFinite(row.endsAt.getTime());
+  const rsvpAction: "rsvp-pause" | "rsvp-reopen" | null =
+    row.status === "published" && endFinite && row.endsAt > now
+      ? row.rsvpOpen
+        ? "rsvp-pause"
+        : "rsvp-reopen"
+      : null;
+  const recovery = rosterRecovery(row.eventKey, query, entries.length, roster.total);
+  // Same guard as the Hono edit fill: a corrupt zone or unrenderable instant
+  // stays visible for correction but is never formatted.
+  const knownTimezone = isKnownTimezone(row.timezone);
+  const startFinite = Number.isFinite(row.startsAt.getTime());
   return {
     kind: "ok",
     view: {
@@ -214,8 +261,8 @@ export async function resolveKitEventEdit(
         description: row.description ?? "",
         // Wall text in the row's zone — what the moderator typed is what they
         // see; the stored instant is preserved by the Hono UTC carriers.
-        starts_at: utcToWall(row.startsAt, row.timezone),
-        ends_at: utcToWall(row.endsAt, row.timezone),
+        starts_at: knownTimezone && startFinite ? utcToWall(row.startsAt, row.timezone) : "",
+        ends_at: knownTimezone && endFinite ? utcToWall(row.endsAt, row.timezone) : "",
         timezone: row.timezone,
         location: row.location ?? "",
         capacity: row.capacity === null ? "" : String(row.capacity),
@@ -225,26 +272,29 @@ export async function resolveKitEventEdit(
       isDraft: false,
       showPublish: row.status === "draft",
       showCancel: row.status === "draft" || row.status === "published",
-      rsvpAction:
-        row.status === "published" && row.endsAt > now
-          ? row.rsvpOpen
-            ? "rsvp-pause"
-            : "rsvp-reopen"
-          : null,
+      rsvpAction,
       seriesNote: row.recurrenceFrequency
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
-      endsAt: row.endsAt.toISOString(),
+      endsAt: endFinite ? row.endsAt.toISOString() : "",
       roster: {
         total: roster.total,
         query,
         entries,
         rangeStart,
         rangeEnd,
+        rangeText: rosterRangeText(rangeStart, rangeEnd, roster.total),
+        statusOptions: ROSTER_STATUSES.map((o) => ({
+          value: o.value,
+          label: o.label,
+          selected: o.value === query.status,
+        })),
         hasPrev,
         hasNext,
         prevUrl: hasPrev ? rosterUrl(row.eventKey, query, { page: query.page - 1 }) : null,
         nextUrl: hasNext ? rosterUrl(row.eventKey, query, { page: query.page + 1 }) : null,
+        clearUrl: recovery.clearUrl,
+        firstUrl: recovery.firstUrl,
         emptyText:
           entries.length === 0
             ? roster.total > 0
@@ -258,6 +308,8 @@ export async function resolveKitEventEdit(
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
       },
+      pauseReviewHtml:
+        rsvpAction === "rsvp-pause" ? renderRsvpPauseReviewHtml(row.title, row.eventKey) : null,
     },
   };
 }

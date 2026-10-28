@@ -392,7 +392,8 @@ describe("profile JSON 422 request_id", () => {
     expect(res.headers.get("x-request-id")).toBe(RAY);
     const text = await res.text();
     expect(JSON.parse(text)).toEqual({
-      errors: { timezone: TIMEZONE_ERROR },
+      error: "invalid",
+      fields: { timezone: TIMEZONE_ERROR },
       request_id: RAY,
     });
     expect(loggedRequestIds(vi.mocked(console.log))).toContain(RAY);
@@ -413,7 +414,8 @@ describe("profile JSON 422 request_id", () => {
     expect(res.headers.get("content-type")).toContain("application/json");
     const text = await res.text();
     expect(JSON.parse(text)).toEqual({
-      errors: { timezone: TIMEZONE_ERROR },
+      error: "invalid",
+      fields: { timezone: TIMEZONE_ERROR },
       request_id: RAY,
     });
     expectNoLeak(text, [token, SESSION_SECRET, PROFILE_ID, "alice"]);
@@ -429,7 +431,8 @@ describe("profile JSON 422 request_id", () => {
     );
     expect(res.status).toBe(422);
     expect(await res.json()).toEqual({
-      errors: { timezone: TIMEZONE_ERROR },
+      error: "invalid",
+      fields: { timezone: TIMEZONE_ERROR },
       request_id: RAY,
     });
     expect(save).not.toHaveBeenCalled();
@@ -440,11 +443,11 @@ describe("profile JSON 422 request_id", () => {
     const res = await json({ bio: "Updated", timezone: "UTC" });
     expect(res.status).toBe(422);
     const body = (await res.json()) as {
-      errors: Record<string, string>;
+      fields: Record<string, string>;
       request_id?: string;
     };
-    expect(Object.keys(body).sort()).toEqual(["errors", "request_id"]);
-    expect(body.errors.games).toBeTruthy();
+    expect(Object.keys(body).sort()).toEqual(["error", "fields", "request_id"]);
+    expect(body.fields.games).toBeTruthy();
     expect(body.request_id).toBe(RAY);
     expect(save).not.toHaveBeenCalled();
   });
@@ -480,7 +483,7 @@ describe("profile JSON 422 request_id", () => {
     expect(res.status).toBe(422);
     expect(res.headers.get("x-request-id")).toBeNull();
     const body = (await res.json()) as Record<string, unknown>;
-    expect(body).toEqual({ errors: { timezone: TIMEZONE_ERROR } });
+    expect(body).toEqual({ error: "invalid", fields: { timezone: TIMEZONE_ERROR } });
     expect("request_id" in body).toBe(false);
   });
 
@@ -569,7 +572,7 @@ describe("agent ingress envelope shape (control)", () => {
     expect(res.status).toBe(403);
     const text = await res.text();
     const body = JSON.parse(text) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["message", "reason", "request_id"]);
+    expect(Object.keys(body).sort()).toEqual(["code", "message", "next", "reason", "request_id"]);
     expect(body.reason).toBe("forbidden_action");
     expect(body.request_id).toMatch(ULID);
     expectNoLeak(text, [CRED, CALLER]);
@@ -584,7 +587,14 @@ describe("agent ingress envelope shape (control)", () => {
     expect(res.status).toBe(422);
     const text = await res.text();
     const body = JSON.parse(text) as Record<string, unknown>;
-    expect(Object.keys(body).sort()).toEqual(["errors", "message", "reason", "request_id"]);
+    expect(Object.keys(body).sort()).toEqual([
+      "code",
+      "errors",
+      "message",
+      "next",
+      "reason",
+      "request_id",
+    ]);
     expect(body.reason).toBe("validation_failed");
     expect(body.request_id).toMatch(ULID);
     expectNoLeak(text, [CRED, CALLER]);

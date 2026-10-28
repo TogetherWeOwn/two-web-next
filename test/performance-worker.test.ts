@@ -12,6 +12,109 @@ const require = createRequire(import.meta.url);
 const { probeFixture } = require("../ci/lighthouse-admission.cjs");
 const collect = require("../ci/lighthouserc.cjs").ci.collect;
 
+function expectFixtureTimes(html: string, path: string, before: number, after: number) {
+  const times = [...html.matchAll(/<time\b[^>]*datetime="([^"]+)"/g)];
+  expect(times.length, path).toBeGreaterThan(0);
+  const range = path === "/events" || path === `/e/${fixtureKey}`;
+  if (range) expect(times, "calendar/detail have start and end, in that order").toHaveLength(2);
+  for (const [index, [, instant]] of times.entries()) {
+    const timestamp = Date.parse(instant!);
+    // The start window stays request +7d, never +7d +2h. Only the second
+    // calendar/detail endpoint has the fixture's two-hour offset from that window.
+    const offset = range && index === 1 ? 2 * 3600_000 : 0;
+    expect(timestamp, `${path}: ${instant}`).toBeGreaterThanOrEqual(
+      before + 7 * 86400_000 + offset,
+    );
+    expect(timestamp, `${path}: ${instant}`).toBeLessThanOrEqual(after + 7 * 86400_000 + offset);
+  }
+  if (range) {
+    expect(Date.parse(times[1]![1]!) - Date.parse(times[0]![1]!), "two-hour fixture range").toBe(
+      2 * 3600_000,
+    );
+  }
+}
+
+describe.each(["/events", `/e/${fixtureKey}`])("Lighthouse fixture time proof: %s", (path) => {
+  const before = Date.parse("2030-01-01T20:00:00.000Z");
+  const after = before + 10;
+  const start = '<time datetime="2030-01-08T20:00:00.005Z">Starts</time>';
+  const end = '<time datetime="2030-01-08T22:00:00.005Z">Ends</time>';
+  it("admits the two-hour range without widening start freshness", () => {
+    expect(() => expectFixtureTimes(start + end, path, before, after)).not.toThrow();
+  });
+
+  it.each([
+    ["2030-01-08T20:00:00.000Z", "2030-01-08T22:00:00.000Z"],
+    ["2030-01-08T20:00:00.010Z", "2030-01-08T22:00:00.010Z"],
+  ])("admits the inclusive request-window boundary %s", (startsAt, endsAt) => {
+    const html = `<time datetime="${startsAt}">Starts</time><time datetime="${endsAt}">Ends</time>`;
+    expect(() => expectFixtureTimes(html, path, before, after)).not.toThrow();
+  });
+
+  it.each([
+    { name: "missing end", html: start },
+    { name: "missing start", html: end },
+    { name: "no endpoints", html: "" },
+    { name: "swapped endpoints", html: end + start },
+    { name: "duplicate start", html: start + start },
+    { name: "extra endpoint", html: start + end + end },
+    { name: "extra in-window start", html: start + end + start },
+    { name: "duplicate end", html: end + end },
+    { name: "malformed start", html: '<time datetime="invalid">Starts</time>' + end },
+    { name: "start without datetime", html: "<time>Starts</time>" + end },
+    { name: "malformed end", html: start + '<time datetime="invalid">Ends</time>' },
+    {
+      name: "short duration with both normalized endpoints in the window",
+      html: start + '<time datetime="2030-01-08T22:00:00.004Z">Ends</time>',
+    },
+    {
+      name: "stale start and end with exact duration",
+      html:
+        '<time datetime="2030-01-08T19:59:59.999Z">Starts</time>' +
+        '<time datetime="2030-01-08T21:59:59.999Z">Ends</time>',
+    },
+    {
+      name: "late start and end with exact duration",
+      html:
+        '<time datetime="2030-01-08T20:00:00.011Z">Starts</time>' +
+        '<time datetime="2030-01-08T22:00:00.011Z">Ends</time>',
+    },
+    {
+      name: "start shifted into end window with exact duration",
+      html: end + '<time datetime="2030-01-09T00:00:00.005Z">Ends</time>',
+    },
+    { name: "end without datetime", html: start + "<time>Ends</time>" },
+    {
+      name: "wrong duration",
+      html: start + '<time datetime="2030-01-08T22:00:00.006Z">Ends</time>',
+    },
+    {
+      name: "stale request clock",
+      html: '<time datetime="2030-01-08T19:59:59.999Z">Starts</time>' + end,
+    },
+    {
+      name: "late start inside the end window",
+      html: '<time datetime="2030-01-08T22:00:00.005Z">Starts</time>' + end,
+    },
+    {
+      name: "module epoch clock",
+      html: '<time datetime="1970-01-08T00:00:00.000Z">Starts</time>' + end,
+    },
+  ])("rejects $name", ({ html }) => {
+    expect(() => expectFixtureTimes(html, path, before, after)).toThrow();
+  });
+});
+
+it("keeps the homepage on its single-start window, not the range end window", () => {
+  const before = Date.parse("2030-01-01T20:00:00.000Z");
+  const after = before + 10;
+  const start = '<time datetime="2030-01-08T20:00:00.005Z">Starts</time>';
+  const end = '<time datetime="2030-01-08T22:00:00.005Z">Ends</time>';
+  expect(() => expectFixtureTimes(start, "/", before, after)).not.toThrow();
+  expect(() => expectFixtureTimes(end, "/", before, after)).toThrow();
+  expect(() => expectFixtureTimes(start + end, "/", before, after)).toThrow();
+});
+
 // Node does not reproduce workerd's epoch clock during module evaluation.
 // Bundle the actual Lighthouse wrapper and exercise it in the Workers runtime.
 describe("Lighthouse fixture in Miniflare", () => {
@@ -59,7 +162,7 @@ describe("Lighthouse fixture in Miniflare", () => {
       const after = Date.now();
       expect(response.status, path).toBe(200);
       expect(html).toContain("Lighthouse fixture game night");
-      expect(html).toContain(path === "/" ? "3 going" : "3 of 20 going");
+      expect(html).toContain("3 of 20 going");
       expect(html).toContain("Community voice channel");
       if (path === "/") {
         expect(html).toContain('data-testid="home-events-list"');
@@ -78,13 +181,7 @@ describe("Lighthouse fixture in Miniflare", () => {
         expect(html).toContain('data-testid="event-join-pitch"');
         expect(html).toContain('<h1 data-waitlist-position="">Lighthouse fixture game night</h1>');
       }
-      const times = [...html.matchAll(/<time\b[^>]*datetime="([^"]+)"/g)];
-      expect(times.length, path).toBeGreaterThan(0);
-      for (const [, instant] of times) {
-        const startsAt = Date.parse(instant!);
-        expect(startsAt, `${path}: ${instant}`).toBeGreaterThanOrEqual(before + 7 * 86400_000);
-        expect(startsAt, `${path}: ${instant}`).toBeLessThanOrEqual(after + 7 * 86400_000);
-      }
+      expectFixtureTimes(html, path, before, after);
     }
     expect(outbound).toEqual([]);
   });

@@ -61,6 +61,7 @@ function eventRow(): PublicEvent {
     status: "published",
     rsvpOpen: true,
     goingCount: 2,
+    goingOccupancy: 2,
     discordEventId: null,
     discordSyncFailedAt: null,
     discordSyncFailureCode: null,
@@ -82,7 +83,7 @@ function eventRow(): PublicEvent {
 
 async function render(view: "list" | "calendar"): Promise<string> {
   const html = await EventsCalendarPage({
-    state: { view, month: MONTH, q: "", past: false, page: 1 },
+    state: { view, month: MONTH, q: "", game: "", past: false, page: 1 },
     upcoming: [eventRow()],
     past: [],
     zone: "UTC",
@@ -90,6 +91,8 @@ async function render(view: "list" | "calendar"): Promise<string> {
     totalPages: 1,
     emptyState: null,
     discordFailed: false,
+    games: [],
+    gameFilter: null,
     member: false,
     inviteUrl: INVITE,
     appUrl: APP_URL,
@@ -119,7 +122,7 @@ describe("calendar reduced-motion loader SSR", () => {
         expect(html).toContain(`data-testid="${EVENTS_LIST_TESTID}"`);
       } else {
         expect(html).toContain("data-cal-jump");
-        expect(html).toContain("20:00 Reduced motion gam…");
+        expect(html).toContain("20:00 UTC Reduced motion gam…");
       }
       expect(html).toContain(`data-testid="${EVENTS_CONTENT_TESTID}"`);
 

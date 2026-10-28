@@ -1,4 +1,5 @@
 import { Hono } from "hono";
+import { alertRequestError } from "./alerts";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
 import {
@@ -11,19 +12,36 @@ import {
   writeAnonCache,
 } from "./events/anon-cache";
 import { normalizePastPage } from "./events/reads";
-import { publicReadGuard } from "./events/routes-shared";
+import type { PublicEvent } from "./events/reads";
+import { resolveCalendarInput } from "./events/page-models.server";
+import { searchContext, type SearchSegment } from "./events/search-context";
+import { matchQuery } from "./events/search-log";
+import { guardRequestId, publicReadGuard, seedGuardRequestId } from "./events/routes-shared";
 
-export type KitPublicReadGuard = (request: Request, env: Env) => Promise<Response | null>;
+export type KitPublicReadGuard = (
+  request: Request,
+  env: Env,
+  requestId?: unknown,
+) => Promise<Response | null>;
 
 const guardApp = new Hono<{ Bindings: Env }>();
+guardApp.use(guardRequestId);
 guardApp.all("*", async (c) => {
   const limited = await publicReadGuard(c);
   return limited ?? c.body(null, 204);
 });
 
-/** Reuse the public Hono read budget for the native Kit route. */
-export async function kitPublicReadGuard(request: Request, env: Env): Promise<Response | null> {
-  const response = await guardApp.fetch(request, env);
+/**
+ * Reuse the public Hono read budget for the native Kit route. The dispatch
+ * passes its minted id so a 429 renders the same support reference the
+ * response header carries; without one the refusal stays blank-safe.
+ */
+export async function kitPublicReadGuard(
+  request: Request,
+  env: Env,
+  requestId?: unknown,
+): Promise<Response | null> {
+  const response = await guardApp.fetch(seedGuardRequestId(request, requestId), env);
   return response.status === 204 ? null : response;
 }
 
@@ -34,11 +52,14 @@ export async function dispatchPastArchiveRequest(
   resolve: () => Promise<Response>,
   guard: KitPublicReadGuard = kitPublicReadGuard,
   now: number = Date.now(),
+  requestId?: unknown,
 ): Promise<Response> {
-  const limited = await guard(request, env);
-  if (limited) return limited;
-
   const url = new URL(request.url);
+  const input = resolveCalendarInput({ q: url.searchParams.get("q") });
+  // The loader rejects raw oversized input before reads, even on a warm cache.
+  if (input.queryTooLong) return resolve();
+  const limited = await guard(request, env, requestId);
+  if (limited) return limited;
   // Kit data requests still execute the read guard/load but their JSON payload
   // is not the HTML representation cached by Hono.
   const htmlRequest = url.pathname === "/events/past";
@@ -49,7 +70,7 @@ export async function dispatchPastArchiveRequest(
       method: request.method,
       hasCookie: request.headers.has("cookie"),
       hasSession: false,
-      searching: false,
+      searching: input.searching,
       flashed: false,
     });
   const source = eligible ? anonCacheSource(env) : null;
@@ -118,14 +139,19 @@ export async function dispatchPastArchiveRequest(
 export type PastArchiveListPast<Row = never> = (
   db: Db,
   page: number,
+  now?: Date,
+  q?: string | null,
 ) => Promise<{ rows: Row[]; hasMore: boolean; totalPages: number }>;
 
 export interface PastArchiveLoadArgs<Row = never> {
   env: Env;
   pageParam: string | null;
+  queryParam?: string | null;
   setHeaders: (headers: Record<string, string>) => void;
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   listPastFn: PastArchiveListPast<Row>;
+  /** Optional correlation ID from the caller (validated inside the alert, omitted otherwise). */
+  requestId?: string;
 }
 
 /** Branded-outage marker: the Kit binding maps every throw to error(503). */
@@ -133,25 +159,54 @@ export function pastArchiveUnavailable(): Error & { status: number } {
   return Object.assign(new Error("Events temporarily unavailable"), { status: 503 });
 }
 
+// A code bug (no branded status) must never look like a downstream outage:
+// emit the leak-free error.alert diagnostic before mapping to the branded
+// 503, mirroring the Kit hot-zone boundary (src/kit-hotzones.ts). Branded
+// throws pass through with the same outage headers and no new alert, so the
+// binding maps them once. Headers and bodies are byte-stable either way:
+// the binding ignores the thrown message.
+function reportPastArchiveLoadFailure(
+  err: unknown,
+  setHeaders: (headers: Record<string, string>) => void,
+  requestId?: string,
+): never {
+  const headers = { "cache-control": "private, no-store" };
+  if (typeof (err as { status?: unknown })?.status === "number") {
+    setHeaders(headers);
+    throw err;
+  }
+  alertRequestError(err, { method: "GET", route: "/events/past", requestId });
+  setHeaders(headers);
+  throw pastArchiveUnavailable();
+}
+
 export async function loadPastArchivePage<Row>({
   env,
   pageParam,
+  queryParam,
   setHeaders,
   dbForFn,
   listPastFn,
+  requestId,
 }: PastArchiveLoadArgs<Row>): Promise<{
   rows: Row[];
   page: number;
   hasMore: boolean;
   totalPages: number;
   appUrl: string;
+  q: string;
 }> {
+  const input = resolveCalendarInput({ q: queryParam });
+  if (input.queryTooLong) {
+    setHeaders({ "cache-control": "private, no-store" });
+    throw Object.assign(new Error("Search query too long"), { status: 422 });
+  }
+  const q = matchQuery(input.q);
   let db: Db | null;
   try {
     db = await dbForFn({ env });
-  } catch {
-    setHeaders({ "cache-control": "private, no-store" });
-    throw pastArchiveUnavailable();
+  } catch (err) {
+    reportPastArchiveLoadFailure(err, setHeaders, requestId);
   }
   if (!db) {
     setHeaders({ "cache-control": "private, no-store" });
@@ -159,14 +214,73 @@ export async function loadPastArchivePage<Row>({
   }
   const page = normalizePastPage(Number.parseInt(pageParam ?? "1", 10));
   try {
-    const { rows, hasMore, totalPages } = await listPastFn(db, page);
+    const { rows, hasMore, totalPages } = q
+      ? await listPastFn(db, page, new Date(), q)
+      : await listPastFn(db, page);
     setHeaders({
-      "cache-control": "public, max-age=300",
-      "x-two-past-cacheable": String(rows.length > 0),
+      "cache-control": input.searching ? "private, no-store" : "public, max-age=300",
+      "x-two-past-cacheable": String(!input.searching && rows.length > 0),
+      // Browsing renders are public and shared, like the Hono twin: name the
+      // Cookie variance so shared caches key anonymous and signed-in shells
+      // apart. Searching renders stay private no-store with no Vary.
+      ...(!input.searching ? { vary: "Cookie" } : {}),
     });
-    return { rows, page, hasMore, totalPages, appUrl: env.APP_URL };
-  } catch {
-    setHeaders({ "cache-control": "private, no-store" });
-    throw pastArchiveUnavailable();
+    return { rows, page, hasMore, totalPages, appUrl: env.APP_URL, q: q ?? "" };
+  } catch (err) {
+    reportPastArchiveLoadFailure(err, setHeaders, requestId);
   }
+}
+
+/**
+ * The anonymous-safe slice of a past-archive row: the fields the archive
+ * card renders (key/title/time/zone/location/game/host/counts/capacity) plus
+ * the occupancy aggregate and the public-by-design Discord event id. Kit
+ * serializes load data into `__data.json` for anonymous clients even with
+ * `csr=false`, so the past load returns this projection, never the full
+ * row: the authorship snowflake (`createdBy`, a moderator Discord id kept
+ * for retention), full descriptions and sync internals never leave the
+ * server on this logged-out, indexed page. The organizer display name rides
+ * along because the card renders it — the same public name the detail page
+ * shows, never an id or a member link. Search-only fields are present only
+ * for a nonblank query: the bounded description passage (`passage`, at most
+ * 320 code points, only when the row has a description) and the full-title
+ * literal segments (`titleSpans`) rendered with semantic marks. Both derive
+ * from the already public title or a bounded excerpt, never member data,
+ * and keep segment authority server-side so the client ships no search code.
+ * Mirrors the join precedent (`toPublicWidgetSnapshot`) and the home teaser
+ * (`HomeEvent`).
+ */
+export type PastArchiveEvent = Pick<
+  PublicEvent,
+  | "eventKey"
+  | "title"
+  | "startsAt"
+  | "timezone"
+  | "location"
+  | "game"
+  | "organizer_name"
+  | "goingCount"
+  | "goingOccupancy"
+  | "capacity"
+  | "discordEventId"
+> & { passage?: SearchSegment[]; titleSpans?: SearchSegment[] };
+
+/** Project a past-archive row to its anonymous-safe slice. */
+export function toPublicPastArchiveRow(row: PublicEvent, q?: string): PastArchiveEvent {
+  const projected: PastArchiveEvent = {
+    eventKey: row.eventKey,
+    title: row.title,
+    startsAt: row.startsAt,
+    timezone: row.timezone,
+    location: row.location,
+    game: row.game,
+    organizer_name: row.organizer_name,
+    goingCount: row.goingCount,
+    goingOccupancy: row.goingOccupancy,
+    capacity: row.capacity,
+    discordEventId: row.discordEventId,
+  };
+  if (q && row.description) projected.passage = searchContext(row.description, q, true);
+  if (q) projected.titleSpans = searchContext(row.title, q);
+  return projected;
 }

@@ -141,6 +141,69 @@ describe("safeNext control-byte rejection (Location-header safety)", () => {
   });
 });
 
+describe("return destination byte bound (multibyte next)", () => {
+  // The bound counts UTF-8 bytes, not UTF-16 units: the cookie serializer
+  // percent-encodes every byte of a multibyte character, so a CJK character
+  // costs 9 cookie characters and 512 of them would serialize past the
+  // browser's 4096-byte per-cookie cap (silently dropped).
+  const CJK = "\u4e2d"; // 3 UTF-8 bytes, 1 UTF-16 unit
+  const EMOJI = "\u{1f600}"; // 4 UTF-8 bytes, 2 UTF-16 units
+  const COOKIE_CAP_BYTES = 4096;
+  const utf8Bytes = (s: string) => new TextEncoder().encode(s).byteLength;
+  const CJK_AT_BOUND = `/${CJK.repeat(170)}a`; // 512 bytes
+  const CJK_JUST_OVER = `${CJK_AT_BOUND}a`; // 513 bytes
+  const CJK_512_UNITS = `/${CJK.repeat(511)}`; // 1534 bytes
+  const EMOJI_512_UNITS = `/${EMOJI.repeat(255)}a`; // 1022 bytes
+
+  it("accepts a multibyte destination at exactly 512 UTF-8 bytes", () => {
+    expect(utf8Bytes(CJK_AT_BOUND)).toBe(512);
+    expect(safeNext(CJK_AT_BOUND)).toBe(CJK_AT_BOUND);
+  });
+
+  it.each([
+    ["513 bytes (just over)", CJK_JUST_OVER, 513],
+    ["512 CJK units", CJK_512_UNITS, 1534],
+    ["512 emoji units", EMOJI_512_UNITS, 1022],
+  ])("rejects a multibyte destination of %s", (_label, next, bytes) => {
+    expect(next.length).toBeLessThanOrEqual(512);
+    expect(utf8Bytes(next)).toBe(bytes);
+    expect(safeNext(next)).toBeNull();
+  });
+
+  it("an over-bound multibyte next sets no live cookie and consumes as default", async () => {
+    const start = await remember(`?next=${encodeURIComponent(CJK_512_UNITS)}`);
+    expect(start.jar[LOGIN_NEXT_COOKIE]).toBeUndefined();
+    const cb = await consume(start.jar);
+    expect(await cb.text()).toBe("default");
+  });
+
+  it("a multibyte next at the bound rides intact in a cookie under the cap", async () => {
+    const start = await remember(`?next=${encodeURIComponent(CJK_AT_BOUND)}`);
+    const pair = start.res.headers
+      .getSetCookie()
+      .find((c) => c.startsWith(`${LOGIN_NEXT_COOKIE}=`))
+      ?.split(";")[0];
+    expect(pair).toBeTruthy();
+    expect(utf8Bytes(pair!)).toBeLessThanOrEqual(COOKIE_CAP_BYTES);
+    const cb = await consume(start.jar);
+    expect(await cb.text()).toBe(CJK_AT_BOUND);
+  });
+
+  it("a signed over-bound multibyte next falls back to the default at consume time", async () => {
+    const signed = (
+      await serializeSigned(LOGIN_NEXT_COOKIE, CJK_512_UNITS, SESSION_SECRET, {
+        path: "/",
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      })
+    ).split(";")[0]!;
+    const cb = await consume({ [LOGIN_NEXT_COOKIE]: signed.slice(LOGIN_NEXT_COOKIE.length + 1) });
+    expect(await cb.text()).toBe("default");
+    expect(setCookies(cb)).toContain(`${LOGIN_NEXT_COOKIE}=; Max-Age=0`);
+  });
+});
+
 describe("rememberLoginNext (explicit ?next= rides OAuth)", () => {
   it("a safe event return rides and consumes exactly once", async () => {
     const start = await remember("?next=%2Fe%2Fsunday-squad-01");
@@ -228,6 +291,8 @@ describe("bounceToLogin (auth-gate records the intended page)", () => {
   it("a guest GET records pathname plus search and enters OAuth", async () => {
     const bounce = await app.request("/bounce?from=card", {}, env);
     expect(bounce.status).toBe(302);
+    expect(bounce.headers.get("cache-control")).toBe("no-store, private");
+    expect(bounce.headers.get("vary")).toBe("Cookie");
     expect(bounce.headers.get("location")).toBe("/auth/discord");
     expect(jarFrom(bounce)[LOGIN_INTENDED_COOKIE]).toBeTruthy();
   });
@@ -235,6 +300,8 @@ describe("bounceToLogin (auth-gate records the intended page)", () => {
   it("a HEAD bounce records the page the same way", async () => {
     const bounce = await app.request("/bounce?from=card", { method: "HEAD" }, env);
     expect(bounce.status).toBe(302);
+    expect(bounce.headers.get("cache-control")).toBe("no-store, private");
+    expect(bounce.headers.get("vary")).toBe("Cookie");
     expect(bounce.headers.get("location")).toBe("/auth/discord");
     expect(jarFrom(bounce)[LOGIN_INTENDED_COOKIE]).toBeTruthy();
   });
@@ -244,6 +311,20 @@ describe("bounceToLogin (auth-gate records the intended page)", () => {
     expect(bounce.status).toBe(303);
     expect(bounce.headers.get("location")).toBe("/auth/recover?next=%2Fevents");
     expect(setCookies(bounce)).not.toContain(LOGIN_INTENDED_COOKIE);
+  });
+
+  it("an oversized page forgets a stale intended cookie from an abandoned journey", async () => {
+    const first = await app.request("/bounce?from=card", {}, env);
+    const jar = jarFrom(first);
+    expect(jar[LOGIN_INTENDED_COOKIE]).toBeTruthy();
+    const oversized = await app.request(`/bounce?x=${"a".repeat(8192)}`, withJar(jar), env);
+    expect(oversized.status).toBe(302);
+    expect(oversized.headers.get("location")).toBe("/auth/discord");
+    expect(setCookies(oversized)).toContain(`${LOGIN_INTENDED_COOKIE}=; Max-Age=0`);
+    const browser = jarFrom(oversized, jar);
+    expect(browser[LOGIN_INTENDED_COOKIE]).toBeUndefined();
+    const cb = await consume(browser);
+    expect(await cb.text()).toBe("default");
   });
 });
 

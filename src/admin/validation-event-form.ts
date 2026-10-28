@@ -25,10 +25,14 @@ export type EventFormInput = {
   title: string;
   game: string | null;
   description: string | null;
+  accessibilityNotes?: string | null;
   startsAtUtc: Date;
   endsAtUtc: Date;
   timezone: string;
   location: string | null;
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
   capacity: number | null;
 };
 
@@ -47,18 +51,60 @@ export function parseEventForm(
   const title = str(data.title);
   if (!title) fields.title = "Give the event a title.";
   else if ([...title].length > 100) fields.title = "Keep the title to 100 characters.";
+  // A supplied non-string must never silently clear saved text: null, blank
+  // and omitted stay empty (timezone keeps its Europe/London default), but
+  // objects, arrays, booleans and numbers are refused with the existing
+  // field-specific 422 shape.
+  for (const field of [
+    "game",
+    "description",
+    "accessibility_notes",
+    "location",
+    "organizer_name",
+    "join_url",
+    "join_instructions",
+    "timezone",
+  ] as const) {
+    const raw = data[field];
+    if (raw !== undefined && raw !== null && typeof raw !== "string") {
+      fields[field] = `The ${field} must be text.`;
+    }
+  }
   const game = str(data.game);
   if (game && [...game].length > 100) fields.game = "Keep the game to 100 characters.";
   const description = str(data.description);
   if (description && [...description].length > 1000)
     fields.description = "Keep the description to 1000 characters.";
+  const accessibilityNotes = str(data.accessibility_notes);
+  if (accessibilityNotes && [...accessibilityNotes].length > 1000)
+    fields.accessibility_notes = "Keep accessibility notes to 1000 characters.";
   const timezone = str(data.timezone) ?? "Europe/London";
   if (!isKnownTimezone(timezone)) fields.timezone = `Unknown timezone: ${timezone}.`;
   const location = str(data.location);
   if (location && [...location].length > 255)
     fields.location = "Keep the location to 255 characters.";
+  const organizerName = str(data.organizer_name);
+  if (organizerName && [...organizerName].length > 500)
+    fields.organizer_name = "Keep the organizer name to 500 characters.";
+  const joinUrl = str(data.join_url);
+  if (joinUrl && [...joinUrl].length > 2048)
+    fields.join_url = "Keep the public joining link to 2048 characters.";
+  else if (joinUrl && !isPublicJoinUrl(joinUrl))
+    fields.join_url = "Enter a valid public HTTP or HTTPS link without sign-in credentials.";
+  const joinInstructions = str(data.join_instructions);
+  if (joinInstructions && [...joinInstructions].length > 5000)
+    fields.join_instructions = "Keep joining instructions to 5000 characters.";
   // Check the submitted text, not its trimmed value: trim removes BOM.
-  for (const field of ["title", "game", "description", "location"] as const) {
+  for (const field of [
+    "title",
+    "game",
+    "description",
+    "accessibility_notes",
+    "location",
+    "organizer_name",
+    "join_url",
+    "join_instructions",
+  ] as const) {
     const raw = data[field];
     if (typeof raw === "string" && containsControlCharacters(raw)) {
       fields[field] = "Remove control or invisible characters.";
@@ -120,12 +166,32 @@ export function parseEventForm(
     title: title!,
     game,
     description,
+    accessibilityNotes,
     startsAtUtc: startsAtUtc!,
     endsAtUtc: endsAtUtc!,
     timezone,
     location,
+    organizer_name: organizerName,
+    join_url: joinUrl,
+    join_instructions: joinInstructions,
     capacity,
   };
+}
+
+function isPublicJoinUrl(value: string): boolean {
+  if (!/^https?:\/\/[^/?#@\\\s]+(?:[/?#]|$)/i.test(value) || /[\\\u0000- \u007f]/.test(value))
+    return false;
+  try {
+    const url = new URL(value);
+    return (
+      (url.protocol === "https:" || url.protocol === "http:") &&
+      url.hostname !== "" &&
+      url.username === "" &&
+      url.password === ""
+    );
+  } catch {
+    return false;
+  }
 }
 
 function preservedOrParsed(wall: string, carrier: string | undefined, timezone: string): Date {

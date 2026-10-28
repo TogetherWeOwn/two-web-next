@@ -27,11 +27,12 @@ export const HOME_NOTICES = {
 
 export type HomeNotice = keyof typeof HOME_NOTICES;
 
-const HOME_NOTICE_KEYS = new Set<string>(Object.keys(HOME_NOTICES));
-
 /** The `?n=` value Hono accepts: exactly one of the six keys, else no notice. */
 export function parseHomeNotice(value: string | null): HomeNotice | null {
-  if (!value || !HOME_NOTICE_KEYS.has(value)) return null;
+  // Own-key check, not a module-level key Set: the same accept/reject answers
+  // (prototype names still rejected) with no module state for bundlers to
+  // retain in graphs that only need the copy tables below.
+  if (!value || !Object.hasOwn(HOME_NOTICES, value)) return null;
   return value as HomeNotice;
 }
 
@@ -63,11 +64,23 @@ export const HOME_JOIN_RESULT_COPY = {
   reinvite: "Rejoin with the Discord invite",
 } as const;
 
+// The /join intro sentence (lead paragraph plus share description), moved here
+// from src/screens/join.tsx so the Kit join route can render the same bytes:
+// the .tsx screen would bundle the JSX runtime into the Kit worker, while this
+// plain-TS module stays import-safe. Both renderers read this one literal.
+export const JOIN_INTRO = "Approve once with Discord and we will add you to the server.";
+
 // The ladder names its ranks even when the bot views are dark: ranks stack,
 // so an unnumbered stack still reads as the trust ladder, never as zeros.
-export const FALLBACK_RANKS: Rank[] = ["Prospect", "Member", "Soldier", "Veteran", "Legend"].map(
-  (label) => ({ key: label.toLowerCase(), label, memberCount: null }),
-);
+// Plain literal, not a mapped construction: the same five rows, with no call
+// for bundlers to retain in graphs that only need the copy tables.
+export const FALLBACK_RANKS: Rank[] = [
+  { key: "prospect", label: "Prospect", memberCount: null },
+  { key: "member", label: "Member", memberCount: null },
+  { key: "soldier", label: "Soldier", memberCount: null },
+  { key: "veteran", label: "Veteran", memberCount: null },
+  { key: "legend", label: "Legend", memberCount: null },
+];
 
 // Kit homepage decision core (SvelteKit migration; zero behavior change).
 //

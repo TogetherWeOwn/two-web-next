@@ -416,6 +416,11 @@
   },
   {
     "method": "POST",
+    "path": "/admin/events/:key/duplicate",
+    "auth": "moderator"
+  },
+  {
+    "method": "POST",
     "path": "/admin/events/:key/publish",
     "auth": "moderator"
   },
@@ -442,6 +447,11 @@
   {
     "method": "POST",
     "path": "/admin/featured/:id/delete",
+    "auth": "moderator"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/featured/:id/unpublish",
     "auth": "moderator"
   },
   {
@@ -486,6 +496,11 @@
   },
   {
     "method": "POST",
+    "path": "/events/:key/duplicate",
+    "auth": "moderator"
+  },
+  {
+    "method": "POST",
     "path": "/events/:key/publish",
     "auth": "moderator"
   },
@@ -502,6 +517,11 @@
   {
     "method": "POST",
     "path": "/logout",
+    "auth": "public"
+  },
+  {
+    "method": "POST",
+    "path": "/logout/everywhere",
     "auth": "public"
   },
   {

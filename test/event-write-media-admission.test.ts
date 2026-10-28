@@ -11,7 +11,13 @@
 import { Hono } from "hono";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
-import { createEvent, getEvent, updateEvent } from "../src/admin/store";
+import {
+  createEvent,
+  getEvent,
+  mergePatchInput,
+  patchEvent,
+  updateEvent,
+} from "../src/admin/store";
 import type { EventFormInput } from "../src/admin/validation";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import type { events } from "../src/db/admin-schema";
@@ -24,6 +30,7 @@ vi.mock("../src/admin/store", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/admin/store")>()),
   createEvent: vi.fn(),
   getEvent: vi.fn(),
+  patchEvent: vi.fn(),
   updateEvent: vi.fn(),
 }));
 vi.mock("../src/events/reads", async (importOriginal) => ({
@@ -115,8 +122,15 @@ beforeEach(() => {
   }));
   vi.mocked(updateEvent).mockImplementation(async (_db, _actor, _key, input) => {
     const updated = saved(input);
-    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0 });
+    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0, goingOccupancy: 0 });
     // Non-null so a successful PATCH must dispatch exactly one write-back.
+    return { row: updated, writeBack: { eventKey: KEY, status: "published" }, childWriteBacks: [] };
+  });
+  // PATCH merges through the real pure seam against the fixture row (no SQL),
+  // so admission pins keep exercising production validation.
+  vi.mocked(patchEvent).mockImplementation(async (_db, _actor, _key, patch) => {
+    const updated = saved(mergePatchInput(row, patch));
+    vi.mocked(getPublicEvent).mockResolvedValue({ ...updated, goingCount: 0, goingOccupancy: 0 });
     return { row: updated, writeBack: { eventKey: KEY, status: "published" }, childWriteBacks: [] };
   });
 });
@@ -148,6 +162,7 @@ async function writeWithoutContentType(method: Method, bodyText: string): Promis
 
 function expectNoMutationOrDispatch() {
   expect(createEvent).not.toHaveBeenCalled();
+  expect(patchEvent).not.toHaveBeenCalled();
   expect(updateEvent).not.toHaveBeenCalled();
   expect(dispatchWriteBack).not.toHaveBeenCalled();
 }
@@ -254,17 +269,19 @@ describe("supported media types still write", () => {
     const res = await write("PATCH", body, ct);
     expect(res.status).toBe(200);
     expect(await responseTitle(res)).toBe(title);
-    expect(updateEvent).toHaveBeenCalledTimes(1);
+    expect(patchEvent).toHaveBeenCalledTimes(1);
     expect(dispatchWriteBack).toHaveBeenCalledTimes(1);
     expect(createEvent).not.toHaveBeenCalled();
+    expect(updateEvent).not.toHaveBeenCalled();
   });
 
   it("PATCH keeps the explicit application/json {} contract", async () => {
     const res = await write("PATCH", "{}", "application/json; charset=utf-8");
     expect(res.status).toBe(200);
     expect(await responseTitle(res)).toBe("Game night");
-    expect(updateEvent).toHaveBeenCalledTimes(1);
+    expect(patchEvent).toHaveBeenCalledTimes(1);
     expect(dispatchWriteBack).toHaveBeenCalledTimes(1);
+    expect(updateEvent).not.toHaveBeenCalled();
   });
 
   it("PATCH admits a native multipart form body", async () => {
@@ -273,8 +290,9 @@ describe("supported media types still write", () => {
     const res = await write("PATCH", form);
     expect(res.status).toBe(200);
     expect(await responseTitle(res)).toBe("Multipart edit");
-    expect(updateEvent).toHaveBeenCalledTimes(1);
+    expect(patchEvent).toHaveBeenCalledTimes(1);
     expect(dispatchWriteBack).toHaveBeenCalledTimes(1);
+    expect(updateEvent).not.toHaveBeenCalled();
   });
 
   it("PATCH admits multipart in mixed case with parameters", async () => {
@@ -285,8 +303,9 @@ describe("supported media types still write", () => {
     const res = await write("PATCH", body, `Multipart/Form-Data; boundary=${boundary}`);
     expect(res.status).toBe(200);
     expect(await responseTitle(res)).toBe("Multipart edit");
-    expect(updateEvent).toHaveBeenCalledTimes(1);
+    expect(patchEvent).toHaveBeenCalledTimes(1);
     expect(dispatchWriteBack).toHaveBeenCalledTimes(1);
+    expect(updateEvent).not.toHaveBeenCalled();
   });
 
   it("POST admits an exact JSON create", async () => {

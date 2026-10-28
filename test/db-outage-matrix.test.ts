@@ -80,8 +80,9 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/login", status: 302, location: "/auth/discord" },
   { method: "GET", route: "/community", status: 302, location: "/" },
   { method: "GET", route: "/auth/discord/callback", status: 302, location: "/?n=signin_failed" },
-  // Stale-tab liveness probe and expired-write recovery (main #239): neither
-  // reads the DB without a session cookie, so both stay 200 during an outage.
+  // Stale-tab liveness probe and expired-write recovery (main #239): the
+  // probe reads no DB without a session cookie, and the recovery landing's
+  // throttle fails open, so both stay 200 during an outage.
   { method: "GET", route: "/auth/status", status: 200, format: "json" },
   { method: "GET", route: "/auth/recover", status: 200, format: "html" },
   // Bare /members is the retired frozen 404: answered before the member gate,
@@ -91,6 +92,7 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/join/discord", status: 503, format: "html" },
   { method: "GET", route: "/join/callback", status: 503, format: "html" },
   { method: "POST", route: "/logout", status: 303, location: "/" },
+  { method: "POST", route: "/logout/everywhere", status: 303, location: "/", actor: "member" },
   {
     method: "POST",
     route: "/auth/qa/:identity",
@@ -176,7 +178,7 @@ const MATRIX: Case[] = [
     format: "json",
     body: "{}",
   },
-  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => ({
+  ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map((action) => ({
     method: "POST",
     route: `/events/:key/${action}`,
     status: 503,
@@ -317,11 +319,13 @@ const MATRIX: Case[] = [
     "/admin/events/:key",
     "/admin/events/:key/publish",
     "/admin/events/:key/cancel",
+    "/admin/events/:key/duplicate",
     "/admin/events/:key/rsvp-pause",
     "/admin/events/:key/rsvp-reopen",
     "/admin/featured",
     "/admin/featured/:id",
     "/admin/featured/:id/delete",
+    "/admin/featured/:id/unpublish",
   ].map((route) => ({
     method: "POST",
     route,
@@ -590,9 +594,15 @@ it.each([
       expect(res.headers.get("cache-control")).toContain("private");
       expect(res.headers.get("cache-control")).toContain("no-store");
       expect(res.headers.getSetCookie()).toEqual([]);
-      expect(await res.json()).toEqual({
+      const headerId = res.headers.get("x-request-id");
+      expect(typeof headerId).toBe("string");
+      const body = (await res.json()) as { reason: string; message: string; request_id: string };
+      expect(body).toEqual({
+        code: "ingress_unavailable",
         reason: "ingress_unavailable",
         message: "The agent event store is temporarily unavailable. Try again shortly.",
+        request_id: headerId,
+        next: "Retry shortly.",
       });
     } finally {
       await Promise.allSettled(pending);
@@ -610,9 +620,15 @@ it("enabled agent ingress retains its reason envelope without a configured bindi
     },
   );
   expect(res.status).toBe(503);
-  expect(await res.json()).toEqual({
+  const headerId = res.headers.get("x-request-id");
+  expect(typeof headerId).toBe("string");
+  const body = (await res.json()) as { reason: string; message: string; request_id: string };
+  expect(body).toEqual({
+    code: "ingress_unavailable",
     reason: "ingress_unavailable",
     message: "The agent event store is not configured.",
+    request_id: headerId,
+    next: "Retry shortly.",
   });
   expect(clients).toHaveLength(0);
 });
@@ -650,6 +666,32 @@ it("member event show fails closed to the outage envelope during an outage", asy
   }
 });
 
+it.each(["code", "state"])(
+  "oversized join %s keeps the classified outage envelope before recovery",
+  async (param) => {
+    const query = new URLSearchParams({ code: "local-code", state: "local-state" });
+    query.set(param, "x".repeat(8192));
+    const res = await testApp.request(`/join/callback?${query}`, {}, outageEnv());
+    await assertResponse(res.clone(), {
+      method: "GET",
+      route: "/join/callback",
+      status: 503,
+      format: "html",
+    });
+    expect(await res.text()).not.toContain("Join link expired");
+    expect(res.headers.get("cache-control")).toContain("no-store");
+    expect(res.headers.getSetCookie()).toEqual([]);
+    expect(fetch).not.toHaveBeenCalled();
+    // A constructed postgres client is lazy: the query, not construction,
+    // must observe the refused socket before the recovery can return.
+    expect(clients).toHaveLength(1);
+    expect(console.warn).not.toHaveBeenCalledWith(
+      "discord token exchange failed on the join journey",
+      expect.objectContaining({ exception: "OversizedOAuthParams" }),
+    );
+  },
+);
+
 it("valid login callback fails closed at admission, before any Discord call", async () => {
   const state = "local-outage-oauth-state";
   const cookie = (
@@ -663,13 +705,14 @@ it("valid login callback fails closed at admission, before any Discord call", as
     { headers: { cookie } },
     outageEnv(),
   );
-  // The journey cannot be consumed with the app DB down, so the code is never
-  // exchanged and no session is minted: zero upstream calls.
+  // The journey cannot be consumed with the app DB down: the classified
+  // outage from journeys.consume (not store acquisition) reaches the shared
+  // branded 503, so the code is never exchanged and no session is minted.
   expect(fetch).not.toHaveBeenCalled();
   await assertResponse(res, {
     method: "GET",
     route: "/auth/discord/callback",
-    status: 302,
-    location: "/?n=signin_failed",
+    status: 503,
+    format: "html",
   });
 });

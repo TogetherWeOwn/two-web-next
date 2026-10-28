@@ -16,12 +16,13 @@ import { createMemorySessionStore, hashToken, type Sql } from "../src/sessions";
 const exchange = () =>
   exchangeCode("fixture-code", "fixture-client", "fixture-secret", "https://example.test/callback");
 const identity = () => fetchUser("fixture-access");
-const join = () => addGuildMember("fixture-guild", "fixture-user", "fixture-access", "fixture-bot");
-const roles = () => fetchMemberRoles("fixture-guild", "fixture-user", "fixture-bot");
+const join = () =>
+  addGuildMember("222222222222222222", "333333333333333333", "fixture-access", "fixture-bot");
+const roles = () => fetchMemberRoles("222222222222222222", "333333333333333333", "fixture-bot");
 const moderator = () =>
   recomputeModerator({
-    guildId: "fixture-guild",
-    userId: "fixture-user",
+    guildId: "222222222222222222",
+    userId: "333333333333333333",
     botToken: "fixture-bot",
     moderatorRoleIds: ["fixture-role"],
   });
@@ -37,7 +38,7 @@ function isolatedJourney() {
     APP_URL: "https://example.test",
     DISCORD_CLIENT_ID: "fixture-client",
     DISCORD_CLIENT_SECRET: "fixture-secret",
-    DISCORD_GUILD_ID: "fixture-guild",
+    DISCORD_GUILD_ID: "222222222222222222",
     DISCORD_BOT_TOKEN: "fixture-bot",
     DISCORD_INVITE_URL: "https://discord.gg/fixture-invite",
     SESSION_SECRET: "fixture signing key ".repeat(3),
@@ -102,9 +103,10 @@ describe("Discord auth deadlines", () => {
       expect(signal?.aborted).toBe(false);
       await vi.advanceTimersByTimeAsync(1);
       // Each step keeps its existing taxonomy: exchange/identity wrap the timeout
-      // as a transport failure, guild admission degrades to "failed", and the raw
-      // role lookup propagates to recomputeModerator's fail-closed catch.
-      if (name === "join") expect(result()).toEqual({ value: "failed" });
+      // as a transport failure, guild admission classifies it as
+      // "transport_failure", and the raw role lookup propagates to
+      // recomputeModerator's fail-closed catch.
+      if (name === "join") expect(result()).toEqual({ value: "transport_failure" });
       else if (name === "roles")
         expect(result()).toEqual({ error: expect.any(DiscordHttpTimeoutError) });
       else {
@@ -131,7 +133,7 @@ describe("Discord auth deadlines", () => {
     );
     const result = outcome(call());
     await vi.advanceTimersByTimeAsync(BUDGET_MS);
-    if (name.startsWith("join")) expect(result()).toEqual({ value: "failed" });
+    if (name.startsWith("join")) expect(result()).toEqual({ value: "transport_failure" });
     else if (name.startsWith("role"))
       expect(result()).toEqual({ error: expect.any(DiscordHttpTimeoutError) });
     else {
@@ -297,7 +299,12 @@ describe("Discord auth deadlines", () => {
   });
 
   it("preserves healthy payloads, request admission and status-based failures", async () => {
-    const user = { id: "fixture-user", username: "fixture-name", global_name: null, avatar: null };
+    const user = {
+      id: "333333333333333333",
+      username: "fixture-name",
+      global_name: null,
+      avatar: null,
+    };
     const transport = vi
       .fn()
       .mockResolvedValueOnce(Response.json({ access_token: "fixture-access" }))
@@ -313,7 +320,7 @@ describe("Discord auth deadlines", () => {
     expect(await identity()).toEqual(user);
     expect(await join()).toBe("joined");
     expect(await join()).toBe("already_member");
-    expect(await join()).toBe("failed");
+    expect(await join()).toBe("forbidden");
     expect(await moderator()).toBe(true);
     expect(await roles()).toBeNull();
     await expect(exchange()).rejects.toMatchObject({
@@ -375,8 +382,8 @@ describe("Discord auth deadlines", () => {
     expect(await moderator()).toBe(false);
     expect(
       await recomputeModerator({
-        guildId: "fixture-guild",
-        userId: "fixture-user",
+        guildId: "222222222222222222",
+        userId: "333333333333333333",
         botToken: "fixture-bot",
         moderatorRoleIds: [],
       }),
@@ -485,7 +492,12 @@ describe("deadline recovery at the existing journey boundaries", () => {
       vi.spyOn(console, "error").mockImplementation(() => {}),
       vi.spyOn(console, "warn").mockImplementation(() => {}),
     ];
-    const user = { id: "fixture-user", username: "fixture-name", global_name: null, avatar: null };
+    const user = {
+      id: "333333333333333333",
+      username: "fixture-name",
+      global_name: null,
+      avatar: null,
+    };
     const { response, cancel } = stalledBody(step === "join" ? 201 : 200);
     let started!: () => void;
     const reachedStall = new Promise<void>((resolve) => {

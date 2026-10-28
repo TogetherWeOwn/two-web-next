@@ -12,6 +12,7 @@ import {
   DISCORD_SNAPSHOT_MAX_ROWS,
   encodeDiscordSnapshot,
 } from "./discord-snapshot";
+import { parseRetryAfterSeconds } from "../jobs/retry-delay";
 import {
   DISCORD_READ_DEADLINE_MS,
   type DiscordEventsSource,
@@ -61,14 +62,14 @@ function toTransient(row: AdmittedScheduledEvent): DiscordTransient | null {
   }
 }
 
-/** Numeric `retry-after` seconds from a 429; anything else is not worth logging. */
+/**
+ * Bounded `retry-after` seconds from a 429; anything else is not worth
+ * logging. Thin `Response` adapter over the one shared parser in
+ * `src/jobs/retry-delay.ts` — the same mapping the Discord OAuth path and
+ * the bot transport use.
+ */
 function retryAfterSeconds(res: Response): number | undefined {
-  // `Number(null)` and `Number("")` are 0: an absent header must not log as "retry now".
-  const raw = res.headers.get("retry-after")?.trim();
-  if (!raw || !/^\d+(?:\.\d+)?$/.test(raw)) return undefined;
-  const n = Number(raw);
-  // Only representable numeric delays are valid; no HTTP dates or infinity.
-  return Number.isFinite(n) && n * 1000 <= 8_000_000_000_000_000 ? n : undefined;
+  return parseRetryAfterSeconds(res.headers.get("retry-after"));
 }
 
 /** One warn line per failed read: a silent error state cannot be told from an outage. */
@@ -79,12 +80,35 @@ function warnReadFailed(failure: ReadFailure, startedAt: number): void {
   });
 }
 
+/** Named configuration error for a malformed env guild id. Never echoes the value. */
+export class DiscordGuildIdConfigError extends Error {
+  constructor() {
+    super("Invalid DISCORD_GUILD_ID configuration");
+    this.name = "DiscordGuildIdConfigError";
+  }
+}
+
+/**
+ * Charset admission for the env-configured Discord guild id: ASCII digits
+ * only, 1-20 characters, tested as-is with no trimming, coercion or
+ * decoding. Refusal throws the named configuration error before any fetch.
+ */
+export function admitDiscordGuildId(value: unknown): string {
+  if (typeof value !== "string" || !/^\d{1,20}$/.test(value)) {
+    throw new DiscordGuildIdConfigError();
+  }
+  return value;
+}
+
 /**
  * The live reader: one GET of the guild's scheduled events per `upcoming()`
  * call, bot-token auth. Any failure — network, non-2xx, malformed rows — flips
  * `lastReadFailed` and returns an empty list; the page decides what that means.
  */
 export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
+  // Admit once at read time: a malformed guild id throws the named
+  // configuration error before any credentialed request is constructed.
+  const guildId = admitDiscordGuildId(env.DISCORD_GUILD_ID);
   let failed = false;
   let failure: ReadFailure | null = null;
   return {
@@ -104,7 +128,7 @@ export function liveDiscordEventsSource(env: Env): DiscordEventsSource {
         );
       });
       const read = async (): Promise<unknown> => {
-        const res = await fetch(`${API}/guilds/${env.DISCORD_GUILD_ID}/scheduled-events`, {
+        const res = await fetch(`${API}/guilds/${encodeURIComponent(guildId)}/scheduled-events`, {
           headers: { authorization: `Bot ${env.DISCORD_BOT_TOKEN}` },
           signal: controller.signal,
         });

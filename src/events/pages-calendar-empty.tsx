@@ -10,11 +10,14 @@ import {
   EVENTS_EMPTY_NEVER_TESTID,
   EVENTS_EMPTY_SEARCH_TESTID,
   EVENTS_GAP_LIST_LIMIT,
+  EVENTS_PARTIAL_COPY,
+  EVENTS_PARTIAL_TESTID,
   EVENTS_RETRY_TESTID,
   EVENTS_SEARCH_CLEAR_EMPTY_TESTID,
   calendarUrl,
   cardTimeLabel,
   eventsSearchMissCopy,
+  eventsSearchGameMissCopy,
   type CalendarState,
 } from "../islands/contracts";
 import type { PublicEvent } from "./reads";
@@ -72,16 +75,59 @@ export const EmptyError: FC<{ url: string; inviteUrl: string }> = ({ url, invite
   </div>
 );
 
-/** Search miss block: named query, what is searched, and the way back out. */
-export const SearchMiss: FC<{ state: CalendarState }> = ({ state }) => (
-  <div data-testid={EVENTS_EMPTY_SEARCH_TESTID}>
-    <h2>{EVENTS_EMPTY_COPY.searchMissTitle}</h2>
-    <p>{eventsSearchMissCopy(state.q)}</p>
-    <p>{EVENTS_EMPTY_COPY.searchMissBody}</p>
+/** Partial source (role=status): healthy rows stay visible beside this notice.
+ * Retry re-issues the same URL; the join link is the human fallback. */
+export const PartialSourceNotice: FC<{ url: string; inviteUrl: string }> = ({ url, inviteUrl }) => (
+  <div role="status" data-testid={EVENTS_PARTIAL_TESTID}>
+    <p>{EVENTS_PARTIAL_COPY.notice}</p>
     <p>
-      <a href={calendarUrl({ ...state, q: "" })} data-testid={EVENTS_SEARCH_CLEAR_EMPTY_TESTID}>
-        {EVENTS_EMPTY_COPY.searchMissClear}
+      <a href={url} data-testid={EVENTS_RETRY_TESTID}>
+        {EVENTS_EMPTY_COPY.retry}
+      </a>{" "}
+      <a href={inviteUrl} data-testid={DISCORD_JOIN_TESTID}>
+        {EVENTS_EMPTY_COPY.join}
       </a>
     </p>
+  </div>
+);
+
+/** Complete filtered miss: name the effective scope and broaden only what the link promises. */
+export const SearchMiss: FC<{ state: CalendarState; gameFilter?: string | null }> = ({
+  state,
+  gameFilter = null,
+}) => (
+  <div data-testid={EVENTS_EMPTY_SEARCH_TESTID}>
+    <h2>
+      {state.q.trim() !== ""
+        ? EVENTS_EMPTY_COPY.searchMissTitle
+        : "No upcoming events for this game."}
+    </h2>
+    <p>
+      {gameFilter !== null
+        ? state.q.trim() !== ""
+          ? eventsSearchGameMissCopy(state.q, gameFilter)
+          : `No upcoming events for “${gameFilter}”.`
+        : eventsSearchMissCopy(state.q)}
+    </p>
+    {state.q.trim() !== "" ? (
+      <>
+        <p>{EVENTS_EMPTY_COPY.searchMissBody}</p>
+        <p>
+          <a
+            href={calendarUrl({ ...state, q: "", page: 1 })}
+            data-testid={EVENTS_SEARCH_CLEAR_EMPTY_TESTID}
+          >
+            {EVENTS_EMPTY_COPY.searchMissClear}
+          </a>
+        </p>
+      </>
+    ) : null}
+    {gameFilter !== null ? (
+      <p>
+        <a href={calendarUrl({ ...state, game: "", page: 1 })}>
+          {state.q.trim() !== "" ? "Search all games" : "Show all games"}
+        </a>
+      </p>
+    ) : null}
   </div>
 );

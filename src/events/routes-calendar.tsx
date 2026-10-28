@@ -19,6 +19,7 @@ import {
 } from "./anon-cache";
 import { discordEventsSource } from "./discord-transients";
 import { listPast, normalizePastPage } from "./reads";
+import { matchQuery } from "./search-log";
 import { EventsCalendarPage, EventsSearchTooLongPage, PastEventsPage } from "./pages";
 import { eventsUnavailable, publicReadGuard, type App, type SessionReader } from "./routes-shared";
 
@@ -30,6 +31,7 @@ export function registerCalendarRoutes(
   app.get("/events", async (c) => {
     const input = resolveCalendarInput({
       q: c.req.query("q"),
+      game: c.req.query("game"),
       view: c.req.query("view"),
       past: c.req.query("past"),
       page: c.req.query("page"),
@@ -40,10 +42,17 @@ export function registerCalendarRoutes(
       c.header("cache-control", "no-store, private");
       return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} />, 422);
     }
-    const limited = await publicReadGuard(c);
+    let phases = c.get("calendarPhaseRecorder");
+    const limited = await (phases
+      ? phases.measure("public_read_guard", () => publicReadGuard(c))
+      : publicReadGuard(c));
     if (limited) return limited;
     const db = await dbFor(c);
-    if (!db) return eventsUnavailable(c);
+    if (!db) {
+      return c.req.header("x-two-island") === "events-calendar"
+        ? eventsUnavailable(c)
+        : databaseUnavailable(c);
+    }
     let session;
     try {
       session = await (c.req.header("x-two-island") === "events-calendar"
@@ -59,6 +68,12 @@ export function registerCalendarRoutes(
         exception: err instanceof Error ? err.constructor.name : "unknown",
       });
       return databaseUnavailable(c);
+    }
+    // Admission precedes session resolution. Discard its provisional timing
+    // once a session is known: signed-in requests retain the original log shape.
+    if (session !== null) {
+      phases = undefined;
+      c.set("calendarPhaseRecorder", undefined);
     }
     const now = new Date();
 
@@ -96,29 +111,38 @@ export function registerCalendarRoutes(
           hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
         );
         if (hit.vary) c.header("vary", hit.vary);
-        return c.html(hit.body, hit.status as 200);
+        return phases
+          ? phases.measure("render_cache", () => c.html(hit.body, hit.status as 200))
+          : c.html(hit.body, hit.status as 200);
       }
     }
     // Retire generation before the first render read: a publish, edit or RSVP
     // that commits (and retires) while this render awaits its reads must stop
     // the stale bytes from settling below.
     const anonGen = anonSource ? anonCacheGeneration() : 0;
-    const model = await loadCalendarPageModel({
-      db,
-      input,
-      includeDrafts: session?.moderator ?? false,
-      discord: discordEventsSource(c.env),
-      now,
-    });
+    const loadModel = () =>
+      loadCalendarPageModel({
+        db,
+        input,
+        includeDrafts: session?.moderator ?? false,
+        discord: discordEventsSource(c.env),
+        now,
+        requestId: c.get("requestId"),
+        phases,
+      });
+    const model = await (phases ? phases.measure("calendar_model", loadModel) : loadModel());
     const {
       state,
       upcoming,
       past: localPast,
+      pastMayBeTruncated,
       zone,
       totalPages,
       emptyState,
       robots,
       discordFailed,
+      games,
+      gameFilter,
     } = model;
 
     // One-shot join confirmation (legacy join_result flash): /events is a
@@ -150,61 +174,78 @@ export function registerCalendarRoutes(
     } catch {
       loginReturnTo = "/events";
     }
-    const response = await c.html(
-      <EventsCalendarPage
-        state={state}
-        upcoming={upcoming}
-        past={localPast}
-        zone={zone}
-        now={now}
-        totalPages={totalPages}
-        emptyState={emptyState}
-        robots={robots}
-        discordFailed={discordFailed}
-        member={session?.member ?? false}
-        inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
-        appUrl={c.env.APP_URL}
-        loginReturnTo={loginReturnTo}
-        joinResult={joinResult}
-        markdownAlternate="/events.md"
-      />,
-    );
-    // Settle the shared entry only from an anonymous 200: the header guard
-    // above already forced private on session/search/flash, so a `public`
-    // prefix re-checks that no viewer state slipped into shared bytes. Buffer
-    // the candidate before the final generation comparison so a retire that
-    // lands while clone().text() is in flight drops the stale bytes; the
-    // compare-and-write is synchronous, so it is atomic within the isolate.
-    if (anonSource && anonKey && response.status === 200) {
-      const cacheControl = response.headers.get("cache-control");
-      if (cacheControl?.startsWith("public")) {
-        const body = await response.clone().text();
-        if (anonCacheGeneration() === anonGen) {
-          writeAnonCache(
-            anonKey,
-            anonSource,
-            {
-              status: 200,
-              cacheControl,
-              vary: response.headers.get("vary"),
-              body,
-            },
-            ANON_EVENTS_TTL_MS,
-          );
+    const render = async () => {
+      const response = await c.html(
+        <EventsCalendarPage
+          state={state}
+          upcoming={upcoming}
+          past={localPast}
+          pastMayBeTruncated={pastMayBeTruncated}
+          zone={zone}
+          now={now}
+          totalPages={totalPages}
+          emptyState={emptyState}
+          robots={robots}
+          discordFailed={discordFailed}
+          games={games}
+          gameFilter={gameFilter}
+          member={session?.member ?? false}
+          session={session}
+          inviteUrl={inviteDestination(c.env.DISCORD_INVITE_URL)}
+          appUrl={c.env.APP_URL}
+          loginReturnTo={loginReturnTo}
+          joinResult={joinResult}
+          markdownAlternate="/events.md"
+        />,
+      );
+      // Settle the shared entry only from an anonymous 200: the header guard
+      // above already forced private on session/search/flash, so a `public`
+      // prefix re-checks that no viewer state slipped into shared bytes. Buffer
+      // the candidate before the final generation comparison so a retire that
+      // lands while clone().text() is in flight drops the stale bytes; the
+      // compare-and-write is synchronous, so it is atomic within the isolate.
+      if (anonSource && anonKey && response.status === 200) {
+        const cacheControl = response.headers.get("cache-control");
+        if (cacheControl?.startsWith("public")) {
+          const body = await response.clone().text();
+          if (anonCacheGeneration() === anonGen) {
+            writeAnonCache(
+              anonKey,
+              anonSource,
+              {
+                status: 200,
+                cacheControl,
+                vary: response.headers.get("vary"),
+                body,
+              },
+              ANON_EVENTS_TTL_MS,
+            );
+          }
         }
       }
-    }
-    return response;
+      return response;
+    };
+    return phases ? phases.measure("render_cache", render) : render();
   });
 
   app.get("/events/past", async (c) => {
+    const input = resolveCalendarInput({ q: c.req.query("q") });
+    if (input.queryTooLong) {
+      c.header("cache-control", "no-store, private");
+      return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} archive />, 422);
+    }
+    const q = matchQuery(input.q);
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     const db = await dbFor(c);
-    if (!db) return eventsUnavailable(c);
+    if (!db) {
+      return c.req.header("x-two-island") === "past-events"
+        ? eventsUnavailable(c)
+        : databaseUnavailable(c);
+    }
     const page = normalizePastPage(Number.parseInt(c.req.query("page") ?? "1", 10));
     // Anonymous shared entry (N6 retire): the archive renders no session, no
-    // flash and no RSVP controls, so every cookieless render is shareable.
+    // flash and no RSVP controls. Only search-free cookieless renders share bytes.
     // Only data pages settle — empty and out-of-range renders stay uncached
     // so a fresh archive never pins a stale "never ran" state, and keys stay
     // bounded.
@@ -212,7 +253,7 @@ export function registerCalendarRoutes(
       method: c.req.method,
       hasCookie: c.req.header("cookie") !== undefined,
       hasSession: false,
-      searching: false,
+      searching: input.searching,
       flashed: false,
     });
     const pastSource = pastEligible ? anonCacheSource(c.env) : null;
@@ -231,8 +272,12 @@ export function registerCalendarRoutes(
     // Same retire-generation guard as `/events`: an edit that commits while
     // this archive render awaits its read must stop stale bytes settling.
     const pastGen = pastSource ? anonCacheGeneration() : 0;
-    const { rows, hasMore, totalPages } = await listPast(db, page);
-    c.header("cache-control", "public, max-age=300");
+    const { rows, hasMore, totalPages } = await listPast(db, page, new Date(), q);
+    c.header("cache-control", input.searching ? "private, no-store" : "public, max-age=300");
+    // Browsing renders are public and shared, like the Kit twin: name the
+    // Cookie variance so shared caches key anonymous and signed-in shells
+    // apart. Searching renders stay private no-store with no Vary.
+    if (!input.searching) c.header("vary", "Cookie");
     const pastResponse = await c.html(
       <PastEventsPage
         rows={rows}
@@ -240,6 +285,7 @@ export function registerCalendarRoutes(
         hasMore={hasMore}
         totalPages={totalPages}
         appUrl={c.env.APP_URL}
+        q={q ?? ""}
       />,
     );
     // Buffer before the final generation comparison (see /events above): a

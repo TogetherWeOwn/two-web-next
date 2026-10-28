@@ -59,11 +59,11 @@ export function loadBudget(root = repoRoot) {
   let budget;
   try {
     budget = JSON.parse(readFileSync(join(root, "ci/auth-perf-budget.json"), "utf8"));
-  } catch (error) {
-    return { error: `auth perf budget: cannot enforce: ${error.message}` };
+  } catch {
+    return { error: "auth perf budget: cannot enforce: unreadable or invalid budget" };
   }
-  if (!isObject(budget) || !Number.isSafeInteger(budget.samples) || budget.samples < 1) {
-    return { error: "auth perf budget: cannot enforce: samples must be a positive integer" };
+  if (!isObject(budget) || !Number.isSafeInteger(budget.samples) || budget.samples < 5) {
+    return { error: "auth perf budget: cannot enforce: samples must be an integer of at least 5" };
   }
   if (!isObject(budget.journeys)) {
     return { error: "auth perf budget: cannot enforce: journeys must be an object" };
@@ -133,14 +133,16 @@ export function assertJourney({ id, samples, budget }) {
       failures.push(`${id} sample ${index}: content-type ${contentType} is not HTML`);
     for (const failure of assertHtml(sample.html))
       failures.push(`${id} sample ${index}: ${failure}`);
-    if (!(sample.elapsedMs >= 0))
+    if (!Number.isFinite(sample.elapsedMs) || sample.elapsedMs < 0)
       failures.push(`${id} sample ${index}: elapsedMs ${sample.elapsedMs} is not measurable`);
     else if (sample.elapsedMs > budget.maxSingleMs)
       failures.push(
         `${id} sample ${index}: ${sample.elapsedMs}ms over the single-sample ceiling ${budget.maxSingleMs}ms`,
       );
   }
-  const timed = samples.map((sample) => sample.elapsedMs).filter((ms) => ms >= 0);
+  const timed = samples
+    .map((sample) => sample.elapsedMs)
+    .filter((ms) => Number.isFinite(ms) && ms >= 0);
   if (timed.length > 0) {
     const med = median(timed);
     if (med > budget.maxMedianMs)
@@ -157,64 +159,180 @@ function firstSessionCookie(setCookieText) {
   return pair ?? null;
 }
 
-async function qaLoginCookie({ base, identity, token, fetchImpl }) {
-  let res;
-  try {
-    res = await fetchImpl(new URL(`/auth/qa/${identity}`, base), {
-      method: "POST",
-      redirect: "manual",
-      signal: AbortSignal.timeout(15_000),
-      headers: { "x-two-qa-auth": token, origin: base },
-    });
-  } catch (error) {
-    return {
-      error: `QA login request failed on ${new URL(base).host}: ${String(error?.message ?? error).slice(0, 120)}`,
-    };
-  }
-  if (res.status !== 204) {
-    return {
-      error: `QA login answered ${res.status} on ${new URL(base).host} (seam unavailable or token rejected)`,
-    };
-  }
-  const raw = res.headers.getSetCookie?.().join("\n") ?? res.headers.get("set-cookie") ?? "";
-  const cookie = firstSessionCookie(raw);
-  if (!cookie) return { error: `QA login set no session cookie on ${new URL(base).host}` };
-  return { cookie };
+// Resource bounds, not performance budgets: timing still ends at headers.
+const REQUEST_TIMEOUT_MS = 15_000;
+const MAX_BODY_BYTES = 1_048_576;
+const ERRORS = {
+  transport_timeout: [
+    true,
+    "Check transport availability before starting a new probe; no automatic retry.",
+  ],
+  transport_error: [
+    true,
+    "Check transport configuration and availability; no credential substitution or automatic retry.",
+  ],
+  body_read_failed: [
+    true,
+    "Check response delivery before starting a new probe; no automatic retry.",
+  ],
+  body_too_large: [false, "Inspect response size with the service maintainer; keep the body cap."],
+  login_refused: [
+    false,
+    "Verify the QA seam configuration with its authorized maintainer; do not retry credentials.",
+  ],
+  missing_cookie: [
+    false,
+    "Verify QA session issuance with its authorized maintainer; do not re-login.",
+  ],
+  http_refused: [false, "Inspect authenticated route availability and access; do not re-login."],
+  unexpected_content: [false, "Inspect the authenticated HTML contract; do not loosen assertions."],
+  budget_exceeded: [false, "Investigate header latency; do not relax performance budgets."],
+  probe_not_started: [false, "Resolve the preceding failure before starting a new probe."],
+  invalid_configuration: [
+    false,
+    "Check the budget and documented AUTH_PERF settings; no request was sent.",
+  ],
+  output_write_failed: [
+    false,
+    "Restore writable test-results output and rerun verification; receipts are incomplete.",
+  ],
+  probe_failed: [
+    false,
+    "Run the hermetic verification command and inspect the probe implementation.",
+  ],
+};
+
+function failure(code) {
+  if (!Object.hasOwn(ERRORS, code)) code = "probe_failed";
+  const [retryable, next_action] = ERRORS[code];
+  return { code, retryable, next_action };
 }
 
-async function timeJourney({ base, journey, samples, cookie, stripCookie, fetchImpl, now }) {
-  const measured = [];
-  let jar = cookie;
-  for (let i = 0; i < samples; i += 1) {
-    const started = now();
-    let res;
-    try {
-      res = await fetchImpl(new URL(journey.path, base), {
-        redirect: "manual",
-        signal: AbortSignal.timeout(15_000),
-        headers: stripCookie ? {} : { cookie: jar },
-      });
-    } catch (error) {
-      measured.push({ status: -1, html: "", contentType: "", elapsedMs: -1 });
-      return { measured, fetchError: String(error?.message ?? error).slice(0, 200) };
-    }
-    const elapsedMs = Math.round(now() - started);
-    // Rotating page reads replace the presented bearer: follow the fresh
-    // pair like the browser journeys replay the jar, or the next sample
-    // presents a dead session and the gate misreads rotation as slowness.
-    const rotated = firstSessionCookie(
-      res.headers.getSetCookie?.().join("\n") ?? res.headers.get("set-cookie") ?? "",
-    );
-    if (rotated) jar = rotated;
-    const html = res.status === 200 ? await res.text() : "";
-    measured.push({
-      status: res.status,
-      html,
-      contentType: res.headers.get("content-type") ?? "",
-      elapsedMs,
-    });
+// Cleanup is best effort, never a second await boundary. Both synchronous
+// throws and abandoned cleanup rejections are consumed without inspecting text.
+function cleanup(action) {
+  try {
+    Promise.resolve(action()).catch(() => undefined);
+  } catch {
+    return; // A broken disposer must not replace the classified probe result.
   }
-  return { measured };
+}
+
+function dispose(res, reader) {
+  cleanup(() => (reader ? reader.cancel() : res?.body?.cancel?.()));
+  if (reader) cleanup(() => reader.releaseLock());
+}
+
+async function readBody(res, setReader) {
+  if (!res.body?.getReader) {
+    // Compatibility with injected text-only adapters. They cannot offer an
+    // incremental allocation bound, but still get a deadline and UTF-8 cap.
+    const html = await res.text();
+    return new TextEncoder().encode(html).byteLength > MAX_BODY_BYTES
+      ? { error: failure("body_too_large") }
+      : { html };
+  }
+  const reader = res.body.getReader();
+  setReader(reader);
+  const decoder = new TextDecoder();
+  let size = 0;
+  let html = "";
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (done) return { html: html + decoder.decode() };
+    size += value.byteLength;
+    if (size > MAX_BODY_BYTES) return { error: failure("body_too_large") };
+    html += decoder.decode(value, { stream: true });
+  }
+}
+
+async function probeRequest({ url, options, login = false, fetchImpl, now, secrets }) {
+  const controller = new AbortController();
+  let res;
+  let reader;
+  let finished = false;
+  let elapsedMs = null;
+  let status = null;
+  let timer;
+  const started = now();
+  const timeout = new Promise((resolveTimeout) => {
+    timer = setTimeout(() => {
+      finished = true;
+      controller.abort();
+      dispose(res, reader);
+      resolveTimeout({ elapsedMs, status, error: failure("transport_timeout") });
+    }, REQUEST_TIMEOUT_MS);
+  });
+  const operation = (async () => {
+    let phase = "transport_error";
+    try {
+      const response = await fetchImpl(url, { ...options, signal: controller.signal });
+      if (finished) {
+        dispose(response); // An abort-ignoring transport can yield headers late.
+        return { elapsedMs: null, status: null, error: failure("transport_timeout") };
+      }
+      res = response;
+      // Do not include body delivery in the calibrated server-response metric.
+      if (!login) elapsedMs = Math.round(now() - started);
+      status =
+        Number.isInteger(res.status) && res.status >= 100 && res.status <= 599 ? res.status : null;
+      if (login && status !== 204) return { elapsedMs, status, error: failure("login_refused") };
+      if (!login && status !== 200) return { elapsedMs, status, error: failure("http_refused") };
+      const cookie = firstSessionCookie(
+        res.headers.getSetCookie?.().join("\n") ?? res.headers.get("set-cookie") ?? "",
+      );
+      if (cookie) secrets.add(cookie.slice(cookie.indexOf("=") + 1));
+      if (login) {
+        return cookie ? { cookie } : { error: failure("missing_cookie") };
+      }
+      // Response metadata is untrusted too: only a classification reaches
+      // assertJourney/receipts, never the original header or response URL.
+      const contentType = /text\/html/.test(res.headers.get("content-type") ?? "")
+        ? "text/html"
+        : "non_html";
+      phase = "body_read_failed";
+      const body = await readBody(res, (value) => {
+        reader = value;
+      });
+      return { elapsedMs, status, cookie, contentType, ...body };
+    } catch {
+      return { elapsedMs, status, error: failure(phase) };
+    }
+  })();
+  const result = await Promise.race([operation, timeout]);
+  finished = true;
+  clearTimeout(timer);
+  if (result.error || login) {
+    controller.abort();
+    dispose(res, reader);
+  } else if (reader) {
+    cleanup(() => reader.releaseLock());
+  }
+  return result;
+}
+
+function plannedJourney(id, count) {
+  const error = failure("probe_not_started");
+  return {
+    id,
+    name: id,
+    status: "failed",
+    reason: error.code,
+    samples: [],
+    medianMs: null,
+    error,
+    measurements: Array.from({ length: count }, (_, index) => ({
+      id: `${id}:${index}`,
+      state: "unmeasured",
+      elapsedMs: null,
+      error,
+    })),
+  };
+}
+
+function failJourney(journey, error) {
+  journey.error = error;
+  journey.reason = error.code;
 }
 
 export async function runLive({
@@ -223,87 +341,112 @@ export async function runLive({
   now = () => Date.now(),
 } = {}) {
   const { budget, error } = loadBudget();
-  if (error) {
-    console.error(error);
-    return 2;
-  }
-  const base = (env.AUTH_PERF_URL ?? "").trim() || null;
-  if (!base) {
-    console.error(
-      "auth perf gate: cannot enforce: set AUTH_PERF_URL (the worker origin to measure)",
-    );
-    return 2;
-  }
+  const journeys = JOURNEY_IDS.map((id) => plannedJourney(id, budget?.samples ?? 0));
+  const secrets = new Set();
+  const finish = (exitCode) => {
+    const summary = { ...summarize(journeys), version: 2 };
+    const written = writeLedger(summary, { secrets: [...secrets] });
+    return written === 0 ? exitCode : exitCode || written;
+  };
+  const invalid = () => {
+    for (const journey of journeys) failJourney(journey, failure("invalid_configuration"));
+    return finish(2);
+  };
+  if (error) return invalid();
+  const base = (env.AUTH_PERF_URL ?? "").trim();
   let parsed;
   try {
     parsed = new URL(base);
   } catch {
-    console.error("auth perf gate: cannot enforce: AUTH_PERF_URL is not a valid URL");
-    return 2;
+    return invalid();
   }
-  if (parsed.protocol !== "https:" && parsed.hostname !== "127.0.0.1") {
-    console.error("auth perf gate: cannot enforce: AUTH_PERF_URL must be https (or local http)");
-    return 2;
-  }
+  if (
+    (parsed.protocol !== "https:" &&
+      !(parsed.protocol === "http:" && parsed.hostname === "127.0.0.1")) ||
+    parsed.username ||
+    parsed.password ||
+    parsed.search ||
+    parsed.hash
+  )
+    return invalid();
   const mutant = (env.AUTH_PERF_MUTANT ?? "").trim();
-  if (mutant !== "" && mutant !== "no-cookie") {
-    console.error(
-      `auth perf gate: cannot enforce: unknown AUTH_PERF_MUTANT ${JSON.stringify(mutant)}`,
-    );
-    return 2;
-  }
+  if (mutant !== "" && mutant !== "no-cookie") return invalid();
   const stripCookie = mutant === "no-cookie";
-  const token = (env.E2E_QA_TOKEN ?? env.AUTH_PERF_QA_TOKEN ?? "").trim() || null;
-  if (!stripCookie && !token) {
-    console.error("auth perf gate: cannot enforce: set E2E_QA_TOKEN (the ephemeral QA token)");
-    return 2;
-  }
-  const eventKey = (env.AUTH_PERF_EVENT_KEY ?? "").trim() || null;
+  const token = (env.E2E_QA_TOKEN ?? env.AUTH_PERF_QA_TOKEN ?? "").trim();
+  if (token) secrets.add(token);
+  if (!stripCookie && !token) return invalid();
+  const eventKey = (env.AUTH_PERF_EVENT_KEY ?? "").trim();
 
-  const journeys = [];
-  for (const id of JOURNEY_IDS) {
+  for (const journey of journeys) {
+    const { id } = journey;
     const entry = { ...budget.journeys[id] };
     if (id === "member-rsvp" && eventKey) entry.path = `/e/${eventKey}`;
-    let cookie = null;
+    let jar = null;
     if (!stripCookie) {
-      const login = await qaLoginCookie({ base, identity: entry.identity, token, fetchImpl });
+      const login = await probeRequest({
+        url: new URL(`/auth/qa/${entry.identity}`, parsed.origin),
+        options: {
+          method: "POST",
+          redirect: "manual",
+          headers: { "x-two-qa-auth": token, origin: parsed.origin },
+        },
+        login: true,
+        fetchImpl,
+        now,
+        secrets,
+      });
       if (login.error) {
-        console.error(`auth perf gate: cannot enforce: ${login.error}`);
-        return 2;
+        failJourney(journey, login.error);
+        for (const slot of journey.measurements) slot.error = login.error;
+        return finish(2); // No retries or later login after credential refusal.
       }
-      cookie = login.cookie;
+      jar = login.cookie;
     }
-    const { measured, fetchError } = await timeJourney({
-      base,
-      journey: entry,
-      samples: budget.samples,
-      cookie,
-      stripCookie,
-      fetchImpl,
-      now,
-    });
-    if (fetchError) {
-      journeys.push({ name: `${id} (${entry.path})`, status: "failed", reason: fetchError });
-      continue;
-    }
-    const failures = assertJourney({ id, samples: measured, budget: entry });
-    const timed = measured.map((sample) => sample.elapsedMs);
-    journeys.push({
-      name: `${id} (${entry.path})`,
-      status: failures.length ? "failed" : "passed",
-      reason: failures.join("; ").slice(0, 300) || null,
-      samples: timed,
-      medianMs: median(timed),
-    });
-    for (const [index, sample] of measured.entries()) {
+    const observed = [];
+    journey.error = null;
+    for (const [index, slot] of journey.measurements.entries()) {
+      const sample = await probeRequest({
+        url: new URL(entry.path, parsed.origin),
+        options: { redirect: "manual", headers: stripCookie ? {} : { cookie: jar } },
+        fetchImpl,
+        now,
+        secrets,
+      });
+      if (sample.elapsedMs !== null) {
+        slot.state = "measured";
+        slot.elapsedMs = sample.elapsedMs;
+        journey.samples.push(sample.elapsedMs);
+      }
+      slot.error = sample.error ?? null;
+      if (sample.error) {
+        failJourney(journey, sample.error);
+        break;
+      }
+      // Exactly one login per identity; each read replays the fresh bare pair.
+      if (sample.cookie) jar = sample.cookie;
+      observed.push(sample);
       console.log(
         `auth perf: ${id} sample ${index}: status ${sample.status}, ${sample.elapsedMs}ms`,
       );
     }
+    journey.medianMs = journey.samples.length ? median(journey.samples) : null;
+    if (!journey.error) {
+      const failures = assertJourney({ id, samples: observed, budget: entry });
+      if (failures.length) {
+        failJourney(
+          journey,
+          failure(
+            failures.some((f) => f.includes("ceiling")) ? "budget_exceeded" : "unexpected_content",
+          ),
+        );
+        journey.reason = failures.join("; ").slice(0, 300);
+      } else {
+        journey.status = "passed";
+        journey.reason = null;
+      }
+    }
   }
-
-  const summary = summarize(journeys);
-  return writeLedger(summary);
+  return finish(journeys.some((journey) => journey.status === "failed") ? 1 : 0);
 }
 
 export function summarize(journeys) {
@@ -315,14 +458,19 @@ export function summarize(journeys) {
   return { version: 1, counts, journeys, verdict: counts.failed > 0 ? "fail" : "pass" };
 }
 
-export function writeLedger(summary, { stdout = process.stdout } = {}) {
-  mkdirSync("test-results", { recursive: true });
+export function writeLedger(summary, { stdout = process.stdout, secrets = [] } = {}) {
   const ledgerText = JSON.stringify(summary, null, 2);
-  if (scrubSecrets(ledgerText).length) {
+  if (
+    scrubSecrets(ledgerText).length ||
+    secrets.some(
+      (secret) =>
+        secret &&
+        (ledgerText.includes(secret) || ledgerText.includes(JSON.stringify(secret).slice(1, -1))),
+    )
+  ) {
     stdout.write("auth perf gate: secret-shaped content in ledger — failing.\n");
     return 1;
   }
-  writeFileSync("test-results/auth-perf-ledger.json", `${ledgerText}\n`);
   const lines = [
     "## Auth perf ledger",
     "",
@@ -341,8 +489,35 @@ export function writeLedger(summary, { stdout = process.stdout } = {}) {
     ].map((cell) => String(cell).replace(/\\/g, "\\\\").replace(/\|/g, "\\|"));
     lines.push(`| ${cells.join(" | ")} |`);
   }
+  if (summary.version === 2) {
+    lines.push(
+      "",
+      "### Measurements",
+      "",
+      "| Sample ID | State | Header ms | Error code | Retryable | Next action |",
+      "| --- | --- | --- | --- | --- | --- |",
+    );
+    for (const journey of summary.journeys) {
+      if (journey.error)
+        lines.push(
+          `| ${journey.id} | ${journey.status} | — | ${journey.error.code} | ${journey.error.retryable} | ${journey.error.next_action} |`,
+        );
+      for (const slot of journey.measurements) {
+        lines.push(
+          `| ${slot.id} | ${slot.state} | ${slot.elapsedMs ?? "—"} | ${slot.error?.code ?? "—"} | ${slot.error?.retryable ?? "—"} | ${slot.error?.next_action ?? "—"} |`,
+        );
+      }
+    }
+  }
   lines.push("");
-  writeFileSync("test-results/auth-perf-ledger.md", `${lines.join("\n")}\n`);
+  try {
+    mkdirSync("test-results", { recursive: true });
+    writeFileSync("test-results/auth-perf-ledger.json", `${ledgerText}\n`);
+    writeFileSync("test-results/auth-perf-ledger.md", `${lines.join("\n")}\n`);
+  } catch {
+    stdout.write(`auth perf gate: ${JSON.stringify(failure("output_write_failed"))}\n`);
+    return 1;
+  }
   stdout.write(
     `auth perf gate: ${summary.counts.passed} passed, ${summary.counts.failed} failed, ${summary.counts.total} total (verdict: ${summary.verdict}).\n`,
   );
@@ -368,10 +543,21 @@ function selftest() {
   mkdirSync(join(badRoot, "ci"), { recursive: true });
   writeFileSync(
     join(badRoot, "ci/auth-perf-budget.json"),
-    JSON.stringify({ samples: 3, journeys: { "member-rsvp": budget.journeys["member-rsvp"] } }),
+    JSON.stringify({ samples: 5, journeys: { "member-rsvp": budget.journeys["member-rsvp"] } }),
   );
+  const missingJourneyError = loadBudget(badRoot).error;
   check(
     "budget missing a journey fails closed",
+    missingJourneyError ===
+      "auth perf budget: cannot enforce: invalid journey entry: moderator-admin",
+    missingJourneyError ?? "",
+  );
+  writeFileSync(
+    join(badRoot, "ci/auth-perf-budget.json"),
+    JSON.stringify({ samples: 3, journeys: budget.journeys }),
+  );
+  check(
+    "fewer than five samples fails closed",
     loadBudget(badRoot).error !== undefined,
     loadBudget(badRoot).error ?? "",
   );
@@ -396,7 +582,7 @@ function selftest() {
     "member good fixture passes",
     assertJourney({
       id: "member-rsvp",
-      samples: [memberGood, memberGood, memberGood],
+      samples: Array(5).fill(memberGood),
       budget: memberBudget,
     }).length === 0,
   );
@@ -404,7 +590,7 @@ function selftest() {
     "admin good fixture passes",
     assertJourney({
       id: "moderator-admin",
-      samples: [adminGood, adminGood, adminGood],
+      samples: Array(5).fill(adminGood),
       budget: adminBudget,
     }).length === 0,
   );
@@ -513,15 +699,23 @@ function selftest() {
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   const [, , ...args] = process.argv;
-  if (args.length === 1 && args[0] === "--selftest") {
+  if (args.length === 1 && args[0] === "--help") {
+    console.log(`Usage: node ci/check-auth-perf.mjs [--help | --selftest | --dry-run | --mutant no-cookie]
+--selftest / --dry-run: fixtures only; no network, DB or credentials.
+Verify: node --test ci/check-auth-perf*.test.mjs
+No flags: live probe using AUTH_PERF_URL and E2E_QA_TOKEN; authorized fixture origin only.
+--mutant no-cookie: live negative control; never combined with fixture flags.
+Receipts: test-results/auth-perf-ledger.{json,md} (v2, fixed errors and sample IDs).
+Procedure, bounds and recovery: docs/performance-budgets.md`);
+  } else if (args.length === 1 && ["--selftest", "--dry-run"].includes(args[0])) {
     process.exitCode = selftest();
   } else if (args.length === 0) {
     runLive().then(
       (code) => {
         process.exitCode = code;
       },
-      (error) => {
-        console.error(`auth perf gate: ${error?.message ?? error}`);
+      () => {
+        console.error(`auth perf gate: ${JSON.stringify(failure("probe_failed"))}`);
         process.exitCode = 1;
       },
     );
@@ -531,13 +725,15 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       (code) => {
         process.exitCode = code;
       },
-      (error) => {
-        console.error(`auth perf gate: ${error?.message ?? error}`);
+      () => {
+        console.error(`auth perf gate: ${JSON.stringify(failure("probe_failed"))}`);
         process.exitCode = 1;
       },
     );
   } else {
-    console.error("Usage: node ci/check-auth-perf.mjs [--selftest | --mutant no-cookie]");
+    console.error(
+      "Usage: node ci/check-auth-perf.mjs [--help | --selftest | --dry-run | --mutant no-cookie]",
+    );
     process.exitCode = 2;
   }
 }

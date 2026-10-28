@@ -24,7 +24,7 @@ const session: Session = {
   member: false,
   moderator: false,
 };
-const render = (overrides = {}) => Home({ ...props, ...overrides })!.toString();
+const render = (overrides = {}) => Home({ ...props, ...overrides })!.toString() as string;
 
 beforeEach(() =>
   vi.stubGlobal(
@@ -107,6 +107,19 @@ describe("homepage theme", () => {
     if (member) expect(html).toContain('href="https://discord.gg/invite">Open Discord');
   });
 
+  it.each([
+    ["guest", null],
+    ["signed-in non-member", session],
+    ["member", { ...session, member: true }],
+  ] as const)("offers the member board link to members only (%s)", (_viewer, viewer) => {
+    const nav = render({ session: viewer }).match(
+      /<nav[^>]*aria-label="Primary"[^>]*>([\s\S]*?)<\/nav>/,
+    );
+    expect(nav).not.toBeNull();
+    // Guests and non-members cannot open the board, so they are not offered it.
+    expect(nav![1]!.includes('href="/leaderboards/members"')).toBe(viewer?.member === true);
+  });
+
   it.each(["joined", "already_member", "join_failed", "signin_failed"])(
     "retains the %s status and invite recovery",
     (notice) => {
@@ -141,6 +154,7 @@ describe("homepage theme", () => {
           timezone: "UTC",
           location: "Voice lobby",
           goingCount: 2,
+          capacity: null,
         },
       ],
     });
@@ -258,5 +272,23 @@ describe("homepage theme", () => {
     // ~600 bytes of :not(.content-theme) guards. Still no @import, no remote
     // URLs, still one hand-readable file.
     expect(css.length).toBeLessThan(13000);
+  });
+
+  it("keeps the primary .btn:hover lift on the brand token", () => {
+    // The brightness lift is the entire hover affordance: rest and hover
+    // share background var(--brand) and color var(--paper), so deleting or
+    // inverting the filter leaves the join and RSVP CTAs with no visible
+    // hover change. Pin the exact lift and its direction here; the
+    // acceptance file owns only the brand-derivation shape.
+    const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
+    const hovers = css.match(/\.base-theme \.btn:hover\s*\{[^}]*\}/g) ?? [];
+    expect(hovers).toHaveLength(1);
+    expect(hovers[0]).toContain("var(--brand)");
+    expect(hovers[0]).toContain("filter: brightness(1.1)");
+    const rests = css.match(/\.base-theme \.btn\s*\{[^}]*\}/g) ?? [];
+    expect(rests.length).toBeGreaterThanOrEqual(1);
+    for (const rest of rests) {
+      expect(rest).not.toContain("brightness");
+    }
   });
 });

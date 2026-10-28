@@ -26,7 +26,7 @@ expect Hono for the right reason.
 | `GET /admin/events` | `web/src/routes/admin/events/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared bounded `listEvents` helper with a classified-outage 503 mapping, no page-specific island beyond the shared `/islands/auth-status.js` shell tab-sync controller; only this GET migrates — `POST /admin/events`, `/new` and `/:key` stay Hono-owned, so the row forms keep submitting to the unchanged Hono handlers) | events/list (`admin.events.index`, bridged moderator viewer; subject-free `events` + `going-counts` reads, like the Hono handler) | Hono (`enabled: false`) |
 | `GET /admin/events/new` | `web/src/routes/admin/events/new/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, empty `buildEventCreateView` with the Hono 422 values/errors shape, private no-store, shared `/islands/auth-status.js` shell tab-sync controller plus `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands; only this GET migrates — `POST /admin/events` stays Hono-owned, so draft-first creation, weekly recurrence (max 52), wall-time/timezone validation, body cap, throttle, error aggregation, retained values and the 303 keep one authority, and the guarded `/admin/events/create` legacy redirect stays Hono) | events/view (`admin.events.create`, bridged moderator viewer; no store read on fresh GET, like the Hono handler) | Hono (`enabled: false`) |
 | `GET /admin/events/create` | none (exact disabled manifest pin, no Kit handler; the guarded legacy redirect stays Hono-owned so the `:key` pattern cannot capture `/create` once enabled) | — (no declaration; Hono-owned) | Hono (`enabled: false`) |
-| `GET /admin/events/:key` | `web/src/routes/admin/events/[key]/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared `getEvent` read with the Hono wall-value/status/series shape plus the Hono 422 values/errors shape, shared bounded `listRoster` page with the Hono search/sort/paging copy and a classified-outage 503 mapping, private no-store, plain POST forms to the Hono-owned edit/publish/cancel/RSVP-pause/RSVP-reopen endpoints, shared `/islands/auth-status.js` shell tab-sync controller plus `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands, no removal affordance; only this GET migrates — the update, transition and guarded `/:key/edit` legacy routes stay Hono-owned, so UTC carriers, future recurrence propagation and postcommit writeback keep one authority) | events/view (`admin.events.edit`, bridged moderator viewer; roster members audited, failed audit refuses the whole render) | Hono (`enabled: false`) |
+| `GET /admin/events/:key` | `web/src/routes/admin/events/[key]/+page.svelte` (`csr=false`, shared `AdminShell.svelte` chrome per-child title, `decideKitAdminGuard` layout guard, shared `getEvent` read with the Hono wall-value/status/series shape plus the Hono 422 values/errors shape, shared bounded `listRoster` page with the Hono search/facet/sort/paging copy and a classified-outage 503 mapping, private no-store, plain POST forms to the Hono-owned edit/publish/cancel/RSVP-pause/RSVP-reopen endpoints, shared `/islands/auth-status.js` shell tab-sync controller plus `/islands/admin-event-text-limits.js` + `/islands/admin-event-editor.js` progressive islands, no removal affordance; only this GET migrates — the update, transition and guarded `/:key/edit` legacy routes stay Hono-owned, so UTC carriers, future recurrence propagation and postcommit writeback keep one authority) | events/view (`admin.events.edit`, bridged moderator viewer; roster members audited, failed audit refuses the whole render) | Hono (`enabled: false`) |
 | `GET /admin/join-attempts` | `web/src/routes/admin/join-attempts/+page.svelte` (`csr=false` via the group layout, shared `listJoinAttempts`/`parseJoinAttemptsQuery`/`joinAttemptsUrl` reads with the retention window and exact Discord/request-id search, classified-outage 503 mapping, private no-store, no page-specific island beyond the shared `/islands/auth-status.js` shell tab-sync controller; the detail links target the Kit detail page below) | join_attempts/list (`admin.join-attempts.index`, bridged moderator viewer) | Kit (`enabled: true`) |
 | `GET /admin/join-attempts/:id` | `web/src/routes/admin/join-attempts/[id]/+page.svelte` (`csr=false` via the group layout, shared `getJoinAttempt` retention-window lookup with the Hono canonical-ID admission, classified-outage 503 mapping, private no-store, no page-specific island beyond the shared `/islands/auth-status.js` shell tab-sync controller; same outcome/source/time/trace fields, em-dash fallbacks and back navigation as the Hono detail, no raw provider/token payload) | join_attempts/view (`admin.join-attempts.show`, bridged moderator viewer) | Kit (`enabled: true`) |
 | `GET /auth/recover` | `web/src/routes/auth/recover/+page.svelte` (`csr=false`, shared `#lib/Recovery.svelte` over the `RecoveryModel` shape; journey writes + `/join/callback` outcomes stay Hono, rendered through the injected outcome renderer) | public | Hono (`enabled: false`) |
@@ -36,9 +36,23 @@ expect Hono for the right reason.
 | `GET /hotzones/joins` | `web/src/routes/hotzones/[signal]/+page.svelte` (`csr=false`, thin binding over `loadHotzoneSignalData` in `src/kit-hotzones.ts`, shared `renderHotzoneGrid`; locked joins/voice/games vocabulary with unknown segments 404, live joins aggregate, same 400/503/log/cache shape as the Hono handler) | public | Kit (`enabled: true`) |
 | `GET /hotzones/voice` | `web/src/routes/hotzones/[signal]/+page.svelte` (same binding; serves the estimated prior grid, never a live aggregate) | public | Kit (`enabled: true`) |
 | `GET /hotzones/games` | `web/src/routes/hotzones/[signal]/+page.svelte` (same binding; serves the estimated prior grid, never a live aggregate) | public | Kit (`enabled: true`) |
-| `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blockers: the RSVP companion, plus the session-rotation divergence — the Kit detail load never rotates or re-stamps the sliding session (`docs/parity.md` section 12) — until the Kit detail path rotates) |
+| `GET /e/:key` | `web/src/routes/e/[key]/+page.svelte` (`csr=false`, one shared `web/src/lib/EventDetail.svelte` over the `KitEventDetailModel` shape, existing `/islands/rsvp-button.js` + `/copy-link.js` + `/going-count.js`; JSON/ICS stay Hono-owned) | member (`member`/`list`/`events.page`, bridged viewer; disclosed attendee + own-RSVP subjects audited, anonymous releases with none) | Hono (`enabled: false`; enablement blocker: the RSVP companion — the detail read renews the sliding session post-release, matching Hono's re-stamp) |
 | `GET /leaderboards/members` | `web/src/routes/leaderboards/members/+page.svelte` (`csr=false`, thin binding over `src/kit-members.ts`: same gate order, season/scope/activity grammar, ranking read and `private, no-store` as `src/leaderboards/routes.tsx`; the anonymous board-view log is queued by the load and written after the member-read boundary releases a 200, never inside its capture) | leaderboard (`leaderboard`/`list`/`leaderboards.members`, bridged viewer) | Kit (`enabled: true`; enabled after the executed parity journey below earned the fresh privacy verdict) |
 | everything else | none yet (Kit `[...path]` catch-all → `honoFetch`) | — | Hono |
+
+The member board and the held profile twins reuse the existing auth-status
+controller for stale-tab recovery and bounded sign-out. The dispatch hook adds
+it only to authenticated member full HTML GETs on these three owned manifest
+entries, after the exact buffered response clears the member-read audit boundary.
+Only then may it attach the signed read-only status probe; HEAD, fragments, data,
+refused reads and public pages gain neither. The probe never authenticates a
+member or renews the server session. Admin probe behavior remains separate,
+including its existing fragment-cookie scope. Profile holds above remain unchanged.
+`test/kit-member-auth-documents.test.ts` covers the real dispatch/bridge/audit/SSR
+path; `ci/kit-member-auth-browser.test.mjs` executes two-page Chromium fixtures
+against the minified controller (expiry versus 503, dirty drafts, successful,
+refused and ten-second uncertain sign-out). The `a11y` job TAP-verifies all 15
+browser cases; the Hono-only visual/Lighthouse gates do not exercise Kit routes.
 
 Add one row per migrated route with its reads class (`public` routes render
 outside the member-read boundary; anything else is member data). The gates
@@ -91,11 +105,11 @@ baseline, or route. Run it on both the local Hono worker and built Kit Worker,
 for each viewport above. Assertions are observable rendered-page behavior:
 
 - **Voice page:** direct load `/hotzones/voice` returns 200 HTML; the visible
-  heading is `voice hot zone`; the page explains that voice activity for the
-  displayed season is estimated pending bot event-store calibration and shows a
-  numeric total estimate. The one rendered grid is a labelled, focusable
+  heading is `voice hot zone`; the page explains that voice activity is a
+  season-independent seeded estimate pending bot event-store calibration and
+  shows a numeric total estimate. The one rendered grid is a labelled, focusable
   scroll region containing a table with weekday rows and hour columns; its
-  caption is `Estimated voice activity for season all` for the fixture URL.
+  caption is `Season-independent seeded estimate of voice activity` for the fixture URL.
 - **Games page:** same contract for `/hotzones/games`, with `games` substituted
   for `voice` in the heading, estimate copy and caption.
 - **Navigation:** from `/hotzones`, each Voice heatmap and Games heatmap link
@@ -249,33 +263,90 @@ too: `KIT_WORKER_ORIGIN`, else derived from `KIT_WORKER_PORT` (the port
   touch the Hono baselines — and reads ONLY the Kit suite's own folders
   (`test-results-kit-visual/`, `test-results-kit-parity/`,
   `__screenshots-kit__/`), ignoring Hono actuals in the shared failure
-  artifact. The Kit visual config has its own Playwright output directory so
-  the later parity run cannot clear visual actuals before artifact upload.
-  When an actual and its stale committed baseline share a destination, the
-  reviewed actual wins; distinct actuals still refuse. `ci/visual-accept.mjs`
-  ignores actuals from both `test-results-kit-visual/` and
-  `test-results-kit-parity/`, as well as baselines under `__screenshots-kit__/`.
-  An intentional redesign is a reviewed artifact
-  committed in the same PR — reviewers treat a baseline change like code —
-  never a silent regeneration. Kit baselines pin the events index, member board,
-  and archive. `e2e/kit-parity/events-index.visual.spec.ts` captures the populated
-  `/events` state at desktop and mobile widths against the built Kit Worker as a
-  guest. It runs before mutable journeys and asserts exactly the three seeded
-  upcoming event rows plus the zero-RSVP count, so fixture leftovers cannot
-  silently become the reference image. `e2e/kit-parity/parity.spec.ts` captures
-  member-board default, relative, season and activity views at desktop and mobile
-  widths, reusing the journey's single shared QA login. The archive visual case
-  captures populated and out-of-range `/events/past` at desktop and mobile widths
-  against the built Kit Worker as a guest on the deterministic seeded past row;
-  its DOM/state parity runs in the same spec.
-- `maxDiffPixels: 300` per screenshot (absolute, not a ratio), `<time>`
-  masked, animations disabled, caret hidden. Raising the threshold or masking
-  more needs its own PR with justification.
+  artifact. Use `node ci/kit-visual-accept.mjs [--dry-run] [--format json]
+  <artifact-root>` for Kit-only acceptance. Actual replacement authority comes
+  only from the existing exact `test-results-kit-visual` or
+  `test-results-kit-parity` segments inside the artifact; baseline copies
+  retain the existing `e2e/visual/__screenshots-kit__` path. Hono and
+  unrelated/lookalike screenshots have no Kit replacement authority. The
+  extraction folder's name is not a suite marker. The Kit visual config has
+  its own Playwright output directory so the later parity run cannot clear
+  visual actuals before artifact upload. When an actual and its stale
+  committed baseline share a destination, the reviewed actual wins; distinct
+  actuals still refuse. Inspect every expected, actual and diff image in the
+  failed run's artifact before running
+  `node ci/kit-visual-accept.mjs <unzipped-artifact-dir>` (add `--dry-run` to
+  preview the plan, `--format json` for a versioned verdict; unknown flags exit
+  2 before any read, see `docs/visual-regression.md`). Suite ownership uses
+  exact directory segments relative to that root: extraction folder names and
+  substring-lookalike folders do not admit or exclude images. Copies under
+  `__screenshots-kit__/` can add absent baselines or match existing bytes
+  (no rewrite), but cannot replace a differing checkout baseline without a
+  reviewed actual. Such a stale-copy conflict names the target and refuses
+  the whole plan. Use a current artifact or review the matching actual, never
+  delete the newer checkout baseline to force acceptance. Dry-run is read-only
+  and validates the same authority as apply. Reject source symlinks (including
+  root/ancestor links, descendants and cycles) and linked destination
+  files/ancestors before directory creation or writes. The walk permits only
+  regular files and directories, and existing baseline targets must be regular
+  files: pipes, sockets and devices refuse with `IO_ERROR` before any read.
+  Count the artifact root as directory level 1; exceeding 64 directory levels
+  or 4096 visited entries (including ignored files and directories) refuses
+  with `ARTIFACT_LIMIT`. Human and JSON reports sanitize filenames and stay
+  within 16 KiB of UTF-8, with JSON `truncated` counts covering omitted entries.
+  Display names are bounded diagnostics, not authoritative filesystem paths.
+  Confine the resolved plan to the intended artifact and Kit destination roots. Preflight the entire
+  plan and cache source bytes, preserving actual-over-stale-copy precedence,
+  collision/stale-copy refusal, additions and identical no-ops. Refusal must
+  not change destination or outside bytes. Do not delete newer baselines to
+  bypass a stale-copy conflict. All source bytes and existing targets are
+  preflighted before writes, including sources later superseded by actuals;
+  unreadable files refuse without partial application. These checks do not
+  promise safety against a concurrent hostile filesystem writer or rollback
+  after an apply-time disk failure. Commit only the intentional changes in the
+  same PR and explain each one; never regenerate the tree.
+  `ci/visual-accept.mjs` ignores actuals from foreign suites and both
+  `test-results-kit-visual/` and `test-results-kit-parity/`, as well as
+  baselines under `__screenshots-kit__/`. An intentional redesign is a reviewed
+  artifact committed in the same PR — reviewers treat a baseline change like
+  code — never a silent regeneration. The
+  [visual evidence lookup](visual-regression.md#evidence-lookup) maps each
+  entrypoint to its command and attempt-specific artifact directories.
+- [`playwright.kit-visual.config.ts`](../playwright.kit-visual.config.ts)
+  selects only
+  [`events-index.visual.spec.ts`](../e2e/kit-parity/events-index.visual.spec.ts),
+  whose first-line `import "./member-board-viewer.visual"` also registers
+  [`member-board-viewer.visual.ts`](../e2e/kit-parity/member-board-viewer.visual.ts).
+  The entrypoint captures populated guest `/events` against the built Kit
+  Worker at desktop (1280×800) and mobile (390×844), before mutable journeys:
+  exactly three seeded upcoming rows and the zero-RSVP count must be present.
+  The imported viewer suite uses offline Hono/Kit SSR fixtures with served CSS,
+  aborts every browser request, and needs no live login or DB. Its 16 cases
+  cross Hono/Kit × overall/relative × both widths × forced colors none/active.
+  `member-board-viewer-<twin>-<scope>-<viewport>-<forcedColors>.png` is a
+  viewport-only capture after scrolling, not a full-page capture. Assertions
+  cover a visible viewer marker (a distinct outline/border in forced colors),
+  readable sticky headers, opaque headers in normal colors, viewer visibility
+  and no document overflow. These are fixture visual proofs, not authenticated
+  deployed-board acceptance.
+- Separately, [`parity.spec.ts`](../e2e/kit-parity/parity.spec.ts) captures
+  full-page `member-board-<view>-<viewport>.png` images against the built Kit
+  Worker for default/relative (populated QA member) and season/activity (empty)
+  views at both widths. It reuses the journey's single shared QA login. The
+  same spec captures the guest archive's populated and out-of-range states at
+  both widths. The populated state uses the deterministic seeded past row.
+  It checks DOM/state parity for both states. These screenshots land in the Kit
+  baseline directory too, but their actuals are in
+  `test-results-kit-parity/`, not `test-results-kit-visual/`.
+- `maxDiffPixels: 300` per screenshot (absolute, not a ratio), animations
+  disabled, caret hidden; the full-page event, board and archive captures mask
+  `<time>`. Raising the threshold or masking more needs its own PR with
+  justification.
 
-## Performance gates (`ci/check-kit-perf.mjs`, `ci/kit-perf-budget.json`)
+## Performance gates (`ci/check-kit-perf.mjs`, `ci/budgets/kit/`)
 
 Measured baseline 2026-10-12, ceilings at measured ×1.25 (raw to 512B, gzip
-to 256B — the repository rule from `ci/bundle-budget.json`):
+to 256B — the repository rule in `ci/budgets/README.md`):
 
 - Worker entry `_worker.js` (read from the built
   `web/.svelte-kit/cloudflare/` output): exact raw/gzip ceilings.
@@ -293,6 +364,17 @@ to 256B — the repository rule from `ci/bundle-budget.json`):
   becomes ready fails the run before any journey executes. The parity spec
   additionally records warm first-200 latency as a report annotation under a
   10s liveness bound.
+- The canonical required measurement inventory is exactly the four groups
+  above (worker `_worker.js`, server JS, client JS, client CSS), defined once
+  in `ci/bundle-inventory.mjs` and validated before any artifact is read. An
+  empty, missing, misspelled, substituted, extended, or noncanonical plan is
+  an invalid plan (exit 2); the missing canonical `_worker.js` file is
+  missing evidence (exit 2), not a breach. `--root <dir>` selects the
+  measurement root, `--format json` emits a versioned report (stable
+  `kit.worker`, `kit.server.js`, `kit.client.js`, `kit.client.css` group IDs,
+  measured bytes, fixed `error.code` with `next_action`), `--dry-run` is the
+  same read-only measurement, and unknown flags exit 2 before any subprocess
+  or write.
 
 ## Parameterized journeys (`playwright.kit-parity.config.ts`)
 

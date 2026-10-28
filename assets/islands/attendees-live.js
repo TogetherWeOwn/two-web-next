@@ -61,31 +61,44 @@
     return null;
   }
 
-  // Current attendee page for this view, from ?attendees=N only (no other
-  // query state is copied). Returns "" on page one or when unreadable so the
-  // refresh keeps the default URL. Strict like the server
-  // (parseAttendeePageParam in src/events/reads.ts): the raw value must be a
-  // positive integer in full, and its offset arithmetic must stay exact, so
-  // suffixed ("2x"), fractional ("2.9"), padded ("02") and unsafe values all
-  // fall back to the page-one refresh instead of a page the server never
-  // rendered.
+  // Attendee parsing mirrors parseAttendeePageParam: only full positive
+  // integers with exact offset arithmetic; malformed values stay on page one.
+  // Forward bounded scalar archive state on this read only (255 code points,
+  // like MAX_QUERY_LENGTH). The server remains the archive admission authority.
   var ATTENDEE_PAGE_SIZE = 100;
-  function pageQuery() {
-    var raw = null;
+  function rosterQuery() {
+    var result = new URLSearchParams();
     try {
-      var search = typeof location !== "undefined" && location.search ? location.search : "";
+      var search = typeof location !== "undefined" ? location.search || "" : "";
       var params = new URLSearchParams(search);
-      raw = params.get("attendees");
+      var raw = params.get("attendees");
+      var page = Number(raw);
+      if (
+        /^[1-9]\d*$/.test(raw || "") &&
+        Number.isSafeInteger(page) &&
+        Number.isSafeInteger((page - 1) * ATTENDEE_PAGE_SIZE) &&
+        page > 1
+      )
+        result.set("attendees", raw);
+      // Never repair malformed Unicode or collapse duplicate archive fields.
+      decodeURIComponent(search);
+      var pages = params.getAll("archivePage");
+      var queries = params.getAll("archiveQuery");
+      if (
+        pages.length === 1 &&
+        queries.length <= 1 &&
+        pages[0].length <= 16 &&
+        Array.from(queries[0] || "").length <= 255
+      ) {
+        result.set("archivePage", pages[0]);
+        if (queries.length) result.set("archiveQuery", queries[0]);
+      }
     } catch (_searchUnreadable) {
-      // Fall through to "": an unreadable query keeps the default page-one
-      // refresh instead of firing nothing.
+      // Keep the independently parsed attendee page; absent archive context
+      // returns to All events rather than inventing another search.
     }
-    if (typeof raw !== "string" || !/^[1-9]\d*$/.test(raw)) return "";
-    var page = Number(raw);
-    if (!Number.isSafeInteger(page)) return "";
-    if (!Number.isSafeInteger((page - 1) * ATTENDEE_PAGE_SIZE)) return "";
-    if (page <= 1) return "";
-    return "?attendees=" + raw;
+    var query = result.toString();
+    return query ? "?" + query : "";
   }
 
   function findSection(doc) {
@@ -104,9 +117,16 @@
       stale = null;
     }
     if (!stale) return;
+    var refocus = focusedInside(stale);
     try {
       if (stale.parentNode) stale.parentNode.removeChild(stale);
       else if (stale.remove) stale.remove();
+      if (refocus) {
+        // Empty-to-empty recovery has no roster heading to receive focus.
+        // <main> is already focusable; never steal focus that moved away.
+        var fallback = document.querySelector("main");
+        if (fallback && typeof fallback.focus === "function") fallback.focus();
+      }
     } catch (_staleRemoveIgnored) {
       // Fall through: a leftover stale note is corrected on the next refresh
       // via showStale's already-present guard, never a silent contradiction.
@@ -263,7 +283,11 @@
 
   // Swap the roster section from a re-rendered event page. Returns true when
   // the DOM now matches the server truth (including both-missing as no-op).
-  function swapFromHtml(html) {
+  // Admits only the authoritative document for the requested event: the
+  // parsed page must carry this event's mount key. Anything else (an
+  // unrelated/error document, or another event's page) returns false so the
+  // caller runs the bounded retry/stale path and the last-good roster stays.
+  function swapFromHtml(html, key) {
     var parsed = null;
     try {
       parsed = new DOMParser().parseFromString(html, "text/html");
@@ -273,6 +297,25 @@
       return false;
     }
     if (!parsed || !parsed.querySelector) return false;
+    var admitted = false;
+    try {
+      var mounts = parsed.querySelectorAll("[data-event-key]");
+      for (var i = 0; mounts && i < mounts.length; i++) {
+        var mountKey = null;
+        try {
+          mountKey = mounts[i].getAttribute("data-event-key");
+        } catch (_keyUnreadable) {
+          mountKey = null;
+        }
+        if (mountKey === key) {
+          admitted = true;
+          break;
+        }
+      }
+    } catch (_admissionIgnored) {
+      admitted = false;
+    }
+    if (!admitted) return false;
     var fresh = findSection(parsed);
     var old = findSection();
     if (fresh && old) {
@@ -337,22 +380,22 @@
   }
 
   function clearStateTimeout(state) {
-    if (state.timeout !== null && state.timeout !== undefined) {
+    if (state.tmr !== null && state.tmr !== undefined) {
       try {
-        clearTimeout(state.timeout);
+        clearTimeout(state.tmr);
       } catch (_clearIgnored) {
         // Fall through: the handle is dropped below either way, so at most
         // one late timer fires and its state guard no-ops it.
       }
-      state.timeout = null;
+      state.tmr = null;
     }
   }
 
   function onFailure(state) {
     if (current !== state) return;
     clearStateTimeout(state);
-    if (state.attempt < MAX_ATTEMPTS) {
-      state.attempt += 1;
+    if (state.seq < MAX_ATTEMPTS) {
+      state.seq += 1;
       if (!canTimeout) {
         // Without timers there is no deferred retry: surface the signal now
         // rather than leaving a silent contradiction.
@@ -360,9 +403,9 @@
         showStale(state.key);
         return;
       }
-      state.retryTimer = setTimeout(function () {
+      state.retry = setTimeout(function () {
         if (current !== state) return;
-        state.retryTimer = null;
+        state.retry = null;
         attempt(state);
       }, RETRY_DELAY_MS);
     } else {
@@ -372,24 +415,42 @@
   }
 
   function attempt(state) {
-    var controller = canAbort ? new AbortController() : null;
-    state.controller = controller;
+    // Per-attempt ownership: capture the sequence number this read belongs
+    // to. onFailure increments state.seq exactly once for the winning
+    // settlement, so every late header/body/rejection from an older attempt
+    // sees a mismatch and returns before touching roster state, timers,
+    // retries or stale feedback. No new state fields: the existing counter
+    // doubles as the generation.
+    // Budget: state fields use short names (seq/ctrl/tmr/retry) because the
+    // minifier cannot shorten property names; see ci/bundle-budget.json.
+    var ownedAttempt = state.seq;
+    var controller = null;
+    if (canAbort) {
+      try {
+        controller = new AbortController();
+      } catch (_abortConstructIgnored) {
+        // Fall through with controller still null: the read is still issued
+        // and the deadline below still settles it, so a throwing host never
+        // suppresses the refresh.
+      }
+    }
+    state.ctrl = controller;
     if (canTimeout) {
-      state.timeout = setTimeout(function () {
-        if (current !== state) return;
+      state.tmr = setTimeout(function () {
+        if (current !== state || state.seq !== ownedAttempt) return;
         // Abort first so a real transport rejects into the failure path;
-        // harnesses without abort support still get the bounded retry via
-        // the direct failure below only when no controller exists.
+        // then settle here regardless: an abort-ignoring transport (or a
+        // throwing abort) must not hang recovery past the deadline. The
+        // later abort rejection re-enters onFailure with a stale attempt
+        // number and is fenced there. Abort stays best effort.
         if (controller) {
           try {
             controller.abort();
           } catch (_deadlineAbortIgnored) {
-            // Fall through: without abort support the owned fetch still
-            // rejects into the failure path via the controller-less branch.
+            // Fall through to the owned failure below.
           }
-        } else {
-          onFailure(state);
         }
+        onFailure(state);
       }, READ_DEADLINE_MS);
     }
     var options = {
@@ -405,9 +466,12 @@
       credentials: "same-origin",
     };
     if (controller) options.signal = controller.signal;
-    fetch("/e/" + encodeURIComponent(state.key) + pageQuery(), options).then(
+    fetch("/e/" + encodeURIComponent(state.key) + rosterQuery(), options).then(
       function (res) {
-        if (current !== state) return;
+        // Fence stale attempts: only the attempt that owns the current
+        // counter may settle. Late headers from a timed-out or superseded
+        // attempt return here before touching roster state or timers.
+        if (current !== state || state.seq !== ownedAttempt) return;
         // The deadline stays armed past the headers: it clears only once the
         // body is read (below) or fails (onFailure), so a stalled body still
         // retries instead of hanging silently.
@@ -429,11 +493,14 @@
         }
         text.then(
           function (html) {
-            if (current !== state) return;
+            // Late bodies from a timed-out or superseded attempt cannot
+            // swap the roster, clear the newer deadline or clear stale
+            // feedback: only the owning attempt settles.
+            if (current !== state || state.seq !== ownedAttempt) return;
             clearStateTimeout(state);
             var ok = false;
             try {
-              ok = swapFromHtml(html);
+              ok = swapFromHtml(html, state.key);
             } catch (_swapIgnored) {
               // Fall through with ok false: the roster is untouched and the
               // bounded retry/stale path runs.
@@ -447,13 +514,17 @@
             current = null;
           },
           function () {
-            if (current !== state) return;
+            // A late rejection (including the abort rejection that follows
+            // a deadline abort) must not clear the newer deadline, add a
+            // retry or surface stale feedback: the winning settlement
+            // already advanced state.seq, so the stale number fences it.
+            if (current !== state || state.seq !== ownedAttempt) return;
             onFailure(state);
           },
         );
       },
       function () {
-        if (current !== state) return;
+        if (current !== state || state.seq !== ownedAttempt) return;
         onFailure(state);
       },
     );
@@ -467,25 +538,25 @@
     // for another event fires nothing here.
     if (pageKey && key !== pageKey) return;
     if (current) {
-      if (current.retryTimer) {
+      if (current.retry) {
         try {
-          clearTimeout(current.retryTimer);
+          clearTimeout(current.retry);
         } catch (_supersedeClearIgnored) {
           // Fall through: the superseded timer's state guard no-ops it even
           // if the clear throws.
         }
       }
       clearStateTimeout(current);
-      if (current.controller) {
+      if (current.ctrl) {
         try {
-          current.controller.abort();
+          current.ctrl.abort();
         } catch (_supersedeAbortIgnored) {
           // Fall through: the superseded read's state guard drops its late
           // completion even without abort support.
         }
       }
     }
-    var state = { key: key, attempt: 1, controller: null, timeout: null, retryTimer: null };
+    var state = { key: key, seq: 1, ctrl: null, tmr: null, retry: null };
     current = state;
     attempt(state);
   }

@@ -6,7 +6,12 @@
  * theme and utilities layers the shell uses. */
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
-@import "tailwindcss/utilities.css" layer(utilities);
+@import "tailwindcss/utilities.css" layer(utilities) source(none);
+
+/* Utility classes live in Kit components, not prose in server helpers.
+ * Head-only metadata has no utility classes and also stays out of detection. */
+@source "./**/*.svelte";
+@source not "./lib/SiteMetadata.svelte";
 
 /* The join-attempts audit page keeps the Hono viewer's `filters` form class
  * for markup parity, but Tailwind v4 lifts a `filter` candidate from that
@@ -40,7 +45,7 @@
   --color-lobby-on-accent: #14200a;
   --color-lobby-line: #4b5b5d;
   --color-lobby-focus: #ffffff;
-  --font-display: Display, "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+  --font-display: Display, "Display Fallback", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
   --font-sans: ui-sans-serif, system-ui, sans-serif;
 }
 
@@ -91,6 +96,21 @@ html body {
   --muted: var(--color-muted);
   --surface: var(--color-surface);
   --line: var(--color-border);
+}
+
+/* Hono keeps its light admin palette. Kit's shared admin chrome adapts only
+ * help/footer ink and the repeat surface to the root layout's dark canvas.
+ * The light ink is set directly on those elements: overriding --muted on the
+ * shell would also recolor the dashboard's light resource cards
+ * (.card p uses var(--muted) on #fffdf8), dropping them to 1.81:1. */
+.kit-admin :is(.field .hint, .hint) {
+  color: var(--color-lobby-muted);
+}
+.kit-admin footer {
+  color: var(--color-lobby-muted);
+}
+.kit-admin fieldset {
+  background: var(--color-lobby-raised);
 }
 
 .base-theme.schedule-theme,

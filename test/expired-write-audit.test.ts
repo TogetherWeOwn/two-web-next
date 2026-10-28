@@ -10,13 +10,14 @@
 // route-inventory: POST /admin/featured/:id
 // route-inventory: POST /admin/featured/:id/delete
 // route-inventory: POST /logout
+// route-inventory: POST /logout/everywhere
 // route-inventory: POST /csp-reports
 // route-inventory: POST /api/agent-events
 // route-inventory: POST /__probe/alert
 // route-inventory: POST /auth/qa/:identity
 // Expired-write recovery audit for the remaining non-RSVP write surfaces.
 //
-// Full POST/PATCH/PUT/DELETE inventory (25 routes, from test/fixtures/route-inventory.json):
+// Full POST/PATCH/PUT/DELETE inventory (26 routes, from test/fixtures/route-inventory.json):
 // - Already integrated, not re-proven here:
 //   PATCH /events/:key, POST /events, POST /events/:key/{publish,cancel,rsvp-pause,rsvp-reopen}
 //   → shared gate via expiredWriteBounce(c, true), proven in test/event-edit-expired-recovery.test.ts.
@@ -27,7 +28,9 @@
 //   expiredWriteBounce); POST /admin/* (9 routes, via admin guard → bounceToLogin → expiredWriteBounce).
 // - Listed with a reason (no user-session write, so no recovery gate):
 //   POST /logout (terminal idempotent revocation through the production route: dead bearer still
-//   303 + clears cookies, never a recovery bounce); POST /csp-reports (public session-free sink,
+//   303 + clears cookies, never a recovery bounce); POST /logout/everywhere (same terminal
+//   contract for the whole live set: dead bearer still 303 + clears, never a bounce);
+//   POST /csp-reports (public session-free sink,
 //   always 204 even with a dead session); POST /api/agent-events (machine-bearer, dead session
 //   cookie is ignored); POST /__probe/alert (staging-token, dead session cookie is ignored);
 //   POST /auth/qa/:identity (session-issuing, not session-gated).
@@ -146,7 +149,7 @@ describe("profiles: dead-session writes recover, retry succeeds, nothing is echo
     });
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fprofile%3Fedit%3D1",
     });
     expect(res.headers.getSetCookie()).toEqual([]);
@@ -183,7 +186,15 @@ describe("profiles: dead-session writes recover, retry succeeds, nothing is echo
       });
       expect(res.status).toBe(303);
       expect(res.headers.get("location")).toBe(init.location);
-      expect(res.headers.getSetCookie()).toEqual([]);
+      // The genuine bounce arms its own pending notice for the recovery
+      // destination; the landing below mints nothing further.
+      const armed = res.headers
+        .getSetCookie()
+        .filter((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="));
+      expect(armed).toHaveLength(1);
+      const pair = armed[0]!.split(";")[0]!;
+      const payload = decodeURIComponent(pair.slice(pair.indexOf("=") + 1).split(".")[0]!);
+      expect(payload).toBe(`pending|${decodeURIComponent(init.location.split("next=")[1]!)}`);
     }
     expect(f.state.writes).toBe(0);
     expect(f.profiles.rows.get(MEMBER)?.bio).toBe("Accepted bio");
@@ -199,20 +210,26 @@ describe("profiles: dead-session writes recover, retry succeeds, nothing is echo
     try {
       const f = recoveryFixture();
       const dead = await f.login(new Date(0));
+      // A native form POST: the genuine bounce arms pending| itself (a JSON
+      // 401 or a bare landing visit arms nothing).
       const bounce = await f.request(`/members/${MEMBER}`, {
-        method: "PATCH",
+        method: "POST",
         headers: {
           cookie: dead.cookie,
           origin: f.env.APP_URL,
-          "content-type": "application/json",
-          accept: "application/json",
+          referer: `${f.env.APP_URL}/profile?edit=1`,
+          "content-type": "application/x-www-form-urlencoded",
         },
-        body: JSON.stringify({ bio: DRAFT_INPUT }),
+        body: `_method=PATCH&bio=${encodeURIComponent(DRAFT_INPUT)}`,
       });
-      expect(bounce.status).toBe(401);
-      const recovery = (await bounce.json()) as { recovery: string };
+      expect(bounce.status).toBe(303);
+      const location = bounce.headers.get("location")!;
+      expect(location).toBe("/auth/recover?next=%2Fprofile%3Fedit%3D1");
 
-      let jar = mergeCookies("", await f.request(recovery.recovery));
+      let jar = mergeCookies("", bounce);
+      const landing = await f.request(location, { headers: { cookie: jar } });
+      expect(landing.status).toBe(200);
+      jar = mergeCookies(jar, landing);
       expect(jar).not.toContain("Unsaved");
       const start = await f.request("/auth/discord?next=%2Fprofile%3Fedit%3D1", {
         headers: { cookie: jar },
@@ -280,7 +297,16 @@ describe("admin: every POST bounces on a dead session with no write and no echo"
       });
       expect(res.status).toBe(303);
       expect(res.headers.get("location")).toBe(`/auth/recover?next=${encodeURIComponent(next)}`);
-      expect(res.headers.getSetCookie()).toEqual([]);
+      // The genuine bounce arms its own pending notice for the mapped GET
+      // form page (never the write URL, never the submitted draft).
+      const armed = res.headers
+        .getSetCookie()
+        .filter((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="));
+      expect(armed).toHaveLength(1);
+      const pair = armed[0]!.split(";")[0]!;
+      const payload = decodeURIComponent(pair.slice(pair.indexOf("=") + 1).split(".")[0]!);
+      expect(payload).toBe(`pending|${next}`);
+      expect(payload).not.toContain("Unsaved");
       expect(res.headers.get("location")).not.toContain("Unsaved");
     },
   );
@@ -338,7 +364,7 @@ describe("admin: every POST bounces on a dead session with no write and no echo"
       });
       expect(res.status).toBe(401);
       expect(await res.json()).toEqual({
-        error: "Unauthorized",
+        error: "unauthenticated",
         recovery: `/auth/recover?next=${encodeURIComponent(next)}`,
       });
       expect(res.headers.getSetCookie()).toEqual([]);
@@ -459,6 +485,23 @@ describe("non-session writes: reasons, never a recovery bounce", () => {
     const f = recoveryFixture();
     const dead = await f.login(new Date(0));
     const res = await f.request("/logout", {
+      method: "POST",
+      headers: { cookie: dead.cookie, origin: f.env.APP_URL },
+    });
+    expect(res.status).toBe(303);
+    expect(res.headers.get("location")).toBe("/");
+    expect(res.headers.getSetCookie().some((c) => c.startsWith("__Host-two_session="))).toBe(true);
+    expect(await f.sessions.get(dead.tokenHash)).toBeNull();
+    void prod;
+  });
+
+  it("POST /logout/everywhere on a dead bearer still clears and redirects, never bounces", async () => {
+    // Same terminal contract as POST /logout, through the production route:
+    // the member cannot be resolved from a dead bearer, so nothing is swept,
+    // but the browser still clears and lands signed-out.
+    const f = recoveryFixture();
+    const dead = await f.login(new Date(0));
+    const res = await f.request("/logout/everywhere", {
       method: "POST",
       headers: { cookie: dead.cookie, origin: f.env.APP_URL },
     });

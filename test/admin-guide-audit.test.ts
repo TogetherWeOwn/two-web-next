@@ -1,7 +1,7 @@
 // Admin-guide audit (TOG-12108): pin docs/moderator-admin-guide.md §"Screens
-// and route reference" against the mounted app inventory. The guide claims 19
-// canonical routes (10 GET, 9 POST) in src/admin/routes.tsx plus 5 legacy GET
-// bookmarks as 301 redirects, all 24 behind the moderator guard, pause/reopen
+// and route reference" against the mounted app inventory. The guide claims 21
+// canonical routes (10 GET, 11 POST) in src/admin/routes.tsx plus 5 legacy GET
+// bookmarks as 301 redirects, all 26 behind the moderator guard, pause/reopen
 // toggles present, and 404s for unknown/missing resources with legacy-ID
 // resolution from the imported ID (never a same-number native fallback).
 //
@@ -28,7 +28,7 @@ import { routeInventory } from "./helpers/route-inventory";
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 
-// Guide §"Screens and route reference": the 19 canonical routes.
+// Guide §"Screens and route reference": the 21 canonical routes.
 const CANONICAL_GET = [
   "/admin",
   "/admin/events",
@@ -46,10 +46,12 @@ const CANONICAL_POST = [
   "/admin/events/:key",
   "/admin/events/:key/publish",
   "/admin/events/:key/cancel",
+  "/admin/events/:key/duplicate",
   "/admin/events/:key/rsvp-pause",
   "/admin/events/:key/rsvp-reopen",
   "/admin/featured",
   "/admin/featured/:id",
+  "/admin/featured/:id/unpublish",
   "/admin/featured/:id/delete",
 ];
 // Guide: five additional GET routes retain legacy bookmarks as 301 redirects.
@@ -111,9 +113,9 @@ describe("admin guide audit: route table matches the mounted inventory", () => {
   const inventory = routeInventory(app);
   const byKey = new Map(inventory.map((route) => [`${route.method} ${route.path}`, route]));
 
-  it("mounts the 19 canonical routes (10 GET, 9 POST), all moderator-guarded", () => {
+  it("mounts the 21 canonical routes (10 GET, 11 POST), all moderator-guarded", () => {
     expect(CANONICAL_GET).toHaveLength(10);
-    expect(CANONICAL_POST).toHaveLength(9);
+    expect(CANONICAL_POST).toHaveLength(11);
     for (const path of [
       ...CANONICAL_GET.map((p) => `GET ${p}`),
       ...CANONICAL_POST.map((p) => `POST ${p}`),
@@ -129,13 +131,13 @@ describe("admin guide audit: route table matches the mounted inventory", () => {
     }
   });
 
-  it("counts exactly 24 guide-claimed admin routes (15 GET, 9 POST)", () => {
+  it("counts exactly 26 guide-claimed admin routes (15 GET, 11 POST)", () => {
     const claimed = [
       ...CANONICAL_GET.map((p) => `GET ${p}`),
       ...Object.keys(LEGACY_GET).map((p) => `GET ${p}`),
       ...CANONICAL_POST.map((p) => `POST ${p}`),
     ];
-    expect(claimed).toHaveLength(24);
+    expect(claimed).toHaveLength(26);
     expect(claimed.filter((name) => name.startsWith("GET"))).toHaveLength(15);
     for (const name of claimed) expect(byKey.has(name), name).toBe(true);
   });
@@ -181,7 +183,9 @@ describe("admin guide audit: moderator guard on every claimed route (no DB)", ()
         : path;
       const res = await request(route, env, { headers: { cookie } });
       expect(res.status, route).toBe(403);
-      expect(await res.text()).toBe("Forbidden");
+      const body = await res.text();
+      expect(body, route).toContain("You do not have access to this");
+      expect(body, route).toContain('data-testid="error-home"');
     },
   );
 

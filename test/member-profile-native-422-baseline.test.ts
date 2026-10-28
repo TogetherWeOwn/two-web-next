@@ -27,6 +27,7 @@ import { PROFILE_HONEY_FIELD, PROFILE_OPENED_AT_FIELD } from "../src/islands/con
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { registerProfileParticipationBrowserCases } from "./helpers/profile-participation-browser";
 
 const ID = "100000000000000001";
 const env = {
@@ -51,7 +52,7 @@ const B = {
 };
 const CORRECTED_TIMEZONE = "Asia/Tokyo";
 
-async function setup() {
+async function setup(saveFailure?: Error) {
   const sessions = createMemorySessionStore();
   const token = newSessionToken();
   await sessions.create({
@@ -82,6 +83,7 @@ async function setup() {
   };
   const store = createMemoryProfileStore([member]);
   const save = vi.spyOn(store, "save");
+  if (saveFailure) save.mockRejectedValue(saveFailure);
   const app = profilesApp({
     sessionStore: sessions,
     store,
@@ -134,7 +136,9 @@ describe("native profile 422 response (route level)", () => {
     expect(html).toContain("Choose a valid IANA timezone");
     const timezoneInput = html.match(/<input\b[^>]*name="timezone"[^>]*>/)?.[0] ?? "";
     expect(timezoneInput).toContain('aria-invalid="true"');
-    expect(timezoneInput).toContain('aria-describedby="profile-timezone-error"');
+    expect(timezoneInput).toContain(
+      'aria-describedby="profile-timezone-help profile-timezone-error"',
+    );
     // Nothing was persisted.
     expect(save).not.toHaveBeenCalled();
     expect(await store.find(ID)).toMatchObject({
@@ -181,6 +185,7 @@ describe("native profile 422 response (route level)", () => {
 describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
   "native 422 baseline in a real browser",
   () => {
+    registerProfileParticipationBrowserCases();
     let browser: Browser;
     const contexts: BrowserContext[] = [];
     const servers: Server[] = [];
@@ -202,8 +207,13 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       );
     });
 
-    async function openProfile(javaScriptEnabled: boolean, withholdIslandUntilWrite = true) {
-      const fixture = await setup();
+    async function openProfile(
+      javaScriptEnabled: boolean,
+      withholdIslandUntilWrite = true,
+      saveFailure?: Error,
+    ) {
+      const fixture = await setup(saveFailure);
+      const requests: { method: string; path: string; status: number; cacheControl: string }[] = [];
       const context = await browser.newContext({ javaScriptEnabled, serviceWorkers: "block" });
       contexts.push(context);
       const writes: { method: string; status: number }[] = [];
@@ -254,6 +264,12 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
             { method: request.method, headers, body: input || undefined },
             { ...env, APP_URL: base },
           );
+          requests.push({
+            method: request.method!,
+            path: url.pathname,
+            status: response.status,
+            cacheControl: response.headers.get("cache-control") ?? "",
+          });
           let body = await response.text();
           // Model time already spent editing, without sleeping or changing the trap.
           if (response.headers.get("content-type")?.includes("text/html")) {
@@ -293,7 +309,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       );
       const page = await context.newPage();
       await page.goto(`${base}/profile`);
-      return { ...fixture, page, writes, base };
+      return { ...fixture, page, writes, requests, base };
     }
 
     async function field(page: Page, name: string) {
@@ -321,12 +337,11 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       };
     }
 
-    // Drive the real native flow: type B on the GET form (island withheld),
-    // submit, and land on the server-rendered 422 page with the island live.
-    async function reachNative422(page: Page) {
+    // Submit B natively; a valid timezone instead exercises an unavailable save.
+    async function reachNativeRefusal(page: Page, timezone = B.timezone) {
       await setField(page, "bio", B.bio);
       await setField(page, "games_text", B.games_text);
-      await setField(page, "timezone", B.timezone);
+      await setField(page, "timezone", timezone);
       await page.locator("#profile-leaderboard-opt-out").check();
       await Promise.all([page.waitForNavigation(), page.getByTestId("profile-save").click()]);
       await page.getByTestId("profile-error").waitFor();
@@ -334,7 +349,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
 
     it("treats the rejected draft as unsaved work on the 422 page and Cancel restores the stored profile", async () => {
       const { page, writes, save } = await openProfile(true);
-      await reachNative422(page);
+      await reachNativeRefusal(page);
       expect(writes).toEqual([{ method: "POST", status: 422 }]);
       expect(save).not.toHaveBeenCalled();
 
@@ -370,7 +385,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
 
     it("makes a successful correction the baseline that later Cancel restores", async () => {
       const { page, writes, save, store } = await openProfile(true);
-      await reachNative422(page);
+      await reachNativeRefusal(page);
 
       await setField(page, "timezone", CORRECTED_TIMEZONE);
       await page.getByTestId("profile-save").click();
@@ -420,7 +435,7 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
 
     it("keeps the no-JS fallback intact: native 422 shows the draft and a corrected native save lands", async () => {
       const { page, writes, store } = await openProfile(false);
-      await reachNative422(page);
+      await reachNativeRefusal(page);
       expect(writes).toEqual([{ method: "POST", status: 422 }]);
       expect(await (await field(page, "bio")).inputValue()).toBe(B.bio);
       expect(await (await field(page, "timezone")).getAttribute("aria-invalid")).toBe("true");
@@ -434,6 +449,220 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
         leaderboardOptOut: true,
       });
       expect(await page.getByTestId("profile-bio").textContent()).toContain(B.bio);
+    });
+
+    async function expectSavedEditor(page: Page) {
+      await expect
+        .poll(() => formState(page))
+        .toEqual({
+          bio: A.bio,
+          games_text: A.games_text,
+          timezone: A.timezone,
+          checked: false,
+          departurePrevented: false,
+        });
+      await expect
+        .poll(() => page.locator("#profile-bio-count").textContent())
+        .toBe("12 of 1000 characters");
+      await expect
+        .poll(() => page.locator("#profile-games-text-count").textContent())
+        .toBe("1 of 20 games, 13 of 1700 characters");
+      expect(await page.getByTestId("profile-error").count()).toBe(0);
+      for (const id of ["bio", "games-text", "timezone", "leaderboard-opt-out"]) {
+        expect(await page.locator(`#profile-${id}`).getAttribute("aria-invalid")).toBeNull();
+        expect(await page.locator(`#profile-${id}-error`).count()).toBe(0);
+      }
+      expect(await page.locator("#profile-bio").getAttribute("aria-describedby")).toBe(
+        "profile-bio-hint profile-bio-count",
+      );
+      expect(await page.locator("#profile-games-text").getAttribute("aria-describedby")).toBe(
+        "profile-games-text-hint profile-games-text-count",
+      );
+      expect(await page.locator("#profile-timezone").getAttribute("aria-describedby")).toBe(
+        "profile-timezone-help",
+      );
+    }
+
+    function expectPrivateEditor(cacheControl: string) {
+      const directives = cacheControl.split(",").map((directive) => directive.trim().toLowerCase());
+      expect(directives).toContain("private");
+      expect(directives).toContain("no-store");
+    }
+
+    // These catch native reset restoring the refused HTML defaults B instead
+    // of saved A, and an enhancement accidentally following the fallback GET.
+    // Run in the existing CI-executed browser group; no new opt-in or skip.
+    for (const status of [422, 503]) {
+      for (const javaScriptEnabled of [false, true]) {
+        it(`Cancel after native ${status} restores all saved controls, counts and errors with JavaScript ${javaScriptEnabled ? "enabled in place" : "disabled via GET"}`, async () => {
+          const log = vi.spyOn(console, "error").mockImplementation(() => {});
+          try {
+            const failure =
+              status === 503
+                ? Object.assign(new Error("fixture connection refused"), { code: "ECONNREFUSED" })
+                : undefined;
+            const { page, writes, requests, save, store } = await openProfile(
+              javaScriptEnabled,
+              true,
+              failure,
+            );
+            const timezone = status === 422 ? B.timezone : CORRECTED_TIMEZONE;
+            await reachNativeRefusal(page, timezone);
+            expect(writes).toEqual([{ method: "POST", status }]);
+            const attemptedSaves = status === 503 ? 1 : 0;
+            expect(save).toHaveBeenCalledTimes(attemptedSaves);
+            expectPrivateEditor(requests[0]!.cacheControl);
+            expectPrivateEditor(requests[1]!.cacheControl);
+            expect(await formState(page)).toEqual({
+              bio: B.bio,
+              games_text: B.games_text,
+              timezone,
+              checked: true,
+              departurePrevented: javaScriptEnabled,
+            });
+            expect(await page.locator("#profile-bio-count").textContent()).toBe(
+              "14 of 1000 characters",
+            );
+            // Native form encoding submits CRLF: 15 + 2 + 13 raw characters.
+            expect(await page.locator("#profile-games-text-count").textContent()).toBe(
+              "2 of 20 games, 30 of 1700 characters",
+            );
+            const baseline = page.locator("[data-saved-bio]");
+            expect(await baseline.getAttribute("data-saved-bio")).toBe(A.bio);
+            expect(await baseline.getAttribute("data-saved-games-text")).toBe(A.games_text);
+            expect(await baseline.getAttribute("data-saved-timezone")).toBe(A.timezone);
+            expect(await baseline.getAttribute("data-saved-leaderboard-opt-out")).toBe("0");
+            expect(await page.getByTestId("profile-error").textContent()).toMatch(
+              status === 422 ? /valid IANA timezone/ : /try again/i,
+            );
+            if (status === 422) {
+              expect(await page.locator("#profile-timezone").getAttribute("aria-invalid")).toBe(
+                "true",
+              );
+            }
+
+            const beforeCancel = requests.length;
+            await page.getByTestId("profile-cancel").click();
+            await expectSavedEditor(page);
+            expect(writes).toEqual([{ method: "POST", status }]);
+            expect(save).toHaveBeenCalledTimes(attemptedSaves);
+            expect(await store.find(ID)).toMatchObject({
+              bio: A.bio,
+              games: A.games,
+              timezone: A.timezone,
+              leaderboardOptOut: false,
+            });
+            const recovery = requests.slice(beforeCancel);
+            if (javaScriptEnabled) {
+              expect(recovery).toEqual([]);
+              await expect.poll(() => activeTestId(page)).toBe("profile-name");
+            } else {
+              expect(recovery).toHaveLength(1);
+              expect(recovery[0]).toMatchObject({ method: "GET", status: 200 });
+              expect(["/profile", `/members/${ID}`]).toContain(recovery[0]!.path);
+              expectPrivateEditor(recovery[0]!.cacheControl);
+            }
+          } finally {
+            log.mockRestore();
+          }
+        });
+      }
+
+      for (const activation of ["Control", "Meta", "Shift", "Alt", "middle", "right"] as const) {
+        it(`leaves ${activation} Cancel click on native ${status} to the browser without discarding the draft`, async () => {
+          const log = vi.spyOn(console, "error").mockImplementation(() => {});
+          try {
+            const failure =
+              status === 503
+                ? Object.assign(new Error("fixture connection refused"), { code: "ECONNREFUSED" })
+                : undefined;
+            const { page, writes, requests, save, store } = await openProfile(true, true, failure);
+            const timezone = status === 422 ? B.timezone : CORRECTED_TIMEZONE;
+            await reachNativeRefusal(page, timezone);
+            expect(writes).toEqual([{ method: "POST", status }]);
+            const refusedDraft = {
+              bio: B.bio,
+              games_text: B.games_text,
+              timezone,
+              checked: true,
+              departurePrevented: true,
+            };
+            expect(await formState(page)).toEqual(refusedDraft);
+            const cancel = page.getByTestId("profile-cancel");
+            expect(await cancel.evaluate((link) => link.tagName)).toBe("A");
+            expect(await cancel.getAttribute("href")).toBe(`/members/${ID}`);
+            const beforeCancel = requests.length;
+            await cancel.evaluate((link) => {
+              // Observe after the island's handler, then suppress only the browser
+              // default so the same document remains available for draft assertions.
+              link.ownerDocument.addEventListener(
+                "click",
+                (event: Event) => {
+                  link.setAttribute("data-click-default-prevented", String(event.defaultPrevented));
+                  event.preventDefault();
+                },
+                { once: true },
+              );
+            });
+            if (activation === "middle" || activation === "right") {
+              // Native non-primary input emits auxclick/contextmenu, not click.
+              // Dispatch a MouseEvent to exercise a non-primary click reaching the binder.
+              await cancel.dispatchEvent("click", { button: activation === "middle" ? 1 : 2 });
+            } else {
+              await cancel.click({ modifiers: [activation] });
+            }
+            expect.soft(await cancel.getAttribute("data-click-default-prevented")).toBe("false");
+            expect(await formState(page)).toEqual(refusedDraft);
+            expect(await page.getByTestId("profile-error").textContent()).toMatch(
+              status === 422 ? /valid IANA timezone/ : /try again/i,
+            );
+            expect(await page.locator("#profile-bio-count").textContent()).toBe(
+              "14 of 1000 characters",
+            );
+            expect(await page.locator("#profile-games-text-count").textContent()).toBe(
+              "2 of 20 games, 30 of 1700 characters",
+            );
+            expect(requests).toHaveLength(beforeCancel);
+            expect(writes).toEqual([{ method: "POST", status }]);
+            expect(save).toHaveBeenCalledTimes(status === 503 ? 1 : 0);
+            expect(await store.find(ID)).toMatchObject({
+              bio: A.bio,
+              games: A.games,
+              timezone: A.timezone,
+              leaderboardOptOut: false,
+            });
+          } finally {
+            log.mockRestore();
+          }
+        });
+      }
+    }
+
+    it("ordinary no-JS GET Cancel still resets every control locally without a write or navigation", async () => {
+      const { page, requests, writes, save, store } = await openProfile(false);
+      expectPrivateEditor(requests[0]!.cacheControl);
+      await setField(page, "bio", B.bio);
+      await setField(page, "games_text", B.games_text);
+      await setField(page, "timezone", B.timezone);
+      await page.locator("#profile-leaderboard-opt-out").check();
+      expect(await formState(page)).toMatchObject({
+        bio: B.bio,
+        games_text: B.games_text,
+        timezone: B.timezone,
+        checked: true,
+      });
+      const beforeCancel = requests.length;
+      await page.getByTestId("profile-cancel").click();
+      await expectSavedEditor(page);
+      expect(requests).toHaveLength(beforeCancel);
+      expect(writes).toEqual([]);
+      expect(save).not.toHaveBeenCalled();
+      expect(await store.find(ID)).toMatchObject({
+        bio: A.bio,
+        games: A.games,
+        timezone: A.timezone,
+        leaderboardOptOut: false,
+      });
     });
 
     // Delayed island refusals must respect deliberate newer work, as a

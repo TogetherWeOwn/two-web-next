@@ -372,7 +372,7 @@ describe("W15 join landing and recovery parity", () => {
       focus: ReturnType<typeof vi.fn>;
       addEventListener: ReturnType<typeof vi.fn>;
     };
-    const preview = { replaceChildren: vi.fn() };
+    const preview = { appendChild: vi.fn() };
     let onClick: (event: { button: number; preventDefault: () => void }) => void = () => {};
     runInNewContext(binder, {
       document: {
@@ -395,7 +395,7 @@ describe("W15 join landing and recovery parity", () => {
     onClick(event);
     expect(event.preventDefault).toHaveBeenCalledOnce();
     expect(frame.src).toBe(href);
-    expect(preview.replaceChildren).toHaveBeenCalledWith(frame);
+    expect(preview.appendChild).toHaveBeenCalledWith(frame);
   });
 
   it.each(["", "javascript:alert(1)", "https://evil.test/invite"])(
@@ -483,26 +483,26 @@ describe("GET /join/discord (throttled OAuth start)", () => {
     expect(res.headers.get("cache-control")).toContain("no-store");
   });
 
-  it("degrades to /join (never 500) when sweeping expired journeys rejects", async () => {
+  it("degrades to /join with the start-failed notice (never 500) when sweeping expired journeys rejects", async () => {
     const { store, env: e } = isolated();
     store.journeys.sweepExpired = async () => {
       throw new Error("journey store down");
     };
     const res = await app.request("/join/discord", {}, e);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/join");
+    expect(res.headers.get("location")).toBe("/join?notice=start-failed");
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.getSetCookie().join("\n")).not.toMatch(/__Host-two_join_state=[^;]/);
   });
 
-  it("degrades to /join (never 500) when issuing the journey rejects", async () => {
+  it("degrades to /join with the start-failed notice (never 500) when issuing the journey rejects", async () => {
     const { store, env: e } = isolated();
     store.journeys.issue = async () => {
       throw new Error("journey store down");
     };
     const res = await app.request("/join/discord", {}, e);
     expect(res.status).toBe(302);
-    expect(res.headers.get("location")).toBe("/join");
+    expect(res.headers.get("location")).toBe("/join?notice=start-failed");
     expect(res.headers.get("cache-control")).toContain("no-store");
     expect(res.headers.getSetCookie().join("\n")).not.toMatch(/__Host-two_join_state=[^;]/);
   });

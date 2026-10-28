@@ -12,3 +12,10 @@ ci/floor-guard.test.mjs
 # needs the formatting adjacency directive (same header as grandfathered
 # test/revoke-sessions.test.ts).
 test/revoke-sessions-bounded-waits-acceptance.test.ts
+# Alert-probe disposal acceptance imports the standalone .mjs probe tool, so
+# its TS7016 guard needs the same formatting adjacency directive.
+test/alert-probe-disposal-acceptance.test.ts
+# Operator TLS/chase acceptance imports the standalone .mjs CLIs, so their
+# TS7016 guards need the same formatting adjacency directive.
+test/operator-chase-pass-acceptance.test.ts
+test/operator-tls-parity-acceptance.test.ts

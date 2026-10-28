@@ -187,7 +187,7 @@ describe("faq shared content source", () => {
       "faq-profile",
       "faq-privacy",
     ]);
-    expect(QUESTION_COUNT).toBe(15);
+    expect(QUESTION_COUNT).toBe(18);
   });
 
   it("passes the app URL and the shared questions to the Kit page", () => {
@@ -321,8 +321,9 @@ describe("Kit /faq parity with Hono", () => {
     expect(code).toMatch(/async \(\{\s*setHeaders\s*\}\)/);
     // The leaf CSS reaches the page only through this load's data merge.
     expect(code).toContain("leafCss: LEAF_CRITICAL_CSS");
-    // APP_URL is the only config-driven behavior: dropping it must fail this
-    // pin rather than silently render a wrong canonical.
-    expect(code).toMatch(/faqPageData\(env\.APP_URL\)/);
+    // The stamp is the only config-driven behavior besides the canonical:
+    // dropping FAQ_LAST_REVIEWED (or APP_URL) must fail this pin rather than
+    // silently hide the date.
+    expect(code).toMatch(/faqPageData\(env\.APP_URL,\s*env\.FAQ_LAST_REVIEWED\)/);
   });
 });

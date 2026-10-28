@@ -49,6 +49,7 @@ const KILL_SUITE = [
   "test/session-recovery.test.ts",
   "test/admin-session-recovery.test.ts",
   "test/join-blocked-copy.test.ts",
+  "test/guild-join-failure-classification.test.ts",
   "test/join-blank-bot.test.ts",
   "test/join-idempotence.test.ts",
   "test/w15b-exposure-throttle-race.test.ts",
@@ -69,13 +70,13 @@ const DB_URL_VARS = ["DATABASE_URL", "AUDIT_IMPORT_TEST_DATABASE_URL", "LEGACY_D
 // One auth-check weakening each. `find` must occur exactly once in `file`;
 // when the source drifts the mutant reports STALE instead of silently
 // mutating the wrong line.
-const MUTANTS = [
+export const MUTANTS = [
   {
     id: "S1-live-expiry-blind",
     file: "src/sessions.ts",
     note: "memory store honors revoked/expiry reads: expired sessions stay live",
-    find: "if (!r || r.expiresAt <= clock()) {",
-    replace: "if (!r) {",
+    find: "      r.expiresAt <= clock() ||",
+    replace: "      false ||",
   },
   {
     id: "S2-replace-keeps-old",
@@ -95,23 +96,24 @@ const MUTANTS = [
     id: "S4-revoke-noop",
     file: "src/sessions.ts",
     note: "revocation deletes the row: revoked tokens stay readable",
-    find: "async revoke(hash) {\n      rows.delete(hash);\n    },",
+    find: "async revoke(hash) {\n      rows.delete(hash);\n      dropGraceForToken(hash);\n    },",
     replace: "async revoke(hash) {\n    },",
   },
   {
     id: "S5-revoke-wrong-user",
     file: "src/sessions.ts",
     note: "fresh login revokes only the same user's sessions: other users are revoked instead",
-    find: "if (hash !== exceptTokenHash && r.userId === userId) rows.delete(hash);",
-    replace: "if (hash !== exceptTokenHash && r.userId !== userId) rows.delete(hash);",
+    find: "if (hash !== exceptTokenHash && r.userId === userId && r.expiresAt > clock())\n          rows.delete(hash);",
+    replace:
+      "if (hash !== exceptTokenHash && r.userId !== userId && r.expiresAt > clock())\n          rows.delete(hash);",
   },
   {
     id: "S6-create-drops-member",
     file: "src/sessions.ts",
     note: "created sessions keep their member/moderator flags: flags are cleared on write",
-    find: "rows.set(s.tokenHash, { ...s, expiresAt: s.expiresAt.getTime(), statusHash: s.tokenHash });",
+    find: "rows.set(s.tokenHash, {\n        ...s,",
     replace:
-      "rows.set(s.tokenHash, { ...s, member: false, moderator: false, expiresAt: s.expiresAt.getTime(), statusHash: s.tokenHash });",
+      "rows.set(s.tokenHash, {\n        ...s,\n        member: false,\n        moderator: false,",
   },
   {
     id: "J3-safeNext-allows-del",
@@ -146,9 +148,9 @@ const MUTANTS = [
     id: "J8-failed-maps-added",
     file: "src/join/service.ts",
     note: "bot refusal degrades: a failed add is recorded as a successful added join",
-    find: 'if (result === "failed") return { kind: "recoverable", outcome: "degraded", requestId };',
+    find: 'return { kind: "recoverable", outcome: "degraded", requestId };',
     replace:
-      'if (result === "failed") return { kind: "recoverable", outcome: "added", requestId };',
+      'return { kind: "recoverable", outcome: result === "failed" ? "added" : "degraded", requestId };',
   },
   {
     id: "J9-state-cookie-binding-dropped",
@@ -161,9 +163,8 @@ const MUTANTS = [
     id: "J10-journey-replay-admitted",
     file: "src/join/route-callback.ts",
     note: "callback admits a consumed journey: a replayed state is accepted",
-    find: '(await store.journeys.consume(await hashToken(state!), "join").catch(() => false))',
-    replace:
-      '(true || await store.journeys.consume(await hashToken(state!), "join").catch(() => false))',
+    find: '(await store.journeys.consume(await hashToken(state!), "join")',
+    replace: '(true || await store.journeys.consume(await hashToken(state!), "join")',
   },
   {
     id: "J11-start-throttle-ignored",
@@ -183,8 +184,8 @@ const MUTANTS = [
     id: "R1-member-guard-bypassed",
     file: "src/events/routes-rsvp.tsx",
     note: "member() guard: non-member sessions are admitted to RSVP writes (member-denied matrix)",
-    find: 'if (!session.member) return c.json({ error: "forbidden" }, 403);',
-    replace: 'if (false) return c.json({ error: "forbidden" }, 403);',
+    find: 'if (!session.member) return jsonRefusal(c, "forbidden", 403);',
+    replace: 'if (false) return jsonRefusal(c, "forbidden", 403);',
   },
   {
     id: "R2-throttle-budget-ignored",
@@ -205,8 +206,8 @@ const MUTANTS = [
     id: "A1-guard-bypass-admits-member",
     file: "src/admin/guard.ts",
     note: "admin moderator gate: any signed-in session is admitted to admin writes (write admission)",
-    find: "if (row?.moderator) actor = { id: row.userId, username: row.username };",
-    replace: "if (row) actor = { id: row.userId, username: row.username };",
+    find: "if (row?.moderator) {",
+    replace: "if (row) {",
   },
   {
     id: "A2-refusal-dispatched-as-published",
@@ -226,9 +227,9 @@ const MUTANTS = [
     id: "R5-fetch-failure-admits",
     file: "src/roles.ts",
     note: "failed role lookup fails closed: the failure fabricates full membership",
-    find: "const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => null);",
+    find: "        guild_id: opts.guildId,\n      });\n      return null;",
     replace:
-      "const member = await fetchMemberRoles(opts.guildId, opts.userId, opts.botToken).catch(() => ({ roles: opts.moderatorRoleIds, joinedAt: null }));",
+      "        guild_id: opts.guildId,\n      });\n      return { roles: opts.moderatorRoleIds, joinedAt: null };",
   },
   {
     id: "R6-lookup-failure-admits",
@@ -381,7 +382,7 @@ function defaultKill(suite) {
   return { verdict: verdictFor(child), output };
 }
 
-export function runMutant(root, mutant, kill = defaultKill) {
+export function runMutant(root, mutant, kill = defaultKill, suite = KILL_SUITE) {
   const path = join(root, mutant.file);
   const before = readFileSync(path, "utf8");
   const beforeHash = sha(before);
@@ -412,7 +413,7 @@ export function runMutant(root, mutant, kill = defaultKill) {
   };
   let outcome;
   try {
-    const { verdict, output } = kill(KILL_SUITE);
+    const { verdict, output } = kill(suite);
     const { status, detail } = OUTCOME[verdict] ?? OUTCOME.error;
     outcome = { id: mutant.id, status, detail, output, ms: Date.now() - started };
   } finally {
@@ -537,6 +538,18 @@ function selftest() {
     cases += 1;
     console.log(`ok: ${name}`);
   };
+
+  check("all 38 mutation anchors match the current implementation exactly once", () => {
+    assert.equal(MUTANTS.length, 38);
+    for (const mutant of MUTANTS) {
+      const source = readFileSync(join(repoRoot, mutant.file), "utf8");
+      assert.equal(
+        countOccurrences(source, mutant.find),
+        1,
+        `${mutant.id}: stale or ambiguous anchor`,
+      );
+    }
+  });
 
   // End-to-end mutant cycle against a scratch tree with stub kill commands.
   check("killed mutant restores the file byte-for-byte", () => {

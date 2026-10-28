@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { main } from "./lighthouse-origin-run.mjs";
+import { navigationMetadata } from "../test/lighthouse-navigation-fixtures.mjs";
 
 // Offline selftest for the watch Lighthouse runner. No network and no browser:
 // discovery runs against stub fetches and lhci against a stub launcher.
@@ -164,11 +165,20 @@ function stubFetch(routes) {
   const calls = [];
   const fetchImpl = async (url, init = {}) => {
     calls.push({ url: String(url), init });
-    const route = routes[new URL(url).pathname];
-    const { status = 200, body = "" } = route ?? { status: 404 };
-    return { status, text: async () => body };
+    const entry = routes[new URL(url).pathname];
+    // An array replays one response per request (transient statuses), then
+    // sticks on the last entry; a plain object answers every request alike.
+    const route = Array.isArray(entry) ? (entry.length > 1 ? entry.shift() : entry[0]) : entry;
+    const { status = 200, body = "", headers } = route ?? { status: 404 };
+    return { status, headers, text: async () => body };
   };
   return { calls, fetchImpl };
+}
+
+// Discovery never sleeps for real in tests: the recorded delays pin the
+// backoff (Retry-After honored, exponential fallback) without waiting.
+function recordSleeps(sleeps) {
+  return { sleepImpl: async (ms) => void sleeps.push(ms) };
 }
 
 const rss = (...links) =>
@@ -213,6 +223,61 @@ test("discovery skips live staging fixtures by RSS title without requesting them
   );
 });
 
+// Regression: cancelled events keep their feed row with a `Cancelled: `
+// title prefix (src/events/feeds.ts RSS_CANCELLED_TITLE_PREFIX), so a
+// cancelled staging fixture reads `Cancelled: Staging E2E ...`. The bare
+// fixture prefix missed those rows and every stale one became a
+// verification GET until the origin throttled discovery with a 429.
+// Cancelled fixtures are filtered by title before any request, like live
+// fixtures; the 429 retry stays for genuinely transient throttles.
+test("discovery skips cancelled staging fixtures by RSS title without requesting them", async () => {
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": {
+      body: rssWithTitles(
+        rssItem(`${APEX}${FIXTURE_EVENT_PATH}`, "Cancelled: Staging E2E RSVP 1760317553000"),
+        rssItem(`${APEX}${EVENT_PATH}`, "Community game night"),
+      ),
+    },
+    // The cancelled fixture page is gone (410): the title filter must skip
+    // it before any liveness check, or every stale row costs a request.
+    [FIXTURE_EVENT_PATH]: { status: 410, body: "<h1>Old fixture</h1>" },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.ok(
+    calls.every((call) => !call.url.endsWith(FIXTURE_EVENT_PATH)),
+    "a cancelled staging fixture must never be requested",
+  );
+});
+
+test("discovery still verifies a genuinely cancelled event instead of title-filtering it", async () => {
+  const CANCELLED_PATH = "/e/01JGGGGGGGGGGGGGGGGGGGGGGG";
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": {
+      body: rssWithTitles(
+        rssItem(`${APEX}${CANCELLED_PATH}`, "Cancelled: Community game night"),
+        rssItem(`${APEX}${EVENT_PATH}`, "Spring tournament"),
+      ),
+    },
+    // A real cancelled listing is not a fixture: it is verified live once,
+    // tolerated as gone, and never counted as a fixture.
+    [CANCELLED_PATH]: { status: 410, body: "<h1>Old meetup</h1>" },
+    [EVENT_PATH]: { body: "<h1>Spring tournament</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(CANCELLED_PATH)).length,
+    1,
+    "a genuine cancelled listing is verified once, then skipped as gone",
+  );
+});
+
 test("discovery skips stale-cache 410 candidates and keeps real coverage", async () => {
   const GONE_PATH = "/e/01JBBBBBBBBBBBBBBBBBBBBBBB";
   const { fetchImpl } = stubFetch({
@@ -243,7 +308,8 @@ test("discovery skips 404 candidates and keeps real coverage", async () => {
 });
 
 test("discovery fails closed on unhealthy candidate statuses", async () => {
-  for (const status of [500, 429, 301]) {
+  // 429 retries first; exhaustion must still fail if no alternate event verifies.
+  for (const status of [500, 301]) {
     const { fetchImpl } = stubFetch({
       "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
       [EVENT_PATH]: { status, body: "<h1>Community game night</h1>" },
@@ -254,6 +320,547 @@ test("discovery fails closed on unhealthy candidate statuses", async () => {
       `status ${status} must throw, never measure`,
     );
   }
+});
+
+// Regression: four consecutive e2e-staging runs failed the mobile step in
+// event discovery with `GET https://next.togetherweown.com/e/<key> returned
+// 429` while the origin was healthy (same-SHA green-to-red). Discovery now
+// retries a transient 429 with backoff honoring Retry-After instead of
+// treating one throttled candidate as a dead origin.
+test("discovery retries a transient 429 on candidate verification and recovers", async () => {
+  const sleeps = [];
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+    [EVENT_PATH]: [{ status: 429 }, { body: "<h1>Community game night</h1>" }],
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps)), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(EVENT_PATH)).length,
+    2,
+    "one retry after the 429, then the 200 verifies",
+  );
+  assert.deepEqual(sleeps, [1000], "no Retry-After header: the 1s base backoff applies");
+});
+
+test("discovery honors Retry-After on 429 and skips a persistently throttled candidate", async () => {
+  const THROTTLED_PATH = "/e/01JEEEEEEEEEEEEEEEEEEEEEEE";
+  const sleeps = [];
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${THROTTLED_PATH}`, `${APEX}${EVENT_PATH}`) },
+    [THROTTLED_PATH]: { status: 429, headers: { "retry-after": "2" } },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps)), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.deepEqual(sleeps, [2000, 2000, 2000], "each retry waits out the Retry-After window");
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(THROTTLED_PATH)).length,
+    lib.DISCOVERY_THROTTLE_RETRIES + 1,
+    "the throttled candidate gets its bounded retries, then the next listing wins",
+  );
+});
+
+test("an unparseable Retry-After falls back to exponential backoff", async () => {
+  const THROTTLED_PATH = "/e/01JFFFFFFFFFFFFFFFFFFFFFFF";
+  const sleeps = [];
+  const { fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${THROTTLED_PATH}`, `${APEX}${EVENT_PATH}`) },
+    [THROTTLED_PATH]: { status: 429, headers: { "retry-after": "soon" } },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps)), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.deepEqual(sleeps, [1000, 2000, 4000]);
+});
+
+test("discovery fails, rather than skipping coverage, when every candidate is throttled", async () => {
+  const sleeps = [];
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+    [EVENT_PATH]: { status: 429 },
+    // The listing still links the same throttled path: it must not be
+    // re-requested or counted twice.
+    "/events": { body: `<a href="${EVENT_PATH}">Community game night</a>` },
+  });
+  await assert.rejects(
+    () => lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps)),
+    (error) => {
+      assert.equal(error.code, "DISCOVERY_THROTTLED");
+      assert.match(error.message, /incomplete/);
+      assert.match(error.message, /1 throttled \(429\) candidate\(s\)/);
+      return true;
+    },
+  );
+  assert.equal(
+    calls.filter((call) => call.url.endsWith(EVENT_PATH)).length,
+    lib.DISCOVERY_THROTTLE_RETRIES + 1,
+    "a throttled candidate is retried to its bound once, never twice",
+  );
+});
+
+test("discovery retries a transient 429 on the feed and recovers", async () => {
+  const sleeps = [];
+  const { fetchImpl } = stubFetch({
+    "/events.rss": [
+      { status: 429, headers: new Map([["retry-after", "1"]]) },
+      { body: rss(`${APEX}${EVENT_PATH}`) },
+    ],
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps)), {
+    path: EVENT_PATH,
+    source: "/events.rss",
+  });
+  assert.deepEqual(sleeps, [1000]);
+});
+
+test("a throttled feed falls through, but incomplete discovery never becomes a skip", async () => {
+  const listed = stubFetch({
+    "/events.rss": { status: 429 },
+    "/events": { body: `<a href="${EVENT_PATH}">Community game night</a>` },
+    [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+  });
+  assert.deepEqual(
+    await lib.discoverEventPath(APEX, listed.fetchImpl, recordSleeps([])),
+    { path: EVENT_PATH, source: "/events" },
+    "a throttled RSS feed must not hide a healthy /events listing",
+  );
+  assert.equal(listed.calls.filter((call) => call.url.endsWith("/events.rss")).length, 4);
+  const both = stubFetch({ "/events.rss": { status: 429 }, "/events": { status: 429 } });
+  const sleeps = [];
+  await assert.rejects(
+    () => lib.discoverEventPath(APEX, both.fetchImpl, recordSleeps(sleeps)),
+    (error) => {
+      assert.equal(error.code, "DISCOVERY_THROTTLED");
+      assert.match(error.message, /incomplete/);
+      assert.match(error.message, /\/events\.rss throttled \(429 after retries\)/);
+      assert.match(error.message, /\/events throttled \(429 after retries\)/);
+      return true;
+    },
+  );
+  for (const path of ["/events.rss", "/events"]) {
+    assert.equal(both.calls.filter((call) => new URL(call.url).pathname === path).length, 4);
+  }
+  assert.deepEqual(sleeps, [1000, 2000, 4000, 1000, 2000, 4000]);
+});
+
+test("Retry-After date and numeric boundaries use the fixed clock and ten-second cap", async (t) => {
+  t.mock.method(Date, "now", () => Date.parse("2026-10-25T09:00:00Z"));
+  for (const [header, expected] of [
+    ["Sun, 25 Oct 2026 09:00:07 GMT", 7000],
+    ["Sun, 25 Oct 2026 08:59:59 GMT", 0],
+    ["Sun, 25 Oct 2026 09:01:00 GMT", 10000],
+    ["0", 0],
+    ["10", 10000],
+    ["11", 10000],
+    ["60", 10000],
+    ["9999999999999999999999999999999999999999", 10000],
+    [" 2 ", 2000],
+  ]) {
+    const sleeps = [];
+    const { fetchImpl } = stubFetch({
+      "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+      [EVENT_PATH]: [
+        { status: 429, headers: new Headers({ "retry-after": header }) },
+        { body: "<h1>Community game night</h1>" },
+      ],
+    });
+    assert.equal(
+      (await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps))).path,
+      EVENT_PATH,
+    );
+    assert.deepEqual(sleeps, [expected], header);
+  }
+  for (const header of ["soon", "not-a-date", "?"]) {
+    const sleeps = [];
+    const { fetchImpl } = stubFetch({
+      "/events.rss": [
+        { status: 429, headers: { "retry-after": header } },
+        { status: 429, headers: { "retry-after": header } },
+        { status: 429, headers: { "retry-after": header } },
+        { body: rss(`${APEX}${EVENT_PATH}`) },
+      ],
+      [EVENT_PATH]: { body: "<h1>Community game night</h1>" },
+    });
+    assert.equal(
+      (await lib.discoverEventPath(APEX, fetchImpl, recordSleeps(sleeps))).path,
+      EVENT_PATH,
+    );
+    assert.deepEqual(sleeps, [1000, 2000, 4000], header);
+  }
+});
+
+test("discovery shares one elapsed-time budget across all candidates", async () => {
+  const paths = Array.from({ length: 100 }, (_, i) => `/e/community-${i}`);
+  const sleeps = [];
+  let now = 0;
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(...paths.map((path) => `${APEX}${path}`)) },
+    "/events": { body: "" },
+    ...Object.fromEntries(
+      paths.map((path) => [path, { status: 429, headers: { "retry-after": "10" } }]),
+    ),
+  });
+  await assert.rejects(
+    () =>
+      lib.discoverEventPath(APEX, fetchImpl, {
+        nowImpl: () => now,
+        sleepImpl: async (ms) => {
+          sleeps.push(ms);
+          now += ms;
+        },
+      }),
+    { code: "DISCOVERY_BUDGET_EXHAUSTED" },
+  );
+  assert.ok(now <= 60000, `elapsed ${now} exceeds one minute`);
+  assert.ok(calls.length <= 24, `requests ${calls.length} exceed total cap`);
+  assert.ok(sleeps.length > 0, "the deadline did not bypass retry recovery");
+});
+
+test("discovery shares one request budget across both sources even with no sleeps", async () => {
+  const paths = Array.from({ length: 100 }, (_, i) => `/e/stale-${i}`);
+  const { calls, fetchImpl } = stubFetch({
+    "/events.rss": { body: rss(...paths.slice(0, 10).map((path) => `${APEX}${path}`)) },
+    "/events": {
+      body: paths
+        .slice(10)
+        .map((path) => `<a href="${path}">Old meetup</a>`)
+        .join(""),
+    },
+    ...Object.fromEntries(paths.map((path) => [path, { status: 410 }])),
+  });
+  await assert.rejects(
+    () =>
+      lib.discoverEventPath(APEX, fetchImpl, {
+        nowImpl: () => 0,
+        ...recordSleeps([]),
+      }),
+    { code: "DISCOVERY_BUDGET_EXHAUSTED" },
+  );
+  assert.equal(calls.length, 24);
+  assert.ok(calls.some((call) => new URL(call.url).pathname === "/events"));
+});
+
+test("a slow response cannot overrun the shared deadline and select an event", async () => {
+  let now = 0;
+  const calls = [];
+  await assert.rejects(
+    () =>
+      lib.discoverEventPath(
+        APEX,
+        async (url, init) => {
+          calls.push({ url, init });
+          now += 35000;
+          return { status: 200, text: async () => rss(`${APEX}${EVENT_PATH}`) };
+        },
+        { nowImpl: () => now },
+      ),
+    { code: "DISCOVERY_BUDGET_EXHAUSTED" },
+  );
+  assert.equal(calls.length, 2);
+  assert.ok(calls.every(({ init }) => init.signal instanceof AbortSignal));
+});
+
+// Native AbortSignal.timeout does not use node:test's mocked timers. Keep real
+// AbortSignals, but schedule their aborts on the controlled timer queue.
+async function withDiscoveryClock(t, elapsedBeforeRequest, run) {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  let now = elapsedBeforeRequest;
+  let initialSample = true;
+  const timeouts = [];
+  const pending = [];
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    const controller = new AbortController();
+    const timer = setTimeout(() => {
+      controller.abort(new DOMException("Discovery request timed out", "TimeoutError"));
+    }, ms);
+    timeouts.push({ ms, controller, timer });
+    return controller.signal;
+  });
+  const clock = {
+    timeouts,
+    advance(ms) {
+      now += ms;
+      t.mock.timers.tick(ms);
+    },
+    start(fetchImpl) {
+      const result = { settled: false };
+      const done = lib
+        .discoverEventPath(APEX, fetchImpl, {
+          // The first sample starts the budget; later samples include a scheduler
+          // delay before the first GET, without stalling an already-timed request.
+          nowImpl: () => {
+            if (initialSample) {
+              initialSample = false;
+              return 0;
+            }
+            return now;
+          },
+        })
+        .then(
+          (value) => Object.assign(result, { settled: true, value }),
+          (error) => Object.assign(result, { settled: true, error }),
+        );
+      pending.push(done);
+      return { result, done };
+    },
+  };
+  try {
+    await run(clock);
+  } finally {
+    now = 60000;
+    for (const { controller, timer } of timeouts) {
+      clearTimeout(timer);
+      controller.abort(new DOMException("Test cleanup", "AbortError"));
+    }
+    await Promise.all(pending);
+    t.mock.restoreAll();
+    t.mock.timers.reset();
+  }
+}
+
+for (const phase of ["fetch", "body"]) {
+  test(`discovery aborts pending ${phase} with only 1000ms remaining`, async (t) => {
+    await withDiscoveryClock(t, 58000, async (clock) => {
+      const entered = Promise.withResolvers();
+      const calls = [];
+      let suppliedSignal;
+      let aborted = false;
+      const { result, done } = clock.start(async (url, { signal }) => {
+        const path = new URL(url).pathname;
+        calls.push(path);
+        if (path === "/events.rss") {
+          return {
+            status: 200,
+            text: async () => {
+              clock.advance(1000);
+              return rss(`${APEX}${EVENT_PATH}`);
+            },
+          };
+        }
+        assert.equal(path, EVENT_PATH);
+        suppliedSignal = signal;
+        if (phase === "fetch") {
+          return new Promise((_resolve, reject) => {
+            const abort = () => {
+              aborted = true;
+              reject(signal.reason);
+            };
+            signal.addEventListener("abort", abort, { once: true });
+            entered.resolve();
+            if (signal.aborted) abort();
+          });
+        }
+        return new Response(
+          new ReadableStream(
+            {
+              start(controller) {
+                const abort = () => {
+                  aborted = true;
+                  controller.error(signal.reason);
+                };
+                signal.addEventListener("abort", abort, { once: true });
+                if (signal.aborted) abort();
+              },
+              pull() {
+                // With no prefetch, pull proves text() is awaiting body bytes.
+                entered.resolve();
+              },
+            },
+            { highWaterMark: 0 },
+          ),
+          { status: 200 },
+        );
+      });
+      await entered.promise;
+      assert.equal(suppliedSignal.aborted, false);
+      assert.equal(result.settled, false);
+      clock.advance(999);
+      assert.equal(suppliedSignal.aborted, false);
+      assert.equal(result.settled, false);
+      clock.advance(1);
+      assert.equal(aborted, true, `the supplied signal must interrupt pending ${phase}`);
+      assert.equal(suppliedSignal.reason.name, "TimeoutError");
+      await done;
+      if (phase === "body") assert.equal(result.error, suppliedSignal.reason);
+      else assert.equal(result.error?.code, "DISCOVERY_BUDGET_EXHAUSTED");
+      assert.deepEqual(
+        clock.timeouts.map(({ ms }) => ms),
+        [2000, 1000],
+      );
+      assert.equal(result.value, undefined, "an aborted request cannot select an event");
+      assert.deepEqual(calls, ["/events.rss", EVENT_PATH], "no fallback GET after expiry");
+    });
+  });
+}
+
+for (const [remaining, timeout] of [
+  [60000, 15000],
+  [15000, 15000],
+  [14999.25, 15000],
+  [1000, 1000],
+  [1.25, 2],
+  [0.25, 1],
+]) {
+  test(`discovery caps and rounds the request timeout with ${remaining}ms remaining`, async (t) => {
+    await withDiscoveryClock(t, 60000 - remaining, async (clock) => {
+      const calls = [];
+      const { result, done } = clock.start(async (url, { signal }) => {
+        calls.push(new URL(url).pathname);
+        assert.equal(signal.aborted, false);
+        return {
+          status: 200,
+          text: async () => rss(`${APEX}${EVENT_PATH}`),
+        };
+      });
+      await done;
+      assert.equal(result.error, undefined);
+      assert.deepEqual(result.value, { path: EVENT_PATH, source: "/events.rss" });
+      assert.deepEqual(calls, ["/events.rss", EVENT_PATH]);
+      assert.deepEqual(
+        clock.timeouts.map(({ ms }) => ms),
+        [timeout, timeout],
+      );
+    });
+  });
+}
+
+for (const elapsed of [60000, 60000.25]) {
+  test(`discovery makes no GET when the first request starts at ${elapsed}ms`, async (t) => {
+    await withDiscoveryClock(t, elapsed, async (clock) => {
+      let requests = 0;
+      const { result, done } = clock.start(async () => {
+        requests += 1;
+        return { status: 200, text: async () => rss(`${APEX}${EVENT_PATH}`) };
+      });
+      await done;
+      assert.equal(result.error?.code, "DISCOVERY_BUDGET_EXHAUSTED");
+      assert.equal(requests, 0);
+      assert.equal(clock.timeouts.length, 0);
+    });
+  });
+}
+
+for (const elapsed of [60000, 60000.25]) {
+  test(`discovery rejects an event whose body finishes at ${elapsed}ms`, async (t) => {
+    await withDiscoveryClock(t, 59000, async (clock) => {
+      const calls = [];
+      let bodyCompleted = false;
+      const { result, done } = clock.start(async (url) => {
+        const path = new URL(url).pathname;
+        calls.push(path);
+        return {
+          status: 200,
+          text: async () => {
+            if (path === EVENT_PATH) {
+              // EOF wins the promise race, but its continuation resumes too late.
+              clock.advance(elapsed - 59000);
+              bodyCompleted = true;
+              return "<h1>Community game night</h1>";
+            }
+            return rss(`${APEX}${EVENT_PATH}`);
+          },
+        };
+      });
+      await done;
+      assert.equal(bodyCompleted, true);
+      assert.equal(result.error?.code, "DISCOVERY_BUDGET_EXHAUSTED");
+      assert.equal(result.value, undefined, "a completed body does not override the deadline");
+      assert.deepEqual(calls, ["/events.rss", EVENT_PATH]);
+    });
+  });
+}
+
+test("the runner rejects persistent candidate or feed throttling before launching Lighthouse", async () => {
+  for (const routes of [
+    {
+      "/events.rss": { body: rss(`${APEX}${EVENT_PATH}`) },
+      [EVENT_PATH]: { status: 429 },
+      "/events": { body: `<a href="${EVENT_PATH}">Community game night</a>` },
+    },
+    { "/events.rss": { status: 429 }, "/events": { status: 429 } },
+    { "/events.rss": { status: 429 }, "/events": { body: "" } },
+  ]) {
+    await withDir(async (dir) => {
+      const { fetchImpl } = stubFetch(routes);
+      let launched = 0;
+      const code = await main([APEX], {
+        fetchImpl,
+        dir,
+        log: () => {},
+        discoveryOptions: recordSleeps([]),
+        lhci: async (env) => {
+          launched += 1;
+          let n = 0;
+          for (const path of lib.plannedPaths(env.LIGHTHOUSE_EVENT_PATH || undefined)) {
+            for (let run = 0; run < base.ci.collect.numberOfRuns; run += 1) {
+              await writeFile(
+                join(dir, `lhr-${n++}.json`),
+                JSON.stringify(lhr(path, [1000, 0, 100, 10, 800])),
+              );
+            }
+          }
+          await writeFile(join(dir, "assertion-results.json"), "[]");
+          return { exitCode: 0, output: "" };
+        },
+      });
+      assert.equal(code, 1);
+      assert.equal(
+        launched,
+        0,
+        "throttled evidence must not be replaced with a reduced route plan",
+      );
+      const summary = await readFile(join(dir, "watch-summary.md"), "utf8");
+      assert.match(summary, /Event discovery failed.*incomplete.*throttled/);
+      assert.doesNotMatch(summary, /Event route skipped/);
+    });
+  }
+});
+
+test("each exhausted 429 body is released before retrying or selecting an alternate", async () => {
+  let cancelled = 0;
+  let requests = 0;
+  let sleeps = 0;
+  const found = await lib.discoverEventPath(
+    APEX,
+    async (url) => {
+      const path = new URL(url).pathname;
+      requests += 1;
+      if (path === "/events.rss" || path === "/e/throttled") {
+        return {
+          status: 429,
+          body: {
+            cancel: async () => {
+              cancelled += 1;
+            },
+          },
+        };
+      }
+      if (path === "/events")
+        return {
+          status: 200,
+          text: async () => '<a href="/e/throttled">Throttled</a><a href="/e/healthy">Healthy</a>',
+        };
+      assert.equal(cancelled, 8);
+      return { status: 200, text: async () => "<h1>Healthy</h1>" };
+    },
+    {
+      sleepImpl: async () => {
+        sleeps += 1;
+        assert.equal(cancelled, requests - 1 + (sleeps <= 3 ? 1 : 0));
+      },
+    },
+  );
+  assert.equal(found.path, "/e/healthy");
+  assert.equal(cancelled, 8);
+  assert.equal(sleeps, 6);
 });
 
 test("discovery reports cancelled listings when only stale candidates remain", async () => {
@@ -437,6 +1044,7 @@ test("an origin that errors, redirects or is not allowlisted fails discovery ins
 });
 
 const lhr = (path, values, finalPath = path) => ({
+  ...navigationMetadata("mobile"),
   requestedUrl: `${APEX}${path}`,
   finalUrl: `${APEX}${finalPath}`,
   categories: { performance: { score: 1 } },
@@ -687,4 +1295,187 @@ test("the workflow is dispatch-only, hosted, read-only, secret-free and pinned",
   assert.match(code, /npm run lighthouse:origin -- "\$ORIGIN"/);
   // The choice is passed through the environment, never interpolated into the script.
   assert.doesNotMatch(code, /run:[^\n]*\$\{\{/);
+});
+
+// The marginal band derives from ci/lighthouserc.cjs (single source): the
+// budget itself is never copied into the retry logic.
+test("the marginal band is (budget, budget * 1.1) from ci/lighthouserc.cjs", () => {
+  assert.equal(lib.lcpBudget(), 2000);
+  assert.equal(lib.marginalBandMax(), 2200);
+  assert.equal(lib.MARGINAL_AUDIT, "largest-contentful-paint");
+  assert.equal(lib.MARGINAL_PATH, "/");
+  assert.equal(lib.MARGINAL_BAND_RATIO, 0.1);
+});
+
+function marginalFixture({
+  lcpRuns = [1940, 2060, 2065],
+  assertions = "marginal",
+  skip = true,
+} = {}) {
+  const paths = skip ? lib.plannedPaths(undefined) : lib.plannedPaths(EVENT_PATH);
+  const lhrs = [];
+  for (const path of paths) {
+    const values = path === "/" ? lcpRuns : [1000, 1100, 1050];
+    for (const lcp of values) lhrs.push(lhr(path, [lcp, 0, 100, 50, 900]));
+  }
+  const marginal = [
+    {
+      url: `${APEX}/`,
+      auditId: "largest-contentful-paint",
+      level: "error",
+      actual: 2060,
+      expected: 2000,
+    },
+    {
+      url: `${APEX}/`,
+      auditId: "first-contentful-paint",
+      level: "warn",
+      actual: 1850,
+      expected: 1800,
+    },
+    {
+      url: `${APEX}/events`,
+      auditId: "first-contentful-paint",
+      level: "warn",
+      actual: 1820,
+      expected: 1800,
+    },
+  ];
+  return {
+    rows: lib.summarizeRoutes({
+      origin: APEX,
+      eventPath: skip ? undefined : EVENT_PATH,
+      skipReason: skip ? "no published event is listed" : undefined,
+      lhrs,
+      assertions: assertions === "marginal" ? marginal : assertions,
+    }),
+    assertions: assertions === "marginal" ? marginal : assertions,
+  };
+}
+
+test("rows carry every per-run sample for every route, including passes", () => {
+  const { rows } = marginalFixture();
+  const home = rows.find((row) => row.path === "/");
+  assert.deepEqual(home.samples["largest-contentful-paint"], [1940, 2060, 2065]);
+  assert.deepEqual(home.samples["server-response-time"], [100, 100, 100]);
+  const pass = rows.find((row) => row.path === "/faq");
+  assert.equal(pass.verdict, "pass");
+  assert.deepEqual(pass.samples["largest-contentful-paint"], [1000, 1100, 1050]);
+  const skipped = rows.find((row) => row.path === "/e/<key>");
+  assert.equal(skipped.verdict, "skipped");
+  assert.deepEqual(skipped.samples, {});
+});
+
+test("the summary renders per-sample values for all routes and an optional notice", () => {
+  const { rows } = marginalFixture();
+  const text = lib.renderSummary({ origin: APEX, eventPath: undefined, rows });
+  assert.match(text, /### Per-sample values \(all routes, collection order\)/);
+  assert.match(text, /\| \/ \| 1940, 2060, 2065 \|/);
+  assert.match(text, /\| \/faq \| 1000, 1100, 1050 \|/);
+  assert.match(text, /\| \/e\/<key> \| - \| - \| - \| - \| - \|/);
+  assert.doesNotMatch(text, /gates on attempt 2/);
+  const noticed = lib.renderSummary({
+    origin: APEX,
+    eventPath: undefined,
+    rows,
+    notice: "> Attempt 1 breached marginally; gates on attempt 2.",
+  });
+  assert.match(noticed, /> Attempt 1 breached marginally; gates on attempt 2\./);
+});
+
+test("a marginal / LCP breach with everything else pass/warn-only retries", () => {
+  const { rows, assertions } = marginalFixture();
+  assert.equal(rows.find((row) => row.path === "/").verdict, "fail");
+  assert.equal(rows.find((row) => row.path === "/events").verdict, "warn");
+  const marginal = lib.isMarginalLcpBreach({ rows, assertions });
+  assert.equal(marginal.marginal, true);
+  assert.equal(marginal.actual, 2060);
+  assert.equal(marginal.budget, 2000);
+  assert.equal(marginal.bandMax, 2200);
+  assert.match(marginal.reason, /only error is \/ LCP 2060 within \(2000, 2200\)/);
+});
+
+test("anything outside the marginal shape fails closed to no retry", () => {
+  const check = (assertions, mutateRows, pattern) => {
+    const { rows } = marginalFixture({ assertions });
+    const result = lib.isMarginalLcpBreach({
+      rows: mutateRows ? mutateRows(rows) : rows,
+      assertions,
+    });
+    assert.equal(result.marginal, false);
+    assert.match(result.reason, pattern);
+  };
+  const lcpError = (actual, url = `${APEX}/`) => ({
+    url,
+    auditId: "largest-contentful-paint",
+    level: "error",
+    actual,
+    expected: 2000,
+  });
+  // Band edges: strictly inside (budget, bandMax), exclusive both ends.
+  check([lcpError(2500)], null, /outside the marginal band/);
+  check([lcpError(2200)], null, /outside the marginal band/);
+  check([lcpError(2000)], null, /outside the marginal band/);
+  check([lcpError(Number.NaN)], null, /outside the marginal band/);
+  // A non-LCP error on `/` (e.g. a dragged-down performance category) vetoes.
+  check(
+    [
+      lcpError(2060),
+      {
+        url: `${APEX}/`,
+        auditId: "server-response-time",
+        level: "error",
+        actual: 900,
+        expected: 600,
+      },
+    ],
+    null,
+    /non-LCP error/,
+  );
+  // An error on any other route vetoes.
+  check(
+    [
+      lcpError(2060),
+      {
+        url: `${APEX}/events`,
+        auditId: "server-response-time",
+        level: "error",
+        actual: 900,
+        expected: 600,
+      },
+    ],
+    null,
+    /\/events is fail, not pass\/warn-only/,
+  );
+  // Unreadable assertion evidence vetoes.
+  check(
+    [{ level: "error", auditId: "unreadable-assertion-results", readError: true }],
+    null,
+    /unreadable/,
+  );
+  // No error at all is not a breach to retry.
+  check([], null, /no error-level/);
+  // An error attributed to no planned row hides from the table: veto.
+  check([lcpError(2060), lcpError(2500, `${APEX}/ghost`)], null, /unattributed/);
+  // Incomplete runs veto, even with the LCP error in the band.
+  check(
+    [lcpError(2060)],
+    (rows) => {
+      const short = structuredClone(rows);
+      short.find((row) => row.path === "/about").verdict = "fail";
+      short.find((row) => row.path === "/about").note = "0/3 runs (incomplete collection)";
+      return short;
+    },
+    /\/about is fail, not pass\/warn-only/,
+  );
+  // A skipped row anywhere but the event slot vetoes.
+  check(
+    [lcpError(2060)],
+    (rows) => {
+      const skipped = structuredClone(rows);
+      skipped.find((row) => row.path === "/faq").verdict = "skipped";
+      return skipped;
+    },
+    /unexpected skipped row/,
+  );
 });

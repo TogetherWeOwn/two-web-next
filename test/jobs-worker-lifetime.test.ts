@@ -262,15 +262,58 @@ describe.skipIf(!process.env.DATABASE_URL)(
         try {
           await vi.waitFor(() => expect(successor).toBeDefined(), { timeout: 2000 });
           await expectAckAndShutdown(messages, work);
-          expect(pools.every(({ ended }) => ended)).toBe(true);
+          // AB7 producer deadline: a hung send stops racing at 2000 ms, so its
+          // lease-release pool can still be closing when the batch acks. Wait
+          // for every pool to end instead of asserting it immediately.
+          await vi.waitFor(() => expect(pools.every(({ ended }) => ended)).toBe(true), {
+            timeout: 5000,
+          });
           if (late) {
             expect(await observer`select job_id from queue_jobs`).toEqual([
               { job_id: successor!.jobId },
             ]);
+            // Pin the worker waitUntil wiring: after the dispatch deadline the
+            // background lifetime must still be pending while the held send is
+            // unresolved. A revert to successorLifetime(work) settles at the
+            // deadline and fails this pin (Node would still run the detached
+            // tail, masking it without this order assert).
+            await vi.waitFor(
+              () =>
+                expect(
+                  warnings.mock.calls.some(
+                    ([text]) => text === "sync successor dispatch failed; reconcile will retry",
+                  ),
+                ).toBe(true),
+              { timeout: 10_000 },
+            );
+            let backgroundSettled = false;
+            void Promise.all(background).then(
+              () => {
+                backgroundSettled = true;
+              },
+              () => {
+                backgroundSettled = true;
+              },
+            );
+            await new Promise((resolve) => setTimeout(resolve, 100));
+            expect(backgroundSettled).toBe(false);
             held.reject(new Error("local late transport rejection")); // AFTER actual pool end
+            await Promise.all(background);
+            // The tail (including exact-jobId ledger compensation) rides the
+            // background lifetime: already empty here with no waitFor. A
+            // reverted wiring drains at the deadline while compensation is
+            // still in flight and fails this immediate assert.
+            expect(await observer`select job_id from queue_jobs`).toEqual([]);
+          } else {
+            await awaitDispatchFailure();
+            // AB7 producer deadline: the dispatch can already have settled at
+            // its 2000 ms bound, so the rejection compensation below can still
+            // be in flight. Wait for it instead of asserting it immediately.
+            await vi.waitFor(
+              async () => expect(await observer`select job_id from queue_jobs`).toEqual([]),
+              { timeout: 10_000 },
+            );
           }
-          await awaitDispatchFailure();
-          expect.soft(await observer`select job_id from queue_jobs`).toEqual([]);
           expect(await pgEventStore(observer).needsSync(firstKey)).toBe(true);
           await recover(); // A clean revision must not hide the old orphan jobId.
         } finally {
@@ -281,7 +324,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     }
 
     for (const expireGrace of [false, true]) {
-      it(`accepted-late successor keeps its exact row and lock until its real consumer settles it (grace expired=${expireGrace})`, async () => {
+      it(`accepted-late successor keeps its exact row with the lease released at the deadline until its real consumer settles it (grace expired=${expireGrace})`, async () => {
         const messages = await prepare();
         const held = gate();
         let successor: SyncMessage | undefined;
@@ -309,7 +352,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
         try {
           await vi.waitFor(() => expect(successor).toBeDefined(), { timeout: 2000 });
           await expectAckAndShutdown(messages, work);
-          expect(pools.every(({ ended }) => ended)).toBe(true);
+          // AB7 producer deadline: a hung send stops racing at 2000 ms, so its
+          // lease-release pool can still be closing when the batch acks. Wait
+          // for every pool to end instead of asserting it immediately.
+          await vi.waitFor(() => expect(pools.every(({ ended }) => ended)).toBe(true), {
+            timeout: 5000,
+          });
           expect(await observer`select job_id from queue_jobs`).toEqual([
             { job_id: successor!.jobId },
           ]);
@@ -329,15 +377,29 @@ describe.skipIf(!process.env.DATABASE_URL)(
               { job_id: successor!.jobId },
             ]);
           }
+          // AB7 producer deadline: the hung send stops racing at 2000 ms, but
+          // the expiry above can settle the lifetime race first. Wait for the
+          // deadline rejection itself before releasing the gate, so the late
+          // accept always lands after the lease is gone.
+          await vi.waitFor(
+            () =>
+              expect(
+                warnings.mock.calls.some(
+                  ([text]) => text === "sync successor dispatch failed; reconcile will retry",
+                ),
+              ).toBe(true),
+            { timeout: 10_000 },
+          );
           held.release();
           await vi.waitFor(() => expect(accepted).toBe(true), { timeout: 2000 });
           await Promise.all(background);
           expect(await observer`select job_id from queue_jobs`).toEqual([
             { job_id: successor!.jobId },
           ]);
-          expect(await observer`select key from job_unique_locks`).toEqual([
-            { key: uniqueKey(firstKey) },
-          ]);
+          // AB7 producer deadline: the lease was already released when the
+          // 2000 ms bound fired, while the late-accepted send keeps its exact
+          // tracked row until its real consumer settles it below.
+          expect(await observer`select key from job_unique_locks`).toEqual([]);
           transport.bot = {
             upsertEvent: vi.fn<BotClient["upsertEvent"]>(async () => ({
               ok: true,
@@ -363,14 +425,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
       }, 20_000);
     }
 
-    for (const statementTimeout of [false, true]) {
-      it(statementTimeout
-        ? "a still-blocked native INSERT reaches its database timeout without holding ACK or leaking its pool"
-        : "a native INSERT that commits after handler pool shutdown is cancelled before send and compensated", async () => {
+    for (const releaseBeforeBound of [false, true]) {
+      it(releaseBeforeBound
+        ? "a native INSERT released before the ledger bound commits and dispatches the successor"
+        : "a still-blocked native INSERT is cancelled server-side within the ledger bound without holding ACK or leaking its pool", async () => {
         const messages = await prepare();
         // A server-side trigger holds only the successor INSERT, not handler SQL.
-        // Its receipt proves a late COMMIT actually happened, not just a rolled
-        // back statement or a fake ledger promise returning after a timer.
+        // Its receipt proves a COMMIT actually happened, not just a rolled back
+        // statement or a fake ledger promise returning after a timer.
         await observer`create table successor_insert_receipts (job_id uuid primary key)`;
         await observer`create function hold_successor_insert() returns trigger language plpgsql as $$
         begin
@@ -404,37 +466,103 @@ describe.skipIf(!process.env.DATABASE_URL)(
             interval: 10,
             timeout: 2000,
           });
+          const parkedAt = Date.now(); // ~INSERT start: polling began before it parked.
+          if (releaseBeforeBound) {
+            held.release(); // Commit inside the 2 s ledger bound (positive control).
+            await holding;
+            await expectAckAndShutdown(messages, work);
+            await Promise.all(background);
+            // A brief sub-bound wait still commits and dispatches exactly once.
+            expect(send).toHaveBeenCalledOnce();
+            const successor = send.mock.calls[0]![0] as SyncMessage;
+            expect(successor).toMatchObject({ kind: "sync-event", eventKey: firstKey });
+            expect(await observer`select job_id from successor_insert_receipts`).toEqual([
+              { job_id: successor.jobId },
+            ]);
+            expect(
+              warnings.mock.calls.some(
+                ([text]) => text === "sync successor dispatch failed; reconcile will retry",
+              ),
+            ).toBe(false);
+            expect(await observer`select job_id from queue_jobs`).toEqual([
+              { job_id: successor.jobId },
+            ]);
+            expect(await observer`select key from job_unique_locks`).toEqual([
+              { key: uniqueKey(firstKey) },
+            ]);
+            await observer`drop trigger hold_successor_insert on queue_jobs`;
+            transport.bot = {
+              upsertEvent: vi.fn<BotClient["upsertEvent"]>(async () => ({
+                ok: true,
+                requestId: null,
+                discordEventId: "discord-successor",
+              })),
+              cancelEvent: vi.fn(),
+              postAnnouncement: vi.fn(),
+              assignRole: vi.fn(),
+            };
+            const message = delivery(successor);
+            await handleQueue(
+              { messages: [message] } as unknown as MessageBatch<unknown>,
+              env,
+              ctx,
+            );
+            expect(message.ack).toHaveBeenCalledOnce();
+            expect(message.retry).not.toHaveBeenCalled();
+            expect(await pgEventStore(observer).needsSync(firstKey)).toBe(false);
+            expect(await observer`select job_id from queue_jobs`).toEqual([]);
+            expect(await observer`select key from job_unique_locks`).toEqual([]);
+            return;
+          }
           await expectAckAndShutdown(messages, work);
           expect(send).not.toHaveBeenCalled();
-          expect(await blocked()).toHaveLength(1); // Still server-side, AFTER shutdown.
-          if (statementTimeout) {
-            // Keep the actual server lock held until statement_timeout cancels the
-            // query. waitUntil settlement is bounded independently of this holder.
-            await Promise.all(background);
-            // Class-only since the successor-dispatch redaction: the timeout
-            // error's raw message ("statement timeout") must not reach the
-            // log, only its bounded class. The cancelled server query and the
-            // empty receipts below still prove the timeout itself happened.
-            const dispatchWarns = warnings.mock.calls.filter(
-              ([text]) => text === "sync successor dispatch failed; reconcile will retry",
+          // The holder never released, so only the server-side 2 s ledger bound
+          // can free the parked INSERT. 4000 ms from parking sits far under the
+          // 5 s pool statement_timeout that used to be the only cancellation.
+          await vi.waitFor(async () => expect(await blocked()).toHaveLength(0), {
+            interval: 50,
+            timeout: 10_000,
+          });
+          expect(Date.now() - parkedAt).toBeLessThan(4000);
+          expect(
+            await observer`select pid from pg_locks
+            where locktype = 'advisory' and pid = ${holderPid} and granted`,
+          ).toHaveLength(1); // Holder still holds: the bound freed the INSERT.
+          await Promise.all(background);
+          await vi.waitFor(() => expect(pools.every(({ ended }) => ended)).toBe(true), {
+            timeout: 10_000,
+          });
+          // Class-only since the successor-dispatch redaction: the error's raw
+          // message must not reach the log, only its bounded class. Which class
+          // wins is a ~50 ms race: the server lock cancel surfaces PostgresError
+          // unless the 2 s client producer deadline takes that remaining 50 ms.
+          const dispatchWarns = warnings.mock.calls.filter(
+            ([text]) => text === "sync successor dispatch failed; reconcile will retry",
+          );
+          expect(dispatchWarns.length).toBeGreaterThanOrEqual(1);
+          for (const [, detail] of dispatchWarns) {
+            expect(Object.keys(detail as object)).toEqual(["exception"]);
+            expect(["PostgresError", "BotTransportError"]).toContain(
+              (detail as { exception: string }).exception,
             );
-            expect(dispatchWarns.length).toBeGreaterThanOrEqual(1);
-            for (const [, detail] of dispatchWarns) {
-              expect(detail).toEqual({ exception: "PostgresError" });
-            }
-            expect(await blocked()).toHaveLength(0);
-            expect(pools.every(({ ended }) => ended)).toBe(true);
           }
+          // Cancelled before the holder released, the INSERT can never commit
+          // late: no receipt, no ledger orphan, and the lease is compensated.
+          expect(await observer`select job_id from successor_insert_receipts`).toEqual([]);
+          await vi.waitFor(
+            async () => expect(await observer`select job_id from queue_jobs`).toEqual([]),
+            { timeout: 10_000 },
+          );
+          await vi.waitFor(
+            async () => expect(await observer`select key from job_unique_locks`).toEqual([]),
+            { timeout: 10_000 },
+          );
           held.release();
           await holding;
-          await awaitDispatchFailure();
-          expect(send).not.toHaveBeenCalled(); // Deadline abort prevents a late send.
-          expect(await observer`select job_id from successor_insert_receipts`).toHaveLength(
-            statementTimeout ? 0 : 1,
-          );
-          expect(await observer`select job_id from queue_jobs`).toEqual([]);
-          expect(await observer`select key from job_unique_locks`).toEqual([]);
+          expect(await observer`select job_id from successor_insert_receipts`).toEqual([]);
+          expect(send).not.toHaveBeenCalled();
           await observer`drop trigger hold_successor_insert on queue_jobs`;
+          expect(await pgEventStore(observer).needsSync(firstKey)).toBe(true);
           await recover();
         } finally {
           held.release();

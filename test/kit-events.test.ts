@@ -45,7 +45,7 @@ const noSession = async () => null;
 const noFlash = async () => null;
 
 const baseModel = () => ({
-  state: { view: "list", month: "2026-10", q: "", past: false, page: 1 },
+  state: { view: "list", month: "2026-10", q: "", game: "", past: false, page: 1 },
   upcoming: [],
   past: [],
   zone: "Europe/London",
@@ -53,6 +53,8 @@ const baseModel = () => ({
   emptyState: null,
   robots: undefined,
   discordFailed: false,
+  games: [],
+  gameFilter: null,
 });
 
 function loadArgs(overrides: Record<string, unknown> = {}) {
@@ -145,7 +147,11 @@ describe("Kit events list response parity", () => {
   });
 
   it("skips the session store read for cookie-bearing requests", async () => {
-    const sessionFor = vi.fn(async () => ({ member: true, moderator: false }));
+    const sessionFor = vi.fn(async () => ({
+      username: "kit-member",
+      member: true,
+      moderator: false,
+    }));
     const withCookie = () =>
       request("https://example.test/events", { headers: { cookie: "session=opaque" } });
     let renders = 0;
@@ -193,7 +199,7 @@ describe("Kit events list response parity", () => {
       renders++;
       return cachedResponse();
     };
-    const sessionFor = async () => ({ member: true, moderator: false });
+    const sessionFor = async () => ({ username: "kit-member", member: true, moderator: false });
     await dispatchEventsRequest(request(), env, resolve, { sessionFor, now: 1000 });
     await dispatchEventsRequest(request(), env, resolve, { sessionFor, now: 2000 });
 
@@ -260,7 +266,12 @@ describe("Kit events list response parity", () => {
       vi.fn(async (parts: TemplateStringsArray) =>
         parts.join("").includes("SELECT count(*)") ? [{ n: 60, wait: 12 }] : [],
       ),
-      { begin: async (run: (tx: never) => Promise<unknown>) => run(sql as never) },
+      {
+        begin: async (run: (tx: never) => Promise<unknown>) => run(sql as never),
+        // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before
+        // the advisory lock; the double passes it through.
+        unsafe: async () => [],
+      },
     );
     const throttledEnv = {
       APP_URL: "https://example.test",

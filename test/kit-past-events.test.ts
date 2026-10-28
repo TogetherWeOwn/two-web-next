@@ -103,7 +103,12 @@ describe("Kit past archive response parity", () => {
       vi.fn(async (parts: TemplateStringsArray) =>
         parts.join("").includes("SELECT count(*)") ? [{ n: 60, wait: 12 }] : [],
       ),
-      { begin: async (run: (tx: never) => Promise<unknown>) => run(sql as never) },
+      {
+        begin: async (run: (tx: never) => Promise<unknown>) => run(sql as never),
+        // The throttle sets `SET LOCAL lock_timeout` through `unsafe` before
+        // the advisory lock; the double passes it through.
+        unsafe: async () => [],
+      },
     );
     const throttledEnv = {
       APP_URL: "https://example.test",
@@ -303,6 +308,50 @@ describe("past archive load helper", () => {
         },
       }),
     ).rejects.toMatchObject({ status: 503 });
+    expect(headers["cache-control"]).toBe("private, no-store");
+  });
+
+  it("rejects an oversized query before touching the database", async () => {
+    const { headers, setHeaders } = headersOf();
+    const setHeadersSpy = vi.fn(setHeaders);
+    const dbForFn = vi.fn(async () => fakeDb);
+    const listPastFn = vi.fn(async () => ({ rows: [row], hasMore: false, totalPages: 1 }));
+    // Raw length governs admission: the blank variant normalizes to null yet
+    // must still reject, so a later cleanup cannot drop the +page.server
+    // pre-check trusting an unpinned helper.
+    for (const queryParam of ["a".repeat(256), " ".repeat(256)]) {
+      await expect(
+        loadPastArchivePage({
+          env,
+          pageParam: "1",
+          queryParam,
+          setHeaders: setHeadersSpy,
+          dbForFn,
+          listPastFn,
+        }),
+      ).rejects.toMatchObject({ status: 422 });
+    }
+    expect(headers["cache-control"]).toBe("private, no-store");
+    expect(headers["x-two-past-cacheable"]).toBeUndefined();
+    expect(setHeadersSpy).toHaveBeenCalledTimes(2);
+    expect(dbForFn).not.toHaveBeenCalled();
+    expect(listPastFn).not.toHaveBeenCalled();
+  });
+
+  it("normalizes CR/CRLF queries to LF before the read so data-query and canonical agree", async () => {
+    const { headers, setHeaders } = headersOf();
+    const listPastFn = vi.fn(async () => ({ rows: [row], hasMore: false, totalPages: 1 }));
+    const data = await loadPastArchivePage({
+      env,
+      pageParam: "1",
+      queryParam: "alpha\r\nbeta",
+      setHeaders,
+      dbForFn: async () => fakeDb,
+      listPastFn,
+    });
+
+    expect(data.q).toBe("alpha\nbeta");
+    expect(listPastFn).toHaveBeenCalledWith(fakeDb, 1, expect.any(Date), "alpha\nbeta");
     expect(headers["cache-control"]).toBe("private, no-store");
   });
 });

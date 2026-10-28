@@ -2,37 +2,81 @@
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import {
+  EVENT_CARD_HOST_TESTID,
   EVENTS_EMPTY_COPY,
   EVENTS_SUBSCRIBE_TESTID,
+  PAST_EVENTS_BACK_TESTID,
   PAST_EVENTS_COPY,
   PAST_EVENTS_EMPTY_TESTID,
   PAST_EVENTS_ISLAND,
   PAST_EVENTS_LIST_TESTID,
   PAST_EVENTS_OUT_OF_RANGE_TESTID,
+  PAST_EVENTS_PAGER_NEWER_TESTID,
+  PAST_EVENTS_PAGER_OLDER_TESTID,
+  PAST_EVENTS_PAGER_TESTID,
+  PAST_EVENTS_SEARCH_MISS_TESTID,
   PAST_EVENTS_TESTID,
   goingCountText,
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
 } from "../islands/contracts";
+import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { feedUrl, rssUrl, webcalUrl } from "./feeds";
+import { subscriptionHelp } from "./subscription-help";
 import type { PublicEvent } from "./reads";
+import { effectiveZone } from "./date-format";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
+import { searchContext } from "./search-context";
 
-const Card: FC<{ e: PublicEvent }> = ({ e }) => (
-  <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>
-    <ScheduleDate date={e.startsAt} zone={e.timezone} />
-    <div class="schedule-info">
-      <h2>
-        <a href={`/e/${e.eventKey}`}>{e.title}</a>
-      </h2>
-      <p>
-        <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>
-      </p>
-      {e.game ? <p>{e.game}</p> : null}
-    </div>
-    <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
-  </li>
-);
+const Card: FC<{ e: PublicEvent; q: string; archive: ArchiveContext }> = ({ e, q, archive }) => {
+  // Same compact host line as the upcoming CalCard: trimmed public organizer,
+  // already on the row (no new read); blank/missing renders no node.
+  const host = (e.organizer_name ?? "").trim();
+  return (
+    <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>
+      <ScheduleDate date={e.startsAt} zone={e.timezone} />
+      <div class="schedule-info">
+        <h2>
+          <a href={archiveEventHref(e.eventKey, archive)}>
+            {q ? (
+              <span>
+                {searchContext(e.title, q).map((part) =>
+                  part.match ? <mark>{part.text}</mark> : part.text,
+                )}
+              </span>
+            ) : (
+              e.title
+            )}
+          </a>
+        </h2>
+        {/* Upcoming-card shape (time · zone · location): the zone always
+            renders, the location only when the row has one. */}
+        <p>
+          <time datetime={e.startsAt.toISOString()}>
+            {fmt(e.startsAt, effectiveZone(e.timezone))}
+          </time>{" "}
+          <span>{effectiveZone(e.timezone)}</span>
+          {e.location ? (
+            <>
+              {" · "}
+              <span>{e.location}</span>
+            </>
+          ) : null}
+        </p>
+        {e.game ? <p>{e.game}</p> : null}
+        {host !== "" ? <p data-testid={EVENT_CARD_HOST_TESTID}>Hosted by {host}</p> : null}
+        {q && e.description ? (
+          <p class="archive-passage">
+            {searchContext(e.description, q, true).map((part) =>
+              part.match ? <mark>{part.text}</mark> : part.text,
+            )}
+          </p>
+        ) : null}
+      </div>
+      <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
+    </li>
+  );
+};
 
 export const PastEventsPage: FC<{
   rows: PublicEvent[];
@@ -40,28 +84,33 @@ export const PastEventsPage: FC<{
   hasMore: boolean;
   totalPages: number;
   appUrl: string;
-}> = ({ rows, page, hasMore, totalPages, appUrl }) => (
+  q?: string;
+}> = ({ rows, page, hasMore, totalPages, appUrl, q = "" }) => (
   <ScheduleShell
     title="Past events"
-    canonical={canonicalUrl(appUrl, pastEventsUrl(page))}
+    canonical={canonicalUrl(appUrl, pastEventsUrl(page, q))}
     description="Look back at the community’s game nights and tournaments."
     robots="noindex, follow"
-    loginReturnTo={pastEventsUrl(page)}
+    loginReturnTo={pastEventsUrl(page, q)}
   >
     <section
       data-island={PAST_EVENTS_ISLAND}
       data-testid={PAST_EVENTS_TESTID}
       data-page={page}
       data-total-pages={totalPages}
+      data-query={q}
       data-load-error={PAST_EVENTS_COPY.failed}
       aria-labelledby="past-events-heading"
     >
       <div class="schedule-heading">
-        <p class="strap">The archive</p>
+        <p class="strap">The archive</p>{" "}
         <h1 id="past-events-heading" tabindex={-1}>
           Past events
-        </h1>
-        <p>Game nights we’ve shared. Find the next one in the upcoming schedule.</p>
+        </h1>{" "}
+        <p>
+          Game nights we’ve shared. Find the next one in the <a href="/events">upcoming schedule</a>
+          .
+        </p>
       </div>
       {/* Feed links live outside the binder's swapped zones (state/list/pager)
           so fragment turns never swallow them; same helpers as the calendar. */}
@@ -71,9 +120,37 @@ export const PastEventsPage: FC<{
         </a>{" "}
         <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
       </p>
+      {subscriptionHelp(appUrl)}
+      {/* Plain GET navigation outside the binder's swapped zones: submitting
+          starts from page 1 with JS off, and fragment turns never swallow it.
+          Same shape as the calendar search form. */}
+      <form method="get" action="/events/past" role="search">
+        <label class="sr-only" for="past-events-search-input">
+          Search past events
+        </label>
+        <input
+          id="past-events-search-input"
+          type="search"
+          name="q"
+          value={q}
+          placeholder="Search past events"
+        />
+        <button class="btn" type="submit">
+          Search
+        </button>
+      </form>
       <div data-archive-state>
+        {q ? (
+          <p role="status">
+            Past events matching “{q}”. <a href="/events/past">Clear search</a>
+          </p>
+        ) : null}
         {rows.length === 0 ? (
-          totalPages === 0 ? (
+          totalPages === 0 && q ? (
+            <p role="status" data-testid={PAST_EVENTS_SEARCH_MISS_TESTID}>
+              No past events match “{q}”. <a href="/events/past">Clear search</a>
+            </p>
+          ) : totalPages === 0 ? (
             <div data-testid={PAST_EVENTS_EMPTY_TESTID}>
               <p>{PAST_EVENTS_COPY.empty}</p>
               <p>
@@ -82,33 +159,50 @@ export const PastEventsPage: FC<{
             </div>
           ) : (
             <p role="status" data-testid={PAST_EVENTS_OUT_OF_RANGE_TESTID}>
-              {pastEventsOutOfRangeCopy(page, totalPages)}
+              {pastEventsOutOfRangeCopy(page, totalPages)}{" "}
+              <a href={pastEventsUrl(1, q)}>Back to page 1</a>
             </p>
           )
         ) : null}
       </div>
       <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>
         {rows.map((e) => (
-          <Card e={e} />
+          <Card e={e} q={q} archive={{ page, q }} />
         ))}
       </ul>
-      <nav aria-label="Past event pages" data-archive-pager>
+      <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>
         {page > 1 && totalPages > 0 ? (
-          <a data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages))}>
+          <a
+            data-testid={PAST_EVENTS_PAGER_NEWER_TESTID}
+            data-archive-page
+            href={pastEventsUrl(Math.min(page - 1, totalPages), q)}
+          >
             Newer
           </a>
         ) : null}{" "}
+        {totalPages > 0 ? (
+          <span>
+            Page {page} of {totalPages}
+          </span>
+        ) : null}{" "}
         {hasMore ? (
-          <a data-archive-page href={pastEventsUrl(page + 1)}>
+          <a
+            data-testid={PAST_EVENTS_PAGER_OLDER_TESTID}
+            data-archive-page
+            href={pastEventsUrl(page + 1, q)}
+          >
             Older
           </a>
         ) : null}
       </nav>
       <p>
-        <a href="/events">Back to upcoming events</a>
+        <a data-testid={PAST_EVENTS_BACK_TESTID} href="/events">
+          Back to upcoming events
+        </a>
       </p>
       <p role="status" data-archive-feedback></p>
     </section>
+    <script src="/islands/copy-link.js" defer />
     <script src="/islands/past-events.js" defer />
   </ScheduleShell>
 );

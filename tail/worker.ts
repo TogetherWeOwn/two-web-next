@@ -8,6 +8,12 @@ export type TailEnv = {
   ALERT_AGGREGATOR?: DurableObjectNamespace;
 };
 export const MUTE_MS = 5 * 60 * 1000;
+// Source timestamps more than this far ahead of the Tail clock are treated as
+// skew or poisoning: the mute decision uses the local clock instead. Smaller
+// skews keep exact source-time semantics so the app's own alert limiter
+// (which re-emits on the window boundary in source time) stays coordinated
+// with the Tail mute.
+export const MAX_SOURCE_SKEW_MS = 60_000;
 // Aggregate spike alarm: one page per script when errors cross these gates in a
 // rolling window, then a cooldown. Per-fingerprint pages alone cannot say
 // "half of traffic is 5xx", so the Tail Worker counts every trace outcome.
@@ -22,6 +28,14 @@ export const HEALTH_COOLDOWN_MS = 15 * 60 * 1000;
 const MAX_TRACKED = 500;
 const MAX_BUCKETS = 40;
 const BUCKET_MS = 30_000;
+// Future-skew slack: a batch stamped more than this far beyond the wall
+// clock is rejected at ingest (dropped on the tail path, 400 on the
+// aggregator wire) so one far-future batch cannot advance the eviction
+// cutoff and wipe every in-window bucket. Two buckets cover ordinary
+// clock drift and bucket quantization (a one-bucket +30s skew still
+// counts); merely-late batches (stamped in the past) are unaffected and
+// still count when inside the rolling window.
+export const BATCH_FUTURE_SLACK_MS = 2 * BUCKET_MS;
 // A deployed version tag is the staging SHA, or <sha>-<run-id>-<attempt> in
 // production. Accept only that leading 40-hex SHA; arbitrary tags never leave.
 const VERSION_TAG = /^([0-9a-f]{40})(?:-\d+-\d+)?$/;
@@ -113,13 +127,15 @@ export function logsPath(script: string): string {
 
 // Exact app script names this pager accepts. Wrangler does not inherit
 // tail_consumers into named environments, so production traces arrive under
-// the production app name, and the staging jobs Worker (two-web-jobs)
-// tails separately from the web Worker. Never match by prefix: a
-// prefix wildcard would page for foreign Workers in the same account.
+// the production app names, and each jobs Worker (two-web-jobs,
+// two-web-jobs-production) tails separately from its web Worker. Never match
+// by prefix: a prefix wildcard would page for foreign Workers in the same
+// account.
 export const APP_SCRIPT_NAMES: ReadonlySet<string> = new Set([
   "two-web-next",
   "two-web-next-production",
   "two-web-jobs",
+  "two-web-jobs-production",
 ]);
 
 // Uptime prober: two attempts per cron run, at least 10 s apart, each with a
@@ -218,6 +234,51 @@ function cleanupResponse(response: Response): void {
   }
 }
 
+// Independent settlement deadline for one scheduled GET header wait. The
+// /up and synthetic probes each allow UPTIME_TIMEOUT_MS per attempt; the
+// AbortSignal.timeout on each GET stays on as cooperative cleanup only.
+// Racing the headers against a setTimeout guarantees the attempt settles
+// within the existing budget even when the transport never resolves and
+// ignores abort. Expiry is the existing transport treatment (status 0,
+// eligible for the existing retry). A late response gets best-effort inert
+// body cleanup without being awaited, and a late rejection is swallowed:
+// neither can change the settled verdict, page twice, or surface as an
+// unhandled rejection.
+async function withProbeDeadline(
+  work: Promise<Response>,
+  ms = UPTIME_TIMEOUT_MS,
+): Promise<Response> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => reject(new Error("probe deadline")), ms);
+    });
+    void work.then(
+      () => {},
+      () => {},
+    );
+    return await Promise.race([work, timeout]);
+  } catch (error) {
+    // The race already settled without this attempt: a late Response still
+    // gets inert cleanup, a late rejection stays swallowed, and the settled
+    // verdict below never changes. Attached only on the losing path so a
+    // winning attempt is still cleaned up exactly once by its caller.
+    void work.then(
+      (response) => {
+        try {
+          cleanupResponse(response);
+        } catch {
+          /* Late cleanup never flips the settled verdict. */
+        }
+      },
+      () => {},
+    );
+    throw error;
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+  }
+}
+
 export type UptimeAlert = {
   event: "uptime.down";
   status: number;
@@ -308,6 +369,7 @@ export const ALERT_ROUTES = new Set([
   "/admin/events/:key",
   "/admin/events/new",
   "/admin/events/:key/cancel",
+  "/admin/events/:key/duplicate",
   "/admin/events/:key/edit",
   "/admin/events/create",
   "/admin/events/:key/publish",
@@ -317,6 +379,7 @@ export const ALERT_ROUTES = new Set([
   "/admin/featured/:id",
   "/admin/featured/new",
   "/admin/featured/:id/delete",
+  "/admin/featured/:id/unpublish",
   "/admin/featured-contents",
   "/admin/featured-contents/:id/edit",
   "/admin/featured-contents/create",
@@ -352,6 +415,7 @@ export const ALERT_ROUTES = new Set([
   "/events/past",
   "/events/:key",
   "/events/:key/cancel",
+  "/events/:key/duplicate",
   "/events/:key/publish",
   "/events/:key/rsvp",
   "/events/:key/rsvp-pause",
@@ -368,6 +432,7 @@ export const ALERT_ROUTES = new Set([
   "/llms.txt",
   "/login",
   "/logout",
+  "/logout/everywhere",
   "/mcp",
   "/members",
   "/members/",
@@ -499,9 +564,22 @@ function validAttemptId(value: unknown): string | undefined {
   return typeof value === "string" && value.length >= 8 && value.length <= 128 ? value : undefined;
 }
 
-type Bucket = { at: number; requests: number; errors: number; crashes: number };
+type Bucket = {
+  at: number;
+  requests: number;
+  errors: number;
+  crashes: number;
+  // Homogeneous validated 40-hex SHA for every counted observation merged
+  // into this bucket. Absent when the bucket mixes builds or contains any
+  // counted observation with unknown attribution: an untagged or invalid
+  // batch, or a restored legacy entry written before provenance existed.
+  buildSha?: string;
+};
 type ScriptState = {
   buckets: Bucket[];
+  // Newest event time seen for this script, never rewound by late arrivals.
+  // Absent only for an empty legacy snapshot before its first observation.
+  windowEndAt?: number;
   cooldownUntil: number;
   // A page attempt is outstanding: set by observe, cleared by resolve. The
   // cooldown arms only when resolve reports a delivered page, mirroring the
@@ -511,7 +589,6 @@ type ScriptState = {
   // Fences retried results to the attempt they settle. Restored legacy state
   // has a pendingAt without an identity and still suppresses until age-out.
   pendingAttemptId?: string;
-  buildSha?: string;
 };
 
 function orderSpike(alert: SpikeAlert): SpikeAlert {
@@ -544,16 +621,33 @@ export class AggregateTracker {
       [...this.scripts].map(([script, state]) => [
         script,
         {
-          buckets: state.buckets,
+          buckets: state.buckets.map((b) => ({
+            at: b.at,
+            requests: b.requests,
+            errors: b.errors,
+            crashes: b.crashes,
+            ...(shaFromVersionTag(b.buildSha) ? { buildSha: shaFromVersionTag(b.buildSha)! } : {}),
+          })),
+          ...(state.windowEndAt !== undefined ? { windowEndAt: state.windowEndAt } : {}),
           cooldownUntil: state.cooldownUntil,
           ...(state.pendingAt !== undefined ? { pendingAt: state.pendingAt } : {}),
           ...(state.pendingAttemptId !== undefined
             ? { pendingAttemptId: state.pendingAttemptId }
             : {}),
-          ...(state.buildSha ? { buildSha: state.buildSha } : {}),
         },
       ]),
     );
+  }
+
+  /**
+   * Replace the whole tracker state with a previously captured snapshot.
+   * Unlike restore (which merges into the live map for load), this also drops
+   * scripts the snapshot does not contain, so rolling back a failed write
+   * cannot leave behind an entry the failed observation created.
+   */
+  resetTo(value: unknown): void {
+    this.scripts.clear();
+    this.restore(value);
   }
 
   restore(value: unknown): void {
@@ -575,24 +669,58 @@ export class AggregateTracker {
       // after a different bucket was observed. Merge by bucket time first:
       // trimming raw entries would discard a still-live bucket (for example
       // the crash bucket) while keeping duplicates of later buckets.
+      // Provenance merges too: duplicate entries keep a SHA only when every
+      // copy carries the same validated SHA. Legacy entries without
+      // provenance, and any legacy top-level buildSha, are unknown and
+      // ignored — never proof the restored counts came from one build.
       const byAt = new Map<number, Bucket>();
       for (const b of buckets) {
+        const sha = shaFromVersionTag((b as Partial<Bucket>).buildSha);
         const existing = byAt.get(b.at);
         if (existing) {
           existing.requests += b.requests;
           existing.errors += b.errors;
           existing.crashes += b.crashes;
+          if (existing.buildSha === undefined || sha === undefined || existing.buildSha !== sha) {
+            delete existing.buildSha;
+          }
+        } else if (sha !== undefined) {
+          byAt.set(b.at, {
+            at: b.at,
+            requests: b.requests,
+            errors: b.errors,
+            crashes: b.crashes,
+            buildSha: sha,
+          });
         } else {
           byAt.set(b.at, { at: b.at, requests: b.requests, errors: b.errors, crashes: b.crashes });
         }
       }
       const merged = [...byAt.values()].sort((a, b) => a.at - b.at);
+      // Legacy writers stored bucket starts, not the newest exact event time.
+      // Derive their endpoint from the newest valid bucket, regardless of array
+      // order. A saved endpoint cannot trail retained counts; an empty legacy
+      // snapshot leaves it unset until the first observation. Keep compatible
+      // pending/cooldown markers and unknown legacy provenance intact.
+      const newestBucketAt = merged.at(-1)?.at;
+      const savedEndAt =
+        Number.isSafeInteger(state.windowEndAt) && state.windowEndAt! >= 0
+          ? state.windowEndAt
+          : undefined;
+      const windowEndAt =
+        savedEndAt === undefined
+          ? newestBucketAt
+          : Math.max(savedEndAt, newestBucketAt ?? savedEndAt);
       this.scripts.set(script, {
-        buckets: merged.slice(-MAX_BUCKETS),
+        buckets: merged
+          .filter(
+            (b) => windowEndAt === undefined || b.at + BUCKET_MS > windowEndAt - SPIKE_WINDOW_MS,
+          )
+          .slice(-MAX_BUCKETS),
+        ...(windowEndAt !== undefined ? { windowEndAt } : {}),
         cooldownUntil: Number.isSafeInteger(state.cooldownUntil) ? state.cooldownUntil! : 0,
         pendingAt: Number.isSafeInteger(state.pendingAt) ? state.pendingAt : undefined,
         pendingAttemptId: validAttemptId(state.pendingAttemptId),
-        buildSha: shaFromVersionTag(state.buildSha),
       });
     }
   }
@@ -616,10 +744,21 @@ export class AggregateTracker {
       state = { buckets: [], cooldownUntil: 0 };
       this.scripts.set(batch.script, state);
     }
-    // The latest batch owns the attribution: a batch with no valid tag
-    // clears a previous build's SHA rather than blaming that build.
-    state.buildSha = shaFromVersionTag(batch.buildSha);
+    state.windowEndAt = Math.max(state.windowEndAt ?? at, at);
+    const cutoff = state.windowEndAt - SPIKE_WINDOW_MS;
+    state.buckets = state.buckets.filter((b) => b.at + BUCKET_MS > cutoff);
     const bucketAt = Math.floor(at / BUCKET_MS) * BUCKET_MS;
+    // Expired arrivals are no-ops, before insertion, attribution or paging:
+    // they cannot fill the cap, evict live counts or retry an expired window.
+    // Equal timestamps and older buckets still overlapping the cutoff add.
+    if (bucketAt + BUCKET_MS <= cutoff) return null;
+    // Provenance is per bucket, not per latest batch: a bucket keeps its
+    // SHA only while every counted observation merged into it shares one
+    // validated SHA. An untagged or invalid batch, or a second validated
+    // build in the same 30-second bucket, clears that bucket to unknown.
+    // A batch contributing no counts never changes provenance.
+    const incomingSha = shaFromVersionTag(batch.buildSha);
+    const incomingCounts = batch.requests + batch.errors + batch.crashes;
     // The same bucket time can recur after a different bucket was observed,
     // so coalesce by bucket time rather than reusing only the last bucket.
     // Otherwise each revisit appends a duplicate entry and the bucket cap
@@ -628,23 +767,47 @@ export class AggregateTracker {
     if (!bucket) {
       bucket = { at: bucketAt, requests: 0, errors: 0, crashes: 0 };
       state.buckets.push(bucket);
+      state.buckets.sort((a, b) => a.at - b.at);
       if (state.buckets.length > MAX_BUCKETS)
         state.buckets.splice(0, state.buckets.length - MAX_BUCKETS);
+    }
+    if (incomingCounts > 0) {
+      const priorCounts = bucket.requests + bucket.errors + bucket.crashes;
+      if (priorCounts === 0) {
+        if (incomingSha !== undefined) bucket.buildSha = incomingSha;
+        else delete bucket.buildSha;
+      } else if (
+        bucket.buildSha === undefined ||
+        incomingSha === undefined ||
+        bucket.buildSha !== incomingSha
+      ) {
+        delete bucket.buildSha;
+      }
     }
     bucket.requests += batch.requests;
     bucket.errors += batch.errors;
     bucket.crashes += batch.crashes;
-    const cutoff = at - SPIKE_WINDOW_MS;
-    state.buckets = state.buckets.filter((b) => b.at + BUCKET_MS > cutoff);
     if (at < state.cooldownUntil) return null;
     let requests = 0;
     let errors = 0;
     let crashes = 0;
+    // The page counts every trace in the window whatever build produced it;
+    // the SHA is emitted only when every counted bucket in the window
+    // carries the same validated SHA. Mixed builds, or any counted bucket
+    // with unknown attribution (including restored legacy buckets), page
+    // with no build_sha rather than blaming the latest build.
+    let windowSha: string | undefined;
+    let windowMixed = false;
     for (const b of state.buckets) {
       requests += b.requests;
       errors += b.errors;
       crashes += b.crashes;
+      if (b.requests + b.errors + b.crashes === 0) continue;
+      if (b.buildSha === undefined) windowMixed = true;
+      else if (windowSha === undefined) windowSha = b.buildSha;
+      else if (windowSha !== b.buildSha) windowMixed = true;
     }
+    if (windowMixed) windowSha = undefined;
     const rateGate =
       errors >= SPIKE_MIN_ERRORS && requests > 0 && errors / requests >= SPIKE_MIN_RATE;
     const crashGate = crashes >= SPIKE_MIN_CRASHES;
@@ -657,7 +820,7 @@ export class AggregateTracker {
     return orderSpike({
       event: "error.spike",
       script: batch.script,
-      ...(state.buildSha ? { build_sha: state.buildSha } : {}),
+      ...(windowSha ? { build_sha: windowSha } : {}),
       logs: logsPath(batch.script),
       window_seconds: SPIKE_WINDOW_MS / 1000,
       requests,
@@ -695,6 +858,13 @@ export class HealthTracker {
   private pendingAt: number | null = null;
   // Fences retried results to the attempt they settle; see AggregateTracker.
   private pendingAttemptId: string | undefined;
+  // Monotonic source-observation watermark: the newest source timestamp
+  // applied so far. A delayed observation stamped strictly older than this
+  // is ignored before it can clear a newer outage (or its pending page) or
+  // resurrect an outage a newer healthy sample already cleared. Equal
+  // timestamps are not strictly older, so same-time duplicates and retries
+  // still take effect.
+  private lastObservedAt: number | null = null;
   constructor(private readonly now: () => number = Date.now) {}
 
   snapshot(): {
@@ -702,12 +872,14 @@ export class HealthTracker {
     cooldownUntil: number;
     pendingAt: number | null;
     pendingAttemptId?: string;
+    lastObservedAt: number | null;
   } {
     return {
       downSince: this.downSince,
       cooldownUntil: this.cooldownUntil,
       pendingAt: this.pendingAt,
       ...(this.pendingAttemptId !== undefined ? { pendingAttemptId: this.pendingAttemptId } : {}),
+      lastObservedAt: this.lastObservedAt,
     };
   }
 
@@ -718,6 +890,7 @@ export class HealthTracker {
       cooldownUntil?: unknown;
       pendingAt?: unknown;
       pendingAttemptId?: unknown;
+      lastObservedAt?: unknown;
     };
     this.downSince = Number.isSafeInteger(state.downSince) ? (state.downSince as number) : null;
     this.cooldownUntil = Number.isSafeInteger(state.cooldownUntil)
@@ -725,6 +898,11 @@ export class HealthTracker {
       : 0;
     this.pendingAt = Number.isSafeInteger(state.pendingAt) ? (state.pendingAt as number) : null;
     this.pendingAttemptId = validAttemptId(state.pendingAttemptId);
+    // Legacy snapshots predate the watermark: they load safely with it unset,
+    // and the first accepted observation after the restore establishes it.
+    this.lastObservedAt = Number.isSafeInteger(state.lastObservedAt)
+      ? (state.lastObservedAt as number)
+      : null;
   }
 
   /** Identity of the current pending health attempt, if any. */
@@ -736,6 +914,11 @@ export class HealthTracker {
 
   /** Returns how long health has been red when a page is due, else null. */
   observe(ok: boolean, at = this.now()): number | null {
+    // Fence observation ordering, not arrival order: a strictly older sample
+    // is a successful no-op (null, nothing mutated) so it can neither clear
+    // a newer outage/pending page nor resurrect a cleared window.
+    if (this.lastObservedAt !== null && at < this.lastObservedAt) return null;
+    this.lastObservedAt = at;
     if (ok) {
       this.downSince = null;
       this.pendingAt = null;
@@ -819,6 +1002,12 @@ function batchForTrace(trace: TraceLike, fallbackAt: number): TraceBatch | null 
   };
 }
 
+// Future-skew slack bound: a wire batch stamped beyond now plus
+// BATCH_FUTURE_SLACK_MS is rejected (null -> 400) so it can neither wipe
+// in-window buckets nor future-date an alert or pending/cooldown marker.
+// Merely-late batches (stamped in the past) are allowed and still count
+// when inside the rolling window; a one-bucket (+30s) skew is within the
+// slack and also counts.
 function validBatch(value: unknown): TraceBatch | null {
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
   const b = value as Record<string, unknown>;
@@ -830,6 +1019,7 @@ function validBatch(value: unknown): TraceBatch | null {
   )
     return null;
   if ((b.errors as number) > (b.requests as number) + (b.crashes as number)) return null;
+  if ((b.at as number) > Date.now() + BATCH_FUTURE_SLACK_MS) return null;
   const buildSha = shaFromVersionTag(b.buildSha);
   return {
     script: b.script,
@@ -841,6 +1031,26 @@ function validBatch(value: unknown): TraceBatch | null {
   };
 }
 
+// Skew-vs-malformed classifier for the /observe 400: true only for a batch
+// that would have counted but for its stamp. Every structural check mirrors
+// validBatch exactly, so a batch that is both malformed and future-stamped
+// (unknown script, bad counts, missing timestamp) reads as malformed, never
+// skew. Drop semantics and the slack bound live in validBatch; this function
+// only names the rejection reason for the log line.
+function isFutureSkewedBatch(value: unknown): boolean {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false;
+  const b = value as Record<string, unknown>;
+  if (typeof b.script !== "string" || !APP_SCRIPT_NAMES.has(b.script)) return false;
+  if (
+    ![b.at, b.requests, b.errors, b.crashes].every(
+      (n) => Number.isSafeInteger(n) && (n as number) >= 0,
+    )
+  )
+    return false;
+  if ((b.errors as number) > (b.requests as number) + (b.crashes as number)) return false;
+  return (b.at as number) > Date.now() + BATCH_FUTURE_SLACK_MS;
+}
+
 /**
  * Durable aggregate state: one instance per Tail Worker environment keeps the
  * rolling counts and the health window across isolate churn. Storage holds
@@ -850,15 +1060,49 @@ export class AlertAggregator {
   private readonly tracker = new AggregateTracker();
   private readonly health = new HealthTracker();
   private loaded: Promise<void> | undefined;
+  // Serializes mutating requests within one instance. Each observe/resolve
+  // mutates its tracker before its storage.put lands; without ordering, a
+  // late put rejection could roll back over a concurrent successful update
+  // (or interleave with one), stranding or duplicating alert state. The
+  // chain survives individual failures so one rejected write never wedges
+  // later requests.
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(private readonly state: DurableObjectState) {}
 
   private load(): Promise<void> {
-    this.loaded ??= (async () => {
-      this.tracker.restore(await this.state.storage.get("scripts"));
-      this.health.restore(await this.state.storage.get("health"));
-    })();
+    if (!this.loaded) {
+      const attempt = this.loadOnce();
+      this.loaded = attempt;
+      // A rejected initial load must not wedge the instance: clear the
+      // cached promise so a later request retries once storage is healthy.
+      // Concurrent holders keep `attempt`, so one recovery load stays
+      // single-flight; the identity guard never clears a newer attempt.
+      // A resolved load stays cached: success remains single-flight.
+      void attempt.catch(() => {
+        if (this.loaded === attempt) this.loaded = undefined;
+      });
+    }
     return this.loaded;
+  }
+
+  private enqueue<T>(work: () => Promise<T>): Promise<T> {
+    const run = this.writeQueue.then(work, work);
+    this.writeQueue = run.then(
+      () => undefined,
+      () => undefined,
+    );
+    return run;
+  }
+
+  private async loadOnce(): Promise<void> {
+    // Read both keys before restoring either: a rejected second read must
+    // not leave half-restored scripts state applied (or applied twice on
+    // recovery), and a failed load must not reach a snapshot write.
+    const scripts = await this.state.storage.get("scripts");
+    const health = await this.state.storage.get("health");
+    this.tracker.restore(scripts);
+    this.health.restore(health);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -873,17 +1117,43 @@ export class AlertAggregator {
     try {
       body = await request.json();
     } catch {
+      // Unparseable body: malformed, never skew. No payload bytes in the line.
+      console.warn("tail observe rejected malformed batch: invalid body");
       return new Response(null, { status: 400 });
     }
     await this.load();
     if (pathname === "/observe") {
       const batch = validBatch(body);
-      if (!batch) return new Response(null, { status: 400 });
-      const alert = this.tracker.observe(batch);
-      await this.state.storage.put("scripts", this.tracker.snapshot());
-      if (alert === null) return Response.json(null);
-      const attemptId = this.tracker.pendingAttemptId(batch.script);
-      return Response.json(attemptId ? { ...alert, attemptId } : alert);
+      if (!batch) {
+        // Status stays 400 either way; the line names the reason so
+        // operators can tell clock skew from payload corruption.
+        if (isFutureSkewedBatch(body)) {
+          console.warn("tail observe rejected future-skewed batch: timestamp beyond slack");
+        } else {
+          console.warn("tail observe rejected malformed batch: invalid payload");
+        }
+        return new Response(null, { status: 400 });
+      }
+      return this.enqueue(async () => {
+        // Deep-clone: snapshot() shares its bucket arrays with the live
+        // tracker, so an alias would observe the very mutation it must undo.
+        const prior = structuredClone(this.tracker.snapshot());
+        const alert = this.tracker.observe(batch);
+        try {
+          await this.state.storage.put("scripts", this.tracker.snapshot());
+        } catch (error) {
+          // The write never landed, so the mutation must not become visible:
+          // a retained pending marker would suppress a recovered observation
+          // until expiry and retained counts would diverge from the snapshot
+          // a fresh instance restores. Rethrow so the caller takes its
+          // documented local fallback instead of reading a false success.
+          this.tracker.resetTo(prior);
+          throw error;
+        }
+        if (alert === null) return Response.json(null);
+        const attemptId = this.tracker.pendingAttemptId(batch.script);
+        return Response.json(attemptId ? { ...alert, attemptId } : alert);
+      });
     }
     if (pathname === "/spike-result") {
       const result = body as { script?: unknown; delivered?: unknown; attemptId?: unknown };
@@ -897,9 +1167,16 @@ export class AlertAggregator {
       ) {
         return new Response(null, { status: 400 });
       }
-      this.tracker.resolve(result.script, result.delivered, result.attemptId);
-      await this.state.storage.put("scripts", this.tracker.snapshot());
-      return Response.json(null);
+      // Capture narrowed fields before the closure: property narrowing does
+      // not carry into the queued callback.
+      const script = result.script;
+      const delivered = result.delivered;
+      const attemptId = result.attemptId;
+      return this.enqueue(async () => {
+        this.tracker.resolve(script, delivered, attemptId);
+        await this.state.storage.put("scripts", this.tracker.snapshot());
+        return Response.json(null);
+      });
     }
     if (pathname === "/health-result") {
       const result = body as { delivered?: unknown; attemptId?: unknown };
@@ -911,18 +1188,42 @@ export class AlertAggregator {
       ) {
         return new Response(null, { status: 400 });
       }
-      this.health.resolve(result.delivered, result.attemptId);
-      await this.state.storage.put("health", this.health.snapshot());
-      return Response.json(null);
+      const delivered = result.delivered;
+      const attemptId = result.attemptId;
+      return this.enqueue(async () => {
+        this.health.resolve(delivered, attemptId);
+        await this.state.storage.put("health", this.health.snapshot());
+        return Response.json(null);
+      });
     }
     const probe = body as { ok?: unknown; at?: unknown };
     if (typeof probe?.ok !== "boolean" || !Number.isSafeInteger(probe.at)) {
       return new Response(null, { status: 400 });
     }
-    const downMs = this.health.observe(probe.ok, probe.at as number);
-    await this.state.storage.put("health", this.health.snapshot());
-    if (downMs === null) return Response.json(null);
-    return Response.json({ downMs, attemptId: this.health.pendingAttempt() });
+    const ok = probe.ok;
+    const at = probe.at as number;
+    return this.enqueue(async () => {
+      const prior = structuredClone(this.health.snapshot());
+      const downMs = this.health.observe(ok, at);
+      // A stale observation changes nothing (every mutated field is part of
+      // the snapshot), so there is nothing to publish: skip the write and
+      // answer success instead of persisting an identical value.
+      if (JSON.stringify(this.health.snapshot()) === JSON.stringify(prior)) {
+        return Response.json(null);
+      }
+      try {
+        await this.state.storage.put("health", this.health.snapshot());
+      } catch (error) {
+        // Same contract as /observe: an unpersisted health mutation must not
+        // leak into this instance (a stranded window or pending page would
+        // suppress or restart the outage window). HealthTracker.restore
+        // overwrites every field, so no key cleanup is needed here.
+        this.health.restore(prior);
+        throw error;
+      }
+      if (downMs === null) return Response.json(null);
+      return Response.json({ downMs, attemptId: this.health.pendingAttempt() });
+    });
   }
 }
 
@@ -1037,11 +1338,59 @@ export function createTailWorker(
 
   type ObservationSource = "aggregator" | "local";
   type SpikeObservation = SpikeAlert & { attemptId?: string; source: ObservationSource };
+
+  // Visibility for a malfunctioning aggregator: one classified console line
+  // per fallback (non-OK, unparseable, wrong-shape 200 on spike/observe and
+  // health). Console, not the sink: sink lines are delivery receipts and
+  // exact-receipt assertions pin them. Only fixed tokens plus a numeric
+  // status: never payload bytes, the webhook credential, the trace token,
+  // or the internal aggregator URL. Thrown/stalled operations stay silent
+  // (deliberately unpinned) so stall coverage keeps its exact shape.
+  type AggregatorFallbackClass = "non-ok" | "unparseable" | "wrong-shape";
+  function warnAggregatorFallback(
+    path: "spike" | "health",
+    failure: AggregatorFallbackClass,
+    status?: number,
+  ): void {
+    try {
+      console.warn(
+        JSON.stringify({
+          event: "aggregator.fallback",
+          path,
+          fallback: "aggregator-fallback",
+          reason:
+            failure === "non-ok"
+              ? "non-ok-status"
+              : failure === "unparseable"
+                ? "unparseable-json"
+                : "wrong-shape",
+          ...(status !== undefined ? { status } : {}),
+        }),
+      );
+    } catch {
+      /* Diagnostics never throw. */
+    }
+  }
   function normalizeSpikeObservation(value: unknown): SpikeObservation | null {
     if (value === null) return null;
     if (!value || typeof value !== "object" || Array.isArray(value)) return null;
     const record = value as Record<string, unknown> & SpikeAlert;
     if (record.event !== "error.spike" || typeof record.script !== "string") return null;
+    // A verdict built from a non-finite, negative, or mistyped count would
+    // page garbage while the local tracker never counts the burst: every
+    // numeric field the alert is built from must be a finite, non-negative
+    // number, otherwise the observation is malformed and falls back.
+    for (const field of [
+      "requests",
+      "errors",
+      "crashes",
+      "error_rate",
+      "window_seconds",
+    ] as const) {
+      const fieldValue = record[field];
+      if (typeof fieldValue !== "number" || !Number.isFinite(fieldValue) || fieldValue < 0)
+        return null;
+    }
     const attemptId = validAttemptId((record as { attemptId?: unknown }).attemptId);
     return {
       ...(record as SpikeAlert),
@@ -1062,18 +1411,45 @@ export function createTailWorker(
     try {
       // One independent deadline covers request plus body parsing: headers
       // followed by a stalled JSON body expire as a single operation.
-      const operation = (async () => {
+      type ObserveOutcome =
+        | { fallback: true; failure: AggregatorFallbackClass; status?: number }
+        | { data: SpikeObservation | null };
+      const operation: Promise<ObserveOutcome> = (async () => {
         const response = await stub.fetch("https://aggregator.invalid/observe", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify(batch),
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
-        if (!response.ok) return { fallback: true as const };
-        return { data: normalizeSpikeObservation(await response.json()) };
+        if (!response.ok)
+          return { fallback: true as const, failure: "non-ok" as const, status: response.status };
+        let raw: unknown;
+        try {
+          raw = await response.json();
+        } catch (error) {
+          // Only malformed JSON warns: a body stream error, dropped
+          // connection, or abort/timeout mid-body rethrows to the silent
+          // outer fallback so on-call chases latency/resets, not parsing.
+          if (!(error instanceof SyntaxError)) throw error;
+          return { fallback: true as const, failure: "unparseable" as const };
+        }
+        const spike = normalizeSpikeObservation(raw);
+        // A 200 that parses to anything other than null or a valid spike
+        // alert is a malfunctioning aggregator: fall back to local counts so
+        // it can never suppress the spike page.
+        if (raw !== null && spike === null)
+          return { fallback: true as const, failure: "wrong-shape" as const };
+        return { data: spike };
       })();
       const result = await withAggregatorDeadline(operation);
-      if ("fallback" in result) return localObserve();
+      if ("fallback" in result) {
+        warnAggregatorFallback(
+          "spike",
+          result.failure,
+          "status" in result ? result.status : undefined,
+        );
+        return localObserve();
+      }
       return result.data;
     } catch {
       // Aggregation is additive: a broken binding falls back to local counts
@@ -1174,25 +1550,62 @@ export function createTailWorker(
     try {
       // One independent deadline covers request plus body parsing, matching
       // observeBatch: expiry takes the existing local fallback.
-      const operation = (async () => {
+      type HealthOutcome =
+        | { fallback: true; failure: AggregatorFallbackClass; status?: number }
+        | { downMs: number | null; attemptId: string | null; source: "aggregator" };
+      const operation: Promise<HealthOutcome> = (async () => {
         const response = await stub.fetch("https://aggregator.invalid/health", {
           method: "POST",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ ok, at }),
           signal: AbortSignal.timeout(AGGREGATOR_TIMEOUT_MS),
         });
-        if (!response.ok) return { fallback: true as const };
-        const data = (await response.json()) as { downMs?: unknown; attemptId?: unknown } | null;
-        if (!data || typeof data.downMs !== "number")
-          return { downMs: null, attemptId: null, source: "aggregator" as const };
+        if (!response.ok)
+          return { fallback: true as const, failure: "non-ok" as const, status: response.status };
+        let data: unknown;
+        try {
+          data = await response.json();
+        } catch (error) {
+          // Same contract as the spike path: only SyntaxError is
+          // unparseable; stream/abort failures stay silent.
+          if (!(error instanceof SyntaxError)) throw error;
+          return { fallback: true as const, failure: "unparseable" as const };
+        }
+        // Well-formed answers are exactly null or an object with a numeric
+        // downMs. Anything else on a 200 is a malfunctioning aggregator:
+        // fall back to the local health observation so it can never suppress
+        // the uptime page.
+        if (data === null) return { downMs: null, attemptId: null, source: "aggregator" as const };
+        if (typeof data !== "object" || data === null || Array.isArray(data))
+          return { fallback: true as const, failure: "wrong-shape" as const };
+        const { downMs, attemptId } = data as { downMs?: unknown; attemptId?: unknown };
+        // typeof NaN === "number", so a shape check alone waves NaN,
+        // ±Infinity, and negative durations through as authoritative and
+        // pages a garbage down_seconds. Only a finite, non-negative downMs
+        // is well-formed; anything else falls back to the local health
+        // observation.
+        if (typeof downMs !== "number" || !Number.isFinite(downMs) || downMs < 0)
+          return { fallback: true as const, failure: "wrong-shape" as const };
         return {
-          downMs: data.downMs,
-          attemptId: validAttemptId(data.attemptId) ?? null,
+          downMs,
+          attemptId: validAttemptId(attemptId) ?? null,
           source: "aggregator" as const,
         };
       })();
       const result = await withAggregatorDeadline(operation);
-      if ("fallback" in result) return local();
+      if ("fallback" in result) {
+        warnAggregatorFallback(
+          "health",
+          result.failure,
+          "status" in result ? result.status : undefined,
+        );
+        return local();
+      }
+      // A healthy probe handled durably still ends the local red window:
+      // without this, a fallback-red / aggregator-healthy / fallback-red
+      // sequence pages as continuous red from the first run. Healthy
+      // answers JSON null, so this covers the no-number branch too.
+      if (ok) health.observe(true, at);
       return result;
     } catch {
       return local();
@@ -1228,7 +1641,7 @@ export function createTailWorker(
       try {
         reader.releaseLock();
       } catch {
-        /* A pending stalled read stays with the stream; cancel below settles it. */
+        /* A pending stalled read stays pending with the stream; the caller's independent deadline wins. */
       }
     }
   }
@@ -1240,11 +1653,14 @@ export function createTailWorker(
     attribution: UpAttribution;
   }> {
     try {
-      const response = await send(target, {
-        method: "GET",
-        redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
-        signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
-      });
+      const response = await withProbeDeadline(
+        send(target, {
+          method: "GET",
+          redirect: "manual", // Workers fetch rejects "error"; a 3xx is never ok, so it fails closed.
+          signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
+        }),
+        UPTIME_TIMEOUT_MS,
+      );
       const ok =
         response.status === 200 && response.headers.get("x-two-origin") === EXPECTED_ORIGIN;
       // Read the already-fetched body for the public revision marker only.
@@ -1276,11 +1692,14 @@ export function createTailWorker(
     check: SyntheticCheck,
   ): Promise<{ ok: boolean; status: number }> {
     try {
-      const response = await send(new URL(check.path, base).toString(), {
-        method: "GET",
-        redirect: "manual", // Never follow into Discord or a login flow.
-        signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
-      });
+      const response = await withProbeDeadline(
+        send(new URL(check.path, base).toString(), {
+          method: "GET",
+          redirect: "manual", // Never follow into Discord or a login flow.
+          signal: AbortSignal.timeout(UPTIME_TIMEOUT_MS),
+        }),
+        UPTIME_TIMEOUT_MS,
+      );
       let ok = response.status === check.status;
       if (ok && check.contentType) {
         ok = (response.headers.get("content-type") ?? "").startsWith(check.contentType);
@@ -1389,24 +1808,71 @@ export function createTailWorker(
     async tail(events: readonly TraceLike[], env: TailEnv): Promise<void> {
       const url = webhookUrl(env.OPS_ALERT_WEBHOOK_URL);
       if (!url) return; // No secret: no parsing, no logging, no outbound work.
-      // Merge same-script traces so one invocation makes at most one
-      // aggregation call per script; SHA is per-trace version metadata.
+      // Merge same-script traces by their 30-second event-time bucket, so
+      // one invocation makes at most one aggregation call per script and
+      // bucket; SHA is per-trace version metadata. Merging by script alone
+      // and re-stamping at the newest trace time would collapse minutes-old
+      // crashes into the newest bucket and page without any real in-window
+      // spike. Each bucket batch keeps a SHA only while every counted trace
+      // in that bucket shares one validated SHA. An untagged or invalid
+      // trace, or a second validated build, clears it to unknown: the last
+      // tag must never speak for the whole bucket.
+      // Drop traces skewed beyond now plus the documented slack before the
+      // merge: keeping one would let Math.max lift the merged batch into
+      // the future and wipe in-window buckets. Merely-late traces still
+      // count; a one-bucket future skew stays within the slack.
+      const wallNow = now();
       const batches = new Map<string, TraceBatch>();
+      // Future-skew drop accounting: one line per invocation reporting that
+      // invocation's dropped count (not a running total). Drop semantics and
+      // the slack bound are unchanged; this counter only names the drops.
+      let skewDropped = 0;
       for (const trace of events) {
-        const batch = batchForTrace(trace, now());
+        const batch = batchForTrace(trace, wallNow);
         if (!batch) continue;
-        const prior = batches.get(batch.script);
+        if (batch.at > wallNow + BATCH_FUTURE_SLACK_MS) {
+          skewDropped += 1;
+          continue;
+        }
+        const bucketAt = Math.floor(batch.at / BUCKET_MS) * BUCKET_MS;
+        const key = `${batch.script}\0${bucketAt}`;
+        const prior = batches.get(key);
         if (!prior) {
-          batches.set(batch.script, { ...batch });
+          batches.set(key, { ...batch });
         } else {
+          const incomingCounts = batch.requests + batch.errors + batch.crashes;
+          if (incomingCounts > 0) {
+            const priorCounts = prior.requests + prior.errors + prior.crashes;
+            const incomingSha = shaFromVersionTag(batch.buildSha);
+            if (priorCounts === 0) {
+              if (incomingSha !== undefined) prior.buildSha = incomingSha;
+              else delete prior.buildSha;
+            } else if (
+              prior.buildSha === undefined ||
+              incomingSha === undefined ||
+              prior.buildSha !== incomingSha
+            ) {
+              delete prior.buildSha;
+            }
+          }
           prior.requests += batch.requests;
           prior.errors += batch.errors;
           prior.crashes += batch.crashes;
           prior.at = Math.max(prior.at, batch.at);
-          if (batch.buildSha) prior.buildSha = batch.buildSha;
         }
       }
-      for (const batch of batches.values()) {
+      // One accounting line per invocation that dropped skewed traces,
+      // reporting that invocation's count. Goes to the log sink like the
+      // delivery receipts — never to the webhook — and carries no trace
+      // payload data. Zero-drop invocations stay silent.
+      if (skewDropped > 0) {
+        sink(JSON.stringify({ event: "tail.skew_drop", dropped: skewDropped }));
+      }
+      // Feed the oldest event-time bucket first, whatever order the
+      // traces arrived in: the rolling window, eviction cutoff and alert
+      // timestamp then match feeding the same traces bucket by bucket.
+      const ordered = [...batches.values()].sort((a, b) => a.at - b.at);
+      for (const batch of ordered) {
         const observed = await observeBatch(env, batch);
         if (!observed) continue;
         // The fencing identity and observation source stay internal: strip
@@ -1445,7 +1911,15 @@ export function createTailWorker(
               timestamp: parsed.timestamp,
             };
             const key = `${alert.event}:${alert.fingerprint}`;
-            if (!mute.begin(key, log.timestamp)) continue;
+            // Clamp only far-future source timestamps to the local clock: the
+            // page still carries its original timestamp, but suppression can
+            // never stretch past the documented window. Stamps within skew
+            // tolerance (past, on-time, or seconds ahead) keep source-time
+            // semantics so boundary re-emits from the app's own limiter
+            // still coordinate with the Tail mute.
+            const nowMs = now();
+            const muteAt = log.timestamp - nowMs > MAX_SOURCE_SKEW_MS ? nowMs : log.timestamp;
+            if (!mute.begin(key, muteAt)) continue;
             const delivered = await deliver(url, alert);
             mute.finish(key, delivered);
             // Probe correlation is receipt-only: never send it to the webhook or split the mute key.

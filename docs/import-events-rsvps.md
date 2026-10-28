@@ -1,5 +1,17 @@
 # Legacy events and RSVPs import
 
+> **Current status — historical reference only.** TWO Next is a fresh start:
+> no real legacy import, legacy verification or retired-repository revival.
+> The retained tools, mappings, CLI recipes and old evidence below support
+> historical reference and synthetic-fixture maintenance, not a live cutover.
+> Neither maintenance nor historical approval language authorizes a real legacy
+> run, including read-only verification.
+>
+> Follow the [safe-test rules](../README.md#database-and-migrations) and
+> [current database topology](db-migrations.md#topology-target).
+> This notice does not remove tools, change member erasure or audit-retention
+> policy, or release retained-archive approval holds.
+
 `bin/import/events-rsvps.mjs` copies the frozen Laravel events and RSVPs into the
 migrated Next database. It does not call Discord, enqueue sync jobs, import users,
 copy sessions, or create agent grants. Import users first: member and creator
@@ -7,6 +19,10 @@ references are resolved from legacy `users.discord_id` to Next `users.id`
 (the Discord snowflake), never by legacy numeric IDs.
 
 ## Operator use
+
+**Historical operator recipe — not actionable under the current fresh-start directive.**
+The invocation and cutover requirements below are retained CLI reference, not
+instructions to provision access, stop live writers or run a real import.
 
 Supply `LEGACY_DATABASE_URL` and `DATABASE_URL` through the operator's approved
 environment/secret injection. Do not put connection strings on the command line,
@@ -21,6 +37,7 @@ pinned to 5432; an explicit nonzero URL port is honored.
 node bin/import/events-rsvps.mjs             # default: read-only dry run
 node bin/import/events-rsvps.mjs --dry-run   # explicit read-only dry run
 node bin/import/events-rsvps.mjs --apply     # explicit transactional writes
+node bin/import/events-rsvps.mjs --help      # print usage; reads no env, opens no connections
 ```
 
 Run the dry run, inspect its per-table counts, resolve rejected rows, and only
@@ -59,14 +76,20 @@ not advance the counter.
 ### Calendar wire range and exhaustion
 
 Storage/import retain exact bigint revisions, but RFC 5545 §§3.3.8 and 3.8.7.4
-limit the `SEQUENCE` wire value to **0–2147483647**. Both ICS exports reject an
-out-of-range revision and return **503**, with no ETag or cacheable calendar.
-The collection fails as a whole rather than silently omitting an event. There
-is no clamping, modulo, reset, or automatic UID change: any of those could make
-subscribers retain stale content or create duplicate events.
+limit the `SEQUENCE` wire value to **0–2147483647**. The single-event ICS
+export rejects an out-of-range revision and returns **503**, with no ETag or
+cacheable calendar. The `/events.ics` collection instead skips the poison row
+and serves the remaining events as **200**: the feed is METHOD:PUBLISH
+full-state replace, so subscribers drop the skipped event from their calendars
+while `/e/:key` still shows it as live. Every skip logs the exact count plus
+the skipped event keys at warn level, so the stranded event can be found and
+the identity migration below started. There is no clamping, modulo, reset, or
+automatic UID change: any of those could make subscribers retain stale content
+or create duplicate events.
 
 At 2147483647 the last valid revision remains exportable; the next real edit
-continues the database counter and suspends ICS export. Native event edits and
+continues the database counter and suspends that event's ICS export
+(skipped from the collection, 503 on the single-event download). Native event edits and
 legacy import remain available and do not lose the stored revision. An imported
 oversized counter has the same export policy. Recovery requires an explicitly
 approved calendar-identity migration (new UID and subscriber transition), not
@@ -111,8 +134,13 @@ into ordinary events.
 The JSON report contains counts only, not connection strings, event content,
 member identifiers, or raw database errors. Orphan RSVPs are counted by reason
 and skipped, never silently dropped. Missing creators are reported and mapped
-to null, matching the nullable creator FK. Exit 2 means the report contains
-orphans/missing creators (valid rows are still committed with `--apply`); exit 1
+to null, matching the nullable creator FK. Exit 2 has two meanings; tell them
+apart by the output. **Report exit 2**: the run completed, stdout carries the JSON
+report, and the report contains orphans/missing creators (valid rows are still
+committed with `--apply`). **Usage exit 2**: the tool was invoked wrong (a typo
+such as `--aply`, an unknown flag, or a URL on argv), nothing ran, stdout is empty
+and stderr carries the one usage line. A wrapper must check for the JSON report on
+stdout before concluding that an apply committed. Exit 1
 means validation/connection/database failure. Transactional failures roll back;
 a lost commit acknowledgement has an unconfirmed outcome, so inspect the
 destination before retrying. Exit 0

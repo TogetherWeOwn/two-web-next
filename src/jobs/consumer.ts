@@ -1,7 +1,7 @@
 import { alertQueueFailing } from "../alerts";
 import { AlertProbeError } from "../alert-probe-error";
 import { safeRequestId } from "../request-log";
-import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "./constants";
+import { CALL_INTERNAL_ACTION, SYNC_EVENT, backoffFor } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
 import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
@@ -23,6 +23,14 @@ type Msg = {
   ack(): void;
   retry(o?: { delaySeconds?: number }): void;
 };
+
+// Distinct alert reason when settlement-only redelivery outlives the app
+// carrier budget: the store still has not committed the settlement, so this
+// is not the terminal failure — the attempt stays pending, unstamped and
+// unacked, for operator recovery. Static class-only string, never provider
+// text; the delivery count rides in the alert's attempts field.
+const TERMINAL_SETTLEMENT_UNAVAILABLE =
+  "terminal settlement unavailable; intent retained, failSync uncommitted";
 
 // Legacy identity of each job, for the queue.failing alert line (ports Queue::failing fields).
 const JOBS = {
@@ -116,33 +124,111 @@ export async function consume(
       const timeout = new Promise<void>((r) => {
         t = setTimeout(() => {
           // Single-line sanitized scope: a hostile event key cannot split the log line.
-          console.warn("queue lock release timed out", sanitizeQueueScope(key));
+          console.warn("queue lock release timed out", { scope: sanitizeQueueScope(key) });
           r();
         }, LOCK_TIMEOUT_MS);
       });
       return Promise.race([
         // Class-only: lock errors can carry SQL or connection secrets.
         deps.lock.release(key, body.leaseToken).catch((e: unknown) =>
-          console.warn("queue lock release failed", sanitizeQueueScope(key), {
+          console.warn("queue lock release failed", {
+            scope: sanitizeQueueScope(key),
             exception: queueExceptionClass(e),
           }),
         ),
         timeout,
       ]).finally(() => clearTimeout(t));
     };
-    const failAttempt = async () => {
+    // Bounded settlement without a disposition: reports whether failSync
+    // committed and leaves released/retry policy to the caller. The fresh
+    // definitive path retries undelayed; settlement-only redelivery retries
+    // with the carried backoff delay.
+    const settleAttempt = async () => {
       if (body.kind !== "sync-event") return true;
       try {
-        await deps.events.failSync(body.idempotencyKey);
+        // Settlement is correctness-critical but must never hold the serial
+        // batch open: race the same ledger bound as every sibling wait. On
+        // expiry the existing catch path retries without ack; a late
+        // settlement landing after the race is abandoned and changes nothing.
+        // This race only stops the wait: pgEventStore.failSync cancels the
+        // UPDATE server-side at the same bound (FAIL_SYNC_DB_TIMEOUT_MS), so
+        // a wedged statement also frees the max:1 handler connection and the
+        // next message's prepareSync still runs.
+        let t: ReturnType<typeof setTimeout>;
+        const timeout = new Promise<never>((_, reject) => {
+          t = setTimeout(() => reject(new Error("timed out")), LEDGER_TIMEOUT_MS);
+        });
+        await Promise.race([deps.events.failSync(body.idempotencyKey), timeout]).finally(() =>
+          clearTimeout(t),
+        );
         return true;
       } catch (e) {
         // Snapshot settlement is correctness-critical, unlike the depth ledger.
         // Never ack a terminal message while it still blocks future revisions.
         // Class-only: settlement errors can carry SQL or connection secrets.
         console.error("sync attempt settlement failed", { exception: queueExceptionClass(e) });
-        m.retry();
         return false;
       }
+    };
+    const failAttempt = async () => {
+      if (await settleAttempt()) return true;
+      if (jobId) await bounded("released", deps.ledger.released(jobId, deps.now?.() ?? new Date()));
+      m.retry();
+      return false;
+    };
+    // Terminal-intent noting is correctness-critical like settlement: a
+    // swallowed note re-strands the row (a healed redelivery waits on the
+    // nulled claim forever), so a rejecting race gates the settlement path
+    // instead of the best-effort bounded helper. Stores that predate the
+    // marker skip noting and settle exactly as before.
+    const noteTerminalIntent = async (idempotencyKey: string, reason: string) => {
+      const noteOp = deps.events.noteTerminalIntent;
+      if (typeof noteOp !== "function") return true;
+      try {
+        let t: ReturnType<typeof setTimeout>;
+        const timeout = new Promise<never>((_, reject) => {
+          t = setTimeout(() => reject(new Error("timed out")), LEDGER_TIMEOUT_MS);
+        });
+        await Promise.race([noteOp(idempotencyKey, reason), timeout]).finally(() =>
+          clearTimeout(t),
+        );
+        return true;
+      } catch (e) {
+        console.error("sync terminal intent failed", { exception: queueExceptionClass(e) });
+        return false;
+      }
+    };
+    // Best-effort claim reopen after a failed intent note: a due deadline
+    // lets a healed redelivery re-run the bot flow, re-derive the verdict
+    // and re-note, instead of waiting on the nulled claim until the carrier
+    // exhausts. Never holds the batch: bounded like every sibling wait.
+    const reopenTerminalClaim = async (eventKey: string) => {
+      let t: ReturnType<typeof setTimeout>;
+      const timeout = new Promise<void>((r) => {
+        t = setTimeout(() => {
+          // Sanitized unique-key scope, same value as the lock lines for this
+          // event, so the reopen timeout correlates with the rest of the batch.
+          console.warn("sync terminal claim reopen timed out", {
+            scope: sanitizeQueueScope(uniqueKey(eventKey)),
+          });
+          r();
+        }, LEDGER_TIMEOUT_MS);
+      });
+      await Promise.race([
+        (async () => {
+          try {
+            const pending = await deps.events.pendingSync(eventKey);
+            if (!pending) return;
+            await deps.events.deferSync(pending, deps.now?.() ?? new Date());
+          } catch (e) {
+            // Class-only: store errors can carry SQL or connection secrets.
+            console.warn("sync terminal claim reopen failed", {
+              exception: queueExceptionClass(e),
+            });
+          }
+        })(),
+        timeout,
+      ]).finally(() => clearTimeout(t));
     };
     if (jobId) await bounded("reserved", deps.ledger.reserved(jobId));
 
@@ -175,17 +261,26 @@ export async function consume(
         // Carry the known wait on this delivery, but only a committed result can
         // reopen the durable claim. Recovery must not substitute a short lease.
         console.error("sync retry result persistence failed", SYNC_RETRY_PERSISTENCE_REASON);
-        outcome =
-          e.nextAttemptAt === null || m.attempts >= SYNC_EVENT.tries
-            ? { failed: SYNC_RETRY_PERSISTENCE_REASON }
-            : {
-                retryInSeconds: Math.max(
-                  0,
-                  Math.ceil(
-                    (e.nextAttemptAt.getTime() - (deps.now?.() ?? new Date()).getTime()) / 1000,
-                  ),
-                ),
-              };
+        // A due carried wait (now/past) must never reach the retry
+        // transport as `delaySeconds: 0` — the transport requires a positive
+        // integer. Take the configured sync-event backoff for this carrier
+        // attempt instead; a due deadline is a delay-shape fix, not a failure
+        // reclassification (exhausted and null-deadline carriers stay terminal).
+        // Positive waits pass through ceiled.
+        const nextAttemptAt = e.nextAttemptAt;
+        if (nextAttemptAt === null || m.attempts >= SYNC_EVENT.tries) {
+          outcome = { failed: SYNC_RETRY_PERSISTENCE_REASON };
+        } else {
+          const carriedSeconds = Math.ceil(
+            (nextAttemptAt.getTime() - (deps.now?.() ?? new Date()).getTime()) / 1000,
+          );
+          outcome = {
+            retryInSeconds:
+              carriedSeconds <= 0
+                ? backoffFor(SYNC_EVENT.backoffSeconds, m.attempts)
+                : carriedSeconds,
+          };
+        }
       } else {
         // Unexpected (not a BotTransport/BotTerminal error, not a refusal): a
         // redeliverable throw goes back on the queue with the same message (same
@@ -235,7 +330,48 @@ export async function consume(
       continue;
     }
     if ("failed" in outcome) {
-      if (outcome.definitive && !(await failAttempt())) continue;
+      if (body.kind === "sync-event" && outcome.definitive) {
+        if (typeof outcome.intentRedeliveryBackoffSeconds === "number") {
+          // Settlement-only redelivery: intent is already recorded, so re-run
+          // the bounded settlement without the bot flow. A still-unsettled
+          // store goes back on the queue with the carried backoff delay — the
+          // live row keeps its depth accounting until the store heals. Never
+          // fail, alert, or ack before failSync commits.
+          if (!(await settleAttempt())) {
+            // Past the app carrier budget the silent loop would run until the
+            // transport backstop deletes the carrier, leaving the pending row
+            // with no signal. Raise one distinct alert per delivery instead —
+            // still no failed stamp and no ack before settlement commits.
+            if (m.attempts > SYNC_EVENT.tries) {
+              console.error("job failed", body.kind, TERMINAL_SETTLEMENT_UNAVAILABLE);
+              alertFailing(
+                body.kind,
+                m.attempts,
+                TERMINAL_SETTLEMENT_UNAVAILABLE,
+                { requestId },
+                syncRetry,
+              );
+            }
+            const availableAt = new Date(
+              (deps.now?.() ?? new Date()).getTime() +
+                outcome.intentRedeliveryBackoffSeconds * 1000,
+            );
+            if (jobId) await bounded("released", deps.ledger.released(jobId, availableAt));
+            m.retry({ delaySeconds: outcome.intentRedeliveryBackoffSeconds });
+            continue;
+          }
+        } else {
+          // Fresh definitive refusal: record terminal intent first (idempotent,
+          // first-writer-wins), then run the existing settlement race unchanged.
+          // A failed note still settles — but without intent a healed
+          // redelivery would wait on the nulled claim forever, so reopen the
+          // claim to a due deadline first and let redelivery re-derive the
+          // verdict and re-note if this settlement also wedges.
+          const noted = await noteTerminalIntent(body.idempotencyKey, outcome.failed);
+          if (!noted) await reopenTerminalClaim(body.eventKey);
+          if (!(await failAttempt())) continue;
+        }
+      }
       console.error("job failed", body.kind, outcome.failed);
       alertFailing(body.kind, m.attempts, outcome.failed, { requestId }, syncRetry);
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));

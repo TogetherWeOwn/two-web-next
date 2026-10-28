@@ -145,9 +145,10 @@ describe("W15 Discord login and callback boundaries", () => {
     // Discord.
     expect(result.headers.get("location")).toBe("/?n=signin_failed");
     expect(fetch).not.toHaveBeenCalled();
-    expect(result.headers.getSetCookie().join("\n")).toContain(
-      "__Host-two_oauth_state=; Max-Age=0",
-    );
+    // Stray hits preserve the pending journey for the real hit that follows:
+    // no cookie is cleared here (the surviving journey is pinned by the
+    // stray-callback acceptance suite), and no session is issued.
+    expect(result.headers.getSetCookie().join("\n")).not.toContain("Max-Age=0");
     expect(result.headers.getSetCookie().join("\n")).not.toContain(`${SESSION_COOKIE}=`);
   });
 
@@ -245,8 +246,13 @@ describe("W15 session lifetime, rotation and logout", () => {
     const view = await app.request("/", { headers: { cookie: cookies(login) } }, testEnv);
     expect(await view.text()).toContain("QA Member");
     expect(writes[1]!.getTime()).toBe(now + TTL * 1000);
-    expect(await store.get(await hashToken(bearer(login)))).toBeNull();
+    // Immediate predecessor keeps 10s grace while its successor is live.
+    expect(await store.get(await hashToken(bearer(login)))).not.toBeNull();
     expect(sessionCookie(view)).toContain(`Max-Age=${TTL}`);
+    // Past the 10s grace deadline (still inside the 120-minute original
+    // expiry) the predecessor is a guest; no replay after grace.
+    now += 11_000;
+    expect(await store.get(await hashToken(bearer(login)))).toBeNull();
     now += TTL * 1000;
     const expired = await app.request("/", { headers: { cookie: cookies(view) } }, testEnv);
     expect(await expired.text()).toContain("Sign in with Discord");
@@ -279,8 +285,12 @@ describe("W15 session lifetime, rotation and logout", () => {
     expect(
       views.filter((r) => r.headers.getSetCookie().some((c) => c.startsWith(`${SESSION_COOKIE}=`))),
     ).toHaveLength(1);
+    // One winner mints the replacement; the loser authenticates through the
+    // winner's 10s predecessor grace instead of going guest. Both tabs stay
+    // signed in with a single rotation.
     const html = await Promise.all(views.map((r) => r.text()));
-    expect(html.filter((s) => s.includes("Sign in with Discord"))).toHaveLength(1);
+    expect(html.filter((s) => s.includes("Sign in with Discord"))).toHaveLength(0);
+    expect(html.filter((s) => s.includes("QA Member"))).toHaveLength(2);
   });
 
   it("GET logout cannot revoke; same-origin POST revokes and the old cookie cannot replay", async () => {

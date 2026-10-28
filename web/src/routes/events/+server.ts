@@ -14,7 +14,7 @@ import { JOIN_RESULT_COOKIE } from "../../../../src/return-journey";
 // contract. Only GET is listed in the manifest (HEAD follows it); any other
 // method never reaches here because decideRoute matches the entry GET-only
 // and the hook hands the rest to Hono, so POST /events stays Hono-owned.
-export const GET: RequestHandler = async ({ request, cookies, url, setHeaders }) => {
+export const GET: RequestHandler = async ({ request, cookies, url, locals, setHeaders }) => {
   const collected: Record<string, string> = {};
   let consumeJoinFlash = false;
   try {
@@ -32,6 +32,10 @@ export const GET: RequestHandler = async ({ request, cookies, url, setHeaders })
       sessionForFn: kitEventsSessionFor(env),
       journeyForFn: kitEventsJourneyFor(env),
       discordForFn: discordEventsSource,
+      // The dispatch's served request id: the 503 page and x-request-id
+      // carry this same value, so the alert must name it too
+      // (safeRequestId inside the alert drops anything unvalidated).
+      requestId: locals.requestId,
     });
     const rendered = await renderEventsHtml(data, collected);
     const response = new Response(rendered.body, {

@@ -22,6 +22,7 @@ const e: PublicEvent = {
   status: "published",
   rsvpOpen: true,
   goingCount: 3,
+  goingOccupancy: 3,
   discordEventId: null,
   discordSyncFailedAt: null,
   discordSyncFailureCode: null,
@@ -53,7 +54,7 @@ const session: Session = {
   member: true,
   moderator: false,
 };
-const render = (overrides = {}) => EventPage({ ...props, ...overrides })!.toString();
+const render = (overrides = {}) => EventPage({ ...props, ...overrides })!.toString() as string;
 
 beforeEach(() =>
   vi.stubGlobal(
@@ -141,7 +142,10 @@ describe("event detail theme", () => {
       id: 2,
       eventKey: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
       startsAt: start,
+      endsAt: new Date(start.getTime() + 2 * 3_600_000),
       timezone: "UTC",
+      game: null,
+      rsvpOpen: true,
     };
     const html = render({
       related: [
@@ -160,7 +164,7 @@ describe("event detail theme", () => {
 
   it("gives the cancelled state the same chrome without session, sharing or RSVP actions", () => {
     const jsonLd = '{"eventStatus":"https://schema.org/EventCancelled"}';
-    const html = EventGonePage({ e: { ...e, status: "cancelled" }, jsonLd })!.toString();
+    const html = EventGonePage({ e: { ...e, status: "cancelled" }, jsonLd })!.toString() as string;
     expect(html).toContain('href="/event-theme.css"');
     expect(html).toContain('class="event-hero event-gone"');
     expect(html).toContain('data-testid="event-cancelled">Cancelled');
@@ -197,6 +201,15 @@ describe("event detail theme", () => {
     expect(css).toContain("min-height: 44px");
     expect(css).not.toContain("@import");
     expect(css).not.toContain("url(");
-    expect(css.length).toBeLessThan(6000);
+    // 6150: the four Display stacks each carry the metric-matched
+    // 'Display Fallback' (+80 bytes over the pre-unification 5992); the
+    // ci/bundle-budget.json ceiling (7168 raw) is unchanged.
+    // 6430: the chosen-timezone input rule (+216 bytes over 6125) themes the
+    // native input with semantic tokens instead of shipping a white box on the
+    // dark event theme; still no @import/url and far under the 7168 ceiling.
+    // 6650: two hidden-row rules (+192 bytes over 6414) keep each deferred
+    // island row's laid-out size while hidden, so revealing it never shifts
+    // content (CLS); the 7168 ceiling is unchanged.
+    expect(css.length).toBeLessThan(6650);
   });
 });

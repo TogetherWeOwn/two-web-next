@@ -139,6 +139,7 @@ const event: PublicEvent = {
   location: null,
   capacity: 4,
   goingCount: 1,
+  goingOccupancy: 1,
   status: "published",
   discordEventId: null,
   discordSyncFailedAt: null,
@@ -169,6 +170,10 @@ function browser(
     ...event,
     status: state === "closed" ? "cancelled" : "published",
     goingCount: state === "full" || state === "going-full" ? 4 : 1,
+    // Equal-counts default: the SSR verdict matches the named count unless
+    // a case overrides both, so pre-existing full-state pins keep reading
+    // data-full="true" from the served HTML.
+    goingOccupancy: state === "full" || state === "going-full" ? 4 : 1,
     ...overrides,
   };
   const props = {
@@ -885,6 +890,43 @@ describe("RsvpButton shipped binder", () => {
     },
   );
 
+  it.each([
+    "javascript:alert(1)",
+    "https://evil.example/phish",
+    "/join/discord?next=%2Fe%2Fother",
+    "/auth/recover?next=%",
+  ])("falls back to the SSR join link for hostile recovery value %s", async (recovery) => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.finish(0, 401, { error: "unauthenticated", recovery });
+    await b.settle();
+    const notice = b.get("rsvp-session-expired")!;
+    expect(notice.getAttribute("role")).toBe("alert");
+    expect(notice.children[1]!.href).toBe("/join/discord?next=%2Fe%2Fraid%2Fone");
+    expect(b.get("rsvp-going")!.disabled).toBe(false);
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+    expect(b.requests).toHaveLength(1);
+    expect(b.broadcasts).toHaveLength(0);
+  });
+
+  it.each([401, 419])("renders the join link when the %i body is unreadable", async (status) => {
+    const b = browser();
+    b.get("rsvp-going")!.click();
+    b.requests[0]!.resolve({
+      ok: false,
+      status,
+      json: () => Promise.reject(new Error("unreadable body")),
+    } as Response);
+    await b.settle();
+    const notice = b.get("rsvp-session-expired")!;
+    expect(notice.getAttribute("role")).toBe("alert");
+    expect(notice.children[1]!.href).toBe("/join/discord?next=%2Fe%2Fraid%2Fone");
+    expect(b.get("rsvp-going")!.disabled).toBe(false);
+    expect(b.root.getAttribute("aria-busy")).toBeNull();
+    expect(b.requests).toHaveLength(1);
+    expect(b.broadcasts).toHaveLength(0);
+  });
+
   it.each([500, 422])(
     "announces HTTP %i failure without stealing focus or disabling retry",
     async (status) => {
@@ -969,7 +1011,7 @@ describe("RsvpButton shipped binder", () => {
       expect(b.requests).toHaveLength(3);
       expect(
         b.broadcasts.filter((e) => e.type === "going-count-refreshed").map((e) => e.detail),
-      ).toEqual([{ eventKey: "raid/one", goingCount: 3, capacity }]);
+      ).toEqual([{ eventKey: "raid/one", goingCount: 3, goingOccupancy: 3, capacity }]);
       b.get("rsvp-going")!.click();
       expect(b.requests[3]!.init.body).toBe('{"status":"going"}');
       expect(
@@ -1222,7 +1264,7 @@ describe("RsvpButton shipped binder", () => {
     },
   );
 
-  it.each([403, 409])(
+  it.each([401, 403, 409])(
     "keeps timeout recovery when a %i refusal body settles late",
     async (status) => {
       const b = browser();
@@ -1236,9 +1278,17 @@ describe("RsvpButton shipped binder", () => {
       await b.settle(false);
       b.runTimers(8000);
       expect(b.get(RSVP_UNKNOWN_TESTID)).not.toBeNull();
-      resolveBody(status === 403 ? { error: "rsvp_closed" } : { capacity: 9 });
+      resolveBody(
+        status === 401
+          ? { error: "unauthenticated", recovery: "/auth/recover?next=%2Fe%2Fraid%2Fone" }
+          : status === 403
+            ? { error: "rsvp_closed" }
+            : { capacity: 9 },
+      );
       await b.settle();
       expect(b.get(RSVP_UNKNOWN_TESTID)).not.toBeNull();
+      expect(b.root.getAttribute("data-outcome-unknown")).toBe("true");
+      expect(b.get("rsvp-session-expired")).toBeNull();
       expect(b.reloads()).toBe(0);
       expect(b.get("event-full")).toBeNull();
       expect(b.get("rsvp-going")?.disabled).toBe(true);
@@ -1372,7 +1422,7 @@ describe("RsvpButton shipped binder", () => {
     expect(badge.querySelector("[data-announcement]")?.textContent).toBe("RSVP removed. ");
     expect(
       b.broadcasts.filter((e) => e.type === "going-count-refreshed").map((e) => e.detail),
-    ).toEqual([{ eventKey: "raid/one", goingCount: 1, capacity: 4 }]);
+    ).toEqual([{ eventKey: "raid/one", goingCount: 1, goingOccupancy: 1, capacity: 4 }]);
     expect(b.requests).toHaveLength(4);
   });
 
@@ -1453,6 +1503,47 @@ describe("RsvpButton shipped binder", () => {
     expect(b.get("event-full")).toBeNull();
     expect(b.get("rsvp-confirmed")).toBeNull();
     expect(b.requests).toHaveLength(2);
+  });
+
+  it("reconciles full from seat occupancy when the refreshed counts differ", async () => {
+    // Regression pin for the live refresh: a nameless seat makes occupancy
+    // exceed the named count. Replacing the occupancy verdict with goingCount
+    // would leave the event looking open after the refresh.
+    const b = browser("open");
+    expect(b.root.getAttribute("data-full")).toBe("false");
+    expect(b.get("rsvp-going")).not.toBeNull();
+    b.emit("going-count-refreshed", {
+      eventKey: "raid/one",
+      goingCount: 1,
+      goingOccupancy: 2,
+      capacity: 2,
+    });
+    expect(b.root.getAttribute("data-full")).toBe("true");
+    expect(b.get("rsvp-going")).toBeNull();
+    expect(b.get("waitlist-join")).not.toBeNull();
+    expect(b.get("event-full")).not.toBeNull();
+  });
+
+  it("replays the retained seat occupancy after a refused write when counts differ", async () => {
+    // Regression pin for the deferred snapshot: a nameless seat makes
+    // occupancy exceed the named count. Replaying the stored snapshot with
+    // goingCount would reopen a full event after the refusal.
+    const b = browser("open", undefined, false, { capacity: 2 });
+    expect(b.get("rsvp-going")).not.toBeNull();
+    b.get("rsvp-going")!.click();
+    expect(b.root.getAttribute("aria-busy")).toBe("true");
+    b.emit("going-count-refreshed", {
+      eventKey: "raid/one",
+      goingCount: 1,
+      goingOccupancy: 2,
+      capacity: 2,
+    });
+    b.finish(0, 403, { error: "forbidden" });
+    await b.settle();
+    expect(b.root.getAttribute("data-full")).toBe("true");
+    expect(b.get("rsvp-going")).toBeNull();
+    expect(b.get("waitlist-join")?.disabled).toBe(false);
+    expect(b.requests).toHaveLength(1);
   });
 
   it("does not reopen actual paused SSR after withdrawal and a fresh allocation", async () => {

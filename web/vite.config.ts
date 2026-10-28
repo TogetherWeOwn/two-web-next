@@ -33,10 +33,32 @@ export default defineConfig({
             // separately. This does not change client chunking.
             codeSplitting: {
               groups: [
-                { name: "admin", test: /\/src\/admin\// },
+                // Compress shared shell markup and both header representations
+                // together instead of placing each in a separate gzip stream.
+                {
+                  name: "site-shell",
+                  test: /\/(?:src\/brand-lockup\.ts|web\/src\/lib\/(?:SiteHeader|ErrorShell)\.svelte)$/,
+                },
+                // Both native admin boundaries repeat the same recovery markup.
+                // Co-compress them with their pure shell and URL helper on SSR.
+                {
+                  name: "admin-errors",
+                  test: /\/web\/src\/(?:lib\/(?:AdminShell\.svelte|admin-read-retry\.ts)|routes\/admin\/(?:join-attempts\/)?\+error\.svelte)$/,
+                },
+                // Compress Kit's home and admin markup with the Hono renderers
+                // rather than using separate gzip streams for mirrored pages.
+                {
+                  name: "admin",
+                  test: /\/(?:src\/admin\/|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.svelte$))/,
+                },
+                // Co-compress the Kit profile view with its Hono markup twin.
+                {
+                  name: "profiles",
+                  test: /\/src\/(?:profiles\/|lib\/ProfileView\.svelte$)/,
+                },
                 {
                   name: "events",
-                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$)/,
+                  test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$|lib\/Event(?:Detail|Card|Missing|Gone)\.svelte$|routes\/events\/past\/\+page\.svelte$)/,
                 },
               ],
             },

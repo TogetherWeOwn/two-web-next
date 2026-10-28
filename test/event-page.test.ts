@@ -15,15 +15,21 @@ const PATH = `/e/${KEY}`;
 const SECRET = "test-session-secret-at-least-32-bytes-long";
 
 // Real Drizzle queries and Hono/session rendering; all data is local, no DB connection.
-function fixture(over: Partial<typeof events.$inferSelect> = {}, queryError?: Error) {
+type AccessibilityNotesFixture = { accessibilityNotes?: string | null };
+
+function fixture(
+  over: Partial<typeof events.$inferSelect> & AccessibilityNotesFixture = {},
+  queryError?: Error,
+) {
   const start = new Date("2030-01-10T20:00:00Z");
-  const row: typeof events.$inferSelect = {
+  const row: typeof events.$inferSelect & AccessibilityNotesFixture = {
     id: 1,
     icsSequence: 1n,
     eventKey: KEY,
     title: "Chess night",
     game: "Chess",
     description: "Bring a friend & a board.",
+    accessibilityNotes: null,
     startsAt: start,
     endsAt: new Date("2030-01-10T22:00:00Z"),
     timezone: "UTC",
@@ -54,7 +60,14 @@ function fixture(over: Partial<typeof events.$inferSelect> = {}, queryError?: Er
   const db = drizzle(async (sql) => {
     queries.push(sql);
     if (queryError && sql.includes('"event_key" =')) throw queryError;
-    if (sql.includes('from "rsvps"') && sql.includes('inner join "users"')) return { rows: [] };
+    // The roster projection joins users without a group-by; the attributable
+    // going-count aggregate joins too, so it must fall through to the count arm.
+    if (
+      sql.includes('from "rsvps"') &&
+      sql.includes('inner join "users"') &&
+      !sql.includes("group by")
+    )
+      return { rows: [] };
     // The going-count aggregate reads two positional columns; the viewer
     // answer read selects its own row and is empty in this fixture.
     if (sql.includes('from "rsvps"'))
@@ -258,8 +271,32 @@ describe("Event page parity (fixture-only)", () => {
     }
     expect(html).toContain('name="twitter:card" content="summary"');
     expect(html).not.toContain("<script> & friends");
-    expect(html).not.toContain("og:image");
+    expect(html).toContain(`property="og:image" content="${APP_URL}/icons/icon-512.png"`);
+    expect(html).toContain('property="og:image:alt" content="Together We Own community logo"');
   });
+
+  it("renders escaped accessibility notes for guests and members without changing the description", async () => {
+    const notes = 'Step-free access & a quiet room. <script>alert("not markup")</script>';
+    const source = fixture({ accessibilityNotes: notes });
+    const guest = await source.request();
+    const member = await source.request(await source.cookie());
+
+    for (const html of [await guest.text(), await member.text()]) {
+      expect(html).toMatch(/>\s*Accessibility(?: notes)?\s*</i);
+      expect(html).toContain(esc(notes));
+      expect(html).not.toContain(notes);
+      expect(html).toContain("Bring a friend &amp; a board.");
+    }
+  });
+
+  it.each([null, "", "   "])(
+    "omits Accessibility for blank historical notes (%j)",
+    async (accessibilityNotes) => {
+      const html = await (await fixture({ accessibilityNotes }).request()).text();
+
+      expect(html).not.toMatch(/>\s*Accessibility(?: notes)?\s*</i);
+    },
+  );
 
   it("omits empty venue and uses the legacy share-description fallback", async () => {
     const html = await (await fixture({ location: null, description: "" }).request()).text();

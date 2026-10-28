@@ -1,4 +1,16 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -11,8 +23,58 @@ import { checkSessionRecoveryEvidence } from "../ci/require-session-recovery-evi
 // nothing. These pins keep the existence assertion ahead of the upload and
 // the upload itself failing on missing files; the negative controls prove the
 // assertion rejects every empty-or-incomplete evidence shape.
+//
+// J6 acceptance (reject incomplete browser receipts before upload) extends the
+// guard: a one-field {"result":"PASS"} report currently passes (reproduced at
+// c84bbef9), but must be rejected for exact stable check IDs plus numeric
+// unauthorizedWrites=0. Valid fixtures below share the ID/version definitions
+// from the shared schema module the builder creates; they never prefill
+// production success.
 const ci = readFileSync(".github/workflows/ci.yml", "utf8");
 const a11y = ci.split("\n  a11y:\n")[1]?.split(/\n  [A-Za-z0-9_-]+:\n/)[0] ?? "";
+
+const RECOVERY_SUITE = "test:auth-browser";
+
+async function loadAuthEvidenceSchema(): Promise<any> {
+  try {
+    // @ts-expect-error Standalone CI tooling has no declaration file.
+    return await import("../ci/auth-evidence-schema.mjs");
+  } catch (error) {
+    throw new Error(
+      "Missing shared schema ci/auth-evidence-schema.mjs: builder must create it with " +
+        "AUTH_EVIDENCE_SCHEMA_VERSION (number), AUTH_BROWSER_CHECK_IDS (6 unique strings), " +
+        "SESSION_RECOVERY_CHECK_IDS (10 unique strings). Import failed: " +
+        (error as Error).message,
+    );
+  }
+}
+
+function expectMachineReadableError(fn: () => void, suite: string, context: string): any {
+  let err: any;
+  try {
+    fn();
+  } catch (e) {
+    err = e;
+  }
+  expect(err, `${context}: validator must throw`).toBeDefined();
+  expect(err.code, `${context}: error.code must be a stable machine-readable code`).toMatch(
+    /^[A-Z][A-Z0-9_]+$/,
+  );
+  expect(err.message, `${context}: message must name the fixture suite`).toContain(suite);
+  expect(err.message, `${context}: message must tell the operator to rerun`).toMatch(/rerun/i);
+  expect(err.message, `${context}: message must forbid hand-editing a receipt`).toMatch(
+    /do not hand-edit|never hand-edit|don't hand-edit/i,
+  );
+  expect(err.nextAction, `${context}: error.nextAction must name the suite`).toContain(suite);
+  let again: any;
+  try {
+    fn();
+  } catch (e) {
+    again = e;
+  }
+  expect(again?.code, `${context}: validator must be idempotent`).toBe(err.code);
+  return err;
+}
 
 describe("session-recovery evidence guard", () => {
   it("runs the suite, then the existence assertion, then the upload, in that order", () => {
@@ -78,14 +140,358 @@ describe("session-recovery evidence guard", () => {
     }
   });
 
-  it("accepts a normal run's evidence", () => {
+  it("accepts a normal run's evidence", async () => {
+    const schema = await loadAuthEvidenceSchema();
+    const dir = mkdtempSync(join(tmpdir(), "recovery-guard-"));
+    try {
+      writeFileSync(join(dir, "expired-draft.png"), "fake-png");
+      const report = {
+        schemaVersion: schema.AUTH_EVIDENCE_SCHEMA_VERSION,
+        result: "PASS",
+        checks: [...schema.SESSION_RECOVERY_CHECK_IDS],
+        unauthorizedWrites: 0,
+      };
+      writeFileSync(join(dir, "result.json"), `${JSON.stringify(report)}\n`);
+      const beforeFiles = readdirSync(dir).sort();
+      const beforeRaw = readFileSync(join(dir, "result.json"), "utf8");
+      const first = checkSessionRecoveryEvidence(dir);
+      expect(first).toMatch(/result PASS/);
+      expect(checkSessionRecoveryEvidence(dir)).toBe(first);
+      expect(readdirSync(dir).sort()).toEqual(beforeFiles);
+      expect(readFileSync(join(dir, "result.json"), "utf8")).toBe(beforeRaw);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("session-recovery receipt schema (reject incomplete receipts)", () => {
+  it("shares a versioned schema with ten unique stable recovery IDs and six OAuth IDs", async () => {
+    const schema = await loadAuthEvidenceSchema();
+    expect(typeof schema.AUTH_EVIDENCE_SCHEMA_VERSION).toBe("number");
+    expect(schema.SESSION_RECOVERY_CHECK_IDS).toHaveLength(10);
+    expect(new Set(schema.SESSION_RECOVERY_CHECK_IDS).size).toBe(10);
+    for (const id of schema.SESSION_RECOVERY_CHECK_IDS) {
+      expect(typeof id).toBe("string");
+      expect(id.length).toBeGreaterThan(0);
+      expect(String(Number(id))).not.toBe(id);
+    }
+    expect(schema.AUTH_BROWSER_CHECK_IDS).toHaveLength(6);
+    expect(new Set(schema.AUTH_BROWSER_CHECK_IDS).size).toBe(6);
+    // @ts-expect-error Standalone CI tooling has no declaration file.
+    const again = await import("../ci/auth-evidence-schema.mjs");
+    expect(again.SESSION_RECOVERY_CHECK_IDS).toEqual(schema.SESSION_RECOVERY_CHECK_IDS);
+    expect(again.AUTH_BROWSER_CHECK_IDS).toEqual(schema.AUTH_BROWSER_CHECK_IDS);
+    expect(again.AUTH_EVIDENCE_SCHEMA_VERSION).toBe(schema.AUTH_EVIDENCE_SCHEMA_VERSION);
+  });
+
+  it("rejects a one-field PASS report without checks or unauthorizedWrites", () => {
     const dir = mkdtempSync(join(tmpdir(), "recovery-guard-"));
     try {
       writeFileSync(join(dir, "expired-draft.png"), "fake-png");
       writeFileSync(join(dir, "result.json"), '{"result":"PASS"}\n');
-      expect(checkSessionRecoveryEvidence(dir)).toMatch(/result PASS/);
+      const beforeRaw = readFileSync(join(dir, "result.json"), "utf8");
+      expectMachineReadableError(
+        () => checkSessionRecoveryEvidence(dir),
+        RECOVERY_SUITE,
+        "one-field PASS",
+      );
+      expect(readFileSync(join(dir, "result.json"), "utf8")).toBe(beforeRaw);
     } finally {
       rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects numeric placeholder checks even with PASS and zero writes", () => {
+    const dir = mkdtempSync(join(tmpdir(), "recovery-guard-"));
+    try {
+      writeFileSync(
+        join(dir, "result.json"),
+        JSON.stringify({
+          result: "PASS",
+          checks: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10],
+          unauthorizedWrites: 0,
+        }),
+      );
+      const err = expectMachineReadableError(
+        () => checkSessionRecoveryEvidence(dir),
+        RECOVERY_SUITE,
+        "numeric placeholders",
+      );
+      expect(err.offending, "numeric placeholders must be reported as offending").toBeDefined();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects duplicate, non-string, and substituted check entries", () => {
+    const dir = mkdtempSync(join(tmpdir(), "recovery-guard-"));
+    try {
+      for (const checks of [
+        [1, 1, 2, 3, 4, 5, 6, 7, 8, 9],
+        ["r1", "r2", "r3", "r4", "r5", "r6", "r7", "r8", "r9", "__bogus-id__"],
+        [{}, {}, {}, {}, {}, {}, {}, {}, {}, {}],
+        [null, null, null, null, null, null, null, null, null, null],
+      ]) {
+        writeFileSync(
+          join(dir, "result.json"),
+          JSON.stringify({ result: "PASS", checks, unauthorizedWrites: 0 }),
+        );
+        expectMachineReadableError(
+          () => checkSessionRecoveryEvidence(dir),
+          RECOVERY_SUITE,
+          `substituted checks ${JSON.stringify(checks).slice(0, 48)}`,
+        );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects nine valid IDs plus one substituted stable ID", async () => {
+    const schema = await loadAuthEvidenceSchema();
+    const valid = [...schema.SESSION_RECOVERY_CHECK_IDS];
+    const missingId = valid[9];
+    const bogus = "__bogus-substituted-check-id__";
+    expect(valid).not.toContain(bogus);
+    const dir = mkdtempSync(join(tmpdir(), "recovery-guard-"));
+    try {
+      writeFileSync(
+        join(dir, "result.json"),
+        JSON.stringify({
+          schemaVersion: schema.AUTH_EVIDENCE_SCHEMA_VERSION,
+          result: "PASS",
+          checks: [...valid.slice(0, 9), bogus],
+          unauthorizedWrites: 0,
+        }),
+      );
+      const err = expectMachineReadableError(
+        () => checkSessionRecoveryEvidence(dir),
+        RECOVERY_SUITE,
+        "substituted stable ID",
+      );
+      expect(err.missing, "missing stable ID must be reported").toContain(missingId);
+      expect(err.offending, "substituted ID must be reported as offending").toContain(bogus);
+      expect(err.message).toContain(missingId);
+      expect(err.message).toContain(bogus);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects nine valid IDs plus a duplicate (one missing)", async () => {
+    const schema = await loadAuthEvidenceSchema();
+    const valid = [...schema.SESSION_RECOVERY_CHECK_IDS];
+    const dir = mkdtempSync(join(tmpdir(), "recovery-guard-"));
+    try {
+      writeFileSync(
+        join(dir, "result.json"),
+        JSON.stringify({
+          schemaVersion: schema.AUTH_EVIDENCE_SCHEMA_VERSION,
+          result: "PASS",
+          checks: [valid[0], valid[0], ...valid.slice(1, 9)],
+          unauthorizedWrites: 0,
+        }),
+      );
+      const err = expectMachineReadableError(
+        () => checkSessionRecoveryEvidence(dir),
+        RECOVERY_SUITE,
+        "duplicate stable ID",
+      );
+      expect(err.missing, "missing stable ID must be reported").toContain(valid[9]);
+      expect(err.message).toContain(valid[9]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects nine valid IDs with the missing ID reported", async () => {
+    const schema = await loadAuthEvidenceSchema();
+    const valid = [...schema.SESSION_RECOVERY_CHECK_IDS];
+    const dir = mkdtempSync(join(tmpdir(), "recovery-guard-"));
+    try {
+      writeFileSync(
+        join(dir, "result.json"),
+        JSON.stringify({
+          schemaVersion: schema.AUTH_EVIDENCE_SCHEMA_VERSION,
+          result: "PASS",
+          checks: valid.slice(0, 9),
+          unauthorizedWrites: 0,
+        }),
+      );
+      const err = expectMachineReadableError(
+        () => checkSessionRecoveryEvidence(dir),
+        RECOVERY_SUITE,
+        "missing stable ID",
+      );
+      expect(err.missing, "missing stable ID must be reported").toContain(valid[9]);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects missing, string, positive, or null unauthorizedWrites", async () => {
+    const schema = await loadAuthEvidenceSchema();
+    const dir = mkdtempSync(join(tmpdir(), "recovery-guard-"));
+    try {
+      const base = {
+        schemaVersion: schema.AUTH_EVIDENCE_SCHEMA_VERSION,
+        result: "PASS",
+        checks: [...schema.SESSION_RECOVERY_CHECK_IDS],
+      };
+      for (const report of [
+        { ...base },
+        { ...base, unauthorizedWrites: "0" },
+        { ...base, unauthorizedWrites: 1 },
+        { ...base, unauthorizedWrites: null },
+        { ...base, unauthorizedWrites: -1 },
+      ]) {
+        writeFileSync(join(dir, "result.json"), JSON.stringify(report));
+        const err = expectMachineReadableError(
+          () => checkSessionRecoveryEvidence(dir),
+          RECOVERY_SUITE,
+          `unauthorizedWrites ${JSON.stringify((report as any).unauthorizedWrites)}`,
+        );
+        expect(err.message).toContain("unauthorizedWrites");
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects valid checks without a schema version or with a wrong version/type", async () => {
+    const schema = await loadAuthEvidenceSchema();
+    const dir = mkdtempSync(join(tmpdir(), "recovery-guard-"));
+    try {
+      const base = {
+        result: "PASS",
+        checks: [...schema.SESSION_RECOVERY_CHECK_IDS],
+        unauthorizedWrites: 0,
+      };
+      for (const report of [
+        { ...base },
+        { ...base, schemaVersion: 999999 },
+        { ...base, schemaVersion: String(schema.AUTH_EVIDENCE_SCHEMA_VERSION) },
+        { ...base, schemaVersion: null },
+      ]) {
+        writeFileSync(join(dir, "result.json"), JSON.stringify(report));
+        expectMachineReadableError(
+          () => checkSessionRecoveryEvidence(dir),
+          RECOVERY_SUITE,
+          `schema version ${JSON.stringify((report as any).schemaVersion)}`,
+        );
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("reports machine-readable codes for missing-directory failures", () => {
+    const dir = mkdtempSync(join(tmpdir(), "recovery-guard-"));
+    rmSync(dir, { recursive: true, force: true });
+    expectMachineReadableError(
+      () => checkSessionRecoveryEvidence(dir),
+      RECOVERY_SUITE,
+      "missing dir",
+    );
+  });
+
+  it("session-recovery producer consumes shared IDs without prepopulating success", async () => {
+    await loadAuthEvidenceSchema();
+    const producer = readFileSync("ci/session-recovery-browser.mjs", "utf8");
+    expect(producer).toContain("auth-evidence-schema");
+    expect(producer).toContain("SESSION_RECOVERY_CHECK_IDS");
+    expect(producer.match(/SESSION_RECOVERY_CHECK_IDS/g)?.length ?? 0).toBeGreaterThanOrEqual(10);
+    expect(producer).not.toMatch(/\.\.\.\s*SESSION_RECOVERY_CHECK_IDS/);
+    expect(producer).not.toMatch(/=\s*SESSION_RECOVERY_CHECK_IDS(?!\s*\[)/);
+    expect(producer).not.toMatch(/:\s*SESSION_RECOVERY_CHECK_IDS(?!\s*\[)/);
+    expect(producer).toContain("result.json");
+  });
+});
+
+// A directory the validator can stat but not list must report the evidence as
+// unreadable, not leak a raw EACCES. The validator runs in a child: CI's check
+// job runs as root in a container, where CAP_DAC_OVERRIDE ignores mode bits,
+// so the child drops to an unprivileged uid there to make the chmod fault real.
+const UNPRIVILEGED = process.getuid?.() === 0 ? { uid: 65534, gid: 65534 } : {};
+
+function validateInChild(root: string, dir: string): any {
+  const script = `import { checkSessionRecoveryEvidence } from "./require-session-recovery-evidence.mjs";
+try { process.stdout.write(JSON.stringify({ ok: checkSessionRecoveryEvidence(process.argv[1]) })); }
+catch (e) { process.stdout.write(JSON.stringify({ code: e?.code, nextAction: e?.nextAction, message: String(e?.message) })); }`;
+  return JSON.parse(
+    execFileSync(process.execPath, ["--input-type=module", "-e", script, dir], {
+      cwd: root,
+      encoding: "utf8",
+      ...UNPRIVILEGED,
+    }),
+  );
+}
+
+describe("session-recovery evidence filesystem faults", () => {
+  it("reports an evidence-directory stat fault as unreadable, not missing", () => {
+    const root = mkdtempSync(join(tmpdir(), "recovery-stat-fault-"));
+    const dir = join(root, "loop");
+    try {
+      // ELOOP faults statSync even when CI runs as root.
+      symlinkSync("loop", dir, "dir");
+      expect(() => statSync(dir)).toThrow(expect.objectContaining({ code: "ELOOP" }));
+      const missing = expectMachineReadableError(
+        () => checkSessionRecoveryEvidence(join(root, "missing")),
+        RECOVERY_SUITE,
+        "missing directory control",
+      );
+      expect(missing.code).toBe("SESSION_RECOVERY_NO_EVIDENCE_DIR");
+      expect(missing.nextAction).toBe(`rerun npm run ${RECOVERY_SUITE}`);
+      const err = expectMachineReadableError(
+        () => checkSessionRecoveryEvidence(dir),
+        RECOVERY_SUITE,
+        "evidence-directory stat fault",
+      );
+      expect(err.code).toBe("SESSION_RECOVERY_DIR_UNREADABLE");
+      expect(err.nextAction).toBe(`rerun npm run ${RECOVERY_SUITE}`);
+      expect(err.message).toContain(`npm run ${RECOVERY_SUITE}`);
+      expect(err.message).toMatch(/session-recovery evidence directory is unreadable/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a traversal-only evidence directory holding a valid PASS receipt as unreadable", async () => {
+    const schema = await loadAuthEvidenceSchema();
+    // World-readable root holding copies of the exact validator bytes, so an
+    // unprivileged child can import them.
+    const root = mkdtempSync(join(tmpdir(), "recovery-fault-"));
+    chmodSync(root, 0o755);
+    for (const file of ["require-session-recovery-evidence.mjs", "auth-evidence-schema.mjs"])
+      copyFileSync(join("ci", file), join(root, file));
+    const dir = join(root, "evidence");
+    try {
+      mkdirSync(dir);
+      chmodSync(dir, 0o755);
+      writeFileSync(join(dir, "expired-draft.png"), "fake-png");
+      writeFileSync(
+        join(dir, "result.json"),
+        `${JSON.stringify({
+          schemaVersion: schema.AUTH_EVIDENCE_SCHEMA_VERSION,
+          result: "PASS",
+          checks: [...schema.SESSION_RECOVERY_CHECK_IDS],
+          unauthorizedWrites: 0,
+        })}\n`,
+      );
+      expect(validateInChild(root, dir).ok, "control: receipt is valid").toMatch(/result PASS/);
+      chmodSync(dir, 0o100);
+      const err = validateInChild(root, dir);
+      expect(err.code).toBe("SESSION_RECOVERY_DIR_UNREADABLE");
+      expect(err.nextAction).toBe(`rerun npm run ${RECOVERY_SUITE}`);
+      expect(err.message).toContain(`npm run ${RECOVERY_SUITE}`);
+      expect(err.message).toMatch(/session-recovery evidence directory is unreadable/);
+      expect(String(err.message).replaceAll(dir, "<dir>")).not.toMatch(
+        /EACCES|errno|permission denied|scandir/i,
+      );
+    } finally {
+      chmodSync(dir, 0o700);
+      rmSync(root, { recursive: true, force: true });
     }
   });
 });

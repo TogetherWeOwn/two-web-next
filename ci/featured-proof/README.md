@@ -8,6 +8,8 @@ Both capture jobs run on `[self-hosted, two-selfhosted]` while the repository is
 
 [TOG-10827](/TOG/issues/TOG-10827) adds a separate `current-source` PR job in the same pinned browser container. It generates fictional saved edit/list/scheduled pages plus a long-content edit from the exact checked-out PR head with `current-fixtures.ts`, then `capture-current.cjs` captures all four at 1280×900 and 390×844. The list stays inside a named keyboard-focusable scroll region rather than squeezing five columns into the mobile viewport. Browser regressions require intact title words, single-line headers and complete UTC timestamps, keyboard scrolling, and reachable Window/Last changed columns. Four supplemental `list-window-*` / `list-last-changed-*` screenshots expose those columns at both viewport sizes; all twelve PNGs require independent inspection. The long-content fixture has a 255-character unbroken headline and `https://example.test/` followed by 400 `a`s in the saved body. Checks require the complete text to remain present, wrap to multiple lines and stay inside the card. The generated manifest pins source SHA, clock and HTML hashes; `report.json` records browser version, CI run, image pin, state checks, element bounds and document overflow. Any horizontal overflow, failed state, missing stylesheet or attempted network request fails the job. QA still independently inspects all twelve PNGs on [TOG-10954](/TOG/issues/TOG-10954).
 
+The current-source driver retries a screenshot once only for Chromium's exact `Page.captureScreenshot: Unable to capture screenshot` protocol failure. It reuses the same page and full-page options and records each attempt, including the original error, in `report.json` under `captureAttempts`. Persistent failures, timeouts and other errors still fail the job. Layout checks and the twelve required captures are unchanged; no browser or fixture is restarted, and no CI job is rerun by the driver. Credential-free helper regressions run beside the existing guard selftests.
+
 The fixtures embed the current external stylesheet as a data URL, only for offline capture; deployed markup/CSP are unchanged. They contain no images, real user data, database access, server, auth or form submission. Separate fixture route tests verify that saved image sources emitted by the preview are allowed by the actual response CSP. This is current-source SSR/layout evidence, **not staging deployment or save-interaction proof**.
 
 PR source changes run this new job automatically. Manual `workflow_dispatch` retains the frozen-input `capture` job below; its files, hashes and original source attribution are unchanged and must never be relabelled as new-head evidence. The current-source artifacts are named `featured-current-source-<run-id>-<attempt>` and include twelve PNGs, manifest and report.
@@ -43,6 +45,22 @@ Artifact `featured-offline-proof-<run-id>-<attempt>` contains six full-page PNGs
 The author uploads actual captures as attachment-backed work products on [TOG-11003](/TOG/issues/TOG-11003). QA independently opens **all six** against the matrix on [TOG-10954](/TOG/issues/TOG-10954): clipping, overlap, wrapping, form usability, table overflow and label readability. Automated success is **not** a visual PASS. No browser outputs or visual verdict existed at implementation time.
 
 Only supplied saved static SSR states are covered. Not auth, save interactions, unsaved reactive preview, regenerated/source-to-SSR proof, staging or deployment. Product PR #82 and the fleet incident [TOG-7148](/TOG/issues/TOG-7148) retain their separate gates. This CI-only PR needs one exact-head Code Reviewer pass with green CI; the approving reviewer squash-merges it, not the author.
+
+## Generated-CSS scope coverage
+
+The current-source guard follows runtime imports, including the exact ignored
+`src/leaf-critical-css.ts` output before it exists. That module requires scope
+coverage for its tracked generator, `ci/build-leaf-css.mjs`, and all three inputs:
+`public/styles.css`, `public/theme-tokens.css` and `public/theme.css`. Listing the
+output itself does not replace those requirements. Other runtime source modules
+still require ordinary direct or glob coverage.
+
+The guard pins the generator's SHA-256 without executing it and reads every input.
+Only the exact generated output may be absent before generation; when present,
+its complete bytes, provenance header and CSS hash must match the inputs and
+reviewed recipe. Generator changes require deliberate review of the provenance
+contract in `run-capture.test.cjs`; stale output requires regeneration. No browser
+container, fixture, capture driver or network-containment setting changes.
 
 Credential-free local guard regression command (no browser/module/server/DB):
 

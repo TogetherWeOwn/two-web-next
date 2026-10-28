@@ -13,6 +13,7 @@ import {
 } from "vitest";
 import type postgres from "postgres";
 import app from "./app";
+import { mergeCookies } from "./fixtures/session-recovery";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import type { DiscordEventsSource } from "../src/events/discord-transients";
@@ -144,7 +145,7 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     }
   });
 
-  it("persists login, roster and profile across requests; rotation and logout still revoke", async () => {
+  it("persists login, roster and profile; predecessor grace is bounded and logout still revokes", async () => {
     const cookie = await login();
     const [user] =
       await fixture.client`SELECT id, username, member FROM users WHERE id = ${memberId}`;
@@ -152,22 +153,34 @@ describe.skipIf(!process.env.DATABASE_URL)("web DB binding (test container)", ()
     const profile = await request("/profile", { headers: { cookie } }, env);
     expect(profile.status).toBe(200);
     expect(await profile.text()).toContain("QA Member");
-    const home = await request("/", { headers: { cookie } }, env);
+    // The profile view rotated the login bearer: later requests follow the
+    // fresh jar, and the login cookie alone now reads grace without
+    // re-stamping.
+    const jar = mergeCookies(cookie, profile);
+    const home = await request("/", { headers: { cookie: jar } }, env);
     expect(home.status).toBe(200);
     const rotated = cookieFrom(home);
     expect(rotated).not.toBe(cookie);
-    expect((await request("/profile", { headers: { cookie } }, env)).status).toBe(302);
-    expect((await request("/profile", { headers: { cookie: rotated } }, env)).status).toBe(200);
+    const replay = await request("/profile", { headers: { cookie: jar } }, env);
+    expect(replay.status).toBe(200);
+    expect(replay.headers.get("set-cookie")).toBeNull();
+    await fixture.client`UPDATE web_session_grace SET grace_expires_at = now() WHERE user_id = ${memberId}`;
+    expect((await request("/profile", { headers: { cookie: jar } }, env)).status).toBe(302);
+    const live = await request("/profile", { headers: { cookie: rotated } }, env);
+    expect(live.status).toBe(200);
+    // Log out with the full jar so the probe-carrying lineage is revoked,
+    // not just the presented bearer.
+    const liveJar = mergeCookies(rotated, live);
     expect(
       (
         await request(
           "/logout",
-          { method: "POST", headers: { cookie: rotated, origin: env.APP_URL } },
+          { method: "POST", headers: { cookie: liveJar, origin: env.APP_URL } },
           env,
         )
       ).status,
     ).toBe(303);
-    expect((await request("/profile", { headers: { cookie: rotated } }, env)).status).toBe(302);
+    expect((await request("/profile", { headers: { cookie: liveJar } }, env)).status).toBe(302);
   });
 
   it("resolves admin sessions without granting members moderator access", async () => {

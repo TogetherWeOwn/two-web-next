@@ -85,6 +85,12 @@ async function cookieFor(store: SessionStore, moderator: boolean): Promise<strin
 const request = (path: string, env: Env, init: RequestInit = {}) =>
   app.request(`${APP_URL}${path}`, init, env);
 
+/** The minted bearer inside a `name=signed` cookie pair (unsigned half). */
+function bearerOf(pair: string): string {
+  const signed = decodeURIComponent(pair.slice(pair.indexOf("=") + 1).split(";")[0]!);
+  return signed.slice(0, signed.lastIndexOf("."));
+}
+
 describe("legacy admin redirects (local fixtures, no DB)", () => {
   it.each(aliases.slice(0, -1))(
     "301s %s after the moderator guard and drops every query",
@@ -97,7 +103,14 @@ describe("legacy admin redirects (local fixtures, no DB)", () => {
       expect(res.status).toBe(301);
       expect(res.headers.get("location")).toBe(target);
       expect(res.headers.get("cache-control")).toBe("private, no-store");
-      expect(res.headers.get("set-cookie")).toBeNull();
+      // The moderator guard re-stamps on GET: the redirect carries the fresh
+      // bearer so the browser never strands on a grace-only predecessor.
+      const rotated = res.headers.getSetCookie().find((c) => c.startsWith("__Host-two_session="));
+      expect(
+        rotated,
+        "an authenticated admin GET must re-stamp with a session cookie",
+      ).toBeDefined();
+      expect(bearerOf(rotated!), "the view must mint a fresh bearer").not.toBe(bearerOf(cookie));
       expect(dbRead).not.toHaveBeenCalled();
     },
   );
@@ -134,7 +147,9 @@ describe("legacy admin redirects (local fixtures, no DB)", () => {
     for (const path of [alias, target]) {
       const res = await request(path, env, { headers: { cookie } });
       expect(res.status).toBe(403);
-      expect(await res.text()).toBe("Forbidden");
+      const body = await res.text();
+      expect(body, path).toContain("You do not have access to this");
+      expect(body, path).toContain('data-testid="error-home"');
       expect(res.headers.get("location")).toBeNull();
     }
     expect(dbRead).not.toHaveBeenCalled();
@@ -178,7 +193,18 @@ describe("legacy featured edit identity (local SQL fixtures)", () => {
       expect(res.status).toBe(301);
       expect(res.headers.get("location")).toBe("/admin/featured/2");
       expect(res.headers.get("cache-control")).toBe("private, no-store");
-      expect(res.headers.get("set-cookie")).toBeNull();
+      if (method === "GET") {
+        // The moderator guard re-stamps on GET: the redirect carries the fresh
+        // bearer so the browser never strands on a grace-only predecessor.
+        const rotated = res.headers.getSetCookie().find((c) => c.startsWith("__Host-two_session="));
+        expect(
+          rotated,
+          "an authenticated admin GET must re-stamp with a session cookie",
+        ).toBeDefined();
+        expect(bearerOf(rotated!), "the view must mint a fresh bearer").not.toBe(bearerOf(cookie));
+      } else {
+        expect(res.headers.get("set-cookie")).toBeNull();
+      }
       if (method === "HEAD") expect(await res.text()).toBe("");
       expect(query).toHaveBeenCalledTimes(1);
       expect(query.mock.calls[0]![1]).toEqual(["1"]);
@@ -279,7 +305,23 @@ describe("legacy featured edit identity (local SQL fixtures)", () => {
         });
         expect(res.status).toBe(503);
         expect(res.headers.get("location")).toBeNull();
-        expect(res.headers.get("set-cookie")).toBeNull();
+        if (method === "GET") {
+          // The moderator guard already rotated before the lookup failed: the
+          // 503 carries the fresh bearer so the browser never strands on a
+          // grace-only predecessor.
+          const rotated = res.headers
+            .getSetCookie()
+            .find((c) => c.startsWith("__Host-two_session="));
+          expect(
+            rotated,
+            "an authenticated admin GET must re-stamp with a session cookie",
+          ).toBeDefined();
+          expect(bearerOf(rotated!), "the view must mint a fresh bearer").not.toBe(
+            bearerOf(cookie),
+          );
+        } else {
+          expect(res.headers.get("set-cookie")).toBeNull();
+        }
         expect(res.headers.get("cache-control")).toBe("private, no-store");
         expect(res.headers.get("vary")).toContain("Accept");
         expect(res.headers.get("content-type")).toContain(
@@ -384,7 +426,7 @@ describe("legacy login redirect (local fixtures, no DB)", () => {
       );
       expect(res.status).toBe(302);
       expect(res.headers.get("location")).toBe("/auth/discord");
-      expect(res.headers.get("cache-control")).toBe("no-store");
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
       expect(res.headers.get("set-cookie")).toBeNull();
       expect(dbRead).not.toHaveBeenCalled();
     },

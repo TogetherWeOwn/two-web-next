@@ -37,6 +37,9 @@ function page(opts: { missing?: boolean; orphan?: boolean; noInvite?: boolean } 
       frame.attrs[key] = value;
     }),
     focus: vi.fn(),
+    remove: vi.fn(() => {
+      preview.children = preview.children.filter((child) => child !== frame);
+    }),
     addEventListener: vi.fn((kind: string, fn: (e: unknown) => void) => {
       listeners[kind] = fn;
     }),
@@ -52,21 +55,28 @@ function page(opts: { missing?: boolean; orphan?: boolean; noInvite?: boolean } 
       focus: ReturnType<typeof vi.fn>;
     }>;
   };
+  // No replaceChildren on purpose: the island appends beside the snapshot,
+  // so a regression to replacing the preview slot's children throws here.
   const preview = {
     children: [] as Array<unknown>,
-    replaceChildren: vi.fn((...nodes: Array<unknown>) => {
-      preview.children = [...nodes];
+    appendChild: vi.fn((node: unknown) => {
+      preview.children.push(node);
+      return node;
     }),
-    appendChild: vi.fn(),
   };
-  const messageOf = (call: number) =>
-    (preview.replaceChildren.mock.calls[call]?.[0] ?? null) as Message | null;
+  const message = () =>
+    (preview.children.find(
+      (node) => (node as Message | undefined)?.attrs?.["data-testid"] === "join-widget-error",
+    ) ?? null) as Message | null;
   const createElement = vi.fn((tag: string) => {
     if (tag === "iframe") return frame;
     const el = {
       attrs: {} as Record<string, string>,
       textContent: "",
       focus: vi.fn(),
+      remove: vi.fn(() => {
+        preview.children = preview.children.filter((child) => child !== el);
+      }),
       children: [] as Array<{
         attrs: Record<string, string>;
         textContent: string;
@@ -87,16 +97,18 @@ function page(opts: { missing?: boolean; orphan?: boolean; noInvite?: boolean } 
     createdEls.push(el);
     return el;
   });
-  // After replaceChildren removes the clicked link, a real browser drops
-  // focus to <body>. `active` models document.activeElement so the suite can
+  // After the strap hides the clicked link, a real browser drops focus to
+  // <body>. `active` models document.activeElement so the suite can
   // pin the steal-guard: focus moves in only when the visitor hasn't moved
   // elsewhere since the click.
   const body = {};
   let active: unknown = body;
   let onClick: (e: Click) => void = () => {};
+  const strap = { hidden: false };
   const link = {
     getAttribute: (key: string) => (key === "href" ? widget : null),
-    closest: (selector: string) => (selector === ".join-preview" && !opts.orphan ? preview : null),
+    closest: (selector: string) =>
+      selector === ".join-preview" && !opts.orphan ? preview : selector === ".strap" ? strap : null,
     addEventListener: (kind: string, fn: typeof onClick) => {
       if (kind === "click") onClick = fn;
     },
@@ -130,7 +142,9 @@ function page(opts: { missing?: boolean; orphan?: boolean; noInvite?: boolean } 
   return {
     frame,
     preview,
-    messageOf,
+    strap,
+    link,
+    message,
     timers,
     createElement,
     createdEls,
@@ -153,11 +167,11 @@ describe("join-widget island", () => {
   it("contacts nothing until the visitor clicks", () => {
     const p = page();
     expect(p.createElement).not.toHaveBeenCalled();
-    expect(p.preview.replaceChildren).not.toHaveBeenCalled();
+    expect(p.preview.appendChild).not.toHaveBeenCalled();
     expect(p.timers).toEqual([]);
   });
 
-  it("swaps the link for the sandboxed widget frame without stealing focus", async () => {
+  it("appends the sandboxed widget frame without stealing focus", async () => {
     const p = page();
     const event = await p.click();
     expect(event.preventDefault).toHaveBeenCalledOnce();
@@ -167,7 +181,8 @@ describe("join-widget island", () => {
     expect(p.frame.attrs.sandbox).toBe("allow-scripts allow-same-origin");
     expect(p.frame.attrs.referrerpolicy).toBe("no-referrer");
     expect(p.frame.attrs["data-testid"]).toBe("join-widget");
-    expect(p.preview.replaceChildren).toHaveBeenCalledWith(p.frame);
+    expect(p.preview.appendChild).toHaveBeenCalledWith(p.frame);
+    expect(p.preview.children).toEqual([p.frame]);
     // Focus waits for the frame to prove it rendered.
     expect(p.frame.focus).not.toHaveBeenCalled();
   });
@@ -177,7 +192,18 @@ describe("join-widget island", () => {
     await p.click();
     p.frame.fire("load");
     expect(p.frame.focus).toHaveBeenCalledOnce();
-    expect(p.preview.replaceChildren).toHaveBeenCalledOnce();
+    expect(p.preview.children).toEqual([p.frame]);
+  });
+
+  // Hiding the strap drops focus to <body> in a real browser, but not where
+  // the strap is missing (append without hide) or focus stays on the control:
+  // resting on the clicked control still means "hasn't moved".
+  it("moves focus into the frame on load while focus still rests on the clicked control", async () => {
+    const p = page();
+    await p.click();
+    p.moveFocusTo(p.link);
+    p.frame.fire("load");
+    expect(p.frame.focus).toHaveBeenCalledOnce();
   });
 
   it("does not steal focus on load when the visitor moved elsewhere since the click", async () => {
@@ -191,14 +217,15 @@ describe("join-widget island", () => {
   // Scope note: the failure paths below exercise the observable signals —
   // a signaled `error` event and the bounded load timeout. A blocked
   // navigation that commits an error page fires `load` instead, which is
-  // indistinguishable from a real render cross-origin and stays out of scope
-  // (see the island source comment); the page-level invite link beside the
-  // preview remains the visible path in that case.
+  // indistinguishable from a real render cross-origin; that case is covered
+  // by test/islands-join-widget-blocked-load-acceptance.test.ts (the timer
+  // survives `load` and announces beside-frame guidance without moving
+  // focus).
   it("moves focus to the invite fallback when the frame signals error", async () => {
     const p = page();
     await p.click();
     p.frame.fire("error");
-    const message = p.messageOf(1)!;
+    const message = p.message()!;
     expect(message.attrs.tabindex).toBe("-1");
     const fallback = message.children[0]!;
     expect(fallback.focus).toHaveBeenCalledOnce();
@@ -208,7 +235,7 @@ describe("join-widget island", () => {
     const p = page({ noInvite: true });
     await p.click();
     p.frame.fire("error");
-    const message = p.messageOf(1)!;
+    const message = p.message()!;
     expect(message.attrs.tabindex).toBe("-1");
     expect(message.focus).toHaveBeenCalledOnce();
   });
@@ -218,7 +245,7 @@ describe("join-widget island", () => {
     await p.click();
     p.moveFocusTo({ tag: "header-link" });
     p.frame.fire("error");
-    const message = p.messageOf(1)!;
+    const message = p.message()!;
     expect(message.attrs["data-testid"]).toBe("join-widget-error");
     expect(message.children[0]!.focus).not.toHaveBeenCalled();
     expect(message.focus).not.toHaveBeenCalled();
@@ -229,7 +256,7 @@ describe("join-widget island", () => {
     await p.click();
     p.moveFocusTo({ tag: "header-link" });
     p.fireTimers();
-    const message = p.messageOf(1)!;
+    const message = p.message()!;
     expect(message.attrs["data-testid"]).toBe("join-widget-error");
     expect(message.children[0]!.focus).not.toHaveBeenCalled();
     expect(message.focus).not.toHaveBeenCalled();
@@ -240,8 +267,9 @@ describe("join-widget island", () => {
     await p.click();
     p.frame.fire("error");
     expect(p.frame.focus).not.toHaveBeenCalled();
-    expect(p.preview.replaceChildren).toHaveBeenCalledTimes(2);
-    const message = p.messageOf(1)!;
+    const message = p.message()!;
+    expect(p.frame.remove).toHaveBeenCalledOnce();
+    expect(p.preview.children).toEqual([message]);
     expect(message.attrs["data-testid"]).toBe("join-widget-error");
     const fallback = message.children[0]!;
     expect(fallback.attrs.href).toBe(invite);
@@ -255,8 +283,9 @@ describe("join-widget island", () => {
     expect(bounded.length).toBeGreaterThan(0);
     p.fireTimers();
     expect(p.frame.focus).not.toHaveBeenCalled();
-    expect(p.preview.replaceChildren).toHaveBeenCalledTimes(2);
-    expect(p.messageOf(1)!.attrs["data-testid"]).toBe("join-widget-error");
+    expect(p.frame.remove).toHaveBeenCalledOnce();
+    expect(p.preview.children).toEqual([p.message()]);
+    expect(p.message()!.attrs["data-testid"]).toBe("join-widget-error");
   });
 
   it("ignores a load arriving after the timeout guided away", async () => {
@@ -272,7 +301,7 @@ describe("join-widget island", () => {
     await p.click();
     p.frame.fire("error");
     expect(p.frame.focus).not.toHaveBeenCalled();
-    expect(p.messageOf(1)!.textContent).toMatch(/invite/i);
+    expect(p.message()!.textContent).toMatch(/invite/i);
   });
 
   it.each([
@@ -286,6 +315,47 @@ describe("join-widget island", () => {
     const event = await p.click(extra);
     expect(event.preventDefault).not.toHaveBeenCalled();
     expect(p.createElement).not.toHaveBeenCalled();
+  });
+
+  it("hides the strap while the frame shows and restores it on failure", async () => {
+    const p = page();
+    await p.click();
+    expect(p.strap.hidden).toBe(true);
+    p.frame.fire("error");
+    expect(p.strap.hidden).toBe(false);
+  });
+
+  it("keeps the strap hidden after a successful load", async () => {
+    const p = page();
+    await p.click();
+    p.frame.fire("load");
+    expect(p.strap.hidden).toBe(true);
+    expect(p.preview.children).toEqual([p.frame]);
+  });
+
+  it("a repeat click while loading builds no second frame", async () => {
+    const p = page();
+    await p.click();
+    await p.click();
+    expect(p.createElement.mock.calls.filter(([tag]: [string]) => tag === "iframe")).toHaveLength(
+      1,
+    );
+    expect(p.preview.children).toEqual([p.frame]);
+  });
+
+  it("retry after a failure replaces the stale guidance instead of stacking it", async () => {
+    const p = page();
+    await p.click();
+    p.frame.fire("error");
+    expect(p.preview.children).toEqual([p.message()]);
+    await p.click();
+    expect(p.preview.children).toEqual([p.frame]);
+    p.frame.fire("error");
+    expect(p.preview.children).toEqual([p.message()]);
+    expect(
+      p.createdEls.filter((el) => el.attrs["data-testid"] === "join-widget-error"),
+    ).toHaveLength(2);
+    expect(p.strap.hidden).toBe(false);
   });
 
   it("does nothing without the link or outside a preview slot", () => {

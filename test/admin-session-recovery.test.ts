@@ -114,7 +114,11 @@ describe("expired admin writes recover instead of 403ing", () => {
     });
     expect(res.status).toBe(303);
     expect(res.headers.get("location")).toBe("/auth/recover?next=%2Fadmin%2Fevents%2Fabc");
-    expect(res.headers.getSetCookie()).toEqual([]);
+    // The genuine bounce arms its own pending notice for the edit page.
+    const armed = res.headers
+      .getSetCookie()
+      .filter((c) => c.startsWith(EXPIRED_WRITE_COOKIE + "="));
+    expect(armed).toHaveLength(1);
   });
 
   it.each([
@@ -179,7 +183,7 @@ describe("expired admin writes recover instead of 403ing", () => {
     });
     expect(res.status).toBe(401);
     expect(await res.json()).toEqual({
-      error: "Unauthorized",
+      error: "unauthenticated",
       recovery: "/auth/recover?next=%2Fadmin%2Fevents%2Fabc",
     });
   });
@@ -273,7 +277,13 @@ describe("admin recovery round trip", () => {
       expect(bounce.headers.get("location")).toBe("/auth/recover?next=%2Fadmin%2Fevents%2Fabc");
       expect(f.state.writes).toBe(0);
 
-      let jar = mergeCookies("", await f.request(bounce.headers.get("location")!));
+      // The bounce's pending notice rides through the landing untouched.
+      let jar = mergeCookies("", bounce);
+      const landing = await f.request(bounce.headers.get("location")!, {
+        headers: { cookie: jar },
+      });
+      expect(landing.status).toBe(200);
+      jar = mergeCookies(jar, landing);
       const start = await f.request("/auth/discord?next=%2Fadmin%2Fevents%2Fabc", {
         headers: { cookie: jar },
       });

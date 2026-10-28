@@ -1,8 +1,12 @@
 // SSR leaves a usable canonical link. Enhance only when both link and status exist.
 (() => {
-  const link = document.querySelector("[data-copy-link]");
-  const toast = document.querySelector("[data-copy-toast]");
+  const q = (s) => document.querySelector(s);
+  let link = q("[data-copy-link]");
+  let toast = q("[data-copy-toast]");
   if (!link || !toast) return;
+  const feed = link.getAttribute("data-copy-feed") != null;
+  if (feed) link.hidden = false;
+  const manual = "Select the feed URL and copy it manually in your calendar app.";
   // Unsettled clipboard promises get truthful feedback at 5 s; the feedback contract caps this at 10 s.
   const feedbackDeadlineMs = 5000;
   const resetMs = 4000;
@@ -50,8 +54,9 @@
     timer = setTimeout(() => {
       if (!owns()) return;
       pending = false;
-      toast.textContent =
-        "Copy not confirmed — if it isn't on your clipboard, copy the link from the address bar.";
+      toast.textContent = feed
+        ? manual
+        : "Copy not confirmed — if it isn't on your clipboard, copy the link from the address bar.";
       timer = setTimeout(() => {
         if (mine === latest) toast.textContent = "";
       }, resetMs);
@@ -67,10 +72,10 @@
         } catch {
           // A newer click or an expired deadline owns feedback; never fall back for it.
           if (!owns()) return;
-          copied = fallback(text);
+          copied = !feed && fallback(text);
         }
       } else {
-        copied = fallback(text);
+        copied = !feed && fallback(text);
       }
     } catch {
       copied = false;
@@ -79,17 +84,20 @@
     pending = false;
     clearTimeout(timer);
     toast.textContent = copied
-      ? "Event link copied."
-      : "That link didn't copy — copy it from the address bar.";
+      ? feed
+        ? "Calendar feed URL copied."
+        : "Event link copied."
+      : feed
+        ? manual
+        : "That link didn't copy — copy it from the address bar.";
     timer = setTimeout(() => {
       if (mine === latest) toast.textContent = "";
     }, resetMs);
   }
 
-  // The control stays a link: plain activation copies, modified clicks and
-  // modified keys keep native link navigation, and both Enter and Space copy
-  // exactly once. Ctrl/Cmd/Shift+Enter opens the link in a new tab or window.
-  link.addEventListener("click", (event) => {
+  // Event controls stay links: plain activation copies, modified clicks and
+  // keys keep native navigation. Feed controls use native button activation.
+  function onClick(event) {
     if (
       event.defaultPrevented ||
       event.button !== 0 ||
@@ -101,8 +109,8 @@
       return;
     event.preventDefault();
     void copy();
-  });
-  link.addEventListener("keydown", (event) => {
+  }
+  function onKey(event) {
     if (
       event.defaultPrevented ||
       event.ctrlKey ||
@@ -115,5 +123,25 @@
     event.preventDefault();
     if (event.repeat) return;
     void copy();
-  });
+  }
+  link.addEventListener("click", onClick);
+  // Native buttons already synthesize one click for Enter/Space.
+  if (!feed) link.addEventListener("keydown", onKey);
+  // Calendar fragment swaps replace the feed button node: rebind the newest
+  // node when it changes so the copy action follows the committed scope.
+  // Pages without swaps (event, past archive) and hosts without observers
+  // keep the single binding above. Only the calendar feed button swaps, so
+  // only click rebinds: putting the event link in a swapped zone must also
+  // rebind keydown (Space) there.
+  if (window.MutationObserver) {
+    new MutationObserver(() => {
+      const now = q("[data-copy-link]");
+      if (now && now !== link) {
+        link = now;
+        toast = q("[data-copy-toast]");
+        if (feed) now.hidden = false;
+        now.addEventListener("click", onClick);
+      }
+    }).observe(document, { childList: true, subtree: true });
+  }
 })();

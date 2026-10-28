@@ -27,7 +27,19 @@ import {
   profileJoinedMonth,
 } from "../islands/contracts";
 import type { MemberView } from "./store";
-import type { MemberStats } from "./stats";
+import { MEMBER_MILESTONES_CAP, type MemberStats } from "./stats";
+import {
+  PROFILE_BIO_COUNT_ID,
+  PROFILE_BIO_HINT_COPY,
+  PROFILE_BIO_HINT_ID,
+  PROFILE_GAMES_TEXT_COUNT_ID,
+  PROFILE_GAMES_TEXT_HINT_COPY,
+  PROFILE_GAMES_TEXT_HINT_ID,
+  bioCountText,
+  codePoints,
+  gamesCountText,
+  parseGamesText,
+} from "./composition";
 
 // Stable field/error ids for profile validation association.
 // The server `games` key maps to the `games_text` control; any other key is
@@ -45,6 +57,8 @@ export const PROFILE_ERROR_IDS: Record<ProfileField, string> = {
   timezone: "profile-timezone-error",
   leaderboard_opt_out: "profile-leaderboard-opt-out-error",
 };
+// The timezone help text stays associated in both valid and error states.
+export const PROFILE_TIMEZONE_HELP_ID = "profile-timezone-help";
 export const profileFieldForErrorKey = (key: string): ProfileField | null =>
   key === "bio"
     ? "bio"
@@ -68,61 +82,124 @@ export const statsDate = (date: Date) =>
     timeZone: "UTC",
   });
 
-const MemberStatsBlock: FC<{ stats: MemberStats }> = ({ stats }) => (
-  <section class="profile-panel" aria-labelledby="member-stats-heading" data-testid="profile-stats">
-    <h2 id="member-stats-heading">Member stats</h2>
-    <dl class="profile-stats-grid">
-      {stats.rankKey ? (
-        <div>
-          <dt>Rank</dt>
-          <dd data-testid={PROFILE_RANK_TESTID}>{statsLabel(stats.rankKey)}</dd>
-        </div>
-      ) : null}
-      {stats.joinedAt ? (
-        <div>
-          <dt>Joined</dt>
-          <dd data-testid={PROFILE_JOINED_TESTID}>
-            <time datetime={stats.joinedAt.toISOString()}>{statsDate(stats.joinedAt)}</time>
-          </dd>
-        </div>
-      ) : null}
-      {stats.tenureDays !== null ? (
-        <div>
-          <dt>Tenure</dt>
-          <dd>
-            {stats.tenureDays} {stats.tenureDays === 1 ? "day" : "days"}
-          </dd>
-        </div>
-      ) : null}
-      <div>
-        <dt>Membership</dt>
-        <dd>{stats.isCurrentMember ? "Current member" : "Former member"}</dd>
-      </div>
-      <div>
-        <dt>Milestones</dt>
-        <dd>{stats.milestones.length}</dd>
-      </div>
-    </dl>
-    <h3>Milestones</h3>
-    {stats.milestones.length > 0 ? (
-      <ol class="profile-milestones">
-        {stats.milestones.map((milestone) => (
-          <li>
-            <div>
-              <strong>{statsLabel(milestone.type)}</strong>
-              {milestone.detail ? <p>{milestone.detail}</p> : null}
-            </div>
-            <time datetime={milestone.occurredAt.toISOString()}>
-              {statsDate(milestone.occurredAt)}
-            </time>
-          </li>
-        ))}
-      </ol>
-    ) : (
-      <p>No milestones yet.</p>
-    )}
-  </section>
+// Recovery is an explicit safe GET to the same profile, never a background
+// retry or an automatic reload: over an unsaved editor the link warns that
+// reloading discards the draft.
+const StatsRecovery: FC<{ profilePath: string; label: string; draftWarning?: boolean }> = ({
+  profilePath,
+  label,
+  draftWarning,
+}) => (
+  <p class="profile-hint">
+    <a href={profilePath}>{label}</a>
+    {draftWarning ? " Reloading discards your unsaved changes." : null}
+  </p>
 );
+
+const MemberStatsBlock: FC<{
+  stats: MemberStats;
+  profilePath: string;
+  draftWarning?: boolean;
+}> = ({ stats, profilePath, draftWarning }) => {
+  if (stats.membershipUnavailable) {
+    return (
+      <section
+        class="profile-panel"
+        aria-labelledby="member-stats-heading"
+        data-testid="profile-stats"
+      >
+        <h2 id="member-stats-heading">Member stats</h2>
+        <p class="profile-hint">Member stats unavailable right now.</p>
+        <StatsRecovery
+          profilePath={profilePath}
+          label="Retry loading member stats"
+          draftWarning={draftWarning}
+        />
+      </section>
+    );
+  }
+  return (
+    <section
+      class="profile-panel"
+      aria-labelledby="member-stats-heading"
+      data-testid="profile-stats"
+    >
+      <h2 id="member-stats-heading">Member stats</h2>
+      <dl class="profile-stats-grid">
+        {stats.rankKey ? (
+          <div>
+            <dt>Rank</dt>
+            <dd data-testid={PROFILE_RANK_TESTID}>{statsLabel(stats.rankKey)}</dd>
+          </div>
+        ) : null}
+        {stats.joinedAt ? (
+          <div>
+            <dt>Joined</dt>
+            <dd data-testid={PROFILE_JOINED_TESTID}>
+              <time datetime={stats.joinedAt.toISOString()}>{statsDate(stats.joinedAt)}</time>
+            </dd>
+          </div>
+        ) : null}
+        {stats.tenureDays !== null ? (
+          <div>
+            <dt>Tenure</dt>
+            <dd>
+              {stats.tenureDays} {stats.tenureDays === 1 ? "day" : "days"}
+            </dd>
+          </div>
+        ) : null}
+        <div>
+          <dt>Membership</dt>
+          <dd>{stats.isCurrentMember ? "Current member" : "Former member"}</dd>
+        </div>
+        <div>
+          <dt>Milestones</dt>
+          <dd>
+            {stats.milestonesUnavailable
+              ? "Unavailable"
+              : stats.milestonesTruncated
+                ? `${stats.milestones.length}+`
+                : stats.milestones.length}
+          </dd>
+        </div>
+      </dl>
+      <h3>Milestones</h3>
+      {stats.milestonesUnavailable ? (
+        <>
+          <p class="profile-hint">Milestones unavailable right now.</p>
+          <StatsRecovery
+            profilePath={profilePath}
+            label="Retry loading milestones"
+            draftWarning={draftWarning}
+          />
+        </>
+      ) : (
+        <>
+          {stats.milestonesTruncated ? (
+            <p class="profile-hint">Showing the newest {MEMBER_MILESTONES_CAP} milestones.</p>
+          ) : null}
+          {stats.milestones.length > 0 ? (
+            <ol class="profile-milestones">
+              {stats.milestones.map((milestone) => (
+                <li>
+                  <div>
+                    <strong>{statsLabel(milestone.type)}</strong>
+                    {milestone.detail ? <p>{milestone.detail}</p> : null}
+                  </div>
+                  <time datetime={milestone.occurredAt.toISOString()}>
+                    {statsDate(milestone.occurredAt)}
+                  </time>
+                </li>
+              ))}
+            </ol>
+          ) : (
+            <p>No milestones yet.</p>
+          )}
+        </>
+      )}
+    </section>
+  );
+};
 
 // Share tags (TOG-6793): the canonical is always the shareable member URL,
 // so /profile and /members/{user} never present as duplicates. The
@@ -150,7 +227,24 @@ export const ProfilePage: FC<{
   stats?: MemberStats | null;
   errors?: Record<string, string>;
   values?: ProfileFormValues;
-}> = ({ member, isOwner, isModerator, appUrl, joinResult, stats, errors, values }) => {
+  /** 422/503 re-render: the stats recovery link warns that reloading discards the draft. */
+  statsDraftWarning?: boolean;
+  /** Member's displayed game strings the viewer also plays; entries exactly
+   * equal to a value render the shared marker. Absent (or empty) renders the
+   * plain list: own profile and zero-shared never mark. */
+  sharedGames?: string[];
+}> = ({
+  member,
+  isOwner,
+  isModerator,
+  appUrl,
+  joinResult,
+  stats,
+  errors,
+  values,
+  statsDraftWarning,
+  sharedGames,
+}) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
   const isNewMember = profileIsNewMember(member);
@@ -170,6 +264,19 @@ export const ProfilePage: FC<{
     timezone: member.timezone ?? "",
     leaderboard_opt_out: member.leaderboardOptOut ?? false,
   };
+  // Persistent composition feedback, seeded from the rendered values (the
+  // rejected draft on a 422, the stored record otherwise). The island binder
+  // refreshes these same nodes; no-JS readers get the seeded state.
+  const bioCount = bioCountText(codePoints(form.bio));
+  const gamesCount = gamesCountText(parseGamesText(form.games_text));
+  // Exact-match set over the route's computed shared names: the match itself
+  // (trim + case-insensitive) lives in findSharedGames, shared with the Kit
+  // twin, so the view never re-derives it.
+  const shared = new Set(sharedGames ?? []);
+  // Refusal re-render (422/503): the controls' HTML defaults are the
+  // rejected draft, so Cancel cannot be a native reset there — it would
+  // restore the draft itself for a member without JavaScript.
+  const refused = !!errors && Object.keys(errors).length > 0;
   return (
     <Layout
       title={`${member.username} — Member profile`}
@@ -187,6 +294,9 @@ export const ProfilePage: FC<{
             <a class="btn" href="/profile">
               Your profile
             </a>
+            <a class="btn profile-secondary" href="/events">
+              Events
+            </a>
             {/* Convenience link only: /admin still 403s anyone without the moderator bit. */}
             {isModerator ? (
               <a class="btn profile-secondary" href="/admin" data-testid="profile-admin-link">
@@ -197,6 +307,11 @@ export const ProfilePage: FC<{
           <form method="post" action="/logout" data-testid="profile-signout">
             <button type="submit" class="link">
               Sign out
+            </button>
+          </form>
+          <form method="post" action="/logout/everywhere" data-testid="profile-signout-everywhere">
+            <button type="submit" class="link">
+              Sign out everywhere
             </button>
           </form>
         </div>
@@ -250,6 +365,11 @@ export const ProfilePage: FC<{
                     (isOwner ? PROFILE_EMPTY_COPY.timezoneOwner : PROFILE_EMPTY_COPY.timezoneOther)
                   }`}
                 </p>
+                <div data-local-time-compare={member.timezone ?? ""}>
+                  <button type="button" class="btn profile-secondary" hidden>
+                    Compare local times
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -270,9 +390,16 @@ export const ProfilePage: FC<{
               <div data-testid="profile-games">
                 {member.games.length > 0 ? (
                   <ul>
-                    {member.games.map((g) => (
-                      <li>{g}</li>
-                    ))}
+                    {member.games.map((g) =>
+                      shared.has(g) ? (
+                        <li data-shared-game="true">
+                          {g}
+                          <span data-testid="profile-shared-marker">Shared</span>
+                        </li>
+                      ) : (
+                        <li>{g}</li>
+                      ),
+                    )}
                   </ul>
                 ) : (
                   <p>{isOwner ? PROFILE_EMPTY_COPY.gamesOwner : PROFILE_EMPTY_COPY.gamesOther}</p>
@@ -282,6 +409,7 @@ export const ProfilePage: FC<{
           </div>
         </section>
         <script src="/islands/avatar.js" defer></script>
+        <script src="/islands/local-time-compare.js" defer></script>
         {isOwner ? (
           <section
             class="profile-panel profile-new-member"
@@ -291,12 +419,23 @@ export const ProfilePage: FC<{
           >
             <h2 id="new-member-heading">{PROFILE_NEW_MEMBER_COPY.heading}</h2>
             <p>{PROFILE_NEW_MEMBER_COPY.body}</p>
-            <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
-              {PROFILE_NEW_MEMBER_COPY.cta}
-            </a>
+            <div class="actions">
+              <a class="btn" href="#edit-heading" data-testid={PROFILE_NEW_MEMBER_CTA_TESTID}>
+                {PROFILE_NEW_MEMBER_COPY.cta}
+              </a>
+              <a class="btn profile-secondary" href="/events">
+                Find an event
+              </a>
+            </div>
           </section>
         ) : null}
-        {stats ? <MemberStatsBlock stats={stats} /> : null}
+        {stats ? (
+          <MemberStatsBlock
+            stats={stats}
+            profilePath={`/members/${member.id}`}
+            draftWarning={statsDraftWarning}
+          />
+        ) : null}
         {isOwner ? (
           <section
             class="profile-panel profile-editor"
@@ -362,6 +501,13 @@ export const ProfilePage: FC<{
                 </p>
               ) : null}
               {/* Native maxlength counts UTF-16 units; code-point limits belong to the validators. */}
+              {/* class-before-id keeps `id="…">` adjacent to the count copy. */}
+              <p class="profile-hint" id={PROFILE_BIO_HINT_ID}>
+                {PROFILE_BIO_HINT_COPY}
+              </p>
+              <p class="profile-count" id={PROFILE_BIO_COUNT_ID}>
+                {bioCount}
+              </p>
               <label class="profile-field">
                 Bio{" "}
                 <textarea
@@ -369,7 +515,11 @@ export const ProfilePage: FC<{
                   name="bio"
                   rows={4}
                   aria-invalid={errors?.bio ? "true" : undefined}
-                  aria-describedby={errors?.bio ? PROFILE_ERROR_IDS.bio : undefined}
+                  aria-describedby={
+                    errors?.bio
+                      ? `${PROFILE_BIO_HINT_ID} ${PROFILE_BIO_COUNT_ID} ${PROFILE_ERROR_IDS.bio}`
+                      : `${PROFILE_BIO_HINT_ID} ${PROFILE_BIO_COUNT_ID}`
+                  }
                 >
                   {form.bio}
                 </textarea>
@@ -379,6 +529,12 @@ export const ProfilePage: FC<{
                   {errors.bio}
                 </p>
               ) : null}
+              <p class="profile-hint" id={PROFILE_GAMES_TEXT_HINT_ID}>
+                {PROFILE_GAMES_TEXT_HINT_COPY}
+              </p>
+              <p class="profile-count" id={PROFILE_GAMES_TEXT_COUNT_ID}>
+                {gamesCount}
+              </p>
               <label class="profile-field">
                 Games (one per line){" "}
                 <textarea
@@ -388,8 +544,8 @@ export const ProfilePage: FC<{
                   aria-invalid={errors && (errors.games ?? errors.games_text) ? "true" : undefined}
                   aria-describedby={
                     errors && (errors.games ?? errors.games_text)
-                      ? PROFILE_ERROR_IDS.games_text
-                      : undefined
+                      ? `${PROFILE_GAMES_TEXT_HINT_ID} ${PROFILE_GAMES_TEXT_COUNT_ID} ${PROFILE_ERROR_IDS.games_text}`
+                      : `${PROFILE_GAMES_TEXT_HINT_ID} ${PROFILE_GAMES_TEXT_COUNT_ID}`
                   }
                 >
                   {form.games_text}
@@ -408,7 +564,11 @@ export const ProfilePage: FC<{
                   value={form.timezone}
                   placeholder="Europe/London"
                   aria-invalid={errors?.timezone ? "true" : undefined}
-                  aria-describedby={errors?.timezone ? PROFILE_ERROR_IDS.timezone : undefined}
+                  aria-describedby={
+                    errors?.timezone
+                      ? `${PROFILE_TIMEZONE_HELP_ID} ${PROFILE_ERROR_IDS.timezone}`
+                      : PROFILE_TIMEZONE_HELP_ID
+                  }
                 />
               </label>
               {errors?.timezone ? (
@@ -416,6 +576,22 @@ export const ProfilePage: FC<{
                   {errors.timezone}
                 </p>
               ) : null}
+              <p id={PROFILE_TIMEZONE_HELP_ID} class="profile-hint">
+                {PROFILE_COPY.timezoneHelp}
+              </p>
+              <div data-device-timezone hidden>
+                <button
+                  class="btn profile-secondary"
+                  type="button"
+                  data-device-timezone-use
+                  aria-describedby="profile-device-timezone-help"
+                >
+                  {PROFILE_COPY.deviceTimezone}
+                </button>
+                <p id="profile-device-timezone-help" class="profile-hint">
+                  {PROFILE_COPY.deviceTimezoneHelp}
+                </p>
+              </div>
               <div aria-hidden="true" class="sr-only">
                 <label>
                   Website <input name={PROFILE_HONEY_FIELD} tabindex={-1} autocomplete="off" />
@@ -426,13 +602,26 @@ export const ProfilePage: FC<{
                 <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>
                   {PROFILE_COPY.save}
                 </button>
-                <button
-                  class="btn profile-secondary"
-                  type="reset"
-                  data-testid={PROFILE_CANCEL_TESTID}
-                >
-                  {PROFILE_COPY.cancel}
-                </button>
+                {refused ? (
+                  // A safe GET back to the saved profile discards the draft
+                  // without JavaScript; the island intercepts plain clicks
+                  // and resets in place instead. Same styling as the reset.
+                  <a
+                    class="btn profile-secondary"
+                    href={`/members/${member.id}`}
+                    data-testid={PROFILE_CANCEL_TESTID}
+                  >
+                    {PROFILE_COPY.cancel}
+                  </a>
+                ) : (
+                  <button
+                    class="btn profile-secondary"
+                    type="reset"
+                    data-testid={PROFILE_CANCEL_TESTID}
+                  >
+                    {PROFILE_COPY.cancel}
+                  </button>
+                )}
               </div>
             </form>
             <script src="/islands/member-profile.js" defer></script>

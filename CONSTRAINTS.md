@@ -10,8 +10,14 @@ requires queue-visible waiver trailers (`ci/pr-lint-output.py:26-71`).
 
 - No new suppression comments that silence a checker.
 - No unimplemented stubs and no empty catch blocks that turn failure silent.
-- No added test skips. Test-file deletion, assertion removal, enforced-row
-  removal, and ignore-list addition require a reasoned commit trailer:
+- No added test skips, unconditional or conditional (`.skipIf`/`.runIf`, an
+  options-object `skip:`, or ternary suite/test selection routing to a
+  skip); replacing one gated form with another in the same file, keeping
+  the executable gated count, is not an addition. Comments, strings and
+  fixture data never pay for a new JavaScript/TypeScript gate; wrapping or
+  packing expressions does not change their count. Test-file deletion, assertion
+  removal, enforced-row removal, and ignore-list addition require a
+  reasoned commit trailer:
   `Floor-waiver: test-deleted <path> -- <reason>`,
   `Floor-waiver: assertion-removed <path> -- <reason>`,
   `Floor-waiver: threshold-removed <Dimension> -- <reason>`, or
@@ -44,7 +50,7 @@ while lowering it, or deleting the row, fails the gate.
 | Coverage of changed lines | Added TS lines ≥ 80% executed | `npm run patch:coverage` (`--strict` flips it HARD) | every PR (`check` job, WARN: reports only) |
 | Project coverage | Zero threshold violations: statements 90.8, branches 84.2, functions 92.3, lines 94.4, plus per-area floors (`vitest.config.ts:40`) | `npm run test:coverage` | every PR (`check` job) |
 | Security: code | No sink or secret-literal findings; scanner and partial-parse errors fail closed | Semgrep HARD step in `.github/workflows/ci.yml` (`--strict --error`, planted-finding selftest) | every PR (`check` job) |
-| Test inventory | Every test file reachable from CI | `npm run test:inventory` (`--strict` flips it HARD) | every PR (`check` job, WARN: reports only) |
+| Test inventory | Every test file reachable from CI | `npm run test:inventory -- --strict` | every PR (`check` job, HARD) |
 | Bundle size | Served assets within budget | `npm run budget` | `bundle-budget` job, blocks merge |
 | Worker bundle | Main Worker dry-run bundle within budget | `npm run worker-budget` | every PR (`check` job) |
 | Page quality | Lighthouse categories within `ci/quality-budget.json`; security headers, HTML basics, internal links | `npm run lighthouse:quality`, `npm run standards` | `lighthouse` job, blocks merge |

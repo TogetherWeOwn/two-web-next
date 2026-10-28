@@ -108,11 +108,12 @@ describe("featured policy statement (pure, DB-free)", () => {
     ).toBe(false);
   });
 
-  it("names exactly the three mounted admin write routes", () => {
+  it("names exactly the four mounted admin write routes", () => {
     expect([...FEATURED_WRITE_ROUTES].sort()).toEqual([
       "POST /admin/featured",
       "POST /admin/featured/:id",
       "POST /admin/featured/:id/delete",
+      "POST /admin/featured/:id/unpublish",
     ]);
     // Hono lists one entry per handler in the middleware stack: dedupe like
     // the inventory guard (test/helpers/route-inventory.ts) before comparing.
@@ -128,7 +129,7 @@ describe("featured policy statement (pure, DB-free)", () => {
 });
 
 describe("featured write surface (DB-free source allowlist)", () => {
-  it("registers exactly the three moderator write routes, no public featured writer", () => {
+  it("registers exactly the four moderator write routes, no public featured writer", () => {
     const writes = [
       ...new Set(
         adminApp(createMemorySessionStore())
@@ -136,7 +137,12 @@ describe("featured write surface (DB-free source allowlist)", () => {
           .map((r) => `${r.method} ${r.path}`),
       ),
     ].sort();
-    expect(writes).toEqual(["POST /featured", "POST /featured/:id", "POST /featured/:id/delete"]);
+    expect(writes).toEqual([
+      "POST /featured",
+      "POST /featured/:id",
+      "POST /featured/:id/delete",
+      "POST /featured/:id/unpublish",
+    ]);
   });
 
   it("the featuredContents table object is touched only by schema, public read and the admin store", () => {
@@ -299,6 +305,13 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
       "deleted featured content Policy slot",
     ]);
     expect(new Set(audits.map((a) => a.causerId))).toEqual(new Set([MODERATOR.userId]));
+    const deleted = audits.find((a) => a.description === "deleted featured content Policy slot");
+    expect(deleted!.properties).toMatchObject({
+      title: { before: "Policy slot", after: null },
+      body: { before: "Hello", after: null },
+      isPublished: { before: true, after: null },
+      position: { before: 0, after: null },
+    });
   });
 
   it("public reads return exactly the currentlyVisible rows, start-inclusive end-exclusive", async () => {
@@ -357,6 +370,12 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
       "created featured content Doomed slot",
       "deleted featured content Doomed slot",
     ]);
+    const deleted = audits.find((a) => a.description === "deleted featured content Doomed slot");
+    expect(deleted!.properties).toMatchObject({
+      title: { before: "Doomed slot", after: null },
+      isPublished: { before: false, after: null },
+      position: { before: 0, after: null },
+    });
 
     const second = await admin().request(
       `/featured/${id}/delete`,

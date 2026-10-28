@@ -18,7 +18,7 @@ import {
   type SessionStore,
   type Sql,
 } from "./sessions";
-import { databaseOptions, databaseUrl } from "./db/connection";
+import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
@@ -45,7 +45,6 @@ import { registerMcpRoutes } from "./mcp/routes";
 import { registerPublicApiRoutes } from "./public-data/routes";
 import { takeJoinResult } from "./return-journey";
 import { buildSecurityTxt } from "./security-txt";
-import { enforceOn } from "./access-log";
 import {
   configReadiness,
   revisionReadiness,
@@ -61,6 +60,7 @@ import { expiredWriteBanner } from "./write-recovery";
 import { freezeBanner } from "./freeze-banner";
 import { webmcpPilot } from "./webmcp-pilot";
 
+export { faqLastReviewed } from "./faq-last-reviewed";
 export { rulesLastUpdated } from "./rules-last-updated";
 
 // The session cookie name is defined once in ./session-cookie (re-exported by ./auth/routes, which owns logout).
@@ -213,7 +213,11 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
   // Short-lived per-request client; Hyperdrive pools underneath in the Worker.
   // Keep it alive while the store uses it; idle_timeout closes idle sockets.
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  return createPostgresSessionStore(sql);
+  // Per-request statement bound (SET LOCAL in a short transaction per
+  // statement): a stuck session lookup cancels into the existing outage
+  // handling instead of wedging the request. Journeys share the adapter, so
+  // the OAuth consume path is bounded the same way.
+  return createPostgresSessionStore(withPerRequestStatementBound(sql));
 }
 
 // Roster persistence shares storeFor's DB selection so signed-in profiles
@@ -221,12 +225,21 @@ export async function storeForEnv(env: Env): Promise<SessionStore> {
 // configuration means a no-op upsert so DB-free sign-in tests still work.
 // No DDL here either (TOG-19721): the users table is drizzle/0000, owned by
 // the migrate workflow.
-async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> {
+function rosterSqlFor(c: Context<{ Bindings: Env }>): {
+  sql: Sql | null;
+  close?: () => Promise<void>;
+} {
   const injected = (c.env as EnvWithRoster).ROSTER_STORE;
-  if (injected) return injected;
+  if (injected) return { sql: injected };
   const url = databaseUrl(c.env);
-  if (!url) return null;
-  return postgres(url, databaseOptions) as unknown as Sql;
+  if (!url) return { sql: null };
+  // Bare options: this client feeds upsertRosterUser only, whose
+  // transaction already installs a tighter 500 ms SET LOCAL bound.
+  const client = postgres(url, databaseOptions);
+  return {
+    sql: client as unknown as Sql,
+    close: () => client.end({ timeout: 0 }),
+  };
 }
 
 /** Fresh-login mutual exclusion, per user: overlapping callbacks for the same
@@ -247,8 +260,9 @@ async function rosterSqlFor(c: Context<{ Bindings: Env }>): Promise<Sql | null> 
 const freshLoginChains = new Map<string, Promise<void>>();
 
 /** Bound on waiting for the previous same-user issuance (see
- * withFreshLoginUserLock): a holder that never settles its tail — a hung
- * store query (no statement timeout is configured) or a disconnect-cancelled
+ * withFreshLoginUserLock): a holder that never settles its tail — a store
+ * query stalled on transport (the per-request statement timeout cancels
+ * server-side execution, not a dead socket) or a disconnect-cancelled
  * callback — would otherwise hang that user's future logins on the isolate
  * indefinitely. Normal insert+sweep work is millisecond-scale and the
  * barrier-test hold is 1.5 s, so 10 s (matching the DB connect timeout) only
@@ -316,12 +330,19 @@ async function issueSession(
   // carries no moderator field — `users` has no such column, and the flag is
   // recomputed from Discord role IDs into the session row only.
   try {
-    await upsertRosterUser(await rosterSqlFor(c), {
-      id: row.userId,
-      username: row.username,
-      avatar: row.avatar,
-      member: row.member,
-    });
+    const roster = rosterSqlFor(c);
+    try {
+      await upsertRosterUser(roster.sql, {
+        id: row.userId,
+        username: row.username,
+        avatar: row.avatar,
+        member: row.member,
+      });
+    } finally {
+      // Dedicated optional client only: never close injected/shared or session
+      // storage. SQL limits cancel backend work; end also settles pending I/O.
+      await roster.close?.();
+    }
   } catch (err) {
     // Driver messages can carry DSN fragments; the class name is the whole story here.
     console.warn("roster upsert failed", {
@@ -409,14 +430,16 @@ async function readSession(
     };
   }
   // Rotation: every authenticated page view mints a fresh token and deletes
-  // the old row in the same statement. A replayed cookie finds no row: guest
-  // (rotate resolves false for a revoked/expired/missing source — row
-  // ineligible stays guest, never an outage). Any rotation *error* is an
-  // outage, never a silent guest: classified database failures propagate as
-  // themselves, generic errors normalize to a plain Error so the callers'
-  // existing opaque-fallback boundary (plain Error => outage, named
-  // non-outage => 500) renders the honest outage treatment without leaking
-  // driver details or swallowing genuine programming errors from other reads.
+  // the old row in the same statement, keeping the immediate predecessor
+  // valid for 10s (bounded by its own expiry) while its successor stays live.
+  // A replayed cookie past grace finds no row: guest (rotate resolves false
+  // for a revoked/expired/missing source — row ineligible stays guest, never
+  // an outage). Any rotation *error* is an outage, never a silent guest:
+  // classified database failures propagate as themselves, generic errors
+  // normalize to a plain Error so the callers' existing opaque-fallback
+  // boundary (plain Error => outage, named non-outage => 500) renders the
+  // honest outage treatment without leaking driver details or swallowing
+  // genuine programming errors from other reads.
   const statusKey = await store.statusHash(await hashToken(token));
   const replacement = newSessionToken();
   let rotated: boolean;
@@ -430,7 +453,21 @@ async function readSession(
     if (isDatabaseUnavailable(err)) throw err;
     throw new Error("Session rotation unavailable");
   }
-  if (!rotated) return null;
+  if (!rotated) {
+    // Predecessor grace or a lost rotation race: re-read once. A grace row
+    // (or a concurrent winner's predecessor) authenticates without rotating,
+    // minting or extending — tab B keeps its jar until grace lapses. A
+    // revoked/expired source stays guest.
+    const graceRow = await store.get(await hashToken(token));
+    if (!graceRow) return null;
+    return {
+      id: graceRow.userId,
+      username: graceRow.username,
+      avatar: graceRow.avatar,
+      member: graceRow.member,
+      moderator: graceRow.moderator,
+    };
+  }
   await enableAuthStatus(c, store, await hashToken(replacement), statusKey);
   await setSignedCookie(c, SESSION_COOKIE, replacement, c.env.SESSION_SECRET, {
     path: "/",
@@ -513,7 +550,13 @@ app.get("/", async (c) => {
     executionCtx,
     c.get("requestId"),
   );
-  const featuredPromise = cachedFeatured(c.env, () => dbFor(c), new Date(), executionCtx);
+  const featuredPromise = cachedFeatured(
+    c.env,
+    () => dbFor(c),
+    new Date(),
+    executionCtx,
+    c.get("requestId"),
+  );
   const [{ session, unavailable: sessionUnavailable }, counts, flashed, homeUpcoming, featured] =
     await Promise.all([
       sessionPromise,
@@ -599,8 +642,10 @@ registerJoinRoutes(
           widgetUrl={props.widgetUrl}
           widgetSnapshot={props.widgetSnapshot}
           next={props.next}
+          source={props.source}
           appUrl={c.env.APP_URL}
           joinResult={joinResult}
+          notice={props.notice}
         />,
       );
     },
@@ -629,7 +674,7 @@ app.get("/.well-known/security.txt", (c) => {
   c.header("cache-control", "public, max-age=3600");
   return c.body(buildSecurityTxt(c.env.APP_URL));
 });
-app.post("/api/agent-events", agentEventsAdmission, requestBodyLimit("agent"), agentEventsRoute);
+app.post("/api/agent-events", requestBodyLimit("agent"), agentEventsAdmission, agentEventsRoute);
 
 // `GET /up` — session-free DB/schema and secret-presence readiness plus the
 // existing queue signal. A missing required secret, DB/ledger failure or
@@ -671,22 +716,10 @@ app.get("/up", async (c) => {
     c.header("cache-control", "no-store");
     // Two slots on the one client: the queue read cannot starve the DB read.
     const sql = connect(url, 2);
-    // Member-access-log enforcement signal: informational only, never moves
-    // the status code. Parsing mirrors enforceOn exactly — no raw value or
-    // variable name is echoed into the body. Security note: this two-state
-    // label is intentionally public on the unauthenticated /up body. The
-    // control name and its degraded meaning are already public in the
-    // operator runbooks, and dashboards poll /up without credentials, so an
-    // authenticated-only signal would not reach its consumers. Exploiting a
-    // log-only window still needs an authenticated read plus a failed audit
-    // write, so the field aids operators without giving an unauthenticated
-    // caller a bypass. Consistent with the existing public config/db/queue
-    // signals, which likewise describe operational posture, not secrets.
     const body = await upBody(
       sql ? () => withHealthReadTimeout(sql, pgQueueDepth) : null,
       sql,
       configReadiness(c.env),
-      enforceOn(c.env) ? "enforcing" : "log_only",
     );
     // Informational only: the revision never moves the status code.
     return c.json({ ...body, ...revisionReadiness(c.env.CF_VERSION_METADATA) }, upHttpStatus(body));

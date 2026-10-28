@@ -275,7 +275,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(list).toContain("America/New_York");
 
       const grid = await (await app.request("/events?view=calendar&month=2026-07", {}, env)).text();
-      expect(cellFor(grid, NY_BUCKET)).toContain(`20:00 Evening games`);
+      expect(cellFor(grid, NY_BUCKET)).toContain(`20:00 America/New_York Evening games`);
       expect(cellFor(grid, "2026-07-16")).not.toContain("Evening games");
     });
 
@@ -288,9 +288,8 @@ describe.skipIf(!process.env.DATABASE_URL)(
         games: [],
         timezone: "Pacific/Auckland",
       });
-      // Each authenticated request mints its own token: the full-page
-      // reader rotates the session (deleting the presented row), so reusing
-      // one cookie across three requests would 401 the last one as a guest.
+      // Independent sessions keep the timezone comparisons isolated from
+      // full-page rotation and its bounded predecessor grace.
       const viewerGridCookie = await cookieFor("auck-viewer");
       const viewerListCookie = await cookieFor("auck-viewer");
       const viewerJsonCookie = await cookieFor("auck-viewer");
@@ -304,7 +303,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           env,
         )
       ).text();
-      expect(cellFor(grid, NY_BUCKET)).toContain(`20:00 Evening games`);
+      expect(cellFor(grid, NY_BUCKET)).toContain(`20:00 America/New_York Evening games`);
       expect(cellFor(grid, "2026-07-16")).not.toContain("Evening games");
       expect(grid).not.toContain("12:00");
 

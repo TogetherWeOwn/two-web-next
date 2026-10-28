@@ -1,16 +1,19 @@
 // Shared event-route middleware and serializers. Split out of
 // src/events/routes.tsx so each route group registers from its own module;
 // this file holds what at least two groups use. Re-exported from the barrel.
-import type { Context, Hono } from "hono";
+import type { Context, Hono, MiddlewareHandler } from "hono";
 import type { Env, Session } from "../env";
 import { loginUrl, wallDateIso, wallTimeHm } from "../islands/contracts";
 import { safeNext } from "../join/service";
+import { safeRequestId } from "../request-log";
 import { throttleGuard } from "../throttle";
 import {
+  PUBLIC_DATA_ERROR_NEXT,
   PUBLIC_EVENT_STATUS,
   type PublicEventDto,
   type PublicEventId,
 } from "../public-data/contracts";
+import { clampOutageRetryAfter, OUTAGE_RETRY_AFTER_SECONDS, varyAccept } from "../errors";
 import type { PublicEvent } from "./reads";
 
 export type Ctx = Context<{ Bindings: Env }>;
@@ -19,14 +22,122 @@ export type SessionReader = (c: Ctx) => Promise<Session | null>;
 
 export const PUBLIC_EVENT_READS_PER_MINUTE = 60;
 
+/**
+ * CI loopback override for the shared read budget. The sequential browser
+ * suites present one `anon` client key off-edge, so both loopback workers
+ * (`e2e/wrangler.jsonc` and the generated Kit fixture in
+ * `ci/kit-worker-dev.mjs`, which enforces the same bucket on the same
+ * disposable Postgres) set `E2E_PUBLIC_READ_BUDGET` and the suites stop
+ * tripping each other's windows. Positive integers only; anything else keeps
+ * the production 60 (same shape as the agent-events `routePerMinute`
+ * override).
+ */
+export function publicReadBudget(env: Env): number {
+  const override = Number(env.E2E_PUBLIC_READ_BUDGET);
+  return Number.isInteger(override) && override > 0 ? override : PUBLIC_EVENT_READS_PER_MINUTE;
+}
+
 /** One client budget across public pages and feeds, before event or session reads. */
 export async function publicReadGuard(c: Ctx): Promise<Response | null> {
-  const limited = await throttleGuard(c, "events-read", PUBLIC_EVENT_READS_PER_MINUTE);
+  const limited = await throttleGuard(c, "events-read", publicReadBudget(c.env));
   if (limited) limited.headers.set("cache-control", "no-store, private");
   return limited;
 }
 
-export const eventsUnavailable = (c: Ctx) => c.text("Events temporarily unavailable", 503);
+/**
+ * Internal-only seed header carrying the dispatch-minted request id into the
+ * Kit guard apps (kit-past-events.ts, kit-events.ts), whose bare Hono context
+ * otherwise renders 429 pages with no support reference. Never trusted from
+ * the client: seedGuardRequestId overwrites any client-sent value with the
+ * validated dispatch id, or strips it when no id is passed, and the
+ * middleware re-validates the shape before merging it into context.
+ */
+export const GUARD_REQUEST_ID_HEADER = "x-two-guard-request-id";
+
+/**
+ * Clone a request for the guard apps with the dispatch id seeded (or the
+ * header stripped when the id is absent or hostile). Rebuilt from URL +
+ * method + headers: the guard reads no body (client key, path and Accept
+ * only), and cloning a body-bearing request would need a duplex stream the
+ * guard never consumes.
+ */
+export function seedGuardRequestId(request: Request, requestId: unknown): Request {
+  const headers = new Headers(request.headers);
+  const id = safeRequestId(requestId);
+  if (id === undefined) headers.delete(GUARD_REQUEST_ID_HEADER);
+  else headers.set(GUARD_REQUEST_ID_HEADER, id);
+  return new Request(request.url, { method: request.method, headers });
+}
+
+/** Merge the seeded dispatch id into the guard context for 429 pages. */
+export const guardRequestId: MiddlewareHandler<{ Bindings: Env }> = async (c, next) => {
+  const id = safeRequestId(c.req.header(GUARD_REQUEST_ID_HEADER));
+  if (id !== undefined) c.set("requestId", id);
+  await next();
+};
+
+/**
+ * True only when the caller explicitly lists application/json with q>0 (same
+ * quality grammar as jsonSession below): absent, wildcard, feed-native and
+ * q=0-excluded callers stay on the plaintext feed contract.
+ */
+function feedJsonRequested(c: Ctx): boolean {
+  const accept = c.req.header("accept");
+  if (!accept) return false;
+  return accept
+    .toLowerCase()
+    .split(",")
+    .some((range) => {
+      const [type, ...parameters] = range.split(";").map((part) => part.trim());
+      if (type !== "application/json") return false;
+      const weights = parameters.filter((part) => /^q\s*=/.test(part));
+      const quality = weights[0]?.replace(/^q\s*=\s*/, "") ?? "1";
+      return (
+        weights.length <= 1 &&
+        /^(?:0(?:\.\d{0,3})?|1(?:\.0{0,3})?)$/.test(quality) &&
+        Number(quality) > 0
+      );
+    });
+}
+
+/**
+ * Feed 503s stay plaintext for feed-native callers but answer the structured
+ * error envelope for explicit `Accept: application/json` callers — no-store
+ * either way, with Vary: Accept merged since the representation negotiates.
+ * Throttled feeds (429) keep their plaintext refusal on every Accept.
+ */
+export function unavailableFeed(c: Ctx, message: string, retryAfter?: number): Response {
+  varyAccept(c);
+  if (retryAfter !== undefined) c.header("Retry-After", String(retryAfter));
+  if (feedJsonRequested(c)) {
+    return c.json(
+      {
+        error: {
+          code: "unavailable",
+          message,
+          request_id: c.get("requestId"),
+          next: PUBLIC_DATA_ERROR_NEXT.unavailable,
+        },
+      },
+      503,
+      { "cache-control": "no-store" },
+    );
+  }
+  return c.text(message, 503, { "cache-control": "no-store" });
+}
+
+export const eventsUnavailable = (c: Ctx, retryAfter: number = OUTAGE_RETRY_AFTER_SECONDS) =>
+  unavailableFeed(c, "Events temporarily unavailable", clampOutageRetryAfter(retryAfter));
+
+/**
+ * Inline no-database refusal for the JSON-only event legs: the exact legacy
+ * `{error: "db_unavailable"}` bytes plus the outage Retry-After header.
+ */
+export function dbUnavailableJson(c: Pick<Ctx, "json">): Response {
+  return c.json({ error: "db_unavailable" }, 503, {
+    "Retry-After": String(OUTAGE_RETRY_AFTER_SECONDS),
+  });
+}
 
 export function eventJson(e: PublicEvent) {
   // Legacy EventResource order: event_key first, synced_to_discord
@@ -48,6 +159,7 @@ export function eventJson(e: PublicEvent) {
     location: e.location,
     capacity: e.capacity,
     going_count: e.goingCount,
+    going_occupancy: e.goingOccupancy,
     status: e.status,
     rsvp_open: e.rsvpOpen,
     synced_to_discord: e.discordEventId !== null,

@@ -10,7 +10,7 @@
 // - Access log: every admin GET/HEAD runs inside the keyed read boundary. Stable
 //   route metadata does not authorize SQL or supply subjects. One row per
 //   request (CISO condition TOG-355); failed attribution or audit always
-//   refuses the buffered contents, even with the legacy enforcement flag off.
+//   refuses the buffered contents.
 // - POSTs carry the same origin check as /logout (SameSite=Lax already
 //   blocks cross-site cookie sends; this refuses a forged same-shape POST
 //   anyway).
@@ -19,17 +19,18 @@
 // store is the session (same contract as src/index.tsx: tests inject a
 // SessionStore on the env as SESSION_STORE, runtime builds a postgres store
 // from DATABASE_URL or DB.connectionString, no binding fails closed to 503). The guard reads
-// the row — it never rotates: rotation is the site's per-view concern, and
-// an admin read must not invalidate the cookie the moderator's other tab
-// holds. Never trust a role bit from the cookie: the moderator decision is
-// the server-side row bit only.
+// and rotates the row on GET, mirroring the site's readSession: every
+// authenticated page view mints a fresh bearer, and the predecessor stays
+// grace-valid for 10s so the moderator's other tab keeps working. Never
+// trust a role bit from the cookie: the moderator decision is the
+// server-side row bit only.
 
-import { getSignedCookie } from "hono/cookie";
+import { generateSignedCookie, getSignedCookie } from "hono/cookie";
 import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
-import { databaseUnavailable, notFoundHandler } from "../errors";
-import { databaseOptions, databaseUrl } from "../db/connection";
+import { databaseUnavailable, forbidden, notFoundHandler } from "../errors";
+import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "../db/connection";
 import { bounceToLogin } from "../return-journey";
 import { prepareAuthStatus } from "../auth-status";
 import {
@@ -37,6 +38,9 @@ import {
   createPostgresSessionStore,
   hashToken,
   isValidSessionToken,
+  newSessionToken,
+  SESSION_TTL_SECONDS,
+  type DbSessionRow,
   type SessionStore,
   type Sql,
 } from "../sessions";
@@ -60,20 +64,15 @@ export async function sessionStoreFor(c: { env: Env }): Promise<SessionStore | n
   const url = databaseUrl(c.env);
   if (!url) return null;
   const sql = postgres(url, databaseOptions) as unknown as Sql;
-  return createPostgresSessionStore(sql);
+  // Same per-request statement bound as the site builder above: a stuck
+  // admin session lookup cancels into databaseUnavailable instead of
+  // wedging the panel.
+  return createPostgresSessionStore(withPerRequestStatementBound(sql));
 }
 
 /** No store at all (unit tests without the seam): sessions cannot resolve. */
 export function memoryStoreForTests(): SessionStore {
   return createMemorySessionStore();
-}
-
-export function enforceEnabled(env: Env): boolean {
-  const raw = env.MEMBER_ACCESS_LOG_ENFORCE?.trim().toLowerCase();
-  // Legacy default: enforced in every environment, including local. An
-  // enforcement switch off by default is off in the one place it mattered.
-  if (raw === undefined || raw === "") return true;
-  return raw !== "false" && raw !== "0" && raw !== "no";
 }
 
 /**
@@ -103,6 +102,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     c: Context<{ Bindings: Env; Variables: { adminActor: Actor; access: AccessDecl } }>,
     next: Next,
   ) => {
+    const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
     const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
     // Guest: into the site Discord OAuth flow, like everyone else. There is
     // no panel login page. The bounce records the page they asked for
@@ -117,22 +117,78 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     const dbOverride = isStore(overrides) ? undefined : overrides?.db;
 
     let actor: Actor | null = null;
+    // The authenticated row behind the actor: rotation preserves its exact
+    // identity bits, never re-derives them from the cookie or the actor.
+    let actorRow: DbSessionRow | null = null;
     // A bearer with no live row (expired/revoked/rotated) is an expired
     // guest, not a forbidden member: writes recover, reads re-authenticate.
     let expiredGuest = false;
     // Moderator pages run the tab-sync probe, so an expiry mid-edit raises
     // two:session-expired and the form island can keep the draft reachable.
     let attachStatus: (() => void) | null = null;
+    let rotatedSession: {
+      store: SessionStore;
+      tokenHash: string;
+      sessionCookie: string;
+    } | null = null;
     try {
       const resolved = sessionOverride ?? (await sessionStoreFor(c));
       if (!resolved) throw new Error("admin needs a session store; refusing to decide without one");
       const tokenHash = await hashToken(token);
       const row = await resolved.get(tokenHash);
       // Signed in, not a moderator: 403, not a login loop (TOG-54).
-      if (row?.moderator) actor = { id: row.userId, username: row.username };
-      else if (!row) expiredGuest = true;
-      if (actor && c.req.method === "GET") {
-        attachStatus = await prepareAuthStatus(c, resolved, tokenHash);
+      if (row?.moderator) {
+        actor = { id: row.userId, username: row.username };
+        actorRow = row;
+      } else if (!row) expiredGuest = true;
+      if (actor && actorRow && c.req.method === "GET") {
+        // get() also admits short predecessor grace; only a current bearer
+        // has a status key and can rotate. Grace reads never mint or refresh.
+        const statusKey = await resolved.statusHash(tokenHash);
+        if (statusKey) {
+          // Re-stamp while the row is live, before rendering/audit can cross
+          // its expiry. Every authenticated page view mints a fresh bearer,
+          // mirroring the site's readSession.
+          const replacement = newSessionToken();
+          const replacementHash = await hashToken(replacement);
+          const rotated = await resolved.rotate(tokenHash, {
+            tokenHash: replacementHash,
+            userId: actorRow.userId,
+            username: actorRow.username,
+            avatar: actorRow.avatar,
+            member: actorRow.member,
+            moderator: actorRow.moderator,
+            expiresAt,
+          });
+          if (!rotated) {
+            // Rotation lost a race (revoked/rotated/expired between the
+            // reads): re-read once, mirroring readSession's lost-race
+            // fallback. A grace-valid moderator serves without rotation or
+            // cookies (a thrown re-read fails closed below); revoked/expired
+            // still bounces.
+            const graceRow = await resolved.get(tokenHash);
+            if (!graceRow) return bounceToLogin(c);
+            actorRow = graceRow;
+            if (graceRow.moderator) actor = { id: graceRow.userId, username: graceRow.username };
+            else actor = null;
+          } else {
+            attachStatus = await prepareAuthStatus(c, resolved, replacementHash, statusKey);
+            // Sign before the dashboard deadline; the post-handler read gates attachment.
+            const sessionCookie = await generateSignedCookie(
+              SESSION_COOKIE,
+              replacement,
+              c.env.SESSION_SECRET,
+              {
+                path: "/",
+                secure: true,
+                httpOnly: true,
+                sameSite: "Lax",
+                maxAge: SESSION_TTL_SECONDS,
+              },
+            );
+            rotatedSession = { store: resolved, tokenHash: replacementHash, sessionCookie };
+          }
+        }
       }
     } catch (err) {
       console.error("admin guard could not resolve the session; refusing.", {
@@ -142,7 +198,7 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     }
     if (!actor) {
       if (expiredGuest) return bounceToLogin(c);
-      return c.text("Forbidden", 403);
+      return forbidden(c);
     }
     c.set("adminActor", actor);
 
@@ -168,15 +224,49 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
         },
         databaseUnavailable,
       );
-      // Only rendered documents get the probe: redirects and refusals stay
-      // cookie-free. Signed above, so attaching here never delays the page.
-      if (c.res.status === 200 && c.res.headers.get("content-type")?.includes("text/html")) {
-        attachStatus?.();
+      // The authorized GET already rotated the row, so the browser's bearer is
+      // grace-only: deliver the replacement on every outcome whose jar the
+      // browser keeps (including redirects, refusals and 404s) whenever the
+      // fresh bearer survived rendering without rotation or revocation.
+      // Withholding it would strand the moderator on a dying predecessor.
+      if (rotatedSession) {
+        try {
+          if (
+            (await rotatedSession.store.get(rotatedSession.tokenHash)) &&
+            (await rotatedSession.store.statusHash(rotatedSession.tokenHash))
+          ) {
+            c.header("set-cookie", rotatedSession.sessionCookie, { append: true });
+            // The probe must not overwrite another tab's cookie either.
+            if (c.res.status === 200 && c.res.headers.get("content-type")?.includes("text/html")) {
+              attachStatus?.();
+            }
+          }
+        } catch (err) {
+          console.error("admin guard could not revalidate the session; refusing.", {
+            exception: err instanceof Error ? err.name : "unknown",
+          });
+          c.res = await databaseUnavailable(c);
+          return c.res;
+        }
       }
     } else {
       await next();
     }
-    // Never let the edge cache an authenticated panel response.
-    c.header("cache-control", "private, no-store");
+    // Never let the edge cache an authenticated panel response. A downstream
+    // refusal that already set a no-store cache-control (throttle 429,
+    // body-cap 413, malformed 400, unavailable 503) keeps its own spelling,
+    // so the shared refusal shapes survive the panel. Anything else —
+    // including a cacheable downstream value — is overwritten: the guard is
+    // the single enforcement point, not every downstream handler.
+    const downstream = c.res.headers.get("cache-control");
+    const keepsNoStore =
+      !!downstream &&
+      downstream
+        .toLowerCase()
+        .split(",")
+        .some((part) => part.trim() === "no-store");
+    if (!keepsNoStore) {
+      c.header("cache-control", "private, no-store");
+    }
   };
 }

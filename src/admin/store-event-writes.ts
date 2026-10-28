@@ -9,7 +9,15 @@ import type { Db } from "../db/index";
 import { activityLog, events } from "../db/admin-schema";
 import { occurrences, type RecurrenceInput } from "./recurrence";
 import type { EventFormInput, EventStatus } from "./validation";
-import { isMirrored, newEventKey, nextStatus, ValidationError } from "./validation";
+import {
+  isKnownTimezone,
+  isMirrored,
+  newEventKey,
+  nextStatus,
+  parseEventForm,
+  utcToWall,
+  ValidationError,
+} from "./validation";
 import {
   CAPACITY_BELOW_GOING,
   goingCount,
@@ -18,9 +26,13 @@ import {
 } from "../events/waitlist";
 import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
-import { audit, dirty, NotFoundError, type Actor } from "./store-shared";
+import { retireApiPublicEventCache } from "../public-data/cache";
+import { audit, boundModeratorWrite, dirty, NotFoundError, type Actor } from "./store-shared";
 
-export type EventRow = typeof events.$inferSelect;
+export type EventRow = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
+  /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
+  accessibilityNotes?: string | null;
+};
 
 /** What the Discord write-back (W8 queue, W13 cron) must carry when it lands. */
 export type WriteBack = { eventKey: string; status: EventStatus } | null;
@@ -34,6 +46,91 @@ const LOCATION_REQUIRED = "Add a location before publishing.";
 
 function isBlankLocation(value: string | null | undefined): boolean {
   return value == null || value.trim() === "";
+}
+
+const DUPLICATE_TITLE_PREFIX = "Copy of ";
+const DUPLICATE_TITLE_LIMIT = 100;
+
+/**
+ * The duplicate's title: "Copy of <source>", truncated by code point (never
+ * UTF-16) so the whole title fits the 100-character form limit.
+ */
+export function duplicateTitle(source: string): string {
+  const room = DUPLICATE_TITLE_LIMIT - DUPLICATE_TITLE_PREFIX.length;
+  const codes = [...source];
+  if (codes.length <= room) return `${DUPLICATE_TITLE_PREFIX}${source}`;
+  return `${DUPLICATE_TITLE_PREFIX}${codes.slice(0, room).join("")}`;
+}
+
+/**
+ * Duplicate an event as a new draft (S4). The copy takes the source's
+ * venue/access/joining/capacity/organizer/times, a fresh key, and the
+ * duplicating moderator as creator; RSVPs, series linkage, Discord mirror
+ * state and agent linkage are cleared, and rsvpOpen resets to open. The copy
+ * is always a draft, so there is never a write-back, no queue row, and no
+ * sibling materialization.
+ *
+ * The copied fields are validated against the current form rules (via the
+ * PATCH merge, which also preserves exact fold/gap instants through the
+ * carriers): a source whose stored fields fail validation refuses with 422
+ * instead of cloning a corrupt row. The source row itself is never written.
+ */
+export async function duplicateEvent(
+  db: Db,
+  actor: Actor,
+  eventKey: string,
+): Promise<{ row: EventRow; writeBack: WriteBack }> {
+  const result: { row: EventRow } = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
+    // A plain read, not FOR UPDATE: there is no transition to judge against
+    // the latest committed state, and any committed version copies cleanly,
+    // so a duplicate never blocks behind an in-flight edit.
+    const [source] = await tx.select().from(events).where(eq(events.eventKey, eventKey));
+    if (!source) throw new NotFoundError("event");
+    // PostgreSQL accepts infinite timestamps, but wall-time/ISO formatting does
+    // not. Refuse them as field errors before deriving any display values.
+    const fields: Record<string, string> = {};
+    if (!Number.isFinite(source.startsAt.getTime())) fields.starts_at = "Enter a valid start time.";
+    if (!Number.isFinite(source.endsAt.getTime())) fields.ends_at = "Enter a valid end time.";
+    if (Object.keys(fields).length > 0) throw new ValidationError(fields);
+    // Validate the original title too: prefixing/truncation must not hide a
+    // blank title or a prohibited character beyond the copy's cutoff.
+    const input = mergePatchInput(source, {});
+    const [row] = await tx
+      .insert(events)
+      .values({
+        eventKey: newEventKey(),
+        title: duplicateTitle(input.title),
+        game: input.game,
+        description: input.description,
+        accessibilityNotes: input.accessibilityNotes,
+        startsAt: input.startsAtUtc,
+        endsAt: input.endsAtUtc,
+        timezone: input.timezone,
+        location: input.location,
+        organizer_name: input.organizer_name ?? null,
+        join_url: input.join_url ?? null,
+        join_instructions: input.join_instructions ?? null,
+        capacity: input.capacity,
+        status: "draft",
+        createdBy: actor.id,
+      })
+      .returning();
+    if (!row) throw new Error("event duplicate insert returned no row");
+    await audit(tx, {
+      subjectType: "Event",
+      subjectId: row.eventKey,
+      causerId: actor.id,
+      description: `duplicated event ${row.title} from ${source.title}`,
+      properties: dirty({} as Record<string, unknown>, row),
+    });
+    return { row };
+  });
+  // Committed: same retirement point as createEvent, only after success.
+  retireAnonEventCaches();
+  retireApiPublicEventCache();
+  await retireHomeGuestCache();
+  return { row: result.row, writeBack: null };
 }
 
 export async function createEvent(
@@ -50,6 +147,7 @@ export async function createEvent(
   // no key field and parseEventForm refuses forged event_key/eventKey
   // (legacy EventKeyTest immutability).
   const row = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     const [parent] = await tx
       .insert(events)
       .values({
@@ -57,10 +155,14 @@ export async function createEvent(
         title: input.title,
         game: input.game,
         description: input.description,
+        accessibilityNotes: input.accessibilityNotes,
         startsAt: input.startsAtUtc,
         endsAt: input.endsAtUtc,
         timezone: input.timezone,
         location: input.location,
+        organizer_name: input.organizer_name ?? null,
+        join_url: input.join_url ?? null,
+        join_instructions: input.join_instructions ?? null,
         capacity: input.capacity,
         status: "draft",
         createdBy: actor.id,
@@ -88,6 +190,7 @@ export async function createEvent(
   // Committed: a new event can appear on the calendar once published, so the
   // anonymous entries retire here too (N6), never on a throw above.
   retireAnonEventCaches();
+  retireApiPublicEventCache();
   await retireHomeGuestCache();
   return { row, writeBack: null };
 }
@@ -143,10 +246,14 @@ export async function materializeMissingInstances(
         title: parent.title,
         game: parent.game,
         description: parent.description,
+        accessibilityNotes: parent.accessibilityNotes,
         startsAt: when.startsAt,
         endsAt: when.endsAt,
         timezone: parent.timezone,
         location: parent.location,
+        organizer_name: parent.organizer_name,
+        join_url: parent.join_url,
+        join_instructions: parent.join_instructions,
         capacity: parent.capacity,
         status: "draft",
         createdBy: parent.createdBy,
@@ -193,6 +300,7 @@ export async function updateEvent(
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
     await db.transaction(async (tx) => {
+      await boundModeratorWrite(tx);
       // FOR UPDATE serialises RSVP allocation and concurrent parent edits so the
       // child shift below always sees the committed old times (no double-shift).
       const [locked] = await tx
@@ -201,70 +309,178 @@ export async function updateEvent(
         .where(eq(events.eventKey, eventKey))
         .for("update");
       if (!locked) throw new NotFoundError("event");
-      if (input.capacity !== null) {
-        const occupied = await goingCount(tx, locked.id);
-        if (input.capacity < occupied) {
-          throw new ValidationError({
-            capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.`,
-          });
-        }
-      }
-      // A published row must keep a non-blank location (bot upsert contract):
-      // drafts may stay blank, but an edit that would leave a published event
-      // without one is refused under the same row lock, so no route can bypass it.
-      if (toEventStatus(locked.status) === "published" && isBlankLocation(input.location)) {
-        throw new ValidationError({ location: LOCATION_REQUIRED });
-      }
-      // Closed field list: the key is addressed by, never written through,
-      // this update (EventFormInput carries no key; forged keys never parse).
-      const [row] = await tx
-        .update(events)
-        .set({
-          title: input.title,
-          game: input.game,
-          description: input.description,
-          startsAt: input.startsAtUtc,
-          endsAt: input.endsAtUtc,
-          timezone: input.timezone,
-          location: input.location,
-          capacity: input.capacity,
-          // A moderator edit must invalidate an agent's full-field stale write.
-          agentVersion:
-            locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
-          updatedAt: new Date(),
-        })
-        .where(eq(events.eventKey, eventKey))
-        .returning();
-      if (!row) throw new Error("event update returned no row");
-      await promoteWaitlist(tx, row);
-      const changes = dirty(
-        locked as Record<string, unknown>,
-        row as unknown as Record<string, unknown>,
-      );
-      if (Object.keys(changes).length > 0) {
-        await tx.insert(activityLog).values({
-          logName: "default",
-          description: `updated event ${row.title}`,
-          subjectType: "Event",
-          subjectId: row.eventKey,
-          causerId: actor.id,
-          properties: changes,
-        });
-      }
-      const childWriteBacks = row.recurrenceFrequency
-        ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
-        : [];
-      const status = toEventStatus(row.status);
-      return {
-        row,
-        writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null,
-        childWriteBacks,
-      };
+      return commitLockedUpdate(tx, actor, eventKey, locked, input);
     });
   // Committed: the edit is visible to guests on the next fetch (N6).
   retireAnonEventCaches();
+  retireApiPublicEventCache();
   await retireHomeGuestCache();
   return result;
+}
+
+export type PatchBase = Pick<
+  EventRow,
+  | "title"
+  | "game"
+  | "description"
+  | "accessibilityNotes"
+  | "timezone"
+  | "location"
+  | "organizer_name"
+  | "join_url"
+  | "join_instructions"
+  | "capacity"
+  | "startsAt"
+  | "endsAt"
+>;
+
+/**
+ * Pure PATCH admission + merge: omitted fields resolve from `base` (in
+ * production the locked row inside the committing transaction, in hermetic
+ * tests the fixture row), never from a pre-lock snapshot. Two overlapping
+ * disjoint edits therefore preserve both changes: the later writer merges
+ * against the earlier writer's committed row, and an omitted fold instant
+ * keeps its exact stored UTC instant via the locked carriers.
+ */
+export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>): EventFormInput {
+  const merged = {
+    title: base.title,
+    game: base.game,
+    description: base.description,
+    accessibility_notes: base.accessibilityNotes,
+    timezone: base.timezone,
+    location: base.location,
+    organizer_name: base.organizer_name,
+    join_url: base.join_url,
+    join_instructions: base.join_instructions,
+    capacity: base.capacity,
+    ...patch,
+  } as Record<string, unknown>;
+  // Match parseEventForm's zone default before deriving omitted wall times.
+  const tz =
+    typeof merged.timezone === "string"
+      ? merged.timezone.trim() || "Europe/London"
+      : "Europe/London";
+  if (!isKnownTimezone(tz)) throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
+  // A stored instant a JS Date cannot represent has no wall text and no UTC
+  // carrier: an omitted field refuses as a field error (same copy as the
+  // duplicate guard), while a supplied replacement parses fresh — exactly
+  // how the edit POST treats a nonfinite carrier.
+  const fields: Record<string, string> = {};
+  if (merged.starts_at == null) {
+    if (Number.isFinite(base.startsAt.getTime())) merged.starts_at = utcToWall(base.startsAt, tz);
+    else fields.starts_at = "Enter a valid start time.";
+  }
+  if (merged.ends_at == null) {
+    if (Number.isFinite(base.endsAt.getTime())) merged.ends_at = utcToWall(base.endsAt, tz);
+    else fields.ends_at = "Enter a valid end time.";
+  }
+  if (Object.keys(fields).length > 0) throw new ValidationError(fields);
+  return parseEventForm(merged, {
+    startsAtUtc: Number.isFinite(base.startsAt.getTime()) ? base.startsAt.toISOString() : undefined,
+    endsAtUtc: Number.isFinite(base.endsAt.getTime()) ? base.endsAt.toISOString() : undefined,
+  });
+}
+
+/**
+ * Partial JSON PATCH: omitted fields resolve from the locked row inside the
+ * same transaction that commits the update, never from a pre-lock snapshot.
+ * Full-form admin semantics are untouched (updateEvent still takes a complete
+ * EventFormInput).
+ */
+export async function patchEvent(
+  db: Db,
+  actor: Actor,
+  eventKey: string,
+  patch: Record<string, unknown>,
+): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
+  const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
+    await db.transaction(async (tx) => {
+      await boundModeratorWrite(tx);
+      const [locked] = await tx
+        .select()
+        .from(events)
+        .where(eq(events.eventKey, eventKey))
+        .for("update");
+      if (!locked) throw new NotFoundError("event");
+      return commitLockedUpdate(tx, actor, eventKey, locked, mergePatchInput(locked, patch));
+    });
+  // Committed: same retirement point as updateEvent, only after success.
+  retireAnonEventCaches();
+  retireApiPublicEventCache();
+  await retireHomeGuestCache();
+  return result;
+}
+
+async function commitLockedUpdate(
+  tx: Writer,
+  actor: Actor,
+  eventKey: string,
+  locked: EventRow,
+  input: EventFormInput,
+): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
+  if (input.capacity !== null) {
+    const occupied = await goingCount(tx, locked.id);
+    if (input.capacity < occupied) {
+      throw new ValidationError({
+        capacity: `${CAPACITY_BELOW_GOING} Occupied seats: ${occupied}.`,
+      });
+    }
+  }
+  // A published row must keep a non-blank location (bot upsert contract):
+  // drafts may stay blank, but an edit that would leave a published event
+  // without one is refused under the same row lock, so no route can bypass it.
+  if (toEventStatus(locked.status) === "published" && isBlankLocation(input.location)) {
+    throw new ValidationError({ location: LOCATION_REQUIRED });
+  }
+  // Closed field list: the key is addressed by, never written through,
+  // this update (EventFormInput carries no key; forged keys never parse).
+  const [row] = await tx
+    .update(events)
+    .set({
+      title: input.title,
+      game: input.game,
+      description: input.description,
+      accessibilityNotes: input.accessibilityNotes,
+      startsAt: input.startsAtUtc,
+      endsAt: input.endsAtUtc,
+      timezone: input.timezone,
+      location: input.location,
+      organizer_name: input.organizer_name ?? null,
+      join_url: input.join_url ?? null,
+      join_instructions: input.join_instructions ?? null,
+      capacity: input.capacity,
+      // A moderator edit must invalidate an agent's full-field stale write.
+      agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
+      updatedAt: new Date(),
+    })
+    .where(eq(events.eventKey, eventKey))
+    .returning();
+  if (!row) throw new Error("event update returned no row");
+  await promoteWaitlist(tx, row);
+  const changes = dirty(
+    locked as Record<string, unknown>,
+    row as unknown as Record<string, unknown>,
+  );
+  if (Object.keys(changes).length > 0) {
+    await tx.insert(activityLog).values({
+      logName: "default",
+      description: `updated event ${row.title}`,
+      subjectType: "Event",
+      subjectId: row.eventKey,
+      causerId: actor.id,
+      properties: changes,
+    });
+  }
+  const childWriteBacks = row.recurrenceFrequency
+    ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
+    : [];
+  const status = toEventStatus(row.status);
+  return {
+    row,
+    writeBack: isMirrored(status) ? { eventKey: row.eventKey, status } : null,
+    childWriteBacks,
+  };
 }
 
 /**
@@ -280,14 +496,24 @@ async function shiftFutureChildren(
   oldStartsAt: Date,
   oldEndsAt: Date,
 ): Promise<NonNullable<WriteBack>[]> {
-  const startDelta = parent.startsAt.getTime() - oldStartsAt.getTime();
-  const endDelta = parent.endsAt.getTime() - oldEndsAt.getTime();
+  // Repairing a nonfinite parent time supplies no old instant to shift from.
+  // Preserve that child column, while still applying any finite peer delta.
+  const startDelta = Number.isFinite(oldStartsAt.getTime())
+    ? parent.startsAt.getTime() - oldStartsAt.getTime()
+    : 0;
+  const endDelta = Number.isFinite(oldEndsAt.getTime())
+    ? parent.endsAt.getTime() - oldEndsAt.getTime()
+    : 0;
   if (startDelta === 0 && endDelta === 0) return [];
-  const children = await tx
+  const lockedChildren = await tx
     .select()
     .from(events)
     .where(and(eq(events.parentEventId, parent.id), gt(events.startsAt, new Date())))
     .for("update");
+  // The query's cutoff predates any lock wait. Judge eligibility once after
+  // all child locks are held, for both validation and every reschedule effect.
+  const now = Date.now();
+  const children = lockedChildren.filter((child) => child.startsAt.getTime() > now);
   // A parent delta must never invert (or zero) a future occurrence the
   // moderator shortened individually: refuse the whole edit with the existing
   // ends_at response before any child write, so the surrounding transaction
@@ -296,7 +522,9 @@ async function shiftFutureChildren(
     const proposedStart = child.startsAt.getTime() + startDelta;
     const proposedEnd = child.endsAt.getTime() + endDelta;
     if (proposedEnd <= proposedStart) {
-      throw new ValidationError({ ends_at: "The end is after the start." });
+      throw new ValidationError({
+        ends_at: `The end is after the start. Blocking occurrence: ${child.eventKey}.`,
+      });
     }
   }
   const owed: NonNullable<WriteBack>[] = [];
@@ -345,6 +573,7 @@ export async function transitionEvent(
   to: "published" | "cancelled",
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     // Share the ingress/RSVP row lock: judge the transition only after an
     // earlier writer commits, so publication cannot resurrect cancellation.
     const [locked] = await tx
@@ -392,6 +621,7 @@ export async function transitionEvent(
   });
   // Committed: publish/cancel moves the row between guest views (N6).
   retireAnonEventCaches();
+  retireApiPublicEventCache();
   await retireHomeGuestCache();
   return result;
 }
@@ -405,6 +635,7 @@ export async function setRsvpOpen(
   clock: () => Date = () => new Date(),
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
     // Share the RSVP writer's event lock. Check the clock after acquiring it,
     // so a wait that crosses the end cannot reopen an expired event.
     const [locked] = await tx
@@ -418,7 +649,14 @@ export async function setRsvpOpen(
     if (open && !locked.rsvpOpen && locked.status === "published")
       await lockWaitlist(tx, locked.id);
     const now = clock();
-    if (locked.status !== "published" || locked.endsAt <= now) {
+    // An unrenderable end (Invalid Date) is not a live event: every
+    // comparison with it is false, so without the finite check the writer
+    // would accept a pause/reopen the inventory refuses to offer.
+    if (
+      locked.status !== "published" ||
+      !Number.isFinite(locked.endsAt.getTime()) ||
+      locked.endsAt <= now
+    ) {
       throw new ValidationError({
         rsvp_open: "Only published events that have not ended can pause or reopen RSVPs.",
       });

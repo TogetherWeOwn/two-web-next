@@ -2,20 +2,21 @@
 // Normalized query + result count only: no user id, session, IP or raw input.
 // Fail-open: a down table degrades to an unrecorded search, never a broken page.
 import { count, desc, eq, max, asc, sql } from "drizzle-orm";
+import { exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import { eventSearchLogs } from "../db/admin-schema";
+import { isDatabaseUnavailable } from "../db/errors";
 import { nonSensitiveRead } from "../member-reads";
+import { safeRequestId } from "../request-log";
 
 export const MAX_QUERY_LENGTH = 255;
 
 /** NUL is rejected by PostgreSQL text parameters; drop it before matching or logging. */
 const stripNul = (raw: string | null | undefined): string => (raw ?? "").replace(/\u0000/g, "");
 
-/** Matching input: trimmed original text (no collapse/lowercase, as legacy). null = blank = not a search. */
-export function matchQuery(raw: string | null | undefined): string | null {
-  const t = stripNul(raw).trim();
-  return t === "" ? null : t;
-}
+// Keep existing read/model imports on the same matching authority; renderers
+// import the pure module directly so static leaves stay database-free.
+export { matchQuery } from "./search-query";
 
 /** Analytics form: collapse whitespace runs, lowercase, cap at 255 chars. null = blank. */
 export function normalizeQuery(raw: string | null | undefined): string | null {
@@ -29,19 +30,23 @@ export const LOG_WRITE_DEADLINE_MS = 500;
 /** DB-side cap, shorter than the response deadline, so a blocked INSERT is cancelled server-side rather than left queued. */
 export const LOG_DB_TIMEOUT_MS = 400;
 
-/** Never throws, never waits past the deadline. Logs the error class only (a driver message can carry the DSN). */
+/** Never throws, never waits past the deadline. Logs the error class only (a driver message can carry the DSN), plus the validated request_id so the line joins to `http.request`. */
 export async function recordSearch(
   db: Db,
   raw: string | null | undefined,
   resultCount: number,
   deadlineMs = LOG_WRITE_DEADLINE_MS,
+  requestId?: string | null,
 ): Promise<void> {
   const normalized = normalizeQuery(raw);
   if (normalized === null) return;
-  const warn = (exception: string) =>
+  const warn = (exception: string) => {
+    const validated = safeRequestId(requestId);
     console.warn("Event search unavailable for logging; serving results without recording.", {
       exception,
+      ...(validated !== undefined ? { request_id: validated } : {}),
     });
+  };
   let timer: ReturnType<typeof setTimeout> | undefined;
   const write = (async () => {
     try {
@@ -80,8 +85,9 @@ export const LOG_READ_DEADLINE_MS = 1500;
 
 /**
  * Content-gap read: zero-result queries by miss count, ties alphabetical.
- * Optional analytics: never throws, never waits past the deadline — a blocked
- * or failed read resolves undefined so the dashboard omits the widget.
+ * Optional analytics: never waits past the deadline. A blocked or ordinarily
+ * failed read resolves undefined so the dashboard omits the widget; classified
+ * DB outages propagate to the dashboard's shared 503 boundary.
  * The SELECT runs in a transaction with DB-side lock/statement timeouts so
  * Postgres cancels a lock-blocked read server-side (a client-side race alone
  * would leave the SELECT holding a connection).
@@ -120,7 +126,14 @@ export async function topZeroResultSearches(
           lastSearchedAt: r.lastSearchedAt!,
         }));
       });
-    } catch {
+    } catch (err) {
+      if (isDatabaseUnavailable(err)) throw err;
+      // Ordinary failure only: classified outages propagate silently to the
+      // dashboard's shared 503 boundary, and the deadline below omits silently.
+      // Class-only: a driver message can carry the DSN.
+      console.warn("Event search unavailable for content-gap read; omitting the widget.", {
+        exception: exceptionClass(err),
+      });
       return undefined;
     }
   })();

@@ -2,6 +2,7 @@
 // Routing/cookie APIs: https://playwright.dev/docs/network
 // https://playwright.dev/docs/api/class-browsercontext#browser-context-add-cookies
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { createServer } from "node:https";
 import { execFileSync } from "node:child_process";
 import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
@@ -11,6 +12,10 @@ import { pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
+import {
+  AUTH_EVIDENCE_SCHEMA_VERSION,
+  SESSION_RECOVERY_CHECK_IDS,
+} from "./auth-evidence-schema.mjs";
 
 const directory = await mkdtemp(join(tmpdir(), "auth-browser-"));
 const originalFetch = globalThis.fetch;
@@ -158,6 +163,15 @@ try {
       },
     ]);
     return result;
+  }
+  // Profile/admin page views rotate the bearer: after a navigation the jar
+  // holds the successor, not the login-time token. Expire/revoke the current
+  // bearer so the test targets the live session.
+  async function currentTokenHash() {
+    const jar = (await context.cookies()).find((c) => c.name === "__Host-two_session");
+    assert.ok(jar, "expected a session cookie in the jar");
+    const raw = decodeURIComponent(jar.value).split(".")[0];
+    return createHash("sha256").update(raw).digest("hex");
   }
   const a = await context.newPage();
   const b = await context.newPage();
@@ -542,7 +556,7 @@ try {
   console.log("PASS two-tab logout synchronization to guest render");
 
   // A failed expired save preserves all three draft fields; no automatic/double retry.
-  const expired = await login();
+  await login();
   const profileResponse = await a.goto(url("/profile?edit=1"));
   assert.equal(profileResponse.status(), 200);
   assert.equal(a.url(), url("/profile?edit=1"), await a.locator("body").innerText());
@@ -550,8 +564,9 @@ try {
   await a.getByRole("textbox", { name: /^Bio\b/ }).fill("Unsaved draft");
   await a.getByRole("textbox", { name: /^Games\b/ }).fill("Go\nChess");
   await a.getByLabel("Timezone", { exact: true }).fill("UTC");
-  const row = await f.sessions.get(expired.tokenHash);
-  await f.sessions.create({ ...row, tokenHash: expired.tokenHash, expiresAt: new Date(0) });
+  const liveHash = await currentTokenHash();
+  const row = await f.sessions.get(liveHash);
+  await f.sessions.create({ ...row, tokenHash: liveHash, expiresAt: new Date(0) });
   const beforePatch = patchCalls;
   await a.getByRole("button", { name: "Save", exact: true }).click();
   const notice = a.getByTestId("profile-session-expired");
@@ -588,8 +603,11 @@ try {
   await a.keyboard.press("Enter");
   await a.getByRole("link", { name: "Complete mocked authorization" }).click();
   await a.waitForURL(url("/profile?edit=1"));
-  await a.getByTestId("auth-error").waitFor();
-  assert.equal(await a.getByTestId("auth-error").getAttribute("role"), "status");
+  // The profile save is a JSON fetch, so its bounce arms no pending notice
+  // (only a genuine form-POST bounce does): the return shows no banner, and
+  // never a recovery link back to the expired-session landing.
+  assert.equal(await a.getByTestId("auth-error").count(), 0);
+  assert.equal(await a.locator('a[href*="/auth/recover"]').count(), 0);
   await a.screenshot({ path: "artifacts/session-recovery/post-login-banner.png", fullPage: true });
   assert.equal(await a.getByRole("textbox", { name: /^Bio\b/ }).inputValue(), "Accepted bio");
   await a.reload();
@@ -600,10 +618,10 @@ try {
   );
 
   // Revoked profile tab vetoes a background navigation and keeps its draft reachable.
-  const revoked = await login();
+  await login();
   await b.goto(url("/profile"));
   await b.getByRole("textbox", { name: /^Bio\b/ }).fill("Revoked-tab draft");
-  await f.sessions.revoke(revoked.tokenHash);
+  await f.sessions.revoke(await currentTokenHash());
   await b.bringToFront();
   await b.evaluate(() => {
     window.dispatchEvent(new Event("focus"));
@@ -637,24 +655,32 @@ try {
   console.log("PASS bounded cross-tab storage fallback with draft-preserving expiry");
   assert.deepEqual(errors, []);
   assert.deepEqual(forbidden, []);
+  assert.equal(
+    SESSION_RECOVERY_CHECK_IDS.length,
+    10,
+    "auth-evidence schema changed arity: record each new check ID after its assertion",
+  );
   await writeFile(
     "artifacts/session-recovery/result.json",
     JSON.stringify(
       {
         result: "PASS",
+        schemaVersion: AUTH_EVIDENCE_SCHEMA_VERSION,
         runtime: "local HTTPS loopback",
         outbound: "mocked OAuth; external redirects blocked",
+        // Each ID below is recorded only because every assertion above
+        // passed; never copy the whole array.
         checks: [
-          "non-authoritative errors",
-          "rotation-cookie race",
-          "refused/network logout draft retention and accessible retry at 360/1280",
-          "hung logout deadline, duplicate activation, early confirmation, late success and late refusal under fake clocks",
-          "no duplicate logout or failure notification to other tabs",
-          "successful editor logout retry and broadcast logout",
-          "expired draft and explicit reset",
-          "keyboard recovery and one-shot banner",
-          "focus/visibility revocation",
-          "storage fallback",
+          SESSION_RECOVERY_CHECK_IDS[0],
+          SESSION_RECOVERY_CHECK_IDS[1],
+          SESSION_RECOVERY_CHECK_IDS[2],
+          SESSION_RECOVERY_CHECK_IDS[3],
+          SESSION_RECOVERY_CHECK_IDS[4],
+          SESSION_RECOVERY_CHECK_IDS[5],
+          SESSION_RECOVERY_CHECK_IDS[6],
+          SESSION_RECOVERY_CHECK_IDS[7],
+          SESSION_RECOVERY_CHECK_IDS[8],
+          SESSION_RECOVERY_CHECK_IDS[9],
         ],
         unauthorizedWrites: f.state.writes,
       },

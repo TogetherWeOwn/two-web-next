@@ -57,8 +57,12 @@ export async function readCappedBody(
     // Race once, so even many small chunks share one budget. Promise.race
     // also consumes a late read rejection after the deadline has won.
     return await Promise.race([read, deadline]);
-  } catch {
-    return empty();
+  } catch (err) {
+    // A read that throws before the deadline wins is a real body-read
+    // failure, not an empty body: rethrow so the route's sink_failed
+    // accounting sees it instead of the quiet-heartbeat path. The `finally`
+    // below still cancels and releases the reader first.
+    throw err;
   } finally {
     stopped = true;
     clearTimeout(timer);

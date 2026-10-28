@@ -67,6 +67,12 @@ export type SyncAttempt = {
   /** Null while a claim's result is unsettled, or after retirement/exhaustion. */
   nextAttemptAt: Date | null;
   /**
+   * Terminal-intent marker: the redacted definitive reason, recorded while
+   * state stays pending so redelivery re-runs settlement without the bot
+   * flow. Null until a definitive outcome is noted; absent on older rows.
+   */
+  terminalReason?: string | null;
+  /**
    * Current `events.discord_event_id` at snapshot/claim time. Null means the
    * event was never mirrored to Discord; undefined is a pre-mirror snapshot
    * (hermetic doubles) and is treated as mirrored to preserve the bot path.
@@ -76,6 +82,13 @@ export type SyncAttempt = {
   | { action: "event.upsert"; payload: EventUpsert }
   | { action: "event.cancel"; payload: { eventKey: string } }
 );
+
+/**
+ * One bounded page of the reconcile stale set: `keys` holds at most the
+ * requested page size in ascending `event_key` order, and `deferred` counts
+ * how many matched stale keys were left for later passes.
+ */
+export type StaleEventKeysPage = { keys: string[]; deferred: number };
 
 export interface EventStore {
   /** Snapshot at first attempt, not dispatch. Retries return the persisted request. */
@@ -95,6 +108,12 @@ export interface EventStore {
   deferSync(attempt: SyncAttempt, nextAttemptAt: Date | null): Promise<void>;
   /** Settle only a definitive refusal. */
   failSync(idempotencyKey: string): Promise<void>;
+  /**
+   * Record terminal intent for a definitive refusal without settling it:
+   * first-writer-wins marker while the attempt stays pending. Optional so
+   * older doubles keep compiling; the consumer skips noting when absent.
+   */
+  noteTerminalIntent?(idempotencyKey: string, reason: string): Promise<void>;
   needsSync(eventKey: string): Promise<boolean>;
   /** Recovery preserves request identity, eligibility and attempts across carriers. */
   pendingSync(eventKey: string): Promise<SyncAttempt | null>;
@@ -110,8 +129,26 @@ export interface EventStore {
   closeFinished(now: Date): Promise<number>;
   /** Top up every live series (draft/published parent). Returns rows created; idempotent. */
   materializeSeries(): Promise<number>;
-  /** Initiating-eligible dirty revisions and attempted pending recovery candidates. */
-  staleEventKeys(): Promise<string[]>;
+  /**
+   * Initiating-eligible dirty revisions and attempted pending recovery
+   * candidates. A dirty revision parked behind a permanently undispatchable
+   * pending request (retry budget spent, or a null deadline that never becomes
+   * due) is not stale: the reconcile loop always skips it, so it must not
+   * consume page slots ahead of dispatchable keys. Not-yet-due retries stay
+   * stale when `dueBefore` is omitted; the loop then owns the exact due check.
+   * A supplied `dueBefore` applies that boundary in the selection, before
+   * `ORDER BY` / `LIMIT`, using only that instant: recovery requires
+   * `next_attempt_at <= dueBefore`, and any pending request still sleeping
+   * then also blocks the dirty branch. With a cutoff, `deferred` counts only
+   * due-eligible matches that were not returned. Called with a positive limit,
+   * resolves one deterministic page: at most `limit` keys in ascending
+   * `event_key` order plus how many matched keys were NOT returned (`deferred`
+   * is 0 exactly when the page drained the backlog). Called without a limit,
+   * resolves every stale key as an ascending ordered array (legacy shape
+   * retained for existing single-key-era callers). Deferred keys stay stale
+   * for the next pass: nothing marks, skips or reorders them.
+   */
+  staleEventKeys(limit?: number, dueBefore?: Date): Promise<string[] | StaleEventKeysPage>;
 }
 
 /**
@@ -125,17 +162,22 @@ export interface EventStore {
  */
 export type TxClient = (strings: TemplateStringsArray, ...values: any[]) => Promise<any>;
 
+/** Run a whole drain on one isolated client; a rejection rolls back all its batches. */
+export interface PruneIsolation {
+  isolate?<T>(work: (prune: (at: Date) => Promise<number>) => Promise<T>): Promise<T>;
+}
+
 /** One age-pruned table (Laravel MassPrunable): mass delete older than cutoff, returns rows removed. */
-export interface AgePrunedTable {
+export interface AgePrunedTable extends PruneIsolation {
   pruneOlderThan(cutoff: Date): Promise<number>;
 }
 
 /** web_sessions expiry sweep: delete rows reads can no longer see (expires_at <= now). */
-export interface SessionSweeper {
+export interface SessionSweeper extends PruneIsolation {
   sweepExpired(now: Date): Promise<number>;
 }
 
-/** Tables owned by the daily model:prune pass (audit logs, legacy prunes, and web_sessions GC). */
+/** Tables owned by the daily model:prune pass (audit logs, legacy prunes, web_sessions GC, and job_unique_locks expiry sweep). */
 export interface PruneStores {
   agentEventAudits: AgePrunedTable;
   accessLog: AgePrunedTable;
@@ -144,6 +186,10 @@ export interface PruneStores {
   searchLog: AgePrunedTable;
   boardViews: AgePrunedTable;
   sessions: SessionSweeper;
+  // Optional so stores built before the lock sweep (older stubs) still run:
+  // pruneModelTables drains nothing for a missing sweeper instead of throwing.
+  // Production always passes pgPruneStores().jobUniqueLocks.
+  jobUniqueLocks?: SessionSweeper;
 }
 
 /** ShouldBeUnique: acquire returns an ownership token, or null while a holder's lock is live. */

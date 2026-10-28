@@ -58,6 +58,7 @@ function publicEvent(over: Partial<PublicEvent> = {}): PublicEvent {
     goingCount: 1,
     syncRevision: 1,
     syncedRevision: 0,
+    goingOccupancy: 1,
     ...over,
   };
 }
@@ -188,7 +189,7 @@ describe("admin pause/cancel controls expose their names on native buttons", () 
         errors: {},
       }),
     );
-    expect(html).toContain('<button type="submit" class="link" data-testid="rsvp-pause">');
+    expect(html).toContain('<button type="submit" class="btn" data-testid="rsvp-pause">');
     expect(html).toContain(">Pause RSVPs</button>");
     expect(html).toContain('<button type="submit" class="link" data-testid="cancel-event">');
     expect(html).toContain(">Cancel event</button>");

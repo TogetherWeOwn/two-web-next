@@ -9,10 +9,16 @@
 // several readers are wired). The bridge never rotates, revokes, or issues
 // a session; the one cookie this module writes is the signed auth-status
 // probe below, attached by the hook only to successful moderator admin
-// documents. Rotation stays route-specific inside Hono's readSession
-// (no blanket rotating layout load; fragments and JSON keep nonrotating
-// reads), logout stays the authoritative Hono POST /logout, and flashes stay
-// Hono-consumed until a Kit route needs to consume them.
+// responses or audited full member documents. Renewal stays route-specific:
+// Hono's readSession rotates its page views (no blanket rotating layout load;
+// fragments and JSON keep nonrotating reads), the Kit event detail renews
+// through kitEventDetailRotationFor, and Kit admin reads rotate through
+// kitAdminRenewalFor, which the hook core calls only after the
+// member-read boundary releases a successful GET. Logout stays the
+// authoritative Hono POST /logout. This module only peeks flashes. Profile
+// destinations expire the join flash in the hook core after a released
+// successful HTML GET; that deletion does not run here and does not issue
+// or rotate a session.
 //
 // Decision contract: "authenticated" (live row, bits from the row),
 // "guest" (missing/tampered cookie, non-two_ token, unknown/expired/revoked
@@ -22,9 +28,11 @@
 // accepted here: it proves liveness only and is not a login token.
 import { generateSignedCookie } from "hono/cookie";
 import { parseSigned } from "hono/utils/cookie";
+import { exceptionClass } from "./alerts";
 import { AUTH_STATUS_COOKIE } from "./auth-status";
 import type { Env } from "./env";
 import { storeForEnv } from "./index";
+import type { KitEventsSession } from "./kit-events";
 import { safeNext } from "./join/service";
 import {
   JOIN_RESULT_COOKIE,
@@ -34,7 +42,13 @@ import {
 } from "./return-journey";
 import type { HookEventLike } from "./route-ownership";
 import { SESSION_COOKIE } from "./session-cookie";
-import { hashToken, isValidSessionToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
+import {
+  hashToken,
+  isValidSessionToken,
+  newSessionToken,
+  SESSION_TTL_SECONDS,
+  type SessionStore,
+} from "./sessions";
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 
 export type KitSession = {
@@ -99,10 +113,12 @@ export async function resolveRequestSession(
   let row;
   try {
     row = await deps.store.get(await hashToken(raw));
-  } catch {
+  } catch (err) {
     // Fail closed to "unknown", never to a false logout: callers render the
     // session state as indeterminate (like Hono's sessionUnavailable guest
     // fallback) instead of telling a member they are logged out.
+    // One class-only warn (no Hono context here); callers must not re-warn it.
+    console.warn("kit session store unavailable", { exception: exceptionClass(err) });
     return UNKNOWN;
   }
   if (!row) return GUEST;
@@ -154,9 +170,12 @@ function expiredWriteOf(value: string | false | undefined): string | null {
 /**
  * Kit-visible return state, read-only: the safe destination the OAuth
  * callback would honor, the one-shot join flash, and the pending
- * expired-write notice. Consumption (cookie deletion) stays Hono-side, so a
- * Kit read can never double-spend a flash. HEAD/POST reads leave the join
- * flash pending, matching Hono's GET-only readJoinResult.
+ * expired-write notice. This peek never deletes. A profile destination
+ * expires a valid flash only after the member-read boundary releases a
+ * successful HTML GET; every other Kit read still leaves consumption to the
+ * route that renders the banner. HEAD/POST reads leave the join flash
+ * pending, matching Hono's GET-only readJoinResult, so a peek cannot
+ * double-spend it.
  */
 export async function readReturnJourney(
   request: Request,
@@ -195,10 +214,9 @@ export async function readReturnJourney(
  * the list load needs: an outage resolves to null (guest render with no
  * drafts), never to a false logout, and nothing here rotates or revokes.
  */
-export function kitEventsSessionFor(env: Env): (request: Request) => Promise<{
-  member: boolean;
-  moderator: boolean;
-} | null> {
+export function kitEventsSessionFor(
+  env: Env,
+): (request: Request) => Promise<KitEventsSession | null> {
   return async (request) => {
     try {
       const decision = await resolveRequestSession(request, {
@@ -206,9 +224,17 @@ export function kitEventsSessionFor(env: Env): (request: Request) => Promise<{
         store: await storeForEnv(env),
       });
       return decision.status === "authenticated" && decision.session
-        ? { member: decision.session.member, moderator: decision.session.moderator }
+        ? {
+            username: decision.session.username,
+            member: decision.session.member,
+            moderator: decision.session.moderator,
+          }
         : null;
-    } catch {
+    } catch (err) {
+      // The store never materialized, so no read ran: one class-only warn.
+      // A store.get failure warns inside resolveRequestSession and resolves
+      // to UNKNOWN (null here), so this catch never double-warns it.
+      console.warn("kit events session store unavailable", { exception: exceptionClass(err) });
       return null;
     }
   };
@@ -234,13 +260,139 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
             sessionSecret: env.SESSION_SECRET,
             store: await storeForEnv(env),
           });
-        } catch {
+        } catch (err) {
+          // The store never materialized, so no read ran: one class-only
+          // warn, UNKNOWN with the journey kept. A store.get failure warns
+          // inside resolveRequestSession and resolves to UNKNOWN, so this
+          // catch never double-warns it.
+          console.warn("kit session bridge store unavailable", {
+            exception: exceptionClass(err),
+          });
           return UNKNOWN;
         }
       })(),
       readReturnJourney(event.request, env.SESSION_SECRET),
     ]);
     return { ...session, ...journey };
+  };
+}
+
+/**
+ * Sliding renewal for the native Kit event detail (src/events/kit-detail.ts):
+ * the post-release twin of Hono's readSession rotation. The hook core calls
+ * this only after the member-read boundary releases a successful GET, so a
+ * refused, failed, throttled or redirected read never burns the presented
+ * bearer — the delivered response cannot strand a session it never issued.
+ *
+ * The rotation itself follows the shared Hono contract: re-verify the signed
+ * bearer (locals are never trusted alone), mint a fresh token, atomically
+ * replace the live row with the full 120-minute re-stamp, and sign the
+ * replacement with the same cookie attributes Hono sets (Path=/, Secure,
+ * HttpOnly, SameSite=Lax, Max-Age from SESSION_TTL_SECONDS). A lost race
+ * (rotate resolves false
+ * for a concurrently retired source) returns null like any other expected
+ * non-rotation; only a store failure propagates, and the hook core renders
+ * the released page without renewal then (fail-open: rotate is one atomic
+ * statement, so a throw leaves the old row live and the next read retries).
+ * Anonymous callers get null with zero store writes.
+ */
+export function kitEventDetailRotationFor(
+  env: Env,
+): (event: HookEventLike) => Promise<string | null> {
+  return async (event) => {
+    const locals = event.locals as Partial<KitLocals> | undefined;
+    const bits = locals?.status === "authenticated" ? locals.session : null;
+    if (!bits || !env.SESSION_SECRET) return null;
+    // verifiedCookies never throws (a malformed header resolves to no
+    // cookies); an unverifiable bearer simply does not rotate.
+    const cookies = await verifiedCookies(event.request, env.SESSION_SECRET);
+    const raw = cookies?.[SESSION_COOKIE];
+    if (!isValidSessionToken(raw)) return null;
+    const store = await storeForEnv(env);
+    const replacement = newSessionToken();
+    const rotated = await store.rotate(await hashToken(raw), {
+      tokenHash: await hashToken(replacement),
+      userId: bits.userId,
+      username: bits.username,
+      avatar: bits.avatar,
+      member: bits.member,
+      moderator: bits.moderator,
+      expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+    });
+    if (!rotated) return null;
+    // Inline options, like Hono's setSignedCookie calls: the pinned-lifetime
+    // guard (test/privacy-policy-numbers.test.ts) reads maxAge from the call.
+    return generateSignedCookie(SESSION_COOKIE, replacement, env.SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+      maxAge: SESSION_TTL_SECONDS,
+    });
+  };
+}
+
+/**
+ * Rotating renewal for Kit-served admin reads: the post-release twin of Hono's
+ * admin-guard re-stamp (src/admin/guard.ts: a current bearer mints a fresh
+ * token with a fresh 120-minute window, grace reads never refresh cookies).
+ * The hook core calls this only after the member-read boundary releases a
+ * successful GET document, so a refused, failed, bounced or redirected read
+ * never burns the presented bearer.
+ *
+ * Rotate, not slide: re-verify the signed bearer (locals are never trusted
+ * alone), gate on a current bearer (statusHash present) so grace/predecessor
+ * reads return null without a store write, re-read the live row and re-gate
+ * on its moderator bit, mint a fresh token, atomically replace the row with
+ * the row's own identity bits, and sign the
+ * REPLACEMENT, never the presented token. Rotation preserves the lineage
+ * key and created_at (src/sessions.ts), so the 24h absolute cap is
+ * unaffected. A lost race (rotate resolves false) returns null like any
+ * other expected non-rotation; only a store failure propagates, and the
+ * hook core renders the released page without renewal then (rotate is one
+ * atomic statement, so a throw leaves the old row live as current).
+ * Non-moderators and anonymous callers get null with zero store writes.
+ */
+export function kitAdminRenewalFor(env: Env): (event: HookEventLike) => Promise<string | null> {
+  return async (event) => {
+    const locals = event.locals as Partial<KitLocals> | undefined;
+    const bits = locals?.status === "authenticated" ? locals.session : null;
+    if (!bits?.moderator || !env.SESSION_SECRET) return null;
+    // verifiedCookies never throws (a malformed header resolves to no
+    // cookies); an unverifiable bearer simply does not renew.
+    const cookies = await verifiedCookies(event.request, env.SESSION_SECRET);
+    const raw = cookies?.[SESSION_COOKIE];
+    if (!isValidSessionToken(raw)) return null;
+    const store = await storeForEnv(env);
+    const tokenHash = await hashToken(raw);
+    // Only a current bearer rotates: grace reads never refresh cookies (Hono
+    // gates on statusHash first). A null key returns before any rotate call.
+    if (!(await store.statusHash(tokenHash))) return null;
+    // The live row, not locals, authorizes the successor: a load between the
+    // bridge read and this post-release call could have mutated locals, so
+    // re-read the row, re-gate on its moderator bit, and carry its bits.
+    const row = await store.get(tokenHash);
+    if (!row?.moderator) return null;
+    const replacement = newSessionToken();
+    const rotated = await store.rotate(tokenHash, {
+      tokenHash: await hashToken(replacement),
+      userId: row.userId,
+      username: row.username,
+      avatar: row.avatar,
+      member: row.member,
+      moderator: row.moderator,
+      expiresAt: new Date(Date.now() + SESSION_TTL_SECONDS * 1000),
+    });
+    if (!rotated) return null;
+    // Inline options, like Hono's setSignedCookie calls: the pinned-lifetime
+    // guard (test/privacy-policy-numbers.test.ts) reads maxAge from the call.
+    return generateSignedCookie(SESSION_COOKIE, replacement, env.SESSION_SECRET, {
+      path: "/",
+      secure: true,
+      httpOnly: true,
+      sameSite: "Lax",
+      maxAge: SESSION_TTL_SECONDS,
+    });
   };
 }
 
@@ -252,15 +404,18 @@ const AUTH_STATUS_OPTIONS = {
   maxAge: SESSION_TTL_SECONDS,
 };
 
-/** Signs the read-only probe only for a successful moderator admin document. */
-export function kitAuthStatusCookieFor(env: Env): (event: HookEventLike) => Promise<string | null> {
-  return async (event) => {
+/** The hook alone supplies the proof of an audited, full member document. */
+export function kitAuthStatusCookieFor(
+  env: Env,
+): (event: HookEventLike, releasedMemberDocument?: boolean) => Promise<string | null> {
+  return async (event, releasedMemberDocument = false) => {
     const locals = event.locals as Partial<KitLocals> | undefined;
+    const admin = /^\/admin(?:\/|$)/.test(event.url.pathname) && locals?.session?.moderator;
+    const member = releasedMemberDocument && locals?.session?.member === true;
     if (
       event.request.method !== "GET" ||
-      !/^\/admin(?:\/|$)/.test(event.url.pathname) ||
       locals?.status !== "authenticated" ||
-      !locals.session?.moderator ||
+      (!admin && !member) ||
       !env.SESSION_SECRET
     )
       return null;

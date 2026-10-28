@@ -8,6 +8,7 @@ import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { getEventNeighbors, listRelatedEvents, type EventLink } from "../src/events/reads";
+import { fmt } from "../src/events/pages-shared";
 import {
   createMemorySessionStore,
   hashToken,
@@ -58,8 +59,11 @@ const linkValues = (e: EventLink) => [
   e.eventKey,
   e.title,
   e.startsAt.toISOString(),
+  e.endsAt.toISOString(),
   e.timezone,
   e.location,
+  e.game,
+  e.rsvpOpen,
 ];
 
 function pageFixture(
@@ -137,6 +141,14 @@ async function cookie(
 const relatedKeys = (html: string) =>
   [...html.matchAll(/href="\/e\/([^"]+)" data-testid="event-related-link"/g)].map((m) => m[1]);
 
+const cancelledAlternativesSection = (html: string): string => {
+  const match = html.match(
+    /<ul[^>]*data-testid="event-cancelled-alternatives"[^>]*>[\s\S]*?<\/ul>/,
+  );
+  if (!match) throw new Error("expected the cancelled alternatives list in the 410 HTML");
+  return match[0];
+};
+
 describe("event navigation SQL and SSR (local fixtures)", () => {
   it("uses three bounded, published, not-ended reads, with id tiebreaks and no RSVP aggregates", async () => {
     const f = pageFixture();
@@ -193,7 +205,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(html).toContain(`href="/join?next=%2Fe%2F${key(2)}" data-testid="event-related-join"`);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("vary")).toBe("Cookie");
-    expect(f.queries).toHaveLength(5); // Event + going aggregate + 3 navigation reads.
+    expect(f.queries).toHaveLength(6); // Event + two going aggregates + 3 navigation reads.
   });
 
   it.each(["added", "already_member"])(
@@ -293,14 +305,20 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
       }
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(response.headers.get("vary")).toBe("Cookie");
-      expect(f.queries).toHaveLength(8); // Event/count, viewer answer/position, attendees and three navigation reads.
+      expect(f.queries).toHaveLength(9); // Event/count, viewer answer/position, attendees, two going aggregates and three navigation reads.
       const viewerAnswers = f.queries.filter((q) =>
         q.sql.includes('select "user_id", "status", "synced_to_discord_at"'),
       );
       expect(viewerAnswers).toHaveLength(1);
       expect(viewerAnswers[0]!.params).toContain("100000000000000001");
       expect(f.queries.filter((q) => q.sql.includes("row_number() over"))).toHaveLength(1);
-      expect(f.queries.filter((q) => q.sql.includes('inner join "users"'))).toHaveLength(1);
+      // Exactly one roster-shaped read (joins users, no group-by); the
+      // attributable going-count aggregate joins too and is pinned separately.
+      expect(
+        f.queries.filter(
+          (q) => q.sql.includes('inner join "users"') && !q.sql.includes("group by"),
+        ),
+      ).toHaveLength(1);
     },
   );
 
@@ -338,16 +356,58 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
   it("keeps draft authorization and cancelled 410 ahead of navigation reads", async () => {
     const draft = pageFixture(row(2, { status: "draft" }));
     expect((await draft.request()).status).toBe(403);
-    expect(draft.queries).toHaveLength(2);
+    expect(draft.queries).toHaveLength(3);
     const mod = await draft.request({ headers: { cookie: await cookie(draft.env, true) } });
     expect(mod.status).toBe(200);
     expect(mod.headers.get("cache-control")).toBe("private, no-store");
-    expect(draft.queries.slice(4)).toHaveLength(6); // Navigation, attendees, viewer answer and position.
+    expect(draft.queries.slice(6)).toHaveLength(6); // Navigation, attendees, viewer answer and position.
     const cancelled = pageFixture(row(2, { status: "cancelled" }));
     const gone = await cancelled.request();
     expect(gone.status).toBe(410);
-    expect(await gone.text()).not.toContain('data-testid="event-pagination"');
-    expect(cancelled.queries).toHaveLength(2);
+    const goneHtml = await gone.text();
+    expect(goneHtml).not.toContain('data-testid="event-pagination"');
+    // The gone page adds exactly one bounded related lookup for the
+    // alternatives list (Kit-mirrored siblings + ICS); neighbor navigation
+    // reads still never run here.
+    expect(cancelled.queries).toHaveLength(4);
+    for (const q of cancelled.queries) {
+      expect(q.sql).not.toMatch(/"starts_at" [<>]/);
+    }
+    const relatedQuery = cancelled.queries[3]!;
+    expect(relatedQuery.sql).toContain('"events"."status" =');
+    expect(relatedQuery.sql).toContain('"events"."ends_at" >=');
+    expect(goneHtml).toContain('data-testid="event-cancelled-alternatives"');
+    expect(goneHtml).toContain("Game night 3");
+    expect(goneHtml).toContain('data-testid="event-cancelled-ics"');
+  });
+
+  it("renders each cancelled alternative's own time and zone, never a null location", async () => {
+    const cancelledEvent = row(2, { status: "cancelled" });
+    // Distinct instants and zones from the cancelled event, so a card that
+    // rendered the cancelled event's own fmt(e.startsAt, e.timezone) fails
+    // here; one venue sibling and one location-less sibling pin both sides
+    // of the location conditional.
+    const venueSibling = row(3, {
+      startsAt: new Date("2030-02-01T19:00:00Z"),
+      timezone: "America/New_York",
+      location: "The lobby",
+    });
+    const rovingSibling = row(5, {
+      startsAt: new Date("2030-03-01T19:00:00Z"),
+      timezone: "Europe/London",
+      location: null,
+    });
+    const html = await (
+      await pageFixture(cancelledEvent, null, null, [venueSibling, rovingSibling]).request()
+    ).text();
+    const section = cancelledAlternativesSection(html);
+    expect(section).toContain(fmt(venueSibling.startsAt, venueSibling.timezone));
+    expect(section).toContain(fmt(rovingSibling.startsAt, rovingSibling.timezone));
+    expect(section).toContain(" · The lobby");
+    // Neither card may repeat the cancelled event's own instant, and the
+    // location-less card must omit the venue, not print a literal null.
+    expect(section).not.toContain(fmt(cancelledEvent.startsAt, cancelledEvent.timezone));
+    expect(section).not.toContain("null");
   });
 
   it("escapes titles and locations without turning related cards into markup", async () => {

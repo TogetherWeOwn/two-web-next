@@ -44,7 +44,12 @@ describe("Kit events-list page contract", () => {
   it("submits row actions to the Hono-owned mutation endpoints", () => {
     expect(source).toContain("/publish");
     expect(source).toContain("/cancel");
-    expect(source).toContain("rsvp-pause");
+    // Pause renders through pre-rendered server HTML ({@html}): the action
+    // and copy live in the load data, never as literals here (client gzip
+    // ceiling). Reopen stays an inlined one-click form.
+    expect(source).toContain("{@html pauseReviews[r.eventKey]");
+    expect(source).not.toMatch(/action=\{[^}]*rsvp-pause/);
+    expect(source).not.toMatch(/action="[^"]*rsvp-pause/);
     expect(source).toContain("rsvp-reopen");
     expect(source).not.toContain("on:click");
     expect(source).not.toContain("onclick");

@@ -9,6 +9,7 @@ import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
@@ -28,7 +29,7 @@ function requireDisposableDatabase(value) {
   if (!["postgres:", "postgresql:"].includes(url.protocol)) {
     throw new Error("Kit Worker fixture accepts only a Postgres URL");
   }
-  if (!["localhost", "127.0.0.1", "::1"].includes(url.hostname)) {
+  if (!isLoopbackHostname(url.hostname)) {
     throw new Error("Kit Worker fixture accepts only loopback Postgres hosts");
   }
 }
@@ -107,7 +108,7 @@ const configBody = {
     DISCORD_CLIENT_ID: "ci-fixture-client",
     DISCORD_CLIENT_SECRET: "ci-fixture-secret",
     DISCORD_BOT_TOKEN: "ci-fixture-token",
-    DISCORD_GUILD_ID: "ci-fixture-guild",
+    DISCORD_GUILD_ID: "326474832151838730",
     DISCORD_MODERATOR_ROLE_IDS: "",
     DISCORD_INVITE_URL: "https://example.invalid/invite",
     AGENT_EVENTS_ENABLED: "false",
@@ -238,7 +239,11 @@ try {
   });
   assert.equal(form.status, 403, "cross-origin form POST is refused");
   assert.match(form.headers.get("content-type") ?? "", /application\/json/);
-  assert.deepEqual(await form.json(), { error: "cross_origin" });
+  const formBody = await form.json();
+  assert.equal(formBody.error, "cross_origin");
+  assert.equal(typeof formBody.request_id, "string");
+  assert.ok(formBody.request_id.length > 0, "cross-origin refusal carries request_id");
+  assert.deepEqual(Object.keys(formBody).sort(), ["error", "request_id"]);
   assert.equal(form.headers.get("cache-control"), "no-store, private");
   assert.match(
     form.headers.get("content-security-policy") ?? "",

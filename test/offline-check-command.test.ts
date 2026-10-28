@@ -119,9 +119,9 @@ describe("fixture-only check command (stub children, no SQL/network)", () => {
     ["--", "--exclude", "test/review-p1-verify.test.ts"],
   ])("rejects extra arguments rather than exposing a skip facility: %j", (...args) => {
     const result = offline(args);
-    expect(result.status).toBe(1);
+    expect(result.status).toBe(2);
     expect(result.calls).toEqual([]);
-    expect(result.output).toContain("does not accept arguments");
+    expect(result.output).toMatch(/usage/i);
   });
 
   it.each(["lint", "typecheck", "config:check", "test", "--test", "test:cutover", "test:smoke"])(
@@ -155,7 +155,7 @@ describe("fixture-only check command (stub children, no SQL/network)", () => {
     const { scripts } = JSON.parse(readFileSync("package.json", "utf8"));
     expect(scripts["check:offline"]).toBe("node ci/offline-check.mjs");
     expect(scripts.check).toBe(
-      "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run docs:links && npm run test && node --test ci/a11y-*.test.mjs ci/visual-accept.test.mjs && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke && npm run e2e:safety",
+      "npm run lint && npm run typecheck && npm run e2e:typecheck && npm run config:check && npm run docs:links && npm run ledger:timeouts:selftest && npm run ledger:timeouts && npm run check:kit-payloads:selftest && npm run check:kit-payloads && npm run test && node --test ci/a11y-*.test.mjs ci/visual-accept.test.mjs && npm run test:cutover && npm run test:shadow && npm run budget:selftest && npm run budget && npm run gate:selftest && npm run test:smoke && npm run e2e:safety",
     );
     const runbook = readFileSync("docs/runbook.md", "utf8");
     expect(runbook).toContain("npm run check:offline");
