@@ -277,6 +277,29 @@ function withHostJoin(
   return { ...model, ...fields };
 }
 
+/** Decode the HTML entities SSR attribute/text escaping can produce (&amp; last). */
+function decodeHtml(value: string): string {
+  return value
+    .replace(/&#x([0-9a-fA-F]+);/g, (_match, hex: string) =>
+      String.fromCodePoint(Number.parseInt(hex, 16)),
+    )
+    .replace(/&#(\d+);/g, (_match, dec: string) => String.fromCodePoint(Number.parseInt(dec, 10)))
+    .replaceAll("&quot;", '"')
+    .replaceAll("&apos;", "'")
+    .replaceAll("&lt;", "<")
+    .replaceAll("&gt;", ">")
+    .replaceAll("&amp;", "&");
+}
+
+/** The complete joining destination a member would navigate to, HTML-decoded
+ * from the joining anchor's href; null when no joining anchor is rendered. */
+function joiningHref(html: string): string | null {
+  const anchor = html.match(/<a\b[^>]*data-testid="event-public-join-link"[^>]*>/);
+  if (!anchor) return null;
+  const href = anchor[0].match(/\bhref="([^"]*)"/);
+  return href ? decodeHtml(href[1]!) : null;
+}
+
 // svelte lives in the web workspace only; the root workspace never sees its
 // types, so the compiler is typed structurally.
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
@@ -445,7 +468,7 @@ describe("H4 host/join acceptance: Hono rendering contract", () => {
     expect(html).not.toContain('href="https://"');
     expect(html).toContain("Public joining link: https://");
     expect(html).toContain(longOrganizer);
-    expect(html).toContain(longInstructions.slice(0, 100));
+    expect(html).toContain(longInstructions);
   });
 
   it("attribute-escapes a hostile joining link", async () => {
@@ -457,6 +480,7 @@ describe("H4 host/join acceptance: Hono rendering contract", () => {
       }).request()
     ).text();
     expect(html).toContain('data-testid="event-public-join-link"');
+    expect(joiningHref(html)).toBe('https://meet.example.test/"onmouseover="alert(1)');
     expect(html).not.toContain('"onmouseover="');
   });
 });
@@ -594,7 +618,7 @@ describe("H4 host/join acceptance: Kit presentation legs (RED at base)", () => {
     expect(html).not.toContain('href="https://"');
     expect(html).toContain("Public joining link: https://");
     expect(html).toContain(longOrganizer);
-    expect(html).toContain(longInstructions.slice(0, 100));
+    expect(html).toContain(longInstructions);
   });
 
   it("attribute-escapes a hostile joining link", async () => {
@@ -605,6 +629,7 @@ describe("H4 host/join acceptance: Kit presentation legs (RED at base)", () => {
     });
     const html = renderDetail(model);
     expect(html).toContain('data-testid="event-public-join-link"');
+    expect(joiningHref(html)).toBe('https://meet.example.test/"onmouseover="alert(1)');
     expect(html).not.toContain('"onmouseover="');
   });
 });
@@ -668,23 +693,29 @@ describe("stored joining URL policy at both render boundaries", () => {
         join_instructions: JOIN_INSTRUCTIONS,
       }).request()
     ).text();
-    const kitHtml = renderDetail(
-      withHostJoin((await resolveOk({ join_url: joinUrl })) as unknown as Record<string, unknown>, {
-        organizerName: null,
-        joinUrl,
-        joinInstructions: JOIN_INSTRUCTIONS,
-      }),
-    );
+    // Render the resolver's actual returned model: fixture fields go to the
+    // real resolver and nothing replaces the joinUrl under test afterwards.
+    const kitModel = await resolveOk({
+      organizer_name: null,
+      join_url: joinUrl,
+      join_instructions: JOIN_INSTRUCTIONS,
+    });
+    // The resolver carries the stored value through verbatim; the render
+    // boundary, not the resolver, decides whether it may be linked.
+    expect((kitModel as ModelWithHostJoin).joinUrl).toBe(joinUrl);
+    const kitHtml = renderDetail(kitModel as unknown as Record<string, unknown>);
     for (const html of [honoHtml, kitHtml]) {
       expect(html).toContain('data-testid="event-join-details"');
       expect(html).toContain(JOIN_INSTRUCTIONS);
       if (clickable) {
         expect(html).toContain('data-testid="event-public-join-link"');
         expect(html).toContain("Open the public joining link");
+        expect(joiningHref(html)).toBe(joinUrl);
       } else {
         expect(html).not.toContain('data-testid="event-public-join-link"');
+        expect(joiningHref(html)).toBeNull();
         expect(html).not.toContain(`href="${joinUrl}"`);
-        expect(html).toContain("Public joining link:");
+        expect(decodeHtml(html)).toContain(`Public joining link: ${joinUrl}`);
       }
     }
   });
