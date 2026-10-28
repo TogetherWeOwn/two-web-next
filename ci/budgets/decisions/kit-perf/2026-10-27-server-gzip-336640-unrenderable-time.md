@@ -32,6 +32,15 @@ The conflict resolution preserves main's independent 336896 allocation and
 its literal boundary cases alongside this PR's 336640 allocation; it does
 not change any ceiling.
 
+After merging main `72fc31eed` to resolve the client-allocation oracle
+conflict, two production builds both measured 336636 server gzip bytes:
+4B under the unchanged 336640 ceiling, and 252B over the next lower 336384.
+Both complete Kit budget checks exited 0. Client JS measured 256819 raw /
+103102 gzip bytes and client CSS measured 2861 raw / 1019 gzip bytes, within
+main's existing allocations. The conflict resolution preserves main's paired
+client-JS allocation oracle and all its rejection tests; no ceiling changes.
+The 4B server margin is narrow and exact-head CI must verify the merged build.
+
 ## Shipping tests
 
 `ci/check-kit-perf.test.mjs` gains the 336640 allocation (interval 336514,
