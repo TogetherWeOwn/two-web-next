@@ -75,7 +75,14 @@ export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, d
 );
 
 export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
-  if (row.status !== "published" || row.endsAt <= new Date()) return null;
+  // An unrenderable end (Invalid Date) is not a live event: every comparison
+  // with it is false, so without the finite check it would look unended.
+  if (
+    row.status !== "published" ||
+    !Number.isFinite(row.endsAt.getTime()) ||
+    row.endsAt <= new Date()
+  )
+    return null;
   if (!row.rsvpOpen) {
     return (
       <form method="post" action={`/admin/events/${row.eventKey}/rsvp-reopen`}>
