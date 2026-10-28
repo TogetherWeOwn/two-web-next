@@ -16,13 +16,14 @@ export function apiError(
   code: PublicDataErrorCode,
   message: string,
   status: 422 | 404 | 500 | 503,
+  next = PUBLIC_DATA_ERROR_NEXT[code],
 ): Response {
   const body: PublicDataErrorDto = {
     error: {
       code,
       message,
       request_id: c.get("requestId"),
-      next: PUBLIC_DATA_ERROR_NEXT[code],
+      next,
     },
   };
   return c.json(body, status, { "cache-control": "no-store, private" });
@@ -39,5 +40,5 @@ export function isPublicApiPath(path: string): boolean {
  * request path is never echoed; HEAD loses its body in the framework.
  */
 export function publicApiNotFound(c: Ctx): Response {
-  return apiError(c, "not_found", "No such API path.", 404);
+  return apiError(c, "not_found", "No such API path.", 404, "Check the API path and retry.");
 }

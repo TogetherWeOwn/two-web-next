@@ -46,7 +46,7 @@ REST and in the MCP text content; REST errors also carry `request_id` (matches
 | Code | Meaning | Next action |
 | ---- | ------- | ----------- |
 | `invalid_request` | Rejected input, e.g. a malformed event key. | Fix the input and try again. |
-| `not_found` | No published row for that key, or an unknown `/api/public/*` path. | Check the key and try again. |
+| `not_found` | No published row for that key, or an unknown `/api/public/*` path. | Check the event key or API path and try again. |
 | `rate_limited` | Shared public-read budget exhausted. | Honor `Retry-After`, then try again. |
 | `unavailable` | Event data temporarily unreadable. | Wait and try again. |
 | `internal` | The read failed on our side. | Wait and try again. |

@@ -299,7 +299,7 @@ export function getOpenApiDocument(appUrl: string) {
         },
         CacheControl: {
           description:
-            "Remaining freshness, at most 60s; max-age=0, must-revalidate after a retire.",
+            "Remaining freshness, at most 60s; max-age=0, must-revalidate if retirement overtakes an in-flight event read.",
           schema: { type: "string" },
         },
       },

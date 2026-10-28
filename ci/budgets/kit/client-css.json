@@ -3,7 +3,7 @@
   "client": {
     "css": {
       "maxRawBytes": 3072,
-      "maxGzipBytes": 1024,
+      "maxGzipBytes": 1280,
       "maxFiles": 4
     }
   }

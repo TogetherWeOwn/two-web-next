@@ -134,6 +134,7 @@ async function expectUnknownJson(res: Response, path: string): Promise<PublicErr
   expect(raw, `${path} no branded HTML`).not.toMatch(/<!doctype|<html|error-heading/i);
   expect(raw, `${path} no asset bytes`).not.toContain(ASSET_CANARY);
   expect(raw, `${path} no reflected path`).not.toContain(encodeURIComponent(path));
+  expect(raw, `${path} no plain reflected path`).not.toContain(path.split("?")[0]);
   // The raw path must never echo: hostile bytes stay inert.
   for (const fragment of ["<script", "etc/passwd", "%2e", "%00", "%3C"]) {
     if (path.toLowerCase().includes(fragment.toLowerCase())) {
@@ -143,7 +144,7 @@ async function expectUnknownJson(res: Response, path: string): Promise<PublicErr
   const body = JSON.parse(raw) as PublicErrorBody;
   expect(validatePublicSchema(body, "PublicDataError"), path).toEqual([]);
   expect(body.error.code, path).toBe("not_found");
-  expect(body.error.next, path).toBe(PUBLIC_DATA_ERROR_NEXT.not_found);
+  expect(body.error.next, path).toBe("Check the API path and retry.");
   expect(typeof body.error.message, path).toBe("string");
   expect(body.error.message.length, path).toBeGreaterThan(0);
   expect(body.error.request_id, path).toBe(headerId);
@@ -207,6 +208,21 @@ describe("public API unknown paths return JSON (offline)", () => {
     expect(second.error.message).toBe(first.error.message);
     expect(second.error.next).toBe(first.error.next);
   });
+
+  it.each(["POST", "PUT", "PATCH", "DELETE"])(
+    "%s respects same-origin protection",
+    async (method) => {
+      const path = "/api/public/cache";
+      const denied = await app.request(
+        path,
+        { method, headers: { origin: "https://evil.example" } },
+        baseEnv,
+      );
+      expect(denied.status).toBe(403);
+      const admitted = await app.request(path, { method, headers: { origin: APP_URL } }, baseEnv);
+      await expectUnknownJson(admitted, path);
+    },
+  );
 
   it.each([...UNKNOWN_PATHS])("HEAD %s keeps status/headers with no body", async (path) => {
     const res = await app.request(
@@ -480,6 +496,13 @@ describe("public API conditional-read OpenAPI docs (offline)", () => {
     expect(info).toMatch(/retire/);
     expect(info).toMatch(/isolate/);
     expect(info).toMatch(/not.*(global|edge)|isolate-local|same-isolate/);
+  });
+
+  it("limits forced revalidation to retirement overtaking an in-flight event read", () => {
+    const headers = (spec().components as { headers: { CacheControl: { description: string } } })
+      .headers;
+    expect(headers.CacheControl.description).toMatch(/in.flight event read/i);
+    expect(headers.CacheControl.description).toMatch(/retire/i);
   });
 
   it("promises no If-Modified-Since validator", () => {

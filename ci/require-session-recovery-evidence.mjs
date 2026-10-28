@@ -13,7 +13,7 @@
 // IDs for check-set failures. The validator is read-only and idempotent.
 //
 // Usage: node ci/require-session-recovery-evidence.mjs [artifacts/session-recovery]
-import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -36,13 +36,42 @@ function fail(code, detail, extra) {
   throw error;
 }
 
+function evidenceStat(path) {
+  try {
+    return statSync(path);
+  } catch (error) {
+    // Only a missing path means "the suite wrote nothing". Any other stat
+    // failure (EACCES, ELOOP, ...) must surface as unreadable at the call
+    // site so the validator never misreports a permission error as missing.
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
+    throw error;
+  }
+}
+
 export function checkSessionRecoveryEvidence(dir = "artifacts/session-recovery") {
-  if (!existsSync(dir) || !statSync(dir).isDirectory())
+  let dirStat;
+  try {
+    dirStat = evidenceStat(dir);
+  } catch {
+    fail(
+      "SESSION_RECOVERY_DIR_UNREADABLE",
+      `${dir}: session-recovery evidence directory is unreadable`,
+    );
+  }
+  if (!dirStat?.isDirectory())
     fail(
       "SESSION_RECOVERY_NO_EVIDENCE_DIR",
       `${dir}: no session-recovery evidence directory (the suite wrote nothing)`,
     );
-  const files = readdirSync(dir).sort();
+  let files;
+  try {
+    files = readdirSync(dir).sort();
+  } catch {
+    fail(
+      "SESSION_RECOVERY_DIR_UNREADABLE",
+      `${dir}: session-recovery evidence directory is unreadable`,
+    );
+  }
   if (files.length === 0)
     fail(
       "SESSION_RECOVERY_EMPTY_DIR",

@@ -325,6 +325,7 @@ const MATRIX: Case[] = [
     "/admin/featured",
     "/admin/featured/:id",
     "/admin/featured/:id/delete",
+    "/admin/featured/:id/unpublish",
   ].map((route) => ({
     method: "POST",
     route,
