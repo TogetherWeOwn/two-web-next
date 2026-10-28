@@ -2,7 +2,7 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -118,7 +118,7 @@ function fixture(
     row,
     queries,
     env,
-    async cookie() {
+    async cookie(moderator = false) {
       const token = newSessionToken();
       await store.create({
         tokenHash: await hashToken(token),
@@ -126,7 +126,7 @@ function fixture(
         username: "member",
         avatar: null,
         member: true,
-        moderator: false,
+        moderator,
         expiresAt: new Date(Date.now() + 3600_000),
       });
       return (
@@ -145,6 +145,28 @@ function fixture(
 }
 
 describe("Event detail share matrix (fixture-only)", () => {
+  it("keeps the calendar share box for an elapsed draft previewed by a moderator", async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2025-01-01T00:00:00Z"));
+    try {
+      const source = fixture({
+        status: "draft",
+        startsAt: new Date("2020-01-10T20:00:00Z"),
+        endsAt: new Date("2020-01-10T22:00:00Z"),
+      });
+      const response = await source.request(await source.cookie(true));
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain('<h2 id="event-share-heading">Save the date</h2>');
+      expect(html).toContain(`href="/events/${KEY}.ics" data-testid="event-ics"`);
+      expect(html).toContain('data-testid="event-google-calendar"');
+      expect(html).not.toContain('<h2 id="event-share-heading">Share this event</h2>');
+      expect(html).not.toContain('href="/events/past"');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it("renders the share matrix: canonical, title, time, venue and description", async () => {
     const html = await (await fixture().request()).text();
     expect(html).toContain(`rel="canonical" href="${CANONICAL}"`);
