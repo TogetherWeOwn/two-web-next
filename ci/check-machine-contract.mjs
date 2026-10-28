@@ -328,10 +328,11 @@ const SIZE_LITERAL = /\b\d[\d,._]*\s*(?:[KMGT]i?B|bytes?|kilobytes?|megabytes?)\
 const SIZE_BARE_SUFFIX = /\b\d[\d,._]*\s*[kKMGT]\b/;
 const RESULT_SUBJECT =
   /\b(?:events?|results?|responses?|replies|reply|payloads?|bod(?:y|ies)|DTOs?|CallToolResult|structuredContent|request\s+IDs?|transport|framing|wrappers?|envelopes?|overhead|text|JSON)\b/i;
-// Count nouns need a direct boundary declaration, not an unrelated predicate
-// such as "items with limited availability" or "rows include escaped characters".
+// Count nouns need a direct declaration, not unrelated availability/venue prose.
+// Numeric declarations may contain qualifiers or abbreviations before the count;
+// noun constructions such as "have a limit" and explicit no-limit claims count too.
 const COUNT_BOUNDARY =
-  /\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\s+(?:(?:at|to|of)\s+)?\d+|unbounded|unlimited)\b/i;
+  /\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+(?:caps?|limits?|bounds?|ceilings?)\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*(?:caps?|limits?|bounds?|ceilings?)\b).*\d)/i;
 const SIZE_PREDICATE =
   /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
 // Abbreviations carry periods that are not sentence ends; rejoin fragments
@@ -347,11 +348,13 @@ for (const fragment of rawFragments) {
 }
 for (const sentence of outsideSentences) {
   const flat = sentence.trim();
+  // Formatting must not hide a count noun, bound predicate or numeric value.
+  const countText = flat.replace(/[`*_~]/g, "");
   if (
     flat &&
     (SIZE_LITERAL.test(flat) ||
       SIZE_BARE_SUFFIX.test(flat) ||
-      COUNT_BOUNDARY.test(flat) ||
+      COUNT_BOUNDARY.test(countText) ||
       (RESULT_SUBJECT.test(flat) && SIZE_PREDICATE.test(flat)))
   )
     check(
