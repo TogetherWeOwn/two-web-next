@@ -26,7 +26,7 @@
 //   where `Name` is the trimmed organizer escaped with the existing `rssXml()`
 //   (so `<`, `>`, `&`, quotes round-trip). No other address appears.
 // - No new queries: `organizer_name` already arrives on the feed row
-//   (`select *`); the builders only read it. Headers, ETag/304, redirects and
+//   (part of the feed egress projection); the builders only read it. Headers, ETag/304, redirects and
 //   canonical behaviour stay byte-identical apart from the new property.
 // - Placeholder is fixed and non-routable (`.invalid`, RFC 2606): ICS
 //   `mailto:noreply@example.invalid`, RSS `noreply@example.invalid`.
@@ -36,7 +36,6 @@
 // params+value; the RSS reader is an independent well-formedness XML parser.
 // Raw-byte `includes`/`split` checks only prove escaping and placeholder-only
 // (no other `mailto:` / real domain), never presence.
-import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
@@ -44,6 +43,7 @@ import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { eventIcs, eventsIcsCollection, eventsRss, latestWireUpdatedAt } from "../src/events/feeds";
+import { projectEventRowValues } from "./helpers/pg-proxy-event-projection";
 
 type EventRow = typeof events.$inferSelect;
 
@@ -574,19 +574,19 @@ describe("feed host: RSS author from organizer_name (parser-validated)", () => {
 // Route-level: pg-proxy fixtures, real app/reads/builders, no DB or network.
 // ---------------------------------------------------------------------------
 
-const columns = Object.keys(getTableColumns(events)) as (keyof EventRow)[];
-
-function wireRow(row: EventRow): unknown[] {
-  return columns.map((key) => {
-    const value = row[key];
-    return value instanceof Date ? value.toISOString() : value;
-  });
+// The transport models the emitted projection (pg-proxy maps positionally):
+// the keyed read still selects the stored row, the collection read selects
+// its byte-admitted egress fields.
+function wireRow(sql: string, params: unknown[], row: EventRow): unknown[] {
+  return projectEventRowValues(sql, params, row);
 }
 
 function routeFixture(rows: EventRow[]) {
   const query = vi.fn(async (sql: string, params: unknown[]) => {
     if (sql.includes('from "events"') && sql.includes('"event_key" =')) {
-      return { rows: rows.filter((r) => r.eventKey === params[0]).map(wireRow) };
+      return {
+        rows: rows.filter((r) => r.eventKey === params[0]).map((r) => wireRow(sql, params, r)),
+      };
     }
     if (sql.includes('from "events"') && sql.includes('"status" in')) {
       const cutoff = params.find((v) => typeof v === "string" && (v as string).startsWith("20")) as
@@ -597,7 +597,7 @@ function routeFixture(rows: EventRow[]) {
       return {
         rows: rows
           .filter((r) => (params as string[]).includes(r.status) && r.endsAt >= now)
-          .map(wireRow),
+          .map((r) => wireRow(sql, params, r)),
       };
     }
     throw new Error(`Unexpected fixture query: ${sql}`);

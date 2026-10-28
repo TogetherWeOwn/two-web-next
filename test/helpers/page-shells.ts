@@ -8,6 +8,7 @@ import type { Db } from "../../src/db/index";
 import { joinAttempts } from "../../src/db/schema";
 import type { Env } from "../../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../../src/sessions";
+import { projectEventRowValues } from "./pg-proxy-event-projection";
 
 export const MEMBER_ID = "100000000000000001";
 export const EVENT_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -189,6 +190,10 @@ export function pageShellFixture(status = "published") {
       if (sql.includes('"events"."id" <>')) return { rows: [] }; // No neighboring/related fixture rows.
       if (sql.includes("count(*)")) return { rows: [[1]] };
       if (sql.includes('"event_key" =') && !params.includes(EVENT_KEY)) return { rows: [] };
+      // Feed/sitemap egress reads (and the series context) select a
+      // byte-admitted projection; pg-proxy maps positionally.
+      if (sql.includes("octet_length"))
+        return { rows: [projectEventRowValues(sql, params, event)] };
       return { rows: [encode(getTableColumns(events), event)] };
     }
     if (sql.includes('from "featured_contents"')) {
