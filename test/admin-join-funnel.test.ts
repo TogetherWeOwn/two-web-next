@@ -261,12 +261,20 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
       const html = await (await request).text();
       expect(statusAtDeadline).toBe(200);
       expect(transaction).toHaveBeenCalledTimes(2);
-      expect(html.includes('data-testid="join-funnel"')).toBe(pending === "search");
-      expect(html.includes('data-testid="top-zero-searches"')).toBe(pending === "funnel");
+      expect(html).toContain('data-testid="join-funnel"');
+      expect(html).toContain("Join funnel, last 90 days</h2>");
+      expect(html).toContain('data-testid="top-zero-searches"');
+      expect(html).toContain("Top searches with no results</h2>");
+      expect(html.includes('data-testid="join-funnel-unavailable"')).toBe(pending !== "search");
+      expect(html.includes('data-testid="top-zero-searches-unavailable"')).toBe(
+        pending !== "funnel",
+      );
+      expect(html.includes('data-testid="funnel-added">7</td>')).toBe(pending === "search");
+      expect(html.includes('data-testid="top-zero-searches-empty"')).toBe(pending === "funnel");
     },
   );
 
-  it("omits a rejected zero-search cancellation and still answers with the funnel", async () => {
+  it("marks a rejected zero-search cancellation unavailable and still answers with the funnel", async () => {
     const cancellation = Object.assign(new Error("statement timeout"), {
       code: "57014",
       name: "PostgresError",
@@ -282,7 +290,11 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('data-testid="join-funnel"');
-    expect(html).not.toContain('data-testid="top-zero-searches"');
+    expect(html).toContain('data-testid="funnel-added">7</td>');
+    expect(html).toContain('data-testid="top-zero-searches"');
+    expect(html).toContain("Top searches with no results</h2>");
+    expect(html).toContain('data-testid="top-zero-searches-unavailable"');
+    expect(html).not.toContain('data-testid="top-zero-searches-empty"');
   });
 
   it.each([false, true])("503s a zero-search outage with funnel cache warm=%s", async (warm) => {
@@ -306,7 +318,7 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
   it.each([
     Object.assign(new Error("missing table"), { code: "42P01", name: "PostgresError" }),
     new TypeError("programming error"),
-  ])("omits only zero-search on an ordinary read failure: %s", async (error) => {
+  ])("marks only zero-search unavailable on an ordinary read failure: %s", async (error) => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store);
     const { db, session } = aggregateDb(7);
@@ -322,10 +334,14 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain('data-testid="join-funnel"');
-    expect(html).not.toContain('data-testid="top-zero-searches"');
+    expect(html).toContain('data-testid="funnel-added">7</td>');
+    expect(html).toContain('data-testid="top-zero-searches"');
+    expect(html).toContain("Top searches with no results</h2>");
+    expect(html).toContain('data-testid="top-zero-searches-unavailable"');
+    expect(html).not.toContain('data-testid="top-zero-searches-empty"');
   });
 
-  it("omits the funnel widget and still answers 200", async () => {
+  it("retains unavailable diagnostic headings and still answers 200", async () => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store);
     const { db: brokenDb, session } = aggregateDb(0);
@@ -335,6 +351,14 @@ describe("dashboard route optional analytics (stub ADMIN_DB)", () => {
       ADMIN_DB: brokenDb,
     } as Env);
     expect(res.status).toBe(200);
-    expect(await res.text()).not.toContain('data-testid="join-funnel"');
+    const html = await res.text();
+    expect(html).toContain('data-testid="join-funnel"');
+    expect(html).toContain("Join funnel, last 90 days</h2>");
+    expect(html).toContain('data-testid="join-funnel-unavailable"');
+    expect(html).toContain('data-testid="top-zero-searches"');
+    expect(html).toContain("Top searches with no results</h2>");
+    expect(html).toContain('data-testid="top-zero-searches-unavailable"');
+    expect(html).not.toContain('data-testid="join-funnel-empty"');
+    expect(html).not.toContain('data-testid="top-zero-searches-empty"');
   });
 });

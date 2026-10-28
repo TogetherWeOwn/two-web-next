@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { joinAttemptsUrl } from "../../../../src/admin/table-list";
 import type { PageProps } from "./$types";
 
 // Markup contract of AdminDashboard (src/admin/pages/dashboard.tsx): the
@@ -36,10 +37,15 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
       <p>Every join try, outcome and refusal. Read-only.</p>
     </li>
   </ul>
-  {#if funnel}
     <section data-testid="join-funnel" aria-labelledby="join-funnel-heading">
       <h2 id="join-funnel-heading">Join funnel, last {retentionDays} days</h2>
-      {#if outcomes.length === 0}
+      <p>
+        Counts cover recorded join attempts retained for {retentionDays} days.
+        Cached for 60 seconds, they may lag a new attempt; this is not a live recount.
+      </p>
+      {#if funnel === undefined}
+        <p data-testid="join-funnel-unavailable">Join counts are unavailable for this load.</p>
+      {:else if outcomes.length === 0}
         <p data-testid="join-funnel-empty">No join attempts in the window.</p>
       {:else}
         <p id="join-funnel-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
@@ -59,7 +65,9 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
             <tbody>
               {#each outcomes as [outcome, n] (outcome)}
                 <tr>
-                  <td>{outcome}</td>
+                  <td>
+                    <a href={joinAttemptsUrl({ outcome, q: "", page: 1 }, 1)} aria-label={`View join attempts with outcome ${outcome}`}>{outcome}</a>
+                  </td>
                   <td data-testid={`funnel-${outcome}`}>{n}</td>
                 </tr>
               {/each}
@@ -68,16 +76,16 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
         </div>
       {/if}
     </section>
-  {/if}
-  {#if zeroSearches}
     <section data-testid="top-zero-searches" aria-labelledby="zero-searches-heading">
       <h2 id="zero-searches-heading">Top searches with no results</h2>
       <p>
-        What guests looked for on /events and found nothing. A repeat miss is a game night
-        nobody posted yet.
+        Recorded misses are content-planning hints, not proof of demand. This is not all
+        searches: only complete event reads can record a miss. There is no searcher identity.
       </p>
-      {#if zeroSearches.length === 0}
-        <p data-testid="top-zero-searches-empty">No missed searches.</p>
+      {#if zeroSearches === undefined}
+        <p data-testid="top-zero-searches-unavailable">Missed searches are unavailable for this load.</p>
+      {:else if zeroSearches.length === 0}
+        <p data-testid="top-zero-searches-empty">No recorded missed searches.</p>
       {:else}
         <p id="top-zero-searches-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
         <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the scroll region is intentionally keyboard-focusable so keyboard users can scroll the wide table on narrow screens (axe scrollable-region-focusable requires it); region pattern matches src/admin/pages/dashboard.tsx. -->
@@ -106,12 +114,12 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
         </div>
       {/if}
     </section>
-  {/if}
 </section>
 </AdminShell>
 
 <style>
-  .admin-table-scroll:focus-visible {
+  .admin-table-scroll:focus-visible,
+  .admin-table a:focus-visible {
     outline-color: currentColor;
   }
 </style>
