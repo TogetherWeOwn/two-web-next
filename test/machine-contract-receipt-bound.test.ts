@@ -67,6 +67,10 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     "The result is 2× the text.",
     "Events are unbounded.",
     "The event is unlimited.",
+    "The result measurement counts only the DTO.",
+    "Event payloads differ, e.g. twice the length.",
+    "Collections cap at 30 items.",
+    "The JSON is 64K.",
   ];
 
   it.each(claims)("refuses the paraphrase %j appended after the Limits", (claim) => {

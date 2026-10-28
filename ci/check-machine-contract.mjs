@@ -323,12 +323,24 @@ outsideLimits = outsideLimits.replace("Same DTOs as the MCP tools, byte for byte
 // Otherwise require both a result/transport subject and a measurement
 // predicate. Bare "fits", "bytes", "within" or "counted" can describe schemas,
 // field documentation, retry timing or operational counts, not a boundary.
-const SIZE_LITERAL = /\b\d[\d,._]*\s*(?:[KMGT]i?B|bytes?|kilobytes?|megabytes?)\b|\b32[ ,_]?768\b/i;
+const SIZE_LITERAL =
+  /\b\d[\d,._]*\s*(?:[KMGT]i?B|bytes?|kilobytes?|megabytes?)\b|\b\d[\d,._]*\s*[KMGT]\b|\b32[ ,_]?768\b/i;
 const RESULT_SUBJECT =
-  /\b(?:events?|results?|responses?|replies|reply|payloads?|bod(?:y|ies)|DTOs?|CallToolResult|structuredContent|request\s+IDs?|transport|framing|wrappers?|envelopes?|overhead|text|JSON)\b/i;
+  /\b(?:events?|results?|responses?|replies|reply|payloads?|bod(?:y|ies)|DTOs?|CallToolResult|structuredContent|request\s+IDs?|transport|framing|wrappers?|envelopes?|overhead|text|JSON|collections?|rows?|items?)\b/i;
 const SIZE_PREDICATE =
-  /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measure[sd]?|measuring|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
-for (const sentence of outsideLimits.split(/(?<=[.;!?])\s+/)) {
+  /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
+// Abbreviations carry periods that are not sentence ends; rejoin fragments
+// split after "e.g."/"i.e." so a subject and its predicate stay in one
+// fragment. The original text is kept, so failure messages quote it verbatim.
+const rawFragments = outsideLimits.split(/(?<=[.;!?])\s+/);
+const outsideSentences = [];
+for (const fragment of rawFragments) {
+  const prev = outsideSentences[outsideSentences.length - 1];
+  if (prev !== undefined && /\b(?:e\.g|i\.e)\.$/i.test(prev.trimEnd()))
+    outsideSentences[outsideSentences.length - 1] = `${prev} ${fragment}`;
+  else outsideSentences.push(fragment);
+}
+for (const sentence of outsideSentences) {
   const flat = sentence.trim();
   if (flat && (SIZE_LITERAL.test(flat) || (RESULT_SUBJECT.test(flat) && SIZE_PREDICATE.test(flat))))
     check(
@@ -339,19 +351,29 @@ for (const sentence of outsideLimits.split(/(?<=[.;!?])\s+/)) {
 
 // Real serialization control: 20 maximum-length, escape-heavy descriptions
 // must be fitted so the whole typed result, not one DTO copy, is in budget.
-{
+// The wrap mirrors the production collection envelope (data plus page, limit
+// and meta) so the control cannot under-measure a mini `{data}` wrap.
+// Failures here join the receipt instead of throwing past its emitter.
+try {
   const dtoRow = (n) => ({
     ...REALISTIC_EVENT,
     event_key: String(n).padStart(26, "0"),
     description: '"\\'.repeat(500),
   });
   const rows = Array.from({ length: 20 }, (_, i) => dtoRow(i + 1));
-  const fitted = fitByteBudget(rows, 32768, (trimmed) => ({ data: trimmed }));
+  const fitted = fitByteBudget(rows, 32768, (trimmed) => ({
+    data: trimmed,
+    page: 1,
+    limit: 20,
+    meta: { current_page: 1, per_page: 20, total: 20, last_page: 1 },
+  }));
   check(
     "event result fitter bounds the typed result at 32768 bytes",
     eventResultBytes(fitted) <= 32768,
   );
   check("event result fitter keeps every row", JSON.parse(fitted).data.length === 20);
+} catch (err) {
+  check(`event result fitter control failed: ${err?.message ?? err}`, false);
 }
 
 const body = llmsTxt(APP_URL);
@@ -655,9 +677,12 @@ if (jsonMode) {
   const listed = failures
     .slice(0, MAX_RECEIPT_FAILURES)
     .map((failure) => String(failure).slice(0, MAX_FAILURE_CHARS));
-  // The byte bound is enforced on the serialized receipt itself, so it holds
-  // whatever the two caps above are set to.
-  while (listed.length > 0 && Buffer.byteLength(JSON.stringify(receipt(listed)), "utf8") > 32768)
+  // The byte bound is enforced on the exact stdout bytes (the JSON plus the
+  // `console.log` newline), so it holds whatever the two caps above are set to.
+  while (
+    listed.length > 0 &&
+    Buffer.byteLength(`${JSON.stringify(receipt(listed))}\n`, "utf8") > 32768
+  )
     listed.pop();
   console.log(JSON.stringify(receipt(listed)));
   process.exit(failed ? 1 : 0);
