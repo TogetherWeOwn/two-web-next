@@ -2,7 +2,7 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -118,7 +118,7 @@ function fixture(
     row,
     queries,
     env,
-    async cookie() {
+    async cookie(moderator = false) {
       const token = newSessionToken();
       await store.create({
         tokenHash: await hashToken(token),
@@ -126,7 +126,7 @@ function fixture(
         username: "member",
         avatar: null,
         member: true,
-        moderator: false,
+        moderator,
         expiresAt: new Date(Date.now() + 3600_000),
       });
       return (
@@ -180,6 +180,27 @@ describe("Event detail share matrix (fixture-only)", () => {
     expect(share).not.toContain("Add to calendar");
     expect(share).not.toContain('data-testid="event-ics"');
     expect(share).toContain('href="/events/past">Browse past events</a>');
+  });
+
+  it("keeps an elapsed moderator draft on the live preview share box", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-11T00:00:00Z"));
+    try {
+      const source = fixture({ status: "draft" });
+      const response = await source.request(await source.cookie(true));
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      expect(html).toContain('data-testid="event-draft"');
+      const share = html.match(/<section class="event-share"[\s\S]*?<\/section>/)?.[0] ?? "";
+      expect(share).toContain("Save the date");
+      expect(share).toContain('data-testid="event-ics"');
+      expect(share).toContain('data-testid="event-google-calendar"');
+      expect(share).toContain('data-testid="event-copy-link"');
+      expect(share).not.toContain("Share this event");
+      expect(share).not.toContain("Browse past events");
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("shows a guest the join pitch and never attendee names, even with attendees stored", async () => {

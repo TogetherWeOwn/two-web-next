@@ -284,16 +284,16 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
 
 export function mdEvent(appUrl: string, e: MdEvent, now: Date = new Date()): string {
   const lineup = lineupLine(e);
-  // Same verdict as the HTML share twins (pages-detail.tsx shareAsPast):
-  // an elapsed published row already reads past there, so the .md
-  // alternate agrees. Drafts/cancelled never reach this builder.
-  const asPast = e.status === "past" || e.endsAt <= now;
   const accessibilityNotes = e.accessibilityNotes?.trim();
   const host = hostLine(e);
   // The HTML detail gates "How to join" to published/draft rows; past events
   // show no joining section, so neither does their Markdown alternate. The
   // Host line is ungated on both sides.
   const join = e.status === "past" ? null : joinLine(e);
+  // Same verdict as the HTML share twins (pages-detail.tsx shareAsPast):
+  // an elapsed published row already reads past there, so the .md
+  // alternate agrees. Drafts/cancelled never reach this builder.
+  const asPast = e.status === "past" || e.endsAt <= now;
   return [
     `# ${mdInlineText(e.title)}`,
     "",
