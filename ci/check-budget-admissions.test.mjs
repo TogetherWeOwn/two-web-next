@@ -440,6 +440,11 @@ test("old protected-main GitHub squash dates bound lookups, recent records still
   });
   const main = fx.git("rev-parse", "HEAD");
   fx.add(path.replace("feature", "new"));
+  const newFile = join(fx.root, path.replace("feature", "new"));
+  writeFileSync(
+    newFile,
+    readFileSync(newFile, "utf8").replace("99900", "100900").replace("100400", "101400"),
+  );
   const head = fx.commit("new feature");
   const result = await fx.check("pull_request", prEvent(main, head), {
     request: async (endpoint) => {
@@ -942,4 +947,78 @@ test("initial lifecycle decision must match the actual committed fragment", asyn
   fx.put(fragment, JSON.stringify(budget));
   const head = fx.commit("mismatched allocation");
   await assert.rejects(fx.check("pull_request", prEvent(base, head)), /evidence mismatch/);
+});
+
+test("PR cannot raise a ceiling when its measured result fits existing headroom", async (t) => {
+  const fx = fixture(t);
+  fx.add();
+  const file = join(fx.root, path);
+  writeFileSync(
+    file,
+    readFileSync(file, "utf8").replace("99900", "99000").replace("100400", "99500"),
+  );
+  const head = fx.commit("unnecessary admission");
+  await assert.rejects(fx.check("pull_request", prEvent(fx.base, head)), /headroom/);
+});
+
+test("PR permits only byte-ceiling decreases in existing budget fragments", async (t) => {
+  const fx = fixture(t);
+  const file = "ci/budgets/kit/client.json";
+  const original = JSON.parse(readFileSync(join(fx.root, file), "utf8"));
+  original.client.js.maxGzipBytes = 99_000;
+  fx.put(file, JSON.stringify(original));
+  const head = fx.commit("tighten ceiling");
+  await assert.doesNotReject(fx.check("pull_request", prEvent(fx.base, head)));
+});
+
+test("tightening cannot alter file counts, other fields, or increase byte ceilings", async (t) => {
+  for (const change of [
+    (p) => {
+      p.client.js.maxFiles = 6;
+    },
+    (p) => {
+      p.client.js.maxRawBytes++;
+    },
+    (p) => {
+      p.client.js.extra = 1;
+    },
+    (p) => {
+      p.client.js.maxGzipBytes = 0;
+    },
+  ]) {
+    const fx = fixture(t);
+    const file = "ci/budgets/kit/client.json";
+    const data = JSON.parse(readFileSync(join(fx.root, file), "utf8"));
+    data.client.js.maxGzipBytes = 99_000;
+    change(data);
+    fx.put(file, JSON.stringify(data));
+    const head = fx.commit("invalid edit");
+    await assert.rejects(fx.check("pull_request", prEvent(fx.base, head)), /frozen/);
+  }
+});
+
+test("queue cannot undo a sibling's tightening even when final base equals main", async (t) => {
+  const fx = fixture(t);
+  const file = "ci/budgets/kit/client.json";
+  const original = readFileSync(join(fx.root, file), "utf8");
+  const data = JSON.parse(original);
+  data.client.js.maxGzipBytes = 99_000;
+  fx.put(file, JSON.stringify(data));
+  fx.commit("tighten (#41)");
+  fx.put(file, original);
+  const head = fx.commit("undo (#42)");
+  await assert.rejects(fx.check("merge_group", groupEvent(fx.base, head)), /frozen/);
+});
+
+test("a PR cannot create artificial headroom pressure by tightening and raising the same unit", async (t) => {
+  const fx = fixture(t);
+  const file = "ci/budgets/kit/client.json";
+  const data = JSON.parse(readFileSync(join(fx.root, file), "utf8"));
+  data.client.js.maxGzipBytes = 99_900;
+  fx.put(file, JSON.stringify(data));
+  fx.add(path, 499);
+  const decisionFile = join(fx.root, path);
+  writeFileSync(decisionFile, readFileSync(decisionFile, "utf8").replace("100400", "99950"));
+  const head = fx.commit("tighten and admit");
+  await assert.rejects(fx.check("pull_request", prEvent(fx.base, head)), /tighten.*admission/);
 });

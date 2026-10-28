@@ -1,4 +1,4 @@
-// Additive size admissions. The JSON fragments are frozen bases, NOT mutable
+// Additive size admissions. The JSON fragments are tightening-only bases, NOT mutable
 // counters. Reviewed decision files add bytes; git/GitHub provenance and caps
 // are checked separately by check-budget-admissions.mjs, hard on PR and queue.
 import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
@@ -207,15 +207,17 @@ export function applyAdmissions(root, kind, plan) {
 
 // Snapshot maps contain git blob identities (or bytes in tests). Every base
 // and every old decision, including prose, is frozen. The adapter alone
-// supplies exceptions proved by measured initial/retirement decisions.
+// supplies validated tightening and measured initial/retirement exceptions.
 export function validateFrozenFiles(
   baseFiles,
   headFiles,
   initialAllocations = new Set(),
   retirements = new Set(),
+  tightenings = new Set(),
 ) {
   for (const [file, contents] of baseFiles) {
     if (retirements.has(file) && !headFiles.has(file)) continue;
+    if (tightenings.has(file) && headFiles.has(file)) continue;
     if (!headFiles.has(file) || headFiles.get(file) !== contents) {
       throw new Error(`frozen budget base/history changed or deleted: ${file}`);
     }
@@ -297,6 +299,17 @@ export function validateAdmissions({ bases, historical, proposed, now }) {
   }
   for (const record of proposed) {
     const total = totals.get(record.unit);
+    if (
+      !proposed.some(
+        (candidate) =>
+          candidate.unit === record.unit &&
+          candidate.pr === record.pr &&
+          candidate.after_bytes > total.current,
+      )
+    )
+      throw new Error(
+        `${record.unit}: PR #${record.pr} must consume existing headroom before an admission`,
+      );
     if (record.after_bytes > safeSum(total.current, total.added)) {
       throw new Error(`after measurement is not covered by the admission: ${record.file}`);
     }

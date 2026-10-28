@@ -153,6 +153,37 @@ function oldSquashTime(root, commit, pr, now) {
   return Number.isFinite(time) && time <= Date.parse(now) - 7 * 86400000 ? date : null;
 }
 
+// Permit only strict decreases of existing byte ceilings; all other data,
+// including file counts, metadata and object structure, remains immutable.
+function isTightening(before, after) {
+  let decreased = false;
+  function compare(a, b, key = "") {
+    if (a === b) return true;
+    if (key === "maxRawBytes" || key === "maxGzipBytes") {
+      if (Number.isSafeInteger(a) && Number.isSafeInteger(b) && b > 0 && b < a) {
+        decreased = true;
+        return true;
+      }
+      return false;
+    }
+    if (
+      !a ||
+      !b ||
+      typeof a !== "object" ||
+      typeof b !== "object" ||
+      Array.isArray(a) ||
+      Array.isArray(b)
+    )
+      return false;
+    const keys = Object.keys(a);
+    return (
+      keys.length === Object.keys(b).length &&
+      keys.every((k) => Object.hasOwn(b, k) && compare(a[k], b[k], k))
+    );
+  }
+  return compare(before, after) && decreased;
+}
+
 function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly) {
   const records = admissions(
     root,
@@ -217,7 +248,27 @@ function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly
     }
     target.add(fragment);
   }
-  validateFrozenFiles(baseFiles, headFiles, initial, retired);
+  const tightened = new Set();
+  for (const [file, blob] of baseFiles) {
+    if (
+      !/^ci\/budgets\/(kit|bundle)\/[^/]+\.json$/.test(file) ||
+      !headFiles.has(file) ||
+      headFiles.get(file) === blob
+    )
+      continue;
+    try {
+      if (
+        isTightening(
+          JSON.parse(git(root, "cat-file", "blob", blob)),
+          JSON.parse(git(root, "cat-file", "blob", headFiles.get(file))),
+        )
+      )
+        tightened.add(file);
+    } catch {
+      /* malformed changes remain frozen */
+    }
+  }
+  validateFrozenFiles(baseFiles, headFiles, initial, retired, tightened);
   return { initial, retired };
 }
 
@@ -342,6 +393,23 @@ export async function checkBudgetAdmissions({ root, repo, eventName, event, now,
     root,
     new Map([...headFiles].filter(([file]) => !baseFiles.has(file))),
   );
+  // A lower base must not manufacture the overage used to justify an
+  // admission against what was actually available at the group's base.
+  const tightenedUnits = new Set();
+  for (const [file, blob] of baseFiles) {
+    const match = /^ci\/budgets\/(kit|bundle)\/[^/]+\.json$/.exec(file);
+    if (!match || !headFiles.has(file) || headFiles.get(file) === blob) continue;
+    const before = JSON.parse(git(root, "cat-file", "blob", blob));
+    const after = JSON.parse(git(root, "cat-file", "blob", headFiles.get(file)));
+    const kind = match[1];
+    const oldUnits = budgetUnits(kind, kind === "bundle" ? before.budgets : before);
+    const newUnits = budgetUnits(kind, kind === "bundle" ? after.budgets : after);
+    for (const [unit, value] of oldUnits) {
+      if (newUnits.get(unit).value < value.value) tightenedUnits.add(unit);
+    }
+  }
+  if (proposed.some((record) => !record.action && tightenedUnits.has(record.unit)))
+    throw new Error("cannot tighten a unit and add its admission in the same batch");
   const mergeCache = new Map();
   const activeUnits = new Set(
     proposed.filter((record) => !record.action).map((record) => record.unit),
@@ -381,7 +449,7 @@ export async function checkBudgetAdmissions({ root, repo, eventName, event, now,
     for (const record of proposed) {
       if (record.pr !== event.number) throw new Error(`PR attribution mismatch: ${record.file}`);
     }
-  } else if (proposed.length) {
+  } else {
     const attributed = await queueAttribution(
       root,
       base,
@@ -436,7 +504,7 @@ async function main() {
     "## Budget admission policy",
     "",
     `Validated ${result.proposed.length} new decisions and ${result.historical.length} historical decisions.`,
-    "Base and history frozen; aggregate per-PR 0.5% and trusted rolling 7-day 2% caps passed.",
+    "History frozen and bases only tightened; aggregate per-PR 0.5% and trusted rolling 7-day 2% caps passed.",
     result.authoritative
       ? "Authoritative combined-main/queue validation."
       : "Prequeue policy validation; merge-group measurement remains authoritative.",

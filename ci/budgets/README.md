@@ -1,6 +1,6 @@
 # Additive size budgets
 
-`kit/*.json` and `bundle/*.json` are immutable, per-unit bases. The existing
+`kit/*.json` and `bundle/*.json` are per-unit bases: existing byte ceilings may only be tightened directly. The existing
 canonical inventories and missing-output checks still apply. Byte ceilings are:
 
 **effective ceiling = base + sum of all admitted `delta_bytes` for that unit**
@@ -71,7 +71,7 @@ closed. File counts and startup time are deliberately not admissible units.
 Unknown units, duplicate identities/keys, symlinks, malformed records, noninteger
 or nonpositive deltas, unsafe totals and unsupported provenance fail closed.
 
-Do not edit a base or historical decision. Larger/unexplained growth and
+Only decrease existing `maxRawBytes` or `maxGzipBytes` fields in a base; all other fields and historical decisions remain frozen. The policy gate checks each queued contribution, so a later PR cannot undo an earlier tightening. Current head bases are used conservatively for allowance calculations; a unit cannot be tightened and receive an admission in the same PR or queue batch. A PR/unit admission must have a recorded after measurement above the current effective ceiling. Measurements are review evidence, not automatically verified against build artifacts. Larger/unexplained growth and
 exhausted allowance need an explicit maintainer performance decision outside
 this delegated admission path.
 
@@ -151,7 +151,7 @@ admission rows.
 ## Enforced accounting
 
 `ci/check-budget-admissions.mjs` runs hard on PRs and on `merge_group` (also main
-pushes). It freezes bases/history and validates:
+pushes). It freezes history, permits only base byte-ceiling decreases, and validates:
 
 1. **Per PR, per unit:** sum **all** new files for that PR/unit, then require
    `sum * 200 <= current_main_ceiling` (at most 0.5%). Splitting files cannot
@@ -202,7 +202,7 @@ ratchet or host timer is introduced.
 
 Independent fixed fixtures test boundaries, cap+1, additive composition,
 per-PR aggregation, the exact seven-day boundary, five-PR batches, provenance,
-frozen bases/history and fail-closed behavior. Shipping-boundary tests are
+tightening-only bases, frozen history and fail-closed behavior. Shipping-boundary tests are
 supplemental mechanics, not a second authorization table. Hermetic legacy
 single-file fixtures still load when no fragment directory exists; a legacy
 file beside fragments remains ambiguous and fails closed.

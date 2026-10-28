@@ -2,7 +2,7 @@
 // file under ci/budgets/kit/ and ci/budgets/bundle/, and this loader
 // aggregates them into the exact plan objects the checkers always consumed.
 //
-// Frozen fragments establish bases. Each reviewed admission adds its own
+// Tightening-only fragments establish bases. Each reviewed admission adds its own
 // decision file; effective byte ceilings are base + sum(delta_bytes), with no
 // shared JSON edit. ci/check-budget-admissions.mjs enforces immutable history,
 // aggregate per-PR caps and trusted rolling-window accounting.

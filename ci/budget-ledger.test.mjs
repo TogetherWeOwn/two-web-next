@@ -171,7 +171,9 @@ test("rolling seven days uses trusted merge time, NEVER filename dates", () => {
   ];
   assert.throws(() => validate([row()], historical), /2%/);
   historical[0].delta_bytes = 1_500;
-  assert.doesNotThrow(() => validate([row()], historical));
+  assert.doesNotThrow(() =>
+    validate([row({ before_bytes: 101_400, after_bytes: 101_900 })], historical),
+  );
 });
 
 test("weekly denominator is the effective ceiling at the start of the window", () => {
@@ -266,7 +268,9 @@ test("recent growth cannot compound the weekly denominator", () => {
   // 2010 > 2% of 100000, but <= 2% of current=101510. Per-PR 500 fits either.
   assert.throws(() => validate([row()], historical), /2%/);
   historical[0].delta_bytes = 1_500;
-  assert.doesNotThrow(() => validate([row()], historical));
+  assert.doesNotThrow(() =>
+    validate([row({ before_bytes: 101_400, after_bytes: 101_900 })], historical),
+  );
 });
 
 test("lifecycle fragment filenames allow asset suffixes but reject traversal and unsafe names", () => {
