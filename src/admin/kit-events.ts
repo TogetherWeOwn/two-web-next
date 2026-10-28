@@ -13,6 +13,7 @@
 // (EVENT_PAGE_SIZE + 1, no count query), and the view slices to the page.
 import { EVENT_PAGE_SIZE, eventEmptyText, type EventListQuery } from "./event-list";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { renderTerminalReviewHtml } from "./terminal-review";
 import type { EventListRow } from "./store-event-reads";
 
 /** One events-table row with its timestamps pre-rendered, exactly as the
@@ -43,6 +44,7 @@ export type KitEventListView = {
    * carries no review strings or disclosure markup (client gzip ceiling).
    * The page still gates by end date; ended rows render no review. */
   pauseReviews: Record<string, string>;
+  cancelReviews: Record<string, string>;
 };
 
 /**
@@ -74,7 +76,15 @@ export function buildEventListView(
   fetched: EventListRow[],
 ): KitEventListView {
   const pauseReviews: Record<string, string> = {};
+  const cancelReviews: Record<string, string> = {};
   for (const row of fetched.slice(0, EVENT_PAGE_SIZE)) {
+    if (row.status === "draft" || row.status === "published") {
+      cancelReviews[row.eventKey] = renderTerminalReviewHtml({
+        kind: "cancel",
+        title: row.title,
+        targetId: row.eventKey,
+      });
+    }
     if (row.status === "published" && row.rsvpOpen) {
       pauseReviews[row.eventKey] = renderRsvpPauseReviewHtml(row.title, row.eventKey);
     }
@@ -85,5 +95,6 @@ export function buildEventListView(
     hasNext: fetched.length > EVENT_PAGE_SIZE,
     emptyText: eventEmptyText(query),
     pauseReviews,
+    cancelReviews,
   };
 }

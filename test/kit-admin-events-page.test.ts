@@ -8,6 +8,9 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parseEventListQuery } from "../src/admin/event-list";
+import { buildEventListView } from "../src/admin/kit-events";
+import { savedEvent } from "./helpers/admin-terminal-review";
 
 const source = readFileSync(
   fileURLToPath(new URL("../web/src/routes/admin/events/+page.svelte", import.meta.url).href),
@@ -43,7 +46,11 @@ describe("Kit events-list page contract", () => {
 
   it("submits row actions to the Hono-owned mutation endpoints", () => {
     expect(source).toContain("/publish");
-    expect(source).toContain("/cancel");
+    expect(source).toContain("{@html cancelReviews[r.eventKey]");
+    const view = buildEventListView(parseEventListQuery({}), [savedEvent]);
+    expect(view.cancelReviews[savedEvent.eventKey]).toContain(
+      `<form method="post" action="/admin/events/${savedEvent.eventKey}/cancel">`,
+    );
     // Pause renders through pre-rendered server HTML ({@html}): the action
     // and copy live in the load data, never as literals here (client gzip
     // ceiling). Reopen stays an inlined one-click form.

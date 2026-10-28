@@ -12,6 +12,7 @@ import {
   type EventSort,
 } from "../event-list";
 import { RsvpAction, Shell } from "./shell";
+import { TerminalReview } from "./terminal-review";
 
 const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuery }> = ({
   label,
@@ -207,11 +208,7 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                       </form>
                     ) : null}
                     {r.status === "draft" || r.status === "published" ? (
-                      <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                        <button type="submit" class="link">
-                          Cancel
-                        </button>
-                      </form>
+                      <TerminalReview kind="cancel" title={r.title} targetId={r.eventKey} />
                     ) : null}
                     <RsvpAction row={r} />
                   </td>

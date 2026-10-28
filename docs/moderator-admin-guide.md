@@ -265,10 +265,15 @@ All 26 routes (15 GET, 11 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
 Pausing RSVPs opens a native review first: open **Review pause**, check the
-named event and consequence, then press the final **Pause RSVPs**. Other
-mutating buttons submit immediately with no action-confirmation dialog.
-Double-check the event/slot and intended action before pressing one. The event
-editor's separate browser warning for unsaved changes is not action approval.
+named event and consequence, then press the final **Pause RSVPs**.
+Event cancellation and featured deletion first open a native review panel with
+**Review cancellation** or **Review deletion**. Check its saved title, ID and
+consequence before pressing the final **Cancel event** or **Delete this slot**
+button. Open and close the review with the same heading (Enter/Space on the
+keyboard), including without JavaScript: neither action submits or navigates,
+and unsaved editor values stay intact. Other mutating buttons still submit
+immediately. Review is accident prevention, not authorization; the editor's
+separate unsaved-changes warning is not action approval.
 
 ### Kit admin shells (shipped; join-attempts pair Kit-served)
 
@@ -376,10 +381,13 @@ leave-page warning for unsaved changes (including after a rejected Save).
 
 ### Cancel, past events and unsupported controls
 
-- **Cancel** on the list / **Cancel event** on edit is available for drafts and
-  published events. Cancellation is terminal: no reopen or republish. Make an
-  approved replacement event if needed. Check carefully; there is no confirmation
-  dialog. Old public links remain a cancelled-event page, not a missing record.
+- **Review cancellation** on the list and edit screen is available for drafts and
+  published events. It names the saved event even if the editor has unsaved changes.
+  Close it to keep the event, or press its final **Cancel event** button to submit.
+  A deliberate final action still requests the existing leave-page warning when
+  the editor is dirty and JavaScript is enabled. Cancellation is terminal: there
+  is no restore, reopen, republish or unpublish action. Make an approved replacement
+  event if needed. Old public links remain a cancelled-event page, not a missing record.
   Use the [event cancellation and reschedule communication checklist](events-communications.md)
   after verifying the site state.
 - `past` is a list filter/status, not something moderators set with a button.
@@ -625,8 +633,11 @@ navigate to write recovery without preserving the draft.
 
 Use only public links and media you are authorized to share; do not paste
 private-service URLs, personal data, or expiring/signed URLs into site content.
-**Delete this slot** removes the row immediately, without a confirmation dialog;
-prefer retaining/unpublishing it unless deletion is explicitly authorized.
+Open **Review deletion** and check the saved headline and slot ID before pressing
+its final **Delete this slot** button. Only that final submit removes the row;
+deletion cannot be undone. Close the review to keep the slot and any unsaved edits.
+Prefer retaining it unless deletion is explicitly authorized: to unpublish without
+deleting, clear **Published** and **Save** in the editor instead.
 
 Older/imported same-site images can still render on the homepage, but saving a
 slot applies the current Image URL rules even if that field was unchanged.

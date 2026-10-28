@@ -6,7 +6,7 @@ import { raw } from "hono/html";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { cloneElement, isValidElement } from "hono/jsx";
 import { SkipLink } from "../../pages";
-import { rsvpPauseReviewCopy } from "../rsvp-review";
+import { renderRsvpPauseReviewHtml } from "../rsvp-review";
 import type { EventRow } from "../store";
 import type { SortOrder } from "../table-list";
 
@@ -40,6 +40,7 @@ export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, childre
         <title>{title} — TWO admin</title>
         <link rel="stylesheet" href="/styles.css" />
         <link rel="stylesheet" href="/admin-rsvp-review.css" />
+        <link rel="stylesheet" href="/admin-terminal-review.css" />
       </head>
       <body>
         <SkipLink />
@@ -95,23 +96,7 @@ export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
   // Pause passes a native server-rendered review: opening or closing the
   // disclosure makes no request, and only the final submit uses the existing
   // POST endpoint. Reopen stays one-click.
-  const copy = rsvpPauseReviewCopy;
-  return (
-    <details class="rsvp-review" data-testid="rsvp-pause-review">
-      <summary aria-label={`${copy.summary}: ${row.title}`}>{copy.summary}</summary>
-      <p>
-        {copy.target}: <strong>{row.title}</strong>
-      </p>
-      <p class="rsvp-review-id">ID: {row.eventKey}</p>
-      <p>{copy.consequence}</p>
-      <p>{copy.keep}</p>
-      <form method="post" action={`/admin/events/${row.eventKey}/rsvp-pause`}>
-        <button type="submit" class="btn" data-testid="rsvp-pause">
-          {copy.final}
-        </button>
-      </form>
-    </details>
-  );
+  return raw(renderRsvpPauseReviewHtml(row.title, row.eventKey));
 };
 
 type FieldProps = {

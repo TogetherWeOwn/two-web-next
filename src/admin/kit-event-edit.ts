@@ -46,6 +46,7 @@ import {
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { renderTerminalReviewHtml } from "./terminal-review";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -121,6 +122,7 @@ export type KitEventEditView = {
   isDraft: boolean;
   showPublish: boolean;
   showCancel: boolean;
+  cancelReviewHtml: string;
   rsvpAction: "rsvp-pause" | "rsvp-reopen" | null;
   /** The Hono series-move hint for series parents; null for one-offs. */
   seriesNote: string | null;
@@ -244,6 +246,7 @@ export async function resolveKitEventEdit(
         ? "rsvp-pause"
         : "rsvp-reopen"
       : null;
+  const showCancel = row.status === "draft" || row.status === "published";
   const recovery = rosterRecovery(row.eventKey, query, entries.length, roster.total);
   // Same guard as the Hono edit fill: a corrupt zone or unrenderable instant
   // stays visible for correction but is never formatted.
@@ -271,7 +274,15 @@ export async function resolveKitEventEdit(
       hasErrors: false,
       isDraft: false,
       showPublish: row.status === "draft",
-      showCancel: row.status === "draft" || row.status === "published",
+      showCancel,
+      cancelReviewHtml: showCancel
+        ? renderTerminalReviewHtml({
+            kind: "cancel",
+            title: row.title,
+            targetId: row.eventKey,
+            testId: "cancel-event",
+          })
+        : "",
       rsvpAction,
       seriesNote: row.recurrenceFrequency
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`

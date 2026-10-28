@@ -64,6 +64,8 @@ jobs:
             "src/admin/save-status.ts" \
             "src/admin/table-list.ts" \
             "src/admin/featured-list-query.ts" \
+            "src/admin/terminal-review.ts" \
+            "src/admin/native-review.ts" \
             "src/db/admin-schema.ts" \
             "src/db/schema.ts" \
             "src/featured.ts" \
