@@ -114,6 +114,7 @@ const localsFor = (owner: boolean, moderator: boolean): KitLocals => ({
   joinResult: null,
   returnTo: null,
   expiredWrite: null,
+  restoredWrite: null,
 });
 
 // Parse tags from actual SSR output, never from source or a hand-written page.

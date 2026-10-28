@@ -19,6 +19,7 @@ let {
   loginReturnTo = null,
   accountChrome,
   hideAccount = false,
+  restoredWrite = null,
   children,
 }: {
   title: string;
@@ -40,6 +41,14 @@ let {
   accountChrome?: Snippet;
   /** Drop the account area entirely, as Hono account={false} does on sessionless pages. */
   hideAccount?: boolean;
+  /** Restored-write notice from the root layout data: renders the "you
+    signed in again" banner first inside <main>, exactly as Hono's
+    expiredWriteBanner middleware injects it. The destination is never
+    rendered — the banner keeps its copy with no link — so a hostile value
+    stays inert. Bytes are twinned deliberately (never imported from the
+    .tsx): importing the Hono screen would bundle the JSX runtime into the
+    Kit worker, and the acceptance suite pins both copies byte-identical. */
+  restoredWrite?: string | null;
   children: Snippet;
 } = $props();
 
@@ -62,6 +71,6 @@ const shellClass = $derived(
   exception: it renders leaf-CSS classes only (see shellClass). -->
 <div class={shellClass} data-theme={theme}>
   <SiteHeader {activeNav} {member} {loginReturnTo} {accountChrome} {hideAccount} />
-  <main class={mainClass} id="main" tabindex="-1">{@render children()}</main>
+  <main class={mainClass} id="main" tabindex="-1">{#if restoredWrite}<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>{/if}{@render children()}</main>
   <SiteFooter {theme} />
 </div>

@@ -67,7 +67,7 @@ describe("Kit events-list page contract", () => {
     // Group outlet carries no chrome of its own: children own their titles,
     // the Kit twin of the Hono Shell titles. csr=false disables hydration on
     // first load, like the Hono panel that ships no JavaScript.
-    expect(source).toContain('<AdminShell title="Events">');
+    expect(source).toContain('<AdminShell title="Events" restoredWrite={data.restoredWrite}>');
     const load = readFileSync(
       fileURLToPath(
         new URL("../web/src/routes/admin/events/+page.server.ts", import.meta.url).href,

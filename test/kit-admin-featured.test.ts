@@ -267,7 +267,7 @@ describe("featured Kit chrome (per-child AdminShell)", () => {
   // featured slice's own title, the Kit twin of its Hono Shell title.
   it("wraps itself in its own AdminShell title", () => {
     expect(read("web/src/routes/admin/featured/+page.svelte")).toContain(
-      '<AdminShell title="Featured content">',
+      '<AdminShell title="Featured content" restoredWrite={data.restoredWrite}>',
     );
   });
 });

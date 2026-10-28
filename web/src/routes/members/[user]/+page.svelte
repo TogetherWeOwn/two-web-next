@@ -14,5 +14,6 @@ let { data }: PageProps = $props();
   isModerator={data.isModerator}
   appUrl={data.appUrl}
   joinResult={data.joinResult}
+  restoredWrite={data.restoredWrite}
   sharedGames={data.sharedGames}
 />

@@ -19,6 +19,7 @@ declare global {
       returnTo?: KitLocals["returnTo"];
       joinResult?: KitLocals["joinResult"];
       expiredWrite?: KitLocals["expiredWrite"];
+      restoredWrite?: KitLocals["restoredWrite"];
       // Validated request id the Kit hook merged before resolve (Hono
       // requestLog parity): response header, error pages and error.alert
       // lines carry this same value. Absent off the Kit branch.

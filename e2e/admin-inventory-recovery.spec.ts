@@ -3,7 +3,8 @@
 import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { dirname, resolve, sep } from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
+import { builtNodeStyles } from "./kit-built-styles.mjs";
 import {
   compileInventoryKit,
   inventoryRow,
@@ -18,10 +19,7 @@ let kitStyles: string[];
 test.beforeAll(async () => {
   await compileInventoryKit();
   // Root-layout CSS from the actual Kit build, not a test-owned style substitute.
-  const node = await import(
-    pathToFileURL(resolve(root, "web/.svelte-kit/output/server/nodes/0.js")).href
-  );
-  kitStyles = node.stylesheets;
+  kitStyles = await builtNodeStyles(resolve(root, "web/.svelte-kit/output/server/nodes/0.js"));
 });
 
 async function mount(

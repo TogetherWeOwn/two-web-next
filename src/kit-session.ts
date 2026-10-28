@@ -70,6 +70,7 @@ export type KitReturnJourney = {
   returnTo: string | null;
   joinResult: JoinResult | null;
   expiredWrite: string | null;
+  restoredWrite: string | null;
 };
 
 /** Everything the Kit hook merges into locals on a Kit-owned request. */
@@ -82,7 +83,12 @@ export type RequestSessionDeps = {
 
 const GUEST: KitRequestSession = { status: "guest", session: null };
 const UNKNOWN: KitRequestSession = { status: "unknown", session: null };
-const NO_JOURNEY: KitReturnJourney = { returnTo: null, joinResult: null, expiredWrite: null };
+const NO_JOURNEY: KitReturnJourney = {
+  returnTo: null,
+  joinResult: null,
+  expiredWrite: null,
+  restoredWrite: null,
+};
 
 async function verifiedCookies(
   request: Request,
@@ -160,22 +166,57 @@ function joinResultOf(value: string | false | undefined): JoinResult | null {
   return value === "added" || value === "already_member" ? value : null;
 }
 
-// Mirrors consumeExpiredWrite: only a pending notice resolves; a restored one
-// belongs to Hono's banner render, never to a Kit destination.
+// Mirrors consumeExpiredWrite: only a pending notice resolves here; a
+// restored one resolves through restoredWriteOf below, never as a pending
+// destination.
 function expiredWriteOf(value: string | false | undefined): string | null {
   if (typeof value !== "string" || !value.startsWith("pending|")) return null;
   return safeNext(value.slice("pending|".length));
 }
 
+// Companion to expiredWriteOf: a restored notice resolves to its safe
+// destination with the same safeNext discipline, so Kit pages render the
+// "you signed in again" banner Hono's expiredWriteBanner renders. Like its
+// sibling this is a read-only peek with no method gate: the GET-only,
+// HTML-200-only discipline lives at the render (Kit views) and at the
+// one-shot consumption (the hook core), exactly as on Hono.
+function restoredWriteOf(value: string | false | undefined): string | null {
+  if (typeof value !== "string" || !value.startsWith("restored|")) return null;
+  return safeNext(value.slice("restored|".length));
+}
+
+/**
+ * Request-side gates for the restored-write banner, shared by the Kit render
+ * (the root layout load) and the one-shot consumption (the hook core) so the
+ * two can never disagree: a request that cannot render must never consume.
+ * Mirrors Hono's expiredWriteBanner guards structurally: /auth/* journey
+ * pages are excluded like Hono's path guard, and island-fragment requests
+ * are excluded like Hono's </body>+<main> structural check (a fragment has
+ * no banner slot, and the join flash keeps the same island rule).
+ */
+export function isRestoredBannerEligible(request: Request): boolean {
+  let pathname: string;
+  try {
+    pathname = new URL(request.url).pathname;
+  } catch {
+    return false;
+  }
+  if (pathname.startsWith("/auth/")) return false;
+  if (request.headers.get("x-two-island")) return false;
+  return true;
+}
+
 /**
  * Kit-visible return state, read-only: the safe destination the OAuth
- * callback would honor, the one-shot join flash, and the pending
- * expired-write notice. This peek never deletes. A profile destination
- * expires a valid flash only after the member-read boundary releases a
- * successful HTML GET; every other Kit read still leaves consumption to the
- * route that renders the banner. HEAD/POST reads leave the join flash
- * pending, matching Hono's GET-only readJoinResult, so a peek cannot
- * double-spend it.
+ * callback would honor, the one-shot join flash, the pending expired-write
+ * notice, and the restored expired-write notice Kit pages render as the
+ * "you signed in again" banner. This peek never deletes. A profile
+ * destination expires a valid join flash only after the member-read
+ * boundary releases a successful HTML GET; the restored notice is consumed
+ * by the hook core after any released successful HTML GET, and every other
+ * Kit read still leaves consumption to the route that renders the banner.
+ * HEAD/POST reads leave the join flash pending, matching Hono's GET-only
+ * readJoinResult, so a peek cannot double-spend it.
  */
 export async function readReturnJourney(
   request: Request,
@@ -193,6 +234,7 @@ export async function readReturnJourney(
       safeNext(typeof intended === "string" ? intended : null),
     joinResult: request.method === "GET" ? joinResultOf(cookies[JOIN_RESULT_COOKIE]) : null,
     expiredWrite: expiredWriteOf(cookies[EXPIRED_WRITE_COOKIE]),
+    restoredWrite: restoredWriteOf(cookies[EXPIRED_WRITE_COOKIE]),
   };
 }
 

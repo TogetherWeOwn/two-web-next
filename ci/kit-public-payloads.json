@@ -13,7 +13,7 @@
       "route": "GET /*",
       "binding": "web/src/routes/+layout.server.ts",
       "tests": ["Kit root layout load: requestId forwarding"],
-      "note": "Every Kit page inherits only the validated request reference, never member or session locals; executed exact-shape and hostile-locals checks."
+      "note": "Every Kit page inherits the validated request reference and safe restored-write destination, never member or session locals; executed exact-shape and hostile-locals checks."
     },
     {
       "id": "kit-payload-detector",

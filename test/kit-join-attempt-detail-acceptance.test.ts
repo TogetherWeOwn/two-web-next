@@ -214,6 +214,7 @@ describe("acceptance: detail route classification and audited release", () => {
     returnTo: null,
     joinResult: null,
     expiredWrite: null,
+    restoredWrite: null,
   });
   const guest = (): KitLocals => ({
     status: "guest",
@@ -221,6 +222,7 @@ describe("acceptance: detail route classification and audited release", () => {
     returnTo: null,
     joinResult: null,
     expiredWrite: null,
+    restoredWrite: null,
   });
   const eventFor = (path: string): HookEventLike => {
     const request = new Request(new URL(path, APP_URL).href, {

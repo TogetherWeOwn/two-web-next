@@ -805,10 +805,10 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
   it("pins each cited test line to the case the row means", () => {
     const expected: Record<string, Record<string, RegExp>> = {
       [BRIDGE]: {
-        "test/kit-member-dispatch.test.ts:266": /a failed session bridge leaves the viewer unknown/,
+        "test/kit-member-dispatch.test.ts:268": /a failed session bridge leaves the viewer unknown/,
       },
       [PROBE]: {
-        "test/kit-member-dispatch.test.ts:219":
+        "test/kit-member-dispatch.test.ts:221":
           /keeps an authorized admin response when the probe rejects/,
       },
       [ROTATION]: {
@@ -909,6 +909,7 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
               returnTo: null,
               joinResult: null,
               expiredWrite: null,
+              restoredWrite: null,
             }),
             [provider]: reject,
           };

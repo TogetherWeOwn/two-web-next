@@ -160,6 +160,7 @@ describe("hot-zone Kit ownership (shipped manifest)", () => {
         returnTo: null,
         joinResult: null,
         expiredWrite: null,
+        restoredWrite: null,
       }),
       accessSink: async () => async () => true,
     };
