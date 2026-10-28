@@ -499,7 +499,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
             c,
             err,
             (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
+              c.html(
+                <EventFormPage
+                  mode="edit"
+                  row={existing}
+                  values={v}
+                  errors={errors}
+                  rosterHiddenNotice
+                />,
+              ),
             values,
           );
         }
@@ -522,7 +530,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
             c,
             err,
             (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
+              c.html(
+                <EventFormPage
+                  mode="edit"
+                  row={existing}
+                  values={v}
+                  errors={errors}
+                  rosterHiddenNotice
+                />,
+              ),
             values,
           );
         }
