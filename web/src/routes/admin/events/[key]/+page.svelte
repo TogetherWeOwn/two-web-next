@@ -205,6 +205,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     </div>
   </form>
   {@html '<p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>'}
+  {@html view.savedReviewHtml}
   <section aria-label="Status">
     <h2>Status: {view.status}</h2>
     <div class="actions rsvp-actions">
