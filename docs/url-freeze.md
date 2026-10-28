@@ -53,6 +53,19 @@ caller-only write, decoy, lock and 12/minute bucket; successful submissions retu
 POST to that JSON resource still returns 405. The global same-origin guard
 applies to the HTML adapter as to all cookie-authenticated mutations.
 
+## Featured withdrawal (additive admin action)
+
+`POST /admin/featured/:id/unpublish` is the moderator-only native form action
+for withdrawing one featured slot without resubmitting its other saved fields.
+The shared same-origin guard still applies. The action body cap precedes the
+shared admin-write throttle; non-canonical or unknown IDs return 404. Success
+returns 303 to `/admin/featured`, including an already-unpublished no-op. Only a
+changed withdrawal writes the dirty publication audit and retires the guest
+homepage cache after commit. The full edit and delete routes are unchanged.
+Endpoint and cache/row-state proofs live in
+`test/admin-featured-unpublish-acceptance.test.ts` and
+`test/admin-featured-unpublish-invariants.test.ts`.
+
 ## Redirect map
 
 Legacy-only aliases ([TOG-11156](/TOG/issues/TOG-11156)); request proof:
