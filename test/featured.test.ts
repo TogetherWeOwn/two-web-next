@@ -1,3 +1,4 @@
+import { registerExpiredFeaturedCapTests } from "./helpers/home-featured-expired-cap";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/postgres-js";
 import app from "./app";
@@ -168,6 +169,8 @@ describe("featured homepage fallback (local fixtures)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Postgres)", () => {
+  registerExpiredFeaturedCapTests();
+
   let fixture: MemberDataFixture;
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 2 });

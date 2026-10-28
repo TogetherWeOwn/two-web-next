@@ -1,3 +1,7 @@
+import {
+  registerHomepageBoundedReadTests,
+  registerMcpCommunityBudgetTests,
+} from "./helpers/homepage-bounded-reads";
 // route-inventory: POST /mcp
 // route-inventory: OPTIONS /mcp
 // Stateless public read-only MCP at /mcp (B2): exact tool allowlist over the
@@ -46,6 +50,9 @@ type RpcResponse = {
 };
 
 describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
+  registerHomepageBoundedReadTests();
+  registerMcpCommunityBudgetTests();
+
   let fixture: MemberDataFixture;
   let db: MemberDataFixture["db"];
   let store: SessionStore;

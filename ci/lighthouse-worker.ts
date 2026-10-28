@@ -22,13 +22,29 @@ const linkSelect =
   'select "id", "event_key", "title", "starts_at", "ends_at", "timezone", "location", "game", "rsvp_open" from "events"';
 const timeoutsSql =
   "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)";
-const featuredSql =
-  'select "id", "title", "body", "url", "image_url", "image_alt" from "featured_contents" where ("featured_contents"."is_published" = $1 and ("featured_contents"."starts_at" is null or "featured_contents"."starts_at" <= $2) and ("featured_contents"."ends_at" is null or "featured_contents"."ends_at" > $3)) order by "featured_contents"."position" asc, "featured_contents"."id" asc';
-// Homepage guest cache base: every published row with its window bounds; the
-// worker applies the live window per request, so the open window here (null
-// bounds) stays visible at every instant.
-const publishedFeaturedSql =
-  'select "id", "title", "body", "url", "image_url", "image_alt", "starts_at", "ends_at" from "featured_contents" where "featured_contents"."is_published" = $1 order by "featured_contents"."position" asc, "featured_contents"."id" asc';
+const featuredSql = `select "admitted_featured"."id", "admitted_featured"."title", "admitted_featured"."body", "admitted_featured"."url", "admitted_featured"."image_url", "admitted_featured"."image_alt", "n" from (select count(*) as "n" from "featured_contents" where (("featured_contents"."is_published" = $1 and ("featured_contents"."starts_at" is null or "featured_contents"."starts_at" <= $2) and ("featured_contents"."ends_at" is null or "featured_contents"."ends_at" > $3)) and not (length("featured_contents"."title") <= 255
+  and ("featured_contents"."body" is null or length("featured_contents"."body") <= 1000)
+  and ("featured_contents"."url" is null or length("featured_contents"."url") <= 255)
+  and ("featured_contents"."image_url" is null or length("featured_contents"."image_url") <= 255)
+  and ("featured_contents"."image_alt" is null or length("featured_contents"."image_alt") <= 255)))) "skipped_featured" left join (select "id", "title", "body", "url", "image_url", "image_alt", "position" from "featured_contents" where (("featured_contents"."is_published" = $4 and ("featured_contents"."starts_at" is null or "featured_contents"."starts_at" <= $5) and ("featured_contents"."ends_at" is null or "featured_contents"."ends_at" > $6)) and length("featured_contents"."title") <= 255
+  and ("featured_contents"."body" is null or length("featured_contents"."body") <= 1000)
+  and ("featured_contents"."url" is null or length("featured_contents"."url") <= 255)
+  and ("featured_contents"."image_url" is null or length("featured_contents"."image_url") <= 255)
+  and ("featured_contents"."image_alt" is null or length("featured_contents"."image_alt") <= 255)) order by "featured_contents"."position" asc, "featured_contents"."id" asc limit $7) "admitted_featured" on true order by "admitted_featured"."position" asc, "admitted_featured"."id" asc`;
+// Homepage guest cache base: every published, not-yet-ended row with its
+// window bounds (already-ended rows are excluded before the cap, so expired
+// inventory cannot crowd live rows out of the base); the worker applies the
+// live window per request, so the open window here (null bounds) stays
+// visible at every instant.
+const publishedFeaturedSql = `select "admitted_featured"."id", "admitted_featured"."title", "admitted_featured"."body", "admitted_featured"."url", "admitted_featured"."image_url", "admitted_featured"."image_alt", "admitted_featured"."starts_at", "admitted_featured"."ends_at", "n" from (select count(*) as "n" from "featured_contents" where (("featured_contents"."is_published" = $1 and ("featured_contents"."ends_at" is null or "featured_contents"."ends_at" > $2)) and not (length("featured_contents"."title") <= 255
+  and ("featured_contents"."body" is null or length("featured_contents"."body") <= 1000)
+  and ("featured_contents"."url" is null or length("featured_contents"."url") <= 255)
+  and ("featured_contents"."image_url" is null or length("featured_contents"."image_url") <= 255)
+  and ("featured_contents"."image_alt" is null or length("featured_contents"."image_alt") <= 255)))) "skipped_featured" left join (select "id", "title", "body", "url", "image_url", "image_alt", "starts_at", "ends_at", "position" from "featured_contents" where (("featured_contents"."is_published" = $3 and ("featured_contents"."ends_at" is null or "featured_contents"."ends_at" > $4)) and length("featured_contents"."title") <= 255
+  and ("featured_contents"."body" is null or length("featured_contents"."body") <= 1000)
+  and ("featured_contents"."url" is null or length("featured_contents"."url") <= 255)
+  and ("featured_contents"."image_url" is null or length("featured_contents"."image_url") <= 255)
+  and ("featured_contents"."image_alt" is null or length("featured_contents"."image_alt") <= 255)) order by "featured_contents"."position" asc, "featured_contents"."id" asc limit $5) "admitted_featured" on true order by "admitted_featured"."position" asc, "admitted_featured"."id" asc`;
 // Attributable going count: joins users and counts only named rows, so the
 // badge agrees with the roster (the fixture's three going members are named).
 // Seat occupancy counts every going row (same shape as waitlist.goingCount);
@@ -224,13 +240,21 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         ) {
           return { rows: fixture.endsAt < new Date(params[0]) ? [encoded] : [] };
         }
+        // The bounded readers share one statement shape: admitted rows (cap
+        // probe 101) left-joined onto the counts-only refused total, which
+        // rides every returned row as the trailing "n" column. The fixture
+        // row fits the write maxima, so its refused count is 0.
         if (
           inTransaction &&
           sql === featuredSql &&
-          params.length === 3 &&
+          params.length === 7 &&
           params[0] === true &&
           isInstant(params[1]) &&
-          params[1] === params[2]
+          params[1] === params[2] &&
+          params[3] === true &&
+          params[4] === params[1] &&
+          params[5] === params[1] &&
+          params[6] === 101
         ) {
           return {
             rows: [
@@ -241,6 +265,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
                 "/events",
                 null,
                 null,
+                0,
               ],
             ],
           };
@@ -248,8 +273,12 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         if (
           inTransaction &&
           sql === publishedFeaturedSql &&
-          params.length === 1 &&
-          params[0] === true
+          params.length === 5 &&
+          params[0] === true &&
+          isInstant(params[1]) &&
+          params[2] === true &&
+          params[3] === params[1] &&
+          params[4] === 101
         ) {
           return {
             rows: [
@@ -262,6 +291,7 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
                 null,
                 null,
                 null,
+                0,
               ],
             ],
           };

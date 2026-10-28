@@ -228,7 +228,11 @@ export async function cachedFeatured(
   let value: PublishedFeatured[];
   try {
     const db = await openDb();
-    value = db ? await listPublishedFeatured(db) : [];
+    // The fill passes the request time so already-ended published rows are
+    // excluded before the row cap instead of crowding live rows out of the
+    // base; the per-request window below still judges every cached row, so
+    // boundary instants stay exact.
+    value = db ? await listPublishedFeatured(db, now) : [];
   } catch {
     // Mirror warnHomeFallback (src/events/reads.ts): the bounded exception
     // class plus the validated request id, never driver text, SQL or

@@ -1,8 +1,10 @@
 // TOG-12274: FeaturedContentPolicy parity (docs/parity.md §9).
 //
 // Legacy: every featured-content write is moderator-only; the public surface
-// reads exactly the `currentlyVisible` rows (start inclusive, end exclusive,
-// no homepage cap — src/featured.ts:11). TOG-8719 covered JoinAttempt +
+// reads exactly the `currentlyVisible` rows (start inclusive, end exclusive;
+// src/featured.ts adds a generous 100-row pathological cap plus SQL length
+// admission at the write maxima, so stored rows written around the form are
+// skipped whole instead of transferred and rendered). TOG-8719 covered JoinAttempt +
 // agent-event policies only; this file pins the featured half.
 //
 // Enforcement lives in the existing layers (no product change here beyond the
