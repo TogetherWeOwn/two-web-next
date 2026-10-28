@@ -8,10 +8,10 @@
 // working without the island.
 //
 // Stored profile "A" and rejected draft "B" below are synthetic. Everything
-// runs on the real profiles routes, the real SSR page and the shipped
-// public/islands/member-profile.js binder over in-memory stores and an
-// ephemeral loopback server. No database, staging identity or external
-// service is used.
+// runs on the real Hono profiles routes or real Svelte ProfileView SSR, with
+// source/shipped member-profile binders. Transport uses in-memory stores and
+// an ephemeral loopback server or intercepted local documents. No database,
+// staging identity or external service is used.
 //
 // The browser cases are opt-in where Chromium is installed:
 // A11Y_BROWSER_TESTS=true npx vitest run test/member-profile-native-422-baseline.test.ts
@@ -20,13 +20,14 @@ import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import type { AddressInfo } from "node:net";
 import { serializeSigned } from "hono/utils/cookie";
-import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Browser, BrowserContext, Page } from "playwright";
 import type { Env } from "../src/env";
 import { PROFILE_HONEY_FIELD, PROFILE_OPENED_AT_FIELD } from "../src/islands/contracts";
 import { profilesApp } from "../src/profiles/routes";
 import { createMemoryProfileStore } from "../src/profiles/store";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { compileProfileView } from "./helpers/profile-participation";
 import { registerProfileParticipationBrowserCases } from "./helpers/profile-participation-browser";
 
 const ID = "100000000000000001";
@@ -187,11 +188,16 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
   () => {
     registerProfileParticipationBrowserCases();
     let browser: Browser;
+    let renderKit: Awaited<ReturnType<typeof compileProfileView>>;
     const contexts: BrowserContext[] = [];
     const servers: Server[] = [];
     beforeAll(async () => {
+      renderKit = await compileProfileView();
       const { chromium } = await import("playwright");
       browser = await chromium.launch({ headless: true });
+    });
+    afterEach(async () => {
+      await Promise.all(contexts.splice(0).map((context) => context.close()));
     });
     afterAll(async () => {
       await Promise.all(contexts.map((context) => context.close()));
@@ -451,14 +457,14 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
       expect(await page.getByTestId("profile-bio").textContent()).toContain(B.bio);
     });
 
-    async function expectSavedEditor(page: Page) {
+    async function expectSavedEditor(page: Page, leaderboardOptOut = A.leaderboardOptOut) {
       await expect
         .poll(() => formState(page))
         .toEqual({
           bio: A.bio,
           games_text: A.games_text,
           timezone: A.timezone,
-          checked: false,
+          checked: leaderboardOptOut,
           departurePrevented: false,
         });
       await expect
@@ -664,6 +670,266 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
         leaderboardOptOut: false,
       });
     });
+
+    type KitRefusal = {
+      status: 422 | 503;
+      errors: Record<string, string>;
+      timezone: string;
+      savedOptOut: boolean;
+      refusedOptOut: boolean;
+    };
+    const kitRefusals: KitRefusal[] = [
+      {
+        status: 422,
+        errors: { timezone: "Choose a valid IANA timezone, e.g. Europe/London." },
+        timezone: B.timezone,
+        savedOptOut: false,
+        refusedOptOut: true,
+      },
+      {
+        status: 503,
+        errors: { save: "We couldn't save your profile. Please try again." },
+        timezone: CORRECTED_TIMEZONE,
+        savedOptOut: true,
+        refusedOptOut: false,
+      },
+    ];
+
+    // Exercise ProfileView's public props with real Svelte SSR, not Hono HTML
+    // relabelled as Kit. Only the document transport is synthetic: a refusal
+    // serves B over saved A, and a clean member GET serves A without values/errors.
+    async function openKitProfile(
+      javaScriptEnabled: boolean,
+      {
+        refusal,
+        artifact = "shipped",
+        errors,
+        isOwner = true,
+      }: {
+        refusal?: KitRefusal;
+        artifact?: "source" | "shipped";
+        errors?: Record<string, string> | null;
+        isOwner?: boolean;
+      } = {},
+    ) {
+      const context = await browser.newContext({ javaScriptEnabled, serviceWorkers: "block" });
+      contexts.push(context);
+      const page = await context.newPage();
+      const pageErrors: string[] = [];
+      const requests: { method: string; path: string; status: number }[] = [];
+      const profilePath = `/members/${ID}`;
+      const savedOptOut = refusal?.savedOptOut ?? false;
+      const member = {
+        id: ID,
+        username: "alice",
+        avatar: null,
+        bio: A.bio,
+        games: [...A.games],
+        timezone: A.timezone,
+        leaderboardOptOut: savedOptOut,
+      };
+      page.on("pageerror", (error) => pageErrors.push(error.message));
+      await context.route("**/*", async (route) => {
+        const request = route.request();
+        const url = new URL(request.url());
+        if (url.origin !== env.APP_URL) return route.abort();
+        if (request.method() !== "GET") {
+          requests.push({ method: request.method(), path: url.pathname, status: 500 });
+          return route.fulfill({ status: 500, body: "Unexpected profile mutation" });
+        }
+        if (/^\/islands\/[a-z0-9-]+\.js$/.test(url.pathname))
+          return route.fulfill({
+            contentType: "text/javascript",
+            body: readFileSync(
+              (artifact === "source" ? "assets" : "public") + url.pathname,
+              "utf8",
+            ),
+          });
+        if (url.pathname.endsWith(".css"))
+          return route.fulfill({
+            contentType: "text/css",
+            body: readFileSync("public" + url.pathname, "utf8"),
+          });
+        if (url.pathname !== profilePath) {
+          if (["document", "fetch", "xhr"].includes(request.resourceType()))
+            requests.push({ method: "GET", path: url.pathname + url.search, status: 204 });
+          return route.fulfill({ status: 204 });
+        }
+        const rejected = refusal && url.searchParams.get("refused") === String(refusal.status);
+        const status = rejected ? refusal.status : 200;
+        requests.push({ method: "GET", path: url.pathname + url.search, status });
+        return route.fulfill({
+          status,
+          contentType: "text/html; charset=utf-8",
+          body: renderKit({
+            member,
+            stats: null,
+            isOwner,
+            isModerator: false,
+            appUrl: env.APP_URL,
+            joinResult: null,
+            errors: rejected ? refusal.errors : errors,
+            values: rejected
+              ? {
+                  bio: B.bio,
+                  games_text: B.games_text,
+                  timezone: refusal.timezone,
+                  leaderboard_opt_out: refusal.refusedOptOut,
+                }
+              : undefined,
+          }),
+        });
+      });
+      const response = await page.goto(
+        env.APP_URL + profilePath + (refusal ? `?refused=${refusal.status}` : ""),
+      );
+      expect(response?.status()).toBe(refusal?.status ?? 200);
+      expect(pageErrors).toEqual([]);
+      return { page, requests, pageErrors, profilePath, savedOptOut };
+    }
+
+    async function expectKitDraft(page: Page, refusal: KitRefusal, enhanced: boolean) {
+      await expect
+        .poll(() => formState(page))
+        .toEqual({
+          bio: B.bio,
+          games_text: B.games_text,
+          timezone: refusal.timezone,
+          checked: refusal.refusedOptOut,
+          departurePrevented: enhanced,
+        });
+      expect(await page.getByTestId("profile-error").textContent()).toContain(
+        Object.values(refusal.errors)[0],
+      );
+      expect(await page.locator("#profile-bio-count").textContent()).toBe("14 of 1000 characters");
+      expect(await page.locator("#profile-games-text-count").textContent()).toBe(
+        "2 of 20 games, 29 of 1700 characters",
+      );
+      const baseline = page.locator("[data-saved-bio]");
+      expect(await baseline.getAttribute("data-saved-bio")).toBe(A.bio);
+      expect(await baseline.getAttribute("data-saved-games-text")).toBe(A.games_text);
+      expect(await baseline.getAttribute("data-saved-timezone")).toBe(A.timezone);
+      expect(await baseline.getAttribute("data-saved-leaderboard-opt-out")).toBe(
+        refusal.savedOptOut ? "1" : "0",
+      );
+      if (refusal.status === 422)
+        expect(await page.locator("#profile-timezone").getAttribute("aria-invalid")).toBe("true");
+    }
+
+    for (const refusal of kitRefusals) {
+      it(`Kit/no-JS Cancel on ${refusal.status} GETs the saved member and discards every refused field`, async () => {
+        const { page, requests, pageErrors, profilePath, savedOptOut } = await openKitProfile(
+          false,
+          {
+            refusal,
+          },
+        );
+        await expectKitDraft(page, refusal, false);
+        const cancel = page.getByTestId("profile-cancel");
+        expect.soft(await cancel.evaluate((node) => node.tagName)).toBe("A");
+        expect.soft(await cancel.getAttribute("href")).toBe(profilePath);
+        const beforeCancel = requests.length;
+        await cancel.click();
+        expect
+          .soft(requests.slice(beforeCancel))
+          .toEqual([{ method: "GET", path: profilePath, status: 200 }]);
+        await expectSavedEditor(page, savedOptOut);
+        expect(page.url()).toBe(env.APP_URL + profilePath);
+        expect(pageErrors).toEqual([]);
+      });
+
+      it(`Kit/non-owner ${refusal.status} has no editor or Cancel`, async () => {
+        const { page, pageErrors } = await openKitProfile(false, { refusal, isOwner: false });
+        expect(await page.getByTestId("profile-form").count()).toBe(0);
+        expect(await page.getByTestId("profile-cancel").count()).toBe(0);
+        expect(
+          await page.locator('[name="bio"], [name="games_text"], [name="timezone"]').count(),
+        ).toBe(0);
+        expect(await page.getByTestId("profile-bio").textContent()).toContain(A.bio);
+        expect(pageErrors).toEqual([]);
+      });
+
+      for (const artifact of ["source", "shipped"] as const) {
+        it(`Kit/${artifact} plain Cancel on ${refusal.status} restores the saved baseline in place with clean errors, counts and focus`, async () => {
+          const { page, requests, pageErrors, savedOptOut } = await openKitProfile(true, {
+            refusal,
+            artifact,
+          });
+          await expectKitDraft(page, refusal, true);
+          const beforeCancel = requests.length;
+          await page.getByTestId("profile-cancel").click();
+          await expectSavedEditor(page, savedOptOut);
+          await expect.poll(() => activeTestId(page)).toBe("profile-name");
+          expect(requests.slice(beforeCancel)).toEqual([]);
+          expect(pageErrors).toEqual([]);
+        });
+
+        for (const activation of ["Control", "Meta", "Shift", "Alt", "middle", "right"] as const) {
+          it(`Kit/${artifact} ${activation} Cancel on ${refusal.status} preserves native link behavior and the refused draft`, async () => {
+            const { page, requests, pageErrors, profilePath } = await openKitProfile(true, {
+              refusal,
+              artifact,
+            });
+            await expectKitDraft(page, refusal, true);
+            const cancel = page.getByTestId("profile-cancel");
+            expect(await cancel.evaluate((node) => node.tagName)).toBe("A");
+            expect(await cancel.getAttribute("href")).toBe(profilePath);
+            const beforeCancel = requests.length;
+            await cancel.evaluate((link) => {
+              // Observe the real binder before suppressing only the browser
+              // default, leaving this document available for draft assertions.
+              link.ownerDocument.addEventListener(
+                "click",
+                (event: Event) => {
+                  link.setAttribute("data-click-default-prevented", String(event.defaultPrevented));
+                  event.preventDefault();
+                },
+                { once: true },
+              );
+            });
+            if (activation === "middle" || activation === "right") {
+              await cancel.dispatchEvent("click", { button: activation === "middle" ? 1 : 2 });
+            } else {
+              await cancel.click({ modifiers: [activation] });
+            }
+            expect(await cancel.getAttribute("data-click-default-prevented")).toBe("false");
+            await expectKitDraft(page, refusal, true);
+            expect(requests.slice(beforeCancel)).toEqual([]);
+            expect(pageErrors).toEqual([]);
+          });
+        }
+      }
+    }
+
+    for (const fresh of [
+      { label: "omitted", errors: undefined },
+      { label: "null", errors: null },
+      { label: "empty", errors: {} },
+    ]) {
+      it(`Kit/no-JS fresh GET with ${fresh.label} errors keeps Cancel as a local native reset`, async () => {
+        const { page, requests, pageErrors } = await openKitProfile(false, {
+          errors: fresh.errors,
+        });
+        const cancel = page.getByTestId("profile-cancel");
+        expect(await cancel.evaluate((node) => node.tagName)).toBe("BUTTON");
+        expect(await cancel.getAttribute("type")).toBe("reset");
+        await setField(page, "bio", B.bio);
+        await setField(page, "games_text", B.games_text);
+        await setField(page, "timezone", B.timezone);
+        await page.locator("#profile-leaderboard-opt-out").check();
+        expect(await formState(page)).toMatchObject({
+          bio: B.bio,
+          games_text: B.games_text,
+          timezone: B.timezone,
+          checked: true,
+        });
+        const beforeCancel = requests.length;
+        await cancel.click();
+        await expectSavedEditor(page);
+        expect(requests.slice(beforeCancel)).toEqual([]);
+        expect(pageErrors).toEqual([]);
+      });
+    }
 
     // Delayed island refusals must respect deliberate newer work, as a
     // delayed success does. The PATCH is held at the route until the test
