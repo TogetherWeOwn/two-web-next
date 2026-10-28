@@ -350,8 +350,9 @@ to 256B at that time). Current bases are frozen. Bounded admissions use the
 additive delta ledger and aggregate per-PR/rolling-week caps in
 `ci/budgets/README.md`. These proxy gates remain hard until representative
 built-Kit user-metric coverage exists. Both final Wrangler dry-run artifacts
-also have a required raw-byte safeguard, measured main plus 2% initial headroom:
+also have a required raw-byte safeguard, measured main plus 2% initial headroom.
 
+The retained proxy gates are:
 
 - Worker entry `_worker.js` (read from the built
   `web/.svelte-kit/cloudflare/` output): exact raw/gzip ceilings.

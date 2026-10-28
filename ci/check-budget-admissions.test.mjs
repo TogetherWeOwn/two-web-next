@@ -4,7 +4,8 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
-import { checkBudgetAdmissions } from "./check-budget-admissions.mjs";
+import { gzipSync } from "node:zlib";
+import { checkBudgetAdmissions, githubRequest } from "./check-budget-admissions.mjs";
 
 const UNIT = "kit-client-js-gzip";
 const path = `ci/budgets/decisions/${UNIT}/2000-01-01-feature.md`;
@@ -13,7 +14,11 @@ const repo = "TogetherWeOwn/example";
 function fixture(t) {
   const root = mkdtempSync(join(tmpdir(), "budget-git-"));
   t.after(() => rmSync(root, { recursive: true, force: true }));
-  const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+  const git = (...args) =>
+    execFileSync("git", ["-C", root, ...args], {
+      encoding: "utf8",
+      env: { ...process.env, GIT_COMMITTER_DATE: NOW, GIT_AUTHOR_DATE: NOW },
+    }).trim();
   const put = (name, contents) => {
     mkdirSync(dirname(join(root, name)), { recursive: true });
     writeFileSync(join(root, name), contents);
@@ -184,12 +189,14 @@ test("unverified main-merge history and wrong historical PR numbers fail closed"
   const fx = fixture(t);
   fx.add();
   const main = fx.commit("history (#42)");
+  fx.add(path.replace("feature", "new"));
+  const head = fx.commit("new allowance");
   await assert.rejects(
-    fx.check("pull_request", prEvent(main, main), { request: async () => [] }),
+    fx.check("pull_request", prEvent(main, head), { request: async () => [] }),
     /main merge provenance/,
   );
   await assert.rejects(
-    fx.check("pull_request", prEvent(main, main), {
+    fx.check("pull_request", prEvent(main, head), {
       request: async () => [
         {
           number: 43,
@@ -261,4 +268,366 @@ test("dirty/untracked budget evidence cannot shadow the checked git snapshot", a
   const fx = fixture(t);
   fx.add();
   await assert.rejects(fx.check("pull_request", prEvent(fx.base, fx.base)), /checkout/);
+});
+
+test("queue record PR must match the proven squash PR even if its blob matches", async (t) => {
+  const fx = fixture(t);
+  fx.add(path, 500, 43);
+  const head = fx.commit("feature (#42)");
+  await assert.rejects(fx.check("merge_group", groupEvent(fx.base, head)), /queue PR attribution/);
+});
+
+for (const mismatch of ["sha", "branch", "repository"]) {
+  test(`merged history rejects a mismatched ${mismatch}`, async (t) => {
+    const fx = fixture(t);
+    fx.add();
+    const main = fx.commit("history (#42)");
+    fx.add(path.replace("feature", "new"));
+    const head = fx.commit("new allowance");
+    const pull = {
+      number: 42,
+      merge_commit_sha: main,
+      merged_at: NOW,
+      base: { ref: "main", repo: { full_name: repo } },
+    };
+    if (mismatch === "sha") pull.merge_commit_sha = fx.base;
+    if (mismatch === "branch") pull.base.ref = "other";
+    if (mismatch === "repository") pull.base.repo.full_name = "other/repo";
+    await assert.rejects(
+      fx.check("pull_request", prEvent(main, head), {
+        request: async () => [pull],
+      }),
+      /main merge provenance/,
+    );
+  });
+}
+
+test("two-parent queue merges are rejected even with valid added-file proof", async (t) => {
+  const fx = fixture(t);
+  fx.git("checkout", "-qb", "side");
+  fx.put("feature.txt", "feature");
+  const side = fx.commit("side");
+  fx.git("checkout", "-q", "--detach", fx.base);
+  fx.add();
+  fx.commit("first (#42)");
+  fx.git("merge", "--no-ff", "-qm", "merge (#42)", side);
+  const head = fx.git("rev-parse", "HEAD");
+  await assert.rejects(fx.check("merge_group", groupEvent(fx.base, head)), /unsupported queue/);
+});
+
+function lifecycle(fx, action, fragment, budget, measured = {}) {
+  const file = `ci/budgets/decisions/allocations/2026-10-28-${action}.md`;
+  fx.put(
+    file,
+    `---\n${JSON.stringify({
+      action,
+      fragment,
+      budget,
+      measured,
+      cause: "New measured island; imports checked for duplication.",
+      pr: 42,
+    })}\n---\n`,
+  );
+  return file;
+}
+function installed(fx) {
+  fx.put("ci/check-budget-admissions.mjs", "// installed checker\n");
+  return fx.commit("install policy");
+}
+function newIsland(fx, overrides = {}) {
+  const asset = "public/islands/new.js";
+  const body = "export const feature = 42;\n";
+  fx.put(asset, body);
+  const measured = {
+    "bundle-public-islands-new-js-raw": Buffer.byteLength(body),
+    "bundle-public-islands-new-js-gzip": gzipSync(body).length,
+  };
+  const budget = { budgets: { [asset]: { maxRawBytes: 27, maxGzipBytes: 47, ...overrides } } };
+  const fragment = "ci/budgets/bundle/new.json";
+  fx.put(fragment, JSON.stringify(budget));
+  lifecycle(fx, "initial", fragment, budget, measured);
+  return { fragment, budget, measured };
+}
+
+test("installed checker admits a measured new island with its own initial decision", async (t) => {
+  const fx = fixture(t);
+  const base = installed(fx);
+  newIsland(fx);
+  const head = fx.commit("new island");
+  const result = await fx.check("pull_request", prEvent(base, head));
+  assert.equal(result.proposed.length, 1);
+});
+
+for (const invalid of ["margin", "measurement", "missing decision", "existing unit"]) {
+  test(`initial allocation rejects ${invalid}`, async (t) => {
+    const fx = fixture(t);
+    const base = installed(fx);
+    const { fragment, budget, measured } = newIsland(
+      fx,
+      invalid === "margin" ? { maxRawBytes: 28 } : {},
+    );
+    if (invalid === "measurement") {
+      measured["bundle-public-islands-new-js-raw"] = 25;
+      lifecycle(fx, "initial", fragment, budget, measured);
+    }
+    if (invalid === "missing decision")
+      rmSync(join(fx.root, "ci/budgets/decisions/allocations/2026-10-28-initial.md"));
+    if (invalid === "existing unit") {
+      budget.budgets = { "public/islands/a.js": { maxRawBytes: 27, maxGzipBytes: 47 } };
+      fx.put(fragment, JSON.stringify(budget));
+      lifecycle(fx, "initial", fragment, budget, measured);
+    }
+    const head = fx.commit("invalid allocation");
+    await assert.rejects(
+      fx.check("pull_request", prEvent(base, head)),
+      /allocation|measurement|duplicate/,
+    );
+  });
+}
+
+for (const remains of [true, false]) {
+  test(`retirement ${remains ? "rejects a still-served asset" : "admits an asset gone from inventory"}`, async (t) => {
+    const fx = fixture(t);
+    fx.put("public/islands/a.js", "export {};\n");
+    fx.put(
+      "ci/budgets/bundle/b.json",
+      JSON.stringify({
+        budgets: { "public/islands/b.js": { maxRawBytes: 100, maxGzipBytes: 50 } },
+      }),
+    );
+    const base = installed(fx);
+    const fragment = "ci/budgets/bundle/a.json";
+    const budget = { budgets: { "public/islands/a.js": { maxRawBytes: 100, maxGzipBytes: 50 } } };
+    rmSync(join(fx.root, fragment));
+    if (!remains) rmSync(join(fx.root, "public/islands/a.js"));
+    lifecycle(fx, "retire", fragment, budget);
+    const head = fx.commit("retire asset");
+    if (remains) await assert.rejects(fx.check("pull_request", prEvent(base, head)), /inventory/);
+    else assert.equal((await fx.check("pull_request", prEvent(base, head))).proposed.length, 1);
+  });
+}
+
+test("install-only deploy allocation cannot be reused after checker reaches main", async (t) => {
+  const fx = fixture(t);
+  const base = installed(fx);
+  fx.put(
+    "ci/budgets/deploy/worker.json",
+    JSON.stringify({
+      worker: { maxRawBytes: 1020 },
+      measuredMain: {
+        sha: base,
+        rawBytesUpperBound: 1000,
+        evidence: "https://github.com/TogetherWeOwn/two-web-next/actions/runs/123/job/456",
+      },
+    }),
+  );
+  const head = fx.commit("attempt second install");
+  await assert.rejects(fx.check("pull_request", prEvent(base, head)), /initial allocation/);
+});
+
+test("old protected-main GitHub squash dates bound lookups, recent records still use merged_at", async (t) => {
+  const fx = fixture(t);
+  fx.add(path, 1_000, 1);
+  fx.git("add", ".");
+  execFileSync("git", ["-C", fx.root, "commit", "-qm", "old feature (#1)"], {
+    env: {
+      ...process.env,
+      GIT_COMMITTER_NAME: "GitHub",
+      GIT_COMMITTER_EMAIL: "noreply@github.com",
+      GIT_COMMITTER_DATE: "2026-10-01T12:00:00Z",
+      GIT_AUTHOR_DATE: "2026-10-01T12:00:00Z",
+    },
+  });
+  const main = fx.git("rev-parse", "HEAD");
+  fx.add(path.replace("feature", "new"));
+  const head = fx.commit("new feature");
+  const result = await fx.check("pull_request", prEvent(main, head), {
+    request: async (endpoint) => {
+      throw new Error(`old commit should not need API: ${endpoint}`);
+    },
+  });
+  assert.equal(result.totals.get(UNIT).weekBase, 101_000);
+  assert.equal(result.totals.get(UNIT).added, 500);
+});
+
+test("GitHub provenance retries transient responses and network errors with bounded backoff", async () => {
+  for (const failure of [429, 503, "network"]) {
+    let calls = 0;
+    const waits = [];
+    const request = githubRequest(
+      repo,
+      "fake-test-token",
+      async () => {
+        calls += 1;
+        if (calls < 3) {
+          if (failure === "network") throw new TypeError("fetch failed");
+          return { ok: false, status: failure };
+        }
+        return { ok: true, json: async () => [{ number: 42 }] };
+      },
+      { sleep: async (ms) => waits.push(ms), random: () => 0 },
+    );
+    assert.deepEqual(await request("commits/example/pulls"), [{ number: 42 }]);
+    assert.equal(calls, 3);
+    assert.deepEqual(waits, [1000, 2000]);
+  }
+});
+
+test("permanent API errors are not retried and transient exhaustion fails closed after three attempts", async () => {
+  for (const status of [404, 503]) {
+    let calls = 0;
+    const request = githubRequest(
+      repo,
+      "fake-test-token",
+      async () => {
+        calls += 1;
+        return { ok: false, status };
+      },
+      { sleep: async () => {}, random: () => 0 },
+    );
+    await assert.rejects(request("pulls/42"), /GitHub provenance/);
+    assert.equal(calls, status === 404 ? 1 : 3);
+  }
+});
+
+test("an unrelated PR needs no GitHub history API when no byte allowance changes", async (t) => {
+  const fx = fixture(t);
+  fx.add();
+  const main = fx.commit("recent feature (#42)");
+  fx.put("unrelated.txt", "no budget changes");
+  const head = fx.commit("unrelated");
+  const result = await fx.check("pull_request", prEvent(main, head), {
+    request: async () => {
+      throw new Error("unnecessary provenance API");
+    },
+  });
+  assert.equal(result.totals.get(UNIT).current, 100_500);
+});
+
+test("retirement keeps prior deltas readable without dropping their immutable evidence", async (t) => {
+  const fx = fixture(t);
+  const unit = "bundle-public-islands-a-js-gzip";
+  const file = `ci/budgets/decisions/${unit}/2026-10-28-old.md`;
+  fx.put(
+    file,
+    `---\n${JSON.stringify({
+      unit,
+      delta_bytes: 1,
+      before_bytes: 49,
+      after_bytes: 51,
+      cause: "Measured prior feature; checked duplicate imports.",
+      pr: 41,
+    })}\n---\n`,
+  );
+  fx.put(
+    "ci/budgets/bundle/b.json",
+    JSON.stringify({
+      budgets: {
+        "public/islands/b.js": { maxRawBytes: 100, maxGzipBytes: 50 },
+      },
+    }),
+  );
+  const base = installed(fx);
+  const fragment = "ci/budgets/bundle/a.json";
+  rmSync(join(fx.root, fragment));
+  lifecycle(fx, "retire", fragment, {
+    budgets: {
+      "public/islands/a.js": { maxRawBytes: 100, maxGzipBytes: 50 },
+    },
+  });
+  const head = fx.commit("retire asset, preserve history");
+  const result = await fx.check("pull_request", prEvent(base, head), {
+    request: async () => {
+      throw new Error("no allowance change");
+    },
+  });
+  assert.equal(result.totals.get(unit).current, 51);
+});
+
+test("a new allocation cannot also consume a byte delta in the same feature", async (t) => {
+  const fx = fixture(t);
+  const base = installed(fx);
+  newIsland(fx);
+  const unit = "bundle-public-islands-new-js-raw";
+  fx.put(
+    `ci/budgets/decisions/${unit}/2026-10-28-extra.md`,
+    `---\n${JSON.stringify({
+      unit,
+      delta_bytes: 1,
+      before_bytes: 27,
+      after_bytes: 28,
+      cause: "Feature growth; checked for duplicate imports.",
+      pr: 42,
+    })}\n---\n`,
+  );
+  const head = fx.commit("initial plus delta");
+  await assert.rejects(
+    fx.check("pull_request", prEvent(base, head)),
+    /cannot also receive a delta/,
+  );
+});
+
+test("retired units cannot consume new delta allowance", async (t) => {
+  const fx = fixture(t);
+  fx.put(
+    "ci/budgets/bundle/a.json",
+    JSON.stringify({
+      budgets: {
+        "public/islands/a.js": { maxRawBytes: 1_000, maxGzipBytes: 50 },
+      },
+    }),
+  );
+  const base = installed(fx);
+  const fragment = "ci/budgets/bundle/a.json";
+  rmSync(join(fx.root, fragment));
+  fx.put(
+    "ci/budgets/bundle/b.json",
+    JSON.stringify({
+      budgets: {
+        "public/islands/b.js": { maxRawBytes: 100, maxGzipBytes: 50 },
+      },
+    }),
+  );
+  fx.put("public/islands/b.js", "export {};\n");
+  lifecycle(fx, "retire", fragment, {
+    budgets: {
+      "public/islands/a.js": { maxRawBytes: 1_000, maxGzipBytes: 50 },
+    },
+  });
+  lifecycle(
+    fx,
+    "initial",
+    "ci/budgets/bundle/b.json",
+    {
+      budgets: {
+        "public/islands/b.js": { maxRawBytes: 11, maxGzipBytes: 31 },
+      },
+    },
+    {
+      "bundle-public-islands-b-js-raw": 11,
+      "bundle-public-islands-b-js-gzip": 31,
+    },
+  );
+  fx.put(
+    "ci/budgets/bundle/b.json",
+    JSON.stringify({
+      budgets: {
+        "public/islands/b.js": { maxRawBytes: 11, maxGzipBytes: 31 },
+      },
+    }),
+  );
+  const unit = "bundle-public-islands-a-js-raw";
+  fx.put(
+    `ci/budgets/decisions/${unit}/2026-10-28-extra.md`,
+    `---\n${JSON.stringify({
+      unit,
+      delta_bytes: 1,
+      before_bytes: 1_000,
+      after_bytes: 1_001,
+      cause: "Feature growth; checked for duplicate imports.",
+      pr: 42,
+    })}\n---\n`,
+  );
+  const head = fx.commit("retire plus delta");
+  await assert.rejects(fx.check("pull_request", prEvent(base, head)), /retired unit/);
 });

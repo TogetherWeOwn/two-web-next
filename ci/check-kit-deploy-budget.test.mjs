@@ -82,3 +82,15 @@ test("final-artifact ceiling consumes the same additive ledger", (t) => {
   assert.equal(result.maxRawBytes, 1_025);
   assert.equal(result.code, 0);
 });
+
+test("deploy allocation rejects both below and above measured main plus 2%", (t) => {
+  const fx = fixture(t);
+  for (const ceiling of [1_000, 1_019, 1_021, 1_040]) {
+    fx.base.worker.maxRawBytes = ceiling;
+    fx.save();
+    assert.equal(fx.measure().code, 2, `invalid allocation ${ceiling}`);
+  }
+  fx.base.worker.maxRawBytes = 1_020;
+  fx.save();
+  assert.equal(fx.measure().code, 0);
+});

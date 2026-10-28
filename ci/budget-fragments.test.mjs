@@ -402,3 +402,41 @@ test("kit fragment with an empty section beside a valid unit cannot enforce (2)"
   });
   assert.equal(runKit(root, sink), 2);
 });
+
+// Removing applyAdmissions from either loader must turn a real fit into a breach.
+test("decision files raise the ceilings actually enforced by both artifact checkers", (t) => {
+  const root = kitFixture(t);
+  const units = ["kit-client-js-gzip", "bundle-public-islands-a-js-gzip"];
+  const payload = "console.log('feature');";
+  const gzip = gzipSync(payload).length;
+  writeFile(root, "public/islands/a.js", payload);
+  writeFile(
+    root,
+    "ci/budgets/bundle/a.json",
+    JSON.stringify({
+      budgets: { "public/islands/a.js": { maxRawBytes: payload.length, maxGzipBytes: gzip - 1 } },
+    }),
+  );
+  const fragment = "ci/budgets/kit/client-js.json";
+  const plan = JSON.parse(readFileSync(join(root, fragment), "utf8"));
+  plan.client.js.maxGzipBytes -= 1;
+  writeFile(root, fragment, JSON.stringify(plan));
+  assert.equal(runKit(root, sink), 1);
+  assert.equal(runBundle(root, sink), 1);
+  for (const unit of units) {
+    writeFile(
+      root,
+      `ci/budgets/decisions/${unit}/2026-10-28-feature.md`,
+      `---\n${JSON.stringify({
+        unit,
+        delta_bytes: 1,
+        before_bytes: 1,
+        after_bytes: 2,
+        cause: "Measured feature; checked imports for duplication.",
+        pr: 42,
+      })}\n---\n`,
+    );
+  }
+  assert.equal(runKit(root, sink), 0);
+  assert.equal(runBundle(root, sink), 0);
+});

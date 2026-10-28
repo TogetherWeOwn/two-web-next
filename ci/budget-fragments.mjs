@@ -22,7 +22,12 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { KIT_BUDGET_SECTIONS } from "./bundle-inventory.mjs";
-import { applyAdmissions, budgetUnits } from "./budget-ledger.mjs";
+import {
+  applyAdmissions,
+  budgetUnits,
+  readAdmissions,
+  retiredBudgetUnits,
+} from "./budget-ledger.mjs";
 import { DEPLOY_BASE, loadDeployBase } from "./kit-deploy-budget.mjs";
 
 function isObject(value) {
@@ -209,6 +214,7 @@ export function loadBundleBudgets(root) {
 
 export function loadBudgetBases(root) {
   return new Map([
+    ...retiredBudgetUnits(readAdmissions(root)),
     ...[...budgetUnits("kit", loadKitBase(root))].map(([key, value]) => [key, value.value]),
     ...[...budgetUnits("bundle", loadBundleBase(root))].map(([key, value]) => [key, value.value]),
     ...(existsSync(join(root, DEPLOY_BASE))

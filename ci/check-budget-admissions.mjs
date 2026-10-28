@@ -7,11 +7,16 @@ import { execFileSync } from "node:child_process";
 import { appendFileSync, readFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
+import { setTimeout as sleep } from "node:timers/promises";
 import { loadBudgetBases } from "./budget-fragments.mjs";
 import { DEPLOY_BASE, loadDeployBase } from "./kit-deploy-budget.mjs";
 import {
   DECISIONS_DIR,
   parseAdmission,
+  parseAllocation,
+  budgetUnits,
+  retiredBudgetUnits,
   validateAdmissions,
   validateFrozenFiles,
 } from "./budget-ledger.mjs";
@@ -53,7 +58,12 @@ function admissions(root, files) {
   for (const [file, blob] of files) {
     if (!file.startsWith(`${DECISIONS_DIR}/`)) continue;
     if (/^ci\/budgets\/decisions\/(kit-perf|bundle)\//.test(file)) continue;
-    records.push(parseAdmission(file, git(root, "cat-file", "blob", blob)));
+    records.push(
+      (file.startsWith(`${DECISIONS_DIR}/allocations/`) ? parseAllocation : parseAdmission)(
+        file,
+        git(root, "cat-file", "blob", blob),
+      ),
+    );
   }
   return records;
 }
@@ -61,33 +71,147 @@ function mainPull(pr, repo) {
   return pr?.base?.ref === "main" && pr?.base?.repo?.full_name === repo;
 }
 
-export function githubRequest(repo, token, fetchImpl = fetch) {
+export function githubRequest(repo, token, fetchImpl = fetch, options = {}) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !token)
     throw new Error("GitHub provenance requires repository and read token");
-  // Paginate arrays without relying on a truncated first page. API paths are
-  // constructed here, never taken from decision bodies or response URLs.
+  const wait = options.sleep ?? sleep;
+  const random = options.random ?? Math.random;
+  const cache = new Map();
   return async (endpoint) => {
+    if (cache.has(endpoint)) return cache.get(endpoint);
     const rows = [];
     for (let page = 1; page <= 100; page += 1) {
-      const response = await fetchImpl(
-        `https://api.github.com/repos/${repo}/${endpoint}?per_page=100&page=${page}`,
-        {
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2022-11-28",
-          },
-          signal: AbortSignal.timeout(30_000),
-        },
-      );
-      if (!response.ok) throw new Error(`GitHub provenance API ${response.status} for ${endpoint}`);
-      const body = await response.json();
-      if (!Array.isArray(body)) return body;
+      let body;
+      for (let attempt = 0; attempt < 3; attempt += 1) {
+        let response;
+        try {
+          response = await fetchImpl(
+            `https://api.github.com/repos/${repo}/${endpoint}?per_page=100&page=${page}`,
+            {
+              headers: {
+                Authorization: `Bearer ${token}`,
+                Accept: "application/vnd.github+json",
+                "X-GitHub-Api-Version": "2022-11-28",
+              },
+              signal: AbortSignal.timeout(30_000),
+            },
+          );
+        } catch (error) {
+          if (attempt === 2)
+            throw new Error(`GitHub provenance network error for ${endpoint}`, { cause: error });
+        }
+        if (response?.ok) {
+          body = await response.json();
+          break;
+        }
+        if (response) {
+          const transient =
+            response.status === 429 ||
+            response.status >= 500 ||
+            (response.status === 403 &&
+              (response.headers?.get("retry-after") ||
+                response.headers?.get("x-ratelimit-remaining") === "0"));
+          if (!transient || attempt === 2)
+            throw new Error(`GitHub provenance API ${response.status} for ${endpoint}`);
+        }
+        await wait(1000 * 2 ** attempt + Math.floor(random() * 250));
+      }
+      if (!Array.isArray(body)) {
+        cache.set(endpoint, body);
+        return body;
+      }
       rows.push(...body);
-      if (body.length < 100) return rows;
+      if (body.length < 100) {
+        cache.set(endpoint, rows);
+        return rows;
+      }
     }
     throw new Error("GitHub provenance pagination exceeded bound");
   };
+}
+
+// Only a protected-main GitHub squash commit can supply the old-history
+// shortcut. Ordinary author/committer dates and filenames never establish age.
+// Recent or nonstandard commits still require GitHub merge_commit_sha/merged_at.
+function oldSquashTime(root, commit, pr, now) {
+  const [name, email, date, subject] = git(
+    root,
+    "show",
+    "-s",
+    "--format=%cn%n%ce%n%cI%n%s",
+    commit,
+  ).split("\n");
+  if (name !== "GitHub" || email !== "noreply@github.com" || !subject.endsWith(` (#${pr})`))
+    return null;
+  const time = Date.parse(date);
+  return Number.isFinite(time) && time <= Date.parse(now) - 7 * 86400000 ? date : null;
+}
+
+function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly) {
+  const records = admissions(
+    root,
+    new Map([...headFiles].filter(([file]) => !baseFiles.has(file))),
+  ).filter((record) => record.action);
+  const initial = new Set(installOnly);
+  const retired = new Set();
+  const existing = new Set();
+  for (const [file, blob] of baseFiles) {
+    if (file.startsWith("ci/budgets/bundle/")) {
+      const plan = JSON.parse(git(root, "cat-file", "blob", blob));
+      for (const unit of budgetUnits("bundle", plan.budgets).keys()) existing.add(unit);
+    }
+  }
+  // A retired identity cannot be recycled as a fresh base to reset its caps.
+  for (const record of admissions(root, baseFiles).filter((row) => row.action === "retire")) {
+    for (const unit of budgetUnits("bundle", record.budget.budgets).keys()) existing.add(unit);
+  }
+  for (const record of records) {
+    const { fragment, budget, measured, action } = record;
+    const target = action === "initial" ? initial : retired;
+    if (target.has(fragment)) throw new Error(`duplicate allocation: ${fragment}`);
+    if (
+      action === "initial"
+        ? baseFiles.has(fragment) || !headFiles.has(fragment)
+        : !baseFiles.has(fragment) || headFiles.has(fragment)
+    )
+      throw new Error(`allocation must match a new/deleted fragment: ${fragment}`);
+    const blob = (action === "initial" ? headFiles : baseFiles).get(fragment);
+    if (JSON.stringify(JSON.parse(git(root, "cat-file", "blob", blob))) !== JSON.stringify(budget))
+      throw new Error(`allocation fragment evidence mismatch: ${fragment}`);
+    const asset = Object.keys(budget.budgets)[0];
+    const identity = git(
+      root,
+      "ls-tree",
+      "--format=%(objectmode) %(objectname)",
+      head,
+      "--",
+      asset,
+    );
+    if (action === "retire") {
+      if (identity) throw new Error(`retirement asset remains in inventory: ${asset}`);
+    } else {
+      if (!identity.startsWith("100644 "))
+        throw new Error(`allocation asset missing from inventory: ${asset}`);
+      const bytes = execFileSync("git", ["-C", root, "cat-file", "blob", identity.slice(7)], {
+        maxBuffer: 16 * 1024 * 1024,
+      });
+      const sizes = { maxRawBytes: bytes.length, maxGzipBytes: gzipSync(bytes).length };
+      for (const [unit, entry] of budgetUnits("bundle", budget.budgets)) {
+        if (existing.has(unit))
+          throw new Error(`duplicate initial allocation for existing unit: ${unit}`);
+        existing.add(unit);
+        const actual = sizes[entry.path.at(-1)];
+        if (
+          measured[unit] !== actual ||
+          entry.value < actual ||
+          BigInt(entry.value) * 100n > BigInt(actual) * 102n
+        )
+          throw new Error(`initial allocation requires exact measurement plus at most 2%: ${unit}`);
+      }
+    }
+    target.add(fragment);
+  }
+  validateFrozenFiles(baseFiles, headFiles, initial, retired);
 }
 
 async function mergedPull(commit, repo, request) {
@@ -120,7 +244,7 @@ async function queueAttribution(
     if (parents.length !== 1 || parents[0] !== previous)
       throw new Error("unsupported queue attribution graph (expected squash chain)");
     const files = snapshot(root, commit);
-    validateFrozenFiles(previousFiles, files, initialAllocations);
+    validateAllocationChanges(root, previousFiles, files, commit, initialAllocations);
     const added = [...files.keys()].filter((file) => !previousFiles.has(file));
     if (added.length) {
       let number;
@@ -181,12 +305,12 @@ export async function checkBudgetAdmissions({ root, repo, eventName, event, now,
   }
   const baseFiles = snapshot(root, base);
   const headFiles = snapshot(root, head);
-  // One-time installation is a separately reviewed initial allocation, not
-  // an ongoing agent escape hatch. Once this checker exists on main, even a
-  // new base is rejected. The measured-main SHA must be in the trusted base.
+  // The deploy base has a one-time installation exception, separate from
+  // measured served-asset lifecycle decisions. Its measured-main SHA must
+  // already be in the trusted base; the exception cannot be reused later.
   const installing = !git(root, "ls-tree", base, "--", "ci/check-budget-admissions.mjs");
   const initialAllocations = installing ? new Set([DEPLOY_BASE]) : new Set();
-  validateFrozenFiles(baseFiles, headFiles, initialAllocations);
+  validateAllocationChanges(root, baseFiles, headFiles, head, initialAllocations);
   if (headFiles.has(DEPLOY_BASE) && !baseFiles.has(DEPLOY_BASE)) {
     loadDeployBase(root);
     const evidence = JSON.parse(
@@ -200,7 +324,13 @@ export async function checkBudgetAdmissions({ root, repo, eventName, event, now,
     new Map([...headFiles].filter(([file]) => !baseFiles.has(file))),
   );
   const mergeCache = new Map();
+  const activeUnits = new Set(
+    proposed.filter((record) => !record.action).map((record) => record.unit),
+  );
   for (const record of historical) {
+    // Frozen history on untouched units cannot change any cap outcome. Avoid
+    // making unrelated PRs depend on GitHub API availability.
+    if (record.action || !activeUnits.has(record.unit)) continue;
     const commits = git(
       root,
       "log",
@@ -215,6 +345,11 @@ export async function checkBudgetAdmissions({ root, repo, eventName, event, now,
       .filter(Boolean);
     if (commits.length !== 1) throw new Error(`ambiguous main merge provenance: ${record.file}`);
     const commit = commits[0];
+    const oldTime = oldSquashTime(root, commit, record.pr, now);
+    if (oldTime) {
+      record.mergedAt = oldTime;
+      continue;
+    }
     if (!mergeCache.has(commit)) mergeCache.set(commit, await mergedPull(commit, repo, request));
     const pull = mergeCache.get(commit);
     if (pull.number !== record.pr)
@@ -243,10 +378,20 @@ export async function checkBudgetAdmissions({ root, repo, eventName, event, now,
         throw new Error(`queue PR attribution mismatch: ${record.file}`);
     }
   }
+  const newUnits = new Set(
+    proposed
+      .filter((row) => row.action === "initial")
+      .flatMap((row) => [...budgetUnits("bundle", row.budget.budgets).keys()]),
+  );
+  if (proposed.some((row) => !row.action && newUnits.has(row.unit)))
+    throw new Error("initial allocation cannot also receive a delta");
+  const retired = retiredBudgetUnits([...historical, ...proposed]);
+  if (proposed.some((row) => !row.action && retired.has(row.unit)))
+    throw new Error("retired unit cannot receive a new delta");
   const totals = validateAdmissions({
     bases: loadBudgetBases(root),
-    historical,
-    proposed,
+    historical: historical.filter((record) => !record.action),
+    proposed: proposed.filter((record) => !record.action),
     now,
   });
   return {

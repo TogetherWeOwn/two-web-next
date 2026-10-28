@@ -79,10 +79,12 @@ dry-run builds byte-identical output, so one ceiling covers both):
 |---|---:|---:|
 | `dist/worker.js` | 2486680 / 499001 | 3108352 / 623872 |
 
-Ceilings are measured size x1.25 rounded up (raw to 512 B, gzip to 256 B),
-the repository x1.25 rule in `ci/budgets/README.md`. Never relax a
-ceiling to turn a build green; a raise needs its own reviewed decision
-explaining what grew and why.
+These historical Worker ceilings used measured size x1.25 rounded up (raw to
+512 B, gzip to 256 B). That is not the current repository-wide admission rule:
+`ci/budgets/README.md` defines immutable Kit/served-asset bases plus additive
+decisions, aggregate 0.5% per-PR and 2% rolling seven-day caps, and measured
+initial/retirement records for served assets. Never relax a ceiling just to turn
+a build green; changes need their own reviewed measurement and cause.
 
 ## Minified public assets
 

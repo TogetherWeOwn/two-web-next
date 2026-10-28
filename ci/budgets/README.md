@@ -71,11 +71,82 @@ closed. File counts and startup time are deliberately not admissible units.
 Unknown units, duplicate identities/keys, symlinks, malformed records, noninteger
 or nonpositive deltas, unsafe totals and unsupported provenance fail closed.
 
-Do not edit a base or historical decision. New assets require a separately
-reviewed **initial-allocation policy/inventory change**, not a percentage of an
-imaginary zero base or an automatic minimum block. Larger/unexplained growth,
-new allocation policy and exhausted allowance need an explicit maintainer
-performance decision outside this delegated admission path.
+Do not edit a base or historical decision. Larger/unexplained growth and
+exhausted allowance need an explicit maintainer performance decision outside
+this delegated admission path.
+
+### New assets, retirement and renames
+
+A genuinely new served island or top-level CSS asset has no prior denominator.
+In its feature PR, add one `bundle/<slug>.json` fragment and its own
+`decisions/allocations/YYYY-MM-DD-<slug>.md` decision. The checker measures the
+tracked asset's raw bytes and default-zlib gzip bytes directly from the event's
+Git tree. Each base must be **measured size through floor(measured size * 1.02)**;
+there is no minimum byte block. Record exact measurements, cause/import review
+and the feature PR. For example, a 27B raw / 47B gzip island may use this record
+(with the actual filename and measurements for your feature):
+
+```markdown
+---
+{
+  "action": "initial",
+  "fragment": "ci/budgets/bundle/new.json",
+  "budget": {"budgets": {"public/islands/new.js": {"maxRawBytes": 27, "maxGzipBytes": 47}}},
+  "measured": {"bundle-public-islands-new-js-raw": 27, "bundle-public-islands-new-js-gzip": 47},
+  "cause": "New island; checked imports for duplicate or accidental dependencies.",
+  "pr": 123
+}
+---
+Build commands, source revision and performance evidence.
+```
+
+`budget` must reproduce the fragment's complete JSON mapping (including any
+metadata). Existing or previously retired unit identities cannot be initialized
+again, and an initial allocation cannot also receive a byte delta in the same
+batch. Subsequent growth uses ordinary additive decisions and the 0.5%/2% caps.
+
+To retire an asset, delete it from the served inventory and delete its fragment
+in the same PR. Add a separate allocation decision with `action: "retire"`, the
+old `fragment` and exact old `budget`, `measured: {}`, cause and PR. Retirement
+fails while the asset still exists in the inventory. Keep **all** earlier
+decisions: prior deltas remain readable and immutable, but no longer create an
+active asset ceiling. An island rename is a retirement plus a measured initial
+allocation for the new identity, each with its own decision. Merely renaming a
+fragment without these lifecycle changes is not a backdoor to rewrite a base.
+
+Kit groups and the deploy worker have fixed canonical inventory identities;
+ordinary lifecycle decisions cannot add or retire them. The deploy base's
+measured-main +2% exception is restricted to the checker's installation run.
+Changing a canonical Kit/deploy inventory requires a maintainer-reviewed policy
+and inventory change with matching checker/tests, not a served-asset decision.
+
+**Kit `maxFiles` admission:** byte decisions do not change file counts (or
+`startup.maxMs`). Reuse existing file-count headroom first. If a feature truly
+needs more files, supply the measured before/after enumeration and cause in that
+feature PR and obtain an explicit maintainer-reviewed file-count policy change,
+including the checker and independent boundary tests. Until that explicit policy
+change lands, the existing count remains hard; neither an initial island
+allocation nor a gzip/raw decision can raise `maxFiles`.
+
+### Migration for the 13 in-flight fragment-editing PRs
+
+Rebase onto this policy before queueing. For each **existing** unit whose JSON
+fragment your PR raises, restore that fragment byte-for-byte from current main.
+Compute `delta_bytes = requested effective ceiling - current main effective
+ceiling` (base plus already merged decisions), then add the six-field decision
+above in the **same feature PR** with your own PR number and fresh before/after
+measurements. Do not copy the old ceiling into `delta_bytes`, edit legacy prose,
+create a companion budget PR, or add another fixed allocation table to tests.
+If main already supplies enough headroom, remove the fragment edit without adding
+a decision. Multiple decisions for the same PR/unit share one allowance.
+
+If the needed delta exceeds 0.5% of main's effective ceiling or the shared
+seven-day allowance, optimize/defer the growth or seek an explicit maintainer
+performance decision; do not split PRs to evade the cap. For genuinely new or
+removed assets, use the lifecycle records above rather than a delta against zero.
+The fragment-derived shipping oracle remains a supplemental boundary check;
+it must consume the effective loader result, not reintroduce literal ceiling
+admission rows.
 
 ## Enforced accounting
 
@@ -90,13 +161,21 @@ pushes). It freezes bases/history and validates:
    plus **all** new queue contributions. Require `sum * 50 <= window_start_ceiling`
    (at most 2%). The denominator is base plus older admissions. Exactly seven
    days old is outside the numerator and inside the denominator.
-3. **Trusted provenance:** historical time/PR comes from the first-parent main
-   introduction and GitHub's `merge_commit_sha`/`merged_at`, not the filename,
-   agent-written date or local commit timestamp. On PRs the event number owns
-   every new admission. On the squash merge queue, each generated contribution
-   must match its GitHub PR's added-file blob; all files for the same PR are
-   aggregated. Unsupported queue graphs, API failures or ambiguous attribution
-   fail hard, never fall back to a guessed PR or advisory policy validation.
+3. **Trusted provenance:** recent historical time/PR comes from the first-parent
+   main introduction and GitHub's `merge_commit_sha`/`merged_at`, not the filename
+   or agent-written date. Only units consuming new byte allowance need historical
+   timestamps: unrelated PRs do not call the history API. On protected squash-only
+   main, a GitHub-committed squash with a matching `(#PR)` suffix and committer
+   date already outside the seven-day window bounds old history without an API
+   lookup. Ordinary local author/committer dates never qualify; recent or
+   nonstandard introductions still require the API. Lookups are cached per run.
+   On PRs the event number owns every new decision, including lifecycle records.
+   On the squash merge queue, each generated contribution must match its GitHub
+   PR's added-file blobs; all files for the same PR are aggregated. Unsupported
+   queue graphs and ambiguous attribution fail hard. Network errors, rate limits
+   and 5xx responses retry at most three attempts with exponential backoff and
+   jitter. Exhausted required evidence fails closed, never advisory; an unrelated
+   PR does not fail because an unused historical API is unavailable.
 
 Queue batches can exhaust the shared allowance even when individual PRs fit.
 Read the per-unit failure, remove/defer an admission or seek a larger reviewed

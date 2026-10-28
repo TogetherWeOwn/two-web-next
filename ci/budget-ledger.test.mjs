@@ -144,9 +144,16 @@ test("different units have independent allowances and unknown units fail", () =>
 test("duplicate identities, invalid attribution and fabricated provenance fail", () => {
   assert.throws(() => validate([row(), row()]), /duplicate/);
   assert.throws(() => validate([row({ pr: 0 })]), /PR/);
-  assert.throws(() => validate([], [row()]), /merge provenance/);
   assert.throws(
-    () => validate([], [row({ mergedAt: "2099-01-01T00:00:00Z" })]),
+    () => validate([row({ file: FILE.replace("feature", "new") })], [row()]),
+    /merge provenance/,
+  );
+  assert.throws(
+    () =>
+      validate(
+        [row({ file: FILE.replace("feature", "new") })],
+        [row({ mergedAt: "2099-01-01T00:00:00Z" })],
+      ),
     /merge provenance/,
   );
   assert.throws(() => validate([row()], [], { now: "bad" }), /clock/);
@@ -244,4 +251,19 @@ test("headroom is capped in bytes: no mandatory 256-byte minimum", () => {
   assert.equal(admissionHeadroom(100_000, 100_000), 0, "an exact fit needs no admission");
   assert.throws(() => admissionHeadroom(100, 101), /0.5%/);
   assert.throws(() => admissionHeadroom(1_024, 1_030), /0.5%/);
+});
+
+test("recent growth cannot compound the weekly denominator", () => {
+  const historical = [
+    row({
+      file: FILE.replace("feature", "recent"),
+      pr: 1,
+      delta_bytes: 1_510,
+      mergedAt: "2026-10-27T12:00:00Z",
+    }),
+  ];
+  // 2010 > 2% of 100000, but <= 2% of current=101510. Per-PR 500 fits either.
+  assert.throws(() => validate([row()], historical), /2%/);
+  historical[0].delta_bytes = 1_500;
+  assert.doesNotThrow(() => validate([row()], historical));
 });
