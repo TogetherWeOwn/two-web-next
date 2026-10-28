@@ -46,6 +46,22 @@ The author uploads actual captures as attachment-backed work products on [TOG-11
 
 Only supplied saved static SSR states are covered. Not auth, save interactions, unsaved reactive preview, regenerated/source-to-SSR proof, staging or deployment. Product PR #82 and the fleet incident [TOG-7148](/TOG/issues/TOG-7148) retain their separate gates. This CI-only PR needs one exact-head Code Reviewer pass with green CI; the approving reviewer squash-merges it, not the author.
 
+## Generated-CSS scope coverage
+
+The current-source guard follows runtime imports, including the exact ignored
+`src/leaf-critical-css.ts` output before it exists. That module requires scope
+coverage for its tracked generator, `ci/build-leaf-css.mjs`, and all three inputs:
+`public/styles.css`, `public/theme-tokens.css` and `public/theme.css`. Listing the
+output itself does not replace those requirements. Other runtime source modules
+still require ordinary direct or glob coverage.
+
+The guard pins the generator's SHA-256 without executing it and reads every input.
+Only the exact generated output may be absent before generation; when present,
+its complete bytes, provenance header and CSS hash must match the inputs and
+reviewed recipe. Generator changes require deliberate review of the provenance
+contract in `run-capture.test.cjs`; stale output requires regeneration. No browser
+container, fixture, capture driver or network-containment setting changes.
+
 Credential-free local guard regression command (no browser/module/server/DB):
 
 ```sh

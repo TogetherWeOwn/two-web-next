@@ -99,6 +99,13 @@ export const FeaturedPage: FC<{
                 <tr key={r.id}>
                   <td>
                     <a href={`/admin/featured/${r.id}`}>{r.title}</a>
+                    {r.isPublished ? (
+                      <form method="post" action={`/admin/featured/${r.id}/unpublish`}>
+                        <button type="submit" class="btn" aria-label={`Unpublish ${r.title}`}>
+                          Unpublish
+                        </button>
+                      </form>
+                    ) : null}
                   </td>
                   <td data-testid={`featured-status-${r.id}`}>
                     <FeaturedStatusBadge row={r} now={now} />

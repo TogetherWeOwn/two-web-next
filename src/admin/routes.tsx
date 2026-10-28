@@ -24,6 +24,7 @@
 // - POST /admin/featured             create
 // - GET  /admin/featured/:id         edit form
 // - POST /admin/featured/:id         update
+// - POST /admin/featured/:id/unpublish  unpublish
 // - POST /admin/featured/:id/delete  delete (safe: nothing refers to it)
 //
 // Read routes declare stable metadata; keyed retrieval owns the subjects and
@@ -70,6 +71,7 @@ import {
   setRsvpOpen,
   StaleFeaturedSaveError,
   transitionEvent,
+  unpublishFeatured,
   updateEvent,
   updateFeatured,
 } from "./store";
@@ -821,6 +823,26 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           const current = await getFeatured(db, id);
           return featuredSaveConflict(c, current ?? existing, values, submitted);
         }
+        throw err;
+      }
+    },
+  );
+
+  admin.post(
+    "/featured/:id/unpublish",
+    // Cap first: refuse an oversized body before spending admin-write throttle.
+    requestBodyLimit("action"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    async (c) => {
+      const id = parseRecordId(c.req.param("id"));
+      if (id === null) return errorPage(c, 404, "Featured content not found");
+      const db = await dbOr503(c);
+      if (!db) return writeUnavailable(c);
+      try {
+        await unpublishFeatured(db, c.get("adminActor"), id);
+        return c.redirect("/admin/featured", 303);
+      } catch (err) {
+        if (err instanceof NotFoundError) return errorPage(c, 404, "Featured content not found");
         throw err;
       }
     },

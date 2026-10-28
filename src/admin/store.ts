@@ -14,6 +14,7 @@ export {
   getFeaturedIdByLegacyId,
   listFeatured,
   StaleFeaturedSaveError,
+  unpublishFeatured,
   updateFeatured,
 } from "./store-featured";
 export type { FeaturedEditRow, FeaturedRow } from "./store-featured";

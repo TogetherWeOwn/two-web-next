@@ -53,6 +53,50 @@ client, raw, file-count, CSS, worker or startup ceiling moves. Both shipping
 oracles gain the fixed 337408 allocation and exact/one-byte-over controls;
 prior allocations and both parent decision histories remain.
 
+## 2026-10-28 featured-unpublish composition: 337408 -> 337664
+
+After GitHub reported a merge conflict, current main `728b70054` was
+integrated before changing this allowance. It brings #1869's independently
+reviewed featured-list unpublish action and its 336896 ceiling. Both locked
+Node 24.22.1 / npm 11.19.1 production builds were repeated on pristine main
+and the combined tree, with byte-identical dependency lockfiles:
+
+| Tree | Build | Server files | Raw bytes | Gzip bytes | Gate |
+|---|---|---:|---:|---:|---|
+| Pristine main `728b70054` | 1 | 116 | 1194064 | 336801 | exit 0 against 336896, margin 95 |
+| Pristine main `728b70054` | 2 | 116 | 1194062 | 336801 | exit 0 against 336896, margin 95 |
+| Combined feature and corrections | 1 | 116 | 1196484 | 337502 | exit 1 against 337408, 94 over |
+| Combined feature and corrections | 2 | 116 | 1196486 | 337503 | exit 1 against 337408, 95 over |
+
+337664 is the smallest next 256B step, leaving 161B against the measured
+worst 337503. The complete PR raise versus current main is 768B (0.228%),
+within the 0.5% size-proxy cap. The combined-tree delta is +2422 raw / +702
+gzip bytes versus pristine main's worst totals; identical-tree variation
+is 2 raw bytes and 1 gzip byte. No extra step is reserved for that variation.
+
+The difference remains the saved-content baseline, committing-lock check and
+conflict form plus the JSON fallback-zone correction, now composed with
+main's unpublish route. The built `chunks/admin.js` accounts for +2370 raw /
++699 gzip bytes; the JSON serializers change `chunks/events.js` and
+`chunks/src.js` by 26 raw bytes each. Hashed manifest/import-name differences
+account for the remaining small total variation. Source imports and both
+parent changes were checked; no new dependency, duplicate import, new chunk
+or accidental unrelated code was added by the resolution.
+
+Client JS is byte-identical across the two combined builds: 257189 raw /
+103229 gzip, versus main's 257102 / 103192 and unchanged 258048 / 103424
+ceilings. CSS, Worker, server raw/file, client file and startup limits stay
+unchanged. Current-main a11y, Lighthouse and browser-smoke checks and the
+previous feature head's corresponding checks were green before this step;
+no runtime, staging or other class-A threshold changes. This is a size-only
+allowance, not runtime, deployment or staging acceptance. A fresh exact-head
+review and CI remain required.
+
+Both shipping oracles retain every parent allocation and add 337664 with
+exact-fit / one-byte-over boundary evidence. Main's separate unpublish
+decision remains unchanged. Undo: revert this fragment step, its additive
+allocation proofs and this subsection together with the feature.
+
 ## Why one PR
 
 Repo routing for budget conflicts: a feature PR carries its measured
