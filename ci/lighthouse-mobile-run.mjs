@@ -267,6 +267,9 @@ export async function main(
 }
 
 async function selftest() {
+  const selftestEnv = Object.fromEntries(
+    Object.entries(process.env).filter(([key]) => !/^LHCI_/i.test(key)),
+  );
   const { navigationMetadata } = await import("../test/lighthouse-navigation-fixtures.mjs");
   // expectedLhrs reads the real mobile config (no network): 8 fixture routes
   // at 3 runs each.
@@ -316,6 +319,7 @@ async function selftest() {
       };
     };
     const code = await main([], {
+      env: selftestEnv,
       run,
       reportsDir: reports,
       lhciDir: lhci,
@@ -345,6 +349,7 @@ async function selftest() {
     writeFileSync(join(lhci, "lhr-9.json"), JSON.stringify(lhr("https://h/stale/")));
     writeFileSync(join(reports, "stale-report.json"), JSON.stringify(lhr("https://h/stale/")));
     const code = await main([], {
+      env: selftestEnv,
       run: async () => ({ exitCode: 0, output: "stub green" }),
       reportsDir: reports,
       lhciDir: lhci,
@@ -465,7 +470,7 @@ process.exit(0);
 `,
     );
     const { exitCode, output } = await runAutorun({
-      env: { ...process.env, NODE_OPTIONS: `--require=${preload}` },
+      env: { ...selftestEnv, NODE_OPTIONS: `--require=${preload}` },
     });
     assert.equal(exitCode, 0);
     const captured = JSON.parse(output);
@@ -552,7 +557,7 @@ process.exit(0);
     const logs = [];
     let calls = 0;
     const code = await main(argv, {
-      env: { ...process.env, ...overrideEnv },
+      env: { ...selftestEnv, ...overrideEnv },
       run: async () => {
         calls += 1;
         return { exitCode: 0, output: "unexpected collect" };
@@ -587,6 +592,7 @@ process.exit(0);
     for (const file of files) writeFileSync(file, "previous evidence");
     let calls = 0;
     const code = await main([flag], {
+      env: selftestEnv,
       run: async (options) => {
         calls += 1;
         return runAutorun(options);
