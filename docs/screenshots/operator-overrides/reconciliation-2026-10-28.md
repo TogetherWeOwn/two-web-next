@@ -2,7 +2,19 @@
 
 The existing view-only feature remains in [draft PR #1660](https://github.com/TogetherWeOwn/two-web-next/pull/1660). This report records fresh integration evidence, not merge, deployment or staging approval. Earlier screenshot and verification reports retain their original source scope.
 
-## Main integration
+## Recovery after the source-reduction merge
+
+The managed GitHub read initially failed with `broker_transport_unavailable`; one same-path retry succeeded. No alternate credential or authentication setup was used. GitHub still reported draft PR #1660 as `DIRTY` at `9668ac6c7`. The preserved `ae5b7ecd4` reconciliation had not reached the public branch.
+
+Main now contains [source-reduction PR #1962](https://github.com/TogetherWeOwn/two-web-next/pull/1962), commit `17c3de4a1571c0315469c3f0e58a830fdd766c85`. Its automatic merge into the saved feature required no manual file resolution. A fresh locked production Kit build of this composition passes every unchanged axis: server JS 1,198,130 raw / **335,491 gzip B**, 116 files; client JS 255,918 raw / 102,519 gzip B, 53 files; client CSS 2,861 raw / 1,019 gzip B; Worker entry 2,551 raw / 1,219 gzip B. The server-gzip ceiling remains **336,896 B**. The old breach below is historical: no size-budget raise is needed or applied to this composition.
+
+The unchanged four-suite acceptance command passes **159/159**, zero skips. Lint, typecheck, floor guard, asset synchronization and served-asset budgets pass. All 54 existing main budget/history files remain byte-identical. Both panel/transport acceptance files and both shared budget-oracle suites are unchanged. Dependencies were restored from the lockfiles into run-owned scratch, outside the synced tree.
+
+`node --test ci/budget-fragments.test.mjs` still exits 1: **35 pass / 1 fail**, because the exact shipping table omits this feature's new stylesheet. The independently authored one-line correction remains unincorporated: [active policy PR #1924](https://github.com/TogetherWeOwn/two-web-next/pull/1924) is replacing that table and changing the new-asset allocation contract. Do not concurrently edit its shared-policy surface, open a companion PR or pretend its proposed policy has merged. Resolve landing order with the existing policy owner before consuming the correction or its replacement.
+
+The complete project check, fresh browser/a11y/Lighthouse runs, exact ready-head CI, independent review and staging verification remain outstanding. Earlier visual evidence keeps its original source scope. This recovery changes no panel behavior, admission boundary, credential, deployment or production state.
+
+## Main integration (earlier checkpoint)
 
 GitHub reported a real merge conflict against main `728b70054b50623e921ee8da1c8ad92132772a15`. The only manual resolution preserves both route-inventory rows: main's featured-slot unpublish action and this feature's local operator-method refusal. The resulting 115-row inventory is the exact, duplicate-free union of the two inputs. All 54 existing main budget/history files and both shared shipping-oracle files remain byte-identical to main. The original panel and transport acceptance files remain byte-identical to the saved feature head.
 
