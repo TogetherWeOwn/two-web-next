@@ -131,7 +131,18 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const row = await attempt();
       const res = await app().request("/join-attempts", { headers: { cookie } }, bindings());
       expect(res.status).toBe(200);
-      expect(await res.text()).toContain(`href="/admin/join-attempts/${row.id}"`);
+      const html = await res.text();
+      const href = html
+        .match(new RegExp(`href="(/admin/join-attempts/${row.id}[^"]*)"`))?.[1]
+        ?.replaceAll("&amp;", "&");
+      expect(href).toBeDefined();
+      const url = new URL(href!, env.APP_URL);
+      expect(url.pathname).toBe(`/admin/join-attempts/${row.id}`);
+      expect(Object.fromEntries(url.searchParams)).toEqual({
+        from_outcome: "",
+        from_q: "",
+        from_page: "1",
+      });
     });
 
     it("returns 404 for unknown or expired attempts and writes no log", async () => {

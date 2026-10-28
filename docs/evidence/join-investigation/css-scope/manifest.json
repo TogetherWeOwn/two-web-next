@@ -1,0 +1,50 @@
+[
+  {
+    "name": "Hono-1280-filtered-empty-before-left-after-right.png",
+    "width": 1280,
+    "height": 800,
+    "differentChannels": 0
+  },
+  {
+    "name": "Hono-1280-incomplete-list-before-left-after-right.png",
+    "width": 1280,
+    "height": 800,
+    "differentChannels": 0
+  },
+  {
+    "name": "Hono-390-filtered-empty-before-left-after-right.png",
+    "width": 390,
+    "height": 844,
+    "differentChannels": 0
+  },
+  {
+    "name": "Hono-390-incomplete-list-before-left-after-right.png",
+    "width": 390,
+    "height": 844,
+    "differentChannels": 0
+  },
+  {
+    "name": "Kit-1280-filtered-empty-before-left-after-right.png",
+    "width": 1280,
+    "height": 800,
+    "differentChannels": 0
+  },
+  {
+    "name": "Kit-1280-incomplete-list-before-left-after-right.png",
+    "width": 1280,
+    "height": 800,
+    "differentChannels": 0
+  },
+  {
+    "name": "Kit-390-filtered-empty-before-left-after-right.png",
+    "width": 390,
+    "height": 844,
+    "differentChannels": 0
+  },
+  {
+    "name": "Kit-390-incomplete-list-before-left-after-right.png",
+    "width": 390,
+    "height": 844,
+    "differentChannels": 0
+  }
+]

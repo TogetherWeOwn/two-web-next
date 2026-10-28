@@ -257,7 +257,13 @@ function kitHtml(outcome: string | undefined, page = 1): string {
     hasNext: true,
     prevUrl: query.page > 1 ? joinAttemptsUrl(query, query.page - 1) : null,
     nextUrl: joinAttemptsUrl(query, query.page + 1),
-    outcomes: [...JOIN_OUTCOMES],
+    // This isolated view fixture supplies the admitted load's presentation
+    // model. Exact unknown-option shaping is independently exercised through
+    // the real load in kit-join-attempts-admission.test.mjs.
+    outcomes:
+      query.outcome && !JOIN_OUTCOMES.some((value) => value === query.outcome)
+        ? [...JOIN_OUTCOMES, query.outcome]
+        : [...JOIN_OUTCOMES],
     retentionDays: JOIN_RETENTION_DAYS,
   });
 }
@@ -351,7 +357,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
       return response.text();
     };
     const attemptIds = (html: string) =>
-      [...html.matchAll(/href="\/admin\/join-attempts\/(\d+)"/g)].map((m) => Number(m[1]));
+      [...html.matchAll(/href="\/admin\/join-attempts\/(\d+)(?:\?[^"]*)?"/g)].map((m) =>
+        Number(m[1]),
+      );
     const logs = () =>
       fixture.db.select().from(memberDataAccessLogs).orderBy(memberDataAccessLogs.id);
 

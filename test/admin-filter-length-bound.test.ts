@@ -280,7 +280,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
         ])
         .returning();
       const ids = (html: string) =>
-        [...html.matchAll(/href="\/admin\/join-attempts\/(\d+)"/g)].map((m) => Number(m[1]));
+        [...html.matchAll(/href="\/admin\/join-attempts\/(\d+)(?:\?[^"]*)?"/g)].map((m) =>
+          Number(m[1]),
+        );
       // Positive control: the exact-match search still filters.
       expect(ids(await request("/join-attempts?q=100000000000008001"))).toEqual([rows[0]!.id]);
 

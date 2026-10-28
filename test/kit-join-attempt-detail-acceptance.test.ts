@@ -329,14 +329,18 @@ describe("acceptance: detail page markup — escaped values, no JavaScript", () 
     const html = page();
     expect(html).not.toContain("{@html");
     expect(html).toContain("{view.outcome}");
-    expect(html).toContain("{view.requestId");
-    expect(html).toContain("{view.discordId");
+    expect(html).toContain("{view.requestId}");
+    expect(loadSource()).toContain("requestId: joinDiagnostic(outcome.view.requestId)");
+    expect(html).toContain("{view.discordId}");
+    expect(loadSource()).toContain("discordId: joinDiagnostic(outcome.view.discordId)");
     expect(html).toContain("<time datetime={view.createdAt}>{view.createdAt}</time>");
   });
 
-  it("keeps the Hono contract: back link, Outcome/Trace lists, em-dash fallbacks", () => {
+  it("keeps the Hono contract: back link, Outcome/Trace lists, Not recorded labels", () => {
     const html = page();
-    expect(html).toContain('href="/admin/join-attempts">Back to join attempts</a>');
+    expect(html).toContain(
+      'href={data.returnUrl ?? "/admin/join-attempts"}>Back to join attempts</a>',
+    );
     expect(html).toContain("<h2>Outcome</h2>");
     expect(html).toContain("<h2>Trace</h2>");
     for (const term of [
@@ -348,7 +352,11 @@ describe("acceptance: detail page markup — escaped values, no JavaScript", () 
     ]) {
       expect(html).toContain(term);
     }
-    expect(html.match(/\?\? "—"/g)).toHaveLength(3);
+    expect(
+      loadSource().match(/joinDiagnostic\(outcome.view\.(source|requestId|discordId)\)/g),
+    ).toHaveLength(3);
+    expect(html.match(/\{view\.(source|requestId|discordId)\}/g)).toHaveLength(3);
+    expect(html).not.toContain('?? "—"');
   });
 
   it("ships no JavaScript: server-rendered only, no island, handler, form or control", () => {

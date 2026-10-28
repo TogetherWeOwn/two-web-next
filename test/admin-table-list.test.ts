@@ -30,7 +30,9 @@ function featuredIds(html: string) {
   return [...html.matchAll(/data-testid="featured-position-(\d+)"/g)].map((m) => Number(m[1]));
 }
 function attemptIds(html: string) {
-  return [...html.matchAll(/href="\/admin\/join-attempts\/(\d+)"/g)].map((m) => Number(m[1]));
+  return [...html.matchAll(/href="\/admin\/join-attempts\/(\d+)(?:\?[^"]*)?"/g)].map((m) =>
+    Number(m[1]),
+  );
 }
 
 describe("admin table query state (no DB)", () => {
@@ -937,7 +939,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(exact).toContain("Page 1");
       expect(await listJoinAttempts(fixture.db, { q: injection })).toHaveLength(1);
       const empty = await request("/join-attempts?outcome=added&page=2");
-      expect(empty).toContain("No join attempts.");
+      expect(empty).toContain("No join attempts on this page. Try the first page.");
       expect(link(empty, "prev")).toContain("outcome=added");
       expect(link(empty, "next")).toBeUndefined();
       expect(await logs()).toHaveLength(1);

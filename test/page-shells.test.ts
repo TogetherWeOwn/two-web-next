@@ -195,7 +195,9 @@ it("renders the join-attempt fixture through the mounted detail route", async ()
   const fixture = pageShellFixture();
   const list = await fixture.request("/admin/join-attempts");
   expect(list.status).toBe(200);
-  expect(await list.text()).toContain('href="/admin/join-attempts/1"');
+  expect(await list.text()).toMatch(
+    /href="\/admin\/join-attempts\/1\?from_outcome=[^"]*from_q=[^"]*from_page=[^"]*"/,
+  );
   const response = await fixture.request("/admin/join-attempts/1");
   expect(response.status).toBe(200);
   const html = await response.text();

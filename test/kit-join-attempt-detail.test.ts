@@ -182,7 +182,9 @@ describe("Kit join-attempt detail load: the shared read, nothing new", () => {
 describe("Kit join-attempt detail page: the Hono markup contract, no JavaScript", () => {
   it("keeps the back navigation and the Outcome/Trace definition lists", () => {
     const html = page();
-    expect(html).toContain('href="/admin/join-attempts">Back to join attempts</a>');
+    expect(html).toContain(
+      'href={data.returnUrl ?? "/admin/join-attempts"}>Back to join attempts</a>',
+    );
     expect(html).toContain("<h2>Outcome</h2>");
     expect(html).toContain("<h2>Trace</h2>");
     for (const term of [
@@ -197,10 +199,13 @@ describe("Kit join-attempt detail page: the Hono markup contract, no JavaScript"
     expect(html).toContain("Attempted at and trace identifiers are shown as recorded.");
   });
 
-  it("renders the UTC instant in a <time datetime> and em dashes for missing fields", () => {
+  it("renders the UTC instant in a <time datetime> and Not recorded labels for missing fields", () => {
     const html = page();
     expect(html).toContain("<time datetime={view.createdAt}>{view.createdAt}</time>");
-    expect(html.match(/\?\? "—"/g)).toHaveLength(3);
+    expect(load().match(/joinDiagnostic\(outcome.view\.\w+\)/g)).toHaveLength(3);
+    expect(html.match(/\{view\.(source|requestId|discordId)\}/g)).toHaveLength(3);
+    expect(html).not.toContain('?? "—"');
+    expect(read("src/admin/table-list.ts")).toContain('"Not recorded"');
   });
 
   it("renders inside the admin chrome with the attempt title and ships no JavaScript", () => {
