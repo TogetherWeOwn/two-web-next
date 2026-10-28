@@ -14,6 +14,7 @@
 import { describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import { isDatabaseUnavailable } from "../src/db/errors";
+import { eventContentBaseline } from "../src/admin/event-baseline";
 import {
   resolveKitEventEdit,
   type KitEventEditDeps,
@@ -24,11 +25,20 @@ import { ROSTER_PAGE_SIZE } from "../src/admin/table-list";
 
 const db = {} as Db;
 
-const baseRow: KitEventEditRow = {
+const hostJoin = {
+  organizer_name: "Riley",
+  join_url: "https://meet.example.test/room-9",
+  join_instructions: "Use the public lobby.",
+};
+const baseRow: KitEventEditRow & typeof hostJoin = {
+  ...hostJoin,
   eventKey: "EVTPAST01",
   title: "Game night",
   game: "Chess",
   description: "Casual play",
+  // Non-null so the baseline-mint test pins notes: a mint that narrowed the
+  // Kit projection to null would fail to match here.
+  accessibilityNotes: "Step-free access confirmed.",
   startsAt: new Date("2026-07-01T19:00:00.000Z"),
   endsAt: new Date("2026-07-01T21:00:00.000Z"),
   timezone: "Europe/London",
@@ -60,17 +70,40 @@ function depsFor(overrides: Partial<KitEventEditDeps> = {}): KitEventEditDeps {
 }
 
 describe("resolveKitEventEdit: Hono edit-read parity", () => {
+  it("does not serialize private roster identifiers through the shared HTML", async () => {
+    const memberId = "100000000000000111";
+    const outcome = await resolveKitEventEdit(
+      "EVTPAST01",
+      {},
+      depsFor({
+        list: async () => ({ rows: [{ ...baseRoster.rows[0]!, userId: memberId }], total: 1 }),
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("expected editable event");
+    expect(outcome.view.rosterHtml).toContain("mod");
+    expect(outcome.view.rosterHtml).not.toContain(memberId);
+    expect(JSON.stringify(outcome.view.roster)).not.toContain(memberId);
+  });
+
   it("fills the form from the stored row in its own wall zone, like eventValues()", async () => {
     const outcome = await resolveKitEventEdit("EVTPAST01", {}, depsFor());
     expect(outcome.kind).toBe("ok");
     if (outcome.kind !== "ok") return;
     expect(outcome.view.key).toBe("EVTPAST01");
     expect(outcome.view.title).toBe("Game night");
+    expect(outcome.view.formHtml).toContain('name="saved_baseline"');
+    expect(outcome.view.formHtml).toContain(outcome.view.baseline);
+    expect(outcome.view.rosterHtml).toContain('data-testid="rsvp-roster"');
+    expect(outcome.view.rosterHtml).toContain("Unknown member");
     // 19:00Z July London is 20:00 wall; storage stays the UTC instant.
     expect(outcome.view.values).toEqual({
       title: "Game night",
       game: "Chess",
       description: "Casual play",
+      accessibility_notes: "Step-free access confirmed.",
+      organizer_name: "Riley",
+      join_url: "https://meet.example.test/room-9",
+      join_instructions: "Use the public lobby.",
       starts_at: "2026-07-01 20:00",
       ends_at: "2026-07-01 22:00",
       timezone: "Europe/London",
@@ -78,6 +111,12 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
       capacity: "8",
     });
     expect(outcome.view.endsAt).toBe("2026-07-01T21:00:00.000Z");
+  });
+
+  it("mints the Hono save baseline from the same row the form displays", async () => {
+    const outcome = await resolveKitEventEdit("EVTPAST01", {}, depsFor());
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.baseline).toBe(await eventContentBaseline(baseRow));
   });
 
   it("renders nullables the way the Hono form does (empty strings, never null)", async () => {
@@ -89,6 +128,10 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
           ...baseRow,
           game: null,
           description: null,
+          accessibilityNotes: null,
+          organizer_name: null,
+          join_url: null,
+          join_instructions: null,
           location: null,
           capacity: null,
         }),
@@ -97,6 +140,12 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(outcome.view.values.game).toBe("");
     expect(outcome.view.values.description).toBe("");
+    expect(outcome.view.values.accessibility_notes).toBe("");
+    expect(outcome.view.values).toMatchObject({
+      organizer_name: "",
+      join_url: "",
+      join_instructions: "",
+    });
     expect(outcome.view.values.location).toBe("");
     expect(outcome.view.values.capacity).toBe("");
   });

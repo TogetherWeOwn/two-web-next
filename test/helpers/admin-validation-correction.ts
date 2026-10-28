@@ -6,6 +6,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { EventFormFields } from "../../src/admin/pages/event-form-fields";
 import { EventFormPage, FeaturedFormPage } from "../../src/admin/pages";
 import type { EventRow, FeaturedRow } from "../../src/admin/store";
 import { buildEventCreateView } from "../../src/admin/kit-event-create";
@@ -248,6 +249,13 @@ export async function formFixtures(
             view: {
               ...view.view,
               values: eventValues,
+              formHtml: EventFormFields({
+                mode,
+                row: eventRow,
+                values: eventValues,
+                errors,
+                action: eventAction,
+              }).toString(),
               errors,
               hasErrors: rejected,
               isDraft: rejected,

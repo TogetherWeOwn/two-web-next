@@ -15,6 +15,7 @@ export const ValidationSummary: FC<{
       tabindex={-1}
       data-testid="form-errors"
       data-admin-validation-summary=""
+      data-admin-save-summary=""
     >
       <p>Check the highlighted fields and try again.</p>
       <ul>

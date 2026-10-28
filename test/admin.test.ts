@@ -49,6 +49,7 @@ import {
   MODERATOR,
 } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { savedForm } from "./helpers/event-save-document";
 import type { Env } from "../src/env";
 import { listVisibleFeatured } from "../src/featured";
 import { __resetHomeGuestCacheForTests, cachedFeatured } from "../src/home-cache";
@@ -236,6 +237,12 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
 
     // Sessions resolve through the memory store; admin tables hit Postgres.
     const app = () => adminApp({ sessionStore: store, db });
+    // Mint the edit precondition from the moderator's actual GET.
+    const baseline = async (key: string): Promise<Record<string, string>> => {
+      const read = await app().request(`/events/${key}`, { headers: { cookie } }, liveEnv());
+      expect(read.status).toBe(200);
+      return savedForm(await read.text()).hidden;
+    };
 
     it("moderator event CRUD: create-as-draft → edit → publish → cancel, all audited", async () => {
       const create = await app().request(
@@ -268,6 +275,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
           ends_at: "2026-11-04 23:00",
           timezone: "Europe/London",
           location: "Voice",
+          ...(await baseline(key)),
         }),
         liveEnv(),
       );
@@ -362,6 +370,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
           ends_at: "2026-11-04 22:00",
           timezone: "Europe/London",
           location: "Voice",
+          ...(await baseline(key)),
         }),
         liveEnv(),
       );
@@ -385,6 +394,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
           ends_at: "2026-11-04 22:00",
           timezone: "Europe/London",
           location: "   ",
+          ...(await baseline(key)),
         }),
         liveEnv(),
       );

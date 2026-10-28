@@ -54,8 +54,9 @@ import {
 } from "./table-list";
 import { type AccessDecl, type AdminOverrides, adminGuard } from "./guard";
 import type { SessionStore } from "../sessions";
+import { EVENT_BASELINE_FIELD, eventContentBaseline, isWellFormedBaseline } from "./event-baseline";
+import { eventFormValues as eventValues } from "./event-form-values";
 import {
-  type EventRow,
   type FeaturedEditRow,
   createEvent,
   createFeatured,
@@ -68,9 +69,10 @@ import {
   listFeatured,
   NotFoundError,
   setRsvpOpen,
+  StaleBaselineError,
   transitionEvent,
   unpublishFeatured,
-  updateEvent,
+  updateEventIfBaselineMatches,
   updateFeatured,
 } from "./store";
 import { topZeroResultSearches } from "../events/search-log";
@@ -82,13 +84,7 @@ import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
 import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
-import {
-  isKnownTimezone,
-  parseEventForm,
-  parseFeaturedForm,
-  utcToWall,
-  ValidationError,
-} from "./validation";
+import { parseEventForm, parseFeaturedForm, ValidationError } from "./validation";
 import { dispatchWriteBack } from "./writeback";
 import {
   ActivityLogPage,
@@ -101,6 +97,7 @@ import {
   JoinAttemptPage,
   JoinAttemptsPage,
 } from "./pages";
+import type { SaveConflict } from "./pages/event-form-fields";
 
 type Vars = QueuePreviewVars;
 
@@ -170,6 +167,17 @@ function formError(
 ): Response | Promise<Response> {
   c.status(422);
   return render(err.fields, values);
+}
+
+/** Refuse the save without rebasing the preserved draft onto current content. */
+function saveConflict(key: string, heading: string): SaveConflict {
+  return {
+    heading,
+    detailLead: "Nothing was written. Your draft is preserved below.",
+    reviewHref: `/admin/events/${key}`,
+    reviewText: "Review the current values",
+    detailTail: ", copy over anything to keep, then save again.",
+  };
 }
 
 /**
@@ -456,7 +464,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       <EventFormPage
         mode="edit"
         row={row}
-        values={eventValues(row)}
+        values={{ ...eventValues(row), [EVENT_BASELINE_FIELD]: await eventContentBaseline(row) }}
         errors={{}}
         roster={roster}
         rosterTotal={rosterTotal}
@@ -505,11 +513,29 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         }
         throw err;
       }
+      // The save precondition runs after parsing so an invalid form keeps its
+      // 422 field errors. Every refusal below re-renders the submitted
+      // baseline echoed, never re-minted, so a rejected draft cannot acquire
+      // a current baseline on retry.
+      const submittedBaseline = values[EVENT_BASELINE_FIELD];
+      if (!isWellFormedBaseline(submittedBaseline)) {
+        return c.html(
+          <EventFormPage
+            mode="edit"
+            row={existing}
+            values={values}
+            errors={{}}
+            conflict={saveConflict(key, "Save conflict: missing or invalid save baseline.")}
+          />,
+          400,
+        );
+      }
       try {
-        const { row, writeBack, childWriteBacks } = await updateEvent(
+        const { row, writeBack, childWriteBacks } = await updateEventIfBaselineMatches(
           db,
           c.get("adminActor"),
           key,
+          submittedBaseline,
           input,
         );
         if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
@@ -517,6 +543,18 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         return c.redirect(`/admin/events/${row.eventKey}`, 303);
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
+        if (err instanceof StaleBaselineError) {
+          return c.html(
+            <EventFormPage
+              mode="edit"
+              row={existing}
+              values={values}
+              errors={{}}
+              conflict={saveConflict(key, "Another moderator changed this event.")}
+            />,
+            409,
+          );
+        }
         if (err instanceof ValidationError) {
           return formError(
             c,
@@ -566,12 +604,19 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
               const key = c.req.param("key");
               const row = await getEvent(db, key);
               if (!row) return errorPage(c, 404, "Event not found");
+              // The render shows the row's current content, so the baseline is
+              // minted fresh here — unlike refusal re-renders, which echo the
+              // submitted draft's baseline.
+              const values = {
+                ...eventValues(row),
+                [EVENT_BASELINE_FIELD]: await eventContentBaseline(row),
+              };
               return formError(
                 c,
                 err,
                 (errors, v) =>
                   c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
-                eventValues(row),
+                values,
               );
             }
             return errorPage(
@@ -612,12 +657,19 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
           // refusal in the action loop above.
           const row = await getEvent(db, key);
           if (!row) return errorPage(c, 404, "Event not found");
+          // The render shows the row's current content, so the baseline is
+          // minted fresh here — like the publish-location refusal above. Without
+          // it the follow-up save would 400 on a missing baseline.
+          const values = {
+            ...eventValues(row),
+            [EVENT_BASELINE_FIELD]: await eventContentBaseline(row),
+          };
           return formError(
             c,
             err,
             (errors, v) =>
               c.html(<EventFormPage mode="edit" row={row} values={v} errors={errors} />),
-            eventValues(row),
+            values,
           );
         }
         throw err;
@@ -815,33 +867,6 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   );
 
   return admin;
-}
-
-function eventValues(row: EventRow): Record<string, unknown> {
-  // A validation refusal can retain a corrupt stored zone or instant. Keep the
-  // bad zone visible for correction, but never format it or invent wall times.
-  const knownTimezone = isKnownTimezone(row.timezone);
-  return {
-    title: row.title,
-    game: row.game ?? "",
-    description: row.description ?? "",
-    accessibility_notes: row.accessibilityNotes ?? "",
-    // Wall text in the row's zone — what the moderator typed is what they see.
-    starts_at:
-      knownTimezone && Number.isFinite(row.startsAt.getTime())
-        ? utcToWall(row.startsAt, row.timezone)
-        : "",
-    ends_at:
-      knownTimezone && Number.isFinite(row.endsAt.getTime())
-        ? utcToWall(row.endsAt, row.timezone)
-        : "",
-    timezone: row.timezone,
-    location: row.location ?? "",
-    organizer_name: row.organizer_name ?? "",
-    join_url: row.join_url ?? "",
-    join_instructions: row.join_instructions ?? "",
-    capacity: row.capacity === null ? "" : String(row.capacity),
-  };
 }
 
 function featuredValues(row: FeaturedEditRow): Record<string, unknown> {

@@ -69,6 +69,7 @@ import type { Env } from "../src/env";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { savedForm } from "./helpers/event-save-document";
 
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
 
@@ -426,6 +427,12 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       liveEnv(),
     );
   const get = (path: string) => app().request(path, { headers: { cookie } }, liveEnv());
+  // The edit form's save precondition, as the moderator's GET renders it.
+  const baseline = async (eventKey: string): Promise<Record<string, string>> => {
+    const read = await get(`/events/${eventKey}`);
+    expect(read.status).toBe(200);
+    return savedForm(await read.text()).hidden;
+  };
 
   async function seedEvent(overrides: Partial<typeof events.$inferInsert> & { eventKey: string }) {
     const [row] = await db
@@ -448,7 +455,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       { eventId: row.id, userId: "100000000000000201", status: "going" },
       { eventId: row.id, userId: "100000000000000202", status: "going" },
     ]);
-    const res = await post(`/events/${row.eventKey}`, { ...FORM, capacity: "1" });
+    const res = await post(`/events/${row.eventKey}`, {
+      ...FORM,
+      capacity: "1",
+      ...(await baseline(row.eventKey)),
+    });
     expect(res.status).toBe(422);
     expect(await res.text()).toContain("Occupied seats: 2.");
     const [after] = await db.select().from(events).where(eq(events.eventKey, row.eventKey));
@@ -760,7 +771,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
     const childAuditsBefore = (await db.select().from(activityLog)).filter(
       (audit) => audit.subjectId === child!.eventKey,
     );
-    const res = await post(`/events/${parentKey}`, { ...FORM, title: "Renamed series" });
+    const res = await post(`/events/${parentKey}`, {
+      ...FORM,
+      title: "Renamed series",
+      ...(await baseline(parentKey)),
+    });
     expect(res.status).toBe(303);
     const [childAfter] = await db.select().from(events).where(eq(events.id, child!.id));
     expect(childAfter?.startsAt.toISOString()).toBe(child!.startsAt.toISOString());
@@ -796,6 +811,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       ...FORM,
       starts_at: "2099-11-04 21:00",
       ends_at: "2099-11-04 23:00",
+      ...(await baseline(parentKey)),
     });
     expect(res.status).toBe(303);
     const [moved] = await db.select().from(events).where(eq(events.id, child!.id));

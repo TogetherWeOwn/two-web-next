@@ -4,8 +4,8 @@
 // root test process, so the serializable view decision lives here where unit
 // tests can drive it.
 //
-// Framework-free by construction, like src/admin/kit-featured-edit.ts: it
-// shapes already-fetched rows, performs no session or audit work itself, and
+// SvelteKit bindings stay out of this model. Shared Hono SSR components only
+// shape already-fetched rows; this model performs no session or audit work and
 // never touches cookies. The layout guard owns the guest bounce and the
 // moderator 403; the hook's member-read boundary owns classification and the
 // audit; the roster rows below flow through the shared listRoster keyed read,
@@ -18,9 +18,9 @@
 // past-end pages empty with working navigation), the same status-action
 // admission (publish only from draft, cancel from draft/published, RSVP
 // pause/reopen only on a live published event) and the same series note. The
-// fresh GET carries the Hono 422 values/errors/draft shape empty, exactly
-// like the create port, so the Svelte page renders the identical error DOM
-// when the write slice migrates. POST /admin/events/:key, the
+// fresh GET renders its form and roster through the canonical Hono components;
+// escaped HTML slots avoid duplicated templates, while the existing structured
+// read metadata remains available. Rejected writes still render through Hono. POST /admin/events/:key, the
 // publish/cancel/RSVP-pause/RSVP-reopen siblings and the guarded
 // /admin/events/:key/edit legacy redirect stay Hono-owned, so the UTC
 // carriers across DST, future recurrence propagation and postcommit writeback
@@ -30,6 +30,10 @@ import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import { alertRequestError } from "../alerts";
 import { eventKeyAllowed } from "../events/keys";
+import { EVENT_BASELINE_FIELD, eventContentBaseline } from "./event-baseline";
+import { eventFormValues } from "./event-form-values";
+import { EventFormFields } from "./pages/event-form-fields";
+import { EventRosterSection } from "./pages/event-form-roster";
 import {
   parseRosterQuery,
   ROSTER_PAGE_SIZE,
@@ -44,20 +48,10 @@ import {
   type RosterStatus,
   type SortOrder,
 } from "./table-list";
-import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 
 /** The edit-form values the Hono eventValues() helper renders. */
-export type KitEventEditValues = {
-  title: string;
-  game: string;
-  description: string;
-  starts_at: string;
-  ends_at: string;
-  timezone: string;
-  location: string;
-  capacity: string;
-};
+export type KitEventEditValues = ReturnType<typeof eventFormValues>;
 
 /** One roster row as the Hono table renders it: display name, status and the
  * ISO instant. The member identifier stays out of the view: Hono uses it only
@@ -115,7 +109,13 @@ export type KitEventEditView = {
   key: string;
   title: string;
   status: string;
+  /** The Hono save precondition for this row; the ported form posts it back. */
+  baseline: string;
   values: KitEventEditValues;
+  /** Escaped application-generated HTML from the Hono field renderer, never raw row HTML. */
+  formHtml: string;
+  /** Shared, escaped roster markup; never serializes member identifiers. */
+  rosterHtml: string;
   errors: Record<string, string>;
   hasErrors: boolean;
   isDraft: boolean;
@@ -145,6 +145,12 @@ export type KitEventEditRow = {
   title: string;
   game: string | null;
   description: string | null;
+  /** Displayed by the Kit form and read by the baseline mint: narrowing the
+   * Kit projection breaks saves. */
+  accessibilityNotes?: string | null;
+  organizer_name?: string | null;
+  join_url?: string | null;
+  join_instructions?: string | null;
   startsAt: Date;
   endsAt: Date;
   timezone: string;
@@ -238,6 +244,7 @@ export async function resolveKitEventEdit(
   const hasPrev = query.page > 1;
   const hasNext = query.page * ROSTER_PAGE_SIZE < roster.total;
   const endFinite = Number.isFinite(row.endsAt.getTime());
+
   const rsvpAction: "rsvp-pause" | "rsvp-reopen" | null =
     row.status === "published" && endFinite && row.endsAt > now
       ? row.rsvpOpen
@@ -245,28 +252,36 @@ export async function resolveKitEventEdit(
         : "rsvp-reopen"
       : null;
   const recovery = rosterRecovery(row.eventKey, query, entries.length, roster.total);
-  // Same guard as the Hono edit fill: a corrupt zone or unrenderable instant
-  // stays visible for correction but is never formatted.
-  const knownTimezone = isKnownTimezone(row.timezone);
-  const startFinite = Number.isFinite(row.startsAt.getTime());
+  const baseline = await eventContentBaseline(row);
+  const values = eventFormValues(row);
   return {
     kind: "ok",
     view: {
       key: row.eventKey,
       title: row.title,
       status: row.status,
-      values: {
-        title: row.title,
-        game: row.game ?? "",
-        description: row.description ?? "",
-        // Wall text in the row's zone — what the moderator typed is what they
-        // see; the stored instant is preserved by the Hono UTC carriers.
-        starts_at: knownTimezone && startFinite ? utcToWall(row.startsAt, row.timezone) : "",
-        ends_at: knownTimezone && endFinite ? utcToWall(row.endsAt, row.timezone) : "",
-        timezone: row.timezone,
-        location: row.location ?? "",
-        capacity: row.capacity === null ? "" : String(row.capacity),
-      },
+      // The save form posts to the Hono-owned update, which refuses a save
+      // without the current baseline — mint it from the same row the Hono
+      // edit GET mints from.
+      baseline,
+      values,
+      // One authority for all twelve controls and the baseline; avoids shipping
+      // a second form template in Kit's unhydrated client/server chunks.
+      formHtml: EventFormFields({
+        mode: "edit",
+        row,
+        values: { ...values, [EVENT_BASELINE_FIELD]: baseline },
+        errors: {},
+        action: `/admin/events/${row.eventKey}`,
+      }).toString(),
+      rosterHtml: await EventRosterSection({
+        eventKey: row.eventKey,
+        action: `/admin/events/${row.eventKey}`,
+        // The shared SSR renderer never emits its optional vnode keys as HTML.
+        roster: roster.rows,
+        rosterTotal: roster.total,
+        rosterQuery: query,
+      })!.toString(),
       errors: {},
       hasErrors: false,
       isDraft: false,

@@ -16,7 +16,7 @@ export {
   updateFeatured,
 } from "./store-featured";
 export type { FeaturedEditRow, FeaturedRow } from "./store-featured";
-export { type Actor, NotFoundError } from "./store-shared";
+export { type Actor, NotFoundError, StaleBaselineError } from "./store-shared";
 export {
   createEvent,
   duplicateEvent,
@@ -28,6 +28,7 @@ export {
   setRsvpOpen,
   transitionEvent,
   updateEvent,
+  updateEventIfBaselineMatches,
 } from "./store-event-writes";
 export type { EventRow, PatchBase, WriteBack } from "./store-event-writes";
 export { getEvent, listEvents } from "./store-event-reads";

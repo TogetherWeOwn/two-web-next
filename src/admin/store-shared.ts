@@ -43,6 +43,18 @@ export class NotFoundError extends Error {
   }
 }
 
+/**
+ * The form's saved-content baseline no longer matches the locked row: another
+ * writer committed first. Thrown before any mutation, so the refuse path
+ * writes no content, no audit row and no child shift. The route answers 409
+ * and re-renders the typed draft.
+ */
+export class StaleBaselineError extends Error {
+  constructor() {
+    super("stale event baseline");
+  }
+}
+
 const AUDIT_EXCLUDE = new Set(["discordEventId", "icsSequence"]);
 
 export function dirty<T extends Record<string, unknown>>(

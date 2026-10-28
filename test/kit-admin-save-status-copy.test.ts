@@ -1,5 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
+import { EventFormFields } from "../src/admin/pages/event-form-fields";
 import { adminSaveStatus } from "../src/admin/save-status";
 
 // The four Kit form twins inline the save-status markup instead of importing
@@ -19,7 +20,20 @@ describe("admin save-status copy", () => {
     expect(adminSaveStatus.length).toBeGreaterThan(0);
     for (const twin of KIT_FORM_TWINS) {
       const source = readFileSync(twin, "utf8");
-      expect(source.includes(adminSaveStatus), twin).toBe(true);
+      const statusMarkup =
+        twin === "web/src/routes/admin/events/[key]/+page.svelte"
+          ? EventFormFields({
+              mode: "edit",
+              row: { recurrenceFrequency: null },
+              values: {},
+              errors: {},
+              action: "/admin/events/EVT1",
+            }).toString()
+          : source;
+      expect(statusMarkup.includes(adminSaveStatus), twin).toBe(true);
+      if (twin === "web/src/routes/admin/events/[key]/+page.svelte") {
+        expect(source).toContain("{@html view.formHtml}");
+      }
     }
   });
 

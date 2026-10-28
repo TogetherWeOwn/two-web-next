@@ -17,7 +17,7 @@ import { TableSortHeader } from "./shell";
 export const EventRosterSection: FC<{
   eventKey: string;
   action: string;
-  roster: RosterEntry[];
+  roster: (Pick<RosterEntry, "username" | "status" | "answeredAt"> & { userId?: string })[];
   rosterTotal?: number;
   rosterQuery?: RosterQuery;
 }> = ({

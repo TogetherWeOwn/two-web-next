@@ -36,6 +36,7 @@ import type { Env } from "../src/env";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env as baseEnv, MODERATOR } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { savedForm } from "./helpers/event-save-document";
 
 vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
 
@@ -92,12 +93,20 @@ describe.skipIf(!url)("concurrent disjoint PATCHes preserve omitted fields (live
       { method: "POST", headers: { cookie, origin: baseEnv.APP_URL } },
       jsonEnv,
     );
-  const postForm = (key: string, values: Record<string, string>) =>
-    native().request(
+  const postForm = async (key: string, values: Record<string, string>) => {
+    // The save precondition rides with the moderator's own GET.
+    const page = await native().request(`/events/${key}`, { headers: { cookie } }, liveEnv());
+    expect(page.status).toBe(200);
+    return native().request(
       `/events/${key}`,
-      { method: "POST", headers: { cookie }, body: new URLSearchParams(values) },
+      {
+        method: "POST",
+        headers: { cookie },
+        body: new URLSearchParams({ ...values, ...savedForm(await page.text()).hidden }),
+      },
       liveEnv(),
     );
+  };
 
   async function seed(over: Partial<typeof ORIGINAL & { status: string }> = {}) {
     const [row] = await db

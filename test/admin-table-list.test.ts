@@ -21,6 +21,7 @@ import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { eventEditorBrowser } from "./helpers/admin-event-editor";
+import { savedForm } from "./helpers/event-save-document";
 
 const injection = "%' OR 1=1; DROP TABLE users;--";
 function link(html: string, rel: "next" | "prev") {
@@ -667,6 +668,17 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(html.match(/data-event-editor/g)).toHaveLength(1); // Only Save bypasses the dirty guard.
     });
 
+    // The edit form's save precondition, as the moderator's GET renders it.
+    const baseline = async (): Promise<Record<string, string>> => {
+      const read = await adminApp({ sessionStore: store, db: fixture.db }).request(
+        "/events/01K00000000000000000000011",
+        { headers: { cookie } },
+        { ...env, ADMIN_DB: fixture.db },
+      );
+      expect(read.status).toBe(200);
+      return savedForm(await read.text()).hidden;
+    };
+
     it.each(["invalid", "1"])(
       "keeps the returned draft dirty when Save rejects capacity=%s before or during update",
       async (capacity) => {
@@ -689,7 +701,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
               origin: env.APP_URL,
               "content-type": "application/x-www-form-urlencoded",
             },
-            body: new URLSearchParams(fields),
+            body: new URLSearchParams({ ...fields, ...(await baseline()) }),
           },
           { ...env, ADMIN_DB: fixture.db },
         );
@@ -722,7 +734,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
               origin: env.APP_URL,
               "content-type": "application/x-www-form-urlencoded",
             },
-            body: new URLSearchParams({ ...fields, capacity: "2" }),
+            body: new URLSearchParams({ ...fields, capacity: "2", ...(await baseline()) }),
           },
           { ...env, ADMIN_DB: fixture.db },
         );

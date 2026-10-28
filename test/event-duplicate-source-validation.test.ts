@@ -113,8 +113,21 @@ describe.skipIf(!process.env.DATABASE_URL)("duplicate invalid source regressions
           { ...env, ADMIN_DB: fixture.db } as Env,
         );
 
-  const save = (key: string, values: Record<string, string> = {}) =>
-    adminApp({ sessionStore: store, db: fixture.db }).request(
+  const formValue = (html: string, name: string): string | undefined => {
+    const input = html.match(new RegExp(`<input\\b(?=[^>]*\\bname="${name}"(?=[\\s>]))[^>]*>`));
+    return input?.[0].match(/\bvalue="([^"]*)"/)?.[1];
+  };
+
+  const save = async (key: string, values: Record<string, string> = {}) => {
+    const form = await adminApp({ sessionStore: store, db: fixture.db }).request(
+      `/events/${key}`,
+      { headers: { cookie } },
+      { ...env, ADMIN_DB: fixture.db } as Env,
+    );
+    expect(form.status).toBe(200);
+    const baseline = formValue(await form.text(), "saved_baseline");
+    expect(baseline, "edit form carries the server baseline").toBeDefined();
+    return adminApp({ sessionStore: store, db: fixture.db }).request(
       `/events/${key}`,
       {
         method: "POST",
@@ -126,10 +139,12 @@ describe.skipIf(!process.env.DATABASE_URL)("duplicate invalid source regressions
           timezone: "Europe/London",
           location: "Voice",
           ...values,
+          saved_baseline: baseline!,
         }),
       },
       { ...env, ADMIN_DB: fixture.db } as Env,
     );
+  };
 
   const seedSeries = async () => {
     const parent = await seed({

@@ -17,6 +17,7 @@ import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { EVENT_BASELINE_FIELD, eventContentBaseline } from "../src/admin/event-baseline";
 import {
   createMemberDataFixture,
   testDatabaseUrl,
@@ -171,6 +172,13 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
       env,
     );
   }
+  // The edit form's save precondition, minted from the stored row. (A GET
+  // would enter the keyed read boundary, which refuses this suite's
+  // non-numeric moderator id; the render path is pinned elsewhere.)
+  async function formBaseline(eventKey: string): Promise<Record<string, string>> {
+    const [row] = await fixture.db.select().from(events).where(eq(events.eventKey, eventKey));
+    return { [EVENT_BASELINE_FIELD]: await eventContentBaseline(row!) };
+  }
   async function seed(over: Partial<typeof events.$inferInsert> = {}) {
     const [row] = await fixture.db
       .insert(events)
@@ -324,7 +332,11 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
         const response =
           path === "json"
             ? await json("PATCH", `/events/${row.eventKey}`, { location })
-            : await browser(`/events/${row.eventKey}`, { ...form("8"), location });
+            : await browser(`/events/${row.eventKey}`, {
+                ...form("8"),
+                location,
+                ...(await formBaseline(row.eventKey)),
+              });
         expect(response.status).toBe(422);
         if (path === "json")
           expect(await response.json()).toEqual({
@@ -353,6 +365,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
           : await browser(`/events/${row.eventKey}`, {
               ...form("8", ""),
               title: "Still draft",
+              ...(await formBaseline(row.eventKey)),
             });
       expect(response.status).toBe(path === "json" ? 200 : 303);
       expect(await getEvent(fixture.db, row.eventKey)).toMatchObject({
@@ -373,7 +386,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
         const response =
           path === "json"
             ? await json("PATCH", `/events/${row.eventKey}`, { title: "Edited title", capacity: 2 })
-            : await browser(`/events/${row.eventKey}`, form("2"));
+            : await browser(`/events/${row.eventKey}`, {
+                ...form("2"),
+                ...(await formBaseline(row.eventKey)),
+              });
         expect(response.status).toBe(422);
         if (path === "json")
           expect(await response.json()).toEqual({
@@ -402,10 +418,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event mutation invariants (agent-tes
         const response =
           path === "json"
             ? await json("PATCH", `/events/${row.eventKey}`, { title: "Edited title", capacity })
-            : await browser(
-                `/events/${row.eventKey}`,
-                form(capacity === null ? "" : String(capacity)),
-              );
+            : await browser(`/events/${row.eventKey}`, {
+                ...form(capacity === null ? "" : String(capacity)),
+                ...(await formBaseline(row.eventKey)),
+              });
         expect(response.status).toBe(path === "json" ? 200 : 303);
         expect(await getEvent(fixture.db, row.eventKey)).toMatchObject({
           title: "Edited title",

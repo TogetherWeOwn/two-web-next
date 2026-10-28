@@ -10,6 +10,7 @@ import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { EVENT_BASELINE_FIELD, eventContentBaseline } from "../src/admin/event-baseline";
 
 const APP_URL = "https://next.example.test";
 const SESSION_SECRET = "event-form-test-secret-at-least-32-bytes";
@@ -159,6 +160,14 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       env,
     );
 
+  // The edit form's save precondition, minted from the stored row. (A GET
+  // would enter the keyed read boundary, which refuses this suite's
+  // non-numeric moderator id; the render path is pinned elsewhere.)
+  const baseline = async (): Promise<Record<string, string>> => {
+    const [row] = await fixture.db.select().from(events).where(eq(events.eventKey, KEY));
+    return { [EVENT_BASELINE_FIELD]: await eventContentBaseline(row!) };
+  };
+
   for (const mode of ["new", "edit"] as const) {
     const path = mode === "new" ? "/admin/events" : `/admin/events/${KEY}`;
     const cases: {
@@ -240,7 +249,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
     }
 
     it(`${mode}: valid wall times still save the same UTC instants`, async () => {
-      const res = await post(path, FORM);
+      const res = await post(path, mode === "edit" ? { ...FORM, ...(await baseline()) } : FORM);
       expect(res.status).toBe(303);
       const key = res.headers.get("location")!.split("/").pop()!;
       const [saved] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
@@ -294,6 +303,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       ...FORM,
       starts_at: "2026-10-25T01:30",
       ends_at: "2026-10-25 02:30",
+      ...(await baseline()),
     });
     expect(res.status).toBe(303);
     const [saved] = await fixture.db.select().from(events).where(eq(events.eventKey, KEY));
