@@ -50,12 +50,13 @@ export async function auditOperationBusy(
       // A fresh grant can be deleted between lookup and this receipt (its zero
       // audit rows do not block deletion via the append-only trigger). The
       // audit FK would then turn the retryable 503 into a 23503 500. Revalidate
-      // liveness inside this bounded transaction — FOR SHARE blocks a concurrent
-      // delete until the receipt commits, mirroring checkGrant — and attribute a
-      // vanished grant as null, like the removed-grant denial path.
+      // liveness inside this bounded transaction — FOR KEY SHARE fences deletion
+      // without waiting again on a non-key provisioning update. Authorization's
+      // stronger checkGrant lock is separate. Attribute a vanished grant as null.
       let effectiveGrant = grant;
       if (grant) {
-        const [live] = await tx`SELECT id FROM agent_event_grants WHERE id = ${grant.id} FOR SHARE`;
+        const [live] =
+          await tx`SELECT id FROM agent_event_grants WHERE id = ${grant.id} FOR KEY SHARE`;
         if (!live) effectiveGrant = null;
       }
       await audit(

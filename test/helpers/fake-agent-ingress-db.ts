@@ -94,7 +94,7 @@ export function makeFakeAgentDb(): FakeAgentDb {
       const grant = hashes.get(values[0] as string) ?? null;
       return grant ? [grant] : [];
     }
-    if (text.includes("FOR SHARE")) {
+    if (text.includes("FOR SHARE") || text.includes("FOR KEY SHARE")) {
       const id = values[0] as string;
       const grant = [...hashes.values()].find((g) => g.id === id);
       return grant ? [{ id }] : [];

@@ -11,6 +11,7 @@
 //
 // Hermetic via the in-memory fake (no DATABASE_URL, no Discord, no network).
 import type postgres from "postgres";
+import { DrizzleQueryError } from "drizzle-orm";
 import { describe, expect, it } from "vitest";
 import {
   DEFAULT_CONFIG,
@@ -74,10 +75,7 @@ function wrappedCancellation(code: string): Error {
   };
   cause.name = "PostgresError";
   cause.code = code;
-  const outer = new Error(`Failed query: select ...`) as Error & { cause: unknown };
-  outer.name = "DrizzleQueryError";
-  outer.cause = cause;
-  return outer;
+  return new DrizzleQueryError("select ...", [], cause);
 }
 
 async function fixture(inject?: { site: Site; error: unknown }, deleteGrantBeforeReplay = false) {
@@ -221,6 +219,17 @@ function expectBoundedBefore(
   expect(lockIdx, `LOCK_TIMEOUT_ORDER: ${label} lock_timeout must precede its work`).toBeLessThan(
     workIdx,
   );
+  for (const [index, event] of events.entries()) {
+    if (!workKinds.includes(event.kind)) continue;
+    for (const setting of ["statement_timeout", "lock_timeout"]) {
+      const assignments = events
+        .slice(0, index)
+        .filter((e) => e.kind === "setting" && e.text.includes(`SET LOCAL ${setting} =`));
+      expect(assignments.at(-1)?.text, `EFFECTIVE_TIMEOUT: ${label} ${setting}`).toBe(
+        `SET LOCAL ${setting} = '${derived(wait)}ms'`,
+      );
+    }
+  }
 }
 
 function expectBusyEnvelope(answer: Answer): void {
@@ -257,6 +266,8 @@ describe("agent-events statement-timeout review follow-up", () => {
     expect(isIngressBusy(wrappedCancellation("55P03"))).toBe(true);
     expect(isIngressBusy(Object.assign(new Error("x"), { code: "23505" }))).toBe(false);
     expect(isIngressBusy(wrappedCancellation("23505"))).toBe(false);
+    expect(isIngressBusy(Object.assign(new Error("FK violation"), { code: "23503" }))).toBe(false);
+    expect(isIngressBusy(wrappedCancellation("23503"))).toBe(false);
     expect(isIngressBusy(new Error("plain"))).toBe(false);
     expect(isIngressBusy(null)).toBe(false);
     expect(isIngressBusy({ code: "57014" })).toBe(true);
