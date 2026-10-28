@@ -41,6 +41,7 @@ describe("cancelled schedule copy", () => {
       const html = await jsx(CalCard, {
         e: cancellationEvent(),
         zone: ZONE,
+        now: new Date("2099-01-01T12:00:00Z"),
         isPast: false,
         member,
         inviteUrl: "https://discord.gg/example",
@@ -59,6 +60,7 @@ describe("cancelled schedule copy", () => {
     const html = await jsx(CalCard, {
       e: cancellationEvent({ goingCount: 100, goingOccupancy: 100 }),
       zone: ZONE,
+      now: new Date("2099-01-01T12:00:00Z"),
       isPast: false,
       member: false,
       inviteUrl: "https://discord.gg/example",
@@ -97,7 +99,7 @@ describe("cancelled schedule copy", () => {
     '🎲 Raid <script> & "quoted" 猟師 evening',
   ])("leads the cancelled grid name with its visible label: %s", async (title) => {
     const e = cancellationEvent({ title });
-    const visible = `${wallTimeHm(e.startsAt, ZONE)} ${gridTitle(e.title)} ${GRID_CANCELLED_COPY}`;
+    const visible = `${wallTimeHm(e.startsAt, ZONE)} ${ZONE} ${gridTitle(e.title)} ${GRID_CANCELLED_COPY}`;
     const name = gridAccessibleName(e.title, e.startsAt, ZONE, true);
     expect(name.startsWith(visible)).toBe(true);
     expect(name).toContain(e.title);
@@ -112,15 +114,15 @@ describe("cancelled schedule copy", () => {
     // Compare rendered text as well as the helper, including escaped title bytes.
     expect(renderedText(link![1]!).startsWith(renderedText(link![2]!))).toBe(true);
     expect(html).not.toContain("<script>");
-    // The published shape is untouched by the new flag default: long titles
-    // keep the truncated visible form first, then the full title.
+    // Both published and cancelled clocks identify their host zone. Long titles
+    // still keep the truncated visible form first, then the full title.
     const time = wallTimeHm(e.startsAt, ZONE);
     const day = cardDayLabel(e.startsAt, ZONE);
     const truncated = gridTitle(e.title);
     expect(gridAccessibleName(e.title, e.startsAt, ZONE)).toBe(
       truncated === e.title
-        ? `${time} ${e.title}, ${day}`
-        : `${time} ${truncated} ${e.title}, ${day}`,
+        ? `${time} ${ZONE} ${e.title}, ${day}`
+        : `${time} ${ZONE} ${truncated} ${e.title}, ${day}`,
     );
   });
 

@@ -36,7 +36,7 @@ expires within two hours (120 minutes after its last session-refreshing page vie
 normal browsing can rotate and extend that idle window, but never beyond
 24 hours from the login that started the session lineage. Rotation preserves
 that start time; reaching the absolute cap requires a fresh sign-in and role
-lookup. Kit-served admin pages renew the sliding session exactly like the Hono
+lookup. Kit-served admin pages rotate the session exactly like the Hono
 panel, under the same absolute cap. For immediate invalidation,
 an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply
@@ -236,7 +236,7 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/events/:key/publish` | **Publish** a draft. |
 | POST | `/admin/events/:key/cancel` | **Cancel** / **Cancel event**. |
 | POST | `/admin/events/:key/duplicate` | **Duplicate as draft**: copy the event into a new unpublished draft. |
-| POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling. |
+| POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling, after a native review step. |
 | POST | `/admin/events/:key/rsvp-reopen` | **Reopen RSVPs** on an eligible event. |
 | GET | `/admin/featured` | Featured content list, title/publication filters, sorting and pagination. |
 | GET | `/admin/featured/new` | **New featured slot** form. |
@@ -262,7 +262,9 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 All 25 routes (15 GET, 10 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
-Mutating buttons submit immediately: there is no action-confirmation dialog.
+Pausing RSVPs opens a native review first: open **Review pause**, check the
+named event and consequence, then press the final **Pause RSVPs**. Other
+mutating buttons submit immediately with no action-confirmation dialog.
 Double-check the event/slot and intended action before pressing one. The event
 editor's separate browser warning for unsaved changes is not action approval.
 
@@ -313,7 +315,7 @@ the remaining moderator-admin journeys stay Hono-only, ledgered as skipped.
 Before publishing, use the [event page content readiness checklist](event-content-readiness.md) to confirm members can decide whether and how to attend.
 
 1. Open `/admin/events`, choose **New event**, or open an existing event by its
-   title. **Search** matches title only; **Status** filters `draft`, `published`,
+   title. **Search** matches titles and saved games; **Status** filters `draft`, `published`,
    `cancelled` or `past`. **RSVPs** filters Open/Paused; **Series** filters
    Parent/Child/Standalone; **Fill** filters Full/Has seats/Unlimited.
    Full/Has seats compare finite capacity with **Going** answers only, not Maybe
@@ -430,7 +432,10 @@ existing-responses count as attendance.
 ### Pause or reopen RSVPs
 
 Published events that have not ended show **Pause RSVPs** or **Reopen RSVPs**
-on the list and edit screen. These actions keep the event published; pausing is
+on the list and edit screen. Pausing opens a native review naming the saved
+event and the consequence (signups close, the waitlist line freezes) before
+the final submit; closing the review changes nothing and **Reopen RSVPs**
+stays one-click. These actions keep the event published; pausing is
 not cancellation and does not remove existing answers. Reopening can promote
 waiting members into available seats in first-in-first-out order. Both changed
 settings attempt asynchronous Discord write-back, not immediate delivery.
@@ -573,14 +578,22 @@ Retyping a bound to minute precision narrows it on purpose.
 
 ### Preview and safe editing
 
-The edit page shows a **Homepage preview** panel: the last saved content,
-checked at the printed UTC time. Pressing **Create** or **Save** refreshes it.
-Typed-but-unsaved edits never appear there, and neither do rejected
-submissions: after a failed save the form keeps the submitted values for
-correction while the preview still shows the last saved row. The new-slot page
-has no preview. When the slot is not currently visible, the panel says so
-instead of rendering the slot. An inline preview is not proof of guest homepage
-delivery: verify the homepage as a guest after an authorized change.
+The edit page shows a **Homepage preview** panel with two parts. **Saved
+content preview** renders the last saved card — headline, body, admitted link
+and image — for every saved status, unpublished included, checked at the
+printed UTC time. **Homepage eligibility** separately reports the status badge,
+the reason (publication off, starts in the future, window ended, or eligible)
+and the saved UTC window bounds; an absent bound means the window is open on
+that side. For a published slot with a saved bound the editor cannot decode
+(such as a BC timestamp or infinity), the panel reports **unavailable** rather
+than asserting eligibility; the exact saved bound text remains visible. An
+unchecked **Published** setting still reports **unpublished** first. Pressing
+**Create** or **Save** refreshes both. Typed-but-unsaved
+edits never appear in the card, and neither do rejected submissions: after a
+failed save the form keeps the submitted values for correction while the card
+and eligibility still show the last saved row. The new-slot page has no
+preview. Neither part is proof of guest homepage delivery: verify the homepage
+as a guest after an authorized change.
 
 Follow one coherent workflow per approved change:
 
@@ -641,7 +654,10 @@ Stop and escalate any refusal rather than seeking another access path.
 
 For outcome meanings and safe escalation, use the
 [join troubleshooting guide](troubleshooting-join.md#moderator-diagnostics-and-escalation).
-Request ID is normally blank for the current live Discord add-member call.
+Request ID carries the website's correlation ID (the callback's
+`x-request-id`) on `denied` and `error` rows, so those rows join to request
+logs. On `added`, `already_member`, `degraded` and `rate_limited` rows it
+stays blank because the live add-member call returns no request ID.
 The ordinary sign-in flow does not write these rows; absence is not proof of
 success or no attempted join. Keep member identifiers private.
 

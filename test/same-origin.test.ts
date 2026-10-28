@@ -7,7 +7,7 @@ import { cookieFor, env as memberEnv, MODERATOR } from "./helpers/member-data";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS, sameOrigin } from "../src/same-origin";
 
 const env: Env = { ...memberEnv, APP_URL: "https://two.test/" };
-const forbidden = { error: "cross_origin" };
+const forbidden = { error: "cross_origin", request_id: expect.any(String) };
 
 function fixture() {
   const app = new Hono<{ Bindings: Env }>();
@@ -168,7 +168,7 @@ describe("same-origin middleware", () => {
     for (const headers of cases) {
       const res = await app.request("https://two.test/write", { method, headers }, env);
       expect(res.status).toBe(403);
-      expect(await res.json()).toEqual(forbidden);
+      expect(await res.json()).toEqual({ error: "cross_origin" });
       expect(res.headers.get("cache-control")).toBe("no-store, private");
       expect(res.headers.get("set-cookie")).toBeNull();
     }
@@ -215,7 +215,7 @@ describe("same-origin middleware", () => {
         { ...env, APP_URL },
       );
       expect(res.status).toBe(403);
-      expect(await res.json()).toEqual(forbidden);
+      expect(await res.json()).toEqual({ error: "cross_origin" });
       expect(effect).not.toHaveBeenCalled();
     },
   );

@@ -18,6 +18,21 @@ export function formatEventWhen(instant: Date, timezone: string): string {
   }
 }
 
+/** Elapsed commitment, independent of wall clocks; residual seconds round down. */
+export function formatElapsedDuration(milliseconds: number): string | null {
+  if (!Number.isFinite(milliseconds) || milliseconds <= 0) return null;
+  const minutes = Math.floor(milliseconds / 60_000);
+  if (minutes === 0) return "Less than a minute";
+  const hours = Math.floor(minutes / 60);
+  const remainder = minutes % 60;
+  return [
+    hours ? `${hours} ${hours === 1 ? "hour" : "hours"}` : "",
+    remainder ? `${remainder} ${remainder === 1 ? "minute" : "minutes"}` : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+}
+
 function calendarDate(year: number, monthIndex: number, day: number): Date {
   const date = new Date(0);
   date.setUTCFullYear(year, monthIndex, day);
@@ -34,12 +49,21 @@ export function isValidZone(zone: string | null | undefined): boolean {
   }
 }
 
+/**
+ * The zone a wall clock is actually computed in, and so the only honest label
+ * beside it: the stored zone when Intl accepts it (aliases keep their exact
+ * name), otherwise "UTC". Never rewrites the stored value.
+ */
+export function effectiveZone(zone: string | null | undefined): string {
+  return zone && isValidZone(zone) ? zone : "UTC";
+}
+
 function partsIn(
   instant: Date,
   zone: string,
   opts: Intl.DateTimeFormatOptions,
 ): Map<string, string> {
-  const z = isValidZone(zone) ? zone : "UTC";
+  const z = effectiveZone(zone);
   const parts = new Intl.DateTimeFormat("en-US", { timeZone: z, ...opts }).formatToParts(instant);
   return new Map(parts.filter((p) => p.type !== "literal").map((p) => [p.type, p.value]));
 }
@@ -85,10 +109,10 @@ export function cardTimeLabel(instant: Date, zone: string): string {
 export function calendarZone(timezones: Iterable<string | null | undefined>): string {
   const counts = new Map<string, number>();
   for (const tz of timezones) {
-    if (tz) counts.set(tz, (counts.get(tz) ?? 0) + 1);
+    if (tz && isValidZone(tz)) counts.set(tz, (counts.get(tz) ?? 0) + 1);
   }
   const top = [...counts.entries()].sort((a, b) => b[1] - a[1])[0];
-  return top && isValidZone(top[0]) ? top[0] : "UTC";
+  return top ? top[0] : "UTC";
 }
 
 /** Bad/absent `month` falls back to this month (UTC). */

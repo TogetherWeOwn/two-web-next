@@ -116,11 +116,18 @@ describe("PastEvents contract and SSR drift", () => {
     expect(html).toContain('src="/islands/past-events.js"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
     expect(html).toContain('href="/events/past?page=2"');
-    expect(html).not.toMatch(
+    // The archive section carries the GET search form plus the native,
+    // non-submitting feed-copy action; strip the form before asserting zero
+    // RSVP surface and that the copy button is the only control left.
+    const withoutSearch = html.replace(
+      /<form[^>]*action="\/events\/past"[^>]*>[\s\S]*?<\/form>/,
+      "",
+    );
+    expect(withoutSearch).not.toMatch(
       /data-island="rsvp-button"|data-testid="(?:rsvp-|waitlist-|event-going-count)|\/rsvp\b|<form\b/,
     );
     // Only the native, non-submitting feed-copy action is allowed in the archive.
-    expect(html.match(/<button\b[^>]*>/g)).toEqual([
+    expect(withoutSearch.match(/<button\b[^>]*>/g)).toEqual([
       expect.stringMatching(
         /^<button\b(?=[^>]*\stype="button")(?=[^>]*\sdata-copy-feed="true")(?=[^>]*\sdata-copy-link="https:\/\/next\.example\.test\/events\.ics")[^>]*>$/,
       ),

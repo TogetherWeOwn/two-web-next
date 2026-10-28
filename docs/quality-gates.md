@@ -42,10 +42,29 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   the overall check. JSON, Markdown and per-run Vitest evidence are retained
   for 14 days, including on failure. The full nightly signal stays unchanged.
 - **Test inventory (HARD):** `ci/test-inventory.mjs` fails the job when a
-  `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The step
-  runs `npm run test:inventory -- --strict` with no `continue-on-error`;
-  the `--selftest` stays hermetic (fixture trees plus wiring checks that
-  never depend on the tree having zero orphans).
+  `*.test.ts` / `*.test.mjs` file is reachable from no CI job. The same
+  step gates Playwright specs: every `e2e/**/*.spec.ts` and
+  `e2e/**/*.visual.ts` must match a CI-referenced config's
+  testDir/testMatch and not be excluded by testIgnore (honoring workflow
+  file filters) or be imported transitively by such a spec. Import edges
+  are side-effect imports, re-exports and require calls: a named import of
+  a spec fails closed (Playwright's Babel elides unused bindings), as do
+  argument forwarding (bare positionals as well as `--`) and
+  `--prefix`/`--workspace` redirects on Playwright scripts. YAML run
+  scalars are decoded before shell scanning, with explicit block indentation
+  so leading command whitespace cannot hide later commands. Folded, plain
+  and quoted multiline values cannot hide forwarded arguments. A workflow
+  step or invoked package script that runs Playwright must run at the repo
+  root: any other `working-directory:` or a preceding `cd`, `pushd` or `popd`
+  fails closed (including compound shell commands, Bash `time [-p] [--]`
+  prefixes, quoted/empty assignment values, repeated `command`/`builtin`
+  wrappers and nested npm runs). The cwd scan consumes whole shell words;
+  whitespace or separators inside quotes cannot hide a following cwd change.
+  `--json` prints the Playwright
+  summary (`playwright-spec-reachability`, `OK`/`PLAYWRIGHT_SPEC_ORPHAN`,
+  `next_action`). The step runs `npm run test:inventory -- --strict` with
+  no `continue-on-error`; the `--selftest` stays hermetic (fixture trees
+  plus wiring checks that never depend on the tree having zero orphans).
 - **Tier-0 check (required):** `npm run test:tier0` runs the fast-check
   validator properties, the role x route authz matrix and the
   default-planner EXPLAIN seq-scan check from `tier0/` (own vitest config:
@@ -53,7 +72,9 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   stays isolated in its own runner). The `check`-job step runs against the
   job Postgres service and prints the changed query files beside the verdict.
 - **Floor guard (HARD):** `ci/floor-guard.mjs` enforces the CONSTRAINTS.md
-  floor on the PR diff: new suppressions, test skip calls, deleted test files
+  floor on the PR diff: new suppressions, test skips (unconditional calls and
+  conditional `.skipIf`/`.runIf`, options-object `skip:`, and ternary
+  suite/test selection forms), deleted test files
   (including `*-selftest` scripts), net-removed assertions, source-code stubs,
   new exception rows, lowered table thresholds, removed enforced-threshold
   rows, and added `.constraintsignore` lines fail `check`. Renamed threshold
@@ -69,7 +90,7 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   so `unfoldFloorWaiverLines` joins nonblank continuation lines after each
   `Floor-waiver:` line before matching; path-based waiver parsing removes
   wrap-inserted spaces within the path
-  (`ci/floor-guard.mjs:215-234, 236-262`).
+  (`ci/floor-guard.mjs:404-423, 425-451`).
   Waivers are reasoned commit trailers (`test-deleted`, `assertion-removed`,
   `threshold-removed`, `new-exemption`) and every active one is printed to the
   log and the job summary for reviewer visibility. The ignore list is pinned
@@ -77,7 +98,21 @@ not fail) unless marked HARD. All of them run on the existing runners only.
   `new-exemption` waiver. It scopes skip detection to test code and stub
   detection to source/test code; generated minified islands are exempted by
   `.constraintsignore`. An assertion paired with one added in the same test
-  file reads as a replacement. Failed or oversized diffs exit 2 rather than
+  file reads as a replacement. A conditional skip paired with a skip removed
+  from the same test file reads as a replacement; an unconditional skip added
+  in its place still fails. JavaScript/TypeScript skips are counted as syntax
+  constructs in complete merge-base and working-tree sources using the existing
+  Babel parser, without executing them or evaluating conditions. Wrapped
+  expressions and multiple gates on one line keep the same count; a skip in
+  any builder-chain segment (`it.skip.each`, including tagged-template
+  builders) counts once per registration; comments,
+  strings, fixture data and callback-local objects supply no replacement credit.
+  `skip:` keys count only in test-call options (including literal spreads), not
+  arbitrary nested objects. Other languages keep the legacy call spellings.
+  The `guardDiff` fixture API accepts complete source fragments; callers with
+  partial hunks must pass `sources: new Map([[path, { before, after }]])`.
+  Unparseable fragments throw. Unreadable or unparseable test sources make the
+  CLI fail closed with exit 2, as for failed or oversized diffs, rather than
   looking clean.
   Mirror every `Floor-waiver:` trailer from branch commits in canonical form
   in the PR body: `check_queue_visible_waivers` (`ci/pr-lint-output.py:26-71`) scans

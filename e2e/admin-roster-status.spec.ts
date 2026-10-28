@@ -3,7 +3,7 @@
 // Run in the normal browser harness: npm run e2e -- e2e/admin-roster-status.spec.ts
 // Native submission, keyboard access, no-JS, empty recovery and dirty-draft veto
 // exercise real rendered Hono/Kit documents, not handcrafted filter HTML.
-import { expect, test, type BrowserContext, type Page } from "@playwright/test";
+import { expect, test, type BrowserContext, type Locator, type Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import {
@@ -68,6 +68,26 @@ async function keyboardTo(page: Page, selector: string) {
       return;
   }
   throw new Error(`Keyboard cannot reach ${selector}`);
+}
+async function activateByKeyboard(page: Page, link: Locator) {
+  await expect(link).toHaveCount(1);
+  // locator.press() relies on its implicit programmatic focus; if that
+  // focus does not stick, Enter goes to the document body, no navigation
+  // starts, and the URL wait consumes the whole test timeout. Reach the
+  // link with real Tab presses and press Enter only once the document
+  // confirms the link holds focus, as in admin-inventory-recovery.spec.ts.
+  for (let i = 0; i < 70; i++) {
+    await page.keyboard.press("Tab");
+    if (await link.evaluate((el) => el === el.ownerDocument.activeElement)) {
+      const previousUrl = page.url();
+      await Promise.all([
+        page.waitForURL((url) => url.href !== previousUrl),
+        page.keyboard.press("Enter"),
+      ]);
+      return;
+    }
+  }
+  throw new Error("Recovery link was not reachable using Tab");
 }
 async function isGuarded(page: Page) {
   return page.evaluate(() => {
@@ -137,9 +157,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
           name: "First page of these responses",
           exact: true,
         });
-        await expect(first).toHaveCount(1);
-        await first.focus();
-        await page.keyboard.press("Enter");
+        await activateByKeyboard(page, first);
         await expect(page.getByTestId("roster-range")).toContainText(/1\s*[-–]\s*100 of 105/);
         expect(new URL(page.url()).hash).toBe("#rsvp-roster");
         expect(new URL(page.url()).searchParams.get("roster_status")).toBe("waitlisted");
@@ -148,8 +166,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
         await page.getByTestId("rsvp-roster").locator('button[type="submit"]').click();
         await expect(page.getByTestId("roster-range")).toContainText(/0\s*[-–]\s*0 of 0/);
         const clear = page.getByRole("link", { name: "Clear roster filters", exact: true });
-        await clear.focus();
-        await page.keyboard.press("Enter");
+        await activateByKeyboard(page, clear);
         await expect(page.getByTestId("roster-range")).toContainText(/of 420/);
         const url = new URL(page.url());
         expect(url.hash).toBe("#rsvp-roster");

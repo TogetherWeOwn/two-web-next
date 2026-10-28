@@ -997,7 +997,10 @@ for (const target of targets) {
       });
       expect(response.status()).toBe(403);
       expect(response.headers()["content-type"]).toContain("application/json");
-      expect(await response.json()).toEqual({ error: "cross_origin" });
+      const body = await response.json();
+      expect(body.error).toBe("cross_origin");
+      expect(typeof body.request_id).toBe("string");
+      expect(Object.keys(body).sort()).toEqual(["error", "request_id"]);
       expect(response.headers()["content-security-policy"] ?? "").toContain("default-src 'self'");
     });
   });
@@ -1185,7 +1188,7 @@ for (const target of targets) {
         // test/hotzone-season-continuity-acceptance.test.ts null-DB fixture).
         for (const signal of ["voice", "games"] as const) {
           const path = `/hotzones/${signal}`;
-          const caption = `Season-independent seeded estimate of ${signal} activity`;
+          const caption = `Season-independent seeded estimate of ${signal} activity (hours in UTC)`;
           const signalResponse = await page.goto(path);
           expect(
             signalResponse?.status(),
@@ -1256,7 +1259,7 @@ for (const target of targets) {
           await expect(region.locator("caption")).toHaveText(caption);
           const headerCells = region.locator("thead th");
           await expect(headerCells).toHaveCount(25);
-          await expect(headerCells.first()).toHaveText("Day");
+          await expect(headerCells.first()).toHaveText("Day (UTC)");
           for (let h = 0; h < 24; h++) {
             await expect(headerCells.nth(h + 1), `${target.name} ${path} hour ${h}`).toHaveText(
               String(h).padStart(2, "0"),

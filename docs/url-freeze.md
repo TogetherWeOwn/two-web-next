@@ -270,6 +270,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /events/:key/duplicate` | moderator | events: duplicate as draft |
 | `POST /events/:key/publish` | moderator | events: publish |
 | `POST /logout` | public | app: optional session revoke + origin check |
+| `POST /logout/everywhere` | public | app: whole-live-set revoke for the acting member + origin check |
 | `POST /mcp` | public | mcp: stateless public read-only MCP (list_events, get_event, get_community, get_join); session-free, shared read budget, 32 KiB cap |
 | `POST /members/:user` | member-owner | profiles: `_method=PATCH` form adapter |
 | `PUT /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |

@@ -16,7 +16,12 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { Db } from "../db/index";
-import { PUBLIC_DATA_BOUNDS, PUBLIC_EVENT_STATUS } from "../public-data/contracts";
+import { containsControlCharacters } from "../admin/validation-shared";
+import {
+  PUBLIC_API_GAME_MAX_LENGTH,
+  PUBLIC_DATA_BOUNDS,
+  PUBLIC_EVENT_STATUS,
+} from "../public-data/contracts";
 import { events, rsvps } from "../db/admin-schema";
 import { users } from "../db/schema";
 import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
@@ -647,8 +652,19 @@ export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent |
 
 export type EventLink = Pick<
   PublicEvent,
-  "id" | "eventKey" | "title" | "startsAt" | "timezone" | "location"
+  | "id"
+  | "eventKey"
+  | "title"
+  | "startsAt"
+  | "endsAt"
+  | "timezone"
+  | "location"
+  | "game"
+  | "rsvpOpen"
 >;
+
+export { eventLinkAvailability } from "./link-availability";
+
 export interface EventNeighbors {
   previous: EventLink | null;
   next: EventLink | null;
@@ -659,8 +675,11 @@ const eventLinkColumns = {
   eventKey: events.eventKey,
   title: events.title,
   startsAt: events.startsAt,
+  endsAt: events.endsAt,
   timezone: events.timezone,
   location: events.location,
+  game: events.game,
+  rsvpOpen: events.rsvpOpen,
 };
 
 /**
@@ -819,6 +838,7 @@ export async function getEventSeriesContext(
   const textFits = sql<boolean>`(
     octet_length(${events.eventKey}) + octet_length(${events.title}) +
     octet_length(${events.timezone}) + coalesce(octet_length(${events.location}), 0) +
+    coalesce(octet_length(${events.game}), 0) +
     coalesce(octet_length(${events.organizer_name}), 0)
   ) <= ${SERIES_CONTEXT_MAX_TEXT_BYTES}`;
   const rows = await nonSensitiveRead("events", () =>
@@ -829,6 +849,7 @@ export async function getEventSeriesContext(
         title: sql<string>`case when ${textFits} then ${events.title} end`,
         timezone: sql<string>`case when ${textFits} then ${events.timezone} end`,
         location: sql<string | null>`case when ${textFits} then ${events.location} end`,
+        game: sql<string | null>`case when ${textFits} then ${events.game} end`,
         organizer_name: sql<string | null>`case when ${textFits} then ${events.organizer_name} end`,
         recurrenceIndex: events.recurrenceIndex,
         textFits,
@@ -859,8 +880,11 @@ export async function getEventSeriesContext(
     eventKey: row.eventKey,
     title: row.title,
     startsAt: row.startsAt,
+    endsAt: row.endsAt,
     timezone: row.timezone,
     location: row.location,
+    game: row.game,
+    rsvpOpen: row.rsvpOpen,
   });
   // A run of one is a standalone render: the current row with no visible
   // siblings keeps today's markup with no series block at all.
@@ -1169,12 +1193,32 @@ export type PublicApiEvent = Omit<PublicEvent, "goingCount" | "goingOccupancy"> 
  * bound as `listJson`, but the going-count aggregate degrades to null instead
  * of failing the page — an unreadable RSVP rollup reads as unknown, never 0.
  * `listJson` stays untouched for the session-gated `/events.json` contract.
+ * Optional `game` narrows to one stored game, trim + case-insensitive exact
+ * via `gameCondition` (the schedule-facet and leaderboard `?activity=`
+ * precedent): the value arrives as a bound parameter, never interpolated, so
+ * stored NULL/blank games never match and hostile input matches nothing.
  */
 export async function listPublicApiEvents(
   db: Db,
-  opts: { limit: number; offset: number },
+  opts: { limit: number; offset: number; game?: string },
 ): Promise<{ rows: PublicApiEvent[]; total: number; page: number }> {
-  const predicate = eq(events.status, PUBLIC_EVENT_STATUS);
+  // Defense-in-depth: direct callers must not read unfiltered for a blank
+  // game or send a NUL to PostgreSQL. Invalid games answer empty without a
+  // database read, matching the route and the save-side character rule.
+  if (opts.game !== undefined) {
+    const trimmed = opts.game.trim();
+    if (
+      trimmed === "" ||
+      [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH ||
+      containsControlCharacters(trimmed)
+    ) {
+      return { rows: [], total: 0, page: 1 };
+    }
+  }
+  const gameClause = opts.game !== undefined ? gameCondition(opts.game) : undefined;
+  const predicate = gameClause
+    ? and(eq(events.status, PUBLIC_EVENT_STATUS), gameClause)
+    : eq(events.status, PUBLIC_EVENT_STATUS);
   const [total] = await db.select({ n: count() }).from(events).where(predicate);
   const n = Number(total?.n ?? 0);
   const lastPage = Math.max(1, Math.ceil(n / opts.limit));

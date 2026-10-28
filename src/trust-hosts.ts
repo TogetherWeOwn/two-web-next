@@ -15,6 +15,7 @@
 import type { Context, Next } from "hono";
 import type { Env } from "./env";
 import { notFoundResponse } from "./errors";
+import { safeRequestId } from "./request-log";
 
 /** Parse a single host authority; never truncate a malformed or joined value. */
 export function normalizeHost(raw: string | null | undefined): string | null {
@@ -79,7 +80,14 @@ export function trustHosts() {
       // An invalid request URL is refused, even with a trusted Host header.
     }
     if (urlHost === null || !isTrustedHost(c.env.APP_URL, [c.req.header("host"), urlHost])) {
-      console.warn("refusing request with untrusted host");
+      const requestId = safeRequestId(c.get("requestId"));
+      console.warn(
+        JSON.stringify({
+          event: "http.untrusted_host",
+          ...(requestId ? { request_id: requestId } : {}),
+          next_action: "check_app_url_and_proxy_host",
+        }),
+      );
       return notFoundResponse(c);
     }
     await next();

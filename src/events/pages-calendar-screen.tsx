@@ -1,5 +1,6 @@
 // Events calendar screen: composes the controls, empty states, list and month grid.
 import type { FC } from "hono/jsx";
+import type { HeaderSession, Session } from "../env";
 import { canonicalUrl } from "../seo";
 import {
   CALENDAR_MONTH_EMPTY_RECOVERY_COPY,
@@ -45,7 +46,7 @@ import {
   SearchMiss,
 } from "./pages-calendar-empty";
 import { MonthGrid } from "./pages-calendar-grid";
-import { CalendarList } from "./pages-calendar-list";
+import { CalendarList, PastDrawer } from "./pages-calendar-list";
 import { type CalRow, isTransient, rowZone } from "./pages-calendar-row";
 
 /**
@@ -73,6 +74,8 @@ export const EventsCalendarPage: FC<{
   /** Effective facet: the canonical stored game, or null when unfiltered. */
   gameFilter: string | null;
   member: boolean;
+  /** Signed-in viewer for the header account area; the shell gates members. */
+  session?: Session | HeaderSession | null;
   inviteUrl: string;
   appUrl: string;
   /** Rooted path the guest sign-in link carries as ?next= (null = bare link). */
@@ -98,6 +101,7 @@ export const EventsCalendarPage: FC<{
   games,
   gameFilter,
   member,
+  session,
   inviteUrl,
   appUrl,
   loginReturnTo = null,
@@ -183,6 +187,7 @@ export const EventsCalendarPage: FC<{
       description="Game nights, tournaments and whatever else the community puts on."
       robots={robots}
       member={member}
+      session={session}
       loginReturnTo={loginReturnTo}
       markdownAlternate={markdownAlternate ?? undefined}
     >
@@ -293,6 +298,7 @@ export const EventsCalendarPage: FC<{
               upcoming={upcoming}
               past={past}
               zone={zone}
+              now={now}
               totalPages={totalPages}
               outOfRange={outOfRange}
               showPast={showPast}
@@ -310,6 +316,22 @@ export const EventsCalendarPage: FC<{
               whose non-emptiness always implied visible rows. */}
           {emptyState === null && state.view === "calendar" ? (
             <MonthGrid state={state} weeks={weeks} zone={zone} now={now} />
+          ) : null}
+
+          {/* The past preview rides under the grid too: it is the same
+              bounded drawer the list renders, so a preview opened in either
+              view can be closed without switching views first. */}
+          {emptyState === null && state.view === "calendar" ? (
+            <PastDrawer
+              state={state}
+              past={past}
+              zone={zone}
+              now={now}
+              showPast={showPast}
+              member={member}
+              inviteUrl={inviteUrl}
+              loginReturnTo={loginReturnTo}
+            />
           ) : null}
 
           {monthEmpty ? (

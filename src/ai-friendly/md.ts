@@ -5,7 +5,7 @@
 // routes in ./routes.ts only add headers and reads. Public fields only —
 // never attendee identities, RSVP records, waitlist state, or raw Discord ids.
 import { canonicalUrl } from "../seo";
-import { formatEventWhen as mdDetailInstant, isValidZone } from "../events/date-format";
+import { effectiveZone, formatEventWhen as mdDetailInstant } from "../events/date-format";
 import { fmt } from "../events/pages-shared";
 import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
@@ -39,6 +39,9 @@ export interface MdEvent {
   goingOccupancy: number | null;
   /** Published or past: drafts/cancelled never reach the detail builder. */
   status: "published" | "past";
+  /** Optional accessibility notes; the detail section renders only when set
+   * (trimmed, non-blank). Collection rows omit it. */
+  accessibilityNotes?: string | null;
   /** Public host + joining details, when the row carries them (same column
    * names as the public event row so the route mapper's spread carries them).
    * Optional for older row fixtures; builders treat absent/blank as "render
@@ -235,10 +238,11 @@ export function mdJoin(appUrl: string, inviteUrl: string): string {
 }
 
 function mdEventWhen(e: MdEvent): string {
-  return `${fmt(e.startsAt, e.timezone)} (${e.timezone})`;
+  const zone = effectiveZone(e.timezone);
+  return `${fmt(e.startsAt, zone)} (${zone})`;
 }
 
-const mdZoneLabel = (tz: string): string => (isValidZone(tz) ? tz : "UTC");
+const mdZoneLabel = effectiveZone;
 
 function mdEventBlock(appUrl: string, e: MdEvent): string[] {
   const out = [
@@ -281,6 +285,7 @@ export function mdEvents(appUrl: string, rows: MdEvent[]): string {
 
 export function mdEvent(appUrl: string, e: MdEvent): string {
   const lineup = lineupLine(e);
+  const accessibilityNotes = e.accessibilityNotes?.trim();
   const host = hostLine(e);
   // The HTML detail gates "How to join" to published/draft rows; past events
   // show no joining section, so neither does their Markdown alternate. The
@@ -300,6 +305,7 @@ export function mdEvent(appUrl: string, e: MdEvent): string {
     ...(join ? [join] : []),
     ...(lineup ? [lineup] : []),
     ...(e.description ? ["", `## About this event`, "", mdText(e.description)] : []),
+    ...(accessibilityNotes ? ["", "## Accessibility", "", mdText(accessibilityNotes)] : []),
     "",
     `[Add to calendar (.ics)](${canonicalUrl(appUrl, `/events/${e.eventKey}.ics`)}) · [See upcoming events](${canonicalUrl(appUrl, "/events")})`,
     "",
