@@ -406,7 +406,7 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // lower 334848 rejects by 146), the independently justified 335360 ceiling
 // (combined worst 335338, margin 22; lower 335104 rejects by 234), and the
 // independently justified 335616 ceiling (combined worst 335504, margin 112;
-// lower 335360 rejects by 144), the
+// lower 335360 rejects by 144), and the
 // independently justified 335872 ceiling (combined worst 335624, margin 248;
 // lower 335616 rejects by 8), and the independently justified 336128 ceiling
 // (combined worst 335977, margin 151; lower 335872 rejects by 105), the

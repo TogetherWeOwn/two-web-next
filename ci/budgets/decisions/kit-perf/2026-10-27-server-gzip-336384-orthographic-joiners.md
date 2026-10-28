@@ -1,7 +1,10 @@
 # 2026-10-27 decision: server JS gzip ceiling 335872 -> 336384
 
-`server.js.maxGzipBytes` rises 335872 -> 336384 in
-`ci/budgets/kit/server-js.json`; no other ceiling changes. This admits the
+Historical allocation record: this branch originally raised
+`server.js.maxGzipBytes` 335872 -> 336384 in
+`ci/budgets/kit/server-js.json`. Main now supplies a 336640 ceiling; this
+feature no longer changes any budget fragment. The original allocation
+admitted the
 shared validation rule's RFC 5892 contextual-joiner tables (explicit
 virama set plus the Arabic-joining ZWNJ context) that profile bio/game
 refusals inherit, whose server-side code runs in the Kit server bundle.
@@ -46,9 +49,10 @@ unchanged by this feature's measurement and fit their unchanged ceilings.
 Re-measured after merging current main tip `7d5db1c21` (union with the
 336128 sibling): two builds of the merged tree give server gzip 336106 /
 336105 (raw 1187477 / 1187479), worst 336106, margin 278 under 336384;
-336128 rejects the worst by 22B, so 336384 remains the smallest aligned
-cover. Client JS (event-detail growth from main) fits its raised 257024
-raw ceiling.
+336128 admits that worst build with 22B of margin: those measurements do
+not justify 336384 as the smallest aligned cover. The later measurements
+below provide the historical rationale for 336384 instead. Client JS
+(event-detail growth from main) fits its raised 257024 raw ceiling.
 
 Re-measured again after main moved to `e37975a07` (sibling #1923 raised
 the main ceiling 335872 -> 336128 for Happening-now; #1913/#1487 added
@@ -68,5 +72,37 @@ under-inclusive: it refused correctly spelled Persian ZWNJ text and Mc-virama
 Indic text while admitting non-orthographic joiners. The mandated fix is an
 explicit virama code-point set (69 UCD entries, Mn and Mc) plus an
 Arabic-joining ZWNJ context, already shrunk to a hex-delta table decoded
-once at load; the only cheaper alternative is to drop the behaviour the
-security fix exists to deliver. No new route, island, query or dependency.
+once at load. No new route, island, query or dependency.
+
+## 2026-10-28: exact joining types; allocation is still blocked
+
+The Arabic-script-letter and general-category-mark approximations did not
+implement RFC 5892 A.1/A.2: right-joining ALEF was admitted as the left
+boundary, join-causing characters were mistaken for joining letters,
+non-Arabic joining scripts and transparent format characters were refused,
+and deleting emoji could manufacture an adjacent joining context. The
+replacement uses generated Unicode 17.0.0 `Joining_Type` L/D, R/D and T
+classes and evaluates every exemption against the original submitted text.
+The unmodified UCD fixture, its SHA-256 pin, generator and exhaustive
+code-point conformance test keep the classes reproducible. Emoji sequence
+handling and the explicit 69-entry virama set remain supported.
+
+Fresh builds use Node 24.22.1 / npm 11.19.1, locked root and web dependencies,
+`npm run build --prefix web` and the unchanged canonical
+`node ci/check-kit-perf.mjs` gate. Pristine main is pinned at `789e8a66`;
+the feature is composed on that same base.
+
+| Tree | Build 1 server gzip | Build 2 server gzip | Gate |
+|---|---:|---:|---|
+| Pristine main | 336631 | 336634 | exit 0 both builds |
+| Exact joining-type feature | 339621 | 339621 | exit 1 both builds |
+
+The feature exceeds the unchanged 336640 ceiling by 2981 B; its worst-case
+delta over pristine main is 2987 B gzip. The second feature build measures
+1199839 raw bytes and 116 server files, which fit their unchanged limits.
+Worker, client JS and client CSS also fit (client JS 257110 raw / 103297
+gzip). These measurements supersede all earlier passing feature measurements
+in this document. No budget is raised or proposed here, and the shipping
+allocation tests remain identical to main. The PR must remain draft until
+real size reductions or separately reviewed capacity make the final
+composition fit; skipped draft checks are not merge evidence.

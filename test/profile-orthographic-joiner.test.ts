@@ -43,7 +43,9 @@ const VIRAMA_ZWSP = F(0x0dca, 0x200b);
 const MULTI_SINHALA = `${SINHALA} ${SINHALA}`;
 // RFC 5892 A.2 Persian ZWNJ: Farsi yeh/beh are Lo joining letters, not Mn.
 const PERSIAN_WANT = F(0x0645, 0x06cc, 0x200c, 0x062e, 0x0648, 0x0627, 0x0647, 0x0645);
-const PERSIAN_BOOKS = F(0x06a9, 0x062a, 0x0627, 0x200c, 0x0647, 0x0627);
+// "Books": KAF + TEH + ALEF + BEH, then ZWNJ + HEH + ALEF. The old
+// fixture omitted BEH and wrongly treated right-joining ALEF as a left boundary.
+const PERSIAN_BOOKS = F(0x06a9, 0x062a, 0x0627, 0x0628, 0x200c, 0x0647, 0x0627);
 // Mc viramas (ccc=9, General_Category Mc): Balinese, Javanese, Grantha.
 const BALINESE_ZWNJ = F(0x1b13, 0x1b44, 0x200c);
 const JAVANESE_ZWJ = F(0xa98f, 0xa9c0, 0x200d);
@@ -260,4 +262,23 @@ describe("profile write boundary saves orthographic joiners (in-memory fixtures 
     expect(harness.save).toHaveBeenCalledTimes(1);
     expect(harness.store.rows.get(memberId)).toMatchObject({ bio });
   });
+});
+
+it("refuses invalid joining contexts at every write boundary without persistence", async () => {
+  const harness = await routeSetup();
+  const family = F(0x1f468, 0x200d, 0x1f469, 0x200d, 0x1f467);
+  for (const value of [F(0x0627, 0x200c, 0x0628), `${F(0x0628, 0x200c)}${family}${F(0x0628)}`]) {
+    for (const response of [
+      await harness.jsonPatch({ bio: value, games: ["Chess"], timezone: "UTC" }),
+      await harness.formPatch({ bio: "Hi", games_text: value, timezone: "UTC" }),
+      await harness.nativePost({ bio: value, games_text: "Chess", timezone: "UTC" }),
+    ]) {
+      expect(response.status).toBe(422);
+      const body = await response.text();
+      expect(body).toMatch(/invisible|directional/i);
+      expect(body).not.toContain(value);
+    }
+  }
+  expect(harness.save).not.toHaveBeenCalled();
+  expect(harness.store.rows.get(memberId)).toMatchObject({ bio: "Hi", games: ["Chess"] });
 });

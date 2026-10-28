@@ -4,6 +4,8 @@
 // so all existing importers keep working untouched; `str`/`fail` stay
 // leaf-internal (exported only for the sibling leaves).
 
+import { JOINING_LEFT, JOINING_RIGHT, JOINING_TRANSPARENT } from "./joining-types";
+
 /** Field errors keyed by field name, in the form's own terms. */
 export type FieldErrors = Record<string, string>;
 
@@ -34,12 +36,10 @@ export function fail(fields: FieldErrors): never {
 // (Canonical_Combining_Class=Virama, e.g. Sinhala RAKAARAANSAYA U+0DCA U+200D
 // U+0DBB, Unicode 17.0 section 13.2.1 Table 13-3); A.2 additionally admits
 // ZWNJ between joining letters (required for Persian). V8 RegExp has no
-// ccc/joining-type property escapes, so the virama context is an explicit
-// code-point set (every UCD entry with ccc=9, Mn and Mc alike, taken from
-// UnicodeData 17.0.0) and the joining context is an Arabic-script letter on
-// each side (Script=Arabic plus General_Category Letter, approximating
-// Joining_Type L/D before and R/D after) with combining marks skipped as the
-// transparent run. A lone joiner between Latin letters still refuses below.
+// ccc/joining-type property escapes. Use the exact Unicode 17.0.0 joining
+// types (generated in ./joining-types), not script/category approximations.
+// Context is always read from the original text: removing an emoji or an
+// already-admitted joiner must not manufacture a new joining boundary.
 // Every UCD entry with Canonical_Combining_Class=Virama (UnicodeData
 // 17.0.0): Mn viramas like Sinhala U+0DCA and Mc viramas like Balinese
 // U+1B44, Javanese U+A9C0, Grantha U+1134D. Stored as hex deltas off the
@@ -52,44 +52,47 @@ const VIRAMAS = new Set<number>();
   for (const d of VIRAMA_DELTAS.split(",")) VIRAMAS.add((cp += parseInt(d, 16)));
 }
 
-function isJoiningLetter(ch: string): boolean {
-  return /\p{Script=Arabic}/u.test(ch) && /\p{L}/u.test(ch);
-}
-
-// Drop only the joiners the contextual rules admit; every other joiner
-// stays for the refusal test below. A loop (not one global replace) keeps
-// every occurrence covered no matter how many clusters a value carries.
-function withoutContextualJoiners(value: string): string {
-  const chars = Array.from(value);
-  let out = "";
-  for (let i = 0; i < chars.length; i++) {
-    const ch = chars[i]!;
-    if ((ch !== "\u200C" && ch !== "\u200D") || !isAdmitted(chars, i)) out += ch;
-  }
-  return out;
-}
-
 function isAdmitted(chars: string[], i: number): boolean {
   const prev = i > 0 ? chars[i - 1]! : null;
   if (prev !== null && VIRAMAS.has(prev.codePointAt(0)!)) return true;
   if (chars[i] !== "\u200C") return false;
   let j = i - 1;
-  while (j >= 0 && /\p{M}/u.test(chars[j]!)) j--;
+  while (j >= 0 && JOINING_TRANSPARENT.test(chars[j]!)) j--;
   let k = i + 1;
-  while (k < chars.length && /\p{M}/u.test(chars[k]!)) k++;
-  return j >= 0 && k < chars.length && isJoiningLetter(chars[j]!) && isJoiningLetter(chars[k]!);
+  while (k < chars.length && JOINING_TRANSPARENT.test(chars[k]!)) k++;
+  return (
+    j >= 0 && k < chars.length && JOINING_LEFT.test(chars[j]!) && JOINING_RIGHT.test(chars[k]!)
+  );
 }
 
 export function containsControlCharacters(value: string): boolean {
   const stripped = value.replace(/[\t\n\r]/g, "");
   if (/\p{Cc}/u.test(stripped)) return true;
-  // Match the original text: removing whitespace can manufacture an emoji.
-  const withoutEmojiJoiners = value.replace(
+  if (/[\u{202A}-\u{202E}\u{2066}-\u{2069}\u{200B}\u{FEFF}]/u.test(value)) return true;
+  if (!/[\u200C\u200D]/u.test(value)) return false;
+
+  // Record only the ZWJ offsets admitted by complete emoji matches, without
+  // deleting anything. Emoji and orthographic contexts see identical input.
+  const emojiJoiners = new Set<number>();
+  for (const match of value.matchAll(
     /(?:\p{Extended_Pictographic}[\u{FE00}-\u{FE0F}\p{Mn}\p{Me}\p{Sk}\u{E0020}-\u{E007F}]*\u{200D})+\p{Extended_Pictographic}[\u{FE00}-\u{FE0F}\p{Mn}\p{Me}\p{Sk}\u{E0020}-\u{E007F}]*/gu,
-    "",
-  );
-  const withoutOrthographicJoiners = withoutContextualJoiners(withoutEmojiJoiners);
-  return /[\u{202A}-\u{202E}\u{2066}-\u{2069}\u{200B}-\u{200D}\u{FEFF}]/u.test(
-    withoutOrthographicJoiners,
-  );
+  )) {
+    for (let i = match.index; i < match.index + match[0].length; i++) {
+      if (value[i] === "\u200D") emojiJoiners.add(i);
+    }
+  }
+  const chars = Array.from(value);
+  let offset = 0;
+  for (let i = 0; i < chars.length; i++) {
+    const ch = chars[i]!;
+    if (
+      (ch === "\u200C" || ch === "\u200D") &&
+      !emojiJoiners.has(offset) &&
+      !isAdmitted(chars, i)
+    ) {
+      return true;
+    }
+    offset += ch.length;
+  }
+  return false;
 }
