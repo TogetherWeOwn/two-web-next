@@ -112,9 +112,13 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
-  const accessibilityNotes = e.accessibilityNotes?.trim();
   const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
+  // Share the RSVP render instant with the roster invitation verdict.
   const now = new Date();
+  // The same closed/paused verdict as RsvpButton, without manufacturing an
+  // RSVP invitation that the adjacent control says is unavailable.
+  const rsvpUnavailable = e.status !== "published" || e.endsAt <= now || !e.rsvpOpen;
+  const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -207,19 +211,25 @@ export const EventPage: FC<{
             <dd>{duration}</dd>
           </div>
         ) : null}
-        {e.location ? (
-          <div>
-            <dt>Where</dt>
-            <dd>
-              <p data-testid="event-venue">{e.location}</p>
-              <p>
-                <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
-                  Get directions
-                </a>
+        <div>
+          <dt>Where</dt>
+          <dd>
+            {e.location ? (
+              <>
+                <p data-testid="event-venue">{e.location}</p>
+                <p>
+                  <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
+                    Get directions
+                  </a>
+                </p>
+              </>
+            ) : (
+              <p data-testid="event-venue-tbd">
+                Venue TBD — check <a href="/discord">Discord</a> for updates.
               </p>
-            </dd>
-          </div>
-        ) : null}
+            )}
+          </dd>
+        </div>
         {e.organizer_name ? (
           <div>
             <dt>Hosted by</dt>
@@ -456,7 +466,47 @@ export const EventPage: FC<{
             .
           </p>
         </section>
-      ) : null}
+      ) : (
+        // One accessible shell for guest, non-member and empty member states.
+        // Later attendee pages retain the populated/stale-page branch above.
+        <section
+          aria-labelledby="event-roster-heading"
+          data-testid={
+            member
+              ? "event-roster-empty"
+              : session
+                ? "event-roster-members-only"
+                : "event-roster-guest-nudge"
+          }
+        >
+          <h2 id="event-roster-heading">Who's going{member ? " (0)" : ""}</h2>
+          <p>
+            {member ? (
+              rsvpUnavailable ? (
+                "No RSVPs."
+              ) : (
+                "No RSVPs yet — RSVP to start the list."
+              )
+            ) : session ? (
+              <>
+                Members only —{" "}
+                <a href={`/join?next=${encodeURIComponent(path)}`}>join the Discord</a> to see who's
+                in.
+              </>
+            ) : e.goingCount === 0 && rsvpUnavailable ? (
+              "No RSVPs."
+            ) : (
+              <>
+                {e.goingCount > 0 ? `${e.goingCount} going` : "No RSVPs yet"} —{" "}
+                <a href={`/join/discord?next=${encodeURIComponent(path)}`}>
+                  {e.goingCount > 0 ? "sign in to see who's in" : "sign in to be the first"}
+                </a>
+                .
+              </>
+            )}
+          </p>
+        </section>
+      )}
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/event-share.js" defer />
       <script src="/islands/going-count.js" defer />

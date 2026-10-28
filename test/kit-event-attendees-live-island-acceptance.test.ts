@@ -565,6 +565,7 @@ async function browser(opts: {
   };
 
   const documentStub = {
+    activeElement: null as El | null,
     documentElement: page,
     body: page,
     querySelector: (selector: string) => page.querySelector(selector),
@@ -656,7 +657,10 @@ async function browser(opts: {
   context.window = context;
   context.self = context;
   context.globalThis = context;
-  focusSink = (target) => notifyDocument("focusin", target);
+  focusSink = (target) => {
+    documentStub.activeElement = target;
+    notifyDocument("focusin", target);
+  };
 
   // Execute exactly the island scripts this page references, in order.
   const scriptSrcs = [...html.matchAll(/src="(\/islands\/[^"]+\.js)"/g)].map((m) => m[1]!);
@@ -962,6 +966,7 @@ describe("Kit who's-going roster live refresh", () => {
       viewerGoingBefore: false,
     });
     expect(b.byTestId("event-attendees")).toBeNull();
+    expect(b.byTestId("event-roster-empty")).not.toBeNull();
     expect(badgeCount(b)).toBe(0);
 
     b.byTestId("rsvp-going")!.click();
@@ -970,7 +975,34 @@ describe("Kit who's-going roster live refresh", () => {
 
     expect(b.reloads()).toBe(0);
     expect(rosterNames(b)).toEqual([VIEWER.name]);
+    // The swap consumes the empty placeholder: exactly one roster section.
+    expect(b.byTestId("event-roster-empty")).toBeNull();
     expectRosterBadgeAgreement(b, 1);
+  });
+
+  it("swaps the roster for the empty placeholder after the last withdrawal, no reload", async () => {
+    const b = await browser({
+      before: [VIEWER],
+      after: [],
+      viewerGoingBefore: true,
+    });
+    expect(b.byTestId("event-attendees")).not.toBeNull();
+
+    b.byTestId("rsvp-withdraw")!.click();
+    const write = await b.answerWrite();
+    expect(write.init.method).toBe("DELETE");
+    // A keyboard user may focus the old roster's refresh link while the
+    // fragment read is in flight. The empty section must keep their place.
+    b.byTestId("event-attendees")!.querySelector("a")!.focus();
+    await b.answerReads();
+
+    expect(b.reloads()).toBe(0);
+    expect(b.byTestId("event-attendees")).toBeNull();
+    // The honest empty state arrives with the same refresh, not on reload.
+    expect(b.byTestId("event-roster-empty")).not.toBeNull();
+    const heading = b.byTestId("event-roster-empty")!.querySelector("#event-roster-heading")!;
+    expect(heading.focused).toBe(true);
+    expect(heading.getAttribute("tabindex")).toBe("-1");
   });
 
   it("surfaces a stale signal instead of a silent contradiction when the refresh read fails", async () => {

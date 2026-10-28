@@ -708,9 +708,12 @@ describe("roster refresh admits only authoritative same-event documents", () => 
   it("inserts the roster on a first RSVP from a populated same-event document", async () => {
     const { b } = await start({ before: [] });
     expect(b.byTestId("event-attendees")).toBeNull();
+    expect(b.byTestId("event-roster-empty")).not.toBeNull();
     answer(b, 0, sameEvent([VIEWER]));
     await b.settle();
     expect(rosterNames(b)).toEqual([VIEWER.name]);
+    // The swap consumes the empty placeholder: exactly one roster section.
+    expect(b.byTestId("event-roster-empty")).toBeNull();
     expect(staleShown(b)).toBe(false);
   });
 
@@ -719,6 +722,9 @@ describe("roster refresh admits only authoritative same-event documents", () => 
     answer(b, 0, sameEvent([], false));
     await b.settle();
     expect(b.byTestId("event-attendees"), "empty same-event roster still prunes").toBeNull();
+    // A last withdrawal swaps the list for the honest empty state, not for
+    // nothing: the placeholder arrives with the same refresh, no reload.
+    expect(b.byTestId("event-roster-empty")).not.toBeNull();
     expect(att(b)).toHaveLength(1);
   });
 
