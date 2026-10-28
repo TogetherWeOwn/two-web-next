@@ -474,9 +474,15 @@ const editorIsland = '<script src="/islands/member-profile.js" defer></' + "scri
             <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>
               {PROFILE_COPY.save}
             </button>
-            <button class="btn profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>
-              {PROFILE_COPY.cancel}
-            </button>
+            {#if errors && Object.keys(errors).length > 0}
+              <a class="btn profile-secondary" href="/members/{member.id}" data-testid={PROFILE_CANCEL_TESTID}>
+                {PROFILE_COPY.cancel}
+              </a>
+            {:else}
+              <button class="btn profile-secondary" type="reset" data-testid={PROFILE_CANCEL_TESTID}>
+                {PROFILE_COPY.cancel}
+              </button>
+            {/if}
           </div>
         </form>
         {@html editorIsland}
