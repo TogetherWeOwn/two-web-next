@@ -4,6 +4,7 @@ import {
   deleteFeatured,
   getFeatured,
   NotFoundError,
+  unpublishFeatured,
   updateFeatured,
   type Actor,
 } from "../src/admin/store";
@@ -187,6 +188,23 @@ describe.skipIf(!url)("featured write serialization (owned Postgres schema)", ()
       causerId: firstActor.id,
       description: `deleted featured content ${form.title}`,
       properties: { title: { before: form.title, after: null } },
+    });
+  });
+
+  it("overlapping unpublishes change once and no-op once, with exactly one audit", async () => {
+    await overlap(
+      (tx) => unpublishFeatured(tx, firstActor, id),
+      () => unpublishFeatured(fixture.db, secondActor, id),
+    );
+    expect((await getFeatured(fixture.db, id))!.isPublished).toBe(false);
+    const logs = await audits();
+    expect(logs).toHaveLength(1);
+    expect(logs[0]).toMatchObject({
+      subjectType: "FeaturedContent",
+      subjectId: String(id),
+      causerId: firstActor.id,
+      description: `unpublished featured content ${form.title}`,
+      properties: { isPublished: { before: true, after: false } },
     });
   });
 

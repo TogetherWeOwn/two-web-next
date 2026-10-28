@@ -1,4 +1,15 @@
-import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import {
+  chmodSync,
+  copyFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -525,5 +536,193 @@ describe("auth-browser receipt schema (reject incomplete receipts)", () => {
     expect(producer).not.toMatch(/:\s*AUTH_BROWSER_CHECK_IDS(?!\s*\[)/);
     expect(producer.match(/\.push\(/g)?.length ?? 0).toBeGreaterThanOrEqual(4);
     expect(producer).toContain("result.json");
+  });
+});
+
+// Filesystem faults other than a missing path must report the evidence as
+// unreadable, never as missing, and never leak the raw errno text. Symlink
+// loops (ELOOP) fault even for root, so they run in-process. Mode-bit faults
+// (EACCES) run the validator in a child: CI's check job runs as root in a
+// container, where CAP_DAC_OVERRIDE ignores mode bits, so the child drops to
+// an unprivileged uid there to make the chmod fault real.
+const UNPRIVILEGED = process.getuid?.() === 0 ? { uid: 65534, gid: 65534 } : {};
+const UNREADABLE_DIR = "AUTH_BROWSER_DIR_UNREADABLE";
+const OAUTH_NEXT_ACTION = `rerun npm run ${OAUTH_SUITE}`;
+
+async function writeValidEvidence(dir: string) {
+  const schema = await loadAuthEvidenceSchema();
+  writeOAuthScreenshots(dir);
+  writeFileSync(
+    join(dir, "result.json"),
+    JSON.stringify({
+      schemaVersion: schema.AUTH_EVIDENCE_SCHEMA_VERSION,
+      checks: [...schema.AUTH_BROWSER_CHECK_IDS],
+      unexpectedRequests: 0,
+      screenshots: [...OAUTH_SCREENSHOTS],
+    }),
+  );
+}
+
+function caught(fn: () => unknown): any {
+  try {
+    return { ok: fn() };
+  } catch (error) {
+    return error;
+  }
+}
+
+// Copies the validator and its schema into a world-readable fixture root so an
+// unprivileged child can import the exact bytes under test.
+function faultRoot(): string {
+  const root = mkdtempSync(join(tmpdir(), "auth-fault-"));
+  chmodSync(root, 0o755);
+  for (const file of ["require-auth-browser-evidence.mjs", "auth-evidence-schema.mjs"])
+    copyFileSync(join("ci", file), join(root, file));
+  return root;
+}
+
+function validateInChild(root: string, dir: string): any {
+  const script = `import { checkAuthBrowserEvidence } from "./require-auth-browser-evidence.mjs";
+try { process.stdout.write(JSON.stringify({ ok: checkAuthBrowserEvidence(process.argv[1]) })); }
+catch (e) { process.stdout.write(JSON.stringify({ code: e?.code, nextAction: e?.nextAction, message: String(e?.message) })); }`;
+  return JSON.parse(
+    execFileSync(process.execPath, ["--input-type=module", "-e", script, dir], {
+      cwd: root,
+      encoding: "utf8",
+      ...UNPRIVILEGED,
+    }),
+  );
+}
+
+function expectUnreadable(err: any, dir: string, code: string, detail: RegExp, context: string) {
+  expect(err?.code, `${context}: code`).toBe(code);
+  expect(err?.nextAction, `${context}: nextAction`).toBe(OAUTH_NEXT_ACTION);
+  expect(err?.message, `${context}: message names the suite`).toContain(`npm run ${OAUTH_SUITE}`);
+  expect(err?.message, `${context}: message`).toMatch(detail);
+  expect(err?.message, `${context}: not reported as missing`).not.toMatch(
+    /missing|wrote nothing|empty/,
+  );
+  expect(
+    String(err?.message).replaceAll(dir, "<dir>"),
+    `${context}: no raw exception text`,
+  ).not.toMatch(/EACCES|ELOOP|ENOENT|errno|permission denied|symbolic links|scandir|stat /i);
+}
+
+describe("auth-browser evidence filesystem faults", () => {
+  it("rejects an evidence directory behind a symlink loop (ELOOP) as unreadable", () => {
+    const root = mkdtempSync(join(tmpdir(), "auth-fault-"));
+    try {
+      const dir = join(root, "evidence");
+      symlinkSync("evidence", dir);
+      const err = expectMachineReadableError(
+        () => checkAuthBrowserEvidence(dir),
+        OAUTH_SUITE,
+        "ELOOP dir",
+      );
+      expectUnreadable(err, dir, UNREADABLE_DIR, /evidence directory is unreadable/, "ELOOP dir");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects an evidence directory behind a traversal-denied parent (EACCES stat) as unreadable", async () => {
+    const root = faultRoot();
+    const locked = join(root, "locked");
+    try {
+      const dir = join(locked, "evidence");
+      mkdirSync(dir, { recursive: true });
+      await writeValidEvidence(dir);
+      chmodSync(locked, 0o000);
+      const err = validateInChild(root, dir);
+      expectUnreadable(err, dir, UNREADABLE_DIR, /evidence directory is unreadable/, "EACCES stat");
+    } finally {
+      chmodSync(locked, 0o700);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a listable-denied evidence directory (EACCES readdir) as unreadable", async () => {
+    const root = faultRoot();
+    const dir = join(root, "evidence");
+    try {
+      mkdirSync(dir);
+      await writeValidEvidence(dir);
+      chmodSync(dir, 0o100);
+      const err = validateInChild(root, dir);
+      expectUnreadable(
+        err,
+        dir,
+        UNREADABLE_DIR,
+        /evidence directory is unreadable/,
+        "EACCES readdir",
+      );
+    } finally {
+      chmodSync(dir, 0o700);
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("rejects a screenshot behind a symlink loop (ELOOP) as unreadable, not missing", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "auth-fault-"));
+    try {
+      await writeValidEvidence(dir);
+      rmSync(join(dir, "join-replay.png"));
+      symlinkSync("join-replay.png", join(dir, "join-replay.png"));
+      const err = expectMachineReadableError(
+        () => checkAuthBrowserEvidence(dir),
+        OAUTH_SUITE,
+        "ELOOP screenshot",
+      );
+      expectUnreadable(
+        err,
+        dir,
+        "AUTH_BROWSER_SCREENSHOT_FILE_MISSING",
+        /screenshot join-replay\.png is unreadable/,
+        "ELOOP screenshot",
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps a genuinely missing path distinct from a faulted one (stat-swallowing control)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "auth-fault-"));
+    try {
+      const missingDir = join(root, "absent");
+      const loopedDir = join(root, "looped");
+      symlinkSync("looped", loopedDir);
+      const missing = caught(() => checkAuthBrowserEvidence(missingDir));
+      const looped = caught(() => checkAuthBrowserEvidence(loopedDir));
+      expect(missing.code).toBe("AUTH_BROWSER_NO_EVIDENCE_DIR");
+      expect(looped.code).toBe(UNREADABLE_DIR);
+      expect(looped.code).not.toBe(missing.code);
+
+      const evidence = join(root, "evidence");
+      mkdirSync(evidence);
+      await writeValidEvidence(evidence);
+      rmSync(join(evidence, "auth-replay.png"));
+      expect(() => checkAuthBrowserEvidence(evidence)).toThrow(
+        /screenshot auth-replay\.png is missing or empty/,
+      );
+      symlinkSync("auth-replay.png", join(evidence, "auth-replay.png"));
+      expect(() => checkAuthBrowserEvidence(evidence)).toThrow(
+        /screenshot auth-replay\.png is unreadable/,
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
+
+  it("accepts valid evidence through the unprivileged child path (fault-harness control)", async () => {
+    const root = faultRoot();
+    try {
+      const dir = join(root, "evidence");
+      mkdirSync(dir);
+      chmodSync(dir, 0o755);
+      await writeValidEvidence(dir);
+      expect(validateInChild(root, dir).ok).toMatch(/6 checks, 0 unexpected requests/);
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
   });
 });

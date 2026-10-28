@@ -81,7 +81,16 @@ let { data }: PageProps = $props();
       <tbody>
         {#each data.rows as r (r.id)}
           <tr>
-            <td><a href={`/admin/featured/${r.id}`}>{r.title}</a></td>
+            <td>
+              <a href={`/admin/featured/${r.id}`}>{r.title}</a>
+              {#if r.status !== "unpublished"}
+                <form method="post" action={`/admin/featured/${r.id}/unpublish`}>
+                  <button type="submit" class="btn" aria-label={`Unpublish ${r.title}`}>
+                    Unpublish
+                  </button>
+                </form>
+              {/if}
+            </td>
             <td data-testid={`featured-status-${r.id}`}>
               <span class="featured-status featured-status-{r.status}" data-status={r.status}>
                 {r.status}
