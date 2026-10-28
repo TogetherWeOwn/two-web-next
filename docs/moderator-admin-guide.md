@@ -328,6 +328,15 @@ Before publishing, use the [event page content readiness checklist](event-conten
    sort and return to page 1. Use **Previous**/**Next** for 25-row pages, retaining
    filters and sort.
    Starts display as UTC timestamps, not local wall time.
+   Each row's **Publish**, **Cancel**, **Pause RSVPs** and **Reopen RSVPs**
+   buttons carry the event title in their accessible name (for example, "Cancel
+   Friday chess"), so a screen reader tells the rows apart; the visible word is
+   unchanged.
+   A search longer than 128 characters is not applied: the page shows "Search
+   terms are limited to 128 characters. Showing all rows." The overlong term is
+   ignored; other filters and pagination still apply.
+   The same notice and rule apply to the roster, featured, join-attempts and
+   activity-log searches.
 2. Fill in the form:
 
    | Field | Rule |
@@ -637,7 +646,7 @@ Legacy instructions about an image crop do not apply to this panel.
 ### Read-only join attempts
 
 `/admin/join-attempts` shows **Outcome**, **Source**, **Discord id**, **Request id**,
-and **Attempted** (UTC). It shows up to **100 rows per page** from the last
+and **Attempted (UTC)**: the time is a UTC instant, not local time. It shows up to **100 rows per page** from the last
 **90 days**, newest first, not every server join or sign-in. Use **Next** for older
 rows and **Previous** to return, retaining filters; **Filter** returns to page 1.
 
@@ -674,8 +683,8 @@ success or no attempted join. Keep member identifiers private.
 
 ### Read-only activity log
 
-`/admin/activity-log` shows **Who**, **What**, **When** and **Subject** for each
-recorded change. It shows up to **50 rows per page**, newest first. Use
+`/admin/activity-log` shows **Who**, **What**, **When (UTC)** and **Subject** for each
+recorded change; **When (UTC)** is a UTC instant, not local time. It shows up to **50 rows per page**, newest first. Use
 **Subject** (type, ID or description) and **Causer** (ID substring), then
 **Filter**; use **Next** for older rows and **Previous** to return. There is no
 edit or delete control, and the raw change payload is never shown.

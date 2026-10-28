@@ -10,6 +10,18 @@ import { rsvpPauseReviewCopy } from "../rsvp-review";
 import type { EventRow } from "../store";
 import type { SortOrder } from "../table-list";
 
+/**
+ * Polite status line shown when an overlong free-text filter was dropped. The
+ * Kit admin pages inline the same markup (search-dropped testid and copy).
+ */
+const SEARCH_DROPPED_NOTICE = "Search terms are limited to 128 characters. Showing all rows.";
+export const SearchDroppedNotice: FC<{ query: { searchDropped?: true } }> = ({ query }) =>
+  query.searchDropped ? (
+    <p role="status" class="hint" data-testid="search-dropped">
+      {SEARCH_DROPPED_NOTICE}
+    </p>
+  ) : null;
+
 export const TableSortHeader: FC<{
   label: string;
   active: boolean;
@@ -86,7 +98,12 @@ export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
   if (!row.rsvpOpen) {
     return (
       <form method="post" action={`/admin/events/${row.eventKey}/rsvp-reopen`}>
-        <button type="submit" class="link" data-testid="rsvp-reopen">
+        <button
+          type="submit"
+          class="link"
+          data-testid="rsvp-reopen"
+          aria-label={`Reopen RSVPs for ${row.title}`}
+        >
           Reopen RSVPs
         </button>
       </form>
@@ -106,7 +123,12 @@ export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
       <p>{copy.consequence}</p>
       <p>{copy.keep}</p>
       <form method="post" action={`/admin/events/${row.eventKey}/rsvp-pause`}>
-        <button type="submit" class="btn" data-testid="rsvp-pause">
+        <button
+          type="submit"
+          class="btn"
+          data-testid="rsvp-pause"
+          aria-label={`${copy.final} for ${row.title}`}
+        >
           {copy.final}
         </button>
       </form>

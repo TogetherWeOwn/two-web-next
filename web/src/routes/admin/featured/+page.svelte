@@ -1,5 +1,5 @@
 <script lang="ts">
-import AdminShell from "#lib/AdminShell.svelte";
+import AdminShell, { searchNotice } from "#lib/AdminShell.svelte";
 import {
   featuredListUrl,
   featuredListHasFilters,
@@ -55,6 +55,7 @@ let { data }: PageProps = $props();
       </div>
     {/if}
   </form>
+  {@render searchNotice(data.query)}
   <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex: keyboard-scrollable
     region per the Hono contract (src/admin/pages/featured-list.tsx) — the

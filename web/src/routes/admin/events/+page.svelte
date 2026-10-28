@@ -1,5 +1,5 @@
 <script lang="ts">
-import AdminShell from "#lib/AdminShell.svelte";
+import AdminShell, { searchNotice } from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
 import {
   eventListUrl,
@@ -104,6 +104,7 @@ const now = new Date();
       </div>
     {/if}
   </form>
+  {@render searchNotice(query)}
   <p>
     <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
   </p>
@@ -160,12 +161,12 @@ const now = new Date();
               <td>
                 {#if r.status === "draft"}
                   <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
-                    <button type="submit" class="link">Publish</button>
+                    <button type="submit" class="link" aria-label={`Publish ${r.title}`}>Publish</button>
                   </form>
                 {/if}
                 {#if r.status === "draft" || r.status === "published"}
                   <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                    <button type="submit" class="link">Cancel</button>
+                    <button type="submit" class="link" aria-label={`Cancel ${r.title}`}>Cancel</button>
                   </form>
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
@@ -173,7 +174,7 @@ const now = new Date();
                     {@html pauseReviews[r.eventKey] ?? ""}
                   {:else}
                     <form method="post" action={`/admin/events/${r.eventKey}/rsvp-reopen`}>
-                      <button type="submit" class="link" data-testid="rsvp-reopen">
+                      <button type="submit" class="link" data-testid="rsvp-reopen" aria-label={`Reopen RSVPs for ${r.title}`}>
                         Reopen RSVPs
                       </button>
                     </form>

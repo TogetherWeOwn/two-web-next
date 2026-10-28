@@ -42,7 +42,7 @@ export function renderRsvpPauseReviewHtml(title: string, eventKey: string): stri
     `<p>${escapeReviewText(copy.consequence)}</p>` +
     `<p>${escapeReviewText(copy.keep)}</p>` +
     `<form method="post" action="/admin/events/${safeKey}/rsvp-pause">` +
-    `<button type="submit" class="btn" data-testid="rsvp-pause">${escapeReviewText(copy.final)}</button>` +
+    `<button type="submit" class="btn" data-testid="rsvp-pause" aria-label="${escapeReviewAttr(`${copy.final} for ${title}`)}">${escapeReviewText(copy.final)}</button>` +
     `</form></details>`
   );
 }

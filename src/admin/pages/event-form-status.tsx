@@ -12,14 +12,24 @@ export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
       <div class="actions rsvp-actions">
         {row.status === "draft" ? (
           <form method="post" action={`/admin/events/${row.eventKey}/publish`}>
-            <button type="submit" class="btn" data-testid="publish-event">
+            <button
+              type="submit"
+              class="btn"
+              data-testid="publish-event"
+              aria-label={`Publish ${row.title}`}
+            >
               Publish
             </button>
           </form>
         ) : null}
         {row.status === "draft" || row.status === "published" ? (
           <form method="post" action={`/admin/events/${row.eventKey}/cancel`}>
-            <button type="submit" class="link" data-testid="cancel-event">
+            <button
+              type="submit"
+              class="link"
+              data-testid="cancel-event"
+              aria-label={`Cancel event ${row.title}`}
+            >
               Cancel event
             </button>
           </form>
