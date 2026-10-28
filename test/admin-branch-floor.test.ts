@@ -872,11 +872,17 @@ describe("admin error and empty page states (pure render, no DB)", () => {
     expect(detailed).toContain("Only a draft.");
   });
 
-  it("omits optional dashboard widgets when the database is absent", () => {
+  it("retains unavailable dashboard widget headings when the database is absent", () => {
     const html = String(jsx(AdminDashboard, { actor: { id: "1", username: "mod" } }));
     expect(html).toContain("mod");
-    expect(html).not.toContain('data-testid="join-funnel"');
-    expect(html).not.toContain('data-testid="top-zero-searches"');
+    expect(html).toContain('data-testid="join-funnel"');
+    expect(html).toContain("Join funnel, last 90 days</h2>");
+    expect(html).toContain('data-testid="join-funnel-unavailable"');
+    expect(html).toContain('data-testid="top-zero-searches"');
+    expect(html).toContain("Top searches with no results</h2>");
+    expect(html).toContain('data-testid="top-zero-searches-unavailable"');
+    expect(html).not.toContain('data-testid="join-funnel-empty"');
+    expect(html).not.toContain('data-testid="top-zero-searches-empty"');
   });
 
   it("names empty versus populated funnel and search widgets", () => {
@@ -884,7 +890,7 @@ describe("admin error and empty page states (pure render, no DB)", () => {
       jsx(AdminDashboard, { actor: { id: "1", username: "mod" }, funnel: {}, zeroSearches: [] }),
     );
     expect(empty).toContain("No join attempts in the window.");
-    expect(empty).toContain("No missed searches.");
+    expect(empty).toContain("No recorded missed searches.");
     const full = String(
       jsx(AdminDashboard, {
         actor: { id: "1", username: "mod" },
@@ -894,7 +900,7 @@ describe("admin error and empty page states (pure render, no DB)", () => {
     );
     expect(full).toContain('data-testid="funnel-added">2</td>');
     expect(full).toContain("chess");
-    expect(full).not.toContain("No missed searches.");
+    expect(full).not.toContain("No recorded missed searches.");
   });
 
   it("renders an empty join-attempts table and null cells without leak", () => {
@@ -1219,14 +1225,17 @@ describe("admin guard denials (memory store, no DB)", () => {
     expect(await bad.text()).toContain("Featured content not found");
   });
 
-  it("renders the dashboard without the funnel when no database is configured", async () => {
+  it("renders the dashboard with unavailable funnel state when no database is configured", async () => {
     const store = createMemorySessionStore();
     const cookie = await cookieFor(store, MODERATOR);
     const res = await adminApp(store).request("/", { headers: { cookie } }, env);
     expect(res.status).toBe(200);
     const html = await res.text();
     expect(html).toContain(MODERATOR.username);
-    expect(html).not.toContain('data-testid="join-funnel"');
+    expect(html).toContain('data-testid="join-funnel"');
+    expect(html).toContain("Join funnel, last 90 days</h2>");
+    expect(html).toContain('data-testid="join-funnel-unavailable"');
+    expect(html).not.toContain('data-testid="join-funnel-empty"');
   });
 
   it("503s list and transition routes without a database instead of crashing", async () => {

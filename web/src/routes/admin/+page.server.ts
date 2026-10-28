@@ -11,8 +11,9 @@ import type { PageServerLoad } from "./$types";
 
 // Same reads and failure posture as the Hono dashboard
 // (src/admin/routes.tsx): the two optional analytics widgets start together
-// under one deadline and degrade to omitted sections when the database is
-// absent or a widget fails — missing analytics never fail the page. A
+// under one deadline and return undefined when the database is absent or a
+// widget fails. The page keeps each heading and says unavailable for this
+// load — missing analytics never fail the page. A
 // classified database outage is the one exception: the funnel rethrows it so
 // the shared sanitized 503 handler can answer, and the Hono guard's
 // memberReadBoundary turns it into the databaseUnavailable envelope. An

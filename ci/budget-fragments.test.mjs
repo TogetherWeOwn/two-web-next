@@ -136,7 +136,11 @@ function kitFixture(t, fragments) {
 // Every other
 // pin stays exact: the oracle rejects any ceiling outside this list, then
 // deep-compares the rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336640, 336896];
+// Diagnostic states and native links: measured server gzip 337173; next lower
+// 337152 rejects by 21. Every other axis remains pinned.
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
+  335104, 335360, 335872, 336128, 336384, 336640, 336896, 337408,
+];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
 // on current main (measured union 258023 raw / 103383 gzip, margins 25 / 41;
@@ -146,13 +150,14 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384
 const SHIPPING_CLIENT_JS_ALLOCATIONS = [
   [257024, 103168],
   [258048, 103424],
+  [258048, 103680],
 ];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337408`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -214,8 +219,54 @@ test("shipping oracle admits the measured 336896 server gzip allocation", () => 
   });
 });
 
+test("shipping oracle admits the measured 337408 diagnostic server allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 337408 } },
+  });
+});
+
+test("shipping oracle admits the measured 258048/103680 diagnostic client allocation", () => {
+  for (const maxGzipBytes of SHIPPING_SERVER_GZIP_ALLOCATIONS) {
+    assertShippingKitBudget({
+      ...SHIPPING_KIT_BUDGET,
+      server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
+      client: {
+        ...SHIPPING_KIT_BUDGET.client,
+        js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 258048, maxGzipBytes: 103680 },
+      },
+    });
+  }
+});
+
+test("shipping oracle rejects off-axis drift at the diagnostic allocations", () => {
+  const drifts = [
+    ["server raw", (plan) => (plan.server.js.maxRawBytes += 1)],
+    ["server files", (plan) => (plan.server.js.maxFiles += 1)],
+    ["client raw", (plan) => (plan.client.js.maxRawBytes += 1)],
+    ["client gzip", (plan) => (plan.client.js.maxGzipBytes += 1)],
+    ["client files", (plan) => (plan.client.js.maxFiles += 1)],
+    ["client css gzip", (plan) => (plan.client.css.maxGzipBytes += 1)],
+    ["worker gzip", (plan) => (plan.worker["_worker.js"].maxGzipBytes += 1)],
+    ["startup", (plan) => (plan.startup.maxMs += 1)],
+  ];
+  for (const [label, drift] of drifts) {
+    const plan = JSON.parse(JSON.stringify(SHIPPING_KIT_BUDGET));
+    plan.server.js.maxGzipBytes = 337408;
+    plan.client.js.maxRawBytes = 258048;
+    plan.client.js.maxGzipBytes = 103680;
+    assertShippingKitBudget(JSON.parse(JSON.stringify(plan)));
+    drift(plan);
+    assert.throws(
+      () => assertShippingKitBudget(plan),
+      /Expected values to be strictly deep-equal/,
+      `${label} drift must fail the shipping oracle`,
+    );
+  }
+});
+
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 336641, 336897]) {
+  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 336641, 336897, 337407, 337409]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
@@ -273,7 +324,10 @@ test("shipping oracle rejects client js pairs outside the admitted list", () => 
     [257536, 103424],
     [258048, 103168],
     [257024, 103424],
-    [258048, 103680],
+    [258047, 103680],
+    [258049, 103680],
+    [258048, 103679],
+    [258048, 103681],
     [258560, 103424],
   ]) {
     assert.throws(
