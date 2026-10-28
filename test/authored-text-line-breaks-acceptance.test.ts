@@ -9,10 +9,10 @@
 // long unbroken words overflowing instead of wrapping.
 //
 // The oracle is mechanism-agnostic and works from the rendered artifacts:
-// it renders the real pages, collects the stylesheets those pages actually
-// serve (linked sheets in document order, inline <style>, the Kit global
-// sheet and captured component CSS), and computes each authored-text
-// container's rendered lines the way a browser would — literal newlines
+// it renders the real pages and evaluates admitted linked and inline sheets
+// in document order. Kit component fixtures additionally model compiled CSS
+// as same-origin external output; they do not verify Vite asset URLs or order.
+// Within its bounded CSS and CSP subset, it computes rendered lines: newlines
 // count only when the effective CSS preserves them (white-space:
 // pre/pre-wrap/pre-line/break-spaces, white-space-collapse: preserve*,
 // from a matching rule, an inline style, or a utility class the served
@@ -22,6 +22,7 @@
 //
 // Hermetic: local component/route fixtures only, no database, no network.
 // Run: npx vitest run test/authored-text-line-breaks-acceptance.test.ts
+import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -34,8 +35,10 @@ import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import { EventPage, EventsCalendarPage } from "../src/events/pages";
 import type { PublicEvent } from "../src/events/reads";
 import type { VisibleFeatured } from "../src/featured";
+import { securityHeadersFor } from "../src/headers";
 import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
 import { renderEventsHtml } from "../src/kit-events-html";
+import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { Home } from "../src/pages";
 import { EVENT_KEY, scanEvent } from "./calendar-card-scan.fixtures";
 import {
@@ -666,14 +669,63 @@ const USER_AGENT_CSS =
   "pre, listing, plaintext, xmp { white-space: pre; } textarea { white-space: pre-wrap; } " +
   "nobr, td[nowrap], th[nowrap] { white-space: nowrap; }";
 
-/** Stylesheets a rendered page serves, in document order, plus test-supplied
- * extras (the compiled Kit global sheet / captured component CSS). The DOM
- * parser's scripting-enabled context keeps <noscript> sheets inert, and its
- * traversal excludes <template> content. Non-CSS types, disabled/alternate
- * links and inactive media do not apply. Preferred sets, source admission
- * policies and URL resolution outside canonical public/ CSS fail closed. */
-function servedRules(html: string, extras: { css: string; source: string }[] = []): CssRule[] {
-  const rules: CssRule[] = [];
+type CssExtra = { css: string; source: string; kind?: "kit-external" };
+type StylePolicy = { self: boolean; hashes: Set<string> };
+type ServedRules = CssRule[] & { stylePolicies: StylePolicy[] | null };
+
+// This fixture models only same-origin links and SHA-256 inline hashes. Every
+// enforced policy must admit a source; unmodelled source expressions and
+// directives that change stylesheet admission are refused, not approximated.
+function stylesheetPolicies(headers: Headers): StylePolicy[] {
+  const csp = headers.get("content-security-policy");
+  if (!csp) return unevaluable("missing response Content-Security-Policy");
+  if (/[^\t\x20-\x7e]/.test(csp)) unevaluable("non-ASCII or control character in CSP");
+  return csp.split(",").map((policy) => {
+    const directives = new Map<string, string[]>();
+    for (const part of policy.split(";")) {
+      const tokens = part.split(/[ \t]+/).filter(Boolean);
+      if (tokens.length === 0) continue;
+      const name = tokens.shift()!.toLowerCase();
+      if (directives.has(name)) unevaluable(`duplicate CSP directive ${name}`);
+      directives.set(name, tokens);
+    }
+    for (const name of [
+      "style-src-elem",
+      "style-src-attr",
+      "sandbox",
+      "require-sri-for",
+      "upgrade-insecure-requests",
+    ]) {
+      if (directives.has(name)) unevaluable(`CSP ${name}`);
+    }
+    const sources = directives.get("style-src") ?? directives.get("default-src");
+    if (!sources || sources.length === 0) return unevaluable("CSP stylesheet source list");
+    const hashes = new Set<string>();
+    for (const source of sources) {
+      if (source === "'self'" || source === "'none'") continue;
+      if (/^'sha256-[A-Za-z0-9+/]{43}='$/.test(source)) hashes.add(source.slice(8, -1));
+      else unevaluable(`CSP stylesheet source ${source}`);
+    }
+    if (sources.includes("'none'") && sources.length !== 1)
+      unevaluable("CSP 'none' combined with other stylesheet sources");
+    return { self: sources.includes("'self'"), hashes };
+  });
+}
+
+function routePolicy(path: string): Headers {
+  return new Headers(securityHeadersFor({ path, method: "GET" }));
+}
+
+/** Kit extras are compiled CSS represented as same-origin external output,
+ * not as inline styles. The fixture does not prove final Vite asset URLs or
+ * bundling/order; it admits these extras only under a same-origin policy. */
+function servedRules(
+  html: string,
+  extras: CssExtra[],
+  admission: Headers | "synthetic",
+): ServedRules {
+  const policies = admission === "synthetic" ? null : stylesheetPolicies(admission);
+  const rules: ServedRules = Object.assign([] as CssRule[], { stylePolicies: policies });
   const state: CssState = { order: 0, layers: new Map(), anonymous: 0 };
   const context = (source: string, origin: number): CssContext => ({
     source,
@@ -719,8 +771,13 @@ function servedRules(html: string, extras: { css: string; source: string }[] = [
     if (media !== undefined && /[^\t\n\f\r\x20-\x7e]/.test(media))
       unevaluable(`stylesheet media ${JSON.stringify(media)} (CSS tokenization)`);
     if (el.tagName === "style") {
-      if (media === undefined || mediaListActive(media, "<style media>"))
-        chunks.push({ css: text(el), source: "inline <style>" });
+      if (media === undefined || mediaListActive(media, "<style media>")) {
+        if (attribute(el, "nonce") !== undefined) unevaluable("inline stylesheet nonce");
+        const css = text(el);
+        const hash = createHash("sha256").update(css, "utf8").digest("base64");
+        if (!policies || policies.every((policy) => policy.hashes.has(hash)))
+          chunks.push({ css, source: "inline <style>" });
+      }
       continue;
     }
     if (rel.includes("alternate")) {
@@ -735,16 +792,23 @@ function servedRules(html: string, extras: { css: string; source: string }[] = [
     if (media !== undefined && !mediaListActive(media, href)) continue;
     if (hasBaseHref) unevaluable("<base href> (stylesheet URL resolution)");
     if (attribute(el, "integrity")) unevaluable("stylesheet integrity (served-byte admission)");
+    if (attribute(el, "nonce") !== undefined) unevaluable("linked stylesheet nonce");
     const path = href.split(/[?#]/)[0]!;
     if (!/^\/(?:[\w-]+\/)*[\w.-]+\.css$/.test(path))
       unevaluable(`stylesheet ${JSON.stringify(href)} (only canonical public/ CSS is readable)`);
+    if (policies && !policies.every((policy) => policy.self)) continue;
     try {
       chunks.push({ css: readFileSync(join(root, "public", path), "utf8"), source: path });
     } catch {
       unevaluable(`unreadable stylesheet ${JSON.stringify(path)}`);
     }
   }
-  for (const chunk of [...chunks, ...extras]) parseCss(chunk.css, context(chunk.source, 1), rules);
+  for (const extra of extras) {
+    if (policies && extra.kind !== "kit-external")
+      unevaluable(`unidentified stylesheet extra ${extra.source}`);
+    if (!policies || policies.every((policy) => policy.self)) chunks.push(extra);
+  }
+  for (const chunk of chunks) parseCss(chunk.css, context(chunk.source, 1), rules);
   return rules;
 }
 
@@ -770,7 +834,12 @@ function cascaded(el: Element, rules: CssRule[], longhand: Longhand): Effective 
   };
   const candidates: Candidate[] = [];
   const style = attribute(el, "style");
-  const inline = style && parseDeclarations(style, `inline style on <${el.tagName}>`).get(longhand);
+  const policies = (rules as ServedRules).stylePolicies;
+  if (policies === undefined) unevaluable("stylesheet admission metadata");
+  const inline =
+    style &&
+    policies === null &&
+    parseDeclarations(style, `inline style on <${el.tagName}>`).get(longhand);
   if (inline) {
     candidates.push({
       ...inline,
@@ -1007,7 +1076,7 @@ describe("CSS oracle applicability controls", () => {
   function linesWith(css: string): string[] {
     const html = `<style>${css}</style>${markup}`;
     const container = smallestContaining(document(html), MULTI_LINES.filter(Boolean), "control");
-    return renderedLines(container, servedRules(html));
+    return renderedLines(container, servedRules(html, [], "synthetic"));
   }
 
   it.each([
@@ -1093,7 +1162,7 @@ describe("CSS oracle selector, cascade and source fidelity controls", () => {
 
   function linesIn(html: string, extras: { css: string; source: string }[] = []): string[] {
     const container = smallestContaining(document(html), MULTI_LINES.filter(Boolean), "control");
-    return renderedLines(container, servedRules(html, extras));
+    return renderedLines(container, servedRules(html, extras, "synthetic"));
   }
   const linesWith = (css: string, inner?: string) =>
     linesIn(`<style>${css}</style>${featured(inner)}`);
@@ -1348,7 +1417,7 @@ describe("CSS oracle selector, cascade and source fidelity controls", () => {
     function wraps(css: string, inner = `<p>${LONG_WORD}</p>`): boolean {
       const html = `<style>${css}</style>${featured(inner)}`;
       const container = smallestContaining(document(html), [LONG_TOKEN], "wrap control");
-      return wrapsLongWords(container, servedRules(html)).wraps;
+      return wrapsLongWords(container, servedRules(html, [], "synthetic")).wraps;
     }
     const p = "[data-testid='featured-item'] p";
 
@@ -1680,6 +1749,169 @@ describe("CSS oracle selector, cascade and source fidelity controls", () => {
   });
 });
 
+describe("CSS oracle response CSP admission controls", () => {
+  const policy = new Headers(securityHeadersFor({ path: "/events/past", method: "GET" }));
+  const collapsed = ["Doors at seven Bring a deck New players welcome"];
+  const rulesWithPolicy = servedRules as (
+    html: string,
+    extras: { css: string; source: string }[],
+    headers: Headers,
+  ) => CssRule[];
+  const lines = (html: string) => {
+    const container = smallestContaining(
+      document(html),
+      MULTI_LINES.filter(Boolean),
+      "CSP control",
+    );
+    return renderedLines(container, rulesWithPolicy(html, [], policy));
+  };
+
+  it("rejects a preserving inline stylesheet under the archive policy", () => {
+    expect(lines(`<style>p { white-space: pre-line }</style><p>${MULTI}</p>`)).toEqual(collapsed);
+  });
+
+  it("rejects a preserving style attribute under the archive policy", () => {
+    expect(lines(`<p style="white-space: pre-line">${MULTI}</p>`)).toEqual(collapsed);
+  });
+
+  it("ignores blocked collapsing inline styles over a permitted same-origin sheet", () => {
+    const markup = `<div class="event-theme"><div class="event-description"><p style="white-space: normal !important">${MULTI}</p></div></div>`;
+    const html = `<link rel="stylesheet" href="/event-theme.css"><style>p { white-space: normal !important }</style>${markup}`;
+    expect(lines(html)).toEqual(MULTI_LINES);
+  });
+
+  it("admits only the exact generated leaf bytes allowed by the homepage policy", () => {
+    const html = renderFeaturedHono(MULTI);
+    expect(html).toContain(`<style>${LEAF_CRITICAL_CSS}</style>`);
+    const leafPolicy = routePolicy("/");
+    const hash = createHash("sha256").update(LEAF_CRITICAL_CSS, "utf8").digest("base64");
+    expect(leafPolicy.get("content-security-policy")).toContain(`'sha256-${hash}'`);
+    const admitted = servedRules(html, [], leafPolicy).filter(
+      (rule) => rule.source === "inline <style>",
+    );
+    const unrestricted = servedRules(html, [], "synthetic").filter(
+      (rule) => rule.source === "inline <style>",
+    );
+    expect(unrestricted.length).toBeGreaterThan(0);
+    expect(admitted).toEqual(unrestricted);
+    const changed = html.replace(LEAF_CRITICAL_CSS, `${LEAF_CRITICAL_CSS} `);
+    expect(
+      servedRules(changed, [], leafPolicy).filter((rule) => rule.source === "inline <style>"),
+    ).toEqual([]);
+    expect(
+      servedRules(html, [], policy).filter((rule) => rule.source === "inline <style>"),
+    ).toEqual([]);
+  });
+
+  it("intersects multiple enforced policies instead of accepting either one", () => {
+    const headers = routePolicy("/");
+    headers.append("content-security-policy", "default-src 'self'; style-src 'self'");
+    const html = renderFeaturedHono(MULTI);
+    expect(
+      servedRules(html, [], headers).filter((rule) => rule.source === "inline <style>"),
+    ).toEqual([]);
+  });
+
+  it("applies a matching inline hash to rendered lines and rejects changed bytes", () => {
+    const css = "p { white-space: pre-line }";
+    const hash = createHash("sha256").update(css, "utf8").digest("base64");
+    const headers = new Headers({
+      "content-security-policy": `default-src 'self'; style-src 'self' 'sha256-${hash}'`,
+    });
+    const rendered = (sheet: string) => {
+      const html = `<style>${sheet}</style><p>${MULTI}</p>`;
+      const container = smallestContaining(
+        document(html),
+        MULTI_LINES.filter(Boolean),
+        "hash control",
+      );
+      return renderedLines(container, servedRules(html, [], headers));
+    };
+    expect(rendered(css)).toEqual(MULTI_LINES);
+    expect(rendered(`${css} `)).toEqual(collapsed);
+  });
+
+  it("does not treat a stylesheet hash as permission for style attributes", () => {
+    const html = `<p style="white-space: pre-line">${MULTI}</p>`;
+    const container = smallestContaining(
+      document(html),
+      MULTI_LINES.filter(Boolean),
+      "hash control",
+    );
+    expect(renderedLines(container, servedRules(html, [], routePolicy("/")))).toEqual(collapsed);
+  });
+
+  it.each(["between sources", "at a directive edge"])(
+    "fails closed on non-ASCII whitespace %s",
+    (placement) => {
+      const css = "p { white-space: pre-line }";
+      const hash = createHash("sha256").update(css, "utf8").digest("base64");
+      const directive = `style-src 'self' 'sha256-${hash}'`;
+      const csp =
+        placement === "between sources"
+          ? `default-src 'self'; style-src 'self' 'sha256-${hash}'`
+          : `default-src 'self'; ${directive}`;
+      const html = `<style>${css}</style><p>${MULTI}</p>`;
+      expect(() => servedRules(html, [], new Headers({ "content-security-policy": csp }))).toThrow(
+        "CSS oracle cannot evaluate",
+      );
+    },
+  );
+
+  it("blocks a same-origin linked sheet when the policy excludes self", () => {
+    const html = `<link rel="stylesheet" href="/event-theme.css"><div class="event-theme"><div class="event-description"><p>${MULTI}</p></div></div>`;
+    const headers = new Headers({ "content-security-policy": "default-src 'none'" });
+    const container = smallestContaining(
+      document(html),
+      MULTI_LINES.filter(Boolean),
+      "link control",
+    );
+    expect(renderedLines(container, servedRules(html, [], headers))).toEqual(collapsed);
+  });
+
+  it.each([
+    `<style nonce="fixture">p { white-space: pre-line }</style><p>${MULTI}</p>`,
+    `<link rel="stylesheet" nonce="fixture" href="/event-theme.css"><p>${MULTI}</p>`,
+  ])("fails closed on a nonce-bearing stylesheet", (html) => {
+    expect(() => servedRules(html, [], policy)).toThrow("CSS oracle cannot evaluate");
+  });
+
+  it("does not admit external Kit extras without same-origin permission", () => {
+    const html = `<p>${MULTI}</p>`;
+    const headers = new Headers({ "content-security-policy": "default-src 'none'" });
+    const container = smallestContaining(
+      document(html),
+      MULTI_LINES.filter(Boolean),
+      "extra control",
+    );
+    const extras: CssExtra[] = [
+      { css: "p { white-space: pre-line }", source: "fixture external", kind: "kit-external" },
+    ];
+    expect(renderedLines(container, servedRules(html, extras, headers))).toEqual(collapsed);
+  });
+
+  it.each([
+    "style-src 'self' 'unsafe-inline'",
+    "style-src 'self'; style-src-elem 'none'",
+    "style-src 'self'; sandbox",
+    "style-src 'self'; style-src 'none'",
+    "style-src 'self', style-src 'nonce-example'",
+  ])("fails closed for unsupported or ambiguous response policy %s", (csp) => {
+    expect(() =>
+      servedRules(`<p>${MULTI}</p>`, [], new Headers({ "content-security-policy": csp })),
+    ).toThrow("CSS oracle cannot evaluate");
+  });
+
+  it("fails closed when response CSP is missing or an extra has no source kind", () => {
+    expect(() => servedRules(`<p>${MULTI}</p>`, [], new Headers())).toThrow(
+      "CSS oracle cannot evaluate",
+    );
+    expect(() =>
+      servedRules(`<p>${MULTI}</p>`, [{ css: "p {}", source: "unknown" }], policy),
+    ).toThrow("CSS oracle cannot evaluate");
+  });
+});
+
 // ---------------------------------------------------------------------------
 // Calendar cards: Hono screen and the Kit events endpoint render of it.
 // ---------------------------------------------------------------------------
@@ -1722,7 +1954,7 @@ function calendarCard(html: string): { card: Element; rules: CssRule[] } {
     (el) => el.tagName === "article" && attribute(el, "data-event-key") === EVENT_KEY,
   );
   expect(cards, "fixture event reaches the real list card").toHaveLength(1);
-  return { card: cards[0]!, rules: servedRules(html) };
+  return { card: cards[0]!, rules: servedRules(html, [], routePolicy("/events")) };
 }
 
 for (const twin of ["Hono", "Kit"] as const) {
@@ -1977,13 +2209,12 @@ beforeAll(async () => {
   kitGlobalCss = await compileKitGlobalCss();
 }, 60_000);
 
-function kitGlobalExtras(
-  extraCss = "",
-  globalCss = kitGlobalCss,
-): { css: string; source: string }[] {
+function kitGlobalExtras(extraCss = "", globalCss = kitGlobalCss): CssExtra[] {
   return [
-    { css: globalCss, source: "web/src/app.css (compiled)" },
-    ...(extraCss ? [{ css: extraCss, source: "compiled component CSS" }] : []),
+    { css: globalCss, source: "web/src/app.css (compiled)", kind: "kit-external" },
+    ...(extraCss
+      ? [{ css: extraCss, source: "compiled component CSS", kind: "kit-external" as const }]
+      : []),
   ];
 }
 
@@ -2007,7 +2238,11 @@ for (const twin of ["Hono", "Kit"] as const) {
       it(`renders ${fixture.name} featured text as authored`, () => {
         const html =
           twin === "Hono" ? renderFeaturedHono(fixture.body) : renderFeaturedKit(fixture.body);
-        const rules = servedRules(html, twin === "Kit" ? kitGlobalExtras(kitHomeCss) : []);
+        const rules = servedRules(
+          html,
+          twin === "Kit" ? kitGlobalExtras(kitHomeCss) : [],
+          routePolicy("/"),
+        );
         const needles = fixture.lines.filter(Boolean);
         const container = featuredBody(html, rules, needles);
         expectLines(container, fixture.lines, rules, `${twin} featured ${fixture.name}`, true);
@@ -2017,7 +2252,11 @@ for (const twin of ["Hono", "Kit"] as const) {
 
     it("never interprets featured text as markup and never autolinks it", () => {
       const html = twin === "Hono" ? renderFeaturedHono(HOSTILE) : renderFeaturedKit(HOSTILE);
-      const rules = servedRules(html, twin === "Kit" ? kitGlobalExtras(kitHomeCss) : []);
+      const rules = servedRules(
+        html,
+        twin === "Kit" ? kitGlobalExtras(kitHomeCss) : [],
+        routePolicy("/"),
+      );
       const container = featuredBody(html, rules, ["https://evil.example/x"]);
       expectPlainText(container, `${twin} hostile featured body`);
     });
@@ -2033,11 +2272,9 @@ beforeAll(async () => {
 }, 60_000);
 afterAll(() => archiveKit?.dispose());
 
-function svelteStyleExtras(): { css: string; source: string }[] {
-  // The route harness compiles Svelte without emitting component CSS; a fix
-  // scoped in these components would still be served in production, so
-  // compile them the same way and read the scoped CSS Svelte emits (its hash
-  // classes match the harness markup) rather than the unscoped source.
+function svelteStyleExtras(): CssExtra[] {
+  // The harness omits component CSS. Model the compiled scoped CSS as
+  // same-origin external output; the fixture does not verify Vite asset URLs.
   const webRequire = createRequire(join(root, "web/package.json"));
   const { compile } = webRequire("svelte/compiler") as {
     compile: (
@@ -2057,9 +2294,55 @@ function svelteStyleExtras(): { css: string; source: string }[] {
       dev: false,
       filename: path,
     });
-    return css?.code ? [{ css: css.code, source: `${file} (compiled <style>)` }] : [];
+    return css?.code
+      ? [
+          {
+            css: css.code,
+            source: `${file} (compiled component CSS)`,
+            kind: "kit-external" as const,
+          },
+        ]
+      : [];
   });
 }
+
+function archivePolicy(twin: "Hono" | "Kit", response: Response): Headers {
+  const headers = new Headers(response.headers);
+  if (twin === "Kit") {
+    // The outer Kit hook replaces the dispatch response CSP on this route.
+    headers.set(
+      "content-security-policy",
+      routePolicy("/events/past").get("content-security-policy")!,
+    );
+  }
+  return headers;
+}
+
+describe("archive response policy decoration", () => {
+  it("replaces a pre-hook Kit CSP with the production route policy", () => {
+    const response = new Response("", {
+      headers: { "content-security-policy": "default-src 'none'", "x-fixture": "kept" },
+    });
+    const headers = archivePolicy("Kit", response);
+    expect(headers.get("content-security-policy")).toBe(
+      routePolicy("/events/past").get("content-security-policy"),
+    );
+    expect(headers.get("x-fixture")).toBe("kept");
+    const html = `<link rel="stylesheet" href="/event-theme.css"><div class="event-theme"><div class="event-description"><p>${MULTI}</p></div></div>`;
+    const container = smallestContaining(document(html), MULTI_LINES.filter(Boolean), "Kit policy");
+    expect(renderedLines(container, servedRules(html, [], headers))).toEqual(MULTI_LINES);
+    expect(response.headers.get("content-security-policy")).toBe("default-src 'none'");
+  });
+
+  it("keeps the actual Hono response policy", () => {
+    const response = new Response("", {
+      headers: { "content-security-policy": "default-src 'none'" },
+    });
+    expect(archivePolicy("Hono", response).get("content-security-policy")).toBe(
+      "default-src 'none'",
+    );
+  });
+});
 
 describe.each(archiveTwins)("%s archive passage authored line breaks", (twin) => {
   beforeEach(() => {
@@ -2091,6 +2374,7 @@ describe.each(archiveTwins)("%s archive passage authored line breaks", (twin) =>
     const rules = servedRules(
       html,
       twin === "Kit" ? [...kitGlobalExtras(), ...svelteStyleExtras()] : [],
+      archivePolicy(twin, response),
     );
     const doc = document(html);
     const passages = elements(doc, (el) => classList(el).includes("archive-passage"));
@@ -2098,6 +2382,25 @@ describe.each(archiveTwins)("%s archive passage authored line breaks", (twin) =>
     expect(passages.length, `${twin} archive passage renders for the match`).toBeLessThanOrEqual(1);
     return { passage, rules };
   }
+
+  it("uses the archive response policy to reject inline preservation", async () => {
+    const source = archiveReadFixture();
+    const response = await requestArchive(twin, "/events/past?q=needle", source.env, archiveKit);
+    expect(response.status).toBe(200);
+    if (twin === "Hono") {
+      expect(response.headers.get("content-security-policy")).toContain("style-src 'self'");
+    }
+    const headers = archivePolicy(twin, response);
+    const html = `<style>p { white-space: pre-line }</style><p style="white-space: pre-line">${MULTI}</p>`;
+    const container = smallestContaining(
+      document(html),
+      MULTI_LINES.filter(Boolean),
+      "archive CSP",
+    );
+    expect(renderedLines(container, servedRules(html, [], headers))).toEqual([
+      "Doors at seven Bring a deck New players welcome",
+    ]);
+  });
 
   it("renders multi-paragraph passage lines and keeps its marks", async () => {
     const { passage, rules } = await passageFor(ARCHIVE_MULTI, ["Archive finale"]);
@@ -2188,7 +2491,7 @@ describe("CONTROL event detail authored line breaks", () => {
       appUrl: "https://next.example.test",
       jsonLd: '{"@type":"Event"}',
     })!.toString() as string;
-    const rules = servedRules(html);
+    const rules = servedRules(html, [], routePolicy(`/e/${EVENT_KEY}`));
     const container = smallestContaining(
       document(html),
       MULTI_LINES.filter(Boolean),
