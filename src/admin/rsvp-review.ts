@@ -28,8 +28,14 @@ function escapeReviewAttr(value: string): string {
 /** Pre-render the Kit pause review as server-only HTML for {@html}: identical
  * markup, classes, testids and copy to the Hono RsvpAction disclosure, with
  * the saved title and key escaped exactly like Svelte would. The Kit client
- * bundle never sees this string; it arrives via load data. */
-export function renderRsvpPauseReviewHtml(title: string, eventKey: string): string {
+ * bundle never sees this string; it arrives via load data. startsAtIso is the
+ * occurrence discriminator in the final button's accessible name ("" when
+ * the start is unrenderable), matching the Hono actionOccurrenceSuffix. */
+export function renderRsvpPauseReviewHtml(
+  title: string,
+  eventKey: string,
+  startsAtIso: string,
+): string {
   const copy = rsvpPauseReviewCopy;
   const safeTitle = escapeReviewText(title);
   const safeLabel = escapeReviewAttr(`${copy.summary}: ${title}`);
@@ -42,7 +48,7 @@ export function renderRsvpPauseReviewHtml(title: string, eventKey: string): stri
     `<p>${escapeReviewText(copy.consequence)}</p>` +
     `<p>${escapeReviewText(copy.keep)}</p>` +
     `<form method="post" action="/admin/events/${safeKey}/rsvp-pause">` +
-    `<button type="submit" class="btn" data-testid="rsvp-pause" aria-label="${escapeReviewAttr(`${copy.final} for ${title}`)}">${escapeReviewText(copy.final)}</button>` +
+    `<button type="submit" class="btn" data-testid="rsvp-pause" aria-label="${escapeReviewAttr(`${copy.final} for ${title}${startsAtIso ? ` (${startsAtIso})` : ""}`)}">${escapeReviewText(copy.final)}</button>` +
     `</form></details>`
   );
 }

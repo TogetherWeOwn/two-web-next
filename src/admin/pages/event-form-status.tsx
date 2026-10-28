@@ -3,7 +3,7 @@
 
 import type { FC } from "hono/jsx";
 import type { EventRow } from "../store";
-import { RsvpAction } from "./shell";
+import { actionOccurrenceSuffix, RsvpAction } from "./shell";
 
 export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
   return (
@@ -16,7 +16,7 @@ export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
               type="submit"
               class="btn"
               data-testid="publish-event"
-              aria-label={`Publish ${row.title}`}
+              aria-label={`Publish ${row.title}${actionOccurrenceSuffix(row.startsAt)}`}
             >
               Publish
             </button>
@@ -28,7 +28,7 @@ export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
               type="submit"
               class="link"
               data-testid="cancel-event"
-              aria-label={`Cancel event ${row.title}`}
+              aria-label={`Cancel event ${row.title}${actionOccurrenceSuffix(row.startsAt)}`}
             >
               Cancel event
             </button>

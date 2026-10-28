@@ -198,7 +198,7 @@ describe("cancel action copy (no confirmation dialog)", () => {
     const html = editHtml("published");
     expect(html).toContain('<form method="post" action="/admin/events/cancel-published/cancel">');
     expect(html).toContain(
-      '<button type="submit" class="link" data-testid="cancel-event" aria-label="Cancel event cancel-published">Cancel event</button>',
+      '<button type="submit" class="link" data-testid="cancel-event" aria-label="Cancel event cancel-published (2026-06-15T00:30:00.000Z)">Cancel event</button>',
     );
   });
 

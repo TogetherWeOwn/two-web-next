@@ -161,12 +161,12 @@ const now = new Date();
               <td>
                 {#if r.status === "draft"}
                   <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
-                    <button type="submit" class="link" aria-label={`Publish ${r.title}`}>Publish</button>
+                    <button type="submit" class="link" aria-label={`Publish ${r.title}${r.startsAt ? ` (${r.startsAt})` : ""}`}>Publish</button>
                   </form>
                 {/if}
                 {#if r.status === "draft" || r.status === "published"}
                   <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                    <button type="submit" class="link" aria-label={`Cancel ${r.title}`}>Cancel</button>
+                    <button type="submit" class="link" aria-label={`Cancel ${r.title}${r.startsAt ? ` (${r.startsAt})` : ""}`}>Cancel</button>
                   </form>
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
@@ -174,7 +174,7 @@ const now = new Date();
                     {@html pauseReviews[r.eventKey] ?? ""}
                   {:else}
                     <form method="post" action={`/admin/events/${r.eventKey}/rsvp-reopen`}>
-                      <button type="submit" class="link" data-testid="rsvp-reopen" aria-label={`Reopen RSVPs for ${r.title}`}>
+                      <button type="submit" class="link" data-testid="rsvp-reopen" aria-label={`Reopen RSVPs for ${r.title}${r.startsAt ? ` (${r.startsAt})` : ""}`}>
                         Reopen RSVPs
                       </button>
                     </form>

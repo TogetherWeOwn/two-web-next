@@ -14,7 +14,18 @@ import type { SortOrder } from "../table-list";
  * Polite status line shown when an overlong free-text filter was dropped. The
  * Kit admin pages inline the same markup (search-dropped testid and copy).
  */
-const SEARCH_DROPPED_NOTICE = "Search terms are limited to 128 characters. Showing all rows.";
+const SEARCH_DROPPED_NOTICE =
+  "Search terms are limited to 128 characters. Overlong search terms were not applied. Other filters and pagination still apply.";
+
+/**
+ * Occurrence discriminator appended to row-action accessible names: two
+ * occurrences of a recurring event share a title, so the name also carries
+ * the start instant in ISO UTC (" (2099-11-01T18:00:00.000Z)"). An
+ * unrenderable start contributes no suffix; never call toISOString() on a
+ * non-finite Date. The Kit twins inline the same rule over their ISO text.
+ */
+export const actionOccurrenceSuffix = (startsAt: Date): string =>
+  Number.isFinite(startsAt.getTime()) ? ` (${startsAt.toISOString()})` : "";
 export const SearchDroppedNotice: FC<{ query: { searchDropped?: true } }> = ({ query }) =>
   query.searchDropped ? (
     <p role="status" class="hint" data-testid="search-dropped">
@@ -102,7 +113,7 @@ export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
           type="submit"
           class="link"
           data-testid="rsvp-reopen"
-          aria-label={`Reopen RSVPs for ${row.title}`}
+          aria-label={`Reopen RSVPs for ${row.title}${actionOccurrenceSuffix(row.startsAt)}`}
         >
           Reopen RSVPs
         </button>
@@ -127,7 +138,7 @@ export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
           type="submit"
           class="btn"
           data-testid="rsvp-pause"
-          aria-label={`${copy.final} for ${row.title}`}
+          aria-label={`${copy.final} for ${row.title}${actionOccurrenceSuffix(row.startsAt)}`}
         >
           {copy.final}
         </button>

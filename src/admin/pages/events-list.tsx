@@ -11,7 +11,7 @@ import {
   type EventListQuery,
   type EventSort,
 } from "../event-list";
-import { RsvpAction, SearchDroppedNotice, Shell } from "./shell";
+import { actionOccurrenceSuffix, RsvpAction, SearchDroppedNotice, Shell } from "./shell";
 
 const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuery }> = ({
   label,
@@ -202,14 +202,22 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                   <td>
                     {r.status === "draft" ? (
                       <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
-                        <button type="submit" class="link" aria-label={`Publish ${r.title}`}>
+                        <button
+                          type="submit"
+                          class="link"
+                          aria-label={`Publish ${r.title}${actionOccurrenceSuffix(r.startsAt)}`}
+                        >
                           Publish
                         </button>
                       </form>
                     ) : null}
                     {r.status === "draft" || r.status === "published" ? (
                       <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                        <button type="submit" class="link" aria-label={`Cancel ${r.title}`}>
+                        <button
+                          type="submit"
+                          class="link"
+                          aria-label={`Cancel ${r.title}${actionOccurrenceSuffix(r.startsAt)}`}
+                        >
                           Cancel
                         </button>
                       </form>

@@ -214,7 +214,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
             type="submit"
             class="btn"
             data-testid="publish-event"
-            aria-label={`Publish ${view.title}`}>Publish</button
+            aria-label={`Publish ${view.title}${view.startsAt ? ` (${view.startsAt})` : ""}`}>Publish</button
           >
         </form>
       {/if}
@@ -224,7 +224,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
             type="submit"
             class="link"
             data-testid="cancel-event"
-            aria-label={`Cancel event ${view.title}`}>Cancel event</button
+            aria-label={`Cancel event ${view.title}${view.startsAt ? ` (${view.startsAt})` : ""}`}>Cancel event</button
           >
         </form>
       {/if}
@@ -237,7 +237,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         {@html view.pauseReviewHtml ?? ""}
       {:else if view.rsvpAction === "rsvp-reopen"}
         <form method="post" action={`/admin/events/${view.key}/rsvp-reopen`}>
-          <button type="submit" class="link" data-testid="rsvp-reopen" aria-label={`Reopen RSVPs for ${view.title}`}>Reopen RSVPs</button>
+          <button type="submit" class="link" data-testid="rsvp-reopen" aria-label={`Reopen RSVPs for ${view.title}${view.startsAt ? ` (${view.startsAt})` : ""}`}>Reopen RSVPs</button>
         </form>
       {/if}
     </div>

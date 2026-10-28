@@ -329,12 +329,14 @@ Before publishing, use the [event page content readiness checklist](event-conten
    filters and sort.
    Starts display as UTC timestamps, not local wall time.
    Each row's **Publish**, **Cancel**, **Pause RSVPs** and **Reopen RSVPs**
-   buttons carry the event title in their accessible name (for example, "Cancel
-   Friday chess"), so a screen reader tells the rows apart; the visible word is
+   buttons carry the event title and its UTC start in their accessible name
+   (for example, "Cancel Friday chess (2099-11-01T18:00:00.000Z)"), so a screen
+   reader tells even same-title occurrences apart; the visible word is
    unchanged.
    A search longer than 128 characters is not applied: the page shows "Search
-   terms are limited to 128 characters. Showing all rows." The overlong term is
-   ignored; other filters and pagination still apply.
+   terms are limited to 128 characters. Overlong search terms were not applied.
+   Other filters and pagination still apply." The overlong term is ignored;
+   other filters and pagination still apply.
    The same notice and rule apply to the roster, featured, join-attempts and
    activity-log searches.
 2. Fill in the form:

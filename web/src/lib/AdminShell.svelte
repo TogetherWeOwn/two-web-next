@@ -20,7 +20,7 @@ let { title, children }: { title: string; children: Snippet } = $props();
 
 {#snippet searchNotice(query: { searchDropped?: true })}
   {#if query.searchDropped}
-    <p role="status" class="hint" data-testid="search-dropped">Search terms are limited to 128 characters. Showing all rows.</p>
+    <p role="status" class="hint" data-testid="search-dropped">Search terms are limited to 128 characters. Overlong search terms were not applied. Other filters and pagination still apply.</p>
   {/if}
 {/snippet}
 

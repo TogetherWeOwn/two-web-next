@@ -42,7 +42,8 @@ const atBound = "x".repeat(BOUND);
 const overBound = "x".repeat(BOUND + 1);
 const huge = "x".repeat(8192);
 const NUL = String.fromCharCode(0);
-const NOTICE = "Search terms are limited to 128 characters. Showing all rows.";
+const NOTICE =
+  "Search terms are limited to 128 characters. Overlong search terms were not applied. Other filters and pagination still apply.";
 const noticeCount = (html: string) => html.split(NOTICE).length - 1;
 
 // One row per free-text field across the five admin list parsers.

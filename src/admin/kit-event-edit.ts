@@ -124,6 +124,9 @@ export type KitEventEditView = {
   rsvpAction: "rsvp-pause" | "rsvp-reopen" | null;
   /** The Hono series-move hint for series parents; null for one-offs. */
   seriesNote: string | null;
+  /** Start instant in ISO UTC ("" when unrenderable): the occurrence
+   * discriminator in the status actions' accessible names. */
+  startsAt: string;
   endsAt: string;
   roster: KitEventEditRosterView;
   /** Pre-rendered pause-review HTML when rsvpAction is rsvp-pause, else null;
@@ -276,6 +279,7 @@ export async function resolveKitEventEdit(
       seriesNote: row.recurrenceFrequency
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
+      startsAt: startFinite ? row.startsAt.toISOString() : "",
       endsAt: endFinite ? row.endsAt.toISOString() : "",
       roster: {
         total: roster.total,
@@ -309,7 +313,13 @@ export async function resolveKitEventEdit(
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
       },
       pauseReviewHtml:
-        rsvpAction === "rsvp-pause" ? renderRsvpPauseReviewHtml(row.title, row.eventKey) : null,
+        rsvpAction === "rsvp-pause"
+          ? renderRsvpPauseReviewHtml(
+              row.title,
+              row.eventKey,
+              startFinite ? row.startsAt.toISOString() : "",
+            )
+          : null,
     },
   };
 }
