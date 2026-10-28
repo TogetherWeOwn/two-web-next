@@ -36,6 +36,24 @@ converts. Surrounding whitespace is ignored. An unknown or overlong identifier, 
 formatting, yields honest guidance pointing back at the host schedule and
 calendar links.
 
+## Read the time commitment and calendar clocks
+
+**Duration** in event details is elapsed time between the scheduled instants,
+not the difference between the two host clocks. It remains accurate overnight
+and across daylight-saving changes. It uses whole hours/minutes, rounding down
+residual seconds, or **Less than a minute** for a positive sub-minute interval.
+An unusable or nonpositive interval has no Duration entry. Starts, Ends, RSVP
+and calendar exports keep their existing values and behavior, with or without
+JavaScript.
+
+Timed entries in the month grid name the host IANA timezone beside the clock,
+for example **19:00 Europe/London**. Invalid zones read as **UTC**, matching the
+clock's fallback. Discord-only entries use the page's fallback zone. Long labels
+wrap inside the existing horizontally scrollable mobile grid; the title is not
+hidden by CSS truncation. Screen-reader names keep the visible prefix, full
+title and day. **Continues** entries keep their displayed-day/cancellation
+wording without gaining a clock or timezone.
+
 ## UI contract
 
 Audience: guests and members comparing the start or end instant without
@@ -63,8 +81,11 @@ event loads a fresh comparison.
 Required evidence: desktop 1280×800 and mobile 390×844 before/default,
 converted and unavailable states in Hono and Kit, for Starts
 ([evidence](./evidence/event-device-timezone/README.md)) and Ends
-([evidence](./evidence/event-device-timezone-ends/README.md)). Hono
-a11y/Lighthouse/visual gates do not exercise the Kit route; Kit needs its own
+([evidence](./evidence/event-device-timezone-ends/README.md)). The Ends bundle
+currently omits the required unavailable-state images at both widths in both
+renderers; its browser tests cover the behavior, not that visual evidence.
+Those captures remain outstanding. Hono a11y/Lighthouse/visual gates do not
+exercise the Kit route; Kit needs its own
 real-browser fixture proof and release-build budget check. Visual baseline
 updates require reviewed CI failure artifacts; no wider masks or threshold
 changes are part of this feature.

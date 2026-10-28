@@ -20,7 +20,7 @@ import type {
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-import { formatEventWhen as fmtWithOffset } from "./date-format";
+import { formatElapsedDuration, formatEventWhen as fmtWithOffset } from "./date-format";
 
 const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now }) => {
   const availability = eventLinkAvailability(event, now);
@@ -113,6 +113,7 @@ export const EventPage: FC<{
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   const accessibilityNotes = e.accessibilityNotes?.trim();
+  const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
   const now = new Date();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
@@ -184,6 +185,28 @@ export const EventPage: FC<{
             <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
           </dd>
         </div>
+        {e.status === "draft" || e.status === "cancelled" ? null : (
+          <div hidden>
+            <dt>Time from now</dt>
+            <dd
+              class="event-device-timezone"
+              data-event-time-from-now
+              data-starts-at={e.startsAt.toISOString()}
+              data-ends-at={e.endsAt.toISOString()}
+            >
+              <button type="button" hidden data-testid="event-time-from-now-button">
+                Show time from now
+              </button>
+              <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
+            </dd>
+          </div>
+        )}
+        {duration ? (
+          <div>
+            <dt>Duration</dt>
+            <dd>{duration}</dd>
+          </div>
+        ) : null}
         {e.location ? (
           <div>
             <dt>Where</dt>
@@ -267,6 +290,7 @@ export const EventPage: FC<{
         />
         <script src="/islands/rsvp-button.js" defer />
         <script src="/islands/event-device-timezone.js" defer />
+        <script src="/islands/event-time-from-now.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>

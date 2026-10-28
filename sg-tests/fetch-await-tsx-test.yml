@@ -1,8 +1,8 @@
 id: fetch-must-be-awaited-tsx
 valid:
-- const X = () => <div />;
-- async function f(u) { await fetch(u); }
-- const f = (u) => fetch(u);
+  - const X = () => <div />;
+  - async function f(u) { await fetch(u); }
+  - const f = (u) => fetch(u);
 invalid:
-- export const X = <div />; function f(u) { fetch(u); }
-- await run(async () => { fetch(u); });
+  - export const X = <div />; function f(u) { fetch(u); }
+  - await run(async () => { fetch(u); });
