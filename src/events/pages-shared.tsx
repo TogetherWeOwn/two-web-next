@@ -4,18 +4,7 @@ import type { FC, PropsWithChildren } from "hono/jsx";
 import { Layout, SiteFooter, SiteHeader } from "../pages";
 import type { HeaderSession, Session } from "../env";
 
-// Exported for the SvelteKit spike page (web/, TOG-12247): one formatter, one markup contract.
-export const fmt = (d: Date, tz: string): string => {
-  try {
-    return new Intl.DateTimeFormat("en-GB", {
-      dateStyle: "full",
-      timeStyle: "short",
-      timeZone: tz,
-    }).format(d);
-  } catch {
-    return d.toISOString();
-  }
-};
+export { fmt } from "./date-format";
 
 const ScheduleShell: FC<
   PropsWithChildren<{

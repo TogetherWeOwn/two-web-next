@@ -1,6 +1,5 @@
 <script lang="ts">
-import { fmt } from "../../../src/events/pages";
-import { effectiveZone } from "../../../src/events/date-format";
+import { effectiveZone, fmt } from "../../../src/events/date-format";
 import type { PastArchiveEvent } from "../../../src/kit-past-events";
 import { archiveEventHref, type ArchiveContext } from "../../../src/events/attendee-paths";
 import { goingCountText } from "../../../src/islands/contracts";
