@@ -25,7 +25,7 @@
 //      unclassified step failure (full evidence but no assertion verdict: the
 //      tails below name it).
 // ci/lighthouserc.cjs budgets are never touched here.
-// Usage: npm run lighthouse [-- <extra lhci args>]
+// Usage: npm run lighthouse [-- <non-collection lhci args>]
 // Selftest: node ci/lighthouse-perf-run.mjs --selftest (hermetic: injected
 // lhci stub and temp dirs, no network or browser).
 import { spawn } from "node:child_process";
@@ -148,8 +148,17 @@ export async function main(
     log = console.log,
   } = {},
 ) {
-  const { collect, expected, mode } = expectedLhrs();
   const extraArgs = argv.filter((a) => a !== "--selftest");
+  // This fixture gate uses the checked-in collection plan, not a custom crawl.
+  // Never launch a different plan and judge it against these fixed quotas.
+  if (extraArgs.some((arg) => /^--(?:no-?)?(?:collect|config|lighthouserc)(?:[.=]|$)/i.test(arg))) {
+    log(
+      "Unsupported collection override: the fixture runner uses ci/lighthouserc.cjs. " +
+        "Run lhci autorun directly for a custom collection.",
+    );
+    return 1;
+  }
+  const { collect, expected, mode } = expectedLhrs();
   mkdirSync(join(logFile, ".."), { recursive: true });
   writeFileSync(logFile, "");
 
@@ -243,6 +252,34 @@ async function selftest() {
     categories: { performance: { score: 1 } },
   });
 
+  // Custom collection/config flags must fail before starting LHCI: the fixture
+  // evidence plan and its settings are pinned to the checked-in config.
+  for (const argv of [
+    ["--collect.numberOfRuns=1"],
+    ["--collect.number-of-runs=1"],
+    ["--collect.n=1"],
+    ["--collect.url=https://example.com"],
+    ["--collect.settings.formFactor=desktop"],
+    ["--collect.numberOfRuns", "1"],
+    ["--config=other.cjs"],
+    ["--config", "other.cjs"],
+    ["--no-lighthouserc"],
+    ["--nolighthouserc"],
+  ]) {
+    let calls = 0;
+    const messages = [];
+    const code = await main(argv, {
+      run: async () => {
+        calls += 1;
+        return { exitCode: 0, output: "must not launch" };
+      },
+      log: (message) => messages.push(message),
+    });
+    assert.equal(code, 1, argv[0]);
+    assert.equal(calls, 0, `${argv[0]}: reject before launch`);
+    assert.match(messages.join("\n"), /Unsupported collection override/);
+  }
+
   // Retry matrix with a stubbed lhci (hermetic: temp dirs, no browser). The
   // stub mirrors the real filesystem upload: the reports dir holds ONE file
   // per route (runs overwrite each other, median survives) while the lhci dir
@@ -260,10 +297,11 @@ async function selftest() {
       // Emulate a fresh collect: per-run saved LHRs, then the deduping upload.
       clearAttemptEvidence({ qualityDir: rdir, lhciDir: lhci });
       mkdirSync(rdir, { recursive: true });
-      step.urls.forEach((url, i) => {
+      const reports = step.lhrs ?? step.urls.map(lhr);
+      reports.forEach((report, i) => {
         writeFileSync(
           join(lhci, `lhr-${calls}${String(i).padStart(4, "0")}.json`),
-          JSON.stringify(lhr(url)),
+          JSON.stringify(report),
         );
       });
       for (const route of new Set(step.urls.map(routeOf))) {
@@ -298,6 +336,46 @@ async function selftest() {
     assert.equal(code, 0);
     assert.equal(calls, 1);
     assert.equal(loadCollectedLhrs(join(caseDir, ".lighthouseci")).length, 24);
+  }
+  // A raw 24-file count cannot stand in for per-URL independent, matching
+  // navigations: one overfull route, a copied navigation or a desktop sample
+  // leaves a quota short even when both processes exit 0.
+  for (const [name, corrupt, evidence] of [
+    [
+      "skewed routes",
+      (reports) => {
+        reports[23] = lhr(fixtureUrls[0]);
+      },
+      /\/privacy: 2\/3 runs/,
+    ],
+    [
+      "duplicate navigation",
+      (reports) => {
+        reports[1] = structuredClone(reports[0]);
+      },
+      /duplicate_navigation=1/,
+    ],
+    [
+      "wrong profile",
+      (reports) => {
+        reports[0].configSettings = navigationMetadata("desktop").configSettings;
+      },
+      /settings_mismatch=1/,
+    ],
+  ]) {
+    const reports = fixtureUrls.map(lhr);
+    corrupt(reports);
+    const step = { exitCode: 0, urls: fixtureUrls, lhrs: reports };
+    const { code, calls, caseDir } = await runCase([step, step]);
+    assert.equal(code, 1, name);
+    assert.equal(calls, 2, `${name}: one retry`);
+    assert.equal(loadCollectedLhrs(join(caseDir, ".lighthouseci")).length, 24, name);
+    const diagnosis = readFileSync(join(caseDir, "diagnosis.md"), "utf8");
+    assert.match(diagnosis, /COLLECT FAILURE/, name);
+    assert.match(diagnosis, evidence, name);
+    const recovered = await runCase([step, { exitCode: 0, urls: fixtureUrls }]);
+    assert.equal(recovered.code, 0, `${name}: fresh balanced collection recovers`);
+    assert.equal(recovered.calls, 2, `${name}: recovery uses one retry`);
   }
   // Full collection and exit 0 cannot override failed or unreadable assertion
   // evidence. Neither failure retries; passing error-level results stay green.

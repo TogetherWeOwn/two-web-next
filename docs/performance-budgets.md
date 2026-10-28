@@ -130,10 +130,16 @@ These import checks do not replace actual Chromium collection: the Lighthouse
 job must still collect all twenty-four samples (eight routes, three runs each) and pass the unchanged assertions.
 Fixture collection survives one transient per step: `npm run lighthouse` runs
 `ci/lighthouse-perf-run.mjs`, which reruns the whole mobile `lhci autorun` a
-single time when it fails with fewer than the 24 configured LHRs (counted
-from collect's per-run `.lighthouseci/lhr-*.json` files), and `npm run
-lighthouse:quality` does the same for the desktop collect. A full-evidence
-assert failure never retries. Every run writes
+single time when any configured URL is short of three independent,
+profile-matched navigations (read from collect's per-run
+`.lighthouseci/lhr-*.json` files), and `npm run lighthouse:quality` does the
+same for the desktop collect. Twenty-four files alone are not sufficient:
+duplicated navigations, wrong-profile samples and surplus samples for one
+route cannot fill another route's quota. A full-evidence assert failure never
+retries. The fixture wrapper rejects `--collect.*`, `--config` and
+`--no-lighthouserc` overrides before launching LHCI, so it never judges a
+custom crawl against the checked-in fixture plan. Run `lhci autorun` directly
+for a custom collection. Every collection run writes
 `.lighthouseci/perf-collect.log` (full lhci output) and, on failure,
 `.lighthouseci/perf-collect-diagnosis.md`, which says COLLECT FAILURE (short
 evidence: re-run the step, budgets untouched), BUDGET BREACH (full evidence
