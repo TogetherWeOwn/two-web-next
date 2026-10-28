@@ -7,8 +7,8 @@ import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 import { loadKitBudget } from "./budget-fragments.mjs";
-import { assertKitPlanMatchesLedger, loadKitCeilingLedger } from "./budget-ledger.mjs";
-import { discoverKitAssets, run, runJson } from "./check-kit-perf.mjs";
+import { validateKitPlan } from "./bundle-inventory.mjs";
+import { discoverKitAssets, kitBudgetSummary, run, runJson } from "./check-kit-perf.mjs";
 
 const scriptPath = fileURLToPath(new URL("./check-kit-perf.mjs", import.meta.url));
 
@@ -174,7 +174,12 @@ test("acceptance: existing but empty server JS output cannot enforce (exit 2)", 
   // A lone sourcemap is not server JS: zero real files must not read as fits.
   const fx = makeFixture({
     server: [],
-    extraFiles: [{ path: join(SERVER_DIR, "chunks/server.js.map"), body: Buffer.from("{}") }],
+    extraFiles: [
+      {
+        path: join(SERVER_DIR, "chunks/server.js.map"),
+        body: Buffer.from("{}"),
+      },
+    ],
   });
   t.after(fx.cleanup);
   assertCannotEnforce(fx.runCaptured(), /server/i, "empty server js");
@@ -227,7 +232,11 @@ function addUnenumerableDeepTree(baseDir, body) {
   }
 }
 
-const GENEROUS = { maxRawBytes: 1_000_000, maxGzipBytes: 1_000_000, maxFiles: 10 };
+const GENEROUS = {
+  maxRawBytes: 1_000_000,
+  maxGzipBytes: 1_000_000,
+  maxFiles: 10,
+};
 
 test("acceptance: incompletely enumerated server output cannot enforce (exit 2)", (t) => {
   const fx = makeFixture({ budgetOverrides: { serverJs: GENEROUS } });
@@ -393,21 +402,15 @@ test("shipping budget: client gzip still fails independently of raw", (t) => {
   ]);
 });
 
-// Shipping rows are derived from the shipping plan and its decision ledger
-// (ci/budget-ledger.mjs), never from a literal table: the cap and cap+1 come
-// from the fragment, the newly-allowed interval from the decision's
-// "(previous N)" ceiling. The ledger test below is what keeps that honest:
-// a fragment value without a matching `Ceiling:` line in a decision file
-// fails closed, so raising a ceiling is one fragment edit plus one
-// decision file, never a test-only literal PR. Fixtures copy the aggregated
-// plan byte-for-byte into a scratch root as a legacy single file.
+// Supplemental boundary coverage follows the effective shipping plan. This
+// does not authorize raises: independent fixed fixtures exercise the checker,
+// and check-budget-admissions.mjs freezes bases and checks additive policy.
 const SHIPPING_ROOT = fileURLToPath(new URL("../", import.meta.url));
 const SHIPPING_PLAN = loadKitBudget(SHIPPING_ROOT);
-const SHIPPING_LEDGER = loadKitCeilingLedger(SHIPPING_ROOT);
 const SHIPPING_BUDGET_BYTES = Buffer.from(JSON.stringify(SHIPPING_PLAN));
 
-test("shipping budget: every fragment ceiling has a matching decision file", () => {
-  assertKitPlanMatchesLedger(SHIPPING_PLAN, SHIPPING_LEDGER);
+test("shipping budget: canonical inventory remains complete", () => {
+  assert.equal(validateKitPlan(SHIPPING_PLAN), null);
 });
 
 const SHIPPING_GROUPS = ["kit.worker", "kit.server.js", "kit.client.js", "kit.client.css"];
@@ -484,33 +487,31 @@ function makeShippingFixture(t, group, axis, bytes) {
   return { root, bodies };
 }
 
-// Boundary rows come from the fragment (cap, cap+1) and its decision (the
-// byte just above the previous ceiling), so a ceiling change moves the
-// evidence with it. An unsupported axis fails the ledger test above instead
-// of silently producing no row.
+// A literal admission table would recreate a shared-file hotspot. These
+// boundary rows test mechanics, while fixed-fixture policy tests independently
+// reject missing records, frozen-base edits, aggregate cap breaches and forgery.
 function ceilingOf(key) {
-  const entry = SHIPPING_LEDGER.get(key);
-  assert.ok(entry, `no decision declares ${key}`);
-  return entry.value;
+  if (key.startsWith("worker._worker.js."))
+    return SHIPPING_PLAN.worker["_worker.js"][key.slice("worker._worker.js.".length)];
+  let value = SHIPPING_PLAN;
+  for (const part of key.split(".")) value = value[part];
+  assert.ok(Number.isSafeInteger(value) && value > 0, `invalid ceiling ${key}`);
+  return value;
 }
 
 function boundaryRows({ label, group, axis, key }) {
   const cap = ceilingOf(key);
-  const rows = [];
-  const previous = SHIPPING_LEDGER.get(key)?.previous;
-  if (previous !== undefined) {
-    rows.push({ name: `${label} newly allowed interval`, group, axis, bytes: previous + 1 });
-  }
-  rows.push({ name: `${label} exact ceiling`, group, axis, bytes: cap });
-  rows.push({
-    name: `${label} one byte over`,
-    group,
-    axis,
-    bytes: cap + 1,
-    ceiling: cap,
-    breach: true,
-  });
-  return rows;
+  return [
+    { name: `${label} exact ceiling`, group, axis, bytes: cap },
+    {
+      name: `${label} one byte over`,
+      group,
+      axis,
+      bytes: cap + 1,
+      ceiling: cap,
+      breach: true,
+    },
+  ];
 }
 
 const overRow = (name, group, axis, key) => {
@@ -617,3 +618,17 @@ for (const { name, group, axis, bytes, ceiling, breach = false } of [
     }
   });
 }
+
+test("Kit summary warns near proxy ceilings without changing their hard verdict", (t) => {
+  const fx = makeFixture();
+  t.after(() => rmSync(fx.root, { recursive: true, force: true }));
+  const result = runJson(fx.root);
+  assert.equal(result.code, 0);
+  const summary = kitBudgetSummary({
+    code: result.code,
+    groups: result.report.groups,
+  });
+  assert.match(summary, /WARNING/);
+  assert.match(summary, /remain hard/);
+  assert.match(summary, /kit.server.js/);
+});

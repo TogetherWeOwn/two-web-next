@@ -17,6 +17,7 @@
 // plan (exit 2), never a silent drop and never a fits verdict. The missing
 // canonical Worker file is missing evidence (exit 2), not a breach.
 import {
+  appendFileSync,
   mkdtempSync,
   mkdirSync,
   readdirSync,
@@ -392,10 +393,42 @@ function measureGroup(files, group, label, logs, errors) {
   return { breach: false, raw, gzip };
 }
 
-export function run(root = repoRoot, output = console) {
+// Advisory planning signals do not replace any current Kit protection.
+export function kitBudgetSummary(result) {
+  const lines = [
+    "## Kit size inventory",
+    "",
+    "SSR, adapter-entry and file-count protections remain hard pending built-Kit user-metric coverage.",
+    "",
+    "| Unit | Raw bytes | Per-file gzip bytes | Files | Planning signal |",
+    "| --- | --- | --- | --- | --- |",
+  ];
+  for (const group of result.groups) {
+    for (const check of group.checks) {
+      const near = [
+        [check.rawBytes, check.maxRawBytes],
+        [check.gzipBytes, check.maxGzipBytes],
+      ].some(([measured, cap]) => {
+        if (!Number.isSafeInteger(measured) || !Number.isSafeInteger(cap)) return false;
+        const allowance = Math.floor(cap / 200);
+        const block = allowance >= 256 ? Math.floor(allowance / 256) * 256 : allowance;
+        return measured >= cap - block;
+      });
+      const filesNear = Number.isSafeInteger(check.files) && check.files >= check.maxFiles - 1;
+      lines.push(
+        `| ${group.id} | ${check.rawBytes ?? "missing"}/${check.maxRawBytes ?? "?"} | ${check.gzipBytes ?? "missing"}/${check.maxGzipBytes ?? "?"} | ${check.files ?? "—"}/${check.maxFiles ?? "—"} | ${near || filesNear ? "WARNING: near/over ceiling" : check.status} |`,
+      );
+    }
+  }
+  lines.push("", `Hard measurement exit: ${result.code}.`, "");
+  return lines.join("\n");
+}
+
+export function run(root = repoRoot, output = console, summaryPath) {
   const result = measure(root);
   for (const line of result.logs) output.log(line);
   for (const line of result.errors) output.error(line);
+  if (summaryPath) appendFileSync(summaryPath, kitBudgetSummary(result));
   return result.code;
 }
 
@@ -430,8 +463,12 @@ function selftest() {
   const check = (name, setup, expected, message) => {
     mkdirSync(join(root, "ci"), { recursive: true });
     mkdirSync(join(root, "web/.svelte-kit/cloudflare"), { recursive: true });
-    mkdirSync(join(root, "web/.svelte-kit/output/server/chunks"), { recursive: true });
-    mkdirSync(join(root, "web/.svelte-kit/output/client/_app/immutable"), { recursive: true });
+    mkdirSync(join(root, "web/.svelte-kit/output/server/chunks"), {
+      recursive: true,
+    });
+    mkdirSync(join(root, "web/.svelte-kit/output/client/_app/immutable"), {
+      recursive: true,
+    });
     const workerBytes = Buffer.from(`/* worker */\n${"x".repeat(1000)}`);
     const serverBytes = Buffer.from(`/* server chunk */\n${"w".repeat(800)}`);
     const jsBytes = Buffer.from(`console.log(1);\n${"y".repeat(500)}`);
@@ -456,8 +493,16 @@ function selftest() {
         },
       },
       client: {
-        js: { maxRawBytes: jsBytes.length, maxGzipBytes: gzipSync(jsBytes).length, maxFiles: 4 },
-        css: { maxRawBytes: cssBytes.length, maxGzipBytes: gzipSync(cssBytes).length, maxFiles: 4 },
+        js: {
+          maxRawBytes: jsBytes.length,
+          maxGzipBytes: gzipSync(jsBytes).length,
+          maxFiles: 4,
+        },
+        css: {
+          maxRawBytes: cssBytes.length,
+          maxGzipBytes: gzipSync(cssBytes).length,
+          maxFiles: 4,
+        },
       },
       startup: { maxMs: 30_000 },
     };
@@ -551,7 +596,9 @@ function selftest() {
   check(
     "substituted worker entry cannot enforce",
     ({ root, budget }) => {
-      budget.worker = { "assets/small.js": { maxRawBytes: 4096, maxGzipBytes: 4096 } };
+      budget.worker = {
+        "assets/small.js": { maxRawBytes: 4096, maxGzipBytes: 4096 },
+      };
       save(root, budget);
     },
     2,
@@ -568,21 +615,38 @@ function selftest() {
   );
   // Restore a valid tree: earlier negatives left an extra budget section and
   // an unbudgeted 100KB client chunk behind.
-  rmSync(join(root, "web/.svelte-kit/output/client/_app/immutable/b.js"), { force: true });
+  rmSync(join(root, "web/.svelte-kit/output/client/_app/immutable/b.js"), {
+    force: true,
+  });
   const fitWorker = readFileSync(join(root, "web/.svelte-kit/cloudflare/_worker.js"));
   const fitServer = readFileSync(join(root, "web/.svelte-kit/output/server/chunks/a.js"));
   const fitJs = readFileSync(join(root, "web/.svelte-kit/output/client/_app/immutable/a.js"));
   const fitCss = readFileSync(join(root, "web/.svelte-kit/output/client/_app/immutable/a.css"));
   const fitBudget = {
     worker: {
-      "_worker.js": { maxRawBytes: fitWorker.length, maxGzipBytes: gzipSync(fitWorker).length },
+      "_worker.js": {
+        maxRawBytes: fitWorker.length,
+        maxGzipBytes: gzipSync(fitWorker).length,
+      },
     },
     server: {
-      js: { maxRawBytes: fitServer.length, maxGzipBytes: gzipSync(fitServer).length, maxFiles: 4 },
+      js: {
+        maxRawBytes: fitServer.length,
+        maxGzipBytes: gzipSync(fitServer).length,
+        maxFiles: 4,
+      },
     },
     client: {
-      js: { maxRawBytes: fitJs.length, maxGzipBytes: gzipSync(fitJs).length, maxFiles: 4 },
-      css: { maxRawBytes: fitCss.length, maxGzipBytes: gzipSync(fitCss).length, maxFiles: 4 },
+      js: {
+        maxRawBytes: fitJs.length,
+        maxGzipBytes: gzipSync(fitJs).length,
+        maxFiles: 4,
+      },
+      css: {
+        maxRawBytes: fitCss.length,
+        maxGzipBytes: gzipSync(fitCss).length,
+        maxFiles: 4,
+      },
     },
     startup: { maxMs: 30_000 },
   };
@@ -623,9 +687,21 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
     const measured = runJson(parsed.options.root ?? repoRoot);
     for (const line of measured.logs) console.error(line);
     for (const line of measured.errors) console.error(line);
+    if (process.env.GITHUB_STEP_SUMMARY)
+      appendFileSync(
+        process.env.GITHUB_STEP_SUMMARY,
+        kitBudgetSummary({
+          code: measured.code,
+          groups: measured.report.groups,
+        }),
+      );
     process.stdout.write(`${JSON.stringify(measured.report)}\n`);
     process.exitCode = measured.code;
   } else {
-    process.exitCode = run(parsed.options.root ?? repoRoot);
+    process.exitCode = run(
+      parsed.options.root ?? repoRoot,
+      console,
+      process.env.GITHUB_STEP_SUMMARY,
+    );
   }
 }

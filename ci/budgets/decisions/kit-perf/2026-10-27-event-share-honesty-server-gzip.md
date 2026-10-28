@@ -1,7 +1,5 @@
 # 2026-10-27 decision: server JS gzip ceiling 336128 -> 336384
 
-Ceiling: server.js.maxGzipBytes = 336384 (previous 336128)
-
 `server.js.maxGzipBytes` rises 336128 -> 336384 in
 `ci/budgets/kit/server-js.json`; no other ceiling changes. This admits the
 event-share-honesty change (PR #1865), whose share block on the event detail

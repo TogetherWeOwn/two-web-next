@@ -10,8 +10,6 @@ case. The supported-allocation literal for 336128 already exists in
 `ci/check-kit-perf.test.mjs`, so no test change accompanies this raise
 beyond the fragment oracle's admitted-allocation list.
 
-Ceiling: server.js.maxGzipBytes = 336128 (previous 335872)
-
 ## Measurements
 
 Locked Node 24.22.1 / npm 11.19.1 production builds

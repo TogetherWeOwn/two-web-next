@@ -35,6 +35,21 @@ skips to enforce the gate.
 the real LHCI assertion command, proves its nonzero exit fails this gate, and pins
 the workflow wiring. `npm run gate:selftest` covers result-state handling offline.
 
+## Additive byte admissions and final Kit artifact
+
+The [budget policy](../ci/budgets/README.md) defines immutable bases plus additive
+`delta_bytes` decision files, an aggregate 0.5% per PR/unit cap and a trusted
+rolling seven-day 2% cap. The policy validator is hard on PRs and merge groups;
+ordinary review, security and user-outcome checks still block admission.
+
+Kit's existing intermediate SSR/adapter/file-count gates stay hard until there
+is representative built-Kit rendering, interaction and response-latency
+coverage. The Hono Lighthouse/auth fixture and low-sample nightly RUM do not
+close that measurement gap. This PR additionally gates both final Wrangler
+dry-run artifacts against `ci/budgets/deploy/worker.json`: a conservative
+main-CI raw-byte upper bound plus 2%, then the same additive ledger. This is an
+artifact safeguard, not a user-facing latency target or a platform plan limit.
+
 ## Main Worker bundle
 
 The main app Worker (`src/worker.ts` via `wrangler.jsonc`) previously had
@@ -592,8 +607,10 @@ fail-safe auth changes: bounded sign-out feedback and a session-read deadline
 that settles even when abort is ignored. The raw ceiling remains unchanged.
 
 Never relax a Lighthouse threshold to turn a build green. Threshold changes
-require a separate owner-approved PR. Byte-ceiling increases must likewise be a
-separate deliberate PR explaining what grew and why. A failure gets a fix or an
+require a separate owner-approved PR. Bounded byte admissions belong inside the
+feature PR, through the additive decision ledger in [the budget policy](../ci/budgets/README.md).
+Bases and historical decisions are frozen; CI enforces aggregate per-PR and
+trusted rolling seven-day caps on the combined merge-group result. A failure gets a fix or an
 explicit decision, not retries until a lucky sample passes.
 
 ## Discord snapshot path

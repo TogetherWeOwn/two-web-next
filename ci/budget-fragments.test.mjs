@@ -14,48 +14,12 @@ import { dirname, join } from "node:path";
 import { test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
-import {
-  assertKitPlanMatchesLedger,
-  flattenKitPlan,
-  loadKitCeilingLedger,
-} from "./budget-ledger.mjs";
+import { budgetUnits } from "./budget-ledger.mjs";
 import { loadBundleBudgets, loadKitBudget } from "./budget-fragments.mjs";
 import { run as runBundle } from "./check-bundle-budget.mjs";
 import { run as runKit } from "./check-kit-perf.mjs";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
-
-// The exact served-asset ceilings shipped in ci/bundle-budget.json at the
-// split commit. Aggregation must reproduce them exactly: any drift here is
-// a budget change, which needs its own decision file, never a silent edit.
-// Kit ceilings carry no literal table: they are derived from the decision
-// ledger (ci/budget-ledger.mjs), see the ledger tests below.
-const SHIPPING_BUNDLE_BUDGETS = {
-  "public/islands/admin-event-editor.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
-  "public/islands/admin-event-text-limits.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
-  "public/islands/auth-status.js": { maxRawBytes: 3072, maxGzipBytes: 1536 },
-  "public/islands/avatar.js": { maxRawBytes: 512, maxGzipBytes: 512 },
-  "public/islands/copy-link.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
-  "public/islands/event-device-timezone.js": { maxRawBytes: 2560, maxGzipBytes: 1280 },
-  "public/islands/event-share.js": { maxRawBytes: 1024, maxGzipBytes: 768 },
-  "public/islands/events-calendar.js": { maxRawBytes: 10752, maxGzipBytes: 4096 },
-  "public/islands/going-count.js": { maxRawBytes: 5632, maxGzipBytes: 2304 },
-  "public/islands/join-widget.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
-  "public/islands/member-profile.js": { maxRawBytes: 15872, maxGzipBytes: 5632 },
-  "public/islands/model-context.js": { maxRawBytes: 4608, maxGzipBytes: 2048 },
-  "public/islands/past-events.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
-  "public/islands/rsvp-button.js": { maxRawBytes: 17408, maxGzipBytes: 5120 },
-  "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
-  "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
-  "public/admin-rsvp-review.css": { maxRawBytes: 1024, maxGzipBytes: 512 },
-  "public/theme.css": { maxRawBytes: 15360, maxGzipBytes: 3584 },
-  "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
-  "public/event-theme.css": { maxRawBytes: 7168, maxGzipBytes: 2048 },
-  "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
-  "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },
-  "public/islands/local-time-compare.js": { maxRawBytes: 1536, maxGzipBytes: 768 },
-  "public/islands/event-time-from-now.js": { maxRawBytes: 2048, maxGzipBytes: 1024 },
-};
 
 // sha256 of the frozen legacy-history archives: header + the verbatim
 // pre-split $comment. If either hash changes, decision history was edited.
@@ -94,7 +58,10 @@ function kitFixture(t, fragments) {
   writeFile(root, "web/.svelte-kit/output/server/chunks/a.js", server);
   writeFile(root, "web/.svelte-kit/output/client/_app/immutable/a.js", js);
   writeFile(root, "web/.svelte-kit/output/client/_app/immutable/a.css", css);
-  const exact = (body) => ({ maxRawBytes: body.length, maxGzipBytes: gzipSync(body).length });
+  const exact = (body) => ({
+    maxRawBytes: body.length,
+    maxGzipBytes: gzipSync(body).length,
+  });
   const defaults = {
     "worker.json": { worker: { "_worker.js": exact(worker) } },
     "server.json": { server: { js: { ...exact(server), maxFiles: 4 } } },
@@ -102,169 +69,27 @@ function kitFixture(t, fragments) {
     "client-css.json": { client: { css: { ...exact(css), maxFiles: 4 } } },
     "startup.json": { startup: { maxMs: 30000 } },
   };
-  for (const [name, fragment] of Object.entries({ ...defaults, ...fragments })) {
+  for (const [name, fragment] of Object.entries({
+    ...defaults,
+    ...fragments,
+  })) {
     if (fragment !== null) writeFile(root, `ci/budgets/kit/${name}`, JSON.stringify(fragment));
   }
   return root;
 }
 
-// The Kit aggregate pin is derived, not tabulated: every value in
-// ci/budgets/kit/*.json must be declared by a `Ceiling:` line in a decision
-// file (ci/budget-ledger.mjs), and every declaration must be carried by a
-// fragment. Raising a ceiling is one fragment edit plus one new decision.
-test("kit fragments aggregate to the ceilings their decision files declare", () => {
-  assertKitPlanMatchesLedger(loadKitBudget(repoRoot), loadKitCeilingLedger(repoRoot));
-});
-
-test("the ledger covers every unit the shipping plan carries", () => {
-  const flat = flattenKitPlan(loadKitBudget(repoRoot));
-  assert.deepEqual([...flat.keys()].sort(), [...loadKitCeilingLedger(repoRoot).keys()].sort());
-  assert.ok(flat.size >= 12, "fewer shipping ceilings than expected");
-});
-
-function ledgerFixture(t, { fragment = {}, decisions = {} }) {
-  const root = scratchRoot(t, "budget-ledger-");
-  writeFile(root, "ci/budgets/kit/server-js.json", JSON.stringify(fragment));
-  for (const [name, body] of Object.entries(decisions)) {
-    writeFile(root, `ci/budgets/decisions/kit-perf/${name}`, body);
-  }
-  return root;
-}
-
-const SERVER_PLAN = { server: { js: { maxRawBytes: 100, maxGzipBytes: 50, maxFiles: 3 } } };
-const SERVER_DECLARATIONS = [
-  "Ceiling: server.js.maxRawBytes = 100",
-  "Ceiling: server.js.maxGzipBytes = 50",
-  "Ceiling: server.js.maxFiles = 3",
-].join("\n");
-
-test("ledger: a fragment value no decision declares fails closed", (t) => {
-  const root = ledgerFixture(t, {
-    decisions: { "0001-base.md": "Ceiling: server.js.maxRawBytes = 100\n" },
-  });
-  assert.throws(
-    () => assertKitPlanMatchesLedger(SERVER_PLAN, loadKitCeilingLedger(root)),
-    /server\.js\.maxGzipBytes = 50 has no decision file declaring it/,
-  );
-});
-
-test("ledger: a raised fragment needs a newer decision, the latest declaration wins", (t) => {
-  const root = ledgerFixture(t, {
-    decisions: {
-      "0001-base.md": SERVER_DECLARATIONS,
-      "2026-10-27-raise.md": "Ceiling: server.js.maxGzipBytes = 60 (previous 50)\n",
-    },
-  });
-  const ledger = loadKitCeilingLedger(root);
-  assert.deepEqual(ledger.get("server.js.maxGzipBytes"), {
-    value: 60,
-    previous: 50,
-    file: "2026-10-27-raise.md",
-  });
-  assert.throws(
-    () => assertKitPlanMatchesLedger(SERVER_PLAN, ledger),
-    /server\.js\.maxGzipBytes = 50 but the latest decision \(2026-10-27-raise\.md\) declares 60/,
-  );
-  const raised = { server: { js: { ...SERVER_PLAN.server.js, maxGzipBytes: 60 } } };
-  assertKitPlanMatchesLedger(raised, ledger);
-});
-
-test("ledger: a re-declared key must name the ceiling it replaces", (t) => {
-  for (const [raise, pattern] of [
-    // omitted: the newly-allowed interval would silently disappear
-    ["Ceiling: server.js.maxGzipBytes = 60\n", /must declare \(previous 50\)/],
-    // wrong: the interval byte would already be admitted by the old ceiling
-    [
-      "Ceiling: server.js.maxGzipBytes = 60 (previous 40)\n",
-      /must declare \(previous 50\).*not \(previous 40\)/,
-    ],
+// Shipping numbers are not a second allocation authority. Independent fixed
+// fixtures below and budget-ledger.test.mjs prove enforcement; the git policy
+// checker freezes actual bases and validates all new deltas on PR and queue.
+test("Kit and served-asset plans expose finite, unique byte-budget units", () => {
+  for (const [kind, plan] of [
+    ["kit", loadKitBudget(repoRoot)],
+    ["bundle", loadBundleBudgets(repoRoot)],
   ]) {
-    const root = ledgerFixture(t, {
-      decisions: { "0001-base.md": SERVER_DECLARATIONS, "2026-10-27-raise.md": raise },
-    });
-    assert.throws(() => loadKitCeilingLedger(root), pattern, raise);
+    const units = budgetUnits(kind, plan);
+    assert.ok(units.size > 0);
+    for (const { value } of units.values()) assert.ok(Number.isSafeInteger(value) && value > 0);
   }
-  // A chain of raises resolves link by link.
-  const root = ledgerFixture(t, {
-    decisions: {
-      "0001-base.md": SERVER_DECLARATIONS,
-      "2026-10-27-a.md": "Ceiling: server.js.maxGzipBytes = 60 (previous 50)\n",
-      "2026-10-28-b.md": "Ceiling: server.js.maxGzipBytes = 70 (previous 60)\n",
-    },
-  });
-  assert.equal(loadKitCeilingLedger(root).get("server.js.maxGzipBytes").previous, 60);
-});
-
-test("ledger: decision files resolve in file-name order, not directory order", (t) => {
-  const root = ledgerFixture(t, {
-    decisions: {
-      "0001-base.md": SERVER_DECLARATIONS,
-      "2026-10-27-a.md": "Ceiling: server.js.maxGzipBytes = 60 (previous 50)\n",
-      "2026-10-28-b.md": "Ceiling: server.js.maxGzipBytes = 70 (previous 60)\n",
-    },
-  });
-  // Readdir order is a filesystem detail; hand the loader the names newest
-  // first so an unsorted read applies the chain backwards and throws.
-  const newestFirst = (dir) => readdirSync(dir).sort().reverse();
-  const entry = loadKitCeilingLedger(root, newestFirst).get("server.js.maxGzipBytes");
-  assert.deepEqual(entry, { value: 70, previous: 60, file: "2026-10-28-b.md" });
-});
-
-test("ledger: the baseline keeps the previous ceilings of its two historic raises", () => {
-  // The baseline's first declarations are the only ones the chain rule cannot
-  // check, so their previous figures are pinned to the dated decisions that
-  // recorded the raises: 2026-10-27-server-gzip-335872-event-time.md and
-  // 2026-10-26-client-js-event-detail-257024.md. Deleting one silently drops
-  // its newly-allowed interval row from the shipping suite.
-  const ledger = loadKitCeilingLedger(repoRoot);
-  const baseline = "0001-ceiling-ledger-baseline.md";
-  const seeded = readFileSync(join(repoRoot, "ci/budgets/decisions/kit-perf", baseline), "utf8");
-  for (const [key, previous] of [
-    ["server.js.maxGzipBytes", 335360],
-    ["client.js.maxRawBytes", 256000],
-  ]) {
-    assert.match(
-      seeded,
-      new RegExp(`^Ceiling: ${key.replaceAll(".", "\\.")} = \\d+ \\(previous ${previous}\\)$`, "m"),
-    );
-    assert.ok(ledger.has(key), key);
-  }
-});
-
-test("ledger: a declaration no fragment carries fails closed", (t) => {
-  const root = ledgerFixture(t, {
-    decisions: { "0001-base.md": `${SERVER_DECLARATIONS}\nCeiling: startup.maxMs = 1\n` },
-  });
-  assert.throws(
-    () => assertKitPlanMatchesLedger(SERVER_PLAN, loadKitCeilingLedger(root)),
-    /declares startup\.maxMs but no fragment carries it/,
-  );
-});
-
-test("ledger: malformed, duplicate and non-increasing declarations throw", (t) => {
-  for (const [body, pattern] of [
-    ["Ceiling: server.js.maxGzipBytes 50\n", /malformed ceiling line/],
-    ["Ceiling: server.js.maxGzipBytes = 5e1\n", /malformed ceiling line/],
-    ["Ceiling: server.js.maxGzipBytes = 50 (was 40)\n", /malformed ceiling line/],
-    [
-      "Ceiling: server.js.maxGzipBytes = 50\nCeiling: server.js.maxGzipBytes = 60\n",
-      /declared twice/,
-    ],
-    ["Ceiling: server.js.maxGzipBytes = 50 (previous 50)\n", /previous 50 must be below 50/],
-    ["Ceiling: __proto__ = 1\n", /unsupported ceiling key/],
-  ]) {
-    const root = ledgerFixture(t, { decisions: { "0001-bad.md": body } });
-    assert.throws(() => loadKitCeilingLedger(root), pattern, body);
-  }
-});
-
-test("ledger: the frozen legacy archive and prose never count as declarations", () => {
-  const ledger = loadKitCeilingLedger(repoRoot);
-  for (const { file } of ledger.values()) assert.ok(!file.startsWith("0000-legacy"), file);
-});
-
-test("bundle fragments aggregate to the exact pre-split ceilings", () => {
-  assert.deepEqual(loadBundleBudgets(repoRoot), SHIPPING_BUNDLE_BUDGETS);
 });
 
 test("every shipping fragment carries exactly one budget unit", () => {
@@ -305,14 +130,18 @@ test("kit checker fits a fragment tree exactly at its ceilings", (t) => {
 
 test("kit checker breach against a fragment ceiling exits 1", (t) => {
   const root = kitFixture(t, {
-    "server.json": { server: { js: { maxRawBytes: 999999, maxGzipBytes: 1, maxFiles: 4 } } },
+    "server.json": {
+      server: { js: { maxRawBytes: 999999, maxGzipBytes: 1, maxFiles: 4 } },
+    },
   });
   assert.equal(runKit(root, sink), 1);
 });
 
 test("duplicate kit unit across fragments cannot enforce (2)", (t) => {
   const root = kitFixture(t, {
-    "server-copy.json": { server: { js: { maxRawBytes: 10, maxGzipBytes: 10, maxFiles: 1 } } },
+    "server-copy.json": {
+      server: { js: { maxRawBytes: 10, maxGzipBytes: 10, maxFiles: 1 } },
+    },
   });
   const errors = [];
   const code = runKit(root, {
@@ -351,7 +180,9 @@ test("legacy single-file kit budget still loads for scratch fixtures", (t) => {
   rmSync(join(root, "ci/budgets/kit"), { recursive: true, force: true });
   const budget = {
     worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
-    server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335104, maxFiles: 126 } },
+    server: {
+      js: { maxRawBytes: 1203200, maxGzipBytes: 335104, maxFiles: 126 },
+    },
     client: {
       js: { maxRawBytes: 254976, maxGzipBytes: 102912, maxFiles: 55 },
       css: { maxRawBytes: 3072, maxGzipBytes: 1024, maxFiles: 4 },
@@ -368,12 +199,18 @@ function bundleFixture(t, fragments) {
   const payload = Buffer.from(Array.from({ length: 128 }, (_, i) => `/* asset-${i} */\n`).join(""));
   writeFile(root, "public/islands/example.js", payload);
   writeFile(root, "public/styles.css", payload);
-  const exact = { maxRawBytes: payload.length, maxGzipBytes: gzipSync(payload).length };
+  const exact = {
+    maxRawBytes: payload.length,
+    maxGzipBytes: gzipSync(payload).length,
+  };
   const defaults = {
     "example.json": { budgets: { "public/islands/example.js": { ...exact } } },
     "styles.json": { budgets: { "public/styles.css": { ...exact } } },
   };
-  for (const [name, fragment] of Object.entries({ ...defaults, ...fragments })) {
+  for (const [name, fragment] of Object.entries({
+    ...defaults,
+    ...fragments,
+  })) {
     writeFile(root, `ci/budgets/bundle/${name}`, JSON.stringify(fragment));
   }
   return { root, exact };
@@ -390,7 +227,12 @@ test("bundle checker breach against a fragment ceiling exits 1", (t) => {
     root,
     "ci/budgets/bundle/example.json",
     JSON.stringify({
-      budgets: { "public/islands/example.js": { ...exact, maxRawBytes: exact.maxRawBytes - 1 } },
+      budgets: {
+        "public/islands/example.js": {
+          ...exact,
+          maxRawBytes: exact.maxRawBytes - 1,
+        },
+      },
     }),
   );
   assert.equal(runBundle(root, sink), 1);
@@ -399,7 +241,9 @@ test("bundle checker breach against a fragment ceiling exits 1", (t) => {
 test("duplicate bundle entry across fragments cannot enforce (2)", (t) => {
   const { root } = bundleFixture(t, {
     "example-copy.json": {
-      budgets: { "public/islands/example.js": { maxRawBytes: 1, maxGzipBytes: 1 } },
+      budgets: {
+        "public/islands/example.js": { maxRawBytes: 1, maxGzipBytes: 1 },
+      },
     },
   });
   const errors = [];
@@ -524,7 +368,9 @@ test("kit fragment with an unsupported empty section cannot enforce (2)", (t) =>
 
 test("kit fragment with an unsupported section is rejected by the loader", (t) => {
   const root = kitFixture(t, {
-    "typo.json": { typo: { x: { maxRawBytes: 1, maxGzipBytes: 1, maxFiles: 1 } } },
+    "typo.json": {
+      typo: { x: { maxRawBytes: 1, maxGzipBytes: 1, maxFiles: 1 } },
+    },
   });
   assert.throws(() => loadKitBudget(root), /unsupported budget section: typo/);
 });
@@ -548,7 +394,9 @@ test("kit fragment with an empty section beside a valid unit cannot enforce (2)"
   // let committed input claim a section it never actually budgets.
   const root = kitFixture(t, {
     "client-js.json": {
-      client: { js: { maxRawBytes: 999999, maxGzipBytes: 999999, maxFiles: 9 } },
+      client: {
+        js: { maxRawBytes: 999999, maxGzipBytes: 999999, maxFiles: 9 },
+      },
       server: {},
     },
   });

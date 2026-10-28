@@ -1,104 +1,221 @@
-// Kit ceiling ledger: the machine-readable half of the decision files.
-//
-// Every value in ci/budgets/kit/*.json must be declared by a decision file
-// under ci/budgets/decisions/kit-perf/, on one line:
-//
-//   Ceiling: server.js.maxGzipBytes = 335616 (previous 335360)
-//
-// The key is the fragment path joined with dots; "(previous N)" names the
-// ceiling this decision replaced. It is required, and must equal the earlier
-// declaration, whenever a key is declared again; only a key's first
-// declaration may omit it. Decision files are read in
-// file-name order and the last declaration for a key is authoritative, so a
-// ceiling change is exactly one fragment edit plus one new decision file and
-// the shipping tests derive their cap, cap+1 and newly-allowed interval from
-// the pair instead of carrying literal tables. Fail-closed: a malformed
-// declaration, a previous ceiling not below its value or not the one it
-// replaces, a fragment value no decision declares, or a declaration for a unit
-// no fragment carries all throw.
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+// Additive size admissions. The JSON fragments are frozen bases, NOT mutable
+// counters. Reviewed decision files add bytes; git/GitHub provenance and caps
+// are checked separately by check-budget-admissions.mjs, hard on PR and queue.
+import { existsSync, lstatSync, readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 
-const DECISIONS_DIR = "ci/budgets/decisions/kit-perf";
-const DECLARATION = /^Ceiling: (\S+) = (\d+)(?: \(previous (\d+)\))?$/;
+export const DECISIONS_DIR = "ci/budgets/decisions";
+const ARCHIVES = new Set(["kit-perf", "bundle"]);
+const UNIT = /^(kit|bundle|deploy)-[a-z0-9-]+-(raw|gzip)$/;
+const DECISION =
+  /^ci\/budgets\/decisions\/([^/]+)\/(\d{4}-\d{2}-\d{2})-[a-z0-9]+(?:-[a-z0-9]+)*\.md$/;
+const FIELDS = ["unit", "delta_bytes", "before_bytes", "after_bytes", "cause", "pr"];
+const WEEK_MS = 7 * 24 * 60 * 60 * 1000;
 
-// Flatten a Kit plan into dotted key -> number. "$" metadata is skipped.
-export function flattenKitPlan(plan, prefix = "", out = new Map()) {
-  for (const [key, value] of Object.entries(plan)) {
-    if (key.startsWith("$")) continue;
-    const path = prefix === "" ? key : `${prefix}.${key}`;
-    if (typeof value === "number") out.set(path, value);
-    else if (value !== null && typeof value === "object" && !Array.isArray(value)) {
-      flattenKitPlan(value, path, out);
-    } else {
-      throw new Error(`kit budget ${path}: expected a number or object`);
-    }
+function integer(value, label, minimum = 1) {
+  if (!Number.isSafeInteger(value) || value < minimum) {
+    throw new Error(`${label}: expected a safe integer >= ${minimum}`);
   }
-  return out;
+  return value;
 }
 
-// key -> { value, previous (number | undefined), file }
-// listNames is a seam for tests: readdir order is a filesystem detail, so the
-// ordering rule below is proven by handing it names in the wrong order.
-export function loadKitCeilingLedger(root, listNames = readdirSync) {
+function validateRecord(record) {
+  if (!record || !UNIT.test(record.unit)) throw new Error("invalid admission unit");
+  integer(record.delta_bytes, "delta_bytes");
+  integer(record.before_bytes, "before_bytes", 0);
+  integer(record.after_bytes, "after_bytes");
+  integer(record.pr, "PR");
+  if (record.after_bytes <= record.before_bytes)
+    throw new Error("admission requires measured growth");
+  if (typeof record.cause !== "string" || record.cause.trim().length < 12) {
+    throw new Error("admission requires an explained cause and import check");
+  }
+}
+
+// JSON is a YAML-compatible front-matter mapping. Restrict it to six flat
+// fields; canonical serialization also rejects duplicate JSON keys instead
+// of silently accepting the last one. The prose body is for review evidence.
+export function parseAdmission(file, text) {
+  const match = DECISION.exec(file);
+  if (!match || !UNIT.test(match[1])) throw new Error(`invalid decision path: ${file}`);
+  const date = new Date(`${match[2]}T00:00:00Z`);
+  if (!Number.isFinite(date.getTime()) || date.toISOString().slice(0, 10) !== match[2]) {
+    throw new Error(`invalid decision date: ${file}`);
+  }
+  const front = /^---\n([\s\S]*?)\n---(?:\n|$)/.exec(text);
+  if (!front) throw new Error(`${file}: missing JSON front matter`);
+  const data = JSON.parse(front[1]);
+  if (
+    !data ||
+    Array.isArray(data) ||
+    typeof data !== "object" ||
+    Object.keys(data).sort().join() !== [...FIELDS].sort().join()
+  ) {
+    throw new Error(`${file}: front matter must contain exactly ${FIELDS.join(", ")}`);
+  }
+  // Count keys lexically, including escaped spellings, with JSON's own string
+  // parser. Values are flat scalars, so every string followed by ':' is a key.
+  const keys = [...front[1].matchAll(/("(?:[^"\\]|\\.)*")\s*:/g)].map((key) => JSON.parse(key[1]));
+  if (keys.length !== FIELDS.length || new Set(keys).size !== FIELDS.length) {
+    throw new Error(`${file}: duplicate front matter key`);
+  }
+  validateRecord(data);
+  if (data.unit !== match[1]) throw new Error(`${file}: unit does not match directory`);
+  return { ...data, file };
+}
+
+export function readAdmissions(root) {
   const dir = join(root, DECISIONS_DIR);
-  if (!existsSync(dir)) throw new Error(`${DECISIONS_DIR}/ is missing`);
-  const ledger = new Map();
-  const names = listNames(dir)
-    .filter((name) => name.endsWith(".md"))
-    .sort();
-  for (const name of names) {
-    const seen = new Set();
-    for (const line of readFileSync(join(dir, name), "utf8").split("\n")) {
-      if (!line.startsWith("Ceiling:")) continue;
-      const match = DECLARATION.exec(line);
-      if (!match) throw new Error(`${DECISIONS_DIR}/${name}: malformed ceiling line: ${line}`);
-      const [, key, rawValue, rawPrevious] = match;
-      if (key === "__proto__" || key === "constructor" || key === "prototype") {
-        throw new Error(`${DECISIONS_DIR}/${name}: unsupported ceiling key ${key}`);
-      }
-      const value = Number(rawValue);
-      const previous = rawPrevious === undefined ? undefined : Number(rawPrevious);
-      if (previous !== undefined && previous >= value) {
-        throw new Error(
-          `${DECISIONS_DIR}/${name}: ${key} previous ${previous} must be below ${value}`,
-        );
-      }
-      if (seen.has(key)) throw new Error(`${DECISIONS_DIR}/${name}: ${key} declared twice`);
-      seen.add(key);
-      // The chain is checked, not trusted: a declaration that replaces an
-      // earlier one must name exactly the ceiling it replaces, or the derived
-      // newly-allowed interval would be vacuous or silently absent.
-      const replaced = ledger.get(key);
-      if (replaced !== undefined && previous !== replaced.value) {
-        throw new Error(
-          `${DECISIONS_DIR}/${name}: ${key} must declare (previous ${replaced.value}), the ceiling ${replaced.file} set` +
-            (previous === undefined ? "" : `, not (previous ${previous})`),
-        );
-      }
-      ledger.set(key, { value, previous, file: name });
+  if (!existsSync(dir)) return []; // legacy hermetic fixtures have no ledger
+  const records = [];
+  for (const unit of readdirSync(dir).sort()) {
+    const unitPath = join(dir, unit);
+    if (!lstatSync(unitPath).isDirectory()) throw new Error(`invalid decision path: ${unit}`);
+    if (ARCHIVES.has(unit)) continue; // frozen legacy prose; never new allowances
+    if (!UNIT.test(unit)) throw new Error(`invalid admission unit: ${unit}`);
+    for (const name of readdirSync(unitPath).sort()) {
+      const file = `${DECISIONS_DIR}/${unit}/${name}`;
+      if (!lstatSync(join(root, file)).isFile()) throw new Error(`invalid decision path: ${file}`);
+      records.push(parseAdmission(file, readFileSync(join(root, file), "utf8")));
     }
   }
-  return ledger;
+  return records;
 }
 
-// Throw unless the plan and the ledger describe exactly the same ceilings.
-export function assertKitPlanMatchesLedger(plan, ledger) {
-  const flat = flattenKitPlan(plan);
-  for (const [key, value] of flat) {
-    const decision = ledger.get(key);
-    if (decision === undefined) {
-      throw new Error(`kit ceiling ${key} = ${value} has no decision file declaring it`);
+export function budgetUnits(kind, plan) {
+  const units = new Map();
+  const walk = (value, path = []) => {
+    for (const [key, item] of Object.entries(value)) {
+      if (key.startsWith("$")) continue;
+      if (["maxRawBytes", "maxGzipBytes"].includes(key)) {
+        integer(item, path.join("."));
+        const slug = path
+          .join("-")
+          .toLowerCase()
+          .replace(/[^a-z0-9-]/g, "-");
+        const unit = `${kind}-${slug}-${key === "maxRawBytes" ? "raw" : "gzip"}`;
+        if (units.has(unit)) throw new Error(`duplicate budget unit identity: ${unit}`);
+        units.set(unit, { value: item, path: [...path, key] });
+      } else if (item && typeof item === "object" && !Array.isArray(item)) {
+        walk(item, [...path, key]);
+      }
     }
-    if (decision.value !== value) {
-      throw new Error(
-        `kit ceiling ${key} = ${value} but the latest decision (${decision.file}) declares ${decision.value}`,
-      );
+  };
+  walk(plan);
+  return units;
+}
+
+function safeSum(base, delta) {
+  return integer(base + delta, "effective ceiling safe integer");
+}
+
+export function applyAdmissions(root, kind, plan) {
+  const result = structuredClone(plan);
+  const units = budgetUnits(kind, result);
+  for (const record of readAdmissions(root)) {
+    if (!record.unit.startsWith(`${kind}-`)) continue;
+    const unit = units.get(record.unit);
+    if (!unit) throw new Error(`unknown unit: ${record.unit}`);
+    let target = result;
+    for (const key of unit.path.slice(0, -1)) target = target[key];
+    const key = unit.path.at(-1);
+    target[key] = safeSum(target[key], record.delta_bytes);
+  }
+  return result;
+}
+
+// Snapshot maps contain git blob identities (or bytes in tests). Every base
+// and every old decision, including prose, is frozen. New assets need a
+// separately reviewed initial-allocation policy change, not an in-band delta.
+export function validateFrozenFiles(baseFiles, headFiles, initialAllocations = new Set()) {
+  for (const [file, contents] of baseFiles) {
+    if (!headFiles.has(file) || headFiles.get(file) !== contents) {
+      throw new Error(`frozen budget base/history changed or deleted: ${file}`);
     }
   }
-  for (const [key, decision] of ledger) {
-    if (!flat.has(key)) {
-      throw new Error(`decision ${decision.file} declares ${key} but no fragment carries it`);
+  for (const file of headFiles.keys()) {
+    if (baseFiles.has(file) || initialAllocations.has(file)) continue;
+    if (!file.startsWith(`${DECISIONS_DIR}/`)) {
+      throw new Error(`new budget base requires separate initial allocation: ${file}`);
+    }
+    const match = DECISION.exec(file);
+    if (!match || !UNIT.test(match[1]))
+      throw new Error(`new decision must be an admission: ${file}`);
+  }
+}
+
+// Denominators do not compound within a queue batch: every PR uses the
+// effective main ceiling at the group's base; the weekly cap uses the
+// effective ceiling at (now - 7d). Provenance is supplied by the git/GitHub
+// adapter, NEVER from a decision's date, claimed PR or local commit clock.
+export function validateAdmissions({ bases, historical, proposed, now }) {
+  const clock = Date.parse(now);
+  if (!Number.isFinite(clock)) throw new Error("invalid validation clock");
+  const seen = new Set();
+  const totals = new Map(
+    [...bases].map(([unit, base]) => [
+      unit,
+      {
+        current: integer(base, unit),
+        weekBase: base,
+        recent: 0,
+        added: 0,
+        byPr: new Map(),
+      },
+    ]),
+  );
+  for (const record of [...historical, ...proposed]) {
+    validateRecord(record);
+    if (seen.has(record.file)) throw new Error(`duplicate decision identity: ${record.file}`);
+    seen.add(record.file);
+    if (!totals.has(record.unit)) throw new Error(`unknown unit: ${record.unit}`);
+  }
+  for (const record of historical) {
+    const time = Date.parse(record.mergedAt);
+    if (!Number.isFinite(time) || time > clock)
+      throw new Error(`invalid main merge provenance: ${record.file}`);
+    const total = totals.get(record.unit);
+    total.current = safeSum(total.current, record.delta_bytes);
+    if (time <= clock - WEEK_MS) total.weekBase = safeSum(total.weekBase, record.delta_bytes);
+    else total.recent = safeSum(total.recent, record.delta_bytes);
+  }
+  for (const record of proposed) {
+    const total = totals.get(record.unit);
+    total.added = safeSum(total.added, record.delta_bytes);
+    total.byPr.set(record.pr, safeSum(total.byPr.get(record.pr) ?? 0, record.delta_bytes));
+    if (record.before_bytes > total.current)
+      throw new Error(`before measurement exceeds current ceiling: ${record.file}`);
+  }
+  for (const [unit, total] of totals) {
+    for (const [pr, delta] of total.byPr) {
+      if (BigInt(delta) * 200n > BigInt(total.current)) {
+        throw new Error(`${unit}: PR #${pr} aggregate ${delta}B exceeds 0.5% of ${total.current}B`);
+      }
+    }
+    if (
+      total.added &&
+      (BigInt(total.recent) + BigInt(total.added)) * 50n > BigInt(total.weekBase)
+    ) {
+      throw new Error(`${unit}: rolling 7-day additions exceed 2% of ${total.weekBase}B`);
     }
   }
+  for (const record of proposed) {
+    const total = totals.get(record.unit);
+    if (record.after_bytes > safeSum(total.current, total.added)) {
+      throw new Error(`after measurement is not covered by the admission: ${record.file}`);
+    }
+  }
+  return totals;
+}
+
+// Optional target, not a minimum allocation: overage + headroom is ALWAYS
+// clipped to floor(0.5% * ceiling). Small assets use byte-scale blocks.
+export function admissionHeadroom(ceiling, measured) {
+  integer(ceiling, "ceiling");
+  integer(measured, "measurement");
+  const cap = Math.floor(ceiling / 200);
+  const overage = Math.max(0, measured - ceiling);
+  if (overage > cap) throw new Error("measurement needs more than the 0.5% allowance");
+  const block = cap >= 256 ? Math.floor(cap / 256) * 256 : cap;
+  return Math.min(cap, overage + block);
 }
