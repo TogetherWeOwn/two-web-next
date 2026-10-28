@@ -8,8 +8,9 @@
 // Same bundling pattern as test/kit-activity-log-load.test.mjs: the root
 // Vitest config does not run SvelteKit's sync hook, so Vite/OXC cannot
 // resolve the route's generated `$app/tsconfig`. Bundle the real route with
-// esbuild instead — no stubs needed, since its only value import is the pure
-// src/request-log validator and the $types import is type-only.
+// esbuild instead. Keep the real request-log validator and virtualize only
+// the Workers env and the session bridge. These no-notice requests exercise
+// the excluded path; banner composition is covered in the paired banner suite.
 import { build } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
 import { fileURLToPath } from "node:url";
@@ -27,6 +28,24 @@ beforeAll(async () => {
     platform: "node",
     tsconfigRaw: { compilerOptions: {} },
     write: false,
+    plugins: [
+      {
+        name: "root-layout-session-fixture",
+        setup(plugin) {
+          plugin.onResolve({ filter: /^cloudflare:workers$|src\/kit-session$/ }, ({ path }) => ({
+            path,
+            namespace: "root-layout-session-fixture",
+          }));
+          plugin.onLoad({ filter: /.*/, namespace: "root-layout-session-fixture" }, ({ path }) => ({
+            contents:
+              path === "cloudflare:workers"
+                ? "export const env = {};"
+                : "export const isRestoredBannerEligible = () => false; export const readReturnJourney = () => { throw new Error('excluded request must not peek'); };",
+            loader: "js",
+          }));
+        },
+      },
+    ],
   });
   const source = outputFiles[0].text;
   const bundled = `data:text/javascript;base64,${Buffer.from(source).toString("base64")}`;
@@ -34,16 +53,27 @@ beforeAll(async () => {
 });
 
 describe("Kit root layout load: requestId forwarding", () => {
-  it("forwards a validated cf-ray verbatim", () => {
-    expect(load({ locals: { requestId: RAY } })).toEqual({ requestId: RAY });
+  it("forwards a validated cf-ray verbatim", async () => {
+    expect(
+      await load({
+        request: new Request("https://example.test/auth/recover"),
+        locals: { requestId: RAY },
+      }),
+    ).toEqual({ restoredWrite: null, requestId: RAY });
   });
 
-  it("forwards a validated ULID verbatim", () => {
-    expect(load({ locals: { requestId: ULID } })).toEqual({ requestId: ULID });
+  it("forwards a validated ULID verbatim", async () => {
+    expect(
+      await load({
+        request: new Request("https://example.test/auth/recover"),
+        locals: { requestId: ULID },
+      }),
+    ).toEqual({ restoredWrite: null, requestId: ULID });
   });
 
-  it("serializes only the safe reference, never member or session locals", () => {
-    const payload = load({
+  it("serializes only the safe reference, never member or session locals", async () => {
+    const payload = await load({
+      request: new Request("https://example.test/auth/recover"),
       locals: {
         requestId: RAY,
         session: { username: "private-member", token: "private-token" },
@@ -51,21 +81,39 @@ describe("Kit root layout load: requestId forwarding", () => {
         email: "private@example.test",
       },
     });
-    expect(JSON.parse(JSON.stringify(payload))).toEqual({ requestId: RAY });
+    expect(JSON.parse(JSON.stringify(payload))).toEqual({ restoredWrite: null, requestId: RAY });
   });
 
-  it("drops a hostile locals id to undefined", () => {
-    expect(load({ locals: { requestId: "<script>alert(1)</script>" } })).toEqual({
+  it("drops a hostile locals id to undefined", async () => {
+    expect(
+      await load({
+        request: new Request("https://example.test/auth/recover"),
+        locals: { requestId: "<script>alert(1)</script>" },
+      }),
+    ).toEqual({
+      restoredWrite: null,
       requestId: undefined,
     });
   });
 
-  it("renders blank-safe when locals carries no id", () => {
-    expect(load({ locals: {} })).toEqual({ requestId: undefined });
-    expect(load({ locals: { requestId: undefined } })).toEqual({ requestId: undefined });
+  it("renders blank-safe when locals carries no id", async () => {
+    expect(
+      await load({ request: new Request("https://example.test/auth/recover"), locals: {} }),
+    ).toEqual({ restoredWrite: null, requestId: undefined });
+    expect(
+      await load({
+        request: new Request("https://example.test/auth/recover"),
+        locals: { requestId: undefined },
+      }),
+    ).toEqual({ restoredWrite: null, requestId: undefined });
   });
 
-  it("drops a non-string locals id to undefined", () => {
-    expect(load({ locals: { requestId: 42 } })).toEqual({ requestId: undefined });
+  it("drops a non-string locals id to undefined", async () => {
+    expect(
+      await load({
+        request: new Request("https://example.test/auth/recover"),
+        locals: { requestId: 42 },
+      }),
+    ).toEqual({ restoredWrite: null, requestId: undefined });
   });
 });

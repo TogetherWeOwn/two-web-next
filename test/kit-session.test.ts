@@ -299,7 +299,12 @@ describe("readReturnJourney (Kit-visible return state, read-only)", () => {
       ]),
       SECRET,
     );
-    expect(journey).toEqual({ returnTo: "/e/two", joinResult: null, expiredWrite: null });
+    expect(journey).toEqual({
+      returnTo: "/e/two",
+      joinResult: null,
+      expiredWrite: null,
+      restoredWrite: null,
+    });
   });
 
   it("falls back to the intended page, then to null", async () => {
@@ -379,13 +384,14 @@ describe("readReturnJourney (Kit-visible return state, read-only)", () => {
       returnTo: null,
       joinResult: null,
       expiredWrite: null,
+      restoredWrite: null,
     });
     expect(
       await readReturnJourney(
         new Request("https://next.example.test/", { headers: { cookie: "%%%" } }),
         SECRET,
       ),
-    ).toEqual({ returnTo: null, joinResult: null, expiredWrite: null });
+    ).toEqual({ returnTo: null, joinResult: null, expiredWrite: null, restoredWrite: null });
   });
 });
 
@@ -425,6 +431,7 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     returnTo: null,
     joinResult: null,
     expiredWrite: null,
+    restoredWrite: null,
   });
 
   it("a Hono-owned request never invokes the session bridge, cookies or not", async () => {
@@ -517,6 +524,7 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
         returnTo: null,
         joinResult: null,
         expiredWrite: null,
+        restoredWrite: null,
       },
     };
     const res = await dispatchHookRequest(event, deps);
@@ -614,6 +622,7 @@ describe("kitSessionBridge (production hook composition)", () => {
       returnTo: null,
       joinResult: null,
       expiredWrite: null,
+      restoredWrite: null,
     });
   });
 
@@ -771,6 +780,7 @@ describe("kitAuthStatusCookieFor (moderator admin documents only)", () => {
         returnTo: null,
         joinResult: null,
         expiredWrite: null,
+        restoredWrite: null,
       },
     };
     expect((await parseSigned(request.headers.get("cookie") ?? "", SECRET))[SESSION_COOKIE]).toBe(
@@ -814,6 +824,7 @@ describe("kitAuthStatusCookieFor (moderator admin documents only)", () => {
       returnTo: null,
       joinResult: null,
       expiredWrite: null,
+      restoredWrite: null,
     };
     const base: HookEventLike = {
       request,
@@ -860,6 +871,7 @@ describe("kitAuthStatusCookieFor (moderator admin documents only)", () => {
         returnTo: null,
         joinResult: null,
         expiredWrite: null,
+        restoredWrite: null,
       },
     };
     const writeCookie = kitAuthStatusCookieFor({
@@ -885,6 +897,7 @@ describe("kitAuthStatusCookieFor (moderator admin documents only)", () => {
         returnTo: null,
         joinResult: null,
         expiredWrite: null,
+        restoredWrite: null,
       },
     };
     const writeCookie = kitAuthStatusCookieFor({

@@ -334,6 +334,7 @@ describe("acceptance: the hook boundary releases error renders with their status
           returnTo: null,
           joinResult: null,
           expiredWrite: null,
+          restoredWrite: null,
         }),
       ),
       accessSink: async () => sink,

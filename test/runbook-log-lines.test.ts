@@ -909,6 +909,7 @@ describe("kit session-bridge and auth-status probe runbook row cites", () => {
               returnTo: null,
               joinResult: null,
               expiredWrite: null,
+              restoredWrite: null,
             }),
             [provider]: reject,
           };

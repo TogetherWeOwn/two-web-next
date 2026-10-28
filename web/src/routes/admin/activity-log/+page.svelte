@@ -31,7 +31,7 @@ const subjectOf = (row: {
 };
 </script>
 
-<AdminShell title="Activity log">
+<AdminShell title="Activity log" restoredWrite={data.restoredWrite}>
   <section>
     <h1>Activity log</h1>
     <p class="hint">

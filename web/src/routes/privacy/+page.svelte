@@ -34,6 +34,7 @@ const canonical = $derived(canonicalUrl(appUrl, "/privacy"));
   theme="content"
   {leafCss}
   accountChrome={joinChrome}
+  restoredWrite={data.restoredWrite}
 >
   <div class="content-layout">
     <nav class="content-nav" aria-label="Community information">

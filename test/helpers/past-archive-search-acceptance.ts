@@ -21,7 +21,12 @@ import {
   loadPastArchivePage,
   toPublicPastArchiveRow,
 } from "../../src/kit-past-events";
-import { kitEventsJourneyFor, kitEventsSessionFor } from "../../src/kit-session";
+import {
+  isRestoredBannerEligible,
+  kitEventsJourneyFor,
+  kitEventsSessionFor,
+  readReturnJourney,
+} from "../../src/kit-session";
 import app from "../app";
 
 export const ARCHIVE_ORIGIN = "https://archive.example.test";
@@ -214,6 +219,8 @@ const kitDependencies = {
   renderEventsHtml,
   kitEventsSessionFor,
   kitEventsJourneyFor,
+  isRestoredBannerEligible,
+  readReturnJourney,
   discordEventsSource,
 };
 type KitBinding = {
@@ -238,7 +245,15 @@ export async function compileArchiveKit() {
     [join(root, "src/kit-past-events.ts"), ["loadPastArchivePage", "toPublicPastArchiveRow"]],
     [join(root, "src/kit-events.ts"), ["loadEventsPage"]],
     [join(root, "src/kit-events-html.ts"), ["renderEventsHtml"]],
-    [join(root, "src/kit-session.ts"), ["kitEventsSessionFor", "kitEventsJourneyFor"]],
+    [
+      join(root, "src/kit-session.ts"),
+      [
+        "kitEventsSessionFor",
+        "kitEventsJourneyFor",
+        "isRestoredBannerEligible",
+        "readReturnJourney",
+      ],
+    ],
     [join(root, "src/events/discord-transients.ts"), ["discordEventsSource"]],
   ]);
   const result = await build({

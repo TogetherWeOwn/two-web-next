@@ -31,6 +31,7 @@ const { appUrl, strap, lead, facts, leafCss } = $derived(data);
   theme="content"
   {leafCss}
   accountChrome={accountJoin}
+  restoredWrite={data.restoredWrite}
 >
   <ContentLeaf navCurrent="about" headingId="about-heading" heading="About Together We Own">
     <p class="strap">{strap}</p>

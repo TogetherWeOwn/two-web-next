@@ -25,7 +25,18 @@ const virtualModules = new Map([
     "session",
     `export const kitEventsSessionFor = () => async () => null;
      export const kitEventsJourneyFor = () => async (request) =>
-       request.headers.get("cookie")?.includes("__Host-two_join_result=pending") ? "added" : null;`,
+       request.headers.get("cookie")?.includes("__Host-two_join_result=pending") ? "added" : null;
+     export const isRestoredBannerEligible = (request) =>
+       !new URL(request.url).pathname.startsWith("/auth/") &&
+       !request.headers.get("x-two-island");
+     export const readReturnJourney = async (request) => ({
+       returnTo: null,
+       joinResult: null,
+       expiredWrite: null,
+       restoredWrite: request.headers.get("cookie")?.includes("restored|")
+         ? "/profile?restored-probe=1"
+         : null,
+     });`,
   ],
   [
     "discord",
@@ -122,11 +133,21 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function requestEvent({ flash = false, method = "GET", island = false } = {}) {
-  const request = new Request("https://example.test/events", {
+function requestEvent({
+  flash = false,
+  restored = false,
+  method = "GET",
+  island = false,
+  query = "",
+} = {}) {
+  const jar = [
+    ...(flash ? ["__Host-two_join_result=pending"] : []),
+    ...(restored ? ["__Host-two_expired_write=restored|/profile"] : []),
+  ];
+  const request = new Request(`https://example.test/events${query}`, {
     method,
     headers: {
-      ...(flash ? { cookie: "__Host-two_join_result=pending" } : {}),
+      ...(jar.length ? { cookie: jar.join("; ") } : {}),
       ...(island ? { "x-two-island": "events-calendar" } : {}),
     },
   });
@@ -253,5 +274,49 @@ describe("Kit events endpoint flash-consumption controls", () => {
     expect(response.status).toBe(200);
     expect(seams.render.mock.calls[0][0]).toMatchObject({ joinResult: null });
     expect(deleteCookie).not.toHaveBeenCalled();
+  });
+});
+
+describe("Kit events endpoint restored-write banner", () => {
+  const banner =
+    '<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>';
+
+  it("renders the banner first in main on a full GET without echoing the destination", async () => {
+    const { event, deleteCookie } = requestEvent({ restored: true });
+
+    const response = await GET(event);
+
+    expect(response.status).toBe(200);
+    expect(seams.render.mock.calls[0][2]).toEqual({
+      restoredWrite: "/profile?restored-probe=1",
+    });
+    const body = await response.text();
+    expect(body).toContain(banner);
+    expect(body.indexOf('data-testid="auth-error"')).toBeGreaterThan(body.indexOf("<main"));
+    expect(body).not.toContain("restored-probe=1");
+    // The endpoint renders only: the hook core owns the one-shot deletion.
+    expect(deleteCookie).not.toHaveBeenCalled();
+  });
+
+  it("renders no banner for island fragments", async () => {
+    const { event } = requestEvent({ restored: true, island: true });
+
+    const response = await GET(event);
+
+    expect(response.status).toBe(200);
+    expect(seams.render.mock.calls[0][2]).toEqual({ restoredWrite: null });
+    expect(await response.text()).not.toContain('data-testid="auth-error"');
+  });
+
+  it("renders no banner on the overlong-query notice", async () => {
+    const { event } = requestEvent({ restored: true, query: `?q=${"z".repeat(300)}` });
+
+    const response = await GET(event);
+
+    expect(response.status).toBe(200);
+    expect(seams.render.mock.calls[0][0]).toMatchObject({ queryTooLong: true });
+    expect(seams.render.mock.calls[0][2]).toEqual({ restoredWrite: null });
+    expect(seams.model).not.toHaveBeenCalled();
+    expect(await response.text()).not.toContain('data-testid="auth-error"');
   });
 });

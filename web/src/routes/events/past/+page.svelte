@@ -48,6 +48,7 @@ const islands =
   activeNav="events"
   mainClass="events-page"
   loginReturnTo={destination}
+  restoredWrite={data.restoredWrite}
 >
   <section data-island={PAST_EVENTS_ISLAND} data-testid={PAST_EVENTS_TESTID} data-page={page} data-total-pages={totalPages} data-query={q} data-load-error={PAST_EVENTS_COPY.failed} aria-labelledby="past-events-heading">
     <div class="schedule-heading">

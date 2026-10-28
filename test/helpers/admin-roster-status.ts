@@ -338,6 +338,7 @@ export async function readRoster(
     returnTo: null,
     joinResult: null,
     expiredWrite: null,
+    restoredWrite: null,
   };
   const manifest = ROUTE_MANIFEST.map((r) =>
     r.path === "/admin/events/:key" && r.method === "GET" ? { ...r, enabled: true } : r,

@@ -434,6 +434,7 @@ describe("kitSessionBridge warns once on store failure; UNKNOWN keeps the journe
       returnTo: null,
       joinResult: null,
       expiredWrite: null,
+      restoredWrite: null,
     });
     expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
     scanClean(logs);

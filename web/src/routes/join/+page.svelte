@@ -36,6 +36,7 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
   description={JOIN_INTRO}
   theme="join"
   {accountChrome}
+  restoredWrite={data.restoredWrite}
 >
   {#if joinResult}
     <p class="notice" role="status" data-testid="join-result">

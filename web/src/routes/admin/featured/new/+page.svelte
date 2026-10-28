@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import type { PageProps } from "./$types";
 
 // Markup contract of FeaturedFormPage mode="new"
 // (src/admin/pages/featured-form.tsx): the POST destination, every Hono
@@ -11,9 +12,11 @@ import AdminShell from "#lib/AdminShell.svelte";
 // deferred dirty-draft/double-submit guard island is progressive markup
 // (like join/+page.svelte): with csr=false the no-JS contract still holds.
 const island = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
+
+let { data }: PageProps = $props();
 </script>
 
-<AdminShell title="New featured slot">
+<AdminShell title="New featured slot" restoredWrite={data.restoredWrite}>
 <section class="featured-form">
   <h1>New featured slot</h1>
   <form method="post" action="/admin/featured" data-event-editor="">

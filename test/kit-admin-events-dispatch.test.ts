@@ -55,6 +55,7 @@ const localsFor = (status: KitLocals["status"], userId?: string): KitLocals => (
   returnTo: null,
   joinResult: null,
   expiredWrite: null,
+  restoredWrite: null,
 });
 
 const eventFor = (): HookEventLike => {

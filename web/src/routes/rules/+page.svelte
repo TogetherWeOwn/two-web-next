@@ -29,6 +29,7 @@ let { data }: PageProps = $props();
   theme="content"
   leafCss={data.leafCss}
   accountChrome={accountJoin}
+  restoredWrite={data.restoredWrite}
 >
   <ContentLeaf navCurrent="rules" headingId="rules-heading" heading="House rules">
     <p class="lead">{RULES_INTRO}</p>
