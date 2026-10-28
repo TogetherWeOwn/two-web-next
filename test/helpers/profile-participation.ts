@@ -31,7 +31,7 @@ const SECRET = "test-session-secret-at-least-32-bytes-long";
 export const FIXED_NOW = new Date("2026-10-20T12:00:00Z");
 
 let compiled: Promise<(props: Record<string, unknown>) => string> | undefined;
-function compileView() {
+export function compileProfileView() {
   compiled ??= (async () => {
     const root = fileURLToPath(new URL("../../", import.meta.url));
     const webRequire = createRequire(new URL("../../web/package.json", import.meta.url));
@@ -268,7 +268,7 @@ export async function participationFixture(
           },
         },
       );
-      const render = await compileView();
+      const render = await compileProfileView();
       return new Response(render(props), { headers });
     } catch (error) {
       if (error instanceof Response) return error;
