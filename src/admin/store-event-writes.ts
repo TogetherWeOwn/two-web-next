@@ -7,7 +7,7 @@
 import { and, eq, gt, inArray, isNotNull } from "drizzle-orm";
 import type { Db } from "../db/index";
 import { activityLog, events } from "../db/admin-schema";
-import { occurrences, type RecurrenceInput } from "./recurrence";
+import { MAX_OCCURRENCES, occurrences, type RecurrenceInput } from "./recurrence";
 import type { EventFormInput, EventStatus } from "./validation";
 import {
   isKnownTimezone,
@@ -473,7 +473,7 @@ async function commitLockedUpdate(
     });
   }
   const childWriteBacks = row.recurrenceFrequency
-    ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
+    ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt, locked.timezone)
     : [];
   const status = toEventStatus(row.status);
   return {
@@ -485,9 +485,10 @@ async function commitLockedUpdate(
 
 /**
  * A parent whose times moved reprograms the future: children not yet started
- * shift by the same absolute delta (seconds, not wall arithmetic: DST-proof),
- * so the series stays weekly around the edit. Started or finished instances
- * keep their times. Returns the write-backs the shifted mirrored children owe.
+ * shift by the difference between their old and new scheduled instants. This
+ * preserves individual deviations while keeping the weekly host-local time
+ * across offset transitions. Started or finished instances keep their times.
+ * Returns the write-backs the shifted mirrored children owe.
  */
 async function shiftFutureChildren(
   tx: Writer,
@@ -495,6 +496,7 @@ async function shiftFutureChildren(
   parent: EventRow,
   oldStartsAt: Date,
   oldEndsAt: Date,
+  oldTimezone: string,
 ): Promise<NonNullable<WriteBack>[]> {
   // Repairing a nonfinite parent time supplies no old instant to shift from.
   // Preserve that child column, while still applying any finite peer delta.
@@ -514,26 +516,59 @@ async function shiftFutureChildren(
   // all child locks are held, for both validation and every reschedule effect.
   const now = Date.now();
   const children = lockedChildren.filter((child) => child.startsAt.getTime() > now);
+  // Compare the old and edited schedules at each index rather than applying a
+  // single UTC delta. Fall back to the original delta for malformed legacy
+  // rows, or when a nonfinite parent time is being repaired.
+  const maxIndex = Math.min(
+    MAX_OCCURRENCES,
+    Math.max(1, ...children.map((child) => child.recurrenceIndex ?? 1)),
+  );
+  const canSchedule =
+    parent.recurrenceFrequency === "weekly" &&
+    Number.isFinite(oldStartsAt.getTime()) &&
+    Number.isFinite(oldEndsAt.getTime()) &&
+    isKnownTimezone(oldTimezone);
+  const before = canSchedule
+    ? occurrences(oldStartsAt, oldEndsAt, oldTimezone, "weekly", maxIndex)
+    : null;
+  const after = canSchedule
+    ? occurrences(parent.startsAt, parent.endsAt, parent.timezone, "weekly", maxIndex)
+    : null;
+  const proposed = children.map((child) => {
+    const oldSlot = before?.get(child.recurrenceIndex ?? 0);
+    const newSlot = after?.get(child.recurrenceIndex ?? 0);
+    const startShift =
+      oldSlot && newSlot && startDelta !== 0
+        ? newSlot.startsAt.getTime() - oldSlot.startsAt.getTime()
+        : startDelta;
+    const endShift =
+      oldSlot && newSlot && endDelta !== 0
+        ? newSlot.endsAt.getTime() - oldSlot.endsAt.getTime()
+        : endDelta;
+    return {
+      child,
+      startsAt: new Date(child.startsAt.getTime() + startShift),
+      endsAt: new Date(child.endsAt.getTime() + endShift),
+    };
+  });
   // A parent delta must never invert (or zero) a future occurrence the
   // moderator shortened individually: refuse the whole edit with the existing
   // ends_at response before any child write, so the surrounding transaction
   // rolls the parent, audit and waitlist writes back atomically.
-  for (const child of children) {
-    const proposedStart = child.startsAt.getTime() + startDelta;
-    const proposedEnd = child.endsAt.getTime() + endDelta;
-    if (proposedEnd <= proposedStart) {
+  for (const { child, startsAt, endsAt } of proposed) {
+    if (endsAt.getTime() <= startsAt.getTime()) {
       throw new ValidationError({
         ends_at: `The end is after the start. Blocking occurrence: ${child.eventKey}.`,
       });
     }
   }
   const owed: NonNullable<WriteBack>[] = [];
-  for (const child of children) {
+  for (const { child, startsAt, endsAt } of proposed) {
     const [moved] = await tx
       .update(events)
       .set({
-        startsAt: new Date(child.startsAt.getTime() + startDelta),
-        endsAt: new Date(child.endsAt.getTime() + endDelta),
+        startsAt,
+        endsAt,
         agentVersion: child.agentGrantId === null ? child.agentVersion : child.agentVersion + 1,
         updatedAt: new Date(),
       })

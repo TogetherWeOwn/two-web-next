@@ -176,6 +176,78 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect.soft(diagnostic).not.toContain(SIBLING.eventKey);
     }
 
+    for (const surface of ["native Save", "JSON PATCH"] as const) {
+      it.each([
+        {
+          name: "spring offset change",
+          oldStart: "2099-03-22T00:30:00Z",
+          oldEnd: "2099-03-22T00:50:00Z",
+          childStart: "2099-03-29T00:30:00Z",
+          childEnd: "2099-03-29T00:50:00Z",
+          newStart: "2099-03-22 02:30",
+          newEnd: "2099-03-22 02:50",
+          wantStart: "2099-03-29T01:30:00.000Z",
+          wantEnd: "2099-03-29T01:50:00.000Z",
+        },
+        {
+          name: "reverse spring offset change",
+          oldStart: "2099-03-22T02:30:00Z",
+          oldEnd: "2099-03-22T02:50:00Z",
+          childStart: "2099-03-29T01:30:00Z",
+          childEnd: "2099-03-29T01:50:00Z",
+          newStart: "2099-03-22 00:30",
+          newEnd: "2099-03-22 00:50",
+          wantStart: "2099-03-29T00:30:00.000Z",
+          wantEnd: "2099-03-29T00:50:00.000Z",
+        },
+        {
+          name: "autumn offset change",
+          oldStart: "2099-10-17T23:30:00Z",
+          oldEnd: "2099-10-17T23:50:00Z",
+          childStart: "2099-10-24T23:30:00Z",
+          childEnd: "2099-10-24T23:50:00Z",
+          newStart: "2099-10-18 02:30",
+          newEnd: "2099-10-18 02:50",
+          wantStart: "2099-10-25T02:30:00.000Z",
+          wantEnd: "2099-10-25T02:50:00.000Z",
+        },
+        {
+          // The child was independently moved ten minutes later and shortened.
+          // Keep those deviations from its scheduled start/end, not a reset.
+          name: "spring change with an individually edited child",
+          oldStart: "2099-03-22T00:30:00Z",
+          oldEnd: "2099-03-22T00:50:00Z",
+          childStart: "2099-03-29T00:40:00Z",
+          childEnd: "2099-03-29T00:55:00Z",
+          newStart: "2099-03-22 02:30",
+          newEnd: "2099-03-22 02:50",
+          wantStart: "2099-03-29T01:40:00.000Z",
+          wantEnd: "2099-03-29T01:55:00.000Z",
+        },
+      ])(`${surface}: preserves the weekly schedule across $name`, async (times) => {
+        const [parent] = await seedSeries([
+          {
+            eventKey: "series-dst-child",
+            startsAt: times.childStart,
+            endsAt: times.childEnd,
+          },
+        ]);
+        await db
+          .update(events)
+          .set({ startsAt: new Date(times.oldStart), endsAt: new Date(times.oldEnd) })
+          .where(eq(events.id, parent!.id));
+        const edits = { starts_at: times.newStart, ends_at: times.newEnd };
+        const res =
+          surface === "JSON PATCH"
+            ? await patch(parent!.eventKey, edits)
+            : await post(`/events/${parent!.eventKey}`, { ...FORM, ...edits });
+        expect(res.status).toBe(surface === "JSON PATCH" ? 200 : 303);
+        const child = await stored("series-dst-child");
+        expect(child.startsAt.toISOString()).toBe(times.wantStart);
+        expect(child.endsAt.toISOString()).toBe(times.wantEnd);
+      });
+    }
+
     it("identifies the shortened child atomically: no rows, audits, promotions or write-backs", async () => {
       const [parent] = await seedSeries([SHORTENED, SIBLING]);
       await db.insert(rsvps).values([
