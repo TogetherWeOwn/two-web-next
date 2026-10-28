@@ -6,8 +6,13 @@
 // controls, so an over-limit description was only caught on submit.
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
-import { fileURLToPath, URL } from "node:url";
-import { describe, expect, it } from "vitest";
+import { URL } from "node:url";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import {
+  compileKitForms,
+  formFixtures,
+  type FormFixture,
+} from "./helpers/admin-validation-correction";
 import { EventFormPage } from "../src/admin/pages";
 import type { EventRow } from "../src/admin/store";
 
@@ -58,6 +63,14 @@ function textareaTag(markup: string): string {
   return tag;
 }
 
+let compiler: Awaited<ReturnType<typeof compileKitForms>>;
+let kitForms: FormFixture[];
+beforeAll(async () => {
+  compiler = await compileKitForms();
+  kitForms = await formFixtures(compiler, false);
+});
+afterAll(() => compiler?.dispose());
+
 describe("event description text limit templates", () => {
   it.each(["new", "edit"] as const)(
     "Hono %s form annotates the description textarea with the 1000 code-point limit",
@@ -72,13 +85,14 @@ describe("event description text limit templates", () => {
   );
 
   it.each([
-    ["Kit new", "../web/src/routes/admin/events/new/+page.svelte"],
-    ["Kit edit", "../web/src/routes/admin/events/[key]/+page.svelte"],
+    ["Kit new", "Kit event new"],
+    ["Kit edit", "Kit event edit"],
   ] as const)(
     "%s page annotates the description textarea with the 1000 code-point limit",
-    (_label, path) => {
-      const source = readFileSync(fileURLToPath(new URL(path, import.meta.url).href), "utf8");
-      const tag = textareaTag(source);
+    (_label, fixtureName) => {
+      // Execute the real page: field metadata may be data-driven, but the
+      // native textarea and its exact code-point limit must still render.
+      const tag = textareaTag(kitForms.find((fixture) => fixture.name === fixtureName)!.html);
       expect(tag).toMatch(
         new RegExp(`data-event-text-limit=(?:"${DESCRIPTION_MAX}"|\\{${DESCRIPTION_MAX}\\})`),
       );

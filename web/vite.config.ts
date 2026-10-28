@@ -24,6 +24,8 @@ export default defineConfig({
         minify: true,
         rolldownOptions: {
           output: {
+            // Preserve source names through linker collisions as well as minification.
+            keepNames: true,
             // Compact local bindings without compression rewrites. Preserve
             // function/class names: error diagnostics use constructor.name.
             // Keep licenses and maps, and never mangle property names.

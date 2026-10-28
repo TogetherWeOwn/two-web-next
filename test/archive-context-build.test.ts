@@ -14,6 +14,7 @@ it("retains archive refusal and Unicode normalization after production tree-shak
     // Same conservative minification as the Kit SSR build, including tree-shaking.
     const { output } = await bundle.generate({
       format: "esm",
+      keepNames: true,
       minify: { compress: false, mangle: { keepNames: true }, codegen: true },
     });
     const code = output.find((entry: { type: string }) => entry.type === "chunk").code;
