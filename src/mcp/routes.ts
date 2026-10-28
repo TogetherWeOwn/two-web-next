@@ -111,7 +111,7 @@ async function mcpRefused(c: Ctx): Promise<Response | null> {
  * through a shared server. The factory still builds an isolated McpServer
  * per call, exactly as the Agents SDK requires for concurrent requests.
  */
-async function serveMcp(c: Ctx): Promise<Response> {
+async function serveMcp(c: Ctx, request = c.req.raw): Promise<Response> {
   // The database resolves inside the factory so OPTIONS preflights never
   // open one; event tools report unavailable when it resolves to null.
   // No onerror hook: the SDK calls it for ordinary client protocol
@@ -146,7 +146,7 @@ async function serveMcp(c: Ctx): Promise<Response> {
   } catch {
     executionCtx = undefined;
   }
-  return handler(c.req.raw, c.env, executionCtx as unknown as ExecutionContext);
+  return handler(request, c.env, executionCtx as unknown as ExecutionContext);
 }
 
 export function registerMcpRoutes(app: Hono<{ Bindings: Env }>): void {
@@ -169,7 +169,19 @@ export function registerMcpRoutes(app: Hono<{ Bindings: Env }>): void {
       return serveMcp(c);
     }
     const invalid = refuseMcpMessageText(text, c);
-    if (invalid) return invalid;
+    if (invalid) {
+      // Reuse the SDK's no-factory preflight for origin validation and CORS,
+      // rather than duplicating its policy or opening a database for bad input.
+      const preflight = await serveMcp(
+        c,
+        new Request(c.req.url, { method: "OPTIONS", headers: c.req.raw.headers }),
+      );
+      if (!preflight.ok) return preflight;
+      for (const [name, value] of preflight.headers) {
+        if (name.startsWith("access-control-")) invalid.headers.set(name, value);
+      }
+      return invalid;
+    }
     c.req.raw = new Request(c.req.raw, { body: text, duplex: "half" } as RequestInit);
     return serveMcp(c);
   });
