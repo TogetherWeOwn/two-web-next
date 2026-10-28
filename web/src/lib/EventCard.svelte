@@ -1,5 +1,6 @@
 <script lang="ts">
 import { fmt } from "../../../src/events/pages";
+import { effectiveZone } from "../../../src/events/date-format";
 import type { PastArchiveEvent } from "../../../src/kit-past-events";
 import { archiveEventHref, type ArchiveContext } from "../../../src/events/attendee-paths";
 import { goingCountText } from "../../../src/islands/contracts";
@@ -44,6 +45,8 @@ const badge = $derived(dateParts(e.startsAt, e.timezone));
 // Same compact host line as the Hono twins: trimmed public organizer from the
 // projected row (no new read); blank/missing renders no node.
 const host = $derived((e.organizer_name ?? "").trim());
+// A stored zone Intl rejects reads as UTC, so the label matches the clock.
+const zone = $derived(effectiveZone(e.timezone));
 </script>
 
 <li class="schedule-row" data-testid="event-card" data-event-key={e.eventKey}>
@@ -52,7 +55,7 @@ const host = $derived((e.organizer_name ?? "").trim());
     <h2>
       <a href={archiveEventHref(e.eventKey, archive)}>{#if q && e.titleSpans}<span>{#each e.titleSpans as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</span>{:else}{e.title}{/if}</a>
     </h2>
-    <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}<span>{e.timezone}</span>{#if e.location}{" · "}<span>{e.location}</span>{/if}</p>
+    <p><time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, zone)}</time>{" "}<span>{zone}</span>{#if e.location}{" · "}<span>{e.location}</span>{/if}</p>
     {#if e.game}<p>{e.game}</p>{/if}
     {#if host}<p data-testid="event-card-host">Hosted by {host}</p>{/if}{#if q && e.passage}<p class="archive-passage">{#each e.passage as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>{/if}
   </div>
