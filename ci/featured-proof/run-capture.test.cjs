@@ -225,13 +225,13 @@ function generatedLeafScopeInputs(repoRoot) {
     `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
   let actual;
   try {
-    actual = fsSync.readFileSync(path.join(repoRoot, output), 'utf8');
+    actual = fsSync.readFileSync(path.join(repoRoot, output));
   } catch (error) {
     // The workflow runs this guard before generation. Only this exact output
     // may be absent; generator and input reads above must all succeed.
     if (error.code !== 'ENOENT') throw error;
   }
-  if (actual !== undefined) assert.equal(actual, expected,
+  if (actual !== undefined) assert.deepEqual(actual, Buffer.from(expected, 'utf8'),
     'Generated CSS output drift: regenerate with node ci/build-leaf-css.mjs');
   return [generator, ...inputs];
 }
@@ -495,5 +495,25 @@ for (const missing of LEAF_SCOPE_INPUTS) {
 test('generated CSS rejects stale output after a covered input changes', async t => {
   const dir = await leafScopeFixture(t, true);
   await fs.appendFile(path.join(dir, 'public', 'theme.css'), '\n.changed {}');
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+});
+
+test('generated CSS accepts valid replacement-character bytes but rejects identically decoded malformed UTF-8', async t => {
+  const dir = await leafScopeFixture(t, true);
+  await fs.writeFile(path.join(dir, 'public', 'styles.css'), 'body � {}');
+  const valid = Buffer.from(LEAF_OUTPUT_FIXTURE
+    .replace('body {}', 'body � {}')
+    .replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', 'eDPS7mHegXY3W7fmCCWLYeSQzHINIE/jG1bBbpqMTZM='), 'utf8');
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), valid);
+  assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), []);
+
+  const replacement = Buffer.from('�', 'utf8');
+  const offset = valid.indexOf(replacement);
+  assert.ok(offset >= 0, 'the valid output contains a UTF-8 replacement character');
+  const malformed = Buffer.concat([valid.subarray(0, offset), Buffer.from([0xFF]), valid.subarray(offset + replacement.length)]);
+  assert.notDeepEqual(malformed, valid, 'the output bytes differ');
+  assert.equal(malformed.toString('utf8'), valid.toString('utf8'), 'UTF-8 decoding hides the corruption');
+  t.diagnostic(`valid=${valid.length} bytes; malformed=${malformed.length} bytes; decoded strings equal`);
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), malformed);
   assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
 });
