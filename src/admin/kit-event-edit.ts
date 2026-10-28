@@ -44,6 +44,7 @@ import {
   type RosterStatus,
   type SortOrder,
 } from "./table-list";
+import { capacityPanel, renderCapacityPanelHtml } from "./event-capacity";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 
@@ -126,6 +127,10 @@ export type KitEventEditView = {
   seriesNote: string | null;
   endsAt: string;
   roster: KitEventEditRosterView;
+  /** Pre-rendered Going-only capacity snapshot and guidance (the Hono twin's
+   * exact markup) for {@html}; null only for a fixture list read that returns
+   * no `occupied`. Pre-rendered so the client bundle carries none of the copy. */
+  capacityHtml: string | null;
   /** Pre-rendered pause-review HTML when rsvpAction is rsvp-pause, else null;
    * the page injects it via {@html} so the client bundle carries no review
    * strings or disclosure markup (client gzip ceiling). */
@@ -171,7 +176,7 @@ export type KitEventEditDeps = {
     db: Db,
     eventKey: string,
     query: RosterQuery,
-  ) => Promise<{ rows: KitEventEditRosterRow[]; total: number }>;
+  ) => Promise<{ rows: KitEventEditRosterRow[]; total: number; occupied?: number }>;
   now?: Date;
 };
 
@@ -217,7 +222,7 @@ export async function resolveKitEventEdit(
   }
   if (!row) return { kind: "notFound" };
   const query = parseRosterQuery(rawQuery);
-  let roster: { rows: KitEventEditRosterRow[]; total: number };
+  let roster: { rows: KitEventEditRosterRow[]; total: number; occupied?: number };
   try {
     roster = await deps.list(deps.db, row.eventKey, query);
   } catch (err) {
@@ -308,6 +313,12 @@ export async function resolveKitEventEdit(
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
       },
+      capacityHtml:
+        roster.occupied === undefined
+          ? null
+          : renderCapacityPanelHtml(
+              capacityPanel(row.eventKey, query, roster.occupied, row.capacity),
+            ),
       pauseReviewHtml:
         rsvpAction === "rsvp-pause" ? renderRsvpPauseReviewHtml(row.title, row.eventKey) : null,
     },

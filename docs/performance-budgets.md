@@ -572,6 +572,7 @@ rounded up to 512 B raw / 256 B gzip:
 
 | Asset | Raw / gzip bytes | Ceiling |
 |---|---:|---:|
+| `public/islands/admin-event-capacity.js` | 828 / 488 | 1536 / 768 |
 | `public/islands/admin-event-editor.js` | 1429 / 737 | 2048 / 1024 |
 | `public/islands/admin-event-text-limits.js` | 998 / 539 | 1536 / 768 |
 | `public/islands/auth-status.js` | 2765 / 1297 | 3072 / 1536 |

@@ -5,6 +5,7 @@
 import type { FC } from "hono/jsx";
 import type { EventRow } from "../store";
 import type { RosterEntry } from "../reads";
+import type { CapacityPanel } from "../event-capacity";
 import type { RosterQuery } from "../table-list";
 import { EventFormFields } from "./event-form-fields";
 import { EventRosterSection } from "./event-form-roster";
@@ -19,13 +20,21 @@ export const EventFormPage: FC<{
   roster?: RosterEntry[];
   rosterTotal?: number;
   rosterQuery?: RosterQuery;
-}> = ({ mode, row, values, errors, roster, rosterTotal, rosterQuery }) => {
+  capacity?: CapacityPanel;
+}> = ({ mode, row, values, errors, roster, rosterTotal, rosterQuery, capacity }) => {
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
     <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
       <section>
         <h1>{mode === "new" ? "New event" : `Edit ${row!.title}`}</h1>
-        <EventFormFields mode={mode} row={row} values={values} errors={errors} action={action} />
+        <EventFormFields
+          mode={mode}
+          row={row}
+          values={values}
+          errors={errors}
+          action={action}
+          capacity={capacity}
+        />
         {mode === "edit" && row ? <EventStatusSection row={row} /> : null}
         {mode === "edit" && roster ? (
           <EventRosterSection
@@ -39,6 +48,7 @@ export const EventFormPage: FC<{
       </section>
       <script type="module" src="/islands/admin-event-text-limits.js" />
       <script src="/islands/admin-event-editor.js" defer />
+      {capacity ? <script src="/islands/admin-event-capacity.js" defer /> : null}
     </Shell>
   );
 };
