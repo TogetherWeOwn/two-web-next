@@ -129,26 +129,30 @@ function kitFixture(t, fragments) {
 // fourth, independently measured allocation (combined worst 335901, margin
 // 227; lower 335872 rejects by 29; the next 256B step 336384 was
 // unsupported then); 336384 is the fifth, event-share-honesty allocation
-// (combined worst 336168, margin 216; lower 336128 rejects by 40). Every other
-// pin stays exact: the oracle rejects any ceiling outside this list, then
-// deep-compares the rest of the plan.
-const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384];
+// (combined worst 336168, margin 216; lower 336128 rejects by 40); 336896 is
+// the admin chronology allocation (combined worst 336762, margin 134; lower
+// 336640 rejects by 122). Every other pin stays exact: the oracle rejects any
+// ceiling outside this list, then deep-compares the rest of the plan.
+const SHIPPING_SERVER_GZIP_ALLOCATIONS = [335104, 335360, 335872, 336128, 336384, 336896];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
 // on current main (measured union 258023 raw / 103383 gzip, margins 25 / 41;
-// the lower 257536 raw step rejects by 487 and 103168 gzip by 215). Pairs are
-// admitted together, never per axis: any other pair is compared against the
-// baseline pin and fails.
+// the lower 257536 raw step rejects by 487 and 103168 gzip by 215).
+// 257536/103680 is the independently measured admin chronology allocation
+// (combined worst 257386 raw / 103565 gzip, margins 150 / 115; lower 257280
+// raw and 103424 gzip reject by 106 / 141). Pairs are admitted together,
+// never per axis: any other pair is compared against the baseline pin and fails.
 const SHIPPING_CLIENT_JS_ALLOCATIONS = [
   [257024, 103168],
   [258048, 103424],
+  [257536, 103680],
 ];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336896`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -196,8 +200,15 @@ test("shipping oracle admits the measured 336384 server gzip allocation", () => 
   });
 });
 
+test("shipping oracle admits the measured 336896 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 336896 } },
+  });
+});
+
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616, 336385]) {
+  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 336640, 336895, 336897]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
@@ -246,8 +257,28 @@ test("shipping oracle admits the measured 258048/103424 client js allocation", (
   }
 });
 
+test("shipping oracle admits the measured 257536/103680 client js allocation", () => {
+  for (const maxGzipBytes of SHIPPING_SERVER_GZIP_ALLOCATIONS) {
+    assertShippingKitBudget({
+      ...SHIPPING_KIT_BUDGET,
+      server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
+      client: {
+        ...SHIPPING_KIT_BUDGET.client,
+        js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 257536, maxGzipBytes: 103680 },
+      },
+    });
+  }
+});
+
 test("shipping oracle rejects client js pairs outside the admitted list", () => {
   for (const [maxRawBytes, maxGzipBytes] of [
+    [257535, 103680],
+    [257537, 103680],
+    [257536, 103679],
+    [257536, 103681],
+    [257280, 103680],
+    [257024, 103680],
+    [257536, 103168],
     [258047, 103424],
     [258049, 103424],
     [258048, 103423],
@@ -289,6 +320,35 @@ test("shipping oracle rejects off-axis drift at the 258048/103424 client js allo
     plan.server.js.maxGzipBytes = 336384;
     plan.client.js.maxRawBytes = 258048;
     plan.client.js.maxGzipBytes = 103424;
+    assertShippingKitBudget(JSON.parse(JSON.stringify(plan)));
+    drift(plan);
+    assert.throws(
+      () => assertShippingKitBudget(plan),
+      /Expected values to be strictly deep-equal/,
+      `${label} drift must fail the shipping oracle`,
+    );
+  }
+});
+
+test("shipping oracle rejects off-axis drift at the admin chronology allocation", () => {
+  const drifts = [
+    ["server raw", (plan) => (plan.server.js.maxRawBytes += 1)],
+    ["server files", (plan) => (plan.server.js.maxFiles += 1)],
+    ["client raw", (plan) => (plan.client.js.maxRawBytes += 1)],
+    ["client gzip", (plan) => (plan.client.js.maxGzipBytes += 1)],
+    ["client files", (plan) => (plan.client.js.maxFiles += 1)],
+    ["client css raw", (plan) => (plan.client.css.maxRawBytes += 1)],
+    ["client css gzip", (plan) => (plan.client.css.maxGzipBytes += 1)],
+    ["client css files", (plan) => (plan.client.css.maxFiles += 1)],
+    ["worker raw", (plan) => (plan.worker["_worker.js"].maxRawBytes += 1)],
+    ["worker gzip", (plan) => (plan.worker["_worker.js"].maxGzipBytes += 1)],
+    ["startup", (plan) => (plan.startup.maxMs += 1)],
+  ];
+  for (const [label, drift] of drifts) {
+    const plan = JSON.parse(JSON.stringify(SHIPPING_KIT_BUDGET));
+    plan.server.js.maxGzipBytes = 336896;
+    plan.client.js.maxRawBytes = 257536;
+    plan.client.js.maxGzipBytes = 103680;
     assertShippingKitBudget(JSON.parse(JSON.stringify(plan)));
     drift(plan);
     assert.throws(
