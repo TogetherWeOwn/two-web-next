@@ -89,7 +89,8 @@ for (const renderer of ["Hono", "Kit"] as const) {
         const range = text(section.match(/data-testid="roster-range"[^>]*>([\s\S]*?)<\/p>/)![1]!);
         expect(range).toMatch(/1\s*[-–]\s*100 of 105\b/);
         expect(range).toMatch(/responses/i);
-        expect(text(section)).not.toMatch(/\b(?:seats|attendance|attended|occupancy)\b/i);
+        // Count labels describe responses; chronology help may explicitly disclaim attendance.
+        expect(range).not.toMatch(/\b(?:seats|attendance|attended|occupancy)\b/i);
         const next = links(section).find((l) => l.rel === "next");
         expect(next).toBeDefined();
         expect(normalizedLink(next!.href).get("roster_status")).toBe(status);
