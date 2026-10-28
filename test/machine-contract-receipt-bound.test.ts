@@ -110,6 +110,12 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     'Rows are limited to "(30)".',
     'Rows are limited to "30.0".',
     "Rows are limited to <=30.",
+    "Rows are limited to ≥30.",
+    "Rows are limited to ≥30.5.",
+    "Rows are limited to <=1,000.",
+    "Rows are limited to 20-30.",
+    "Rows are limited to ≥20.5-30.5.",
+    'Rows are limited to "20-30".',
     "Items cap at 30.",
     "Collections are unbounded.",
     "Collections are unlimited.",
@@ -196,6 +202,15 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     'Rows are limited to "8-bit entries".',
     "Rows are limited to '8-bit entries'.",
     "Rows are limited to (8-bit) entries.",
+    "Rows are limited to ≥8-bit entries.",
+    "Rows are limited to <=16-bit entries.",
+    "Rows are limited to 8-bit entries.",
+    "Rows are limited to ≥8.5-bit entries.",
+    "Rows are limited to <=1,024-bit entries.",
+    'Rows are limited to "≥8-bit entries".',
+    "Rows are limited to (<=16-bit) entries.",
+    "Rows are limited to 8-16-bit entries.",
+    "Rows are limited to ≥8.5-16.5-bit entries.",
   ])("allows unrelated prose %j", (prose) => {
     const result = run(`${guide}\n${prose}\n`);
     expect(result.status, result.stdout + result.stderr).toBe(0);

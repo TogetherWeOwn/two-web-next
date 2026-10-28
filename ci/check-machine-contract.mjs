@@ -331,7 +331,8 @@ const RESULT_SUBJECT =
 // Count nouns need a direct declaration, not unrelated availability/venue prose.
 // Only bound qualifiers/abbreviations may precede the numeric count, never
 // unrelated suffix text. Direct limit nouns and explicit no-limit claims count too.
-const COUNT_NUMBER = String.raw`(?:[<>≤≥]=?|=)?\s*[+\-−]?\d+(?:[.,]\d+)*\b`;
+// Consume numeric ranges, but not hyphenated attributes or partial numbers.
+const COUNT_NUMBER = String.raw`(?:[<>≤≥]=?|=)?\s*[+\-−]?\d+(?:[.,]\d+)*(?:-\d+(?:[.,]\d+)*)?\b(?!-|[.,]\d)`;
 // Wrappers must enclose the numeric token, not a phrase such as "8-bit entries".
 const COUNT_VALUE = String.raw`(?:${COUNT_NUMBER}|(?:[\[({"'“‘]\s*)+${COUNT_NUMBER}(?:\s*[\])}"'”’])+)`;
 const COUNT_BOUNDARY = new RegExp(
