@@ -31,6 +31,28 @@ Prior step on the earlier base (`e37975a07`, pristine 335835): 336128 ->
 336640 for worst case 336544, margin 96. That base is superseded; this record
 covers the current tree.
 
+## 2026-10-28 integration: 337152 -> 337408
+
+Main `def3274b3` brings the independently reviewed unrenderable-time guards
+from #1859. This PR also resolves the JSON fallback-zone review finding in
+both serializers. Locked Node 24.22.1 production builds were repeated:
+
+| Tree | Build | Server files | Gzip bytes | Gate |
+|---|---|---:|---:|---|
+| Pristine main `def3274b3` | 1 | 116 | 336633 | exit 0 against 336640, margin 7 |
+| Combined feature and corrections | 1 | 116 | 337329 | exit 1 against 337152, 177 over |
+| Combined feature and corrections | 2 | 116 | 337328 | exit 1 against 337152, 176 over |
+
+One additional 256B step, 337408, is the smallest aligned cover for worst
+case 337329, with 79B margin. The 1B rebuild variation is disclosed. Against
+current pristine main, the combined server delta is +696 gzip bytes; this
+is the feature plus the JSON correction, not an isolated per-change cost.
+Both combined client builds are identical: 54 files, 256906 raw and 103139
+gzip versus 258048/103424 ceilings. Pristine main is 256819/103102. No
+client, raw, file-count, CSS, worker or startup ceiling moves. Both shipping
+oracles gain the fixed 337408 allocation and exact/one-byte-over controls;
+prior allocations and both parent decision histories remain.
+
 ## Why one PR
 
 Repo routing for budget conflicts: a feature PR carries its measured

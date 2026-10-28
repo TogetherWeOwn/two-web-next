@@ -267,6 +267,48 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     expect(structured).toEqual(await rest.json());
   });
 
+  it.each([
+    ["Bogus/Zone", "UTC", "19:00", "21:00"],
+    ["", "UTC", "19:00", "21:00"],
+    ["Europe/London", "Europe/London", "20:00", "22:00"],
+    ["US/Eastern", "US/Eastern", "15:00", "17:00"],
+  ])("keeps REST and MCP clocks honest for stored zone %j", async (stored, zone, start, end) => {
+    await seed(11, {
+      startsAt: new Date("2099-07-15T19:00:00Z"),
+      endsAt: new Date("2099-07-15T21:00:00Z"),
+      timezone: stored,
+    });
+    await initialize();
+    await notifyInitialized();
+    const list = await callTool("list_events", { per_page: 20, page: 1 });
+    const collection = (list.messages[0]!["result"] as Record<string, unknown>)[
+      "structuredContent"
+    ] as PublicApiEventCollectionDto;
+    const detail = await callTool("get_event", { event_key: key(11) }, 4);
+    const single = (detail.messages[0]!["result"] as Record<string, unknown>)["structuredContent"];
+    const rest = await app.request(
+      `/api/public/events/${key(11)}`,
+      { headers: { "cf-connecting-ip": "192.0.2.72" } },
+      env,
+    );
+    expect(list.status).toBe(200);
+    expect(detail.status).toBe(200);
+    expect(rest.status).toBe(200);
+    expect(collection.data).toHaveLength(1);
+    expect(collection.data[0]).toMatchObject({
+      timezone: zone,
+      starts_at_local: `2099-07-15 ${start}`,
+      ends_at_local: `2099-07-15 ${end}`,
+      starts_at: "2099-07-15T19:00:00.000Z",
+      ends_at: "2099-07-15T21:00:00.000Z",
+    });
+    expect(single).toEqual(collection.data[0]);
+    expect(await rest.json()).toEqual(single);
+    const [persisted] =
+      await fixture.client`SELECT timezone FROM events WHERE event_key = ${key(11)}`;
+    expect(persisted!.timezone).toBe(stored);
+  });
+
   it("serves get_event and refuses unknown tools without a mutation surface", async () => {
     await seed(11);
     await initialize();
