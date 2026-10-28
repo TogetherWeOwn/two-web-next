@@ -2,10 +2,11 @@
 
 Port the panel's existing 512B raw / 256B gzip allocation into the
 fragment layout. No existing ceiling changes. The authored stylesheet
-measures 225B raw / 150B gzip using the checker's default `gzipSync`
-measurement (without a filename header). It loads only on the read-only panel;
-the four wrapping rules stay out of shared styles and the homepage's
-inlined critical CSS.
+measures 277B raw / 169B gzip using the checker's default `gzipSync`
+measurement (without a filename header): the original four wrapping rules
+(225B / 150B) plus one `white-space: pre-wrap` rule so stored values keep
+their whitespace. It loads only on the read-only panel; the five rules stay
+out of shared styles and the homepage's inlined critical CSS.
 
 The original decision from the pre-fragment branch is preserved here:
 

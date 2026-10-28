@@ -12,3 +12,6 @@
   padding: 0.5rem;
   vertical-align: top;
 }
+.ops-overrides td code {
+  white-space: pre-wrap;
+}
