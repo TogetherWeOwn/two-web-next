@@ -188,7 +188,12 @@ describe("record fidelity", () => {
     expect(html).not.toMatch(/[\u200b\u202e\u0085\u007f]/);
   });
 
-  it("loads a stylesheet that preserves whitespace inside stored values", () => {
+  it("loads a stylesheet that preserves whitespace inside stored values", async () => {
+    const { res, html } = await withRecord(record());
+    expect(res.status).toBe(200);
+    expect(html).toMatch(
+      /<link\b(?=[^>]*\brel="stylesheet")(?=[^>]*\bhref="\/operator-overrides-theme\.css")[^>]*>/,
+    );
     const css = readFileSync("public/operator-overrides-theme.css", "utf8");
     expect(css).toMatch(/\.ops-overrides td code\s*\{[^}]*white-space:\s*pre-wrap/);
   });
@@ -238,6 +243,11 @@ describe("fail-closed configuration and URL guards", () => {
 describe("pre-authentication attempt cap", () => {
   const WRONG = `Bearer ${TOKEN.slice(0, -1)}z`;
 
+  beforeEach(() => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2026-10-28T12:00:00.000Z"));
+  });
+
   it("refuses the eleventh rejected guess before comparing, without upstream contact", async () => {
     const fetched = installFetch();
     const client = freshClient();
@@ -252,9 +262,23 @@ describe("pre-authentication attempt cap", () => {
     expect(fetched).not.toHaveBeenCalled();
   });
 
+  it("shares an exhausted IPv6 bucket within a /64 but not across /64s", async () => {
+    const fetched = installFetch();
+    const prefix = `2001:db8:${(nextClient++).toString(16)}`;
+    const first = `${prefix}:1::1`;
+    const sameSubnet = `${prefix}:1::2`;
+    const otherSubnet = `${prefix}:2::1`;
+    for (let i = 0; i < 10; i++) expect((await read(first, WRONG)).status).toBe(401);
+    expect((await read(first, WRONG)).status).toBe(429);
+    expect((await read(sameSubnet, WRONG)).status).toBe(429);
+    expect((await read(sameSubnet)).status).toBe(429);
+    expect((await read(otherSubnet, WRONG)).status).toBe(401);
+    expect(fetched).not.toHaveBeenCalled();
+    expect((await read(otherSubnet)).status).toBe(200);
+    expect(fetched).toHaveBeenCalledTimes(1);
+  });
+
   it("returns tokens over time and scopes the cap to one client", async () => {
-    vi.useFakeTimers({ toFake: ["Date"] });
-    vi.setSystemTime(new Date("2026-10-28T12:00:00.000Z"));
     const fetched = installFetch();
     const client = freshClient();
     for (let i = 0; i < 10; i++) await read(client, WRONG);
