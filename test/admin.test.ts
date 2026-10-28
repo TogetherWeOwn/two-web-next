@@ -50,6 +50,7 @@ import {
   HIDDEN_RE,
   KEY,
   ROSTER_ANSWERED,
+  ROSTER_IDS,
   ROSTER_NAMES,
   expectRefusedEditNotice,
   findRosterHiddenNotice,
@@ -220,12 +221,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     const store = createMemorySessionStore();
     const SESSION_SECRET = "roster-refused-test-secret-at-least-32-bytes";
 
-    beforeAll(async () => {
-      if (!process.env.DATABASE_URL)
-        throw new Error(
-          "DATABASE_URL is required for the refused-edit roster DB cases; set it to a run-owned disposable test database (see README.md)",
-        );
-      fixture = await createMemberDataFixture(process.env.DATABASE_URL);
+    // An authenticated GET rotates the session and the predecessor bearer
+    // dies seconds later, so no case may inherit a cookie an earlier case
+    // already spent on a GET: mint a fresh moderator session per case and
+    // retain any rotated bearer a response hands back within the case.
+    const mintCookie = async () => {
       const token = newSessionToken();
       await store.create({
         tokenHash: await hashToken(token),
@@ -244,6 +244,19 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
           sameSite: "Lax",
         })
       ).split(";")[0]!;
+    };
+    const retainCookie = (res: Response): Response => {
+      const rotated = res.headers.get("set-cookie")?.match(/__Host-two_session=[^;,]+/)?.[0];
+      if (rotated) cookie = rotated;
+      return res;
+    };
+
+    beforeAll(async () => {
+      if (!process.env.DATABASE_URL)
+        throw new Error(
+          "DATABASE_URL is required for the refused-edit roster DB cases; set it to a run-owned disposable test database (see README.md)",
+        );
+      fixture = await createMemberDataFixture(process.env.DATABASE_URL);
       env = {
         APP_URL,
         SESSION_SECRET,
@@ -263,6 +276,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     });
     beforeEach(async () => {
       await fixture.reset();
+      await mintCookie();
       const [event] = await fixture.db
         .insert(events)
         .values({
@@ -275,35 +289,38 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         })
         .returning();
       await fixture.db.insert(users).values([
-        { id: "100000000000007701", username: ROSTER_NAMES[0] },
-        { id: "100000000000007702", username: ROSTER_NAMES[1] },
+        { id: ROSTER_IDS[0], username: ROSTER_NAMES[0] },
+        { id: ROSTER_IDS[1], username: ROSTER_NAMES[1] },
       ]);
       await fixture.db.insert(rsvps).values([
         {
           eventId: event!.id,
-          userId: "100000000000007701",
+          userId: ROSTER_IDS[0],
           status: "going",
           updatedAt: new Date(ROSTER_ANSWERED[0]!),
         },
         {
           eventId: event!.id,
-          userId: "100000000000007702",
+          userId: ROSTER_IDS[1],
           status: "going",
           updatedAt: new Date(ROSTER_ANSWERED[1]!),
         },
       ]);
     });
 
-    const get = (path: string) => app.request(APP_URL + path, { headers: { cookie } }, env);
-    const post = (path: string, values: Record<string, string>) =>
-      app.request(
-        APP_URL + path,
-        {
-          method: "POST",
-          headers: { cookie, origin: APP_URL },
-          body: new URLSearchParams(values),
-        },
-        env,
+    const get = async (path: string) =>
+      retainCookie(await app.request(APP_URL + path, { headers: { cookie } }, env));
+    const post = async (path: string, values: Record<string, string>) =>
+      retainCookie(
+        await app.request(
+          APP_URL + path,
+          {
+            method: "POST",
+            headers: { cookie, origin: APP_URL },
+            body: new URLSearchParams(values),
+          },
+          env,
+        ),
       );
 
     it("CONTROL: the plain GET edit page shows the roster and no hidden-roster notice", async () => {
