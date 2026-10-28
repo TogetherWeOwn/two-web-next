@@ -140,9 +140,35 @@ it("CONTROL U2.4/U2.6 Hono: no added server reads, writes, network or cache-vary
   } as unknown as Env;
   const response = await app.request(schedulePath, {}, env);
   expect(response.status).toBe(200);
-  // Existing guest route: event + two aggregate counts + two neighbors + related.
-  expect(statements).toHaveLength(6);
+  // Guest detail: event + going aggregates + two neighbors + related.
+  // Main pins 6 (two aggregates); optimized withGoing merges them to 5.
+  expect([5, 6]).toContain(statements.length);
   expect(statements.every((sql) => /^select\b/i.test(sql))).toBe(true);
+  expect(statements.every((sql) => !/member_id/i.test(sql))).toBe(true);
+  const aggregates = statements.filter((sql) => sql.includes('from "rsvps"'));
+  if (statements.length === 6) {
+    // Legacy: named (inner join + username bound) + occupancy (no join).
+    expect(aggregates).toHaveLength(2);
+    for (const sql of aggregates) {
+      expect(sql).toContain('group by "rsvps"."event_id"');
+      expect(sql).toMatch(/\bcount\(/i);
+    }
+    const named = aggregates.filter((sql) => sql.includes('inner join "users"'));
+    const occupancy = aggregates.filter((sql) => !sql.includes('join "users"'));
+    expect(named).toHaveLength(1);
+    expect(occupancy).toHaveLength(1);
+    expect(named[0]).toContain('"users"."username" <>');
+  } else {
+    // Optimized: one combined LEFT JOIN aggregate, named conditional + all-seat.
+    expect(aggregates).toHaveLength(1);
+    const [combined] = aggregates;
+    expect(combined).toContain('group by "rsvps"."event_id"');
+    expect(combined).toContain('left join "users"');
+    expect(combined).not.toContain('inner join "users"');
+    expect(combined).toContain("count(case when");
+    expect(combined).toContain('"users"."username" <>');
+    expect(combined).toMatch(/\bcount\(\*\)/i);
+  }
   expect(response.headers.get("vary")).toMatch(/cookie/i);
   expect(response.headers.get("cache-control")).toMatch(/no-store/i);
 });
