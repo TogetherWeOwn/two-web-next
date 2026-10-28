@@ -88,7 +88,7 @@ export function parseAllocation(file, text) {
   ]);
   if (
     !["initial", "retire"].includes(data.action) ||
-    !/^ci\/budgets\/bundle\/[a-z0-9-]+\.json$/.test(data.fragment)
+    !/^ci\/budgets\/bundle\/[a-z0-9-]+(?:\.[a-z0-9-]+)*\.json$/.test(data.fragment)
   )
     throw new Error("initial allocation/retirement requires a served-asset fragment");
   integer(data.pr, "PR");

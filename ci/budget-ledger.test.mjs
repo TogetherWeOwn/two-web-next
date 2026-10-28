@@ -7,6 +7,7 @@ import {
   applyAdmissions,
   admissionHeadroom,
   parseAdmission,
+  parseAllocation,
   readAdmissions,
   validateAdmissions,
   validateFrozenFiles,
@@ -266,4 +267,66 @@ test("recent growth cannot compound the weekly denominator", () => {
   assert.throws(() => validate([row()], historical), /2%/);
   historical[0].delta_bytes = 1_500;
   assert.doesNotThrow(() => validate([row()], historical));
+});
+
+test("lifecycle fragment filenames allow asset suffixes but reject traversal and unsafe names", () => {
+  const file = "ci/budgets/decisions/allocations/2026-10-28-retire.md";
+  const record = {
+    action: "retire",
+    fragment: "ci/budgets/bundle/copy-link.js.json",
+    budget: {
+      budgets: {
+        "public/islands/copy-link.js": {
+          maxRawBytes: 2048,
+          maxGzipBytes: 1024,
+        },
+      },
+    },
+    measured: {},
+    cause: "Retired island after checking imports.",
+    pr: 42,
+  };
+  assert.equal(parseAllocation(file, text(record)).fragment, record.fragment);
+  for (const fragment of [
+    "ci/budgets/bundle/../x.json",
+    "ci/budgets/bundle/a..json",
+    "ci/budgets/bundle/.hidden.json",
+    "ci/budgets/bundle/a/b.json",
+    "ci/budgets/bundle/a.js.json/extra",
+  ]) {
+    assert.throws(
+      () => parseAllocation(file, text({ ...record, fragment })),
+      /served-asset fragment/,
+    );
+  }
+});
+
+test("effective loader ignores old deltas for retired assets", (t) => {
+  const root = scratch(t);
+  const unit = "bundle-public-islands-copy-link-js-gzip";
+  const old = `ci/budgets/decisions/${unit}/2026-10-27-growth.md`;
+  put(root, old, text(decision({ unit, delta_bytes: 1 })));
+  put(
+    root,
+    "ci/budgets/decisions/allocations/2026-10-28-retire.md",
+    text({
+      action: "retire",
+      fragment: "ci/budgets/bundle/copy-link.js.json",
+      budget: {
+        budgets: {
+          "public/islands/copy-link.js": {
+            maxRawBytes: 2048,
+            maxGzipBytes: 1024,
+          },
+        },
+      },
+      measured: {},
+      cause: "Retired island after checking imports.",
+      pr: 42,
+    }),
+  );
+  const plan = {
+    "public/islands/other.js": { maxRawBytes: 500, maxGzipBytes: 200 },
+  };
+  assert.deepEqual(applyAdmissions(root, "bundle", plan), plan);
 });

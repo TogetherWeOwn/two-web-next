@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -632,21 +632,36 @@ test("retired units cannot consume new delta allowance", async (t) => {
   await assert.rejects(fx.check("pull_request", prEvent(base, head)), /retired unit/);
 });
 
-for (const variant of ["wrong-name", "wrong-email", "recent"]) {
+for (const variant of ["wrong-name", "wrong-email", "wrong-subject", "six-days-old", "recent"]) {
   test(`historical squash ${variant} requires API provenance`, async (t) => {
     const fx = fixture(t);
     fx.add(path, 1_600, 1);
     fx.git("add", ".");
-    execFileSync("git", ["-C", fx.root, "commit", "-qm", "feature (#1)"], {
-      env: {
-        ...process.env,
-        GIT_COMMITTER_NAME: variant === "wrong-name" ? "Other" : "GitHub",
-        GIT_COMMITTER_EMAIL:
-          variant === "wrong-email" ? "other@example.invalid" : "noreply@github.com",
-        GIT_COMMITTER_DATE: variant === "recent" ? NOW : "2026-10-01T12:00:00Z",
-        GIT_AUTHOR_DATE: NOW,
+    execFileSync(
+      "git",
+      [
+        "-C",
+        fx.root,
+        "commit",
+        "-qm",
+        variant === "wrong-subject" ? "feature (#2)" : "feature (#1)",
+      ],
+      {
+        env: {
+          ...process.env,
+          GIT_COMMITTER_NAME: variant === "wrong-name" ? "Other" : "GitHub",
+          GIT_COMMITTER_EMAIL:
+            variant === "wrong-email" ? "other@example.invalid" : "noreply@github.com",
+          GIT_COMMITTER_DATE:
+            variant === "recent"
+              ? NOW
+              : variant === "six-days-old"
+                ? "2026-10-22T11:59:59Z"
+                : "2026-10-01T12:00:00Z",
+          GIT_AUTHOR_DATE: NOW,
+        },
       },
-    });
+    );
     const main = fx.git("rev-parse", "HEAD");
     fx.add(path.replace("feature", "new"), 500);
     const head = fx.commit("new feature");
@@ -835,4 +850,96 @@ test("excessive Retry-After fails closed without retrying early", async () => {
   );
   await assert.rejects(request("pulls/42"), /retry delay exceeds bound/);
   assert.equal(calls, 1);
+});
+
+test("shipping fragment retirement accepts the exact current filename and metadata", async (t) => {
+  const fx = fixture(t);
+  const fragment = "ci/budgets/bundle/copy-link.js.json";
+  const budget = JSON.parse(
+    readFileSync(new URL("./budgets/bundle/copy-link.js.json", import.meta.url), "utf8"),
+  );
+  fx.put(fragment, JSON.stringify(budget));
+  fx.put("public/islands/copy-link.js", "export {};\n");
+  const base = installed(fx);
+  rmSync(join(fx.root, fragment));
+  rmSync(join(fx.root, "public/islands/copy-link.js"));
+  lifecycle(fx, "retire", fragment, budget);
+  const head = fx.commit("retire shipping island");
+  assert.equal((await fx.check("pull_request", prEvent(base, head))).proposed.length, 1);
+});
+
+test("queue attributes an actual fragment rename only with matching retirement evidence", async (t) => {
+  const fx = fixture(t);
+  const old = "ci/budgets/bundle/copy-link.js.json";
+  const replacement = "ci/budgets/bundle/share-link.js.json";
+  const original = JSON.parse(
+    readFileSync(new URL("./budgets/bundle/copy-link.js.json", import.meta.url), "utf8"),
+  );
+  fx.put(old, JSON.stringify(original));
+  fx.put("public/islands/copy-link.js", "export {};\n");
+  const base = installed(fx);
+  rmSync(join(fx.root, old));
+  rmSync(join(fx.root, "public/islands/copy-link.js"));
+  lifecycle(fx, "retire", old, original);
+  const body = "export {};\n";
+  fx.put("public/islands/share-link.js", body);
+  const budget = {
+    budgets: {
+      "public/islands/share-link.js": {
+        maxRawBytes: Buffer.byteLength(body),
+        maxGzipBytes: gzipSync(body).length,
+      },
+    },
+  };
+  fx.put(replacement, JSON.stringify(budget));
+  lifecycle(fx, "initial", replacement, budget, {
+    "bundle-public-islands-share-link-js-raw": Buffer.byteLength(body),
+    "bundle-public-islands-share-link-js-gzip": gzipSync(body).length,
+  });
+  const head = fx.commit("rename island (#42)");
+  assert.equal((await fx.check("pull_request", prEvent(base, head))).proposed.length, 2);
+  const request = async (endpoint) => {
+    if (!endpoint.endsWith("/files")) return fx.request(endpoint);
+    return [
+      {
+        filename: replacement,
+        previous_filename: old,
+        status: "renamed",
+        sha: fx.git("rev-parse", `HEAD:${replacement}`),
+      },
+      ...["initial", "retire"].map((action) => {
+        const file = `ci/budgets/decisions/allocations/2026-10-28-${action}.md`;
+        return { filename: file, status: "added", sha: fx.git("rev-parse", `HEAD:${file}`) };
+      }),
+    ];
+  };
+  assert.equal(
+    (await fx.check("merge_group", groupEvent(base, head), { request })).proposed.length,
+    2,
+  );
+  for (const previous of ["ci/budgets/bundle/unrelated.js.json", undefined]) {
+    await assert.rejects(
+      fx.check("merge_group", groupEvent(base, head), {
+        request: async (endpoint) => {
+          const result = await request(endpoint);
+          return Array.isArray(result)
+            ? result.map((entry) =>
+                entry.filename === replacement ? { ...entry, previous_filename: previous } : entry,
+              )
+            : result;
+        },
+      }),
+      /attribution/,
+    );
+  }
+});
+
+test("initial lifecycle decision must match the actual committed fragment", async (t) => {
+  const fx = fixture(t);
+  const base = installed(fx);
+  const { fragment, budget } = newIsland(fx);
+  budget.budgets["public/islands/new.js"].maxRawBytes = 1000;
+  fx.put(fragment, JSON.stringify(budget));
+  const head = fx.commit("mismatched allocation");
+  await assert.rejects(fx.check("pull_request", prEvent(base, head)), /evidence mismatch/);
 });

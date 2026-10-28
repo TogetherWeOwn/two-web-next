@@ -218,6 +218,7 @@ function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly
     target.add(fragment);
   }
   validateFrozenFiles(baseFiles, headFiles, initial, retired);
+  return { initial, retired };
 }
 
 async function mergedPull(commit, repo, request) {
@@ -250,7 +251,13 @@ async function queueAttribution(
     if (parents.length !== 1 || parents[0] !== previous)
       throw new Error("unsupported queue attribution graph (expected squash chain)");
     const files = snapshot(root, commit);
-    validateAllocationChanges(root, previousFiles, files, commit, initialAllocations);
+    const { initial, retired } = validateAllocationChanges(
+      root,
+      previousFiles,
+      files,
+      commit,
+      initialAllocations,
+    );
     const added = [...files.keys()].filter((file) => !previousFiles.has(file));
     if (added.length) {
       let number;
@@ -269,7 +276,13 @@ async function queueAttribution(
       for (const file of added) {
         const proof = prFiles.filter(
           (entry) =>
-            entry.filename === file && entry.status === "added" && entry.sha === files.get(file),
+            entry.filename === file &&
+            entry.sha === files.get(file) &&
+            (entry.status === "added" ||
+              (entry.status === "renamed" &&
+                file.startsWith("ci/budgets/bundle/") &&
+                initial.has(file) &&
+                retired.has(entry.previous_filename))),
         );
         if (proof.length !== 1 || attributed.has(file))
           throw new Error(`missing/ambiguous PR file attribution: ${file}`);
