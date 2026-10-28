@@ -198,6 +198,26 @@ test("shipping oracle admits the measured 336384 server gzip allocation", () => 
   });
 });
 
+test("shipping oracle admits the measured 337920 server gzip allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 337920 } },
+  });
+});
+
+for (const maxGzipBytes of [337919, 337921]) {
+  test(`shipping oracle rejects the neighboring ${maxGzipBytes} server gzip allocation`, () => {
+    assert.throws(
+      () =>
+        assertShippingKitBudget({
+          ...SHIPPING_KIT_BUDGET,
+          server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
+        }),
+      new RegExp(`unsupported server gzip allocation ${maxGzipBytes}`),
+    );
+  });
+}
+
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
   for (const maxGzipBytes of [335105, 335359, 335616, 336385]) {
     const unsupported = {

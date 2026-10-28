@@ -747,6 +747,74 @@ function shippingServerGzipCases() {
     { name: "server gzip one byte over", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
   ];
 }
+test("fixed 337920 server gzip cases run before the allocation ships", (t) => {
+  assert.deepEqual(SHIPPING_SERVER_GZIP_ALLOCATIONS[337920], {
+    intervalBytes: 337820,
+    exactBytes: 337920,
+    overBytes: 337921,
+  });
+  const expectedCases = [
+    {
+      name: "server gzip newly allowed interval",
+      group: "kit.server.js",
+      axis: "gzip",
+      bytes: 337820,
+    },
+    { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 337920 },
+    {
+      name: "server gzip one byte over",
+      group: "kit.server.js",
+      axis: "gzip",
+      bytes: 337921,
+      ceiling: 337920,
+      breach: true,
+    },
+  ];
+  // Select the test-local oracle synchronously, then restore it before any
+  // checker runs. The shipping plan and its fragments are never changed.
+  const shippingCap = SHIPPING_SERVER_GZIP_CAP;
+  let cases;
+  try {
+    SHIPPING_SERVER_GZIP_CAP = 337920;
+    cases = shippingServerGzipCases();
+  } finally {
+    SHIPPING_SERVER_GZIP_CAP = shippingCap;
+  }
+  assert.deepEqual(cases, expectedCases);
+  const isolatedBudget = JSON.parse(SHIPPING_BUDGET_BYTES.toString("utf8"));
+  isolatedBudget.server.js.maxGzipBytes = 337920;
+  for (const [index, selected] of cases.entries()) {
+    const expected = expectedCases[index];
+    const fx = makeShippingFixture(t, selected.group, selected.axis, selected.bytes);
+    writeFixtureFile(fx.root, "ci/kit-perf-budget.json", JSON.stringify(isolatedBudget));
+    const result = runJson(fx.root);
+    assert.equal(result.code, expected.breach ? 1 : 0, expected.name);
+    assert.equal(result.report.exitCode, result.code);
+    assert.equal(result.report.ok, !expected.breach);
+    assert.deepEqual(
+      result.errors,
+      expected.breach ? ["kit perf budget: server js: gzip 337921B over 337920B"] : [],
+    );
+    assert.deepEqual(
+      result.report.groups.map((entry) => entry.id),
+      SHIPPING_GROUPS,
+    );
+    for (const entry of result.report.groups) {
+      assert.equal(entry.status, expected.breach && entry.id === "kit.server.js" ? "fail" : "pass");
+      const [check] = entry.checks;
+      assert.equal(check.status, entry.status);
+      assert.ok(check.rawBytes <= check.maxRawBytes, `${entry.id} raw bytes`);
+      if (entry.id === "kit.server.js") {
+        assert.equal(check.gzipBytes, expected.bytes);
+        assert.equal(check.maxGzipBytes, 337920);
+      } else {
+        assert.ok(check.gzipBytes <= check.maxGzipBytes, `${entry.id} gzip bytes`);
+      }
+      if (entry.id !== "kit.worker") assert.ok(check.files <= check.maxFiles, `${entry.id} files`);
+    }
+  }
+});
+
 function shippingClientRawCases() {
   if (SHIPPING_CLIENT_RAW_CAP === 257024) {
     return [
