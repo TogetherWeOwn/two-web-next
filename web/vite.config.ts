@@ -24,9 +24,10 @@ export default defineConfig({
         minify: true,
         rolldownOptions: {
           output: {
-            // Compact server output without rewrites or name mangling; error
-            // diagnostics depend on constructor names. Keep licenses and maps.
-            minify: { compress: false, mangle: false, codegen: true },
+            // Compact local bindings without compression rewrites. Preserve
+            // function/class names: error diagnostics use constructor.name.
+            // Keep licenses and maps, and never mangle property names.
+            minify: { compress: false, mangle: { keepNames: true }, codegen: true },
             comments: { annotation: false, jsdoc: false, legal: true },
             // Hono and Kit share these route families. Keep their modules
             // together on the server instead of compressing each helper chunk

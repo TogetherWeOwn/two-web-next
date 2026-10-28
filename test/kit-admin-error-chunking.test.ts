@@ -112,7 +112,7 @@ describe("native admin error server chunking", () => {
     expect(groupPattern("admin").test("/checkout/src/admin/reads.ts")).toBe(true);
   });
 
-  it("keeps grouping on SSR and preserves conservative minification", () => {
+  it("keeps error grouping on SSR and preserves conservative minification", () => {
     const { environments, output } = serverOutput();
     assert.ok(environments.type === "ObjectExpression");
     expect(
@@ -121,11 +121,11 @@ describe("native admin error server chunking", () => {
       ),
     ).toEqual(["ssr"]);
     const minify = property(output, "minify");
-    expect(["compress", "mangle", "codegen"].map((name) => booleanProperty(minify, name))).toEqual([
-      false,
+    expect(["compress", "codegen"].map((name) => booleanProperty(minify, name))).toEqual([
       false,
       true,
     ]);
+    expect(booleanProperty(property(minify, "mangle"), "keepNames")).toBe(true);
     const comments = property(output, "comments");
     expect(["annotation", "jsdoc", "legal"].map((name) => booleanProperty(comments, name))).toEqual(
       [false, false, true],

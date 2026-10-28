@@ -10,11 +10,46 @@
 // unchanged Hono controllers during mixed mode. There is deliberately no
 // event delete anywhere on this resource, and the Svelte port adds none.
 //
-// Source-text by design: the root Vitest suite cannot compile .svelte, and
-// these pins are the exact selectors the admin edit E2E suite drives.
+// Source structure pins cover routing and islands; compiled SSR pins cover
+// named controls and field errors, including data-driven presentation markup.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { resolveKitEventEdit } from "../src/admin/kit-event-edit";
+import {
+  compileKitForms,
+  eventRow,
+  formFixtures,
+  now,
+} from "./helpers/admin-validation-correction";
+
+let compiler: Awaited<ReturnType<typeof compileKitForms>>;
+let rendered = "";
+let carried = "";
+beforeAll(async () => {
+  compiler = await compileKitForms();
+  const fixtures = await formFixtures(compiler, true);
+  rendered = fixtures.find((fixture) => fixture.name === "Kit event edit")!.html;
+  const outcome = await resolveKitEventEdit(
+    eventRow.eventKey,
+    {},
+    {
+      db: {} as never,
+      get: async () => ({
+        ...eventRow,
+        accessibilityNotes: "Access <details>",
+        organizer_name: "Public organizer",
+        join_url: "https://example.com/lobby?x=1&y=2",
+        join_instructions: "Join & play",
+      }),
+      list: async () => ({ rows: [], total: 0 }),
+      now,
+    },
+  );
+  if (outcome.kind !== "ok") throw new Error("invalid carried-field fixture");
+  carried = compiler.renderForm(1, { view: outcome.view });
+});
+afterAll(() => compiler?.dispose());
 
 const source = readFileSync(
   fileURLToPath(new URL("../web/src/routes/admin/events/[key]/+page.svelte", import.meta.url).href),
@@ -50,7 +85,7 @@ describe("Kit event-edit page contract", () => {
       "location",
       "capacity",
     ]) {
-      expect(source).toContain(`name="${name}"`);
+      expect(rendered).toContain(`name="${name}"`);
     }
     for (const id of [
       "f-title",
@@ -81,16 +116,16 @@ describe("Kit event-edit page contract", () => {
   });
 
   it("renders the Hono 422 error shape with retained values and the draft marker", () => {
-    expect(source).toContain('data-testid="form-errors"');
-    expect(source).toContain("Check the highlighted fields and try again.");
-    expect(source).toContain("error-title");
-    expect(source).toContain("error-starts_at");
-    expect(source).toContain("error-timezone");
-    expect(source).toContain("error-location");
-    expect(source).toContain("error-capacity");
-    expect(source).toContain('role="alert"');
-    expect(source).toContain("aria-invalid=");
-    expect(source).toContain("aria-describedby=");
+    expect(rendered).toContain('data-testid="form-errors"');
+    expect(rendered).toContain("Check the highlighted fields and try again.");
+    expect(rendered).toContain("error-title");
+    expect(rendered).toContain("error-starts_at");
+    expect(rendered).toContain("error-timezone");
+    expect(rendered).toContain("error-location");
+    expect(rendered).toContain("error-capacity");
+    expect(rendered).toContain('role="alert"');
+    expect(rendered).toContain("aria-invalid=");
+    expect(rendered).toContain("aria-describedby=");
   });
 
   it("keeps the Hono status actions posting to the unchanged transition endpoints", () => {
@@ -153,5 +188,37 @@ describe("Kit event-edit page contract", () => {
     expect(load).not.toContain("actions");
     expect(load).toContain("resolveKitEventEdit");
     expect(load).toContain("params.key");
+  });
+});
+
+// Execute the actual controls: a sibling binding or a 10x limit inflation
+// must fail even when a data-driven renderer keeps all field names in source.
+describe("Kit event-edit access/joining carry-through pins", () => {
+  // Opening tag of the control carrying a field name; empty when absent.
+  function controlTag(name: string): string {
+    const match = carried.match(new RegExp(`<(?:textarea|input)[^>]*name="${name}"[^>]*>`));
+    return match ? match[0] : "";
+  }
+
+  // A textarea carries its submitted value as escaped element content.
+  function textareaElement(name: string): string {
+    const match = carried.match(new RegExp(`<textarea[^>]*name="${name}"[^>]*>.*?</textarea>`));
+    return match ? match[0] : "";
+  }
+
+  it("binds each new control to its own stored value, not a sibling field", () => {
+    expect(textareaElement("accessibility_notes")).toContain("Access &lt;details>");
+    expect(controlTag("organizer_name")).toContain('value="Public organizer"');
+    expect(controlTag("join_url")).toContain('value="https://example.com/lobby?x=1&amp;y=2"');
+    expect(textareaElement("join_instructions")).toContain("Join &amp; play");
+  });
+
+  it("pins the exact text-limit attributes the island reads on the three limited controls", () => {
+    // Exact quoted values: a 10x inflation must fail, and
+    // join_url carries no limit attribute, matching the Hono control.
+    expect(controlTag("accessibility_notes")).toMatch(/data-event-text-limit="1000"/);
+    expect(controlTag("organizer_name")).toMatch(/data-event-text-limit="500"/);
+    expect(controlTag("join_instructions")).toMatch(/data-event-text-limit="5000"/);
+    expect(controlTag("join_url")).not.toContain("data-event-text-limit");
   });
 });

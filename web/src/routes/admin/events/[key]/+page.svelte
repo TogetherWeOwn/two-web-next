@@ -1,3 +1,88 @@
+<script module lang="ts">
+// The field groups share one emitter rather than duplicating input/error
+// branches in both generated bundles. Metadata keeps the Hono field order,
+// exact limits and safety copy; executed SSR tests pin each carried value.
+type EventField = {
+  name: string;
+  id: string;
+  label: string;
+  textarea?: boolean;
+  type?: "url";
+  limit?: number;
+  required?: boolean;
+  hint?: string;
+  inputmode?: "numeric";
+};
+const openingFields: EventField[] = [
+  { name: "title", id: "f-title", label: "Title", limit: 100, required: true },
+  { name: "game", id: "f-game", label: "Game", limit: 100 },
+  { name: "description", id: "f-description", label: "Description", textarea: true, limit: 1000 },
+];
+const accessibilityFields: EventField[] = [
+  {
+    name: "accessibility_notes",
+    id: "f-accessibility-notes",
+    label: "Accessibility notes",
+    textarea: true,
+    limit: 1000,
+    hint: "Optional; include only confirmed details, not personal contact information.",
+  },
+];
+const joiningFields: EventField[] = [
+  {
+    name: "organizer_name",
+    id: "f-organizer-name",
+    label: "Organizer display name (optional)",
+    limit: 500,
+    hint: "Use a name the organizer has agreed to show publicly. Do not enter contact details.",
+  },
+  {
+    name: "join_url",
+    id: "f-join-url",
+    label: "Public joining link (optional)",
+    type: "url",
+    hint: "HTTPS or HTTP link visible to everyone. Never use attendee-only or private links.",
+  },
+  {
+    name: "join_instructions",
+    id: "f-join-instructions",
+    label: "Public joining instructions (optional)",
+    textarea: true,
+    limit: 5000,
+    hint: "Share only verified details that are safe for anyone to see. Do not enter contact details.",
+  },
+];
+const scheduleFields: EventField[] = [
+  {
+    name: "starts_at",
+    id: "f-starts-at",
+    label: "Starts (local wall time, YYYY-MM-DD HH:mm)",
+    required: true,
+  },
+  {
+    name: "ends_at",
+    id: "f-ends-at",
+    label: "Ends (local wall time, YYYY-MM-DD HH:mm)",
+    required: true,
+  },
+  {
+    name: "timezone",
+    id: "f-timezone",
+    label: "Timezone",
+    hint: "The IANA zone the wall time above is typed in. Storage is UTC.",
+  },
+  { name: "location", id: "f-location", label: "Location", limit: 255 },
+];
+const capacityFields: EventField[] = [
+  {
+    name: "capacity",
+    id: "f-capacity",
+    label: "Capacity (empty = unlimited)",
+    inputmode: "numeric",
+  },
+];
+</script>
+
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
@@ -29,13 +114,50 @@ const values = $derived(view.values ?? {});
 const errors = $derived(view.errors ?? {});
 const hasErrors = $derived(view.hasErrors ?? Object.keys(errors).length > 0);
 const val = (name: string) => values[name] ?? "";
-const timezoneVal = $derived(val("timezone") || "Europe/London");
 const roster = $derived(view.roster);
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
-const textLimitsIsland =
-  '<script type="module" src="/islands/admin-event-text-limits.js"></' + "script>";
-const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
+const editorIslands =
+  '<script type="module" src="/islands/admin-event-text-limits.js"></' +
+  'script><script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
+
+{#snippet eventFields(fields: EventField[])}
+  {#each fields as field (field.name)}
+    {@const error = errors[field.name]}
+    {@const describedBy = [field.hint ? `${field.id}-hint` : "", error ? `${field.id}-error` : ""].filter(Boolean).join(" ") || undefined}
+    <div class="field">
+      <label for={field.id}>{field.label}</label>
+      {#if field.textarea}
+        <textarea
+          id={field.id}
+          name={field.name}
+          rows="4"
+          data-event-text-limit={field.limit}
+          aria-invalid={error ? "true" : undefined}
+          aria-describedby={describedBy}
+        >{val(field.name)}</textarea>
+      {:else}
+        <input
+          id={field.id}
+          name={field.name}
+          type={field.type ?? "text"}
+          inputmode={field.inputmode}
+          value={field.name === "timezone" ? val(field.name) || "Europe/London" : val(field.name)}
+          data-event-text-limit={field.limit}
+          required={field.required}
+          aria-invalid={error ? "true" : undefined}
+          aria-describedby={describedBy}
+        />
+      {/if}
+      {#if field.hint}
+        <p id={`${field.id}-hint`} class="hint">{field.hint}</p>
+      {/if}
+      {#if error}
+        <p id={`${field.id}-error`} class="error" role="alert" data-testid={`error-${field.name}`}>{error}</p>
+      {/if}
+    </div>
+  {/each}
+{/snippet}
 
 <AdminShell title={`Edit ${view.title}`}>
 <section>
@@ -62,140 +184,11 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     data-event-editor=""
     data-event-draft={hasErrors ? "" : undefined}
   >
-    <div class="field">
-      <label for="f-title">Title</label>
-      <input
-        id="f-title"
-        name="title"
-        type="text"
-        value={val("title")}
-        data-event-text-limit={100}
-        required
-        aria-invalid={errors.title ? "true" : undefined}
-        aria-describedby={errors.title ? "f-title-error" : undefined}
-      />
-      {#if errors.title}
-        <p id="f-title-error" class="error" role="alert" data-testid="error-title">{errors.title}</p>
-      {/if}
-    </div>
-    <div class="field">
-      <label for="f-game">Game</label>
-      <input
-        id="f-game"
-        name="game"
-        type="text"
-        value={val("game")}
-        data-event-text-limit={100}
-        aria-invalid={errors.game ? "true" : undefined}
-        aria-describedby={errors.game ? "f-game-error" : undefined}
-      />
-      {#if errors.game}
-        <p id="f-game-error" class="error" role="alert" data-testid="error-game">{errors.game}</p>
-      {/if}
-    </div>
-    <div class="field">
-      <label for="f-description">Description</label>
-      <textarea
-        id="f-description"
-        name="description"
-        rows={4}
-        data-event-text-limit={1000}
-        aria-invalid={errors.description ? "true" : undefined}
-        aria-describedby={errors.description ? "f-description-error" : undefined}
-      >{val("description")}</textarea>
-      {#if errors.description}
-        <p id="f-description-error" class="error" role="alert" data-testid="error-description">
-          {errors.description}
-        </p>
-      {/if}
-    </div>
-    <div class="field">
-      <label for="f-starts-at">Starts (local wall time, YYYY-MM-DD HH:mm)</label>
-      <input
-        id="f-starts-at"
-        name="starts_at"
-        type="text"
-        value={val("starts_at")}
-        required
-        aria-invalid={errors.starts_at ? "true" : undefined}
-        aria-describedby={errors.starts_at ? "f-starts-at-error" : undefined}
-      />
-      {#if errors.starts_at}
-        <p id="f-starts-at-error" class="error" role="alert" data-testid="error-starts_at">
-          {errors.starts_at}
-        </p>
-      {/if}
-    </div>
-    <div class="field">
-      <label for="f-ends-at">Ends (local wall time, YYYY-MM-DD HH:mm)</label>
-      <input
-        id="f-ends-at"
-        name="ends_at"
-        type="text"
-        value={val("ends_at")}
-        required
-        aria-invalid={errors.ends_at ? "true" : undefined}
-        aria-describedby={errors.ends_at ? "f-ends-at-error" : undefined}
-      />
-      {#if errors.ends_at}
-        <p id="f-ends-at-error" class="error" role="alert" data-testid="error-ends_at">
-          {errors.ends_at}
-        </p>
-      {/if}
-    </div>
-    <div class="field">
-      <label for="f-timezone">Timezone</label>
-      <input
-        id="f-timezone"
-        name="timezone"
-        type="text"
-        value={timezoneVal}
-        aria-invalid={errors.timezone ? "true" : undefined}
-        aria-describedby={errors.timezone ? "f-timezone-hint f-timezone-error" : "f-timezone-hint"}
-      />
-      <p id="f-timezone-hint" class="hint">
-        The IANA zone the wall time above is typed in. Storage is UTC.
-      </p>
-      {#if errors.timezone}
-        <p id="f-timezone-error" class="error" role="alert" data-testid="error-timezone">
-          {errors.timezone}
-        </p>
-      {/if}
-    </div>
-    <div class="field">
-      <label for="f-location">Location</label>
-      <input
-        id="f-location"
-        name="location"
-        type="text"
-        value={val("location")}
-        data-event-text-limit={255}
-        aria-invalid={errors.location ? "true" : undefined}
-        aria-describedby={errors.location ? "f-location-error" : undefined}
-      />
-      {#if errors.location}
-        <p id="f-location-error" class="error" role="alert" data-testid="error-location">
-          {errors.location}
-        </p>
-      {/if}
-    </div>
-    <div class="field">
-      <label for="f-capacity">Capacity (empty = unlimited)</label>
-      <input
-        id="f-capacity"
-        name="capacity"
-        type="text"
-        inputmode="numeric"
-        value={val("capacity")}
-        aria-invalid={errors.capacity ? "true" : undefined}
-        aria-describedby={errors.capacity ? "f-capacity-error" : undefined}
-      />
-      {#if errors.capacity}
-        <p id="f-capacity-error" class="error" role="alert" data-testid="error-capacity">
-          {errors.capacity}
-        </p>
-      {/if}
-    </div>
+    {@render eventFields(openingFields)}
+    {@render eventFields(accessibilityFields)}
+    {@render eventFields(scheduleFields)}
+    {@render eventFields(joiningFields)}
+    {@render eventFields(capacityFields)}
     {#if view.seriesNote}
       <p class="hint" data-testid="series-info">{view.seriesNote}</p>
     {/if}
@@ -315,7 +308,6 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {/if}
     </nav>
   </section>
-  {@html textLimitsIsland}
-  {@html editorIsland}
+  {@html editorIslands}
 </section>
 </AdminShell>
