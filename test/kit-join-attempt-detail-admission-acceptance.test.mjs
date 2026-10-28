@@ -104,10 +104,11 @@ beforeEach(() => {
   globalThis.__kitDetailGetImpl = async () => ({ attempt: ROW });
 });
 
-const eventFor = ({ parent, id = "7" }) => ({
+const eventFor = ({ parent, id = "7", url }) => ({
   parent,
   params: { id },
   setHeaders: vi.fn(),
+  url: new URL(url ?? `https://next.example.test/admin/join-attempts/${id}`),
 });
 
 describe("acceptance: detail load admission (role denial)", () => {
@@ -147,6 +148,9 @@ describe("acceptance: detail load admission (role denial)", () => {
         discordId: "100000000000000201",
         createdAt: "2026-10-01T12:00:00.000Z",
       },
+      returnUrl: "/admin/join-attempts",
+      evidenceNote:
+        "Not recorded means evidence is missing, not verified anonymity. Missing evidence does not prove success or that no join was attempted. Ordinary sign-in does not write these records.",
     });
   });
 });
@@ -163,9 +167,28 @@ describe("acceptance: detail load outcomes for an admitted moderator", () => {
         discordId: "100000000000000201",
         createdAt: "2026-10-01T12:00:00.000Z",
       },
+      returnUrl: "/admin/join-attempts",
+      evidenceNote:
+        "Not recorded means evidence is missing, not verified anonymity. Missing evidence does not prove success or that no join was attempted. Ordinary sign-in does not write these records.",
     });
     expect(globalThis.__kitDetailGetCalls).toHaveLength(1);
     expect(event.setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
+  });
+
+  it("formats missing diagnostics only after the admitted read and preserves recorded text", async () => {
+    globalThis.__kitDetailGetImpl = async () => ({
+      attempt: { ...ROW, source: null, requestId: " ", discordId: "  recorded  " },
+    });
+    const data = await load(eventFor({ parent: async () => ({}) }));
+    expect(data.view).toEqual({
+      id: 7,
+      outcome: "added",
+      source: "Not recorded",
+      requestId: "Not recorded",
+      discordId: "  recorded  ",
+      createdAt: "2026-10-01T12:00:00.000Z",
+    });
+    expect(globalThis.__kitDetailGetCalls).toHaveLength(1);
   });
 
   it("missing id answers 404 and releases no private cache header", async () => {

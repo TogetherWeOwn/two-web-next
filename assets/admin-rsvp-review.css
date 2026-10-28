@@ -1,8 +1,8 @@
-/* RSVP-pause review disclosure (admin only). Served as a separate
-   stylesheet linked from the admin shells so these rules never enter the
-   inlined leaf critical-CSS bundle: the homepage LCP ratchets forbid
-   regrowing the shared inlined bytes, and only admin surfaces render
-   .rsvp-* markup. The admin shells already load stylesheets externally, so
+/* RSVP-pause review disclosure and join-link focus (admin only). Served as a
+   separate stylesheet linked from the admin shells so these rules never enter
+   the inlined leaf critical-CSS bundle: the homepage LCP ratchets forbid
+   regrowing the shared inlined bytes. Only admin surfaces use these rules.
+   The admin shells already load stylesheets externally, so
    no-JS rendering is unaffected. Source for public/admin-rsvp-review.css
    (esbuild --minify via `npm run build:assets`; drift fails CI). */
 .rsvp-actions {
@@ -37,4 +37,10 @@
 }
 .admin-table .rsvp-review {
   min-width: 16rem;
+}
+
+/* Both admin shells load this sheet. Keep the join focus override here,
+   outside the public inlined bundle, without another stylesheet request. */
+a[href^="/admin/join-attempts"]:focus-visible {
+  outline-color: currentColor;
 }

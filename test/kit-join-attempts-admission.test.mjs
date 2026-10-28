@@ -246,5 +246,62 @@ describe("Kit join-attempts load: moderator admission ordering", () => {
     expect(data.hasNext).toBe(true);
     expect(data.retentionDays).toBe(90);
     expect(data.outcomes).toContain("added");
+    expect(data.contextSearch).toBe("?from_outcome=&from_q=&from_page=1");
+    expect(data.emptyText).toBe(
+      "No join attempts recorded in the last 90 days (the retention window).",
+    );
+    expect(data.firstPageUrl).toBeNull();
+  });
+
+  it.each(["future", " added", "added ", "Added", '"><script>alert(1)</script>', "A & B"])(
+    "prepares diagnostic text and the exact unknown outcome %j on the server",
+    async (outcome) => {
+      globalThis.__kitJoinAttemptsListImpl = async () => [
+        {
+          id: 7,
+          outcome: "future",
+          source: null,
+          requestId: " ",
+          discordId: "  recorded  ",
+          createdAt: new Date("2026-10-01T00:00:00.000Z"),
+        },
+      ];
+      const { event } = makeEvent({ parent: async () => ({}) });
+      event.url = new URL(
+        `https://example.com/admin/join-attempts?${new URLSearchParams({ outcome })}`,
+      );
+      const data = await load(event);
+      expect(data.rows[0]).toEqual({
+        id: 7,
+        outcome: "future",
+        source: "Not recorded",
+        requestId: "Not recorded",
+        discordId: "  recorded  ",
+        createdAt: "2026-10-01T00:00:00.000Z",
+      });
+      expect(data.outcomes).toEqual([
+        "added",
+        "already_member",
+        "error",
+        "denied",
+        "degraded",
+        outcome,
+      ]);
+      expect(data.evidenceNote).toBe(
+        "Not recorded means evidence is missing, not verified anonymity. Missing evidence does not prove success or that no join was attempted. Ordinary sign-in does not write these records.",
+      );
+      expect(listCalls()).toHaveLength(1);
+    },
+  );
+
+  it("prepares filter-preserving recovery and context after admission without another read", async () => {
+    const { event } = makeEvent({ parent: async () => ({}) });
+    event.url = new URL("https://example.com/admin/join-attempts?outcome=error&q=exact&page=2");
+    const data = await load(event);
+    expect(data.contextSearch).toBe("?from_outcome=error&from_q=exact&from_page=2");
+    expect(data.emptyText).toBe("No join attempts on this page. Try the first page.");
+    expect(data.firstPageUrl).toBe("/admin/join-attempts?page=1&outcome=error&q=exact");
+    expect(listCalls()).toHaveLength(1);
+    expect(dbForCalls()).toHaveLength(1);
   });
 });

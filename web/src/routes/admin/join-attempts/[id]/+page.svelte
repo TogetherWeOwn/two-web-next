@@ -4,7 +4,7 @@ import type { PageProps } from "./$types";
 
 // Markup contract of JoinAttemptPage (src/admin/pages/join-attempts.tsx):
 // the back link, the Outcome/Trace headings and definition terms, the UTC
-// <time datetime> instant, and the em-dash fallbacks for missing trace
+// <time datetime> instant, and the Not recorded labels for missing trace
 // fields are shared, so the existing admin E2E selectors still apply when
 // this route owns traffic. Values arrive from the load in the exact Hono
 // shape with the instant pre-rendered as an ISO string, exactly as the Hono
@@ -22,16 +22,17 @@ const view = $derived(data.view);
 <AdminShell title={`Join attempt ${view.id}`}>
 <section aria-labelledby="join-attempt-heading">
   <p>
-    <a href="/admin/join-attempts">Back to join attempts</a>
+    <a href={data.returnUrl ?? "/admin/join-attempts"}>Back to join attempts</a>
   </p>
   <h1 id="join-attempt-heading">Join attempt {view.id}</h1>
   <p class="hint">Read-only. Attempted at and trace identifiers are shown as recorded.</p>
+  <p>{data.evidenceNote}</p>
   <h2>Outcome</h2>
   <dl>
     <dt>Outcome</dt>
     <dd>{view.outcome}</dd>
     <dt>Source</dt>
-    <dd>{view.source ?? "—"}</dd>
+    <dd>{view.source}</dd>
     <dt>Attempted at (UTC)</dt>
     <dd>
       <time datetime={view.createdAt}>{view.createdAt}</time>
@@ -40,9 +41,9 @@ const view = $derived(data.view);
   <h2>Trace</h2>
   <dl>
     <dt>Request ID</dt>
-    <dd>{view.requestId ?? "—"}</dd>
+    <dd>{view.requestId}</dd>
     <dt>Discord ID</dt>
-    <dd>{view.discordId ?? "—"}</dd>
+    <dd>{view.discordId}</dd>
   </dl>
 </section>
 </AdminShell>

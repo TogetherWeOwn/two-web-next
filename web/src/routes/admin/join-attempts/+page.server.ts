@@ -4,6 +4,10 @@ import { dbFor } from "../../../../../src/admin/db";
 import { JOIN_RETENTION_DAYS, listJoinAttempts } from "../../../../../src/admin/reads";
 import {
   JOIN_ATTEMPT_PAGE_SIZE,
+  JOIN_EVIDENCE_NOTE,
+  joinDiagnostic,
+  joinAttemptContextSearch,
+  joinAttemptsEmptyText,
   joinAttemptsUrl,
   parseJoinAttemptsQuery,
 } from "../../../../../src/admin/table-list";
@@ -52,19 +56,28 @@ export const load: PageServerLoad = async ({ url, setHeaders, parent }) => {
   const rows = fetched.slice(0, JOIN_ATTEMPT_PAGE_SIZE).map((row) => ({
     id: row.id,
     outcome: row.outcome,
-    source: row.source,
-    requestId: row.requestId,
-    discordId: row.discordId,
+    source: joinDiagnostic(row.source),
+    requestId: joinDiagnostic(row.requestId),
+    discordId: joinDiagnostic(row.discordId),
     createdAt: row.createdAt.toISOString(),
   }));
   return {
     rows,
     query,
+    // Keep navigation encoding and recovery presentation in the admitted load;
+    // Kit inventories browser view modules even when csr=false prevents hydration.
+    contextSearch: joinAttemptContextSearch(query),
+    emptyText: joinAttemptsEmptyText(query, JOIN_RETENTION_DAYS),
+    firstPageUrl: rows.length === 0 && query.page > 1 ? joinAttemptsUrl(query, 1) : null,
     hasNext: fetched.length > JOIN_ATTEMPT_PAGE_SIZE,
     prevUrl: query.page > 1 ? joinAttemptsUrl(query, query.page - 1) : null,
     nextUrl:
       fetched.length > JOIN_ATTEMPT_PAGE_SIZE ? joinAttemptsUrl(query, query.page + 1) : null,
-    outcomes: [...JOIN_OUTCOMES],
+    outcomes:
+      query.outcome !== "" && !JOIN_OUTCOMES.some((outcome) => outcome === query.outcome)
+        ? [...JOIN_OUTCOMES, query.outcome]
+        : [...JOIN_OUTCOMES],
+    evidenceNote: JOIN_EVIDENCE_NOTE,
     retentionDays: JOIN_RETENTION_DAYS,
   };
 };

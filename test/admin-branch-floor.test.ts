@@ -23,6 +23,7 @@ import {
   JoinAttemptsPage,
 } from "../src/admin/pages";
 import { parseEventListQuery } from "../src/admin/event-list";
+import { JOIN_RETENTION_DAYS } from "../src/admin/reads";
 import { parseJoinAttemptsQuery } from "../src/admin/table-list";
 import { queuePreviewAdmission } from "../src/admin/queue-preview";
 import { adminApp } from "../src/admin/routes";
@@ -907,7 +908,9 @@ describe("admin error and empty page states (pure render, no DB)", () => {
       }),
     );
     expect(empty).toContain('data-testid="join-attempts-empty"');
-    expect(empty).toContain("No join attempts.");
+    expect(empty).toContain(
+      `No join attempts recorded in the last ${JOIN_RETENTION_DAYS} days (the retention window).`,
+    );
     const nulled: JoinAttemptRow = {
       id: 7,
       outcome: "added",
@@ -1361,7 +1364,7 @@ describe("admin join list empty copy (pure render, no DB)", () => {
         outcomes: ["added"],
       }),
     );
-    expect(html).toContain("No join attempts.");
+    expect(html).toContain("No join attempts on this page. Try the first page.");
     expect(html).toContain("Page 2");
     expect(html).toContain('rel="prev"');
     expect(html).toContain("Previous");

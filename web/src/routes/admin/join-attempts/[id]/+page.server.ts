@@ -3,6 +3,11 @@ import { env } from "cloudflare:workers";
 import { dbFor } from "../../../../../../src/admin/db";
 import { resolveKitJoinAttemptDetail } from "../../../../../../src/admin/kit-join-attempt-detail";
 import { getJoinAttempt } from "../../../../../../src/admin/reads";
+import {
+  JOIN_EVIDENCE_NOTE,
+  joinAttemptReturnUrl,
+  joinDiagnostic,
+} from "../../../../../../src/admin/table-list";
 import type { PageServerLoad } from "./$types";
 
 // Server-rendered only (csr=false comes from the admin group layout): no
@@ -24,7 +29,7 @@ import type { PageServerLoad } from "./$types";
 // columns.
 export const csr = false;
 
-export const load: PageServerLoad = async ({ parent, params, setHeaders }) => {
+export const load: PageServerLoad = async ({ parent, params, setHeaders, url }) => {
   // Layout and page loads run concurrently; wait for moderator admission
   // before opening the database or starting the audited member read.
   await parent();
@@ -33,5 +38,14 @@ export const load: PageServerLoad = async ({ parent, params, setHeaders }) => {
   if (outcome.kind === "unavailable") error(503, "Admin temporarily unavailable");
   if (outcome.kind === "notFound") error(404, "Join attempt not found");
   setHeaders({ "cache-control": "private, no-store" });
-  return { view: outcome.view };
+  return {
+    view: {
+      ...outcome.view,
+      source: joinDiagnostic(outcome.view.source),
+      requestId: joinDiagnostic(outcome.view.requestId),
+      discordId: joinDiagnostic(outcome.view.discordId),
+    },
+    returnUrl: joinAttemptReturnUrl(url),
+    evidenceNote: JOIN_EVIDENCE_NOTE,
+  };
 };
