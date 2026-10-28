@@ -379,6 +379,7 @@ export const ALERT_ROUTES = new Set([
   "/admin/featured/:id",
   "/admin/featured/new",
   "/admin/featured/:id/delete",
+  "/admin/featured/:id/unpublish",
   "/admin/featured-contents",
   "/admin/featured-contents/:id/edit",
   "/admin/featured-contents/create",

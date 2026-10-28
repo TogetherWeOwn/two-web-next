@@ -471,6 +471,11 @@
   },
   {
     "method": "POST",
+    "path": "/admin/featured/:id/unpublish",
+    "auth": "moderator"
+  },
+  {
+    "method": "POST",
     "path": "/admin/ops-overrides",
     "auth": "ops-control-bearer"
   },
