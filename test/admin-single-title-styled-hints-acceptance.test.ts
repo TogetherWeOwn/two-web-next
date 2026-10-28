@@ -336,13 +336,13 @@ describe("E8 tab text: unchanged through the dedupe", () => {
 
   it("the list page keeps its shell title prop byte-identical", () => {
     expect(read("web/src/routes/admin/join-attempts/+page.svelte")).toContain(
-      '<AdminShell title="Join attempts">',
+      '<AdminShell title="Join attempts" restoredWrite={data.restoredWrite}>',
     );
   });
 
   it("the detail page keeps its shell title prop byte-identical", () => {
     expect(read("web/src/routes/admin/join-attempts/[id]/+page.svelte")).toContain(
-      "<AdminShell title={`Join attempt ${view.id}`}>",
+      "<AdminShell title={`Join attempt ${view.id}`} restoredWrite={data.restoredWrite}>",
     );
   });
 });

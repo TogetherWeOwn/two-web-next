@@ -71,7 +71,11 @@ const virtualModules = new Map([
   [
     "session",
     `export const kitEventsSessionFor = () => async () => null;
-     export const kitEventsJourneyFor = () => async () => null;`,
+     export const kitEventsJourneyFor = () => async () => null;
+     export const isRestoredBannerEligible = () => true;
+     export const readReturnJourney = async () => ({
+       returnTo: null, joinResult: null, expiredWrite: null, restoredWrite: null
+     });`,
   ],
   [
     "discord",
