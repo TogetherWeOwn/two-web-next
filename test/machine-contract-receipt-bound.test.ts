@@ -71,6 +71,10 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     "Event payloads differ, e.g. twice the length.",
     "Collections cap at 30 items.",
     "The JSON is 64K.",
+    "The JSON is 64k.",
+    "The JSON is 2M.",
+    "The JSON is 2G.",
+    "The JSON is 2T.",
   ];
 
   it.each(claims)("refuses the paraphrase %j appended after the Limits", (claim) => {
@@ -110,6 +114,10 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
 
   it.each([
     "Wait and try again within a minute.",
+    "Retry after 5m.",
+    "Wait 30 m.",
+    "Use 2 t.",
+    "Use 2 g.",
     "The structuredContent object matches the advertised schema.",
     "Successful reads are counted in operational dashboards.",
     "DTO fields are documented by the schema.",

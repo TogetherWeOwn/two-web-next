@@ -323,8 +323,9 @@ outsideLimits = outsideLimits.replace("Same DTOs as the MCP tools, byte for byte
 // Otherwise require both a result/transport subject and a measurement
 // predicate. Bare "fits", "bytes", "within" or "counted" can describe schemas,
 // field documentation, retry timing or operational counts, not a boundary.
-const SIZE_LITERAL =
-  /\b\d[\d,._]*\s*(?:[KMGT]i?B|bytes?|kilobytes?|megabytes?)\b|\b\d[\d,._]*\s*[KMGT]\b|\b32[ ,_]?768\b/i;
+const SIZE_LITERAL = /\b\d[\d,._]*\s*(?:[KMGT]i?B|bytes?|kilobytes?|megabytes?)\b|\b32[ ,_]?768\b/i;
+// Bare suffixes stay case-sensitive so "5m" (minutes) is not a size.
+const SIZE_BARE_SUFFIX = /\b\d[\d,._]*\s*[kKMGT]\b/;
 const RESULT_SUBJECT =
   /\b(?:events?|results?|responses?|replies|reply|payloads?|bod(?:y|ies)|DTOs?|CallToolResult|structuredContent|request\s+IDs?|transport|framing|wrappers?|envelopes?|overhead|text|JSON|collections?|rows?|items?)\b/i;
 const SIZE_PREDICATE =
@@ -342,7 +343,12 @@ for (const fragment of rawFragments) {
 }
 for (const sentence of outsideSentences) {
   const flat = sentence.trim();
-  if (flat && (SIZE_LITERAL.test(flat) || (RESULT_SUBJECT.test(flat) && SIZE_PREDICATE.test(flat))))
+  if (
+    flat &&
+    (SIZE_LITERAL.test(flat) ||
+      SIZE_BARE_SUFFIX.test(flat) ||
+      (RESULT_SUBJECT.test(flat) && SIZE_PREDICATE.test(flat)))
+  )
     check(
       `guide states a size or measurement claim outside the canonical Limits: "${flat.slice(0, 80)}"`,
       false,
