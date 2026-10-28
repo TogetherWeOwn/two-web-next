@@ -114,7 +114,13 @@ export function githubRequest(repo, token, fetchImpl = fetch, options = {}) {
           if (!transient || attempt === 2)
             throw new Error(`GitHub provenance API ${response.status} for ${endpoint}`);
         }
-        await wait(1000 * 2 ** attempt + Math.floor(random() * 250));
+        const retryAfter = response?.headers?.get("retry-after");
+        const seconds = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) : 0;
+        // Do not retry before GitHub's requested delay; fail closed instead of
+        // holding the required job indefinitely for an excessive delay.
+        if (seconds > 120)
+          throw new Error(`GitHub provenance retry delay exceeds bound for ${endpoint}`);
+        await wait(Math.max(1000 * 2 ** attempt, seconds * 1000) + Math.floor(random() * 250));
       }
       if (!Array.isArray(body)) {
         cache.set(endpoint, body);

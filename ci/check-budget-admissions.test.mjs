@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { test } from "node:test";
@@ -630,4 +630,209 @@ test("retired units cannot consume new delta allowance", async (t) => {
   );
   const head = fx.commit("retire plus delta");
   await assert.rejects(fx.check("pull_request", prEvent(base, head)), /retired unit/);
+});
+
+for (const variant of ["wrong-name", "wrong-email", "recent"]) {
+  test(`historical squash ${variant} requires API provenance`, async (t) => {
+    const fx = fixture(t);
+    fx.add(path, 1_600, 1);
+    fx.git("add", ".");
+    execFileSync("git", ["-C", fx.root, "commit", "-qm", "feature (#1)"], {
+      env: {
+        ...process.env,
+        GIT_COMMITTER_NAME: variant === "wrong-name" ? "Other" : "GitHub",
+        GIT_COMMITTER_EMAIL:
+          variant === "wrong-email" ? "other@example.invalid" : "noreply@github.com",
+        GIT_COMMITTER_DATE: variant === "recent" ? NOW : "2026-10-01T12:00:00Z",
+        GIT_AUTHOR_DATE: NOW,
+      },
+    });
+    const main = fx.git("rev-parse", "HEAD");
+    fx.add(path.replace("feature", "new"), 500);
+    const head = fx.commit("new feature");
+    await assert.rejects(
+      fx.check("pull_request", prEvent(main, head), {
+        request: async (endpoint) => {
+          assert.equal(endpoint, `commits/${main}/pulls`);
+          return [
+            {
+              number: 1,
+              merge_commit_sha: main,
+              merged_at: NOW,
+              base: { ref: "main", repo: { full_name: repo } },
+            },
+          ];
+        },
+      }),
+      /2%/,
+    );
+  });
+}
+
+test("unmerged history does not establish provenance", async (t) => {
+  const fx = fixture(t);
+  fx.add();
+  const main = fx.commit("history (#42)");
+  fx.add(path.replace("feature", "new"));
+  const head = fx.commit("new");
+  await assert.rejects(
+    fx.check("pull_request", prEvent(main, head), {
+      request: async () => [
+        {
+          number: 42,
+          merge_commit_sha: main,
+          merged_at: null,
+          base: { ref: "main", repo: { full_name: repo } },
+        },
+      ],
+    }),
+    /main merge provenance/,
+  );
+});
+
+for (const mismatch of ["branch", "repository"]) {
+  test(`queue rejects attributed PR with wrong ${mismatch}`, async (t) => {
+    const fx = fixture(t);
+    fx.add();
+    const head = fx.commit("feature (#42)");
+    await assert.rejects(
+      fx.check("merge_group", groupEvent(fx.base, head), {
+        request: async (endpoint) =>
+          endpoint === "pulls/42"
+            ? {
+                base: {
+                  ref: mismatch === "branch" ? "other" : "main",
+                  repo: { full_name: mismatch === "repository" ? "other/repo" : repo },
+                },
+              }
+            : fx.request(endpoint),
+      }),
+      /different base\/repository/,
+    );
+  });
+}
+
+test("budget evidence must not be a symlink", async (t) => {
+  const fx = fixture(t);
+  fx.git("rm", "-q", "ci/budgets/kit/client.json");
+  mkdirSync(join(fx.root, "ci/budgets/kit"), { recursive: true });
+  symlinkSync("missing", join(fx.root, "ci/budgets/kit/client.json"));
+  fx.git("add", "ci/budgets/kit/client.json");
+  fx.git("commit", "-qm", "replace budget with symlink");
+  const head = fx.git("rev-parse", "HEAD");
+  await assert.rejects(fx.check("pull_request", prEvent(fx.base, head)), /regular git files/);
+});
+
+test("initial allocation permits exactly 2% but rejects more", async (t) => {
+  const fx = fixture(t);
+  const base = installed(fx);
+  const asset = "public/islands/new.js";
+  const body = "x".repeat(100);
+  fx.put(asset, body);
+  const measured = {
+    "bundle-public-islands-new-js-raw": 100,
+    "bundle-public-islands-new-js-gzip": gzipSync(body).length,
+  };
+  const fragment = "ci/budgets/bundle/new.json";
+  const budget = {
+    budgets: {
+      [asset]: { maxRawBytes: 102, maxGzipBytes: measured["bundle-public-islands-new-js-gzip"] },
+    },
+  };
+  fx.put(fragment, JSON.stringify(budget));
+  lifecycle(fx, "initial", fragment, budget, measured);
+  const head = fx.commit("allocation at boundary");
+  assert.equal((await fx.check("pull_request", prEvent(base, head))).proposed.length, 1);
+  budget.budgets[asset].maxRawBytes = 103;
+  fx.put(fragment, JSON.stringify(budget));
+  lifecycle(fx, "initial", fragment, budget, measured);
+  const over = fx.commit("allocation over boundary");
+  await assert.rejects(fx.check("pull_request", prEvent(base, over)), /at most 2%/);
+});
+
+test("a retired unit cannot be reintroduced as a fresh base", async (t) => {
+  const fx = fixture(t);
+  const fragment = "ci/budgets/bundle/a.json";
+  const budget = { budgets: { "public/islands/a.js": { maxRawBytes: 100, maxGzipBytes: 50 } } };
+  fx.put(
+    "ci/budgets/bundle/b.json",
+    JSON.stringify({ budgets: { "public/islands/b.js": { maxRawBytes: 100, maxGzipBytes: 50 } } }),
+  );
+  installed(fx);
+  rmSync(join(fx.root, fragment));
+  lifecycle(fx, "retire", fragment, budget);
+  const base = fx.commit("retirement");
+  const body = "export {};\n";
+  fx.put("public/islands/a.js", body);
+  const replacement = {
+    budgets: {
+      "public/islands/a.js": {
+        maxRawBytes: Buffer.byteLength(body),
+        maxGzipBytes: gzipSync(body).length,
+      },
+    },
+  };
+  fx.put(fragment, JSON.stringify(replacement));
+  lifecycle(fx, "initial", fragment, replacement, {
+    "bundle-public-islands-a-js-raw": Buffer.byteLength(body),
+    "bundle-public-islands-a-js-gzip": gzipSync(body).length,
+  });
+  const head = fx.commit("reuse retired identity");
+  await assert.rejects(
+    fx.check("pull_request", prEvent(base, head)),
+    /duplicate initial allocation/,
+  );
+});
+
+test("deploy install rejects measurement from outside base ancestry", async (t) => {
+  const fx = fixture(t);
+  fx.git("checkout", "-qb", "side");
+  const side = fx.commit("unrelated measurement");
+  fx.git("checkout", "-q", "--detach", fx.base);
+  fx.put(
+    "ci/budgets/deploy/worker.json",
+    JSON.stringify({
+      worker: { maxRawBytes: 1020 },
+      measuredMain: {
+        sha: side,
+        rawBytesUpperBound: 1000,
+        evidence: "https://github.com/TogetherWeOwn/two-web-next/actions/runs/123/job/456",
+      },
+    }),
+  );
+  const head = fx.commit("install deploy base");
+  await assert.rejects(fx.check("pull_request", prEvent(fx.base, head)), /merge-base/);
+});
+
+test("GitHub rate-limit retry honors Retry-After seconds", async () => {
+  let calls = 0;
+  const waits = [];
+  const request = githubRequest(
+    repo,
+    "fake-test-token",
+    async () => {
+      calls += 1;
+      return calls === 1
+        ? { ok: false, status: 403, headers: new Headers({ "retry-after": "60" }) }
+        : { ok: true, json: async () => ({ number: 42 }) };
+    },
+    { sleep: async (ms) => waits.push(ms), random: () => 0 },
+  );
+  assert.deepEqual(await request("pulls/42"), { number: 42 });
+  assert.deepEqual(waits, [60_000]);
+});
+
+test("excessive Retry-After fails closed without retrying early", async () => {
+  let calls = 0;
+  const request = githubRequest(
+    repo,
+    "fake-test-token",
+    async () => {
+      calls += 1;
+      return { ok: false, status: 429, headers: new Headers({ "retry-after": "121" }) };
+    },
+    { sleep: async () => assert.fail("must not retry early"), random: () => 0 },
+  );
+  await assert.rejects(request("pulls/42"), /retry delay exceeds bound/);
+  assert.equal(calls, 1);
 });

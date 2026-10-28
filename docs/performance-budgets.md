@@ -45,7 +45,7 @@ ordinary review, security and user-outcome checks still block admission.
 Kit's existing intermediate SSR/adapter/file-count gates stay hard until there
 is representative built-Kit rendering, interaction and response-latency
 coverage. The Hono Lighthouse/auth fixture and low-sample nightly RUM do not
-close that measurement gap. This PR additionally gates both final Wrangler
+close that measurement gap. CI additionally gates both final Wrangler
 dry-run artifacts against `ci/budgets/deploy/worker.json`: a conservative
 main-CI raw-byte upper bound plus 2%, then the same additive ledger. This is an
 artifact safeguard, not a user-facing latency target or a platform plan limit.
