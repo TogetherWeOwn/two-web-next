@@ -8,6 +8,7 @@ import {
   eventListUrl,
   eventListHasFilters,
   eventListClearUrl,
+  eventStartsWindowSummary,
   type EventListQuery,
   type EventSort,
 } from "../event-list";
@@ -127,6 +128,24 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
           </select>
         </div>
         <div class="field">
+          <label for="starts_from">Starts from (UTC date, included)</label>
+          <input
+            id="starts_from"
+            name="starts_from"
+            type="date"
+            value={query.startsWindow?.from ?? ""}
+          />
+        </div>
+        <div class="field">
+          <label for="starts_before">Starts before (UTC date, excluded)</label>
+          <input
+            id="starts_before"
+            name="starts_before"
+            type="date"
+            value={query.startsWindow?.before ?? ""}
+          />
+        </div>
+        <div class="field">
           <button type="submit" class="btn">
             Filter
           </button>
@@ -137,6 +156,14 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
           </div>
         ) : null}
       </form>
+      {query.startsWindow?.error ? (
+        <p class="notice" role="alert">
+          {query.startsWindow.error}
+        </p>
+      ) : null}
+      {eventStartsWindowSummary(query.startsWindow) ? (
+        <p>{eventStartsWindowSummary(query.startsWindow)}</p>
+      ) : null}
       <p>
         <a class="btn" href="/admin/events/new" data-testid="new-event">
           New event

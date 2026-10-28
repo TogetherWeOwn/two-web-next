@@ -81,6 +81,30 @@ describe("native admin error server chunking", () => {
     expect(groupPattern("admin").test("/checkout/src/admin/reads.ts")).toBe(true);
   });
 
+  it("co-compresses native admin loaders with their renderers, not public or client modules", () => {
+    const pattern = groupPattern("admin");
+    for (const module of [
+      "routes/admin/+layout.server.ts",
+      "routes/admin/+page.server.ts",
+      "routes/admin/events/+page.server.ts",
+      "routes/admin/events/[key]/+page.server.ts",
+      "routes/admin/featured/[id]/+page.server.ts",
+      "routes/admin/join-attempts/+page.server.ts",
+    ]) {
+      expect(pattern.test(`/checkout/web/src/${module}`), module).toBe(true);
+    }
+    for (const module of [
+      "routes/+page.server.ts",
+      "routes/events/+page.server.ts",
+      "routes/admin/events/+page.ts",
+      "routes/admin/events/+page.server.ts.backup",
+      "routes/admin-events/+page.server.ts",
+      "lib/server/admin.ts",
+    ]) {
+      expect(pattern.test(`/checkout/web/src/${module}`), module).toBe(false);
+    }
+  });
+
   it("keeps grouping on SSR and preserves conservative minification", () => {
     const { environments, output } = serverOutput();
     assert.ok(environments.type === "ObjectExpression");

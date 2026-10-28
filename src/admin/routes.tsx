@@ -41,7 +41,7 @@ import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evi
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { badRequest, prefersHtmlError, varyAccept } from "../errors";
-import { EVENT_PAGE_SIZE, parseEventListQuery } from "./event-list";
+import { EVENT_PAGE_SIZE, eventListParams, parseEventListQuery } from "./event-list";
 import { eventKeyAllowed } from "../events/keys";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
@@ -380,7 +380,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     declareAccess(c, { resource: "events", action: "list", route: "admin.events.index" });
     const db = await dbOr503(c);
     if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
-    const params = c.req.query();
+    const params = eventListParams(new URL(c.req.url).searchParams);
     const query = parseEventListQuery(params);
     const fetched = await listEvents(db, params);
     const rows = fetched.slice(0, EVENT_PAGE_SIZE);

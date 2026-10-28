@@ -23,7 +23,7 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // inlined literals or a shared component would breach the client gzip and
 // file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
-const { query, rows, hasNext, emptyText, pauseReviews } = $derived(data);
+const { query, rows, hasNext, emptyText, windowSummary, pauseReviews } = $derived(data);
 const now = new Date();
 </script>
 
@@ -96,6 +96,24 @@ const now = new Date();
       </select>
     </div>
     <div class="field">
+      <label for="starts_from">Starts from (UTC date, included)</label>
+      <input
+        id="starts_from"
+        name="starts_from"
+        type="date"
+        value={query.startsWindow?.from ?? ""}
+      />
+    </div>
+    <div class="field">
+      <label for="starts_before">Starts before (UTC date, excluded)</label>
+      <input
+        id="starts_before"
+        name="starts_before"
+        type="date"
+        value={query.startsWindow?.before ?? ""}
+      />
+    </div>
+    <div class="field">
       <button type="submit" class="btn">Filter</button>
     </div>
     {#if eventListHasFilters(query)}
@@ -104,6 +122,12 @@ const now = new Date();
       </div>
     {/if}
   </form>
+  {#if query.startsWindow?.error}
+    <p class="notice" role="alert">{query.startsWindow.error}</p>
+  {/if}
+  {#if windowSummary}
+    <p>{windowSummary}</p>
+  {/if}
   <p>
     <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
   </p>

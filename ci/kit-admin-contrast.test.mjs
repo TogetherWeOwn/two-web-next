@@ -15,6 +15,9 @@ import { buildEventCreateView } from "../src/admin/kit-event-create.ts";
 import { resolveKitEventEdit } from "../src/admin/kit-event-edit.ts";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
+import { registerPlanningWindowBrowserAcceptance } from "../test/helpers/admin-event-planning-window-browser.ts";
+
+registerPlanningWindowBrowserAcceptance(() => browser);
 
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
@@ -87,6 +90,16 @@ before(async () => {
       {
         name: "offline-kit-admin-data",
         setup(plugin) {
+          // SSR loaders can share the renderer chunk. This render-only fixture
+          // replaces their loads below; any accidental binding read must fail.
+          plugin.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+            path: "workers-bindings",
+            namespace: "offline-kit-admin",
+          }));
+          plugin.onLoad({ filter: /.*/, namespace: "offline-kit-admin" }, () => ({
+            contents:
+              "export const env = new Proxy({}, {get() {throw new Error('Workers binding read outside render-only admin fixture');}});",
+          }));
           plugin.onLoad({ filter: /[/\\]entries[/\\]hooks\.server\.js$/ }, () => ({
             contents: "export const handle = ({event, resolve}) => resolve(event);",
           }));
