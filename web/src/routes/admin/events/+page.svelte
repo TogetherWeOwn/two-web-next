@@ -147,7 +147,14 @@ const now = new Date();
               </td>
               <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
               <td>
-                <time datetime={r.startsAt}>{r.startsAt}</time>
+                {#if r.startsAt}
+                  <time datetime={r.startsAt}>{r.startsAt}</time>
+                {:else}
+                  <span data-testid={`event-unrenderable-time-${r.eventKey}`}>Unrenderable time</span>
+                {/if}
+                {#if r.startsAt && !r.endsAt}
+                  <span data-testid={`event-unrenderable-time-${r.eventKey}`}> (unrenderable end time)</span>
+                {/if}
               </td>
               {@render fillCell(r)}
               <td>

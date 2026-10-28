@@ -16,7 +16,7 @@ function property(object: Node | null | undefined, name: string): Node {
   return entry.value;
 }
 
-function serverOutput() {
+function serverOutput(environment = "ssr") {
   const source = parse(readFileSync("web/vite.config.ts", "utf8"), {
     sourceType: "module",
     plugins: ["typescript"],
@@ -25,15 +25,15 @@ function serverOutput() {
   assert.ok(exported?.declaration.type === "CallExpression");
   const config = exported.declaration.arguments[0];
   const environments = property(config, "environments");
-  const build = property(property(environments, "ssr"), "build");
+  const build = property(property(environments, environment), "build");
   const output = property(property(build, "rolldownOptions"), "output");
   const groups = property(property(output, "codeSplitting"), "groups");
   assert.ok(groups.type === "ArrayExpression");
   return { environments, output, groups: groups.elements };
 }
 
-function groupPattern(name: string): RegExp {
-  const group = serverOutput().groups.find((node) => {
+function groupPattern(name: string, environment = "ssr"): RegExp {
+  const group = serverOutput(environment).groups.find((node) => {
     const groupName = property(node, "name");
     return groupName.type === "StringLiteral" && groupName.value === name;
   });
@@ -81,14 +81,21 @@ describe("native admin error server chunking", () => {
     expect(groupPattern("admin").test("/checkout/src/admin/reads.ts")).toBe(true);
   });
 
-  it("keeps grouping on SSR and preserves conservative minification", () => {
+  it("keeps admin grouping on SSR and preserves conservative minification", () => {
     const { environments, output } = serverOutput();
     assert.ok(environments.type === "ObjectExpression");
     expect(
       environments.properties.map((node) =>
         node.type === "ObjectProperty" && node.key.type === "Identifier" ? node.key.name : null,
       ),
-    ).toEqual(["ssr"]);
+    ).toEqual(["ssr", "client"]);
+    expect(
+      serverOutput("client").groups.map((group) => {
+        const name = property(group, "name");
+        assert.ok(name.type === "StringLiteral");
+        return name.value;
+      }),
+    ).toEqual(["hotzones"]);
     const minify = property(output, "minify");
     expect(["compress", "mangle", "codegen"].map((name) => booleanProperty(minify, name))).toEqual([
       false,
@@ -99,5 +106,42 @@ describe("native admin error server chunking", () => {
     expect(["annotation", "jsdoc", "legal"].map((name) => booleanProperty(comments, name))).toEqual(
       [false, false, true],
     );
+  });
+});
+
+describe("hotzone peak compression groups", () => {
+  it("co-compresses the SSR-only client shells with their shared peak copy", () => {
+    const pattern = groupPattern("hotzones", "client");
+    for (const module of [
+      "/checkout/web/src/routes/hotzones/+page.svelte",
+      "/checkout/web/src/routes/hotzones/[signal]/+page.svelte",
+      "/checkout/src/hotzones/weekday-names.ts",
+    ])
+      expect(pattern.test(module), module).toBe(true);
+    for (const module of [
+      "/checkout/src/hotzones/aggregates.ts",
+      "/checkout/web/src/routes/hotzones/+page.server.ts",
+      "/checkout/web/src/routes/admin/+page.svelte",
+      "/checkout/web/src/routes/events/past/+page.svelte",
+    ])
+      expect(pattern.test(module), module).toBe(false);
+  });
+
+  it("co-compresses server twins without absorbing unrelated route families", () => {
+    const pattern = groupPattern("hotzones");
+    for (const module of [
+      "/checkout/src/hotzones/pages.tsx",
+      "/checkout/src/hotzones/aggregates.ts",
+      "/checkout/src/kit-hotzones.ts",
+      "/checkout/web/src/routes/hotzones/+page.svelte",
+      "/checkout/web/src/routes/hotzones/[signal]/+page.server.ts",
+    ])
+      expect(pattern.test(module), module).toBe(true);
+    for (const module of [
+      "/checkout/src/admin/reads.ts",
+      "/checkout/src/kit-past-events.ts",
+      "/checkout/web/src/routes/events/past/+page.svelte",
+    ])
+      expect(pattern.test(module), module).toBe(false);
   });
 });

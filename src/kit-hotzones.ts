@@ -43,7 +43,9 @@ export interface HotzonesLoadArgs {
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   loadJoinsGridFn?: LoadJoinsGrid;
   recordBoardViewFn?: RecordBoardView;
-  /** Optional correlation id for the board-view record; omitted when the caller has none (see the runbook's Kit-omission caveat). */
+  /** Validated dispatch id: the failure alert and the board-view record
+   * both carry it (the record re-validates and omits it when invalid);
+   * absent in legacy calls. */
   requestId?: string | null;
 }
 
@@ -97,7 +99,7 @@ function reportLoadFailure(err: unknown, args: HotzonesLoadArgs, route: string):
     args.setHeaders(noStoreHeaders());
     throw err;
   }
-  alertRequestError(err, { method: "GET", route });
+  alertRequestError(err, { method: "GET", route, requestId: args.requestId ?? undefined });
   args.setHeaders(noStoreHeaders());
   throw hotzonesUnavailable();
 }
@@ -251,12 +253,13 @@ export async function dispatchHotzonesRequest(
   env: Env,
   render: () => Promise<Response>,
   guard: KitPublicReadGuard = kitPublicReadGuard,
+  requestId?: unknown,
 ): Promise<Response> {
   // Season grammar first, mirroring the Hono handlers: a bad season reaches
   // the load's 400 without spending. Unknown signals never reach this
   // wrapper: the manifest lists concrete signal paths only, so anything else
   // falls through to the Hono 404.
   if (!parseSeasonParam(new URL(request.url).searchParams.get("season"))) return render();
-  const limited = await guard(request, env);
+  const limited = await guard(request, env, requestId);
   return limited ?? render();
 }

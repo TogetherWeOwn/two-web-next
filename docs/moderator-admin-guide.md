@@ -36,7 +36,7 @@ expires within two hours (120 minutes after its last session-refreshing page vie
 normal browsing can rotate and extend that idle window, but never beyond
 24 hours from the login that started the session lineage. Rotation preserves
 that start time; reaching the absolute cap requires a fresh sign-in and role
-lookup. Kit-served admin pages renew the sliding session exactly like the Hono
+lookup. Kit-served admin pages rotate the session exactly like the Hono
 panel, under the same absolute cap. For immediate invalidation,
 an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply
@@ -168,8 +168,9 @@ the maintainers.
 ## Pending or unconfirmed saves
 
 With JavaScript enabled, event and featured-content editors show **Saving… Please
-wait.** when you submit. Repeating the action during the next ten seconds sends
-no extra submission and explains that saving is already pending. This feedback
+wait.** when you submit. Repeating the action in the same open form during the
+next ten seconds sends no extra submission and explains that saving is already
+pending; this does not suppress submissions in another tab or document. This feedback
 does not move keyboard focus or confirm success.
 
 If the page has not navigated after ten seconds, the message says saving is not
@@ -604,10 +605,12 @@ Follow one coherent workflow per approved change:
 Leaving the page with unsaved changes triggers a browser warning; the
 rejected-save redisplay is guarded the same way. There is no autosave: an
 unsaved draft exists only in the open document, so leaving or reloading without
-saving loses it. A repeated **Save** within 10 seconds is ignored; if a save
-seems interrupted, reopen the slot and check its stored settings before saving
-again. An expired session shows a notice and keeps the edits; use its sign-in
-link to recover.
+saving loses it. With JavaScript, a repeated **Save** in the same open form
+within 10 seconds is ignored; if a save seems interrupted, reopen the slot and
+check its stored settings before saving again. When the background session check
+detects expiry, it shows a notice and keeps the edits in that document; use its
+sign-in link to recover. Expiry first discovered by a submitted POST can instead
+navigate to write recovery without preserving the draft.
 
 Use only public links and media you are authorized to share; do not paste
 private-service URLs, personal data, or expiring/signed URLs into site content.

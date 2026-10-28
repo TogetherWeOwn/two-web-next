@@ -33,6 +33,12 @@ export default defineConfig({
             // separately. This does not change client chunking.
             codeSplitting: {
               groups: [
+                // Hotzone peaks and outage copy repeat across the Hono and
+                // Kit twins. Compress them together, with no omitted assets.
+                {
+                  name: "hotzones",
+                  test: /\/(?:src\/(?:hotzones\/|kit-hotzones\.ts$)|web\/src\/routes\/hotzones\/)/,
+                },
                 // Compress shared shell markup and both header representations
                 // together instead of placing each in a separate gzip stream.
                 {
@@ -59,6 +65,25 @@ export default defineConfig({
                 {
                   name: "events",
                   test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$|lib\/Event(?:Detail|Card|Missing|Gone)\.svelte$|routes\/events\/past\/\+page\.svelte$)/,
+                },
+              ],
+            },
+          },
+        },
+      },
+    },
+    client: {
+      build: {
+        rolldownOptions: {
+          output: {
+            codeSplitting: {
+              groups: [
+                // Both routes have csr=false. Keep their generated shells in
+                // one gzip stream rather than duplicating shared peak markup.
+                // Server-only aggregates/loaders are deliberately excluded.
+                {
+                  name: "hotzones",
+                  test: /\/(?:src\/hotzones\/weekday-names\.ts|web\/src\/routes\/hotzones\/(?:\[signal\]\/)?\+page\.svelte)$/,
                 },
               ],
             },

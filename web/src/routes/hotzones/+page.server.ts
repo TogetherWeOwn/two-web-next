@@ -14,13 +14,14 @@ export const csr = false;
 // the reads, the board-view log and the cache policy; this binding owns the
 // branded status mapping (400 season grammar, 503 outage) and the grid
 // rendering, mirroring web/src/routes/events/past/+page.server.ts.
-export const load: PageServerLoad = async ({ url, setHeaders }) => {
+export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
   try {
     const data = await loadHotzonesIndexData({
       env,
       seasonParam: url.searchParams.get("season"),
       setHeaders,
       dbForFn: dbFor,
+      requestId: locals.requestId,
     });
     return {
       season: data.season,
@@ -52,7 +53,8 @@ export const load: PageServerLoad = async ({ url, setHeaders }) => {
     // The helper already alerted on unbranded read failures; alert here only
     // for failures the helper could not see (grid rendering), so a code bug
     // never becomes a silent 503.
-    if (typeof status !== "number") alertRequestError(err, { method: "GET", route: "/hotzones" });
+    if (typeof status !== "number")
+      alertRequestError(err, { method: "GET", route: "/hotzones", requestId: locals.requestId });
     error(503, "Hot zones temporarily unavailable");
   }
 };

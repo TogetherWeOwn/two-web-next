@@ -190,7 +190,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       return parent;
     }
 
-    it("ACKs the next real sync while the first unique-lock DELETE still blocks the cleanup pool (PR68 finding 1)", async () => {
+    it("ACKs the next real sync while the first unique-lock DELETE parks, then cancels, on the cleanup pool (PR68 finding 1)", async () => {
       await seedPublished(firstKey, "First sync");
       await seedPublished(secondKey, "Second sync");
       for (const eventKey of [firstKey, secondKey]) {
@@ -249,6 +249,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
           { interval: 10, timeout: 2000 },
         );
         expect(first.ack).not.toHaveBeenCalled();
+        // Still parked behind the holder, before ANY ack and before the 2 s
+        // ledger bound can fire: the cleanup DELETE is genuinely blocked.
+        const [parked] = await observer`select pg_blocking_pids(${cleanupPid}) as blockers`;
+        expect(parked!.blockers).toContain(holderPid);
         // Real 2s release + 2s successor bounds run for each message. A max:1
         // handler contaminated by that DELETE cannot reach this second ACK.
         await vi.waitFor(
@@ -270,8 +274,19 @@ describe.skipIf(!process.env.DATABASE_URL)(
             body.idempotencyKey,
           ]),
         );
+        // The holder never released, so the parked DELETE was freed by the
+        // server-side ledger bound, not by a late commit of the first lock row.
         const [wait] = await observer`select pg_blocking_pids(${cleanupPid}) as blockers`;
-        expect(wait!.blockers).toContain(holderPid); // BEFORE releasing the holder
+        expect(wait!.blockers).toEqual([]);
+        expect(await observer`select state from pg_stat_activity where pid = ${holderPid}`).toEqual(
+          [{ state: "idle in transaction" }],
+        ); // Holder still holds.
+        // The cancelled DELETE never landed: the first lease row survives until
+        // its TTL (bot ran twice, so the queued second DELETE cannot be hidden
+        // behind it), while second's own release settles.
+        expect(await observer`select key from job_unique_locks`).toEqual([
+          { key: uniqueKey(firstKey) },
+        ]);
         expect(
           await observer`select state, request_attempts from event_sync_attempts order by payload->>'eventKey'`,
         ).toEqual([

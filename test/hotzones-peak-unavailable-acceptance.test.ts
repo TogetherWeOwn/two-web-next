@@ -553,6 +553,7 @@ let renderKit: (signal: string | null, data: Record<string, unknown>) => string;
 type KitIndexData = Awaited<ReturnType<typeof loadHotzonesIndexData>>;
 type KitSignalData = Awaited<ReturnType<typeof loadHotzoneSignalData>>;
 type KitEvent = {
+  locals: { requestId: string };
   url: URL;
   params: { signal: string };
   setHeaders: (headers: Record<string, string>) => void;
@@ -560,6 +561,8 @@ type KitEvent = {
 let bindings: {
   loadIndex: (event: KitEvent) => Promise<Record<string, unknown>>;
   loadSignal: (event: KitEvent) => Promise<Record<string, unknown>>;
+  getIndexArgs: () => { requestId: string };
+  getSignalArgs: () => { requestId: string };
   setIndexData: (data: KitIndexData) => void;
   setSignalData: (data: KitSignalData) => void;
 };
@@ -573,7 +576,7 @@ beforeAll(async () => {
         import Signal from "./web/src/routes/hotzones/[signal]/+page.svelte";
         export { load as loadIndex } from "./web/src/routes/hotzones/+page.server.ts";
         export { load as loadSignal } from "./web/src/routes/hotzones/[signal]/+page.server.ts";
-        export { setIndexData, setSignalData } from "./src/kit-hotzones";
+        export { setIndexData, setSignalData, getIndexArgs, getSignalArgs } from "./src/kit-hotzones";
         export function renderKit(signal, data) {
           return render(signal ? Signal : Index, { props: { data } }).body;
         }
@@ -617,11 +620,13 @@ beforeAll(async () => {
                 : path === "db"
                   ? `export function dbFor() { throw new Error("unexpected direct database read"); }`
                   : `
-                    let indexData, signalData;
+                    let indexData, signalData, indexArgs, signalArgs;
+                    export const getIndexArgs = () => indexArgs;
+                    export const getSignalArgs = () => signalArgs;
                     export const setIndexData = (data) => { indexData = data; };
                     export const setSignalData = (data) => { signalData = data; };
-                    export const loadHotzonesIndexData = async () => indexData;
-                    export const loadHotzoneSignalData = async () => signalData;
+                    export const loadHotzonesIndexData = async (args) => { indexArgs = args; return indexData; };
+                    export const loadHotzoneSignalData = async (args) => { signalArgs = args; return signalData; };
                   `,
             loader: "js",
           }));
@@ -837,6 +842,7 @@ describe("Kit Svelte joins unavailable vs genuine-empty", () => {
 });
 
 const bindingEvent = (signal = "joins"): KitEvent => ({
+  locals: { requestId: "hotzone-peak-binding-test" },
   url: new URL(`${APP_URL}/hotzones/${signal}?season=all`),
   params: { signal },
   setHeaders: () => {},
@@ -867,6 +873,7 @@ describe("Kit executed peak bindings", () => {
         peaks: { joins, voice, games },
       });
       const data = await bindings.loadIndex(bindingEvent());
+      expect(bindings.getIndexArgs().requestId).toBe("hotzone-peak-binding-test");
       expect({
         available: data.available,
         joinsPeak: data.joinsPeak,
@@ -900,6 +907,7 @@ describe("Kit executed peak bindings", () => {
         peak,
       });
       const data = await bindings.loadSignal(bindingEvent(signal));
+      expect(bindings.getSignalArgs().requestId).toBe("hotzone-peak-binding-test");
       expect({ available: data.available, peak: data.peak }).toEqual({ available, peak });
     },
   );

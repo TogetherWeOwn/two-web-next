@@ -55,6 +55,7 @@ let { model }: { model: KitEventDetailModel } = $props();
 // every deferred script runs after parsing, with all of its mount nodes present.
 const detailIslands = [
   "event-device-timezone",
+  "event-time-from-now",
   "rsvp-button",
   "copy-link",
   "event-share",
@@ -104,6 +105,19 @@ const lineup = $derived(
   {/if}
 </svelte:head>
 
+{#snippet destinationPreview(event: NonNullable<KitEventDetailModel["neighbors"]["previous"]>)}
+  <time datetime={event.datetime}>{event.whenText}</time>
+  {#if event.location}
+    {" "}<span class="event-related-location">{event.location}</span>
+  {/if}
+  {#if event.game}
+    {" "}<span class="event-related-game">{event.game}</span>
+  {/if}
+  {#if event.availability}
+    {" "}<span class="event-related-state">{event.availability}</span>
+  {/if}
+{/snippet}
+
 {#snippet eventPagination(neighbors: KitEventDetailModel["neighbors"] | null | undefined, series: boolean)}
   {#snippet eventLink(event: KitEventDetailModel["neighbors"]["previous"], previous: boolean)}
     {#if event}
@@ -113,10 +127,7 @@ const lineup = $derived(
         data-testid="event-{series ? 'series-' : ''}{previous ? 'previous' : 'next'}"
       >
         <span>{previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}</span>{" "}
-        <time datetime={event.datetime}>{event.whenText}</time>
-        {#if event.location}
-          <span class="event-related-location">{event.location}</span>
-        {/if}
+        {@render destinationPreview(event)}
       </a>
     {/if}
   {/snippet}
@@ -199,6 +210,26 @@ const lineup = $derived(
         <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
       </dd>
     </div>
+    {#if !model.isDraft}
+      <div hidden>
+        <dt>Time from now</dt>
+        <dd
+          class="event-device-timezone"
+          data-event-time-from-now
+          data-starts-at={model.timeDatetime}
+          data-ends-at={model.endsAt}
+        >
+          <button type="button" hidden data-testid="event-time-from-now-button">Show time from now</button>
+          <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
+        </dd>
+      </div>
+    {/if}
+    {#if model.durationText}
+      <div>
+        <dt>Duration</dt>
+        <dd>{model.durationText}</dd>
+      </div>
+    {/if}
     {#if model.location}
       <div>
         <dt>Where</dt>
@@ -321,6 +352,16 @@ const lineup = $derived(
           <p>{model.description}</p>
         </section>
       {/if}
+      {#if model.accessibilityNotes}
+        <section
+          class="event-description"
+          data-testid="event-accessibility"
+          aria-labelledby="event-accessibility-heading"
+        >
+          <h2 id="event-accessibility-heading">Accessibility</h2>
+          <p>{model.accessibilityNotes}</p>
+        </section>
+      {/if}
       {#if model.showJoinPitch}
         <section class="event-pitch" data-testid="event-join-pitch" aria-label="Join the community">
           <p>
@@ -436,10 +477,7 @@ const lineup = $derived(
             <li>
               <a href="/e/{event.key}" data-testid="event-related-link">
                 {event.title}{" "}
-                <time datetime={event.datetime}>{event.whenText}</time>
-                {#if event.location}
-                  {" "}<span class="event-related-location">{event.location}</span>
-                {/if}
+                {@render destinationPreview(event)}
               </a>
             </li>
           {/each}
