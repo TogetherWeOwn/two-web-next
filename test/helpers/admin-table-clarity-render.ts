@@ -10,7 +10,13 @@ export type RenderPanel = (
   renderer: Renderer,
   panel: Panel,
   raw?: Record<string, string>,
-  options?: { empty?: boolean; status?: string; rsvpOpen?: boolean },
+  options?: {
+    empty?: boolean;
+    status?: string;
+    rsvpOpen?: boolean;
+    eventKey?: string;
+    startsAt?: string;
+  },
 ) => Promise<{ html: string; query: Record<string, unknown> }>;
 
 // Real SSR pages, Kit route loaders and shared parsers/read models. Only the
@@ -56,11 +62,17 @@ const baseEvent = {
   icsSequence: 0n, syncRevision: 0, syncedRevision: 0, createdBy: null,
   createdAt: now, updatedAt: now, goingCount: 2,
 };
+// Two same-title recurring occurrences per lifecycle state (draft,
+// published/open, published/paused), each with a distinct key and start, so a
+// title-only accessible name cannot tell the occurrences apart.
 const eventRows = [
   { ...baseEvent, status: "draft" },
-  { ...baseEvent, id: 2, eventKey: "01K00000000000000000000002", title: "Sunday strategy", status: "draft" },
-  { ...baseEvent, id: 3, eventKey: "01K00000000000000000000003", title: "Open games" },
-  { ...baseEvent, id: 4, eventKey: "01K00000000000000000000004", title: "Paused games", rsvpOpen: false },
+  { ...baseEvent, id: 5, eventKey: "01K00000000000000000000005", status: "draft", startsAt: new Date("2099-11-08T18:00:00.000Z"), endsAt: new Date("2099-11-08T21:00:00.000Z") },
+  { ...baseEvent, id: 2, eventKey: "01K00000000000000000000002", title: "Sunday strategy", status: "draft", startsAt: new Date("2099-11-03T18:00:00.000Z"), endsAt: new Date("2099-11-03T21:00:00.000Z") },
+  { ...baseEvent, id: 3, eventKey: "01K00000000000000000000003", title: "Open games", startsAt: new Date("2099-11-02T18:00:00.000Z"), endsAt: new Date("2099-11-02T21:00:00.000Z") },
+  { ...baseEvent, id: 6, eventKey: "01K00000000000000000000006", title: "Open games", startsAt: new Date("2099-11-09T18:00:00.000Z"), endsAt: new Date("2099-11-09T21:00:00.000Z") },
+  { ...baseEvent, id: 4, eventKey: "01K00000000000000000000004", title: "Paused games", rsvpOpen: false, startsAt: new Date("2099-11-04T18:00:00.000Z"), endsAt: new Date("2099-11-04T21:00:00.000Z") },
+  { ...baseEvent, id: 7, eventKey: "01K00000000000000000000007", title: "Paused games", rsvpOpen: false, startsAt: new Date("2099-11-11T18:00:00.000Z"), endsAt: new Date("2099-11-11T21:00:00.000Z") },
 ];
 const roster = [{ userId: "100000000000000101", username: "Alex", status: "going", answeredAt: now }];
 const attempts = [{ id: 7, outcome: "added", source: "join", requestId: "fixture-request", discordId: "100000000000000101", createdAt: now }];
@@ -72,7 +84,15 @@ const components = { events: KitEvents, roster: KitRoster, "join-attempts": KitA
 
 export async function renderPanel(renderer, panel, raw = {}, options = {}) {
   const query = parsers[panel](raw);
-  const row = { ...baseEvent, status: options.status ?? "published", rsvpOpen: options.rsvpOpen ?? true };
+  const startsAt = options.startsAt ? new Date(options.startsAt) : baseEvent.startsAt;
+  const row = {
+    ...baseEvent,
+    status: options.status ?? "published",
+    rsvpOpen: options.rsvpOpen ?? true,
+    ...(options.eventKey ? { eventKey: options.eventKey } : {}),
+    startsAt,
+    endsAt: new Date(startsAt.getTime() + 3 * 60 * 60 * 1000),
+  };
   const rows = options.empty ? [] : ({ events: eventRows, roster, "join-attempts": attempts, "activity-log": activity, featured })[panel];
   if (renderer === "Hono") {
     let page;
