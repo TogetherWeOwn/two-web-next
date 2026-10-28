@@ -5,7 +5,7 @@
 // routes in ./routes.ts only add headers and reads. Public fields only —
 // never attendee identities, RSVP records, waitlist state, or raw Discord ids.
 import { canonicalUrl } from "../seo";
-import { formatEventWhen as mdDetailInstant, isValidZone } from "../events/date-format";
+import { effectiveZone, formatEventWhen as mdDetailInstant } from "../events/date-format";
 import { fmt } from "../events/pages-shared";
 import { POLICY_VERSION } from "../privacy";
 import { POLICY_MARKDOWN } from "../privacy-content";
@@ -238,10 +238,11 @@ export function mdJoin(appUrl: string, inviteUrl: string): string {
 }
 
 function mdEventWhen(e: MdEvent): string {
-  return `${fmt(e.startsAt, e.timezone)} (${e.timezone})`;
+  const zone = effectiveZone(e.timezone);
+  return `${fmt(e.startsAt, zone)} (${zone})`;
 }
 
-const mdZoneLabel = (tz: string): string => (isValidZone(tz) ? tz : "UTC");
+const mdZoneLabel = effectiveZone;
 
 function mdEventBlock(appUrl: string, e: MdEvent): string[] {
   const out = [
