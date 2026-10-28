@@ -547,7 +547,12 @@ for (const { name, group, axis, bytes, ceiling, breach = false } of [
   overRow("Worker raw one byte over", "kit.worker", "raw", "worker._worker.js.maxRawBytes"),
   overRow("Worker gzip one byte over", "kit.worker", "gzip", "worker._worker.js.maxGzipBytes"),
   overRow("CSS raw one byte over", "kit.client.css", "raw", "client.css.maxRawBytes"),
-  overRow("CSS gzip one byte over", "kit.client.css", "gzip", "client.css.maxGzipBytes"),
+  ...boundaryRows({
+    label: "CSS gzip",
+    group: "kit.client.css",
+    axis: "gzip",
+    key: "client.css.maxGzipBytes",
+  }),
   overRow("client file count one over", "kit.client.js", "files", "client.js.maxFiles"),
   overRow("server file count one over", "kit.server.js", "files", "server.js.maxFiles"),
   overRow("CSS file count one over", "kit.client.css", "files", "client.css.maxFiles"),

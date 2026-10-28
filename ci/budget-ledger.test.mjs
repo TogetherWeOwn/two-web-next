@@ -305,6 +305,26 @@ test("lifecycle fragment filenames allow asset suffixes but reject traversal and
   }
 });
 
+test("allocation front matter rejects duplicate nested keys including escaped spellings", () => {
+  const file = "ci/budgets/decisions/allocations/2026-10-28-retire.md";
+  const json = JSON.stringify({
+    action: "retire",
+    fragment: "ci/budgets/bundle/copy-link.js.json",
+    budget: {
+      budgets: {
+        "public/islands/copy-link.js": {
+          maxRawBytes: 2048,
+          maxGzipBytes: 1024,
+        },
+      },
+    },
+    measured: {},
+    cause: "Retired island after checking imports.",
+    pr: 42,
+  }).replace('"maxRawBytes":2048', '"maxRawBytes":2048,"maxRaw\\u0042ytes":2048');
+  assert.throws(() => parseAllocation(file, `---\n${json}\n---\n`), /duplicate front matter key/);
+});
+
 test("effective loader ignores old deltas for retired assets", (t) => {
   const root = scratch(t);
   const unit = "bundle-public-islands-copy-link-js-gzip";

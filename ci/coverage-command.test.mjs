@@ -167,7 +167,7 @@ const PATCH = "Patch coverage (WARN)";
 const SUMMARY = "Coverage job summary";
 const UPLOAD = "Upload coverage report";
 
-function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
+function evaluateGuard(guard, { jobFailed, scope, reportPresent, eventName }) {
   const expression = guard.replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, "$1");
   const tokens = expression.match(/'[^']*'|[A-Za-z_][\w.]*\(?|!=|==|&&|\|\||[()!]|\)/g) ?? [];
   assert.equal(tokens.join(""), expression.replace(/\s+/g, ""), `unsupported guard: ${guard}`);
@@ -197,6 +197,7 @@ function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
       );
       return close(reportPresent ? "present-hash" : "");
     }
+    if (token === "github.event_name") return eventName;
     const output = token.match(/^needs\.scope\.outputs\.(\w+)$/);
     assert(output, `unsupported guard token ${token}: ${guard}`);
     return scope[output[1]] ?? "";
@@ -241,11 +242,11 @@ function evaluateGuard(guard, { jobFailed, scope, reportPresent }) {
 
 // Walk the check job's steps in order. `failing` names the one step that fails
 // when it runs; a step whose guard is false is skipped without failing the job.
-function simulateCheckJob({ failing, scope, reportPresent = true }) {
+function simulateCheckJob({ failing, scope, reportPresent = true, eventName = "pull_request" }) {
   const outcomes = new Map();
   let jobFailed = false;
   for (const { label, guard } of checkSteps) {
-    if (!evaluateGuard(guard, { jobFailed, scope, reportPresent })) {
+    if (!evaluateGuard(guard, { jobFailed, scope, reportPresent, eventName })) {
       outcomes.set(label, "skipped");
       continue;
     }
@@ -257,7 +258,33 @@ function simulateCheckJob({ failing, scope, reportPresent = true }) {
   return outcomes;
 }
 
-const codeScope = { docs_only: "false", draft: "false", full: "true", app: "true" };
+const codeScope = {
+  docs_only: "false",
+  draft: "false",
+  full: "true",
+  app: "true",
+};
+
+test("budget admission gate runs on supported events and skips scheduled runs", () => {
+  const label = "Budget admission policy (HARD on PR and merge-group composition)";
+  for (const eventName of ["pull_request", "merge_group", "push"]) {
+    assert.equal(simulateCheckJob({ scope: codeScope, eventName }).get(label), "success");
+  }
+  assert.equal(simulateCheckJob({ scope: codeScope, eventName: "schedule" }).get(label), "skipped");
+});
+
+test("guard evaluator rejects unknown context tokens", () => {
+  assert.throws(
+    () =>
+      evaluateGuard("github.actor == 'someone'", {
+        jobFailed: false,
+        scope: codeScope,
+        reportPresent: true,
+        eventName: "pull_request",
+      }),
+    /unsupported guard token/,
+  );
+});
 
 test("the check job models the guarded steps the simulation relies on", () => {
   const labels = checkSteps.map((step) => step.label);
@@ -303,7 +330,11 @@ for (const [label, failing] of [
 }
 
 test("a failed dependency audit skips npm install and every later success-guarded step", () => {
-  const outcomes = simulateCheckJob({ failing: AUDIT, scope: codeScope, reportPresent: false });
+  const outcomes = simulateCheckJob({
+    failing: AUDIT,
+    scope: codeScope,
+    reportPresent: false,
+  });
   assert.equal(outcomes.get(INSTALL), "skipped");
   assert.equal(outcomes.get(COVERAGE), "skipped");
   assert.equal(outcomes.get(SUMMARY), "skipped");
@@ -329,14 +360,20 @@ test("the coverage summary and upload still run after a failed coverage run that
   const outcomes = simulateCheckJob({ failing: COVERAGE, scope: codeScope });
   assert.equal(outcomes.get(SUMMARY), "success");
   assert.equal(outcomes.get(UPLOAD), "success");
-  const noReport = simulateCheckJob({ failing: COVERAGE, scope: codeScope, reportPresent: false });
+  const noReport = simulateCheckJob({
+    failing: COVERAGE,
+    scope: codeScope,
+    reportPresent: false,
+  });
   assert.equal(noReport.get(SUMMARY), "skipped");
   assert.equal(noReport.get(UPLOAD), "skipped");
 });
 
 for (const scopeName of ["docs_only", "draft"]) {
   test(`Tier-0 and patch coverage are skipped on a ${scopeName} scope`, () => {
-    const outcomes = simulateCheckJob({ scope: { ...codeScope, [scopeName]: "true" } });
+    const outcomes = simulateCheckJob({
+      scope: { ...codeScope, [scopeName]: "true" },
+    });
     for (const label of [AUDIT, COVERAGE, TIER0, PATCH, SUMMARY, UPLOAD]) {
       assert.equal(outcomes.get(label), "skipped", label);
     }
@@ -353,7 +390,9 @@ for (const [label, body, expected] of [
     7,
   ],
 ]) {
-  test(`the full coverage command propagates ${label}`, { timeout: 20000 }, async (t) => {
+  test(`the full coverage command propagates ${label}`, {
+    timeout: 20000,
+  }, async (t) => {
     const fixture = await mkdtemp(
       join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "coverage-command-"),
     );

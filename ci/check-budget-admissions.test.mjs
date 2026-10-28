@@ -350,7 +350,9 @@ function newIsland(fx, overrides = {}) {
     "bundle-public-islands-new-js-raw": Buffer.byteLength(body),
     "bundle-public-islands-new-js-gzip": gzipSync(body).length,
   };
-  const budget = { budgets: { [asset]: { maxRawBytes: 27, maxGzipBytes: 47, ...overrides } } };
+  const budget = {
+    budgets: { [asset]: { maxRawBytes: 27, maxGzipBytes: 47, ...overrides } },
+  };
   const fragment = "ci/budgets/bundle/new.json";
   fx.put(fragment, JSON.stringify(budget));
   lifecycle(fx, "initial", fragment, budget, measured);
@@ -381,7 +383,9 @@ for (const invalid of ["margin", "measurement", "missing decision", "existing un
     if (invalid === "missing decision")
       rmSync(join(fx.root, "ci/budgets/decisions/allocations/2026-10-28-initial.md"));
     if (invalid === "existing unit") {
-      budget.budgets = { "public/islands/a.js": { maxRawBytes: 27, maxGzipBytes: 47 } };
+      budget.budgets = {
+        "public/islands/a.js": { maxRawBytes: 27, maxGzipBytes: 47 },
+      };
       fx.put(fragment, JSON.stringify(budget));
       lifecycle(fx, "initial", fragment, budget, measured);
     }
@@ -400,12 +404,18 @@ for (const remains of [true, false]) {
     fx.put(
       "ci/budgets/bundle/b.json",
       JSON.stringify({
-        budgets: { "public/islands/b.js": { maxRawBytes: 100, maxGzipBytes: 50 } },
+        budgets: {
+          "public/islands/b.js": { maxRawBytes: 100, maxGzipBytes: 50 },
+        },
       }),
     );
     const base = installed(fx);
     const fragment = "ci/budgets/bundle/a.json";
-    const budget = { budgets: { "public/islands/a.js": { maxRawBytes: 100, maxGzipBytes: 50 } } };
+    const budget = {
+      budgets: {
+        "public/islands/a.js": { maxRawBytes: 100, maxGzipBytes: 50 },
+      },
+    };
     rmSync(join(fx.root, fragment));
     if (!remains) rmSync(join(fx.root, "public/islands/a.js"));
     lifecycle(fx, "retire", fragment, budget);
@@ -484,6 +494,25 @@ test("GitHub provenance retries transient responses and network errors with boun
     assert.equal(calls, 3);
     assert.deepEqual(waits, [1000, 2000]);
   }
+});
+
+test("GitHub provenance caches complete paginated responses per endpoint", async () => {
+  const calls = [];
+  const request = githubRequest(repo, "fake-test-token", async (url) => {
+    calls.push(url);
+    const page = new URL(url).searchParams.get("page");
+    return {
+      ok: true,
+      json: async () =>
+        page === "1" ? Array.from({ length: 100 }, (_, number) => ({ number })) : [{ number: 100 }],
+    };
+  });
+  const first = await request("pulls/42/files");
+  assert.equal(first.length, 101);
+  assert.deepEqual(await request("pulls/42/files"), first);
+  assert.equal(calls.length, 2);
+  await request("pulls/43/files");
+  assert.equal(calls.length, 4);
 });
 
 test("permanent API errors are not retried and transient exhaustion fails closed after three attempts", async () => {
@@ -678,9 +707,11 @@ for (const variant of ["wrong-name", "wrong-email", "wrong-subject", "six-days-o
     const main = fx.git("rev-parse", "HEAD");
     fx.add(path.replace("feature", "new"), 500);
     const head = fx.commit("new feature");
+    let lookups = 0;
     await assert.rejects(
       fx.check("pull_request", prEvent(main, head), {
         request: async (endpoint) => {
+          lookups += 1;
           assert.equal(endpoint, `commits/${main}/pulls`);
           return [
             {
@@ -694,6 +725,7 @@ for (const variant of ["wrong-name", "wrong-email", "wrong-subject", "six-days-o
       }),
       /2%/,
     );
+    assert.equal(lookups, 1, "recent or nonstandard history must use GitHub provenance");
   });
 }
 
@@ -730,7 +762,9 @@ for (const mismatch of ["branch", "repository"]) {
             ? {
                 base: {
                   ref: mismatch === "branch" ? "other" : "main",
-                  repo: { full_name: mismatch === "repository" ? "other/repo" : repo },
+                  repo: {
+                    full_name: mismatch === "repository" ? "other/repo" : repo,
+                  },
                 },
               }
             : fx.request(endpoint),
@@ -764,7 +798,10 @@ test("initial allocation permits exactly 2% but rejects more", async (t) => {
   const fragment = "ci/budgets/bundle/new.json";
   const budget = {
     budgets: {
-      [asset]: { maxRawBytes: 102, maxGzipBytes: measured["bundle-public-islands-new-js-gzip"] },
+      [asset]: {
+        maxRawBytes: 102,
+        maxGzipBytes: measured["bundle-public-islands-new-js-gzip"],
+      },
     },
   };
   fx.put(fragment, JSON.stringify(budget));
@@ -781,10 +818,16 @@ test("initial allocation permits exactly 2% but rejects more", async (t) => {
 test("a retired unit cannot be reintroduced as a fresh base", async (t) => {
   const fx = fixture(t);
   const fragment = "ci/budgets/bundle/a.json";
-  const budget = { budgets: { "public/islands/a.js": { maxRawBytes: 100, maxGzipBytes: 50 } } };
+  const budget = {
+    budgets: { "public/islands/a.js": { maxRawBytes: 100, maxGzipBytes: 50 } },
+  };
   fx.put(
     "ci/budgets/bundle/b.json",
-    JSON.stringify({ budgets: { "public/islands/b.js": { maxRawBytes: 100, maxGzipBytes: 50 } } }),
+    JSON.stringify({
+      budgets: {
+        "public/islands/b.js": { maxRawBytes: 100, maxGzipBytes: 50 },
+      },
+    }),
   );
   installed(fx);
   rmSync(join(fx.root, fragment));
@@ -841,7 +884,11 @@ test("GitHub rate-limit retry honors Retry-After seconds", async () => {
     async () => {
       calls += 1;
       return calls === 1
-        ? { ok: false, status: 403, headers: new Headers({ "retry-after": "60" }) }
+        ? {
+            ok: false,
+            status: 403,
+            headers: new Headers({ "retry-after": "60" }),
+          }
         : { ok: true, json: async () => ({ number: 42 }) };
     },
     { sleep: async (ms) => waits.push(ms), random: () => 0 },
@@ -857,7 +904,11 @@ test("excessive Retry-After fails closed without retrying early", async () => {
     "fake-test-token",
     async () => {
       calls += 1;
-      return { ok: false, status: 429, headers: new Headers({ "retry-after": "121" }) };
+      return {
+        ok: false,
+        status: 429,
+        headers: new Headers({ "retry-after": "121" }),
+      };
     },
     { sleep: async () => assert.fail("must not retry early"), random: () => 0 },
   );
@@ -922,7 +973,11 @@ test("queue attributes an actual fragment rename only with matching retirement e
       },
       ...["initial", "retire"].map((action) => {
         const file = `ci/budgets/decisions/allocations/2026-10-28-${action}.md`;
-        return { filename: file, status: "added", sha: fx.git("rev-parse", `HEAD:${file}`) };
+        return {
+          filename: file,
+          status: "added",
+          sha: fx.git("rev-parse", `HEAD:${file}`),
+        };
       }),
     ];
   };
