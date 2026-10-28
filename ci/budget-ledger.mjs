@@ -213,6 +213,7 @@ export function validateAdmissions({ bases, historical, proposed, now }) {
 export function admissionHeadroom(ceiling, measured) {
   integer(ceiling, "ceiling");
   integer(measured, "measurement");
+  if (measured <= ceiling) return 0;
   const cap = Math.floor(ceiling / 200);
   const overage = Math.max(0, measured - ceiling);
   if (overage > cap) throw new Error("measurement needs more than the 0.5% allowance");

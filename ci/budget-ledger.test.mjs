@@ -240,6 +240,8 @@ test("headroom is capped in bytes: no mandatory 256-byte minimum", () => {
   assert.equal(admissionHeadroom(336_640, 336_800), 1_683);
   assert.equal(admissionHeadroom(1_024, 1_025), 5);
   assert.equal(admissionHeadroom(100, 100), 0);
+  assert.equal(admissionHeadroom(100_000, 99_999), 0, "reuse existing headroom first");
+  assert.equal(admissionHeadroom(100_000, 100_000), 0, "an exact fit needs no admission");
   assert.throws(() => admissionHeadroom(100, 101), /0.5%/);
   assert.throws(() => admissionHeadroom(1_024, 1_030), /0.5%/);
 });
