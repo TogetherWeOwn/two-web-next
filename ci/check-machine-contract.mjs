@@ -327,7 +327,11 @@ const SIZE_LITERAL = /\b\d[\d,._]*\s*(?:[KMGT]i?B|bytes?|kilobytes?|megabytes?)\
 // Bare suffixes stay case-sensitive so "5m" (minutes) is not a size.
 const SIZE_BARE_SUFFIX = /\b\d[\d,._]*\s*[kKMGT]\b/;
 const RESULT_SUBJECT =
-  /\b(?:events?|results?|responses?|replies|reply|payloads?|bod(?:y|ies)|DTOs?|CallToolResult|structuredContent|request\s+IDs?|transport|framing|wrappers?|envelopes?|overhead|text|JSON|collections?|rows?|items?)\b/i;
+  /\b(?:events?|results?|responses?|replies|reply|payloads?|bod(?:y|ies)|DTOs?|CallToolResult|structuredContent|request\s+IDs?|transport|framing|wrappers?|envelopes?|overhead|text|JSON)\b/i;
+// Count nouns need a direct boundary declaration, not an unrelated predicate
+// such as "items with limited availability" or "rows include escaped characters".
+const COUNT_BOUNDARY =
+  /\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\s+(?:(?:at|to|of)\s+)?\d+|unbounded|unlimited)\b/i;
 const SIZE_PREDICATE =
   /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
 // Abbreviations carry periods that are not sentence ends; rejoin fragments
@@ -347,6 +351,7 @@ for (const sentence of outsideSentences) {
     flat &&
     (SIZE_LITERAL.test(flat) ||
       SIZE_BARE_SUFFIX.test(flat) ||
+      COUNT_BOUNDARY.test(flat) ||
       (RESULT_SUBJECT.test(flat) && SIZE_PREDICATE.test(flat)))
   )
     check(
