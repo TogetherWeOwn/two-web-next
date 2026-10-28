@@ -270,6 +270,9 @@ async function selftest() {
         const slug = route === "/" ? "root" : route.replaceAll("/", "_");
         writeFileSync(join(rdir, `${slug}-report.json`), JSON.stringify(lhr(`https://h${route}`)));
       }
+      if (step.assertions !== undefined) {
+        writeFileSync(join(lhci, "assertion-results.json"), step.assertions);
+      }
       const marker = step.assertFailed ? `\n${ASSERT_FAILURE_MARKER}\n` : "";
       return {
         exitCode: step.exitCode,
@@ -295,6 +298,32 @@ async function selftest() {
     assert.equal(code, 0);
     assert.equal(calls, 1);
     assert.equal(loadCollectedLhrs(join(caseDir, ".lighthouseci")).length, 24);
+  }
+  // Full collection and exit 0 cannot override failed or unreadable assertion
+  // evidence. Neither failure retries; passing error-level results stay green.
+  for (const [name, assertions, expectedCode, verdict] of [
+    [
+      "passing results",
+      JSON.stringify([{ url: fixtureUrls[0], level: "error", passed: true }]),
+      0,
+      null,
+    ],
+    [
+      "failed result without a process failure",
+      JSON.stringify([{ url: fixtureUrls[0], level: "error", passed: false }]),
+      1,
+      /BUDGET BREACH/,
+    ],
+    ["unreadable results", "{truncated", 1, /UNCLASSIFIED STEP FAILURE/],
+  ]) {
+    const { code, calls, caseDir } = await runCase([
+      { exitCode: 0, urls: fixtureUrls, assertions },
+    ]);
+    assert.equal(code, expectedCode, name);
+    assert.equal(calls, 1, `${name}: no retry`);
+    if (verdict) {
+      assert.match(readFileSync(join(caseDir, "diagnosis.md"), "utf8"), verdict, name);
+    }
   }
   // Stale evidence from an earlier invocation never counts: leftover LHRs and
   // old reports are cleared before attempt 1.
