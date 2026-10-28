@@ -8,6 +8,7 @@ import type { JoinResult } from "../return-journey";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
+import { eventLinkAvailability } from "./link-availability";
 import type {
   EventAttendee,
   EventLink,
@@ -19,21 +20,41 @@ import type {
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-import { formatEventWhen as fmtWithOffset } from "./date-format";
+import { formatElapsedDuration, formatEventWhen as fmtWithOffset } from "./date-format";
 
-const DestinationPreview: FC<{ event: EventLink }> = ({ event }) => (
-  <>
-    {Number.isFinite(event.startsAt.getTime()) ? (
-      <>
-        {" "}
-        <time datetime={event.startsAt.toISOString()}>
-          {fmtWithOffset(event.startsAt, event.timezone)}
-        </time>
-      </>
-    ) : null}
-    {event.location ? <span class="event-related-location">{event.location}</span> : null}
-  </>
-);
+const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now }) => {
+  const availability = eventLinkAvailability(event, now);
+  return (
+    <>
+      {Number.isFinite(event.startsAt.getTime()) ? (
+        <>
+          {" "}
+          <time datetime={event.startsAt.toISOString()}>
+            {fmtWithOffset(event.startsAt, event.timezone)}
+          </time>
+        </>
+      ) : null}
+      {event.location ? (
+        <>
+          {" "}
+          <span class="event-related-location">{event.location}</span>
+        </>
+      ) : null}
+      {event.game ? (
+        <>
+          {" "}
+          <span class="event-related-game">{event.game}</span>
+        </>
+      ) : null}
+      {availability ? (
+        <>
+          {" "}
+          <span class="event-related-state">{availability}</span>
+        </>
+      ) : null}
+    </>
+  );
+};
 
 // Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
 // the blade wraps it in @guest, so any signed-in viewer (member or
@@ -91,22 +112,9 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
-  // One render instant for the RSVP verdict below and the RSVP block, so the
-  // roster invitations and the closed/paused notice can never disagree.
+  const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
+  // Share one render instant with the lineup and RSVP control.
   const now = new Date();
-  // Closed/paused verdict for the roster invitations: the same verdict
-  // RsvpButton renders (src/events/rsvp-button.tsx). Past, paused and draft
-  // events keep a plain honest empty line with no impossible RSVP
-  // invitation on the same page as the closed/paused notice.
-  const rsvpClosed =
-    e.status === "cancelled"
-      ? "cancelled"
-      : e.status === "draft"
-        ? "draft"
-        : e.status !== "published" || e.endsAt <= now
-          ? "past"
-          : null;
-  const rsvpUnavailable = rsvpClosed !== null || !e.rsvpOpen;
   const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
@@ -178,30 +186,47 @@ export const EventPage: FC<{
             <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
           </dd>
         </div>
-        {e.location ? (
-          <div>
-            <dt>Where</dt>
-            <dd>
-              <p data-testid="event-venue">{e.location}</p>
-              <p>
-                <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
-                  Get directions
-                </a>
-              </p>
-            </dd>
-          </div>
-        ) : (
-          // Venue-less detail names the gap instead of hiding the row; list
-          // cards stay clean (no TBD there).
-          <div>
-            <dt>Where</dt>
-            <dd>
-              <p data-testid="event-venue-tbd">
-                Venue TBD — check <a href="/discord">Discord</a> for updates.
-              </p>
+        {e.status === "draft" || e.status === "cancelled" ? null : (
+          <div hidden>
+            <dt>Time from now</dt>
+            <dd
+              class="event-device-timezone"
+              data-event-time-from-now
+              data-starts-at={e.startsAt.toISOString()}
+              data-ends-at={e.endsAt.toISOString()}
+            >
+              <button type="button" hidden data-testid="event-time-from-now-button">
+                Show time from now
+              </button>
+              <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
             </dd>
           </div>
         )}
+        {duration ? (
+          <div>
+            <dt>Duration</dt>
+            <dd>{duration}</dd>
+          </div>
+        ) : null}
+        <div>
+          <dt>Where</dt>
+          <dd>
+            {e.location ? (
+              <>
+                <p data-testid="event-venue">{e.location}</p>
+                <p>
+                  <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
+                    Get directions
+                  </a>
+                </p>
+              </>
+            ) : (
+              <p data-testid="event-venue-tbd">
+                Venue TBD — check <a href="/discord">Discord</a> for updates.
+              </p>
+            )}
+          </dd>
+        </div>
         {e.organizer_name ? (
           <div>
             <dt>Hosted by</dt>
@@ -272,6 +297,7 @@ export const EventPage: FC<{
         />
         <script src="/islands/rsvp-button.js" defer />
         <script src="/islands/event-device-timezone.js" defer />
+        <script src="/islands/event-time-from-now.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>
@@ -437,53 +463,39 @@ export const EventPage: FC<{
             .
           </p>
         </section>
-      ) : !member && !session ? (
-        // Guest: the lineup count shows above, so the roster names itself and
-        // points at sign-in with this event as ?next= instead of vanishing.
-        // Zero RSVPs gets its own line: "0 going — sign in to see who's in"
-        // invites a sign-in to view an empty list.
-        <section aria-labelledby="event-roster-heading" data-testid="event-roster-guest-nudge">
-          <h2 id="event-roster-heading">Who's going</h2>
+      ) : (
+        // One accessible shell for guest, non-member and empty member states.
+        // Later attendee pages retain the populated/stale-page branch above.
+        <section
+          aria-labelledby="event-roster-heading"
+          data-testid={
+            member
+              ? "event-roster-empty"
+              : session
+                ? "event-roster-members-only"
+                : "event-roster-guest-nudge"
+          }
+        >
+          <h2 id="event-roster-heading">Who's going{member ? " (0)" : ""}</h2>
           <p>
-            {e.goingCount > 0 ? (
+            {member ? (
+              "No one is listed as going yet."
+            ) : session ? (
               <>
-                {e.goingCount} going —{" "}
-                <a href={`/join/discord?next=${encodeURIComponent(path)}`}>
-                  sign in to see who's in
-                </a>
-                .
+                Members only —{" "}
+                <a href={`/join?next=${encodeURIComponent(returnTo ?? path)}`}>join the Discord</a>{" "}
+                to see who's in.
               </>
-            ) : rsvpUnavailable ? (
-              <>No RSVPs.</>
             ) : (
               <>
-                No RSVPs yet —{" "}
-                <a href={`/join/discord?next=${encodeURIComponent(path)}`}>
-                  sign in to be the first
+                {e.goingCount > 0 ? `${e.goingCount} going —` : "No one is listed as going yet."}{" "}
+                <a href={`/join/discord?next=${encodeURIComponent(returnTo ?? path)}`}>
+                  sign in to see who's in
                 </a>
                 .
               </>
             )}
           </p>
-        </section>
-      ) : !member ? (
-        // Signed-in non-member: members-only explainer with the join path.
-        <section aria-labelledby="event-roster-heading" data-testid="event-roster-members-only">
-          <h2 id="event-roster-heading">Who's going</h2>
-          <p>
-            Members only — <a href={`/join?next=${encodeURIComponent(path)}`}>join the Discord</a>{" "}
-            to see who's in.
-          </p>
-        </section>
-      ) : (
-        // Member on an empty page-1 roster: honest empty state. Page>1 keeps
-        // the existing stale-page copy above. Closed/paused events keep a
-        // plain line: the RSVP block on the same page already says no seat
-        // can be taken. None of these states carries the attendees-live
-        // mount: the island finds the member list by section identity.
-        <section aria-labelledby="event-roster-heading" data-testid="event-roster-empty">
-          <h2 id="event-roster-heading">Who's going (0)</h2>
-          {rsvpUnavailable ? <p>No RSVPs.</p> : <p>No RSVPs yet — RSVP to start the list.</p>}
         </section>
       )}
       <script src="/islands/copy-link.js" defer />
@@ -505,13 +517,13 @@ export const EventPage: FC<{
                 data-testid="event-series-previous"
               >
                 <span>← Previous in series: {series.previous.title}</span>
-                <DestinationPreview event={series.previous} />
+                <DestinationPreview event={series.previous} now={now} />
               </a>
             ) : null}{" "}
             {series.next ? (
               <a href={`/e/${series.next.eventKey}`} rel="next" data-testid="event-series-next">
                 <span>Next in series: {series.next.title} →</span>
-                <DestinationPreview event={series.next} />
+                <DestinationPreview event={series.next} now={now} />
               </a>
             ) : null}
           </nav>
@@ -521,13 +533,13 @@ export const EventPage: FC<{
             {neighbors.previous ? (
               <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
                 <span>← Previous event: {neighbors.previous.title}</span>
-                <DestinationPreview event={neighbors.previous} />
+                <DestinationPreview event={neighbors.previous} now={now} />
               </a>
             ) : null}{" "}
             {neighbors.next ? (
               <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
                 <span>Next event: {neighbors.next.title} →</span>
-                <DestinationPreview event={neighbors.next} />
+                <DestinationPreview event={neighbors.next} now={now} />
               </a>
             ) : null}
           </nav>
@@ -539,16 +551,8 @@ export const EventPage: FC<{
               {related.map((event) => (
                 <li>
                   <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
-                    {event.title}{" "}
-                    <time datetime={event.startsAt.toISOString()}>
-                      {fmtWithOffset(event.startsAt, event.timezone)}
-                    </time>
-                    {event.location ? (
-                      <>
-                        {" "}
-                        <span class="event-related-location">{event.location}</span>
-                      </>
-                    ) : null}
+                    {event.title}
+                    <DestinationPreview event={event} now={now} />
                   </a>
                 </li>
               ))}

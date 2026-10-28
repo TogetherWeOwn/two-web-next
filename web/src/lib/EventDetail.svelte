@@ -55,6 +55,7 @@ let { model }: { model: KitEventDetailModel } = $props();
 // every deferred script runs after parsing, with all of its mount nodes present.
 const detailIslands = [
   "event-device-timezone",
+  "event-time-from-now",
   "rsvp-button",
   "copy-link",
   "event-share",
@@ -68,10 +69,6 @@ const detailIslands = [
 // server render instant, so a fast or slow viewer clock never reopens or
 // closes this render.
 const closed = $derived(model.rsvpClosed);
-// Roster invitations follow the same closed/paused verdict the RSVP block
-// renders: past, paused and draft events keep a plain honest empty line
-// with no impossible RSVP invitation.
-const rsvpUnavailable = $derived(closed !== null || !model.rsvpOpen);
 const full = $derived(model.capacity !== null && model.goingOccupancy >= model.capacity);
 const going = $derived(model.answer?.status === "going");
 const waitlisted = $derived(model.answer?.status === "waitlisted");
@@ -108,6 +105,19 @@ const lineup = $derived(
   {/if}
 </svelte:head>
 
+{#snippet destinationPreview(event: NonNullable<KitEventDetailModel["neighbors"]["previous"]>)}
+  <time datetime={event.datetime}>{event.whenText}</time>
+  {#if event.location}
+    {" "}<span class="event-related-location">{event.location}</span>
+  {/if}
+  {#if event.game}
+    {" "}<span class="event-related-game">{event.game}</span>
+  {/if}
+  {#if event.availability}
+    {" "}<span class="event-related-state">{event.availability}</span>
+  {/if}
+{/snippet}
+
 {#snippet eventPagination(neighbors: KitEventDetailModel["neighbors"] | null | undefined, series: boolean)}
   {#snippet eventLink(event: KitEventDetailModel["neighbors"]["previous"], previous: boolean)}
     {#if event}
@@ -117,10 +127,7 @@ const lineup = $derived(
         data-testid="event-{series ? 'series-' : ''}{previous ? 'previous' : 'next'}"
       >
         <span>{previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}</span>{" "}
-        <time datetime={event.datetime}>{event.whenText}</time>
-        {#if event.location}
-          <span class="event-related-location">{event.location}</span>
-        {/if}
+        {@render destinationPreview(event)}
       </a>
     {/if}
   {/snippet}
@@ -203,10 +210,30 @@ const lineup = $derived(
         <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
       </dd>
     </div>
-    {#if model.location}
+    {#if !model.isDraft}
+      <div hidden>
+        <dt>Time from now</dt>
+        <dd
+          class="event-device-timezone"
+          data-event-time-from-now
+          data-starts-at={model.timeDatetime}
+          data-ends-at={model.endsAt}
+        >
+          <button type="button" hidden data-testid="event-time-from-now-button">Show time from now</button>
+          <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
+        </dd>
+      </div>
+    {/if}
+    {#if model.durationText}
       <div>
-        <dt>Where</dt>
-        <dd>
+        <dt>Duration</dt>
+        <dd>{model.durationText}</dd>
+      </div>
+    {/if}
+    <div>
+      <dt>Where</dt>
+      <dd>
+        {#if model.location}
           <p data-testid="event-venue">{model.location}</p>
           {#if model.directionsUrl}
             <p>
@@ -215,19 +242,13 @@ const lineup = $derived(
               </a>
             </p>
           {/if}
-        </dd>
-      </div>
-    {:else}
-      <!-- Venue-less detail names the gap instead of hiding the row; list cards stay clean. -->
-      <div>
-        <dt>Where</dt>
-        <dd>
+        {:else}
           <p data-testid="event-venue-tbd">
             Venue TBD — check <a href="/discord">Discord</a> for updates.
           </p>
-        </dd>
-      </div>
-    {/if}
+        {/if}
+      </dd>
+    </div>
     {#if model.series && model.series.hosts.length > 0}
       <div>
         <dt>Series hosts</dt>
@@ -448,47 +469,27 @@ const lineup = $derived(
         <a href={model.attendeesRefreshHref} data-testid="event-attendees-refresh">Refresh attendees</a>.
       </p>
     </section>
-  {:else if !model.viewerMember && !model.viewerUsername}
-    <!-- Guest: the lineup count shows above, so the roster names itself and points at
-         sign-in with this event as ?next= instead of vanishing. Zero RSVPs gets its own
-         line: "0 going — sign in to see who's in" invites a sign-in to view an
-         empty list. -->
-    <section aria-labelledby="event-roster-heading" data-testid="event-roster-guest-nudge">
-      <h2 id="event-roster-heading">Who's going</h2>
+  {:else}
+    <!-- One shell keeps the named roster states consistent without duplicating
+         markup in the client bundle. The resolver's viewer state, not username,
+         distinguishes a guest from a signed-in non-member. -->
+    <section
+      aria-labelledby="event-roster-heading"
+      data-testid={model.viewerMember ? "event-roster-empty" : model.showJoinPitch ? "event-roster-guest-nudge" : "event-roster-members-only"}
+    >
+      <h2 id="event-roster-heading">Who's going{model.viewerMember ? " (0)" : ""}</h2>
       <p>
-        {#if model.goingCount > 0}
-          {model.goingCount} going —
-          <a href={loginUrl(model.path)}>sign in to see who's in</a>.
-        {:else if rsvpUnavailable}
-          No RSVPs.
+        {#if model.viewerMember}
+          No one is listed as going yet.
+        {:else if model.showJoinPitch}
+          {model.goingCount > 0 ? `${model.goingCount} going —` : "No one is listed as going yet."}
+          <a href={signIn}>sign in to see who's in</a>.
         {:else}
-          No RSVPs yet —
-          <a href={loginUrl(model.path)}>sign in to be the first</a>.
+          Members only —
+          <a href="/join?next={encodeURIComponent(model.joinReturnTo)}">join the Discord</a>
+          to see who's in.
         {/if}
       </p>
-    </section>
-  {:else if !model.viewerMember}
-    <!-- Signed-in non-member: members-only explainer with the join path. -->
-    <section aria-labelledby="event-roster-heading" data-testid="event-roster-members-only">
-      <h2 id="event-roster-heading">Who's going</h2>
-      <p>
-        Members only —
-        <a href="/join?next={encodeURIComponent(model.path)}">join the Discord</a>
-        to see who's in.
-      </p>
-    </section>
-  {:else}
-    <!-- Member on an empty page-1 roster: honest empty state. Page>1 keeps the existing
-         stale-page copy above. Closed/paused events keep a plain line: the RSVP
-         block on the same page already says no seat can be taken. None of these
-         states carries the attendees-live mount. -->
-    <section aria-labelledby="event-roster-heading" data-testid="event-roster-empty">
-      <h2 id="event-roster-heading">Who's going (0)</h2>
-      {#if rsvpUnavailable}
-        <p>No RSVPs.</p>
-      {:else}
-        <p>No RSVPs yet — RSVP to start the list.</p>
-      {/if}
     </section>
   {/if}
   {@html detailIslands}
@@ -503,10 +504,7 @@ const lineup = $derived(
             <li>
               <a href="/e/{event.key}" data-testid="event-related-link">
                 {event.title}{" "}
-                <time datetime={event.datetime}>{event.whenText}</time>
-                {#if event.location}
-                  {" "}<span class="event-related-location">{event.location}</span>
-                {/if}
+                {@render destinationPreview(event)}
               </a>
             </li>
           {/each}

@@ -1,14 +1,11 @@
-// Calendar card pins (owned): the real CalCard rendered directly with crafted
-// rows. Local fixtures only, no database. The acceptance suite pins the full
-// and uncapped card states through the route; the fullness pins close the
-// remaining mutant: dropping the >= comparison from the card verdict renders
-// "3 of 4 spots left" on an open capped card, which the acceptance open-card
-// pin (asserting only the absence of the word "Full") cannot see. The
-// end-date pins below close a second acceptance-blind mutant: the scan
-// acceptance captures raw markup after the start time element, so its
-// end-date/year assertions also match the machine-readable datetime
-// attribute. These pins extract the second <time> element's inner text and
-// assert the visible label only.
+// Calendar card fullness pins (owned): the real CalCard rendered directly
+// with crafted rows. Local fixtures only, no database. The scheduled
+// availability line reads seat occupancy, so an open capped card shows the
+// occupancy-derived remaining count while the Full marker node stays
+// full-only; these pins close the mutant that drops the >= comparison from
+// the card verdict or derives the remaining count from the named count.
+// The end-date pins extract the second <time> element's inner text so its
+// machine-readable datetime attribute cannot satisfy a visible-label pin.
 import { describe, expect, it } from "vitest";
 import { events } from "../src/db/admin-schema";
 import { CalCard } from "../src/events/pages-calendar-card";
@@ -61,6 +58,7 @@ const render = (e: PublicEvent): string =>
   CalCard({
     e,
     zone: "Europe/London",
+    now: new Date(Date.UTC(2030, 0, 1)),
     isPast: false,
     member: true,
     inviteUrl: "https://discord.gg/invite",
@@ -68,10 +66,60 @@ const render = (e: PublicEvent): string =>
   })!.toString() as string;
 
 describe("calendar card fullness pins", () => {
-  it("leaves an open capped card unmarked: count only, no marker node", () => {
+  it("keeps legacy callers without a model instant safe for elapsed events", () => {
+    const html = String(
+      CalCard({
+        e: cardRow({
+          goingCount: 1,
+          goingOccupancy: 1,
+          capacity: 4,
+          startsAt: new Date("2000-01-01T19:00:00Z"),
+          endsAt: new Date("2000-01-01T21:00:00Z"),
+        }),
+        zone: "UTC",
+        isPast: false,
+        member: true,
+        inviteUrl: "https://discord.gg/invite",
+        loginReturnTo: null,
+      }),
+    );
+    expect(html).toContain(">Ended<");
+    expect(html).not.toContain("3 seats left");
+  });
+
+  it("shows remaining seats from occupancy on an open capped card, never the Full marker", () => {
     const html = render(cardRow({ goingCount: 1, goingOccupancy: 1, capacity: 4 }));
     expect(html).toContain("1 of 4 going");
+    expect(html).toContain('data-testid="event-schedule-availability"');
+    expect(html).toContain("3 seats left");
     expect(html).not.toContain("event-spots-left");
+    expect(html).not.toContain(">Full<");
+  });
+
+  it("keeps past draft cards unmarked even with retained responses at capacity", () => {
+    const html = String(
+      CalCard({
+        e: cardRow({
+          status: "draft",
+          goingCount: 3,
+          goingOccupancy: 10,
+          capacity: 10,
+          startsAt: new Date("2029-12-30T19:00:00Z"),
+          endsAt: new Date("2029-12-30T21:00:00Z"),
+        }),
+        zone: "UTC",
+        now: new Date("2030-01-01T12:00:00Z"),
+        isPast: true,
+        member: true,
+        inviteUrl: "https://discord.gg/invite",
+        loginReturnTo: null,
+      }),
+    );
+    expect(html).toContain(">Draft<");
+    expect(html).toContain("3 of 10 going");
+    expect(html).not.toContain('data-testid="event-spots-left"');
+    expect(html).not.toContain(">Full<");
+    expect(html).not.toContain('data-testid="event-schedule-availability"');
   });
 
   it("marks a full card from occupancy even when the named count has room", () => {

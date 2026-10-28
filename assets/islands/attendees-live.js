@@ -27,8 +27,6 @@
   // empty-roster placeholder. Non-member placeholders (guest nudge,
   // members-only) never match: those viewers hold no RSVP control, so no
   // broadcast ever swaps them, and the island never invents them.
-  var SECTION = '[data-testid="event-attendees"]';
-  var SECTION_EMPTY = '[data-testid="event-roster-empty"]';
   var STALE_TESTID = "event-attendees-stale";
   var RETRY_TESTID = "event-attendees-retry";
   var UPDATED = "going-count-updated";
@@ -110,13 +108,17 @@
   }
 
   function findSection(doc) {
-    var scope = doc || (typeof document !== "undefined" ? document : null);
+    // Bootstrap already requires document; refresh parses may supply their own.
+    var scope = doc || document;
+    // Exact queries also work in the small DOM implementations used by the
+    // island consumers. Only one audience-specific roster renders at a time.
     if (!scope || typeof scope.querySelector !== "function") return null;
-    // Two single-selector queries, never a selector list: the minimal
-    // fake-DOM harnesses match exact selectors only, so a list would find
-    // nothing there while working in a real browser. At most one identity
-    // renders at a time, so list-first fallback is order-exact.
-    return scope.querySelector(SECTION) || scope.querySelector(SECTION_EMPTY);
+    var identities = ["attendees", "roster-empty", "roster-guest-nudge", "roster-members-only"];
+    for (var i = 0; i < identities.length; i++) {
+      var section = scope.querySelector('[data-testid="event-' + identities[i] + '"]');
+      if (section) return section;
+    }
+    return null;
   }
 
   function clearStale() {
@@ -242,25 +244,20 @@
   // the old section). Without this the focus drops to BODY and assistive
   // tech loses its place.
   function restoreFocusAfterSwap(section) {
-    var heading = null;
+    var target;
     try {
-      heading =
-        section.querySelector("#event-attendees-heading") ||
-        section.querySelector("#event-roster-heading");
+      target = section.querySelector("h2") || section;
     } catch (_headingLookupIgnored) {
-      heading = null;
+      target = section;
     }
-    var target = heading || section;
     try {
-      if (target && typeof target.setAttribute === "function") {
-        target.setAttribute("tabindex", "-1");
-      }
+      target?.setAttribute?.("tabindex", "-1");
     } catch (_tabindexIgnored) {
       // Fall through to the focus attempt: the target is still focusable
       // enough in most hosts without the tabindex hint.
     }
     try {
-      if (target && typeof target.focus === "function") target.focus();
+      target?.focus?.();
     } catch (_focusIgnored) {
       // Fall through: the roster still matches the server truth; only the
       // focus restoration is skipped.
@@ -366,11 +363,9 @@
       }
     }
     if (!fresh && old) {
-      // The fresh document carries no swappable roster section: a
-      // non-member placeholder (guest nudge / members-only) or none at
-      // all. An empty member roster renders event-roster-empty, which
-      // findSection matches via SECTION_EMPTY and swaps through the
-      // replace branch above.
+      // No roster shell remains in the authoritative document. Empty member
+      // and downgraded audience shells use the replacement branch above;
+      // this fallback still removes old private names when no shell is served.
       var refocusAfterPrune = focusedInside(old);
       try {
         if (old.parentNode) old.parentNode.removeChild(old);

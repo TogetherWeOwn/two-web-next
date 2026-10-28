@@ -29,6 +29,12 @@ Operations (deploy/rollback, `/up`, queues, outages and restore drills):
 
 ## Event search
 
+Upcoming text searches mark locatable title matches and show a relevant, bounded
+passage from the description. Open **Full description** to read the original text.
+Search text is literal, including `%`, `_` and backslash. Matching stays database-led:
+a returned event can show an unmarked excerpt when its match cannot be located
+faithfully for display. Clear the text search to restore ordinary compact cards.
+
 The upcoming schedule's **Filter by game** select works in list and calendar views.
 Choose a game and submit **Search**, with or without JavaScript; combine it with a
 title/description search when needed. Share the resulting `?game=` URL. Matching
@@ -85,6 +91,20 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
 
+Root and `web/` installs generate the ignored critical-CSS module through
+`postinstall`. If install scripts are disabled (`npm ci --ignore-scripts`),
+run the generator explicitly **from the repository root before typecheck,
+tests or bundling**:
+
+```sh
+node ci/build-leaf-css.mjs
+# Or, from the root: npm run build:leaf-css
+```
+
+The generator uses only Node builtins, so it also works before dependency
+installation. See [security-pin contracts](docs/security-pin-contracts.md)
+for the offline static gate and generated-hash review evidence.
+
 Set the local origin in `.dev.vars` to match Wrangler's local server and the
 Discord application's registered callbacks (`${APP_URL}/auth/discord/callback`
 and `${APP_URL}/join/callback`).
@@ -123,9 +143,15 @@ For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-Always supply the test URL for full-suite runs. Live suites skip when
-`DATABASE_URL` is unset; `test/review-p1-verify.test.ts` gates its live-DB
-proofs behind the same skip and keeps its P1-3 refusal proofs offline.
+Always supply the test URL for full-suite SQL coverage. The DB-free lane
+(`env -u DATABASE_URL npm run check`) runs fixture-only checks; existing live
+suites skip when `DATABASE_URL` is unset. `test/review-p1-verify.test.ts` keeps
+its P1-3 refusal proofs offline. Featured-unpublish SQL proofs run under the
+pre-existing integration gate in `test/admin.test.ts`; the six registration
+and rendering proofs in `test/admin-featured-unpublish-acceptance.test.ts`
+and `test/admin-featured-unpublish-invariants.test.ts` remain ungated. This
+preserves the DB-free lane without adding a conditional skip. It does not
+replace disposable-DB verification or browser evidence.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
@@ -248,7 +274,8 @@ npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands
 
 ### Browser regressions
 
-Except for the unconditional Kit member-auth and native event share suites, these suites skip their browser cases unless the opt-in variable is `"true"`, so
+Except for the unconditional suites (Kit member-auth, Kit admin contrast,
+native event share and the three `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
@@ -265,7 +292,10 @@ anywhere in the report (including suite teardown failures and unrelated cases)
 refuses admission. JSON stdout is capped at 16 KiB including its newline; an
 oversized receipt fails before any success output or CI-summary append rather
 than dropping case identities. Human output can still verify larger suites.
-The minimums live in `.github/workflows/ci.yml`. Run any listed command locally
+The minimums live in `.github/workflows/ci.yml`. The `SUITES` registry in
+`ci/a11y-native-browser-suites.test.mjs` is the single source of truth that
+every gated file and browser Vitest config is wired there; check it with
+`node --test ci/a11y-native-browser-suites.test.mjs`. Run any listed command locally
 to execute the same Chromium proof.
 
 | Suite | Opt-in variable | Local command |
@@ -276,6 +306,7 @@ to execute the same Chromium proof.
 | `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `ci/event-time-from-now.test.mjs` | None—always runs | `node --import tsx --test ci/event-time-from-now.test.mjs` (56 real Chromium cases on Hono and Kit renders with a frozen clock and the shipped minified island; TAP-verified in `a11y`; see [docs/event-time-from-now.md](docs/event-time-from-now.md)) |
 | `test/event-chosen-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-chosen-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-local-time-comparison-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-comparison-acceptance.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
@@ -291,11 +322,16 @@ to execute the same Chromium proof.
 | `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
 | `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
 | `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (34 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
+| `ci/schedule-search-context-browser.test.ts` | None—always runs | `npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts` (5 Hono and 5 Kit real Chromium cases; requires Kit dependencies and Chromium; JSON-verified in `a11y` via `ci/a11y-require-executed.mjs`) |
+| `ci/calendar-subscription-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts` (10 cases on each of the four calendar surfaces; intercepted clipboard fixtures; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
+| `ci/calendar-game-recovery-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-game-recovery-browser.vitest.ts ci/calendar-game-recovery-browser.test.ts` (16 cases for each Hono/Kit and source/shipped bundle pairing, enforced minimum 14; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
+| `ci/calendar-navigation-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-navigation-browser.vitest.ts ci/calendar-navigation-browser.test.ts` (shipped schedule navigation on Hono and Kit, enforced minimum 16 per surface; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
 
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
-with memory stores. None needs a database, staging or the network. Install the
-browser once, then run a suite with its variable set:
+with memory stores. None needs a database, staging or the network. For rows that
+require Kit dependencies, install them once with `npm ci --prefix web --include=dev`.
+Install the browser once, then run a suite with its variable set:
 
 ```sh
 npx playwright install --with-deps chromium
@@ -554,6 +590,9 @@ network-free (it checks resolved config) and the smoke requires a valid
 root dot, and rejects redirects. Both URLs must be HTTP(S), without credentials,
 query strings or fragments. A distinct hostname alone does not prove staging
 isolation: the runtime/receiver/custody holds still apply.
+The smoke and drill examples below are **preview-only**: they perform no bot
+actions. Real execution requires `--apply` and the prerequisites in the
+[bot probe staging procedure](docs/bot-probe-staging.md).
 
 ```sh
 npm run check:worker-moderators                   # source deployment preflight

@@ -371,7 +371,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     await runMigration(process.argv[2]);
   } catch (error) {
-    console.error(safeMigrationError(error));
+    if (!settled) console.error(safeMigrationError(error));
     process.exitCode = 1;
   } finally {
     settled = true;
