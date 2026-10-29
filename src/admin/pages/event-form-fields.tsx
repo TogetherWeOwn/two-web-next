@@ -5,6 +5,7 @@
 
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
+import { renderCapacityPanelHtml, type CapacityPanel } from "../event-capacity";
 import { adminSaveStatus } from "../save-status";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
@@ -16,7 +17,8 @@ export const EventFormFields: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   action: string;
-}> = ({ mode, row, values, errors, action }) => {
+  capacity?: CapacityPanel;
+}> = ({ mode, row, values, errors, action, capacity }) => {
   return (
     <>
       <ValidationSummary errors={errors} kind="event" mode={mode} />
@@ -140,7 +142,12 @@ export const EventFormFields: FC<{
             </textarea>
           )}
         </Field>
-        <Field name="capacity" label="Capacity (empty = unlimited)" errors={errors}>
+        <Field
+          name="capacity"
+          label="Capacity (empty = unlimited)"
+          errors={errors}
+          after={capacity ? raw(renderCapacityPanelHtml(capacity)) : null}
+        >
           {(id) => (
             <input
               id={id}
@@ -148,6 +155,7 @@ export const EventFormFields: FC<{
               type="text"
               inputmode="numeric"
               value={val(values, "capacity")}
+              aria-describedby={capacity ? "capacity-snapshot capacity-advice" : undefined}
             />
           )}
         </Field>

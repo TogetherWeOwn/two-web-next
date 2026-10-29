@@ -45,7 +45,8 @@ export const load: PageServerLoad = async ({ parent, params, url, setHeaders }) 
     appUrl: env.APP_URL,
     db,
     get: getEvent,
-    list: listRoster,
+    // Display-only Going snapshot rides the roster read (opt-in occupied).
+    list: (d, key, query) => listRoster(d, key, query, { occupied: true }),
   });
   if (outcome.kind === "unavailable") error(503, "Admin temporarily unavailable");
   if (outcome.kind === "notFound") error(404, "Event not found");

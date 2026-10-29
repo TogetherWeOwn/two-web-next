@@ -81,7 +81,14 @@ import { databaseUrl } from "../db/connection";
 import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
 import { safeRequestId } from "../request-log";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
-import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
+import {
+  countGoingSeats,
+  getJoinAttempt,
+  listActivityLog,
+  listJoinAttempts,
+  listRoster,
+} from "./reads";
+import { capacityPanel } from "./event-capacity";
 import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
 import {
@@ -460,7 +467,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     const row = await getEvent(db, key);
     if (!row) return errorPage(c, 404, "Event not found");
     const rosterQuery = parseRosterQuery(c.req.query());
-    const { rows: roster, total: rosterTotal } = await listRoster(db, row.eventKey, rosterQuery);
+    const {
+      rows: roster,
+      total: rosterTotal,
+      occupied,
+    } = await listRoster(db, row.eventKey, rosterQuery, { occupied: true });
     return bufferedMemberHtml(
       c,
       <EventFormPage
@@ -471,6 +482,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         roster={roster}
         rosterTotal={rosterTotal}
         rosterQuery={rosterQuery}
+        capacity={capacityPanel(row.eventKey, rosterQuery, occupied, row.capacity)}
       />,
     );
   });
@@ -490,6 +502,33 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       if (!existing) return errorPage(c, 404, "Event not found");
       const values = await parsedForm(c);
       if (!values) return badRequest(c);
+      // Only refused saves need a fresh display snapshot. Read the aggregate
+      // alone: no roster identities and no extra dependency on successful writes.
+      const renderRefused = async (
+        errors: Record<string, string>,
+        draft: Record<string, unknown>,
+      ) => {
+        try {
+          const occupied = await countGoingSeats(db, key);
+          return c.html(
+            <EventFormPage
+              mode="edit"
+              row={existing}
+              values={draft}
+              errors={errors}
+              capacity={capacityPanel(
+                key,
+                parseRosterQuery(c.req.query()),
+                occupied,
+                existing.capacity,
+              )}
+            />,
+          );
+        } catch (err) {
+          if (isDatabaseUnavailable(err)) return writeUnavailable(c);
+          throw err;
+        }
+      };
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
       // instant. A nonfinite stored date has no hint; parse its replacement.
       const carriers = {
@@ -505,13 +544,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         input = parseEventForm(values, carriers);
       } catch (err) {
         if (err instanceof ValidationError) {
-          return formError(
-            c,
-            err,
-            (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
-            values,
-          );
+          return formError(c, err, renderRefused, values);
         }
         throw err;
       }
@@ -528,13 +561,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       } catch (err) {
         if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
         if (err instanceof ValidationError) {
-          return formError(
-            c,
-            err,
-            (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
-            values,
-          );
+          return formError(c, err, renderRefused, values);
         }
         throw err;
       }
