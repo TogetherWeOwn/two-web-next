@@ -265,6 +265,7 @@ describe("refused-edit notice hidden content", () => {
     ' hidden="false"',
     ' style="display:none"',
     ' style="DISPLAY: none !important"',
+    ' style="visibility:collapse"',
   ])("rejects a notice section with %s", (sectionAttrs) => {
     expect(findRosterHiddenNotice(noticePage(GOOD_NOTICE, { sectionAttrs }))).toBeNull();
   });
@@ -279,13 +280,15 @@ describe("refused-edit notice hidden content", () => {
     },
   );
 
-  it.each(["hidden", 'style="display:none"', 'style="visibility: hidden !important"'])(
-    "rejects a reload link with %s",
-    (attrs) => {
-      const notice = GOOD_NOTICE.replace("<a href=", `<a ${attrs} href=`);
-      expect(findRosterHiddenNotice(noticePage(notice))).toBeNull();
-    },
-  );
+  it.each([
+    "hidden",
+    'style="display:none"',
+    'style="visibility: hidden !important"',
+    'style="visibility:collapse"',
+  ])("rejects a reload link with %s", (attrs) => {
+    const notice = GOOD_NOTICE.replace("<a href=", `<a ${attrs} href=`);
+    expect(findRosterHiddenNotice(noticePage(notice))).toBeNull();
+  });
 
   it.each(["hidden", 'style="display:none"', 'style="content-visibility: hidden"'])(
     "rejects a reload link under an ancestor with %s",
@@ -361,6 +364,19 @@ describe("refused-edit notice decoded privacy oracle", () => {
           "refused-save body must not leak roster value",
         );
       }
+    },
+  );
+
+  it.each([...ROSTER_NAMES, ...ROSTER_IDS, ...ROSTER_ANSWERED])(
+    "rejects split roster value %s when the suffix element has an unrelated attribute",
+    (value) => {
+      const at = Math.floor(value.length / 2);
+      // The suffix attribute interrupts the all-values stream; the independent
+      // text-only projection must still reject the complete shipped value.
+      const after = `<b>${value.slice(0, at)}</b><span title="unrelated">${value.slice(at)}</span>`;
+      expect(() => expectRefusedEditNotice(noticePage(GOOD_NOTICE, { after }))).toThrow(
+        `refused-save body must not leak roster value ${value}`,
+      );
     },
   );
 
