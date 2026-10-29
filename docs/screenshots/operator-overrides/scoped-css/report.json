@@ -1,0 +1,142 @@
+{
+  "report": [
+    {
+      "state": "populated",
+      "label": "desktop",
+      "status": 200,
+      "path": "populated-desktop.png",
+      "overflow": false,
+      "css": {
+        "links": ["/styles.css", "/operator-overrides-theme.css"],
+        "wrap": "anywhere",
+        "layout": "fixed",
+        "padding": "8px"
+      },
+      "violations": []
+    },
+    {
+      "state": "populated",
+      "label": "mobile",
+      "status": 200,
+      "path": "populated-mobile.png",
+      "overflow": false,
+      "css": {
+        "links": ["/styles.css", "/operator-overrides-theme.css"],
+        "wrap": "anywhere",
+        "layout": "fixed",
+        "padding": "8px"
+      },
+      "violations": []
+    },
+    {
+      "state": "empty",
+      "label": "desktop",
+      "status": 200,
+      "path": "empty-desktop.png",
+      "overflow": false,
+      "css": {
+        "links": ["/styles.css", "/operator-overrides-theme.css"],
+        "wrap": "anywhere",
+        "layout": null,
+        "padding": null
+      },
+      "violations": []
+    },
+    {
+      "state": "empty",
+      "label": "mobile",
+      "status": 200,
+      "path": "empty-mobile.png",
+      "overflow": false,
+      "css": {
+        "links": ["/styles.css", "/operator-overrides-theme.css"],
+        "wrap": "anywhere",
+        "layout": null,
+        "padding": null
+      },
+      "violations": []
+    },
+    {
+      "state": "unavailable",
+      "label": "desktop",
+      "status": 503,
+      "path": "unavailable-desktop.png",
+      "overflow": false,
+      "css": {
+        "links": ["/styles.css", "/operator-overrides-theme.css"],
+        "wrap": "anywhere",
+        "layout": null,
+        "padding": null
+      },
+      "violations": []
+    },
+    {
+      "state": "unavailable",
+      "label": "mobile",
+      "status": 503,
+      "path": "unavailable-mobile.png",
+      "overflow": false,
+      "css": {
+        "links": ["/styles.css", "/operator-overrides-theme.css"],
+        "wrap": "anywhere",
+        "layout": null,
+        "padding": null
+      },
+      "violations": []
+    },
+    {
+      "state": "refused",
+      "label": "desktop",
+      "status": 401,
+      "path": "refused-desktop.png",
+      "overflow": false,
+      "css": {
+        "links": ["/styles.css"],
+        "wrap": null,
+        "layout": null,
+        "padding": null
+      },
+      "violations": []
+    },
+    {
+      "state": "refused",
+      "label": "mobile",
+      "status": 401,
+      "path": "refused-mobile.png",
+      "overflow": false,
+      "css": {
+        "links": ["/styles.css"],
+        "wrap": null,
+        "layout": null,
+        "padding": null
+      },
+      "violations": []
+    }
+  ],
+  "seen": [
+    {
+      "url": "https://bot.example.test/ops/config",
+      "method": "GET"
+    },
+    {
+      "url": "https://bot.example.test/ops/config",
+      "method": "GET"
+    },
+    {
+      "url": "https://bot.example.test/ops/config",
+      "method": "GET"
+    },
+    {
+      "url": "https://bot.example.test/ops/config",
+      "method": "GET"
+    },
+    {
+      "url": "https://bot.example.test/ops/config",
+      "method": "GET"
+    },
+    {
+      "url": "https://bot.example.test/ops/config",
+      "method": "GET"
+    }
+  ]
+}
