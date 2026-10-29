@@ -136,11 +136,19 @@ function kitFixture(t, fragments) {
 // allocation (combined worst 336801, margin 95; lower 336640 rejects by 161).
 // 337152 admits the host/join composition after featured-unpublish landed
 // (measured 337015 before a behavior-preserving URL-check size reduction).
+// 337664 admits the honest roster/venue states composed with host/join
+// (merged builds 337312 and 337311; lower 337152 rejects by 160).
 // Every other pin stays exact: the oracle rejects any ceiling outside this
 // list, then deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
-  335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152,
+  335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337664,
 ];
+// Admitted server.js maxRawBytes allocations: the 1203200 baseline pin and
+// 1205248 for the honest roster/venue states (two merged builds 1204729;
+// the baseline rejects by 1529). Any other value is compared against the
+// baseline pin and fails the deep compare. See
+// ci/budgets/decisions/kit-perf/2026-10-29-honest-roster-venue.md.
+const SHIPPING_SERVER_RAW_ALLOCATIONS = [1203200, 1205248];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
 // on current main (measured union 258023 raw / 103383 gzip, margins 25 / 41;
@@ -153,21 +161,29 @@ const SHIPPING_CLIENT_JS_ALLOCATIONS = [
   // Initial-base host/join allocation: 258282/103538; the latest composed
   // build remains within this pair at 258554/103627 after URL-check simplification.
   [258560, 103680],
+  // Honest roster/venue states: two merged builds 259224/103522; the lower
+  // 258560 raw step rejects by 664, gzip ceiling unchanged.
+  [259584, 103680],
 ];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337664`,
   );
+  const serverRaw = SHIPPING_SERVER_RAW_ALLOCATIONS.includes(actual?.server?.js?.maxRawBytes)
+    ? actual.server.js.maxRawBytes
+    : SHIPPING_KIT_BUDGET.server.js.maxRawBytes;
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
     ([raw, clientGzip]) => clientJs?.maxRawBytes === raw && clientJs?.maxGzipBytes === clientGzip,
   ) ?? [SHIPPING_KIT_BUDGET.client.js.maxRawBytes, SHIPPING_KIT_BUDGET.client.js.maxGzipBytes];
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
-    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: gzip } },
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: serverRaw, maxGzipBytes: gzip },
+    },
     client: {
       ...SHIPPING_KIT_BUDGET.client,
       js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes, maxGzipBytes },
@@ -228,6 +244,19 @@ test("shipping oracle admits the measured host/join allocations together", () =>
     client: {
       ...SHIPPING_KIT_BUDGET.client,
       js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 258560, maxGzipBytes: 103680 },
+    },
+  });
+});
+
+test("shipping oracle admits the measured roster/venue allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1205248, maxGzipBytes: 337664 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 259584, maxGzipBytes: 103680 },
     },
   });
 });
