@@ -149,7 +149,7 @@ async function dropRuntimeRoleIfCreated(client, created) {
 // (creating role = SELECT/UPDATE/USAGE on sequences), whose UPDATE row
 // the guard refuses for an unrelated reason. Removing that owner entry
 // leaves exactly the reviewed two_web_app USAGE/SELECT row set, which is
-// the shape fixture (a) must discriminate on.
+// the shape the bootstrap fixtures must discriminate on.
 async function setExactGlobalSequenceDefault(client) {
   await client.unsafe("ALTER DEFAULT PRIVILEGES GRANT USAGE ON SEQUENCES TO two_web_app");
   await client.unsafe("ALTER DEFAULT PRIVILEGES GRANT SELECT ON SEQUENCES TO two_web_app");
@@ -586,7 +586,7 @@ test("runtime-role connection is refused while the reviewed sequence default pas
   });
 });
 
-test("fresh bootstrap under a global sequence default refuses and leaves no ledger (fixture a)", async () => {
+test("fresh bootstrap under a global sequence default refuses and leaves no ledger", async () => {
   await fixture(async ({ client, run }) => {
     const created = await ensureRuntimeRole(client);
     try {
@@ -657,7 +657,7 @@ test("a sequence default appearing after preflight still rolls back the bootstra
   });
 });
 
-test("already-bootstrapped database: global default and exposed ledger both refuse (fixture a)", async () => {
+test("already-bootstrapped database: global default and exposed ledger both refuse", async () => {
   await fixture(async ({ client, run }) => {
     const created = await ensureRuntimeRole(client);
     try {
@@ -705,7 +705,7 @@ test("already-bootstrapped database: global default and exposed ledger both refu
   });
 });
 
-test("sequence post-default matrix for login, group, and runtime roles (fixture b)", async () => {
+test("sequence post-default matrix for login, group, and runtime roles", async () => {
   await fixture(async ({ client }) => {
     const suffix = randomUUID().replaceAll("-", "");
     const group = `mig_group_${suffix}`;
@@ -778,7 +778,7 @@ test("sequence post-default matrix for login, group, and runtime roles (fixture 
   });
 });
 
-test("schema-scoped drizzle default refuses instead of staying invisible (fixture c)", async () => {
+test("schema-scoped drizzle default refuses instead of staying invisible", async () => {
   await fixture(async ({ client, run }) => {
     const created = await ensureRuntimeRole(client);
     try {
@@ -810,7 +810,7 @@ test("schema-scoped drizzle default refuses instead of staying invisible (fixtur
   });
 });
 
-test("post-apply readout equals the stated grants for a censused pair (fixture d)", async () => {
+test("post-apply readout equals the stated grants for a censused pair", async () => {
   await fixture(async ({ client }) => {
     const created = await ensureRuntimeRole(client);
     try {
