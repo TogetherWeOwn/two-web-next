@@ -205,8 +205,10 @@ apply transaction again right after ledger bootstrap, also refuse while the
 ledger table or its serial sequence (found through `pg_get_serial_sequence`)
 carries any `two_web_app` or `PUBLIC` right. That includes ownership even
 with NULL or explicitly revoked relation ACLs, non-dropped-column grants,
-and rights held through inherited or assumable roles (`pg_has_role` with
-`USAGE` or `SET`). Unrelated owners and grantees stay allowed. The runner
+and rights the runtime can reach through a role it inherits, can assume, or
+administers (`pg_has_role` with `USAGE`, `SET`, or
+`MEMBER WITH ADMIN OPTION`; an admin can re-grant itself `INHERIT`/`SET`).
+Unrelated owners and grantees stay allowed. The runner
 never revokes such a right itself, so an already-exposed ledger stays refused
 until the right is removed outside the runner. The refusal names the offending
 reason while other database errors stay masked. The runner also pins `standard_conforming_strings=on` per connection and

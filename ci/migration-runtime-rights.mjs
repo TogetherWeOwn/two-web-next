@@ -98,7 +98,9 @@ export function validateDefaultAclRows(rows) {
 // ACLs say. pg_get_serial_sequence errors on a missing ledger, so the
 // sequence lookup stays behind the to_regclass guard. Ownership is authority
 // even with NULL/revoked ACLs; column grants live separately in attacl.
-// USAGE follows inherited privileges; SET also covers assumable roles.
+// USAGE follows inherited privileges; SET also covers assumable roles;
+// MEMBER WITH ADMIN OPTION covers roles the runtime can upgrade its own
+// membership of to INHERIT/SET, which is equally effective authority.
 const LEDGER_ACL_QUERY = `
   WITH targets(oid) AS (
     SELECT to_regclass('drizzle.__drizzle_migrations')
@@ -127,7 +129,8 @@ const LEDGER_ACL_QUERY = `
            SELECT 1 FROM pg_roles AS runtime
             WHERE runtime.rolname = 'two_web_app'
               AND (pg_has_role(runtime.oid, rights.grantee, 'USAGE')
-                   OR pg_has_role(runtime.oid, rights.grantee, 'SET'))
+                   OR pg_has_role(runtime.oid, rights.grantee, 'SET')
+                   OR pg_has_role(runtime.oid, rights.grantee, 'MEMBER WITH ADMIN OPTION'))
          ) END AS runtime_access
     FROM rights
    ORDER BY 1, 2, 3, 4
