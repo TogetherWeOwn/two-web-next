@@ -47,6 +47,7 @@ import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import type { KitRequestSession } from "../src/kit-session";
+import { MAX_RETURN_DESTINATION_BYTES, safeNext } from "../src/join/service";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import type {
   EventAttendee,
@@ -437,13 +438,8 @@ function expectNeutralEmptyRoster(html: string, testid: string) {
   expect(section).not.toMatch(firstGoingClaim);
 }
 
-/**
- * The bounded, validated context a roster join/sign-in link actually
- * returns to: decode `next` and re-read it with the existing return-path
- * helpers — the same admission the landing page applies. Byte order of
- * the rebuilt query is the renderer's choice; landed context is not.
- */
-function rosterJoinContext(html: string, testid: string, joinPath: string) {
+/** Decode the shell's actual href and apply the production auth boundary. */
+function rosterJoinDestination(html: string, testid: string, joinPath: string) {
   const section = rosterSection(html, testid);
   const match = /href="([^"]+)"/.exec(section);
   expect(match, `${testid} link`).not.toBeNull();
@@ -452,9 +448,18 @@ function rosterJoinContext(html: string, testid: string, joinPath: string) {
   const next = new URL(href, APP_URL).searchParams.get("next");
   expect(next, `${testid} next`).not.toBeNull();
   expect(next!.startsWith("//")).toBe(false);
-  expect(new TextEncoder().encode(next!).byteLength).toBeLessThanOrEqual(512);
+  const nextBytes = new TextEncoder().encode(next!).byteLength;
+  expect(safeNext(next), `${testid} next (${nextBytes} UTF-8 bytes) must survive auth`).toBe(next);
+  expect(nextBytes).toBeLessThanOrEqual(MAX_RETURN_DESTINATION_BYTES);
   const url = new URL(next!, APP_URL);
+  expect(url.origin).toBe(APP_URL);
   expect(url.pathname).toBe(PATH);
+  return url;
+}
+
+/** Query order is the renderer's choice; landed context is not. */
+function rosterJoinContext(html: string, testid: string, joinPath: string) {
+  const url = rosterJoinDestination(html, testid, joinPath);
   return {
     archive: archiveContext(url.search),
     page: parseAttendeePageParam(url.searchParams.get("attendees")),
@@ -737,6 +742,75 @@ describe("correction: roster join links keep bounded validated return context", 
       expect(guest.model.canonical).toBe(`${APP_URL}${PATH}`);
       expect(guest.model.copyLink).toBe(`${APP_URL}${PATH}`);
     }
+  });
+});
+
+describe.each([
+  {
+    audience: "guest sign-in",
+    testid: "event-roster-guest-nudge",
+    joinPath: "/join/discord",
+    session: GUEST,
+  },
+  {
+    audience: "non-member join",
+    testid: "event-roster-members-only",
+    joinPath: "/join",
+    session: outsiderKitSession(),
+  },
+])("boundary: $audience roster next survives auth", ({ audience, testid, joinPath, session }) => {
+  // Both are valid archive searches, but forwarding the whole request URL
+  // crosses auth's byte limit. Dropping everything loses useful context;
+  // truncating the Unicode search changes its meaning. Neither is a fix.
+  const returnCases = [
+    {
+      label: "omits Unicode archive; keeps attendee 2",
+      search: `?archivePage=2&archiveQuery=${encodeURIComponent("棋".repeat(80))}&attendees=2`,
+      inputArchive: { page: 2, q: "棋".repeat(80) },
+      expectedParams: [["attendees", "2"]],
+    },
+    {
+      label: "omits tracking; keeps archive + page 2",
+      search: `?archivePage=2&archiveQuery=raid&attendees=2&tracking=${"x".repeat(600)}`,
+      inputArchive: { page: 2, q: "raid" },
+      expectedParams: [
+        ["archivePage", "2"],
+        ["archiveQuery", "raid"],
+        ["attendees", "2"],
+      ],
+    },
+  ];
+
+  it.each(returnCases)("Hono: $label", async ({ search, inputArchive, expectedParams }) => {
+    expect(archiveContext(search)).toEqual(inputArchive);
+    expect(new TextEncoder().encode(`${PATH}${search}`).byteLength).toBeGreaterThan(
+      MAX_RETURN_DESTINATION_BYTES,
+    );
+    expect(safeNext(`${PATH}${search}`)).toBeNull();
+    const source = honoFixture({ attendeeRows: ATTENDEES, goingCount: 2 });
+    const cookie = audience === "guest sign-in" ? undefined : await source.outsiderCookie();
+    const response = await source.request(cookie, `${PATH}${search}`);
+    expect(response.status).toBe(200);
+    const html = await response.text();
+    const destination = rosterJoinDestination(html, testid, joinPath);
+    // Inspect the actual admitted destination, not just a parser that could
+    // silently ignore raw tracking, duplicate keys or a shortened search.
+    expect([...destination.searchParams.entries()].sort()).toEqual(expectedParams);
+    expect(html).toContain(`rel="canonical" href="${APP_URL}${PATH}"`);
+  });
+
+  it.each(returnCases)("Kit: $label", async ({ search, inputArchive, expectedParams }) => {
+    expect(archiveContext(search)).toEqual(inputArchive);
+    expect(new TextEncoder().encode(`${PATH}${search}`).byteLength).toBeGreaterThan(
+      MAX_RETURN_DESTINATION_BYTES,
+    );
+    expect(safeNext(`${PATH}${search}`)).toBeNull();
+    const { renderDetail } = await buildKitDetailBundle();
+    const { html, model } = await kitHtml(renderDetail, kitStore(), session, search);
+    const destination = rosterJoinDestination(html, testid, joinPath);
+    expect([...destination.searchParams.entries()].sort()).toEqual(expectedParams);
+    expect(model.canonical).toBe(`${APP_URL}${PATH}`);
+    expect(model.copyLink).toBe(`${APP_URL}${PATH}`);
   });
 });
 
