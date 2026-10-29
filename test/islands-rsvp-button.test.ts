@@ -372,7 +372,7 @@ describe("rsvp-button SSR/server drift", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(mount(html)).toContain(`data-event-key="${KEY}"`);
-    expect(mount(html)).toContain(`href="${loginUrl(`/e/${KEY}?from=calendar`)}"`);
+    expect(mount(html)).toContain(`href="${loginUrl(`/e/${KEY}`)}"`);
     expect(mount(html)).toContain(RSVP_COPY.guestCta);
     expect(mount(html)).not.toContain("data-action");
     expect(html).toContain('src="/islands/rsvp-button.js"');
