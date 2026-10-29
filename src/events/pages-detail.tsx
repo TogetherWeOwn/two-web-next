@@ -1,5 +1,6 @@
 // Event detail screen: hero, RSVP, share, attendees, discovery.
 import type { FC } from "hono/jsx";
+import { isPublicJoinUrl } from "./public-join-url";
 import { canonicalUrl } from "../seo";
 import { EVENT_ONGOING_TESTID, isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
@@ -325,7 +326,7 @@ export const EventPage: FC<{
             >
               <h2 id="event-join-details-heading">How to join</h2>
               {e.join_url ? (
-                e.status === "published" ? (
+                e.status === "published" && isPublicJoinUrl(e.join_url) ? (
                   <p>
                     <a href={e.join_url} data-testid="event-public-join-link">
                       Open the public joining link

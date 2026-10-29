@@ -68,6 +68,27 @@ describe("route inventory diagnostics", () => {
     ]);
   });
 
+  it("classifies only the exact operator override path before the moderator catch-all", () => {
+    const app = new Hono();
+    app.get("/admin/ops-overrides", (c) => c.text("snapshot"));
+    for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])
+      app.on(method, "/admin/ops-overrides", (c) => c.body(null, 405));
+    app.use("/admin/*", async (_c, next) => next());
+    app.get("/admin", (c) => c.text("admin"));
+    app.get("/admin/ops-overrides/export", (c) => c.text("not an exception"));
+    expect(routeInventory(app)).toEqual([
+      { method: "ALL", path: "/admin/*", auth: "moderator" },
+      { method: "DELETE", path: "/admin/ops-overrides", auth: "ops-control-bearer" },
+      { method: "GET", path: "/admin", auth: "moderator" },
+      { method: "GET", path: "/admin/ops-overrides", auth: "ops-control-bearer" },
+      { method: "GET", path: "/admin/ops-overrides/export", auth: "moderator" },
+      { method: "OPTIONS", path: "/admin/ops-overrides", auth: "ops-control-bearer" },
+      { method: "PATCH", path: "/admin/ops-overrides", auth: "ops-control-bearer" },
+      { method: "POST", path: "/admin/ops-overrides", auth: "ops-control-bearer" },
+      { method: "PUT", path: "/admin/ops-overrides", auth: "ops-control-bearer" },
+    ]);
+  });
+
   it("collapses stacked handlers but keeps ALL middleware and fallbacks", () => {
     const app = new Hono();
     app.use("*", async (_c, next) => next());

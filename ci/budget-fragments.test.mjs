@@ -60,6 +60,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
   "public/admin-rsvp-review.css": { maxRawBytes: 1024, maxGzipBytes: 512 },
+  "public/operator-overrides-theme.css": { maxRawBytes: 512, maxGzipBytes: 256 },
   "public/theme.css": { maxRawBytes: 15360, maxGzipBytes: 3584 },
   "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
   "public/event-theme.css": { maxRawBytes: 7168, maxGzipBytes: 2048 },
@@ -132,11 +133,11 @@ function kitFixture(t, fragments) {
 // (combined worst 336168, margin 216; lower 336128 rejects by 40); 336640 is
 // the sixth, unrenderable-time guard allocation (combined worst 336514, margin
 // 126; lower 336384 rejects by 130); 336896 is the seventh, featured-unpublish
-// allocation (combined worst 336801, margin 95; lower 336640 rejects by 161);
-// 337152 admits the rebuilt ongoing-night feature (worst measured 337036,
-// margin 116; lower 336896 rejects by 140). Every other
-// pin stays exact: the oracle rejects any ceiling outside this list, then
-// deep-compares the rest of the plan.
+// allocation (combined worst 336801, margin 95; lower 336640 rejects by 161).
+// 337152 admits the host/join composition after featured-unpublish landed
+// (measured 337015 before a behavior-preserving URL-check size reduction).
+// Every other pin stays exact: the oracle rejects any ceiling outside this
+// list, then deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
   335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152,
 ];
@@ -149,6 +150,9 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 const SHIPPING_CLIENT_JS_ALLOCATIONS = [
   [257024, 103168],
   [258048, 103424],
+  // Initial-base host/join allocation: 258282/103538; the latest composed
+  // build remains within this pair at 258554/103627 after URL-check simplification.
+  [258560, 103680],
 ];
 
 function assertShippingKitBudget(actual) {
@@ -217,10 +221,14 @@ test("shipping oracle admits the measured 336896 server gzip allocation", () => 
   });
 });
 
-test("shipping oracle admits the measured 337152 server gzip allocation", () => {
+test("shipping oracle admits the measured host/join allocations together", () => {
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
     server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 337152 } },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 258560, maxGzipBytes: 103680 },
+    },
   });
 });
 
@@ -285,6 +293,10 @@ test("shipping oracle rejects client js pairs outside the admitted list", () => 
     [257024, 103424],
     [258048, 103680],
     [258560, 103424],
+    [258559, 103680],
+    [258561, 103680],
+    [258560, 103679],
+    [258560, 103681],
   ]) {
     assert.throws(
       () =>
