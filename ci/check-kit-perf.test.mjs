@@ -401,7 +401,7 @@ test("shipping budget: client gzip still fails independently of raw", (t) => {
 const SHIPPING_BUDGET_BYTES = Buffer.from(
   JSON.stringify(loadKitBudget(fileURLToPath(new URL("../", import.meta.url)))),
 );
-// Nine explicit server-gzip allocations are supported: current 334080, the
+// Explicit server-gzip allocations are supported: baseline 334080, the
 // independently justified 335104 ceiling (combined worst 334994, margin 110;
 // lower 334848 rejects by 146), the independently justified 335360 ceiling
 // (combined worst 335338, margin 22; lower 335104 rejects by 234), and the
@@ -416,8 +416,9 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // (two merged builds 336514 and 336514; lower 336384 rejects by 130), and the
 // independently justified 336896 ceiling for the bounded homepage reads (two
 // merged builds 336673 and 336672; margin 223; lower 336640 rejects by 33),
-// the host/join 337152 ceiling, and the honest roster/venue 337664 ceiling
-// (two merged builds 337312 and 337311; lower 337152 rejects by 160).
+// the host/join 337152 ceiling, the ongoing-night 337408 ceiling, and the
+// honest roster/venue 337664 ceiling on current main (two composed builds
+// 337545 and 337547; main's 337408 rejects by 137 and 139).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
