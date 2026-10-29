@@ -913,13 +913,13 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
   ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   ...shippingClientGzipCases(),
-  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1204224 },
+  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1203968 },
   {
     name: "server raw one byte over",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1204225,
-    ceiling: 1204224,
+    bytes: 1203969,
+    ceiling: 1203968,
     breach: true,
   },
   {
