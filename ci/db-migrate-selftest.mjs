@@ -616,6 +616,47 @@ test("fresh bootstrap under a global sequence default refuses and leaves no ledg
   });
 });
 
+test("a sequence default appearing after preflight still rolls back the bootstrap ledger", async () => {
+  await fixture(async ({ client, env, output }) => {
+    const created = await ensureRuntimeRole(client);
+    let armed = false;
+    try {
+      let failure;
+      try {
+        // Arm the global default from a second connection after the
+        // in-transaction preflight has passed (its PITR receipt is the
+        // last summary before bootstrap DDL), so only the post-bootstrap
+        // ledger readout can refuse this apply.
+        await runMigration("apply", env, {
+          testDatabase: true,
+          report: async (line) => {
+            output.push(line);
+            if (!armed && line.startsWith("Pre-migration PITR timestamp")) {
+              armed = true;
+              await setExactGlobalSequenceDefault(client);
+            }
+          },
+        });
+      } catch (error) {
+        failure = error;
+      }
+      assert.ok(armed, "the runner must reach its PITR receipt before bootstrap");
+      assert.ok(failure, "a default that fires on the bootstrap ledger must refuse apply");
+      assert.match(safeMigrationError(failure), /default-ACL guard refused/);
+      assert.equal(
+        (await client`select to_regclass('drizzle.__drizzle_migrations') as ledger`)[0].ledger,
+        null,
+        "rollback must leave no ledger after the refused bootstrap",
+      );
+    } finally {
+      await client
+        .unsafe("ALTER DEFAULT PRIVILEGES REVOKE ALL ON SEQUENCES FROM two_web_app")
+        .catch(() => {});
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
 test("already-bootstrapped database: global default and exposed ledger both refuse (fixture a)", async () => {
   await fixture(async ({ client, run }) => {
     const created = await ensureRuntimeRole(client);
