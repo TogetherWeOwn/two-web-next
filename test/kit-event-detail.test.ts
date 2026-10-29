@@ -418,7 +418,7 @@ describe("event-detail guest reads", () => {
     const queried = await resolve(KEY, fakeStore(), GUEST, null, "?tab=about");
     expect(queried.outcome.kind).toBe("ok");
     if (queried.outcome.kind !== "ok") throw new Error("unreachable");
-    expect(queried.outcome.model.joinReturnTo).toBe(`/e/${KEY}?tab=about`);
+    expect(queried.outcome.model.joinReturnTo).toBe(`/e/${KEY}`);
     expect(model.neighbors.next?.key).toBe(RELATED[0]!.eventKey);
     expect(model.copyLink).toBe(`${APP_URL}/e/${KEY}`);
     expect(model.jsonLd).toContain("https://schema.org/EventScheduled");
