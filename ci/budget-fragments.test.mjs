@@ -60,6 +60,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
   "public/admin-rsvp-review.css": { maxRawBytes: 1024, maxGzipBytes: 512 },
+  "public/operator-overrides-theme.css": { maxRawBytes: 512, maxGzipBytes: 256 },
   "public/theme.css": { maxRawBytes: 15360, maxGzipBytes: 3584 },
   "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
   "public/event-theme.css": { maxRawBytes: 7168, maxGzipBytes: 2048 },
@@ -144,6 +145,7 @@ function kitFixture(t, fragments) {
 // JSON fallback-zone correction (worst 337329, margin 79; 337152 rejects by 177).
 // 337664 composes stale saves with featured-list unpublish (worst 337503,
 // margin 161; lower 337408 rejects by 95, same stale-save decision record).
+// Main also re-measures 337152 for host/join (337015 before URL-check reduction).
 // Every other pin stays exact: the oracle rejects any ceiling outside this
 // list, then deep-compares the rest of the plan.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
@@ -158,6 +160,9 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 const SHIPPING_CLIENT_JS_ALLOCATIONS = [
   [257024, 103168],
   [258048, 103424],
+  // Initial-base host/join allocation: 258282/103538; the latest composed
+  // build remains within this pair at 258554/103627 after URL-check simplification.
+  [258560, 103680],
 ];
 
 function assertShippingKitBudget(actual) {
@@ -170,9 +175,14 @@ function assertShippingKitBudget(actual) {
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
     ([raw, clientGzip]) => clientJs?.maxRawBytes === raw && clientJs?.maxGzipBytes === clientGzip,
   ) ?? [SHIPPING_KIT_BUDGET.client.js.maxRawBytes, SHIPPING_KIT_BUDGET.client.js.maxGzipBytes];
+  // The 1205760 raw allocation composes stale saves with current main;
+  // all other raw values still compare against the 1203200 historical pin.
+  const serverRaw = actual?.server?.js?.maxRawBytes === 1205760 ? 1205760 : 1203200;
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
-    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: gzip } },
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: serverRaw, maxGzipBytes: gzip },
+    },
     client: {
       ...SHIPPING_KIT_BUDGET.client,
       js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes, maxGzipBytes },
@@ -247,8 +257,47 @@ test("shipping oracle admits the measured 337664 server gzip allocation", () => 
   });
 });
 
+test("shipping oracle admits the measured host/join allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes: 337152 } },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 258560, maxGzipBytes: 103680 },
+    },
+  });
+});
+
+test("shipping oracle admits the measured stale-save server raw allocation and rejects drift", () => {
+  const admitted = {
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1205760, maxGzipBytes: 337664 },
+    },
+  };
+  assertShippingKitBudget(admitted);
+  for (const raw of [1203199, 1203201, 1205376, 1205759, 1205761]) {
+    assert.throws(
+      () =>
+        assertShippingKitBudget({
+          ...admitted,
+          server: { js: { ...admitted.server.js, maxRawBytes: raw } },
+        }),
+      /Expected values to be strictly deep-equal/,
+    );
+  }
+  assert.throws(
+    () =>
+      assertShippingKitBudget({
+        ...admitted,
+        server: { js: { ...admitted.server.js, maxFiles: 127 } },
+      }),
+    /Expected values to be strictly deep-equal/,
+  );
+});
+
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 336641, 336897, 337665]) {
+  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 336641, 336897, 337153, 337665]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },
@@ -308,6 +357,10 @@ test("shipping oracle rejects client js pairs outside the admitted list", () => 
     [257024, 103424],
     [258048, 103680],
     [258560, 103424],
+    [258559, 103680],
+    [258561, 103680],
+    [258560, 103679],
+    [258560, 103681],
   ]) {
     assert.throws(
       () =>

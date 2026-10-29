@@ -3,6 +3,7 @@
 //
 // Routes behind adminGuard (non-moderator 403, guest OAuth redirect).
 // Queue preview additionally requires default-off staging/operator admission:
+// - GET  /admin/ops-overrides        control-bearer record/epoch, session-free, read-only
 // - GET  /admin                      dashboard (index of resources)
 // - GET  /admin/events               list (search, status/series/fill, sort, page)
 // - GET  /admin/events/new           create form
@@ -38,6 +39,7 @@ import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
 import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./queue-redispatch";
 import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
+import { opsOverridesHandler, opsOverridesMethodRefused } from "./ops-overrides";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { badRequest, prefersHtmlError, varyAccept } from "../errors";
@@ -213,6 +215,14 @@ function formError(
  */
 export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
+  // Control-token holders only: no session lookup, role admission or writes.
+  admin.get("/ops-overrides", opsOverridesHandler);
+  admin.on(
+    ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "/ops-overrides",
+    requestBodyLimit("action"),
+    opsOverridesMethodRefused,
+  );
   // Evidence-only source/cache verifier: session-free by construction.
   // Registered before every admin middleware (Hono composes in registration
   // order and these handlers answer without next()), so no session lookup,
