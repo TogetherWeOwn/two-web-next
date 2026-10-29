@@ -9,9 +9,11 @@
 export {
   createFeatured,
   deleteFeatured,
+  featuredSaveBaseline,
   getFeatured,
   getFeaturedIdByLegacyId,
   listFeatured,
+  StaleFeaturedSaveError,
   unpublishFeatured,
   updateFeatured,
 } from "./store-featured";

@@ -32,7 +32,14 @@ export const FeaturedFormPage: FC<{
   now?: Date;
   appUrl: string;
   imageHosts?: string;
-}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts }) => {
+  /** Server-derived saved-content baseline, rendered as the Save form's hidden
+      precondition. Fresh on GET; the submitted value on 422/409 re-renders so a
+      correction or repeat Save never silently acquires a current baseline. */
+  baseline?: string;
+  /** The submitted baseline no longer matches: explain, keep the draft, and
+      link the explicit review-current-version action. */
+  conflict?: boolean;
+}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts, baseline, conflict }) => {
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked =
     values.is_published === "on" || values.is_published === true || values.is_published === "true";
@@ -85,12 +92,28 @@ export const FeaturedFormPage: FC<{
           </section>
         ) : null}
         <ValidationSummary errors={errors} kind="featured" mode={mode} />
+        {conflict && mode === "edit" && row ? (
+          <div class="notice" role="alert" data-testid="featured-save-conflict">
+            <p>
+              Another moderator changed this slot after you opened it. Nothing was saved — your
+              draft is preserved below.
+            </p>
+            <p>
+              <a href={`/admin/featured/${row.id}`}>Review the current version</a> before saving
+              again.
+            </p>
+          </div>
+        ) : null}
         <form
           method="post"
           action={action}
+          autocomplete="off"
           data-event-editor=""
-          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
+          data-event-draft={Object.keys(errors).length > 0 || conflict ? "" : undefined}
         >
+          {mode === "edit" && baseline !== undefined ? (
+            <input type="hidden" name="saved_baseline" value={baseline} />
+          ) : null}
           {/* Native maxlength counts UTF-16 units and truncates supplementary
               characters early; the 255-code-point limits belong to the server
               validator so valid headlines and image descriptions survive. */}
@@ -181,7 +204,9 @@ export const FeaturedFormPage: FC<{
           </form>
         ) : null}
       </section>
+      {mode === "edit" ? <script src="/islands/featured-edit-history.js" defer /> : null}
       <script src="/islands/admin-event-editor.js" defer />
+      {conflict ? <script src="/islands/auth-status.js" defer /> : null}
     </Shell>
   );
 };

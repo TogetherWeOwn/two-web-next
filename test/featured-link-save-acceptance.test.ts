@@ -5,7 +5,12 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import { adminApp } from "../src/admin/routes";
-import { createFeatured, getFeatured, updateFeatured } from "../src/admin/store";
+import {
+  createFeatured,
+  featuredSaveBaseline,
+  getFeatured,
+  updateFeatured,
+} from "../src/admin/store";
 import { parseFeaturedForm, ValidationError } from "../src/admin/validation";
 import type { Db } from "../src/db/index";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -207,6 +212,12 @@ describe("featured link spelling acceptance: shared form parser", () => {
   );
 });
 
+// The edit form carries the server-derived saved-content baseline; these
+// proofs pin link validation, so the edit POST submits the fresh one.
+async function savedBaseline(path: string): Promise<Record<string, string>> {
+  return path === "/featured" ? {} : { saved_baseline: await featuredSaveBaseline(existing) };
+}
+
 describe("featured link spelling acceptance: real create/edit POST", () => {
   for (const path of ["/featured", "/featured/1"]) {
     it.each([
@@ -222,7 +233,12 @@ describe("featured link spelling acceptance: real create/edit POST", () => {
         {
           method: "POST",
           headers: { cookie, origin: env.APP_URL },
-          body: new URLSearchParams({ ...base, url, image_alt: "Draft photo description" }),
+          body: new URLSearchParams({
+            ...(await savedBaseline(path)),
+            ...base,
+            url,
+            image_alt: "Draft photo description",
+          }),
         },
         env,
       );
@@ -253,14 +269,16 @@ describe("featured link spelling acceptance: real create/edit POST", () => {
         {
           method: "POST",
           headers: { cookie, origin: env.APP_URL },
-          body: new URLSearchParams({ ...base, url }),
+          body: new URLSearchParams({ ...(await savedBaseline(path)), ...base, url }),
         },
         env,
       );
       expect(res.status).toBe(303);
       const write = path === "/featured" ? createFeatured : updateFeatured;
       expect(write).toHaveBeenCalledOnce();
-      expect(vi.mocked(write).mock.calls[0]!.at(-1)).toMatchObject({ url });
+      // create(db, actor, input); update(db, actor, id, input, { expectedBaseline }).
+      const inputAt = path === "/featured" ? 2 : 3;
+      expect(vi.mocked(write).mock.calls[0]![inputAt]).toMatchObject({ url });
     });
   }
   it.each(["/featured/new", "/featured/1"])(

@@ -13,6 +13,7 @@ import { jsx } from "hono/jsx/jsx-runtime";
 import { describe, expect, it } from "vitest";
 import { utcToWall, wallToUtc } from "../src/admin/validation";
 import { eventJson } from "../src/events/routes";
+import { serializeEvent } from "../src/public-data/routes";
 import { eventIcs, eventsRss, googleCalendarUrl, icsInstant, rssDate } from "../src/events/feeds";
 import { EventPage, EventsCalendarPage } from "../src/events/pages";
 import type { PublicEvent } from "../src/events/reads";
@@ -135,6 +136,27 @@ function cellFor(html: string, iso: string): string {
   expect(cell, `month grid renders a cell for ${iso}`).toBeDefined();
   return cell!;
 }
+
+describe("JSON wall-clock timezone agreement", () => {
+  it.each([
+    ["Bogus/Zone", "UTC", "19:00", "21:00"],
+    ["", "UTC", "19:00", "21:00"],
+    ["UTC", "UTC", "19:00", "21:00"],
+    ["Europe/London", "Europe/London", "20:00", "22:00"],
+    ["US/Eastern", "US/Eastern", "15:00", "17:00"],
+  ])("labels %j with the zone used by both JSON clocks", (stored, zone, start, end) => {
+    const row = event({ timezone: stored });
+    for (const serialize of [eventJson, serializeEvent]) {
+      const json = serialize(row);
+      expect(json.timezone).toBe(zone);
+      expect(json.starts_at_local).toBe(`2026-07-15 ${start}`);
+      expect(json.ends_at_local).toBe(`2026-07-15 ${end}`);
+      expect(json.starts_at).toBe("2026-07-15T19:00:00.000Z");
+      expect(json.ends_at).toBe("2026-07-15T21:00:00.000Z");
+    }
+    expect(row.timezone).toBe(stored);
+  });
+});
 
 describe("DST-paired cross-surface agreement", () => {
   it.each([

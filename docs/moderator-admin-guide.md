@@ -623,6 +623,30 @@ detects expiry, it shows a notice and keeps the edits in that document; use its
 sign-in link to recover. Expiry first discovered by a submitted POST can instead
 navigate to write recovery without preserving the draft.
 
+If another moderator saves the slot after you opened it, your **Save** is
+refused with a conflict notice instead of overwriting their change: nothing is
+saved, and your complete draft stays in the form for reference. Follow the
+**Review the current version** link to load the current saved row, re-apply
+the change you still intend, and save again. Pressing **Save** again on the
+conflict page without reviewing still refuses — it never silently rebases or
+overwrites — and reloading the conflict page resubmits the refused save
+instead of clearing it. To start over with the current saved row, follow
+**Review the current version** or reopen the slot. When two
+moderators must edit one slot, take turns: the second saver always reviews
+first. A publish followed by **Unpublish** does not revive a refused form,
+even if the saved content looks identical again. The conflict preview is the
+saved snapshot observed when the refusal took its lock; use **Review the
+current version** to check for later changes.
+
+Browser Back or reload can restore form controls. With JavaScript, the editor
+retains the original document's save version through those history visits,
+not a newly fetched version that could authorize an old draft. A history entry
+without an original version refuses until you explicitly review. Without
+JavaScript, native autocomplete is disabled so history navigation does not
+pair remembered inputs with a fresh saved version. Keep the refused draft open
+in its conflict document while reviewing the current version in another tab
+if you need to copy changes; this is not persistent draft storage.
+
 Use only public links and media you are authorized to share; do not paste
 private-service URLs, personal data, or expiring/signed URLs into site content.
 **Delete this slot** removes the row immediately, without a confirmation dialog;

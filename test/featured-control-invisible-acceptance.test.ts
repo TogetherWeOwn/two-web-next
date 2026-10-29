@@ -61,6 +61,7 @@ import type { Env } from "../src/env";
 import { __resetHomeGuestCacheForTests, cachedFeatured } from "../src/home-cache";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { clearAuditRows } from "./helpers/audit-rows";
+import { featuredBaselineFields } from "./helpers/featured-baseline";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 // The event-form copy (src/admin/validation-event-form.ts). Pinned literally:
@@ -574,6 +575,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const res = await app().request(
             `/featured/${id}`,
             form({
+              ...(await featuredBaselineFields(db, id)),
               title: forbiddenValue(char),
               body: "Original body",
               image_url: "https://cdn.discordapp.com/photo.png",
@@ -601,6 +603,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const res = await app().request(
             `/featured/${id}`,
             form({
+              ...(await featuredBaselineFields(db, id)),
               title: "Original slot",
               body: forbiddenValue(char),
               position: "4",
@@ -620,6 +623,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const res = await app().request(
             `/featured/${id}`,
             form({
+              ...(await featuredBaselineFields(db, id)),
               title: "Original slot",
               body: "Original body",
               image_url: "https://cdn.discordapp.com/photo.png",
@@ -651,7 +655,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
           const [seeded] = await seed();
           const res = await app().request(
             appPath(kitEditAction(seeded!.id)),
-            form({ title: "Original slot", body: forbiddenValue(char), position: "4" }),
+            form({
+              ...(await featuredBaselineFields(db, seeded!.id)),
+              title: "Original slot",
+              body: forbiddenValue(char),
+              position: "4",
+            }),
             liveEnv(),
           );
           expect(res.status).toBe(422);
@@ -670,6 +679,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
         const res = await app().request(
           appPath(kitEditAction(seeded!.id)),
           form({
+            ...(await featuredBaselineFields(db, seeded!.id)),
             title: "Original slot",
             body: "Original body",
             image_url: "https://cdn.discordapp.com/photo.png",

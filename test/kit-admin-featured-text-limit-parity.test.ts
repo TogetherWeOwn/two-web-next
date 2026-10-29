@@ -36,6 +36,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { clearAuditRows } from "./helpers/audit-rows";
+import { featuredBaselineFields } from "./helpers/featured-baseline";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -248,16 +249,23 @@ describe.skipIf(!process.env.DATABASE_URL)(
     let cookie = "";
     const liveEnv = () => ({ ...envBase, ADMIN_DB: db }) as Env;
     const app = () => adminApp({ sessionStore: store, db });
-    const post = (publicPath: string, fields: Fields) =>
-      app().request(
+    const post = async (publicPath: string, fields: Fields) => {
+      // Edit posts submit the row's fresh saved-content baseline, the way a
+      // rendered edit form carries it; creates have no saved content to pin.
+      const editId = /^\/admin\/featured\/(\d+)$/.exec(publicPath)?.[1];
+      return app().request(
         appPath(publicPath),
         {
           method: "POST",
           headers: { cookie, origin: APP_URL, "content-type": "application/x-www-form-urlencoded" },
-          body: new URLSearchParams(fields),
+          body: new URLSearchParams({
+            ...(editId ? await featuredBaselineFields(db, Number(editId)) : {}),
+            ...fields,
+          }),
         },
         liveEnv(),
       );
+    };
     const allRows = () => db.select().from(featuredContents);
     const seedRow = async () => {
       const [row] = await db

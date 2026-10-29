@@ -27,6 +27,14 @@ machine surface only.
 - Unknown counts read as `null`, never `0` (`going_count`,
   `going_occupancy`, `member_count`, `online_count`).
 
+## Event clocks
+
+`starts_at` and `ends_at` remain UTC instants. The corresponding `*_local`
+wall readings use the returned `timezone`: a supported stored zone keeps its
+exact name (including aliases); an invalid or blank stored zone returns `UTC`
+for both wall clocks and the label. This applies to REST, MCP and the legacy
+`/events.json` serializer without rewriting stored data.
+
 ## Errors
 
 Failures keep `isError` on MCP and `{ error: { code, message } }` on
