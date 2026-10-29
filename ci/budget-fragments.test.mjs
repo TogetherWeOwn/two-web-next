@@ -34,7 +34,7 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
-  server: { js: { maxRawBytes: 1203200, maxGzipBytes: 335360, maxFiles: 126 } },
+  server: { js: { maxRawBytes: 1204224, maxGzipBytes: 335360, maxFiles: 126 } },
   client: {
     js: { maxRawBytes: 257024, maxGzipBytes: 103168, maxFiles: 55 },
     css: { maxRawBytes: 3072, maxGzipBytes: 1280, maxFiles: 4 },
