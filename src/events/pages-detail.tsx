@@ -2,7 +2,7 @@
 import type { FC } from "hono/jsx";
 import { isPublicJoinUrl } from "./public-join-url";
 import { canonicalUrl } from "../seo";
-import { isValidZone, renderGoingCount } from "../islands/contracts";
+import { EVENT_ONGOING_TESTID, isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
@@ -10,6 +10,7 @@ import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
 import { eventLinkAvailability } from "./link-availability";
+import { ONGOING_COPY, isOngoing } from "./ongoing";
 import type {
   EventAttendee,
   EventLink,
@@ -148,6 +149,11 @@ export const EventPage: FC<{
         {e.status === "cancelled" ? (
           <p class="notice" role="status" data-testid="event-cancelled">
             Cancelled
+          </p>
+        ) : null}
+        {isOngoing(e, now) ? (
+          <p class="notice" data-testid={EVENT_ONGOING_TESTID}>
+            {ONGOING_COPY}
           </p>
         ) : null}
         <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>

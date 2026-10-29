@@ -1,6 +1,7 @@
 import type { Sql } from "postgres";
 import type { Grant, Tx } from "./types";
 import { storedEventKey } from "./payload";
+import { isIngressBusy } from "./deadline";
 
 export async function audit(
   sql: Tx,
@@ -46,12 +47,33 @@ export async function auditOperationBusy(
     await sql.begin(async (tx) => {
       await tx.unsafe(`SET LOCAL lock_timeout = '${timeoutMs}ms'`);
       await tx.unsafe(`SET LOCAL statement_timeout = '${timeoutMs}ms'`);
-      await audit(tx, grant, operation, eventKey, key, dig, requestId, "error", "operation_busy");
+      // A fresh grant can be deleted between lookup and this receipt (its zero
+      // audit rows do not block deletion via the append-only trigger). The
+      // audit FK would then turn the retryable 503 into a 23503 500. Revalidate
+      // liveness inside this bounded transaction — FOR KEY SHARE fences deletion
+      // without waiting again on a non-key provisioning update. Authorization's
+      // stronger checkGrant lock is separate. Attribute a vanished grant as null.
+      let effectiveGrant = grant;
+      if (grant) {
+        const [live] =
+          await tx`SELECT id FROM agent_event_grants WHERE id = ${grant.id} FOR KEY SHARE`;
+        if (!live) effectiveGrant = null;
+      }
+      await audit(
+        tx,
+        effectiveGrant,
+        operation,
+        eventKey,
+        key,
+        dig,
+        requestId,
+        "error",
+        "operation_busy",
+      );
     });
     return "audited";
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "55P03" || code === "57014") return "timeout";
+    if (isIngressBusy(err)) return "timeout";
     throw err;
   }
 }

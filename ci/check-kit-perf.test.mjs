@@ -440,11 +440,12 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   336640: { intervalBytes: 336514, exactBytes: 336640, overBytes: 336641 },
   336896: { intervalBytes: 336673, exactBytes: 336896, overBytes: 336897 },
   337152: { intervalBytes: 337015, exactBytes: 337152, overBytes: 337153 },
-  337664: { intervalBytes: 337312, exactBytes: 337664, overBytes: 337665 },
+  337408: { intervalBytes: 337286, exactBytes: 337408, overBytes: 337409 },
+  337664: { intervalBytes: 337545, exactBytes: 337664, overBytes: 337665 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337664`;
+  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664`;
 
 test("shipping budget: server gzip allocation is explicitly approved", () => {
   assert.ok(
@@ -769,13 +770,32 @@ function shippingServerGzipCases() {
       },
     ];
   }
+  if (SHIPPING_SERVER_GZIP_CAP === 337408) {
+    return [
+      {
+        name: "server gzip newly allowed interval",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 337286,
+      },
+      { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 337408 },
+      {
+        name: "server gzip one byte over",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 337409,
+        ceiling: 337408,
+        breach: true,
+      },
+    ];
+  }
   if (SHIPPING_SERVER_GZIP_CAP === 337664) {
     return [
       {
         name: "server gzip newly allowed interval",
         group: "kit.server.js",
         axis: "gzip",
-        bytes: 337312,
+        bytes: 337545,
       },
       { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 337664 },
       {
@@ -957,23 +977,20 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
   ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   ...shippingClientGzipCases(),
-  // Server raw: the honest roster/venue states raise the long-standing
-  // 1203200 ceiling to 1205248 (two merged builds 1204729; the lower
-  // ceiling rejects by 1529). See
-  // ci/budgets/decisions/kit-perf/2026-10-29-honest-roster-venue.md.
+  // Roster/venue composition on current main: 1206782 raw; the previous 1205504 cap rejects.
   {
     name: "server raw newly allowed interval",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1204729,
+    bytes: 1206782,
   },
-  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1205248 },
+  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1207040 },
   {
     name: "server raw one byte over",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1205249,
-    ceiling: 1205248,
+    bytes: 1207041,
+    ceiling: 1207040,
     breach: true,
   },
   {
