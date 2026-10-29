@@ -309,7 +309,9 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     });
 
     const get = async (path: string) =>
-      retainCookie(await app.request(APP_URL + path, { headers: { cookie } }, env));
+      retainCookie(
+        await app.request(new URL(path, APP_URL + EDIT_PATH).href, { headers: { cookie } }, env),
+      );
     const post = async (path: string, values: Record<string, string>) =>
       retainCookie(
         await app.request(
@@ -360,9 +362,13 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       const res = await post(EDIT_PATH, { ...FORM, starts_at: "not-a-time" });
       expect(res.status).toBe(422);
       const notice = expectRefusedEditNotice(await res.text());
-      const linked = new URL(notice.href, APP_URL);
+      const linked = new URL(notice.href, APP_URL + EDIT_PATH);
       expect(linked.pathname).toBe(EDIT_PATH);
-      const reload = await get(linked.pathname + linked.search);
+      expect(linked.href).toBe(APP_URL + EDIT_PATH);
+      expect(linked.hash).toBe("");
+      // Follow the actual admitted destination, never manufacture a GET by
+      // silently dropping a fragment from a same-document recovery link.
+      const reload = await get(linked.href);
       expect(reload.status).toBe(200);
       const html = await reload.text();
       expect(html).toContain('data-testid="rsvp-roster"');
