@@ -1,47 +1,53 @@
-# 2026-10-29 decision: server JS raw ceiling 1203200 -> 1204224
+# 2026-10-29 decision: admit the ongoing-night server composition
 
-This feature PR (#1907) admits one server-raw step after merging main
-`e2590f419968e98522d3ce76f7834d4c42d7c0b6`. The ongoing-night verdict in
-the shared schedule renderers plus the Kit detail projection and notice
-grow the merged server bundle past the raw ceiling; the gzip axis needs
-no change here because main already admits 337152B (host/join, #1825) and
-the merged gzip fits under it. This replaces the earlier same-PR record
-that admitted 337152B gzip against the previous base: that ceiling step
-landed independently on main, so this PR no longer raises gzip at all.
+This feature PR (#1907) reconciles its byte-only allocation after the
+reported conflict with main `bae17ea8411abb6599c4dcf3fddacd5d8cdab015`.
+Main's agent-event statement deadlines now consume the earlier raw and
+gzip margin. Its budget controls were preserved before measuring the
+combined tree; the ongoing-night verdict in the shared schedule renderers
+and the Kit detail projection/notice add the same bounded server cost.
+No duplicate or unneeded import accounts for the growth. The calendar
+revision-race correction changes the separately served island, not the
+Kit server bundle.
 
 ## Measurements
 
 Node 24.22.1, committed root and web lockfiles: `npm run build --prefix
-web` followed by `npm run kit-perf` (gzip is the checker's per-file gzip
-sum, read from the same build output).
+web` followed by `npm run kit-perf` (gzip is the checker's per-file sum).
+Pristine main and the feature used the same dependencies and toolchain.
 
 | Tree | Server files | Raw bytes | Gzip bytes | Result |
 |---|---:|---:|---:|---|
-| Pristine main `e2590f419` | 116 | 1202522 | 336738 | passes 1203200 / 337152 |
-| Merged feature, build 1 | 116 | 1203881 | 336994 | raw exceeds 1203200 by 681 |
-| Merged feature, build 2 | 116 | 1203883 | 336993 | raw exceeds 1203200 by 683 |
+| Pristine main `bae17ea84` | 116 | 1203932 | 337032 | passes 1203968 / 337152 |
+| Composed feature, build 1 | 116 | 1205293 | 337286 | exceeds main by 1325 raw / 134 gzip |
+| Composed feature, build 2 | 116 | 1205293 | 337286 | passes 1205504 / 337408 |
 
-Worst feature delta is +1361 raw / +256 gzip bytes; the 2B raw rebuild
-jitter is disclosed. The next lower 512B-aligned raw step (1203712)
-still rejects the worst build by 171B, so 1204224 is the smallest
-aligned ceiling that fits, with 341B margin. Merged gzip keeps 158B
-margin under main's existing 337152B ceiling.
+Feature delta: +1361 raw / +254 gzip bytes. The smallest fitting
+256B-aligned ceilings are 1205504 raw (211B margin) and 337408 gzip
+(122B margin). The immediately lower raw step, 1205248, rejects by 45B;
+the previous gzip ceiling, 337152, rejects by 134B.
 
-Client JS on the merged build is 53 files at 258363 raw / 103258 gzip
-(main 258144 / 103202), inside the existing 258560 / 103680 ceilings.
-Client CSS is unchanged at 2861 raw / 1019 gzip; the Worker entry stays
-2551 raw / 1219 gzip. No file-count, startup, island, or user-facing
-Lighthouse/a11y target changes.
+Client JS is 53 files at 258363 raw / 103258 gzip (main 258144 / 103202),
+inside the unchanged 258560 / 103680 ceilings. Client CSS is unchanged at
+2861 raw / 1019 gzip; the Worker entry stays 2551 raw / 1219 gzip.
+No file-count, startup, Lighthouse, accessibility or other class-A target
+changes. Exact previous-head class-A CI passed; fresh CI and independent
+review of the composed correction are still required before merging.
 
 ## Bounded admission and tests
 
-The raw step is +1024B, 0.0851% of the 1203200B ceiling, inside the
-0.5% per-feature limit for byte budgets. The shipping-fragment oracle
-pin moves with the fragment ceiling, so any other raw value still fails
-the aggregation deep-compare. The checker test literals move to the
-exact 1204224B ceiling and the 1204225B one-byte-over breach. Every
-other plan axis stays pinned.
+Against current main, raw rises by 1536B (0.1276%) and gzip by 256B
+(0.0759%), each below the 0.5% per-feature byte-budget limit. The shipping
+oracle explicitly admits these allocations while retaining main's
+history. Fixed 1205504 / 1205505 raw and 337408 / 337409 gzip controls
+prove exact-fit and one-byte-over behavior; unsupported neighboring
+allocations still fail. Every other plan axis stays pinned.
 
-Undo: revert this feature PR, including this fragment step and its
+This supersedes the earlier same-PR raw-only 1204224 admission measured
+on `e2590f419`: pristine main was 1202522 raw / 336738 gzip and that
+composition's worst was 1203883 / 336994. The new main's independent
+1203968 raw admission is not counted again as this feature's raise.
+
+Undo: revert this feature PR, including its fragment changes and
 admission controls. No runtime target, scanner, coverage floor,
 required check, or test skip is relaxed.

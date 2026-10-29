@@ -138,15 +138,19 @@ function kitFixture(t, fragments) {
 // (measured 337015 before a behavior-preserving URL-check size reduction).
 // Every other pin stays exact: the oracle rejects any ceiling outside this
 // list, then deep-compares the rest of the plan.
+// 337408 admits the ongoing-night composition on statement-deadline main
+// (measured 337286; the previous 337152 ceiling rejects by 134).
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
-  335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152,
+  335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408,
 ];
 // Admitted server.js maxRawBytes allocations. The SHIPPING_KIT_BUDGET pin
 // above (1203200) is the historical baseline; 1203968 admits the
 // agent-event statement-deadline composition (measured combined worst
 // 1203932, margin 36; lower step 1203712 rejects by 220; see
 // ci/budgets/decisions/kit-perf/2026-10-29-agent-event-deadlines-server-raw.md).
-const SHIPPING_SERVER_RAW_ALLOCATIONS = [1203200, 1203968];
+// 1205504 admits that main plus ongoing-night renderers (measured 1205293;
+// the lower 1205248 step rejects by 45).
+const SHIPPING_SERVER_RAW_ALLOCATIONS = [1203200, 1203968, 1205504];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
 // on current main (measured union 258023 raw / 103383 gzip, margins 25 / 41;
@@ -165,12 +169,12 @@ function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408`,
   );
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -252,8 +256,17 @@ test("shipping oracle admits the measured 1203968 server raw allocation", () => 
   });
 });
 
+test("shipping oracle admits the measured ongoing-night server allocations", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1205504, maxGzipBytes: 337408 },
+    },
+  });
+});
+
 test("shipping oracle rejects an unsupported server raw allocation", () => {
-  for (const maxRawBytes of [1203201, 1203712, 1203967, 1203969]) {
+  for (const maxRawBytes of [1203201, 1203712, 1203967, 1203969, 1205248, 1205503, 1205505]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes } },
@@ -266,7 +279,9 @@ test("shipping oracle rejects an unsupported server raw allocation", () => {
 });
 
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
-  for (const maxGzipBytes of [335105, 335359, 335616, 336385, 336641, 336897, 337153]) {
+  for (const maxGzipBytes of [
+    335105, 335359, 335616, 336385, 336641, 336897, 337153, 337407, 337409,
+  ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxGzipBytes } },

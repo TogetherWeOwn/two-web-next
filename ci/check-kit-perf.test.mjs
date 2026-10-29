@@ -438,10 +438,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   336640: { intervalBytes: 336514, exactBytes: 336640, overBytes: 336641 },
   336896: { intervalBytes: 336673, exactBytes: 336896, overBytes: 336897 },
   337152: { intervalBytes: 337015, exactBytes: 337152, overBytes: 337153 },
+  337408: { intervalBytes: 337286, exactBytes: 337408, overBytes: 337409 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152`;
+  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337408`;
 
 test("shipping budget: server gzip allocation is explicitly approved", () => {
   assert.ok(
@@ -763,6 +764,25 @@ function shippingServerGzipCases() {
       },
     ];
   }
+  if (SHIPPING_SERVER_GZIP_CAP === 337408) {
+    return [
+      {
+        name: "server gzip newly allowed interval",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 337286,
+      },
+      { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 337408 },
+      {
+        name: "server gzip one byte over",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 337409,
+        ceiling: 337408,
+        breach: true,
+      },
+    ];
+  }
   return [
     { name: "server gzip newly allowed interval", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
     { name: "server gzip exact ceiling", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
@@ -913,13 +933,13 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
   ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   ...shippingClientGzipCases(),
-  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1203968 },
+  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1205504 },
   {
     name: "server raw one byte over",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1203969,
-    ceiling: 1203968,
+    bytes: 1205505,
+    ceiling: 1205504,
     breach: true,
   },
   {

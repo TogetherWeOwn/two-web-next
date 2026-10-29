@@ -151,6 +151,23 @@ const LIVE_IDS = [
 function browser() {
   const form = new FNode("form");
   const input = Object.assign(new FNode("input"), { closest: () => form });
+  const game = Object.assign(new FNode("select"), {
+    options: [{ value: "" }, { value: "co-op" }],
+  });
+  let focused = input as FNode;
+  input.focus = () => {
+    focused = input;
+  };
+  let clock = 0;
+  let timerId = 0;
+  const timers = new Map<number, { at: number; run: () => void }>();
+  function advance(ms: number) {
+    clock += ms;
+    for (const [id, timer] of [...timers].sort((a, b) => a[1].at - b[1].at)) {
+      if (timer.at > clock || !timers.delete(id)) continue;
+      timer.run();
+    }
+  }
   const zones = ["head", "actions", "miss", "content"].map((name) => {
     const node = new FNode();
     node.setAttribute("data-cal-zone", name);
@@ -172,6 +189,7 @@ function browser() {
       if (selector === '[data-testid="events-loading"]') return skeleton;
       if (selector === "[data-cal-feedback]") return feedback;
       if (selector === '[data-testid="events-search"]') return input;
+      if (selector === 'select[name="game"]') return game;
       if (selector === '[data-cal-zone="content"]') return zones[3];
       if (selector === "#events-heading") return heading;
       const id = /data-testid="([^"]+)"/.exec(selector)?.[1];
@@ -194,6 +212,7 @@ function browser() {
   };
   const requests: { url: string; response: ReturnType<typeof deferred<FakeResponse>> }[] = [];
   const parseCalls: number[] = [];
+  const windowListeners = new Map<string, () => void>();
   const makePage = (reqIndex: number) => {
     const url = new NodeURL(requests[reqIndex]!.url, ORIGIN);
     const sourceZones = zones.map((target) => {
@@ -216,6 +235,8 @@ function browser() {
         if (selector.startsWith("link")) return { href: url.href };
         const id = /data-testid="([^"]+)"/.exec(selector)?.[1];
         if (id === "events-search") return { getAttribute: () => "" };
+        if (selector === 'select[name="game"]')
+          return { value: url.searchParams.get("game") ?? "" };
         if (LIVE_IDS.includes(id ?? "")) return { textContent: `live ${id}` };
         return null;
       },
@@ -226,8 +247,12 @@ function browser() {
     {
       URL: NodeURL,
       AbortController,
-      setTimeout,
-      clearTimeout,
+      setTimeout(run: () => void, delay: number) {
+        const id = ++timerId;
+        timers.set(id, { at: clock + delay, run });
+        return id;
+      },
+      clearTimeout: (id: number) => timers.delete(id),
       TextDecoder,
       TextEncoder,
       ReadableStream,
@@ -255,7 +280,7 @@ function browser() {
         addEventListener: () => {},
         removeEventListener: () => {},
         get activeElement() {
-          return input;
+          return focused;
         },
         body: new FNode("body"),
       },
@@ -266,7 +291,8 @@ function browser() {
             history.push(path);
           },
         },
-        addEventListener: () => {},
+        addEventListener: (name: string, listener: () => void) =>
+          windowListeners.set(name, listener),
       },
     },
     { filename: "public/islands/events-calendar.js" },
@@ -292,9 +318,25 @@ function browser() {
         preventDefault() {},
       });
     },
-    typeSearch(value: string) {
+    advance,
+    focused: () => focused,
+    typeSearch(value: string, isComposing = false) {
+      input.focus();
       input.value = value;
-      for (const fn of input.listeners.get("input") ?? []) fn({ isComposing: false });
+      for (const fn of input.listeners.get("input") ?? []) fn({ isComposing });
+    },
+    composition(type: "compositionstart" | "compositionend") {
+      input.focus();
+      for (const fn of input.listeners.get(type) ?? []) fn({});
+    },
+    selectGame(value: string) {
+      focused = game;
+      game.value = value;
+      for (const fn of game.listeners.get("change") ?? []) fn({});
+    },
+    back() {
+      location.href = `${ORIGIN}/events?view=calendar&month=2035-09`;
+      windowListeners.get("popstate")!();
     },
     respond: (i: number, r: FakeResponse) => requests[i]!.response.resolve(r),
     feedback: () => feedback.textContent,
@@ -346,13 +388,80 @@ describe("dense ongoing calendar route-to-island regression", () => {
     expect(b.feedback()).toBe("");
   });
 
+  // Removing either revision comparison from the document fallback loses a
+  // newer draft before another request can supersede the month navigation.
+  it.each(["typing", "same-value edit", "composition", "game", "same-value game"] as const)(
+    "an oversized month response preserves newer %s intent",
+    async (intent) => {
+      const html = await render(model(denseRows(), { view: "calendar" }), "Hono");
+      const b = browser();
+      const before = b.zoneChildren();
+      const canonicalBefore = b.canonicalNow();
+      b.navigate();
+      if (intent === "composition") b.composition("compositionstart");
+      if (intent === "game" || intent === "same-value game") {
+        b.selectGame("co-op");
+        if (intent === "same-value game") b.selectGame("");
+      } else {
+        b.typeSearch("new draft", intent === "composition");
+        if (intent === "same-value edit") b.typeSearch("");
+      }
+      const focusBefore = b.focused();
+      const draftBefore = b.input.value;
+      expect(b.requests).toHaveLength(1);
+      b.respond(0, streamedResponse(encoder.encode(html)));
+      expect(await until(() => b.feedback() === LOAD_ERROR)).toBe(true);
+      await settle();
+      expect(b.assigns).toEqual([]);
+      expect(b.parseCalls).toEqual([]);
+      expect(b.zoneChildren()).toEqual(before);
+      expect(b.history).toEqual([]);
+      expect(b.canonicalNow()).toBe(canonicalBefore);
+      expect(b.input.value).toBe(draftBefore);
+      expect(b.focused()).toBe(focusBefore);
+      expect(b.busy()).toBe(false);
+      b.advance(299);
+      expect(b.requests).toHaveLength(1);
+      b.advance(1);
+      if (intent === "typing" || intent === "same-value edit") {
+        expect(b.requests).toHaveLength(2);
+        expect(b.requests[1]!.url).toBe(intent === "typing" ? "/events?q=new+draft" : "/events");
+        b.respond(1, streamedResponse(encoder.encode("small search")));
+        await settle();
+        expect(b.assigns).toEqual([]);
+      } else {
+        // Composition and unsent facet changes schedule no replacement read.
+        expect(b.requests).toHaveLength(1);
+      }
+    },
+  );
+
+  it("CONTROL: an oversized Back read still reconciles the address despite a newer draft", async () => {
+    const html = await render(model(denseRows(), { view: "calendar" }), "Hono");
+    const b = browser();
+    const before = b.zoneChildren();
+    b.back();
+    b.composition("compositionstart");
+    b.typeSearch("new draft", true);
+    b.respond(0, streamedResponse(encoder.encode(html)));
+    expect(await until(() => b.assigns.length > 0)).toBe(true);
+    await settle();
+    expect(b.assigns.map((href) => new NodeURL(href, ORIGIN).href)).toEqual([
+      `${ORIGIN}/events?view=calendar&month=2035-09`,
+    ]);
+    expect(b.parseCalls).toEqual([]);
+    expect(b.zoneChildren()).toEqual(before);
+    expect(b.history).toEqual([]);
+    expect(b.busy()).toBe(false);
+  });
+
   it("a settled search past the cap keeps the last-good view and never navigates the document", async () => {
     const html = await render(model(denseRows(), { view: "calendar" }), "Hono");
     const b = browser();
     const before = b.zoneChildren();
     b.typeSearch("season");
     // The island debounces a settled search by 300 ms.
-    await new Promise((resolve) => setTimeout(resolve, 400));
+    b.advance(300);
     expect(b.requests).toHaveLength(1);
     b.respond(0, streamedResponse(encoder.encode(html)));
     expect(await until(() => b.feedback() === LOAD_ERROR)).toBe(true);
