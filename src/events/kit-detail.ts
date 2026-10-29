@@ -28,6 +28,7 @@ import type {
   EventMissingModel,
   EventMissingSuggestion,
 } from "../kit-event-states";
+import { MAX_RETURN_DESTINATION_BYTES } from "../join/service";
 import { kitPublicReadGuard } from "../kit-past-events";
 import { declareMemberResult } from "../member-reads";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
@@ -60,7 +61,7 @@ import {
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
 import { archiveContext } from "./archive-context";
-import { archiveEventHref } from "./attendee-paths";
+import { archiveEventHref, authReturnHref } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
 import { waitlistPosition } from "./waitlist";
 
@@ -582,9 +583,15 @@ export async function resolveKitEventDetail(
               }
             : null,
           showJoinPitch: !viewer,
-          // The sign-in return keeps the query string, exactly as served;
-          // the join pitch and related-join links use the bare page path.
-          joinReturnTo: `${pagePath}${search}`,
+          // The sign-in return keeps normalized archive/attendee context
+          // bounded to auth's byte cap, never the raw query string; the
+          // join pitch and related-join links use the bare page path.
+          joinReturnTo: authReturnHref(
+            event.eventKey,
+            archive,
+            attendeePage,
+            MAX_RETURN_DESTINATION_BYTES,
+          ),
           joinResult,
           viewerMember: member,
           viewerModerator: viewer?.moderator === true,
