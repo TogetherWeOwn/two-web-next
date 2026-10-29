@@ -705,6 +705,169 @@ test("already-bootstrapped database: global default and exposed ledger both refu
   });
 });
 
+async function createFixtureLedger(client) {
+  await client.unsafe(`
+    CREATE SCHEMA drizzle;
+    CREATE TABLE drizzle.__drizzle_migrations (
+      id serial PRIMARY KEY, hash text NOT NULL, created_at bigint
+    )`);
+}
+
+async function assertLedgerRefused(client, run, reason) {
+  await assert.rejects(assertRuntimeDefaultAcl(client), (error) => {
+    assert.ok(error instanceof DefaultAclRefusal);
+    assert.match(error.message, reason);
+    return true;
+  });
+  for (const mode of ["plan", "apply", "verify"]) {
+    await assert.rejects(run(mode), (error) => {
+      assert.match(safeMigrationError(error), /default-ACL guard refused/);
+      assert.match(safeMigrationError(error), reason);
+      return true;
+    });
+  }
+  assert.equal(
+    Number((await client`select count(*) from drizzle.__drizzle_migrations`)[0].count),
+    0,
+    "refusal must leave the pre-existing ledger unchanged, without applying migrations",
+  );
+  assert.equal((await client`select to_regclass('public.users') as name`)[0].name, null);
+}
+
+test("runtime ownership refuses even when ledger relation ACLs are NULL", async () => {
+  await fixture(async ({ client, run }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      await createFixtureLedger(client);
+      assert.notEqual((await client`select current_user as name`)[0].name, "two_web_app");
+      await client.unsafe("ALTER TABLE drizzle.__drizzle_migrations OWNER TO two_web_app");
+      const objects = await client`
+        select c.relacl, pg_get_userbyid(c.relowner) as owner
+          from pg_class c
+         where c.oid in (
+           'drizzle.__drizzle_migrations'::regclass,
+           pg_get_serial_sequence('drizzle.__drizzle_migrations', 'id')::regclass
+         )`;
+      assert.equal(objects.length, 2);
+      for (const object of objects) {
+        assert.equal(object.owner, "two_web_app");
+        assert.equal(object.relacl, null);
+      }
+      await assertLedgerRefused(client, run, /migration ledger object: .*\/two_web_app\/OWNER/);
+      // Ownership still permits DDL even after explicit ACLs are revoked.
+      await client.unsafe("REVOKE ALL ON TABLE drizzle.__drizzle_migrations FROM two_web_app");
+      await client.unsafe(
+        "REVOKE ALL ON SEQUENCE drizzle.__drizzle_migrations_id_seq FROM two_web_app",
+      );
+      await assertLedgerRefused(client, run, /migration ledger object: .*\/two_web_app\/OWNER/);
+    } finally {
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+for (const inherit of [true, false]) {
+  test(`runtime-accessible ledger owner refuses with INHERIT ${inherit}`, async () => {
+    await fixture(async ({ client, run }) => {
+      const group = `ledger_owner_${randomUUID().replaceAll("-", "")}`;
+      const created = await ensureRuntimeRole(client);
+      await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+      try {
+        await createFixtureLedger(client);
+        await client.unsafe(`ALTER TABLE drizzle.__drizzle_migrations OWNER TO "${group}"`);
+        assert.equal((await run("plan")).length, journal.entries.length);
+        await client.unsafe(`GRANT "${group}" TO two_web_app WITH INHERIT ${inherit}, SET TRUE`);
+        assert.equal(
+          (await client`select pg_has_role('two_web_app', ${group}, 'USAGE') as inherited`)[0]
+            .inherited,
+          inherit,
+        );
+        assert.equal(
+          (await client`select pg_has_role('two_web_app', ${group}, 'SET') as assumable`)[0]
+            .assumable,
+          true,
+        );
+        await assertLedgerRefused(client, run, /migration ledger object: .*\/OWNER/);
+      } finally {
+        await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+        await client.unsafe(`DROP OWNED BY "${group}"`);
+        await client.unsafe(`DROP ROLE "${group}"`);
+        await dropRuntimeRoleIfCreated(client, created);
+      }
+    });
+  });
+}
+
+for (const grantee of ["two_web_app", "PUBLIC"]) {
+  for (const privilege of ["SELECT", "UPDATE"]) {
+    test(`column-only ${privilege} for ${grantee} refuses ledger admission`, async () => {
+      await fixture(async ({ client, run }) => {
+        const created = await ensureRuntimeRole(client);
+        try {
+          await createFixtureLedger(client);
+          await client.unsafe(
+            `GRANT ${privilege} (hash) ON drizzle.__drizzle_migrations TO ${grantee}`,
+          );
+          const rows = await client`
+            select acl.privilege_type,
+                   case when acl.grantee = 0 then 'PUBLIC' else pg_get_userbyid(acl.grantee) end as grantee
+              from pg_attribute a
+              cross join lateral aclexplode(a.attacl) acl
+             where a.attrelid = 'drizzle.__drizzle_migrations'::regclass and a.attname = 'hash'`;
+          assert.ok(
+            rows.some((row) => row.privilege_type === privilege && row.grantee === grantee),
+          );
+          assert.deepEqual(await runtimeAcl(client, "drizzle.__drizzle_migrations"), []);
+          await assertLedgerRefused(
+            client,
+            run,
+            new RegExp(
+              `migration ledger object: __drizzle_migrations\\.hash/${grantee}/${privilege}`,
+            ),
+          );
+        } finally {
+          await dropRuntimeRoleIfCreated(client, created);
+        }
+      });
+    });
+  }
+}
+
+for (const [object, privilege] of [
+  ["TABLE drizzle.__drizzle_migrations", "SELECT"],
+  ["SEQUENCE drizzle.__drizzle_migrations_id_seq", "USAGE"],
+  ["TABLE drizzle.__drizzle_migrations", "UPDATE (hash)"],
+]) {
+  test(`inherited ${privilege} on ${object} refuses ledger admission`, async () => {
+    await fixture(async ({ client, run }) => {
+      const group = `ledger_reader_${randomUUID().replaceAll("-", "")}`;
+      const created = await ensureRuntimeRole(client);
+      await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+      try {
+        await createFixtureLedger(client);
+        await client.unsafe(`GRANT ${privilege} ON ${object} TO "${group}"`);
+        // An unrelated grantee is benign; only runtime inheritance makes
+        // this same catalog grant prohibited.
+        assert.equal((await run("plan")).length, journal.entries.length);
+        await client.unsafe(`GRANT "${group}" TO two_web_app WITH INHERIT TRUE`);
+        assert.equal(
+          (await client`select pg_has_role('two_web_app', ${group}, 'USAGE') as inherited`)[0]
+            .inherited,
+          true,
+        );
+        await assertLedgerRefused(client, run, /runtime rights on migration ledger object/);
+        await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+        assert.equal((await run("plan")).length, journal.entries.length);
+      } finally {
+        await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+        await client.unsafe(`DROP OWNED BY "${group}"`);
+        await client.unsafe(`DROP ROLE "${group}"`);
+        await dropRuntimeRoleIfCreated(client, created);
+      }
+    });
+  });
+}
+
 test("sequence post-default matrix for login, group, and runtime roles", async () => {
   await fixture(async ({ client }) => {
     const suffix = randomUUID().replaceAll("-", "");
@@ -1150,15 +1313,31 @@ assert.deepEqual(state.statements, [
     UNION ALL
     SELECT CASE WHEN to_regclass('drizzle.__drizzle_migrations') IS NULL THEN NULL
                 ELSE pg_get_serial_sequence('drizzle.__drizzle_migrations', 'id')::regclass END
+  ), objects AS (
+    SELECT c.* FROM targets JOIN pg_class AS c ON c.oid = targets.oid
+  ), rights(object_name, grantee, privilege_type, is_grantable) AS (
+    SELECT relname, relowner, 'OWNER', true FROM objects
+    UNION ALL
+    SELECT c.relname, acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM objects AS c
+      CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+    UNION ALL
+    SELECT c.relname || '.' || a.attname, acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM objects AS c
+      JOIN pg_attribute AS a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+      CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
   )
-  SELECT c.relname AS object_name,
-         CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END AS grantee,
-         acl.privilege_type,
-         acl.is_grantable
-    FROM targets
-    JOIN pg_class AS c ON c.oid = targets.oid
-    CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
-   WHERE targets.oid IS NOT NULL
+  SELECT object_name,
+         CASE WHEN grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END AS grantee,
+         privilege_type,
+         is_grantable,
+         CASE WHEN grantee = 0 THEN true ELSE EXISTS (
+           SELECT 1 FROM pg_roles AS runtime
+            WHERE runtime.rolname = 'two_web_app'
+              AND (pg_has_role(runtime.oid, rights.grantee, 'USAGE')
+                   OR pg_has_role(runtime.oid, rights.grantee, 'SET'))
+         ) END AS runtime_access
+    FROM rights
    ORDER BY 1, 2, 3, 4
 `)},
   "select to_regclass(?) as ledger",
