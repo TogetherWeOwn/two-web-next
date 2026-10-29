@@ -323,7 +323,8 @@ outsideLimits = outsideLimits.replace("Same DTOs as the MCP tools, byte for byte
 // Otherwise require both a result/transport subject and a measurement
 // predicate. Bare "fits", "bytes", "within" or "counted" can describe schemas,
 // field documentation, retry timing or operational counts, not a boundary.
-const SIZE_LITERAL = /\b\d[\d,._]*\s*(?:[KMGT]i?B|bytes?|kilobytes?|megabytes?)\b|\b32[ ,_]?768\b/i;
+const SIZE_LITERAL =
+  /\b\d[\d,._]*\s*(?:[KMGTPE]i?B|bytes?|kilobytes?|megabytes?|gigabytes?|terabytes?|petabytes?|exabytes?)\b|\b32[ ,_]?768\b/i;
 // Bare suffixes stay case-sensitive so "5m" (minutes) is not a size.
 const SIZE_BARE_SUFFIX = /\b\d[\d,._]*\s*[kKMGT]\b/;
 const RESULT_SUBJECT =
@@ -333,12 +334,14 @@ const RESULT_SUBJECT =
 // unrelated suffix text. Direct limit nouns and explicit no-limit claims count too.
 // Consume ranges and explicit count units, but not numeric attributes such as
 // "8-bit" or partial numbers. A count unit must end the hyphenated token too.
-const COUNT_UNIT = String.raw`(?:items?|rows?|entr(?:y|ies)|per-page)`;
-const COUNT_NUMBER = String.raw`(?:[<>≤≥]=?|=)?\s*[+\-−]?\d+(?:[.,]\d+)*(?:-\d+(?:[.,]\d+)*)?(?:-${COUNT_UNIT})?\b(?!-|[.,]\d)`;
+const COUNT_UNIT = String.raw`(?:(?:items?|rows?|entr(?:y|ies))-per-page|items?|rows?|entr(?:y|ies)|per-page)`;
+// Spelled-out counts ("thirty", "twenty-five") declare the same bound as digits.
+const COUNT_WORD = String.raw`(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?|hundred|thousand)`;
+const COUNT_NUMBER = String.raw`(?:(?:[<>≤≥]=?|=)?\s*[+\-−]?\d+(?:[.,]\d+)*(?:-\d+(?:[.,]\d+)*)?|${COUNT_WORD})(?:-${COUNT_UNIT})?\b(?!-|[.,]\d)`;
 // Wrappers must enclose the numeric token, not a phrase such as "8-bit entries".
 const COUNT_VALUE = String.raw`(?:${COUNT_NUMBER}|(?:[\[({"'“‘]\s*)+${COUNT_NUMBER}(?:\s*[\])}"'”’])+)`;
 const COUNT_BOUNDARY = new RegExp(
-  String.raw`\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+(?:caps?|limits?|bounds?|ceilings?)\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*(?:caps?|limits?|bounds?|ceilings?)\b)(?:\s+(?:at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|up|most|least|e\.g\.|i\.e\.))*\s*(?:[:,]\s*)*${COUNT_VALUE})`,
+  String.raw`\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+(?:caps?|limits?|bounds?|ceilings?)\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*(?:caps?|limits?|bounds?|ceilings?)\b)(?:\s+(?:at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|about|around|approximately|roughly|nearly|up|most|least|e\.g\.|i\.e\.))*\s*(?:[:,]\s*)*${COUNT_VALUE})`,
   "i",
 );
 const SIZE_PREDICATE =
@@ -354,16 +357,23 @@ for (const fragment of rawFragments) {
     outsideSentences[outsideSentences.length - 1] = `${prev} ${fragment}`;
   else outsideSentences.push(fragment);
 }
+// Visible Markdown text: link labels and split emphasis render as plain
+// words, so every subject/count/size check reads this form, not the raw
+// sentence. Failure messages still quote the original sentence.
+const visibleText = (text) =>
+  text
+    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
+    .replace(/!?\[([^\]]*)\]\[[^\]]*\]/g, "$1")
+    .replace(/[`*_~]/g, "");
 for (const sentence of outsideSentences) {
   const flat = sentence.trim();
-  // Markdown must not hide a count noun, bound predicate or numeric value.
-  const countText = flat.replace(/[`*_~]/g, "");
+  const visible = visibleText(flat);
   if (
     flat &&
-    (SIZE_LITERAL.test(flat) ||
-      SIZE_BARE_SUFFIX.test(flat) ||
-      COUNT_BOUNDARY.test(countText) ||
-      (RESULT_SUBJECT.test(flat) && SIZE_PREDICATE.test(flat)))
+    (SIZE_LITERAL.test(visible) ||
+      SIZE_BARE_SUFFIX.test(visible) ||
+      COUNT_BOUNDARY.test(visible) ||
+      (RESULT_SUBJECT.test(visible) && SIZE_PREDICATE.test(visible)))
   )
     check(
       `guide states a size or measurement claim outside the canonical Limits: "${flat.slice(0, 80)}"`,
