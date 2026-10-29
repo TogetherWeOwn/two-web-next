@@ -11,6 +11,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
+import { parseFragment } from "parse5";
 import { llmsTxt } from "../src/ai-friendly/md";
 import {
   communitySnapshotOutputSchema,
@@ -324,7 +325,7 @@ outsideLimits = outsideLimits.replace("Same DTOs as the MCP tools, byte for byte
 // predicate. Bare "fits", "bytes", "within" or "counted" can describe schemas,
 // field documentation, retry timing or operational counts, not a boundary.
 const SIZE_LITERAL =
-  /\b\d[\d,._]*\s*(?:[KMGTPE]i?B|bytes?|kilobytes?|megabytes?|gigabytes?|terabytes?|petabytes?|exabytes?)\b|\b32[ ,_]?768\b/i;
+  /\b\d[\d,._]*[\s-]*(?:[KMGTPE](?:i?B|bytes?)|bytes?|(?:kilo|mega|giga|tera|peta|exa|kibi|mebi|gibi|tebi|pebi|exbi)bytes?)\b|\b32[ ,_]?768\b/i;
 // Bare suffixes stay case-sensitive so "5m" (minutes) is not a size.
 const SIZE_BARE_SUFFIX = /\b\d[\d,._]*\s*[kKMGT]\b/;
 const RESULT_SUBJECT =
@@ -336,12 +337,20 @@ const RESULT_SUBJECT =
 // "8-bit" or partial numbers. A count unit must end the hyphenated token too.
 const COUNT_UNIT = String.raw`(?:(?:items?|rows?|entr(?:y|ies))-per-page|items?|rows?|entr(?:y|ies)|per-page)`;
 // Spelled-out counts ("thirty", "twenty-five") declare the same bound as digits.
-const COUNT_WORD = String.raw`(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?|hundred|thousand)`;
-const COUNT_NUMBER = String.raw`(?:(?:[<>≤≥]=?|=)?\s*[+\-−]?\d+(?:[.,]\d+)*(?:-\d+(?:[.,]\d+)*)?|${COUNT_WORD})(?:-${COUNT_UNIT})?\b(?!-|[.,]\d)`;
+const COUNT_SMALL = String.raw`(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?)`;
+const COUNT_WORD = String.raw`(?:(?:${COUNT_SMALL}[-\s]+)?(?:hundred|thousand|million|billion)(?:[-\s]+(?:and[-\s]+)?${COUNT_SMALL})?|${COUNT_SMALL}|dozen)`;
+const COUNT_NUMBER = String.raw`(?:(?:[<>≤≥]=?|=)?\s*[+\-−]?\d+(?:[.,]\d+)*(?:-\d+(?:[.,]\d+)*)?|\b${COUNT_WORD})(?:-${COUNT_UNIT})?\b(?!-|[.,]\d)`;
 // Wrappers must enclose the numeric token, not a phrase such as "8-bit entries".
 const COUNT_VALUE = String.raw`(?:${COUNT_NUMBER}|(?:[\[({"'“‘]\s*)+${COUNT_NUMBER}(?:\s*[\])}"'”’])+)`;
+// Qualifiers are whole tokens: "of" + "ten" must never consume "often".
+const COUNT_QUALIFIER = String.raw`(?:at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|about|around|approximately|roughly|nearly|almost|just|over|under|fewer|close|greater|up|most|least|e\.g\.|i\.e\.)(?=[\s:,-]|$)`;
+const QUALIFIED_COUNT = String.raw`(?:[\s:,-]+${COUNT_QUALIFIER})*[\s:,-]*${COUNT_VALUE}`;
 const COUNT_BOUNDARY = new RegExp(
-  String.raw`\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+(?:caps?|limits?|bounds?|ceilings?)\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*(?:caps?|limits?|bounds?|ceilings?)\b)(?:\s+(?:at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|about|around|approximately|roughly|nearly|up|most|least|e\.g\.|i\.e\.))*\s*(?:[:,]\s*)*${COUNT_VALUE})`,
+  String.raw`\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+(?:caps?|limits?|bounds?|ceilings?)\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*(?:caps?|limits?|bounds?|ceilings?)\b)${QUALIFIED_COUNT})`,
+  "i",
+);
+const RESULT_COUNT = new RegExp(
+  String.raw`${RESULT_SUBJECT.source}\s+(?:contains?|includes?|returns?)\b${QUALIFIED_COUNT}\s+(?:items?|rows?|entr(?:y|ies))\b`,
   "i",
 );
 const SIZE_PREDICATE =
@@ -357,14 +366,41 @@ for (const fragment of rawFragments) {
     outsideSentences[outsideSentences.length - 1] = `${prev} ${fragment}`;
   else outsideSentences.push(fragment);
 }
-// Visible Markdown text: link labels and split emphasis render as plain
-// words, so every subject/count/size check reads this form, not the raw
-// sentence. Failure messages still quote the original sentence.
-const visibleText = (text) =>
-  text
-    .replace(/!?\[([^\]]*)\]\([^)]*\)/g, "$1")
-    .replace(/!?\[([^\]]*)\]\[[^\]]*\]/g, "$1")
-    .replace(/[`*_~]/g, "");
+// Link destinations can contain balanced or escaped parentheses. Consume the
+// whole destination, otherwise a leftover ')' can hide the label's predicate.
+const linkLabels = (text) => {
+  const links = /!?\[([^\]]*)\]\(/g;
+  let output = "";
+  let copied = 0;
+  for (let match = links.exec(text); match; match = links.exec(text)) {
+    let end = links.lastIndex;
+    let depth = 1;
+    while (end < text.length && depth > 0) {
+      const char = text[end++];
+      if (char === "\\") end++;
+      else if (char === "(") depth++;
+      else if (char === ")") depth--;
+    }
+    if (depth !== 0) continue;
+    output += text.slice(copied, match.index) + match[1];
+    copied = end;
+    links.lastIndex = end;
+  }
+  return output + text.slice(copied);
+};
+// Every subject/count/size check reads visible text, not markup. The existing
+// HTML parser handles quoted tag attributes and entities without executing or
+// fetching anything. Keep literal snake_case underscores; only paired emphasis
+// markers may join words. Failure messages still quote the original sentence.
+const visibleText = (text) => {
+  const markup = linkLabels(text).replace(/!?\[([^\]]*)\]\[[^\]]*\]/g, "$1");
+  const textContent = (node) =>
+    node.nodeName === "#text" ? node.value : (node.childNodes ?? []).map(textContent).join("");
+  return textContent(parseFragment(markup))
+    .replace(/__([^\n]+?)__/g, "$1")
+    .replace(/(?<![\p{L}\p{N}_])_([^_\n]+)_(?![\p{L}\p{N}_])/gu, "$1")
+    .replace(/[`*~]/g, "");
+};
 for (const sentence of outsideSentences) {
   const flat = sentence.trim();
   const visible = visibleText(flat);
@@ -373,6 +409,7 @@ for (const sentence of outsideSentences) {
     (SIZE_LITERAL.test(visible) ||
       SIZE_BARE_SUFFIX.test(visible) ||
       COUNT_BOUNDARY.test(visible) ||
+      RESULT_COUNT.test(visible) ||
       (RESULT_SUBJECT.test(visible) && SIZE_PREDICATE.test(visible)))
   )
     check(

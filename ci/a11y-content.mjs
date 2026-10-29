@@ -3,6 +3,24 @@ import { A11Y_FREEZE_DATES } from "./a11y-cases.mjs";
 
 export function contentExpectations(scenario) {
   const unavailable = scenario.readState === "unavailable";
+  if (scenario.route === "/admin/ops-overrides") {
+    if (scenario.state === "operator-refused") {
+      return [{ selector: "main h1", text: "Operator access required" }];
+    }
+    return [
+      { selector: "main h1", text: "Operator overrides" },
+      { selector: "main", includes: "300 seconds" },
+      { selector: "main form, main input, main button", count: 0 },
+      ...(scenario.state === "operator-unavailable"
+        ? [{ selector: '[role="status"]', includes: "Operator record unavailable" }]
+        : [
+            { selector: "main dl", includes: "98741" },
+            ...(scenario.state === "operator-empty"
+              ? [{ selector: "main", includes: "No overrides are set." }]
+              : [{ selector: "main table", includes: "TWO_AUTOMOD_MENTION_LIMIT" }]),
+          ]),
+    ];
+  }
   if (scenario.route === "/events/past" && scenario.state === "past-page-overflow") {
     return [
       {
