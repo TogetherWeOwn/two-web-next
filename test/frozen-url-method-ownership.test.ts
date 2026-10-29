@@ -222,6 +222,7 @@ describe("no API, feed, ops, alias or retired path is Kit-swallowed", () => {
     { method: "POST", path: "/logout" },
     { method: "POST", path: "/logout/everywhere" },
     { method: "POST", path: "/auth/qa/fixture" },
+    ...METHODS.map((method) => ({ method, path: "/admin/ops-overrides" })),
     { method: "GET", path: "/admin/queue/failed/7/preview" },
     { method: "POST", path: "/admin/queue/failed/7/redispatch" },
     { method: "GET", path: "/admin/queue/source-evidence/7" },
