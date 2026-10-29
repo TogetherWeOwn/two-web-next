@@ -868,6 +868,45 @@ for (const [object, privilege] of [
   });
 }
 
+test("runtime-administered ledger owner and grantee refuse without INHERIT or SET", async () => {
+  await fixture(async ({ client, run }) => {
+    const group = `ledger_admin_${randomUUID().replaceAll("-", "")}`;
+    const created = await ensureRuntimeRole(client);
+    await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+    try {
+      await createFixtureLedger(client);
+      await client.unsafe(`ALTER TABLE drizzle.__drizzle_migrations OWNER TO "${group}"`);
+      // The column grant keeps a non-owner ledger row in the mix; ownership
+      // already makes it redundant. With no runtime link both are benign.
+      await client.unsafe(`GRANT UPDATE (hash) ON drizzle.__drizzle_migrations TO "${group}"`);
+      assert.equal((await run("plan")).length, journal.entries.length);
+      // ADMIN OPTION alone is effective authority: its holder can re-grant
+      // itself the role WITH INHERIT/SET, so neither USAGE nor SET needs to
+      // hold today for the runtime to reach the group's ledger rights.
+      await client.unsafe(
+        `GRANT "${group}" TO two_web_app WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`,
+      );
+      const probes = (
+        await client`
+        select pg_has_role('two_web_app', ${group}, 'USAGE') as inherited,
+               pg_has_role('two_web_app', ${group}, 'SET') as assumable,
+               pg_has_role('two_web_app', ${group}, 'MEMBER WITH ADMIN OPTION') as administers`
+      )[0];
+      assert.equal(probes.inherited, false);
+      assert.equal(probes.assumable, false);
+      assert.equal(probes.administers, true);
+      await assertLedgerRefused(client, run, /runtime rights on migration ledger object/);
+      await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+      assert.equal((await run("plan")).length, journal.entries.length);
+    } finally {
+      await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+      await client.unsafe(`DROP OWNED BY "${group}"`);
+      await client.unsafe(`DROP ROLE "${group}"`);
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
 test("sequence post-default matrix for login, group, and runtime roles", async () => {
   await fixture(async ({ client }) => {
     const suffix = randomUUID().replaceAll("-", "");
@@ -1335,7 +1374,8 @@ assert.deepEqual(state.statements, [
            SELECT 1 FROM pg_roles AS runtime
             WHERE runtime.rolname = 'two_web_app'
               AND (pg_has_role(runtime.oid, rights.grantee, 'USAGE')
-                   OR pg_has_role(runtime.oid, rights.grantee, 'SET'))
+                   OR pg_has_role(runtime.oid, rights.grantee, 'SET')
+                   OR pg_has_role(runtime.oid, rights.grantee, 'MEMBER WITH ADMIN OPTION'))
          ) END AS runtime_access
     FROM rights
    ORDER BY 1, 2, 3, 4
