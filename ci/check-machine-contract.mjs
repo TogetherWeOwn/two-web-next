@@ -332,7 +332,7 @@ const RESULT_SUBJECT =
 // unrelated suffix text. Direct limit nouns and explicit no-limit claims count too.
 // Consume ranges and explicit count units, but not numeric attributes such as
 // "8-bit" or partial numbers. A count unit must end the hyphenated token too.
-const COUNT_ITEM_UNIT = String.raw`(?:(?:items?|rows?|entr(?:y|ies))-per-(?:page|response)|items?|rows?|entr(?:y|ies))`;
+const COUNT_ITEM_UNIT = String.raw`(?:(?:events?|items?|rows?|entr(?:y|ies))-per-(?:page|response)|events?|items?|rows?|entr(?:y|ies))`;
 const COUNT_UNIT = String.raw`(?:${COUNT_ITEM_UNIT}|per-page)`;
 // Spelled-out counts ("thirty", "twenty-five") declare the same bound as digits.
 const COUNT_SMALL = String.raw`(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?)`;
@@ -356,23 +356,38 @@ const RESULT_COUNT = new RegExp(
   "gi",
 );
 const WORD_SIZE_DECLARATION = new RegExp(
-  String.raw`${RESULT_SUBJECT.source}\s+(?:(?:can|may)\s+be|is|are)\s+(?:as\s+large\s+as\s+)?${COUNT_WORD}[\s-]+(?:bytes?|(?:kilo|mega|giga|tera|peta|exa|kibi|mebi|gibi|tebi|pebi|exbi)bytes?)\b`,
+  String.raw`${RESULT_SUBJECT.source}\s+(?:(?:can|may)\s+be|is|are|occup(?:y|ies))\s+(?:as\s+large\s+as\s+)?${COUNT_WORD}[\s-]+(?:bytes?|(?:kilo|mega|giga|tera|peta|exa|kibi|mebi|gibi|tebi|pebi|exbi)bytes?)\b`,
   "i",
 );
 const SIZE_PREDICATE =
   /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|uncapped|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
+const AGGREGATE_SCOPE = new RegExp(
+  String.raw`^(?:\s+in\s+total\s*,?)?\s+across\s+(?:(?:all|both)\s+)?(?:the\s+)?(?:(?:multiple|several|many|some|\d+|${COUNT_WORD})\s+)?pages\b|^\s+per[\s-]+event\b`,
+  "i",
+);
 // Markdown/HTML parsing owns visibility and statement scope. Source excerpts
 // explain failures but never decide whether a recognized claim is refused.
 try {
-  for (const sentence of guideStatements(outsideLimits)) {
+  const completesValue = (candidate) =>
+    WORD_SIZE_DECLARATION.test(candidate) || !candidate.matchAll(RESULT_COUNT).next().done;
+  const continuesScope = (left, scope) => {
+    const count = Array.from(left.matchAll(RESULT_COUNT)).at(-1);
+    return (
+      !!count &&
+      count.index + count[0].length === left.trimEnd().length &&
+      AGGREGATE_SCOPE.test(` ${scope}`)
+    );
+  };
+  for (const sentence of guideStatements(outsideLimits, completesValue, continuesScope)) {
     const counts = Array.from(sentence.text.matchAll(RESULT_COUNT));
-    const countClaim = counts.some((count, index) => {
-      const tail = sentence.text.slice(count.index + count[0].length, counts[index + 1]?.index);
+    const countClaim = counts.some((count) => {
+      // Aggregate scope is an adjacent page noun phrase, never an open-ended
+      // tail scan that a later clause can satisfy.
+      const tail = sentence.text.slice(count.index + count[0].length);
       const perPage =
         /per[\s-]+(?:page|response)\b/i.test(count[0]) ||
         /^\s+per[\s-]+(?:page|response)\b/i.test(tail);
-      const aggregate =
-        /^(?:\s+in\s+total)?\s+across\s+[^.!?]*\bpages\b|^\s+per[\s-]+event\b/i.test(tail);
+      const aggregate = AGGREGATE_SCOPE.test(tail);
       return perPage || !aggregate;
     });
     if (

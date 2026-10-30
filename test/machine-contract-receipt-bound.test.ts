@@ -1,7 +1,7 @@
 // Pins what the acceptance suite leaves open: paraphrased wrong claims about
 // the measured boundary are refused, and the JSON receipt stays within 32 KiB
 // however many assertions fail. Executes the real offline checker.
-import { spawnSync } from "node:child_process";
+import { execFile, type ExecFileException } from "node:child_process";
 import {
   copyFileSync,
   cpSync,
@@ -24,7 +24,7 @@ for (const name of Object.keys(env)) {
   if (name.includes("DATABASE_URL") || name.startsWith("PG")) delete env[name];
 }
 
-describe("machine contract: paraphrases and receipt bound (offline)", () => {
+describe.concurrent("machine contract: paraphrases and receipt bound (offline)", () => {
   let root: string;
   beforeAll(() => {
     root = mkdtempSync(
@@ -37,17 +37,75 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
       copyFileSync(join(repo, file), join(root, file));
     symlinkSync(join(repo, "node_modules"), join(root, "node_modules"), "dir");
   });
-  afterAll(() => {
+  // Vitest schedules concurrent cases independently; limit actual CLI children to two.
+  const pending = new Set<Promise<unknown>>();
+  let active = 0;
+  const waiters: Array<() => void> = [];
+
+  afterAll(async () => {
+    await Promise.allSettled([...pending]);
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
   function run(text: string) {
-    writeFileSync(join(root, "docs/machine-interface.md"), text);
-    return spawnSync(
-      process.execPath,
-      ["--import", "tsx", "ci/check-machine-contract.mjs", "--format", "json"],
-      { cwd: root, env, encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024 },
+    const task = (async () => {
+      if (active >= 2) await new Promise<void>((resolve) => waiters.push(resolve));
+      else active++;
+      let fixture: string | undefined;
+      try {
+        fixture = mkdtempSync(join(root, "case-"));
+        mkdirSync(join(fixture, "ci"));
+        mkdirSync(join(fixture, "docs"));
+        copyFileSync(
+          join(root, "ci/check-machine-contract.mjs"),
+          join(fixture, "ci/check-machine-contract.mjs"),
+        );
+        symlinkSync(
+          join(root, "ci/machine-guide-prose.mjs"),
+          join(fixture, "ci/machine-guide-prose.mjs"),
+        );
+        for (const name of ["src", "node_modules", "package.json", "tsconfig.json"]) {
+          symlinkSync(join(root, name), join(fixture, name));
+        }
+        writeFileSync(join(fixture, "docs/machine-interface.md"), text);
+        return await new Promise<{
+          status: number | null;
+          signal: NodeJS.Signals | null;
+          error: ExecFileException | undefined;
+          stdout: string;
+          stderr: string;
+        }>((resolve) => {
+          execFile(
+            process.execPath,
+            ["--import", "tsx", "ci/check-machine-contract.mjs", "--format", "json"],
+            { cwd: fixture, env, encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024 },
+            (error, stdout, stderr) =>
+              resolve({
+                status: error ? (typeof error.code === "number" ? error.code : null) : 0,
+                signal: error?.signal ?? null,
+                error:
+                  error && (typeof error.code === "string" || error.killed) ? error : undefined,
+                stdout,
+                stderr,
+              }),
+          );
+        });
+      } finally {
+        try {
+          if (fixture) rmSync(fixture, { recursive: true, force: true });
+        } finally {
+          const next = waiters.shift();
+          if (next) next();
+          else active--;
+        }
+      }
+    })();
+    pending.add(task);
+    void task.then(
+      () => pending.delete(task),
+      () => pending.delete(task),
     );
+    return task;
   }
 
   const claims = [
@@ -227,8 +285,8 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     "Responses return 30 items-per-page.",
   ];
 
-  it.each(claims)("refuses the paraphrase %j appended after the Limits", (claim) => {
-    const result = run(`${guide}\n${claim}\n`);
+  it.each(claims)("refuses the paraphrase %j appended after the Limits", async (claim) => {
+    const result = await run(`${guide}\n${claim}\n`);
     expect(result.status, result.stdout + result.stderr).toBe(1);
     const receipt = JSON.parse(result.stdout);
     expect(receipt.verdict).toBe("fail");
@@ -237,8 +295,8 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     );
   });
 
-  it.each(claims)("refuses the paraphrase %j added inside the Limits", (claim) => {
-    const result = run(guide.replace("## Limits\n", `## Limits\n\n- ${claim}\n`));
+  it.each(claims)("refuses the paraphrase %j added inside the Limits", async (claim) => {
+    const result = await run(guide.replace("## Limits\n", `## Limits\n\n- ${claim}\n`));
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(JSON.parse(result.stdout).verdict).toBe("fail");
   });
@@ -256,8 +314,8 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
         (predicate) => `${subject} ${predicate}.`,
       ),
     ),
-  )("refuses a subject/measurement claim %j", (claim) => {
-    const result = run(`${guide}\n${claim}\n`);
+  )("refuses a subject/measurement claim %j", async (claim) => {
+    const result = await run(`${guide}\n${claim}\n`);
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(JSON.parse(result.stdout).verdict).toBe("fail");
   });
@@ -351,8 +409,8 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     'A style example: <style>p:before { content: "&amp;" }</style> renders separately.',
     "Rows<br>can describe a venue limited to 30 guests.",
     "Collections include 30 per-page settings.",
-  ])("allows unrelated prose %j", (prose) => {
-    const result = run(`${guide}\n${prose}\n`);
+  ])("allows unrelated prose %j", async (prose) => {
+    const result = await run(`${guide}\n${prose}\n`);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(JSON.parse(result.stdout).verdict).toBe("pass");
   });
@@ -361,8 +419,8 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     ["CRLF line endings", guide.replace(/\n/g, "\r\n")],
     ["trailing heading space", guide.replace("## Limits\n", "## Limits \n")],
     ["trailing heading tab", guide.replace("## Limits\n", "## Limits\t\n")],
-  ])("accepts unchanged Markdown with %s", (_name, text) => {
-    const result = run(text);
+  ])("accepts unchanged Markdown with %s", async (_name, text) => {
+    const result = await run(text);
     expect(result.status, result.stdout + result.stderr).toBe(0);
     expect(JSON.parse(result.stdout).verdict).toBe("pass");
   });
@@ -370,16 +428,16 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
   it.each([
     ["the result boundary bullet", /- Every event result fits[\s\S]*?answers `unavailable`\.\n/],
     ["the JSON-RPC envelope bullet", /- The JSON-RPC envelope[\s\S]*?not bounded by it\.\n/],
-  ])("refuses a guide missing %s", (_name, pattern) => {
+  ])("refuses a guide missing %s", async (_name, pattern) => {
     expect(guide).toMatch(pattern);
-    const result = run(guide.replace(pattern, ""));
+    const result = await run(guide.replace(pattern, ""));
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(JSON.parse(result.stdout).verdict).toBe("fail");
   });
 
-  it("emits a structured refusal for deeply nested inline HTML", () => {
+  it("emits a structured refusal for deeply nested inline HTML", async () => {
     const claim = `${"<b>".repeat(4000)}Rows are limited to 30.${"</b>".repeat(4000)}`;
-    const result = run(`${guide}\n${claim}\n`);
+    const result = await run(`${guide}\n${claim}\n`);
     expect(result.status, result.stdout + result.stderr).toBe(1);
     const receipt = JSON.parse(result.stdout);
     expect(receipt.verdict).toBe("fail");
@@ -392,10 +450,10 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
 
   it.each(["&nbsp;", "&#32;", "&#x20;"])(
     "keeps exact source diagnostics across %s separators",
-    (separator) => {
+    async (separator) => {
       const first = "Rows are limited to 30.";
       const second = "Rows are limited to 40.";
-      const result = run(`${guide}\n${first}${separator}${second}\n`);
+      const result = await run(`${guide}\n${first}${separator}${second}\n`);
       expect(result.status, result.stdout + result.stderr).toBe(1);
       const receipt = JSON.parse(result.stdout);
       expect(receipt.verdict).toBe("fail");
@@ -408,8 +466,8 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     },
   );
 
-  it("retains structured refusal after unmatched link openers", () => {
-    const result = run(`${guide}\n${"[](".repeat(8000)}\nRows are limited to 30.\n`);
+  it("retains structured refusal after unmatched link openers", async () => {
+    const result = await run(`${guide}\n${"[](".repeat(8000)}\nRows are limited to 30.\n`);
     expect(result.status, result.stdout + result.stderr).toBe(1);
     const receipt = JSON.parse(result.stdout);
     expect(receipt.verdict).toBe("fail");
@@ -423,11 +481,11 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     expect(result.stderr).toBe("");
   });
 
-  it("caps the failure list and keeps the receipt within 32768 bytes", () => {
+  it("caps the failure list and keeps the receipt within 32768 bytes", async () => {
     const flood = Array.from({ length: 3000 }, (_, i) => `Item ${i} is twice DTO length.`).join(
       "\n",
     );
-    const result = run(`${guide}\n${flood}\n`);
+    const result = await run(`${guide}\n${flood}\n`);
     expect(result.status).toBe(1);
     const receipt = JSON.parse(result.stdout);
     expect(receipt.failure_count).toBeGreaterThanOrEqual(3000);

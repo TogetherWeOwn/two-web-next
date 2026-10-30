@@ -75,6 +75,31 @@ describe("machine guide Markdown contexts and declarations (offline)", () => {
     "<noscript>Responses occupy 32 KB.</noscript>",
     "<iframe>Responses occupy 32 KB.</iframe>",
     "Collections contain 30 items across two pages and the response contains 30 rows.",
+    ...["unlimited", "unbounded", "uncapped"].map(
+      (predicate) => `<div>Responses are</div><div>${predicate}.</div>`,
+    ),
+    "<div>Rows</div>\n\n<div>are limited to 30.</div>",
+    "<header>Rows</header><main>are limited to 30.</main>",
+    "Each response contains 30 events.",
+    "Each page contains thirty events.",
+    "Event results occupy one megabyte.",
+    "Collections contain 30 items-per-response across two pages.",
+    "Responses contain 30 items across venue categories and collections contain 40 rows across two pages.",
+    "Collections have 30 items.",
+    "The result is one megabyte.",
+    ...["contain", "include", "return", "hold", "show", "have"].map(
+      (verb) => `<div>Collections</div><div>${verb} 30 items.</div>`,
+    ),
+    "<div>Event results</div><div>occupy one megabyte.</div>",
+    "<div>The result is</div><div>one megabyte.</div>",
+    "<div>Collections have</div><div>30 items.</div>",
+    "Collections contain 30 items across venue categories, and venue pages are public.",
+    "<div>Collections have</div><div>30</div><div>items.</div>",
+    "<div>The result is</div><div>one</div><div>megabyte.</div>",
+    "<div>Collections have</div><div>one</div><div>hundred</div><div>items.</div>",
+    "<div>Collections have 30 items.</div><div>across two pages.</div>",
+    "<div>Collections have 30 items-per-response</div><div>across two pages.</div>",
+    "<ul><li>Collections have 30 items</li><li>across two pages.</li></ul>",
   ];
   it.each(refused)("refuses %j with a structured claim diagnostic", (prose) => {
     const result = run(prose);
@@ -90,6 +115,71 @@ describe("machine guide Markdown contexts and declarations (offline)", () => {
     ).toBe(true);
     expect(receipt.failures).not.toContain("guide visible-text normalization succeeds");
     expect(result.stderr).toBe("");
+  });
+
+  it.each(["can", "may", "will", "must"])("pins the %s count-modal branch", (modal) => {
+    const claim = `Collections ${modal} contain 30 items.`;
+    const result = run(claim);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout).failures).toContain(
+      `guide states a size or measurement claim outside the canonical Limits: "${claim}"`,
+    );
+  });
+
+  const wordUnits = [
+    "bytes",
+    "kilobytes",
+    "megabytes",
+    "gigabytes",
+    "terabytes",
+    "petabytes",
+    "exabytes",
+    "kibibytes",
+    "mebibytes",
+    "gibibytes",
+    "tebibytes",
+    "pebibytes",
+    "exbibytes",
+  ];
+  it("pins every direct/copula word-size unit without cross-case masking", () => {
+    const claims = wordUnits.flatMap((unit) => [
+      `The result is two ${unit}.`,
+      `Event results are two ${unit}.`,
+      `The result can be as large as two ${unit}.`,
+      `The result may be two ${unit}.`,
+    ]);
+    const prose = claims.join("\n");
+    expect(`${guide}\n${prose}\n`.split("\n").length).toBeLessThanOrEqual(120);
+    const result = run(prose);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const receipt = JSON.parse(result.stdout);
+    expect(receipt.failure_count).toBe(claims.length);
+    expect(
+      receipt.failures.every((failure: string) =>
+        failure.startsWith(
+          "guide states a size or measurement claim outside the canonical Limits:",
+        ),
+      ),
+    ).toBe(true);
+  });
+  it("keeps the paired word-size field examples neutral", () => {
+    const result = run(
+      wordUnits
+        .map((unit) => `The response documents a two-${unit} venue upload field.`)
+        .join("\n"),
+    );
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).verdict).toBe("pass");
+  });
+  it("keeps template ancestors across Markdown nodes without hiding outside claims", () => {
+    const claim = "Rows are limited to 40.";
+    const result = run(`<template>\n\nRows are limited to 30.\n\n</template>\n\n${claim}`);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const receipt = JSON.parse(result.stdout);
+    expect(receipt.failure_count).toBe(1);
+    expect(receipt.failures).toContain(
+      `guide states a size or measurement claim outside the canonical Limits: "${claim}"`,
+    );
   });
 
   it("does not mistake punctuation in a hidden title for the refused source sentence", () => {
@@ -138,6 +228,29 @@ describe("machine guide Markdown contexts and declarations (offline)", () => {
     "<table><tr><td>Responses</td><td>are limited to 30</td></tr></table>",
     "Res__ult__s are unlimited.",
     "Collections contain 30 items across two pages, and venue schedules are published per page.",
+    "The collection contains 30 items in total, across two pages.",
+    "<div>Collections have</div><div>8-bit entries.</div>",
+    "<div>The result is</div><div>a one-megabyte venue upload field.</div>",
+    "<div>Collections have</div><div>30</div><div>items</div><div>across two pages.</div>",
+    "<div>Collections have 30 items</div><div>in total,</div><div>across</div><div>the two pages.</div>",
+    "<div>Results show</div><div>one</div><div>row</div><div>per</div><div>event.</div>",
+    ...[
+      "all",
+      "both",
+      "multiple",
+      "several",
+      "many",
+      "some",
+      "the",
+      "30",
+      "twenty-five",
+      "all the",
+      "the two",
+      "both the two",
+    ].map((pages) => `Collections contain 30 items across ${pages} pages.`),
+    "<template>Rows are limited to 30.</template>",
+    "<template>\n\nRows are limited to 30.\n\n</template>",
+    ...["can", "may", "will", "must"].map((modal) => `Collections ${modal} contain 8-bit entries.`),
   ])("allows neutral scoped prose %j", (prose) => {
     const result = run(prose);
     expect(result.status, result.stdout + result.stderr).toBe(0);

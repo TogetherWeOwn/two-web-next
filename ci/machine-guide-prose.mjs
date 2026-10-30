@@ -13,6 +13,16 @@ const BLOCKS = new Set([
   "pre",
   "section",
   "article",
+  "header",
+  "main",
+  "footer",
+  "nav",
+  "aside",
+  "address",
+  "details",
+  "summary",
+  "figure",
+  "figcaption",
   "hr",
   "h1",
   "h2",
@@ -24,6 +34,7 @@ const BLOCKS = new Set([
   "tr",
   "td",
   "th",
+  "dl",
   "dt",
   "dd",
 ]);
@@ -96,19 +107,102 @@ function sentences(text, separators = /(?<=[.;!?])\s+/g) {
   return result;
 }
 
-// Incomplete declarations may bridge layout blocks, never independent list
-// items or table cells. Completed declarations do not absorb the next block.
-const INCOMPLETE_DECLARATION =
-  /^(?:(?:the|an?|each)\s+)?(?:event\s+)?(?:collections?|rows?|items?|results?|responses?|payloads?|pages?|DTOs?|CallToolResult|JSON)(?:\s+(?:are|is|can|may|be))*$/i;
-const DECLARATION_START =
-  /^(?:(?:are|is|can|may|be)\b|(?:caps?|limits?|limited|capped|bounds?|bounded|contains?|includes?|returns?|holds?|shows?)\b)/i;
+// Incomplete declarations may bridge layout/Markdown blocks, never independent
+// list items or cells. A completed declaration cannot absorb the next block.
+const PREDICATE_WORD = String.raw`are|is|be|has|have|contains?|includes?|returns?|holds?|shows?|occup(?:y|ies)`;
+const LINK_WORD = String.raw`(?:${PREDICATE_WORD}|can|may|will|must)`;
+const INCOMPLETE_DECLARATION = new RegExp(
+  String.raw`^(?:(?:the|an?|each)\s+)?(?:event\s+)?(?:events?|collections?|rows?|items?|results?|responses?|payloads?|pages?|DTOs?|CallToolResult|JSON)(?:\s+${LINK_WORD})*$`,
+  "i",
+);
+const DECLARATION_START = new RegExp(
+  String.raw`^(?:${LINK_WORD}|caps?|limits?|limited|capped|bounds?|bounded|unlimited|unbounded|uncapped)\b`,
+  "i",
+);
+const VALUE_PREFIX_END = new RegExp(String.raw`\b(?:${PREDICATE_WORD})$`, "i");
 
-export function guideStatements(markdown) {
+function sourceText(node, lines) {
+  const [[firstLine, firstColumn], [lastLine, lastColumn]] = node.sourcepos;
+  const sourceLines = lines.slice(firstLine - 1, lastLine);
+  if (sourceLines.length === 1) sourceLines[0] = sourceLines[0].slice(firstColumn - 1, lastColumn);
+  else {
+    sourceLines[0] = sourceLines[0].slice(firstColumn - 1);
+    sourceLines[sourceLines.length - 1] = sourceLines.at(-1).slice(0, lastColumn);
+  }
+  return sourceLines.join("\n").trim();
+}
+
+function mergeRange(left, right) {
+  return left && right
+    ? { start: Math.min(left.start, right.start), end: Math.max(left.end, right.end) }
+    : (left ?? right);
+}
+
+// Resolve diagnostic sources only for refused statements. Re-rendering excerpts
+// is explanatory, never the authority for visibility or a passing verdict.
+function describeSource(text, block, html, sources, markdown, cache) {
+  const range = block.textRange ?? block.range;
+  const related = range
+    ? sources.filter((source) => source.start < range.end && source.end > range.start)
+    : [];
+  const key = related.length === 1 ? related[0] : related.map((item) => item.start).join(",");
+  let cached = cache.sources.get(key);
+  if (!cached) {
+    const source = related.length ? related.map((item) => item.raw).join("\n") : markdown;
+    const renderer = new HtmlRenderer();
+    const excerpts = new Map();
+    for (const raw of sentences(source, /(?<=[.!?])(?:\s+|&(?:nbsp|#32|#x20);?)+/gi)) {
+      const visible = visibleBlocks(renderer.render(new Parser().parse(raw)))
+        .map((part) => part.text)
+        .join(" ");
+      if (!excerpts.has(visible)) excerpts.set(visible, raw);
+    }
+    cached = { source, excerpts };
+    cache.sources.set(key, cached);
+  }
+  const { source, excerpts } = cached;
+  const match = excerpts.get(text);
+  const rawHtml = related.length > 0 && related.every((item) => item.rawHtml);
+  const element =
+    rawHtml && block.range?.element ? html.slice(block.range.start, block.range.end) : null;
+  let focused = false;
+  if (element) {
+    const key = `${block.range.start}:${block.range.end}`;
+    let visible = cache.elements.get(key);
+    if (visible === undefined) {
+      visible = visibleBlocks(element)
+        .map((part) => part.text)
+        .join(" ");
+      cache.elements.set(key, visible);
+    }
+    focused = visible === text;
+  }
+  const original = focused
+    ? element
+    : match ||
+      (rawHtml && block.textRange
+        ? html.slice(block.textRange.start, block.textRange.end)
+        : source);
+  return {
+    raw: (original || text).replace(/\s+/g, " ").trim(),
+    context: focused || !match ? text : null,
+  };
+}
+
+export function guideStatements(
+  markdown,
+  completesValue = () => false,
+  continuesScope = () => false,
+) {
   const tree = new Parser().parse(markdown);
   const renderer = new HtmlRenderer();
+  // One complete DOM preserves template/RAWTEXT ancestors and continuity
+  // across CommonMark nodes. Individual fragments cannot establish visibility.
+  const html = renderer.render(tree);
   const lines = markdown.split("\n");
+  const sources = [];
   const walker = tree.walker();
-  const statements = [];
+  let cursor = 0;
   let event;
   while ((event = walker.next())) {
     const node = event.node;
@@ -117,65 +211,91 @@ export function guideStatements(markdown) {
       !["paragraph", "heading", "code_block", "html_block"].includes(node.type)
     )
       continue;
-    const [[firstLine, firstColumn], [lastLine, lastColumn]] = node.sourcepos;
-    const sourceLines = lines.slice(firstLine - 1, lastLine);
-    if (sourceLines.length === 1)
-      sourceLines[0] = sourceLines[0].slice(firstColumn - 1, lastColumn);
-    else {
-      sourceLines[0] = sourceLines[0].slice(firstColumn - 1);
-      sourceLines[sourceLines.length - 1] = sourceLines.at(-1).slice(0, lastColumn);
-    }
-    const source = sourceLines.join("\n").trim();
-    const excerpts = new Map();
-    for (const raw of sentences(source, /(?<=[.!?])(?:\s+|&(?:nbsp|#32|#x20);?)+/gi)) {
-      const visible = visibleBlocks(renderer.render(new Parser().parse(raw)))
-        .map((block) => block.text)
-        .join(" ");
-      if (!excerpts.has(visible)) excerpts.set(visible, raw);
-    }
-    const html = renderer.render(node);
-    const rawHtml = node.type === "html_block" && html.trimEnd() === source.trimEnd();
-    const blocks = visibleBlocks(html);
-    for (let i = 0; i < blocks.length; i++) {
-      while (
-        INCOMPLETE_DECLARATION.test(blocks[i].text) &&
-        i + 1 < blocks.length &&
-        blocks[i].scope === blocks[i + 1].scope &&
-        DECLARATION_START.test(blocks[i + 1].text)
-      ) {
+    const fragment = renderer.render(node);
+    const start = html.indexOf(fragment, cursor);
+    if (start < 0) continue; // Missing source mapping never suppresses a claim.
+    const raw = sourceText(node, lines);
+    sources.push({
+      start,
+      end: start + fragment.length,
+      raw,
+      rawHtml: node.type === "html_block" && fragment.trimEnd() === raw.trimEnd(),
+    });
+    cursor = start + fragment.length;
+  }
+  const blocks = visibleBlocks(html);
+  for (let i = 0; i < blocks.length; i++) {
+    while (
+      INCOMPLETE_DECLARATION.test(blocks[i].text) &&
+      i + 1 < blocks.length &&
+      blocks[i].scope === blocks[i + 1].scope
+    ) {
+      let count = 1;
+      if (!DECLARATION_START.test(blocks[i + 1].text)) {
+        if (!VALUE_PREFIX_END.test(blocks[i].text)) break;
+        let candidate = blocks[i].text;
+        let end = i;
+        for (let j = i + 1; j < blocks.length && blocks[j].scope === blocks[i].scope; j++) {
+          candidate += ` ${blocks[j].text}`;
+          if (completesValue(candidate)) {
+            end = j;
+            break;
+          }
+          if (INCOMPLETE_DECLARATION.test(blocks[j].text) || /[.;!?]$/.test(blocks[j].text)) break;
+        }
+        if (end === i) break;
+        count = end - i;
+      }
+      for (let part = 0; part < count; part++) {
         const next = blocks.splice(i + 1, 1)[0];
         blocks[i].text += ` ${next.text}`;
-        if (blocks[i].range && next.range)
-          blocks[i].range = {
-            start: Math.min(blocks[i].range.start, next.range.start),
-            end: Math.max(blocks[i].range.end, next.range.end),
-          };
+        blocks[i].range = mergeRange(blocks[i].range, next.range);
+        blocks[i].textRange = mergeRange(blocks[i].textRange, next.textRange);
       }
     }
-    for (const block of blocks) {
-      for (const text of sentences(block.text)) {
-        const match = excerpts.get(text);
-        const element =
-          rawHtml && block.range?.element ? html.slice(block.range.start, block.range.end) : null;
-        const focused =
-          element &&
-          visibleBlocks(element)
-            .map((part) => part.text)
-            .join(" ") === text;
-        const original = focused
-          ? element
-          : match ||
-            (rawHtml && block.textRange
-              ? html.slice(block.textRange.start, block.textRange.end)
-              : source);
-        // DOM order may differ from source order. Source fallback is diagnostic
-        // only: semantic refusal never depends on finding an original slice.
-        statements.push({
-          text,
-          raw: (original || text).replace(/\s+/g, " ").trim(),
-          context: focused || !match ? text : null,
-        });
+    // A count may finish before its aggregate qualifier in the next layout
+    // block. Bind only a scope accepted by the same declaration grammar.
+    if (
+      i + 1 < blocks.length &&
+      blocks[i].scope === blocks[i + 1].scope &&
+      /^(?:across|in|per)\b/i.test(blocks[i + 1].text)
+    ) {
+      let scope = "";
+      let end = i;
+      for (let j = i + 1; j < blocks.length && blocks[j].scope === blocks[i].scope; j++) {
+        scope += `${scope ? " " : ""}${blocks[j].text}`;
+        if (continuesScope(blocks[i].text, scope)) {
+          end = j;
+          break;
+        }
+        if (INCOMPLETE_DECLARATION.test(blocks[j].text) || /[.;!?]$/.test(blocks[j].text)) break;
       }
+      for (let part = i; part < end; part++) {
+        const next = blocks.splice(i + 1, 1)[0];
+        blocks[i].text += ` ${next.text}`;
+        blocks[i].range = mergeRange(blocks[i].range, next.range);
+        blocks[i].textRange = mergeRange(blocks[i].textRange, next.textRange);
+      }
+    }
+  }
+  const statements = [];
+  // Failure floods share source blocks; compute each explanatory projection
+  // once, without caching visibility decisions across documents.
+  const cache = { sources: new Map(), elements: new Map() };
+  for (const block of blocks) {
+    for (const text of sentences(block.text)) {
+      let description;
+      const describe = () =>
+        (description ??= describeSource(text, block, html, sources, markdown, cache));
+      statements.push({
+        text,
+        get raw() {
+          return describe().raw;
+        },
+        get context() {
+          return describe().context;
+        },
+      });
     }
   }
   return statements;
