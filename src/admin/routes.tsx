@@ -148,9 +148,14 @@ function errorPage(
   status: 404 | 422 | 503,
   heading: string,
   detail?: string,
+  recovery?: Array<{ href: string; label: string }>,
 ) {
   c.status(status);
-  return bufferedMemberHtml(c, <ErrorPage heading={heading} detail={detail} />, status);
+  return bufferedMemberHtml(
+    c,
+    <ErrorPage heading={heading} detail={detail} recovery={recovery} />,
+    status,
+  );
 }
 
 function adminUnavailable(c: Context<Vars>) {
@@ -612,11 +617,18 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
                 eventValues(row),
               );
             }
+            // Non-field refusal: the transition was not applied. Offer only safe
+            // native GET recovery — the same validated event editor and the
+            // event inventory — alongside the dashboard. Never retry the POST.
             return errorPage(
               c,
               422,
               "That transition is not allowed",
               err.fields.status ?? err.fields.ends_at ?? err.fields.rsvp_open,
+              [
+                { href: `/admin/events/${key}`, label: "Back to the event editor" },
+                { href: "/admin/events", label: "Back to events" },
+              ],
             );
           }
           throw err;

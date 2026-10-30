@@ -14,7 +14,7 @@
 // because the guard only accepts snowflakes and inventing a member subject
 // would be worse than logging none. Null causers (cron/system) render as an
 // em dash and likewise contribute no subject.
-import { ACTIVITY_LOG_PAGE_SIZE, parseActivityLogQuery } from "./table-list";
+import { ACTIVITY_LOG_PAGE_SIZE, activityLogRecovery, parseActivityLogQuery } from "./table-list";
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import type { Env } from "../env";
@@ -91,6 +91,7 @@ export async function loadActivityLogPage({
   rows: KitActivityLogRow[];
   query: { subject: string; causer: string; page: number };
   hasNext: boolean;
+  recovery: ReturnType<typeof activityLogRecovery> | null;
 }> {
   let db: Db | null;
   try {
@@ -114,7 +115,13 @@ export async function loadActivityLogPage({
       createdAt: r.createdAt.toISOString(),
     }));
     setHeaders(PRIVATE_NO_STORE);
-    return { rows, query, hasNext: fetched.length > ACTIVITY_LOG_PAGE_SIZE };
+    return {
+      rows,
+      query,
+      hasNext: fetched.length > ACTIVITY_LOG_PAGE_SIZE,
+      // This SSR-only route needs links, not a client copy of the URL derivation.
+      recovery: rows.length === 0 ? activityLogRecovery(query, rows.length) : null,
+    };
   } catch (err) {
     reportLoadFailure(err, setHeaders, requestId);
   }
