@@ -41,7 +41,7 @@ import { build } from "esbuild";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -69,6 +69,15 @@ const MEMBER_ID = "100000000000000001";
 const OUTSIDER_ID = "100000000000000099";
 const ANN_ID = "100000000000000003";
 const BOB_ID = "100000000000000004";
+const NOW = new Date("2030-01-10T19:00:00Z");
+
+// Keep open RSVP controls and session expiry deterministic without faking
+// the async timers used by the real route and compiled Svelte fixtures.
+beforeEach(() => {
+  vi.useFakeTimers({ toFake: ["Date"] });
+  vi.setSystemTime(NOW);
+});
+afterEach(() => vi.useRealTimers());
 
 const ATTENDEES: EventAttendee[] = [
   { id: ANN_ID, name: "ann" },
