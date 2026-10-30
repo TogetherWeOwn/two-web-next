@@ -119,6 +119,7 @@ import {
   type SessionStore,
 } from "../src/sessions";
 import { discordWidgetHealth } from "../src/discord-widget";
+import { projectEventRowValues } from "./helpers/pg-proxy-event-projection";
 
 vi.mock("postgres", () => ({
   default: vi.fn(() => {
@@ -428,12 +429,11 @@ function storedFixture(overrides: Partial<FakeStored> = {}): FakeStored {
 
 function fakeDb(stored: FakeStored): Db {
   const eventColumns = Object.keys(getTableColumns(events)) as (keyof typeof events.$inferSelect)[];
+  const encodeValue = (value: unknown): unknown =>
+    value instanceof Date ? value.toISOString() : (value ?? null);
   const toRow = (row: Record<string, unknown>): unknown[] =>
-    eventColumns.map((key) => {
-      const value = row[key as string];
-      return value instanceof Date ? value.toISOString() : (value ?? null);
-    });
-  const db = drizzle(async (sql: string) => {
+    eventColumns.map((key) => encodeValue(row[key as string]));
+  const db = drizzle(async (sql: string, params: unknown[]) => {
     if (sql.includes("set_config")) return { rows: [] };
     if (sql.includes('from "featured_contents"')) {
       // The published-base read selects the window bounds, the direct
@@ -484,6 +484,13 @@ function fakeDb(stored: FakeStored): Db {
       if (sql.includes("count(")) return { rows: [[stored.eventsCount]] };
       if (sql.includes('"timezone"') && !sql.includes('"title"')) return { rows: [] };
       if (sql.includes("discord_event_id") && !sql.includes('"title"')) return { rows: [] };
+      // Feed/sitemap egress reads select a byte-admitted projection and
+      // pg-proxy maps positionally; model their emitted shape.
+      if (sql.includes("octet_length")) {
+        return {
+          rows: stored.eventRows.map((row) => projectEventRowValues(sql, params, row, encodeValue)),
+        };
+      }
       return { rows: stored.eventRows.map(toRow) };
     }
     return { rows: [] };

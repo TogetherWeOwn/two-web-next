@@ -1,4 +1,3 @@
-import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
@@ -7,6 +6,7 @@ import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { projectEventRowValues } from "./helpers/pg-proxy-event-projection";
 
 const APP_URL = "https://next.example.test";
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -47,18 +47,20 @@ function fixture(status: "draft" | "published" = "draft", clock: () => number = 
     createdAt: new Date("2026-10-01T00:00:00Z"),
     updatedAt: new Date("2026-10-01T00:00:00Z"),
   };
-  const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
-  const values = columns.map((key) =>
-    row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key],
-  );
+  // Positional pg-proxy mapping follows the emitted projection: the keyed
+  // read selects the stored row, the collection read its egress fields.
+  const values = (sql: string, params: unknown[]) => projectEventRowValues(sql, params, row);
   const db = drizzle(async (sql, params) => {
     if (sql.includes('from "events"') && sql.includes('"event_key" =')) {
-      return { rows: params[0] === KEY ? [values] : [] };
+      return { rows: params[0] === KEY ? [values(sql, params)] : [] };
     }
     if (sql.includes('from "events"') && sql.includes('"status" in')) {
-      const now = new Date(params[params.length - 1] as string);
+      const cutoff = params.find(
+        (value) => typeof value === "string" && /^\d{4}-\d{2}-\d{2}T/.test(value),
+      );
+      const now = new Date(cutoff as string);
       return {
-        rows: params.slice(0, -1).includes(row.status) && row.endsAt >= now ? [values] : [],
+        rows: params.includes(row.status) && row.endsAt >= now ? [values(sql, params)] : [],
       };
     }
     throw new Error(`Unexpected fixture query: ${sql}`);

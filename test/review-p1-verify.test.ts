@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import { consume } from "../src/jobs/consumer";
 import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
+import { registerEventEgressTextBoundaries } from "./helpers/event-egress-text-boundaries";
+import { registerEventEgressTextPostgresAcceptance } from "./helpers/event-egress-text-postgres-acceptance";
 
 // Mirrors of the 3rd review's P1 proofs, against the fixed code. Live-DB parts
 // run on DATABASE_URL (CI's postgres:17 service, agent-testdb locally) and skip
@@ -71,6 +73,10 @@ const URL = process.env.DATABASE_URL!;
 const hasDb = Boolean(process.env.DATABASE_URL);
 
 describe.skipIf(!hasDb)("P1-2: every accepted jobId keeps its row (real SQL)", () => {
+  // Reuse this approved SQL lane; hermetic egress proofs stay in their own entrypoint.
+  registerEventEgressTextPostgresAcceptance(URL);
+  registerEventEgressTextBoundaries(URL);
+
   it("two live dispatches of the same key count 2", async () => {
     const live = postgres(URL, { max: 1 });
     try {
