@@ -221,8 +221,18 @@ describe("resolveKitEventEdit: bounded roster paging", () => {
     const outcome = await resolveKitEventEdit("EVTPAST01", {}, depsFor());
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(outcome.view.roster.entries).toEqual([
-      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
-      { member: "Unknown member", status: "waitlisted", answeredAt: "2026-06-01T12:00:00.000Z" },
+      {
+        member: "mod",
+        status: "going",
+        answeredAt: "2026-06-01T12:00:00.000Z",
+        waitlistPosition: null,
+      },
+      {
+        member: "Unknown member",
+        status: "waitlisted",
+        answeredAt: "2026-06-01T12:00:00.000Z",
+        waitlistPosition: null,
+      },
     ]);
     for (const entry of outcome.view.roster.entries) {
       expect(entry).not.toHaveProperty("userId");

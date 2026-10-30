@@ -120,6 +120,15 @@ export function rawMemberOwner(statement: string): string | undefined {
     )
   )
     return "user_id";
+  // Moderator roster: only this bounded, event-scoped window projection may
+  // return computed queue ranks. Its user_id owns the joined username too.
+  // Filters run outside the window; sorts are fixed tokens, never arbitrary SQL.
+  if (
+    /^select line\.user_id, users\.username, line\.status, line\.updated_at, line\.position from \( select rsvps\.user_id, rsvps\.status, rsvps\.updated_at, case when rsvps\.status = 'waitlisted' then row_number\(\) over \(partition by rsvps\.status order by rsvps\.created_at, coalesce\(rsvps\.legacy_id, rsvps\.id\), rsvps\.id\)::int end as position from rsvps inner join events on events\.id = rsvps\.event_id where events\.event_key = \$1 \) line left join users on users\.id = line\.user_id(?: where (?:line\.status = \$2(?: and users\.username ilike \$3)?|users\.username ilike \$2))? order by (?:line\.position (?:asc|desc) nulls last,|line\.(?:status|updated_at) (?:asc|desc) ,) line\.user_id asc limit 100 offset \$\d+$/.test(
+      query,
+    )
+  )
+    return "user_id";
   // Member leaderboard aggregate (src/leaderboards/members.ts): one grouped
   // row per ranked member with the owner's id alongside, never per-RSVP
   // rows. Only this exact GROUP BY + COUNT shape earns the exemption, with
