@@ -40,3 +40,28 @@ allowing arbitrary computed event fields, subqueries or member-table reads.
 These are read-side safeguards, not new constraints on event creation or import.
 The query remains anonymous-safe and audit-silent; the page's private/no-store,
 Cookie variation and member-data audit boundaries are unchanged.
+
+## Bounded materialization writes
+
+`materializeMissingInstances` (`src/admin/store-event-writes.ts`) serves both
+moderator create and the `events:reconcile` pass, each inside its caller's
+transaction. For a weekly series it spends a fixed number of statements, not
+one pair per occurrence:
+
+- One read of the existing recurrence indices, then **one** `INSERT` for every
+  missing child (index 1 is the parent) and **one** `INSERT` into the activity
+  log with one creation entry per child. A complete series, including a
+  cancelled child, issues no write. Statements stay sequential on the
+  transaction; there is no `ON CONFLICT` clause.
+- The occurrence list, DST handling and the 52-occurrence ceiling still come
+  from the pure `occurrences` function. Children are drafts with copied fields,
+  a fresh event key, the parent link and the recurrence index.
+- `RETURNING` order is not trusted. Each returned row must match a submitted
+  recurrence index, key and parent exactly once; a missing, duplicate or foreign
+  row throws before any audit is written, rolling back the whole transaction.
+- Evidence: `test/series-materialization-batch-acceptance.test.ts` (recorded
+  statements) and `test/series-materialization-batch-postgres.test.ts`
+  (disposable database; prints one JSON receipt per 1/26/52-occurrence case
+  with `case_id`, `verdict`, `error_code` and `next_action`). Run the second
+  with `DATABASE_URL` set to a run-owned test database, never staging or
+  production.
