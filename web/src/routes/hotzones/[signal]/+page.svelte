@@ -1,14 +1,16 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
+import { hotzoneQuery } from "../../../../../src/hotzones/day";
 import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
 // gridHtml and periodPickerHtml come only from the escaped server-side
-// renderHotzoneGrid/renderPeriodPicker output.
+// renderHotzoneGrid/renderHotzoneDay/renderPeriodPicker output.
 const {
   signal,
   season,
+  day,
   gridHtml,
   total,
   eventCount,
@@ -22,6 +24,10 @@ const destination = $derived(
 );
 // Back and cross-signal links keep the selected season; absent/all stays canonical.
 const qs = $derived(season === "all" ? "" : `?season=${season}`);
+// Cross-signal links also keep the chosen weekday; the canonical URL stays the
+// full-week page, while sign-in returns to the exact view.
+const dayQs = $derived(hotzoneQuery(season, day));
+const returnTo = $derived(`/hotzones/${signal}${dayQs}`);
 </script>
 
 <Shell
@@ -32,7 +38,7 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
   theme="schedule"
   activeNav="events"
   mainClass="events-page"
-  loginReturnTo={destination}
+  loginReturnTo={returnTo}
 >
   {#snippet accountChrome()}
     <a class="btn" href="/discord">Open Discord</a>
@@ -47,6 +53,6 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
     {#if retentionNote}<p>{retentionNote}</p>{/if}
   {/if}
   {@html periodPickerHtml}
-  <p><a href="/hotzones{qs}">All hot zones</a> · <a href="/hotzones/joins{qs}">joins</a> · <a href="/hotzones/voice{qs}">voice</a> · <a href="/hotzones/games{qs}">games</a></p>
+  <p><a href="/hotzones{qs}">All hot zones</a> · <a href="/hotzones/joins{dayQs}">joins</a> · <a href="/hotzones/voice{dayQs}">voice</a> · <a href="/hotzones/games{dayQs}">games</a></p>
   {@html gridHtml}
 </Shell>
