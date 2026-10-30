@@ -194,6 +194,7 @@ export function guideStatements(
   completesValue = () => false,
   continuesScope = () => false,
   awaitsValue = () => false,
+  continuesCount = () => false,
 ) {
   const tree = new Parser().parse(markdown);
   const renderer = new HtmlRenderer();
@@ -286,6 +287,16 @@ export function guideStatements(
         blocks[i].range = mergeRange(blocks[i].range, next.range);
         blocks[i].textRange = mergeRange(blocks[i].textRange, next.textRange);
       }
+    }
+    while (
+      i + 1 < blocks.length &&
+      blocks[i].scope === blocks[i + 1].scope &&
+      continuesCount(blocks[i].text, blocks[i + 1].text)
+    ) {
+      const next = blocks.splice(i + 1, 1)[0];
+      blocks[i].text += ` ${next.text}`;
+      blocks[i].range = mergeRange(blocks[i].range, next.range);
+      blocks[i].textRange = mergeRange(blocks[i].textRange, next.textRange);
     }
   }
   const statements = [];

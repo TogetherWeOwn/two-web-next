@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import { stripVTControlCharacters } from "node:util";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createReceiptPool } from "./machine-contract-receipt-pool";
 
@@ -69,10 +70,11 @@ describe("receipt suite scheduling", () => {
           encoding: "utf8",
           timeout: 20_000,
           maxBuffer: 4 * 1024 * 1024,
-          env: { ...process.env, DATABASE_URL: "", BOT_DATABASE_URL: "" },
+          env: { ...process.env, FORCE_COLOR: "1", DATABASE_URL: "", BOT_DATABASE_URL: "" },
         },
       );
-      expect(output).toMatch(/Tests\s+5 passed/);
+      expect(output).toContain("\u001b[");
+      expect(stripVTControlCharacters(output)).toMatch(/Tests\s+5 passed/);
     } finally {
       rmSync(scratch, { recursive: true, force: true });
     }

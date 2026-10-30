@@ -355,14 +355,27 @@ const COUNT_BOUNDARY = new RegExp(
   "i",
 );
 const COUNT_BOUNDARY_PENDING = new RegExp(
-  String.raw`^(?:(?:the|an?|each)\s+)?${COUNT_BOUNDARY_VALUE_PREFIX}${COUNT_PREFIX}$`,
+  String.raw`${COUNT_BOUNDARY_VALUE_PREFIX}${COUNT_PREFIX}(?:[\[({"'“‘]\s*)*$`,
   "i",
 );
+const COUNT_OBJECT = String.raw`(?:(?<value>${COUNT_VALUE})\s+${COUNT_ITEM_UNIT}\b(?!-)|${COUNT_NUMBER_CORE}-${COUNT_ITEM_UNIT}\s+pages?\b)`;
 const RESULT_COUNT = new RegExp(
-  String.raw`(?<subject>${RESULT_SUBJECT.source}|${COUNT_SUBJECT})(?:\s+(?:can|may|will|must))?\s+(?:contains?|includes?|returns?|holds?|shows?|has|have)\b${COUNT_PREFIX}(?:${COUNT_VALUE}\s+${COUNT_ITEM_UNIT}\b(?!-)|${COUNT_NUMBER_CORE}-${COUNT_ITEM_UNIT}\s+pages?\b)`,
+  String.raw`(?<subject>${RESULT_SUBJECT.source}|${COUNT_SUBJECT})(?:\s+(?:can|may|will|must))?\s+(?:contains?|includes?|returns?|holds?|shows?|has|have)\b${COUNT_PREFIX}${COUNT_OBJECT}`,
   "gi",
 );
-const RESULT_QUALIFIERS = String.raw`(?:(?:list_events|get_event|MCP|event|collection|JSON|tool)\s+)*`;
+// Known result modifiers preserve physical scope without consuming predicates
+// such as "each event documents how API results ..." as one noun phrase.
+const RESULT_QUALIFIERS = String.raw`(?:(?:list_events|get_event|MCP|event|collection|JSON|tool|HTTP|API|successful|failed|serialized|typed|published|cached|empty|nonempty|newly)\s+)*`;
+const PER_RESULT_SCOPE = new RegExp(
+  String.raw`^\s+(?:per[\s-]+${RESULT_QUALIFIERS}(?:page|response)|(?:in|for)\s+(?:each|every|a|the|one|single)\s+${RESULT_QUALIFIERS}(?:page|response))\b`,
+  "i",
+);
+const COORDINATED_COUNT = new RegExp(
+  String.raw`^\s*,?\s*(?:and|with|plus)\b${COUNT_PREFIX}${COUNT_OBJECT}`,
+  "i",
+);
+const perResultCount = (count, tail) =>
+  /per[\s-]+(?:page|response)\b/i.test(count[0]) || PER_RESULT_SCOPE.test(tail);
 const SINGLE_RESULT_SUBJECT = new RegExp(
   String.raw`\b(?:(?:single|one|each|every|individual)\s+${RESULT_QUALIFIERS}(?:CallToolResult|results?|responses?|replies|reply|payloads?|DTOs?|bod(?:y|ies)|pages?)|(?:an?|the)\s+${RESULT_QUALIFIERS}(?:CallToolResult|result|response|reply|payload|DTO|body|page))$`,
   "i",
@@ -381,6 +394,22 @@ const AGGREGATE_SCOPE_ONLY = new RegExp(
   `^${AGGREGATE_SCOPE_PHRASE}(?:\\s*,\\s+with\\b[^,.;!?]*)?[.!?]?\\s*$`,
   "i",
 );
+// Walk only adjacent coordinated objects of this declaration. A later clause
+// with its own subject cannot lend a count to the original result subject.
+function countObjects(text, count) {
+  const objects = [];
+  let object = count;
+  let tail = text.slice(count.index + count[0].length);
+  while (object) {
+    const aggregate = AGGREGATE_SCOPE.exec(tail);
+    const remaining = aggregate ? tail.slice(aggregate[0].length) : tail;
+    objects.push({ object, tail, aggregate, remaining });
+    object = COORDINATED_COUNT.exec(remaining);
+    if (object) tail = remaining.slice(object[0].length);
+  }
+  return objects;
+}
+
 // Markdown/HTML parsing owns visibility and statement scope. Source excerpts
 // explain failures but never decide whether a recognized claim is refused.
 try {
@@ -393,34 +422,43 @@ try {
     return (
       !!count &&
       count.index + count[0].length === left.trimEnd().length &&
-      AGGREGATE_SCOPE_ONLY.test(` ${scope}`)
+      AGGREGATE_SCOPE_ONLY.test(` ${scope.split(/;\s+/, 1)[0]}`)
     );
   };
   const awaitsValue = (candidate) => COUNT_BOUNDARY_PENDING.test(candidate);
+  const continuesCount = (left, right) => {
+    const count = Array.from(left.matchAll(RESULT_COUNT)).at(-1);
+    return (
+      !!count &&
+      countObjects(left, count).at(-1).remaining.trim() === "" &&
+      COORDINATED_COUNT.test(` ${right}`)
+    );
+  };
   for (const sentence of guideStatements(
     outsideLimits,
     completesValue,
     continuesScope,
     awaitsValue,
+    continuesCount,
   )) {
     const counts = Array.from(sentence.text.matchAll(RESULT_COUNT));
     const countClaim = counts.some((count) => {
-      // Aggregate scope is an adjacent page noun phrase, never an open-ended
-      // tail scan that a later clause can satisfy.
-      const tail = sentence.text.slice(count.index + count[0].length);
-      const aggregate = AGGREGATE_SCOPE.exec(tail);
-      const perPage =
-        /per[\s-]+(?:page|response)\b/i.test(count[0]) ||
-        /^\s+per[\s-]+(?:page|response)\b/i.test(tail) ||
-        (aggregate &&
-          /^\s*,?\s*per[\s-]+(?:page|response)\b/i.test(tail.slice(aggregate[0].length)));
       // Bind the explicit single-result modifier to this match's subject,
       // not an unrelated earlier clause. Its physical array cannot aggregate
       // rows from other results merely because a page qualifier follows.
       const subjectEnd = count.index + count.groups.subject.length;
       const singleResult = SINGLE_RESULT_SUBJECT.test(sentence.text.slice(0, subjectEnd));
-      const perEvent = /^\s+per[\s-]+event\b/i.test(tail);
-      return perPage || (singleResult && !perEvent) || !aggregate;
+      return countObjects(sentence.text, count).some(({ object, tail, aggregate, remaining }) => {
+        const perPage =
+          perResultCount(object, tail) ||
+          (aggregate && PER_RESULT_SCOPE.test(remaining.replace(/^\s*,/, " ")));
+        // Only the one-to-one row/event mapping is neutral within one result;
+        // a second coordinated object never inherits that object's exemption.
+        const perEventScope = /^\s+per[\s-]+event\b/i.test(tail);
+        const value = (object.groups.value ?? "").replace(/^[\[({"'“‘\s]+|[\])}"'”’\s]+$/g, "");
+        const perEvent = perEventScope && /^(?:1|one)$/i.test(value);
+        return perPage || (!perEvent && (singleResult || perEventScope || !aggregate));
+      });
     });
     if (
       SIZE_LITERAL.test(sentence.text) ||

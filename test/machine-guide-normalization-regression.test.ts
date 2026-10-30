@@ -169,6 +169,90 @@ describe("machine guide Markdown contexts and declarations (offline)", () => {
     );
   });
 
+  it.each([
+    ...["successful", "serialized", "typed"].flatMap((qualifier) =>
+      ["two", "the first two"].map(
+        (pages) =>
+          `The data array of a single ${qualifier} list_events CallToolResult contains 30 rows across ${pages} pages.`,
+      ),
+    ),
+    ...["two", "the first two"].flatMap((pages) => [
+      `Collections contain 30 items across ${pages} pages, with 30 rows per response.`,
+      `<div>Collections contain 30 items</div><div>across ${pages} pages, with 30 rows per response.</div>`,
+      `<div>Collections contain 30 items</div><div>across ${pages} pages</div><div>, with 30 rows per response.</div>`,
+      `Collections contain 30 items across ${pages} pages, with at most thirty items per page.`,
+    ]),
+    "The data array of a single successful HTTP response contains 30 rows across two pages.",
+    "The data array of a single API response contains 30 rows across two pages.",
+    "The data array of a single newly serialized API response contains 30 rows across two pages.",
+    "Collections contain 30 items across two pages, with 30 rows in each response.",
+    "<div>Collections contain 30 items</div><div>across two pages, with 30 rows in each response.</div>",
+    "Collections contain 30 items across two pages, with 30 rows per API response.",
+    "Collections contain 30 items across two pages, with 30 rows for each response.",
+    "Each response contains one row per event and 30 rows per response.",
+    "Each response contains one row per event, plus 30 rows per response.",
+    "Each response contains one row per event and 30 rows per event.",
+    "<div>Each response contains one row per event</div><div>and 30 rows per response.</div>",
+    "<div>Each response contains one row per event</div><div>and one row per event</div><div>plus 30 rows per response.</div>",
+    "Each response contains (1) row per event, and thirty rows per API response.",
+    "Results show 30 rows per event.",
+    "Each response contains 30 rows per event.",
+    "The data array of a single list_events CallToolResult contains 30 rows per event.",
+    "A successful response contains thirty rows per event.",
+    ...[
+      "Published rows are limited to",
+      "Rows are limited to (",
+      "Published rows are limited to (",
+    ].map((prefix) => `<div>${prefix}</div><div>30${prefix.endsWith("(") ? ")" : ""}.</div>`),
+    "<div>Rows are limited to (</div><div>thirty</div><div>).</div>",
+    "<div>Published rows are limited to</div><div>30.</div>",
+    "<div>Collections contain 30 items</div><div>across two pages; each response contains 30 rows.</div>",
+  ])("review count scope refuses %j", (prose) => {
+    const result = run(prose);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const receipt = JSON.parse(result.stdout);
+    expect(receipt.verdict).toBe("fail");
+    expect(
+      receipt.failures.some((failure: string) =>
+        failure.startsWith(
+          "guide states a size or measurement claim outside the canonical Limits:",
+        ),
+      ),
+    ).toBe(true);
+    expect(receipt.failures).not.toContain("guide visible-text normalization succeeds");
+    expect(result.stderr).toBe("");
+  });
+
+  it.each([
+    ...["two", "the first two"].flatMap((pages) => [
+      `<div>Collections contain 30 items</div><div>across ${pages} pages; the guide explains sign-in.</div>`,
+      `Collections contain 30 items across ${pages} pages; the guide explains sign-in.`,
+      `<div>Collections contain 30 items</div><div>across ${pages} pages, with venue details; the guide explains sign-in.</div>`,
+      `Each successful response is logged, and collections contain 30 items across ${pages} pages.`,
+    ]),
+    "Each response contains (1) row per event.",
+    "Each response contains [one] row per event.",
+    "Each event documents how API results contain 30 rows across two pages.",
+    "Each response documents how API results contain 30 rows across two pages.",
+    "Each response is logged and API results contain 30 rows across two pages.",
+    "Each successful response contains 1 row per event.",
+    "The data array of a single successful list_events CallToolResult contains one row per event.",
+    "Collections contain 30 items across two pages, with venue details and schedules published per response.",
+    "Collections contain 30 items across two pages, and the seating chart has a grid with 30 rows per page.",
+    "Each response contains one row per event, and the seating chart has a grid with 30 rows per page.",
+    "<ul><li>Each response contains one row per event</li><li>and 30 rows per response.</li></ul>",
+    "<table><tr><td>Each response contains one row per event</td><td>and 30 rows per response.</td></tr></table>",
+    "<div>Published rows are limited to</div><div>8-bit entries.</div>",
+    "<div>Rows are limited to (</div><div>8-bit entries).</div>",
+    "<ul><li>Published rows are limited to</li><li>30.</li></ul>",
+    "<table><tr><td>Rows are limited to (</td><td>30).</td></tr></table>",
+  ])("review count scope allows %j", (prose) => {
+    const result = run(prose);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).verdict).toBe("pass");
+    expect(result.stderr).toBe("");
+  });
+
   const wordUnits = [
     "bytes",
     "kilobytes",
