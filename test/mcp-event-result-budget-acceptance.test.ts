@@ -27,6 +27,15 @@ vi.mock("../src/events/routes-shared", async (importOriginal) => ({
 
 const ORIGIN = "https://next.example.test";
 const CAP = 32_768;
+const PROTOCOLS = [
+  "2024-10-07",
+  "2024-11-05",
+  "2025-03-26",
+  "2025-06-18",
+  "2025-11-25",
+  "2026-07-28",
+] as const;
+type ProtocolVersion = (typeof PROTOCOLS)[number];
 const key = (n: number) => String(n).padStart(26, "0");
 const bytes = (text: string) => new TextEncoder().encode(text).length;
 const serializedBytes = (value: unknown) => bytes(JSON.stringify(value));
@@ -136,9 +145,21 @@ function collection(rows: PublicApiEvent[], total = rows.length, page = 1) {
   };
 }
 
-// Independent protocol shape, solely for demonstrating fixture pressure.
-function resultFor(dto: unknown): ToolResult {
+// Independent complete wire projections, never production budget/identity helpers.
+function resultFor(dto: unknown, protocolVersion: ProtocolVersion = "2025-06-18") {
+  if (protocolVersion === "2026-07-28") {
+    return {
+      content: [{ type: "text", text: JSON.stringify(dto) }],
+      structuredContent: dto,
+      resultType: "complete",
+      _meta: { "io.modelcontextprotocol/serverInfo": { name: "two-web-next", version: "1.0.0" } },
+    };
+  }
   return { content: [{ type: "text", text: JSON.stringify(dto) }], structuredContent: dto };
+}
+
+function largestResultBytes(dto: unknown) {
+  return Math.max(...PROTOCOLS.map((version) => serializedBytes(resultFor(dto, version))));
 }
 
 function useRows(rows: PublicApiEvent[], total = rows.length, page = 1) {
@@ -178,7 +199,12 @@ function schemaProblems(value: unknown, schema: Schema, path = "$"): string[] {
   return [];
 }
 
-async function rpc(method: string, params: unknown, id: number | string = 3) {
+async function rpc(
+  method: string,
+  params: unknown,
+  id: number | string = 3,
+  protocolVersion?: ProtocolVersion,
+) {
   const response = await app.request(
     "/mcp",
     {
@@ -186,8 +212,33 @@ async function rpc(method: string, params: unknown, id: number | string = 3) {
       headers: {
         "content-type": "application/json",
         accept: "application/json, text/event-stream",
+        ...(protocolVersion ? { "mcp-protocol-version": protocolVersion } : {}),
+        ...(protocolVersion === "2026-07-28"
+          ? {
+              "mcp-method": method,
+              ...(method === "tools/call" ? { "mcp-name": (params as { name: string }).name } : {}),
+            }
+          : {}),
       },
-      body: JSON.stringify({ jsonrpc: "2.0", id, method, params }),
+      body: JSON.stringify({
+        jsonrpc: "2.0",
+        id,
+        method,
+        params:
+          protocolVersion === "2026-07-28"
+            ? {
+                ...(params as Record<string, unknown>),
+                _meta: {
+                  "io.modelcontextprotocol/protocolVersion": protocolVersion,
+                  "io.modelcontextprotocol/clientCapabilities": {},
+                  "io.modelcontextprotocol/clientInfo": {
+                    name: "result-budget-test",
+                    version: "1",
+                  },
+                },
+              }
+            : params,
+      }),
     },
     env,
   );
@@ -208,18 +259,24 @@ async function rpc(method: string, params: unknown, id: number | string = 3) {
   return { message, payload, wire };
 }
 
-async function tools() {
-  await rpc(
-    "initialize",
-    {
-      protocolVersion: "2025-06-18",
-      capabilities: {},
-      clientInfo: { name: "result-budget-test", version: "1" },
-    },
-    1,
-  );
+async function tools(protocolVersion: ProtocolVersion = "2025-06-18") {
+  if (protocolVersion === "2026-07-28") {
+    const discovered = await rpc("server/discover", {}, 1, protocolVersion);
+    expect(discovered.message.result).toMatchObject({ supportedVersions: ["2026-07-28"] });
+  } else {
+    const initialized = await rpc(
+      "initialize",
+      {
+        protocolVersion,
+        capabilities: {},
+        clientInfo: { name: "result-budget-test", version: "1" },
+      },
+      1,
+    );
+    expect(initialized.message.result).toMatchObject({ protocolVersion });
+  }
   // The endpoint is stateless, as in the existing transport tests.
-  const called = await rpc("tools/list", {}, 2);
+  const called = await rpc("tools/list", {}, 2, protocolVersion);
   return (called.message.result as unknown as { tools: Tool[] }).tools;
 }
 
@@ -494,36 +551,83 @@ describe("event tool results: duplicated serialized byte budget (offline)", () =
     );
   });
 
-  it("preserves a fitting near-ceiling detail and trims the first overflowing code point", async () => {
-    // Derive only the fixture size from an independent literal protocol shape,
-    // never from the production budget constant or description-fitting code.
-    const empty = row(1, { description: "" });
-    const overhead = serializedBytes(resultFor(expectedEvent(empty)));
-    const length = Math.floor((CAP - overhead) / 2);
-    const source = row(1, { description: "d".repeat(length) });
-    const fittingBytes = serializedBytes(resultFor(expectedEvent(source)));
-    expect(fittingBytes).toBeGreaterThanOrEqual(CAP - 1);
-    expect(fittingBytes).toBeLessThanOrEqual(CAP);
-    const schema = (await tools()).find((t) => t.name === "get_event")!.outputSchema!;
-    for (const extra of [0, 1]) {
-      __resetApiPublicCacheForTests();
-      const current = { ...source, description: source.description! + "d".repeat(extra) };
-      useRows([current]);
-      const result = success(
-        await rpc("tools/call", { name: "get_event", arguments: { event_key: key(1) } }),
-        schema,
-        "PublicApiEvent",
+  it.each(["get_event", "list_events"] as const)(
+    "%s preserves a detail or full page fitting every enabled projection and trims the first overflow",
+    async (name) => {
+      // The largest independent complete result, including modern SDK fields,
+      // governs one shared DTO. A legacy-only CAP fixture is not an unchanged control.
+      const dtoFor = (rows: PublicApiEvent[]) =>
+        name === "get_event" ? expectedEvent(rows[0]!) : collection(rows, 41, 2);
+      const empty = Array.from({ length: name === "get_event" ? 1 : 20 }, (_, i) =>
+        row(i + 1, { description: "" }),
       );
-      descriptionsOnly([result.structuredContent as PublicApiEventDto], [current]);
-      if (extra === 0) expect(result.structuredContent).toEqual(expectedEvent(current));
-      else
-        expect((result.structuredContent as PublicApiEventDto).description!.endsWith("…")).toBe(
-          true,
-        );
-      expect((await rest(`/api/public/events/${key(1)}`)).text).toBe(result.content[0]!.text);
-      expect.soft(serializedBytes(result), `boundary +${extra}`).toBeLessThanOrEqual(CAP);
-    }
-  });
+      const length = Math.floor((CAP - largestResultBytes(dtoFor(empty))) / 2);
+      // Spread the page's description bytes across all 20 rows; discard no row.
+      const sources = empty.map((source, i) => ({
+        ...source,
+        description: "d".repeat(
+          Math.floor(length / empty.length) + (i < length % empty.length ? 1 : 0),
+        ),
+      }));
+      const fittingBytes = largestResultBytes(dtoFor(sources));
+      expect(fittingBytes).toBeGreaterThanOrEqual(CAP - 1);
+      expect(fittingBytes).toBeLessThanOrEqual(CAP);
+      const path =
+        name === "get_event"
+          ? `/api/public/events/${key(1)}`
+          : "/api/public/events?per_page=20&page=2";
+      const args = name === "get_event" ? { event_key: key(1) } : { per_page: 20, page: 2 };
+      const schemaName = name === "get_event" ? "PublicApiEvent" : "PublicApiEventCollection";
+      const fittedText = new Map<number, string>();
+      for (const version of PROTOCOLS) {
+        const schema = (await tools(version)).find((t) => t.name === name)!.outputSchema!;
+        for (const extra of [0, 1]) {
+          const current = sources.map((source, i) => ({
+            ...source,
+            description: source.description + (i === 0 ? "d".repeat(extra) : ""),
+          }));
+          expect(largestResultBytes(dtoFor(current))).toBe(fittingBytes + extra * 2);
+          if (extra) expect(largestResultBytes(dtoFor(current))).toBeGreaterThan(CAP);
+          for (const first of ["REST", "MCP"] as const) {
+            __resetApiPublicCacheForTests();
+            useRows(current, 41, 2);
+            const prior = first === "REST" ? await rest(path) : null;
+            const result = success(
+              await rpc("tools/call", { name, arguments: args }, 3, version),
+              schema,
+              schemaName,
+            );
+            const dto = result.structuredContent as PublicApiEventDto | PublicApiEventCollectionDto;
+            const events = "data" in dto ? dto.data : [dto];
+            descriptionsOnly(events, current);
+            if ("data" in dto)
+              expect({ ...dto, data: [] }).toEqual({ ...collection(current, 41, 2), data: [] });
+            if (extra === 0) expect(dto).toEqual(dtoFor(current));
+            else
+              expect
+                .soft(
+                  events.some((event) => event.description!.endsWith("…")),
+                  `${version}: first overflow must trim`,
+                )
+                .toBe(true);
+            // Assert the literal projection matches what the real handler/SDK emitted.
+            expect(result).toEqual(resultFor(dto, version));
+            const mirrored = prior ?? (await rest(path));
+            expect(mirrored.response.status).toBe(200);
+            expect(mirrored.text).toBe(result.content[0]!.text);
+            if (fittedText.has(extra)) expect(mirrored.text).toBe(fittedText.get(extra));
+            else fittedText.set(extra, mirrored.text);
+            expect
+              .soft(serializedBytes(result), `${version} ${first} boundary +${extra}`)
+              .toBeLessThanOrEqual(CAP);
+            const replay = await rpc("tools/call", { name, arguments: args }, 4, version);
+            expect(replay.message.result).toEqual(result);
+            expect((await rest(path)).text).toBe(mirrored.text);
+          }
+        }
+      }
+    },
+  );
 
   it("refuses a legacy detail whose metadata alone overflows only after typed duplication", async () => {
     const source = row(1, { title: "M".repeat(16_000) });
