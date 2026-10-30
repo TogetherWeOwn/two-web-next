@@ -22,7 +22,12 @@ import type {
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-import { formatElapsedDuration, formatEventWhen as fmtWithOffset } from "./date-format";
+import {
+  formatElapsedDuration,
+  formatEventWhen as fmtWithOffset,
+  isEditedEvent,
+  updatedStampLabel,
+} from "./date-format";
 
 const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now }) => {
   const availability = eventLinkAvailability(event, now);
@@ -212,6 +217,17 @@ export const EventPage: FC<{
           <div>
             <dt>Duration</dt>
             <dd>{duration}</dd>
+          </div>
+        ) : null}
+        {isEditedEvent(e.createdAt, e.updatedAt) ? (
+          <div>
+            <dt>Updated</dt>
+            <dd data-testid="event-updated">
+              {"Updated "}
+              <time datetime={e.updatedAt.toISOString()}>
+                {updatedStampLabel(e.updatedAt, e.timezone)}
+              </time>
+            </dd>
           </div>
         ) : null}
         {e.location ? (

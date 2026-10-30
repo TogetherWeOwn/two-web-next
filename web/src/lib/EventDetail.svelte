@@ -83,6 +83,7 @@ const rsvpAction = $derived(
     ? `/e/${encodeURIComponent(model.eventKey)}/rsvp?attendees=${model.attendeesPaging.page}`
     : `/e/${encodeURIComponent(model.eventKey)}/rsvp`,
 );
+const updatedStamp = $derived(model.updatedStamp);
 const lineup = $derived(
   renderGoingCount(model.eventKey, {
     going: model.goingCount,
@@ -234,6 +235,14 @@ const lineup = $derived(
       <div>
         <dt>Duration</dt>
         <dd>{model.durationText}</dd>
+      </div>
+    {/if}
+    {#if updatedStamp}
+      <div>
+        <dt>Updated</dt>
+        <dd data-testid="event-updated">
+          Updated{" "}<time datetime={updatedStamp.datetime}>{updatedStamp.text}</time>
+        </dd>
       </div>
     {/if}
     {#if model.location}

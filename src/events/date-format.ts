@@ -128,6 +128,46 @@ export function calendarZone(timezones: Iterable<string | null | undefined>): st
   return top ? top[0] : "UTC";
 }
 
+/** Skew guard for the edited-event Updated stamp: fresh inserts stamp
+ * createdAt/updatedAt together (millisecond drift), while a real edit lands
+ * later. A full minute keeps fresh rows clean. */
+export const EVENT_UPDATED_SKEW_MS = 60_000;
+
+/** True when the row was edited after creation: updatedAt strictly beyond
+ * createdAt plus the skew guard. Fresh rows, within-skew edits, backwards
+ * rows, and missing or unparseable instants all read as unedited, never as
+ * a throw: both renderers call this on every detail render, so a partial
+ * row must hide the stamp rather than break the page. Both detail renderers
+ * share this predicate, so the stamp never disagrees between them. */
+export function isEditedEvent(
+  createdAt: Date | null | undefined,
+  updatedAt: Date | null | undefined,
+): boolean {
+  if (!(createdAt instanceof Date) || !(updatedAt instanceof Date)) return false;
+  return updatedAt.getTime() - createdAt.getTime() > EVENT_UPDATED_SKEW_MS;
+}
+
+/** "Thursday, 20 November 2029, 15:30 GMT+00:00" — the shared Updated-stamp
+ * human date in the event zone (the served long-offset detail format, ISO on
+ * a bad zone). Both renderers call this one function, so the stamp's visible
+ * text is identical on Hono and Kit for the same row. */
+export function updatedStampLabel(updatedAt: Date, zone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      weekday: "long",
+      day: "numeric",
+      month: "long",
+      year: "numeric",
+      hour: "2-digit",
+      minute: "2-digit",
+      timeZone: zone,
+      timeZoneName: "longOffset",
+    }).format(updatedAt);
+  } catch {
+    return updatedAt.toISOString();
+  }
+}
+
 /** Bad/absent `month` falls back to this month (UTC). */
 export function currentCalendarMonth(now: Date): string {
   return wallMonth(now, "UTC");
