@@ -8,6 +8,7 @@ import {
   NotFoundPage,
 } from "../errors";
 import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
+import { MAX_RETURN_DESTINATION_BYTES } from "../join/service";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
@@ -28,7 +29,7 @@ import {
   type PublicEvent,
 } from "./reads";
 import { archiveContext } from "./archive-context";
-import { archiveEventHref } from "./attendee-paths";
+import { archiveEventHref, authReturnHref } from "./attendee-paths";
 import { waitlistPosition } from "./waitlist";
 import { recordAccess } from "../admin/store";
 import { EventGonePage, EventPage } from "./pages";
@@ -247,7 +248,15 @@ export function registerDetailRoutes(
                 ? archiveEventHref(e.eventKey, archive, attendeePage + 1)
                 : null,
           };
-          const returnTo = c.req.path + new URL(c.req.url).search;
+          // Auth return (`?next=`): normalized archive/attendee context
+          // bounded to auth's byte cap, never the raw request query — an
+          // oversized next is refused by auth and loses the way back here.
+          const returnTo = authReturnHref(
+            e.eventKey,
+            archive,
+            attendeePage,
+            MAX_RETURN_DESTINATION_BYTES,
+          );
           return bufferedMemberHtml(
             c,
             <EventPage

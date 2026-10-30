@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
@@ -418,7 +418,7 @@ describe("event-detail guest reads", () => {
     const queried = await resolve(KEY, fakeStore(), GUEST, null, "?tab=about");
     expect(queried.outcome.kind).toBe("ok");
     if (queried.outcome.kind !== "ok") throw new Error("unreachable");
-    expect(queried.outcome.model.joinReturnTo).toBe(`/e/${KEY}?tab=about`);
+    expect(queried.outcome.model.joinReturnTo).toBe(`/e/${KEY}`);
     expect(model.neighbors.next?.key).toBe(RELATED[0]!.eventKey);
     expect(model.copyLink).toBe(`${APP_URL}/e/${KEY}`);
     expect(model.jsonLd).toContain("https://schema.org/EventScheduled");
@@ -775,6 +775,13 @@ async function memberHtml(): Promise<string> {
 }
 
 describe("Kit detail presentation", () => {
+  afterEach(() => vi.useRealTimers());
+
+  function freezeRosterClock() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-10T21:00:00Z"));
+  }
+
   it("emits one event block and one site block, byte-identical for guest and member", async () => {
     const jsonLdBlocks = (html: string) =>
       [
@@ -828,6 +835,132 @@ describe("Kit detail presentation", () => {
     expect(html).not.toContain('name="robots"');
   });
 
+  it("shows the signed-in join path for a non-member with an empty username", async () => {
+    const session: KitRequestSession = {
+      status: "authenticated",
+      session: { userId: MEMBER_ID, username: "", avatar: null, member: false, moderator: false },
+    };
+    const { outcome } = await resolve(KEY, fakeStore(), session);
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-roster-members-only"');
+    expect(html).toContain(`href="/join?next=${encodeURIComponent(`/e/${KEY}`)}"`);
+    expect(html).not.toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).not.toContain("sign in to see who's in");
+    expect(html).not.toContain(">ann<");
+  });
+
+  it("renders the guest zero-named-going nudge line, never a 0-going line", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row(), goingCount: 0 } as PublicEvent }),
+      GUEST,
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    // The roster lists named going rows only: an empty list never claims
+    // there are no RSVP responses, and never promises a first going seat.
+    expect(html).toContain("No one is listed as going yet.");
+    expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+    expect(html).not.toContain("sign in to be the first");
+    expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(`/e/${KEY}`)}"`);
+    // The old nudge line is gone; the lineup's "0 of 10 going" stays.
+    expect(html).not.toContain("0 going —");
+  });
+
+  it.each([
+    ["past status", { status: "past" }, "This one has been and gone", false],
+    [
+      "ended event",
+      { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
+      "This one has been and gone",
+      false,
+    ],
+    ["paused RSVPs", { rsvpOpen: false }, "RSVPs are paused for this event", false],
+    ["draft", { status: "draft" }, "Not published yet", true],
+  ])(
+    "renders a plain member empty line on %s, never an RSVP invitation",
+    async (_label, over, verdict, moderator) => {
+      if (_label === "paused RSVPs") freezeRosterClock();
+      // Hono parity: past, paused and draft events keep a plain honest empty
+      // line because the RSVP block on the same page already says no seat
+      // can be taken.
+      const { outcome } = await resolve(
+        KEY,
+        fakeStore({
+          event: { ...row(over), goingCount: 0 } as PublicEvent,
+          attendees: [],
+          answer: null,
+        }),
+        moderator ? memberSession(MOD_ID, true) : memberSession(),
+      );
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error("unreachable");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html).toContain(verdict);
+      expect(html).toContain('data-testid="event-roster-empty"');
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+      expect(html).not.toContain("RSVP to start the list");
+    },
+  );
+
+  it.each([
+    ["past status", { status: "past" }, "This one has been and gone"],
+    [
+      "ended event",
+      { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
+      "This one has been and gone",
+    ],
+    ["paused RSVPs", { rsvpOpen: false }, "Log in with Discord"],
+  ])(
+    "renders a plain guest zero-named-going line on %s, never a be-the-first nudge",
+    async (_label, over, rsvpCopy) => {
+      if (_label === "paused RSVPs") freezeRosterClock();
+      // Drafts 403 for non-moderators, so the draft guest has no roster
+      // surface to pin.
+      const { outcome } = await resolve(
+        KEY,
+        fakeStore({
+          event: { ...row(over), goingCount: 0 } as PublicEvent,
+          attendees: [],
+        }),
+        GUEST,
+      );
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error("unreachable");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html).toContain(rsvpCopy);
+      expect(html).toContain('data-testid="event-roster-guest-nudge"');
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+      expect(html).not.toContain("sign in to be the first");
+    },
+  );
+
+  it("keeps the guest sign-in nudge on a past event with RSVPs they can still see", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row({ status: "past" }), goingCount: 2 } as PublicEvent }),
+      GUEST,
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain("This one has been and gone");
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).toContain("2 going");
+    expect(html).toContain("sign in to see who's in");
+  });
+
   it("renders the member contract: attendees with profile links, no join pitch", async () => {
     const html = await memberHtml();
     expect(html).toContain('data-testid="event-attendees"');
@@ -866,6 +999,66 @@ describe("Kit detail presentation", () => {
     // The lineup spots line reads occupancy too, not the named count.
     expect(html).toContain('data-testid="event-spots-left"');
     expect(html).toContain(">Full<");
+  });
+
+  it.each([
+    ["maybe", "maybe", /down as a maybe/i],
+    ["waitlisted", "waitlisted", /on the waitlist/i],
+  ])(
+    "member with a current %s answer and no listed going sees no listed going, never 'no RSVPs'",
+    async (_label, status, answerCopy) => {
+      freezeRosterClock();
+      // Correction: the roster lists named going rows only, so an existing
+      // maybe/waitlisted answer beside an empty roster must not be
+      // contradicted by a "no RSVP responses" claim.
+      const { outcome } = await resolve(
+        KEY,
+        fakeStore({
+          event: { ...row(), goingCount: 0 } as PublicEvent,
+          attendees: [],
+          answer: { status, syncedToDiscordAt: null },
+        }),
+        memberSession(),
+      );
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error("unreachable");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html).toMatch(answerCopy);
+      expect(html).toContain('data-testid="event-roster-empty"');
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+      expect(html).not.toContain("RSVP to start the list");
+    },
+  );
+
+  it("full by a nameless seat: waitlist CTA beside a neutral empty roster, never a first-going invite", async () => {
+    freezeRosterClock();
+    // Correction: capacity 1, goingOccupancy 1, named goingCount 0 and an
+    // empty named roster — the divergent fixture shape from the
+    // going-count/roster agreement contract. The page offers only the
+    // waitlist, so roster copy must not invite a going RSVP.
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: { ...row({ capacity: 1 }), goingCount: 0, goingOccupancy: 1 } as PublicEvent,
+        attendees: [],
+        answer: null,
+      }),
+      memberSession(),
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.goingCount).toBe(0);
+    expect(outcome.model.goingOccupancy).toBe(1);
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain("0 of 1 going");
+    expect(html).toContain('data-testid="waitlist-join"');
+    expect(html).not.toContain('data-testid="rsvp-going"');
+    expect(html).toContain('data-testid="event-roster-empty"');
+    expect(html).toContain("No one is listed as going yet.");
+    expect(html).not.toMatch(/No RSVPs(\.| yet)|RSVP to start the list|sign in to be the first/);
   });
 
   it("renders draft and past states with their notices and noindex", async () => {

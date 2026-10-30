@@ -72,15 +72,13 @@ export function parseEventStartsWindow(
   const fields = [from, before].map((v) => (typeof v === "string" ? [v] : (v ?? [])));
   if (fields.every((f) => f.length === 0 || (f.length === 1 && f[0] === ""))) return undefined;
   const window: EventStartsWindow = {};
-  if (fields.some((f) => f.length > 1)) {
-    window.error = `Starts from and Starts before can each be given only once. ${WINDOW_NOT_APPLIED}`;
-    return window;
-  }
-  const [a, b] = fields.map((f) => f[0] ?? "") as [string, string];
+  const [a, b] = fields.map((f) => (f.length === 1 ? f[0] : "")) as [string, string];
   const dates = [a, b].map((v) => (v === "" ? null : utcMidnight(v)));
   if (a !== "" && dates[0]) window.from = a;
   if (b !== "" && dates[1]) window.before = b;
-  if ((a !== "" && !dates[0]) || (b !== "" && !dates[1])) {
+  if (fields.some((f) => f.length > 1)) {
+    window.error = `Starts from and Starts before can each be given only once. ${WINDOW_NOT_APPLIED}`;
+  } else if ((a !== "" && !dates[0]) || (b !== "" && !dates[1])) {
     window.error = `Starts from and Starts before must be valid calendar dates (YYYY-MM-DD, years 0001 to 9999). ${WINDOW_NOT_APPLIED}`;
   } else if (window.from && window.before && window.from >= window.before) {
     window.error = `Starts from must be a date before Starts before. ${WINDOW_NOT_APPLIED}`;

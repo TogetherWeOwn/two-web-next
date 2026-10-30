@@ -1,12 +1,7 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
-import {
-  eventListUrl,
-  eventListHasFilters,
-  eventListClearUrl,
-  type EventSort,
-} from "../../../../../src/admin/event-list";
+import { eventListUrl, type EventSort } from "../../../../../src/admin/event-list";
 import { goingCountText } from "../../../../../src/islands/contracts-going-count";
 import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 
@@ -23,8 +18,17 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // inlined literals or a shared component would breach the client gzip and
 // file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
-const { query, rows, hasNext, emptyText, windowSummary, startsInputsHtml, pauseReviews } =
-  $derived(data);
+const {
+  query,
+  rows,
+  hasNext,
+  emptyText,
+  startsFeedbackHtml,
+  startsInputsHtml,
+  filterFieldsHtml,
+  filterActionsHtml,
+  pauseReviews,
+} = $derived(data);
 const now = new Date();
 </script>
 
@@ -32,12 +36,16 @@ const now = new Date();
   {@const active = query.sort === sort}
   {@const order = active && query.order === "asc" ? "desc" : "asc"}
   <th scope="col" aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : "none"}>
-    <a
-      href={eventListUrl(query, { sort, order, page: 1 })}
-      aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}
-    >
-      {label}{active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
-    </a>
+    {#if query.startsWindow?.error}
+      <span>{label}</span>
+    {:else}
+      <a
+        href={eventListUrl(query, { sort, order, page: 1 })}
+        aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}
+      >
+        {label}{active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
+      </a>
+    {/if}
   </th>
 {/snippet}
 
@@ -57,61 +65,11 @@ const now = new Date();
 <section aria-labelledby="events-heading">
   <h1 id="events-heading">Events</h1>
   <form method="get" action="/admin/events" class="filters">
-    <input type="hidden" name="sort" value={query.sort} />
-    <input type="hidden" name="order" value={query.order} />
-    <div class="field">
-      <label for="q">Search titles and games</label>
-      <input id="q" name="q" type="search" value={query.q} aria-describedby="q-help" />
-      <p class="hint" id="q-help">Matches event titles and saved games.</p>
-    </div>
-    <div class="field">
-      <label for="status">Status</label>
-      <select id="status" name="status">
-        {#each ["", "draft", "published", "cancelled", "past"] as s (s)}
-          <option value={s} selected={s === query.status}>{s === "" ? "All" : s}</option>
-        {/each}
-      </select>
-    </div>
-    <div class="field">
-      <label for="rsvp_open">RSVPs</label>
-      <select id="rsvp_open" name="rsvp_open">
-        <option value="" selected={query.rsvp_open === ""}>All</option>
-        <option value="1" selected={query.rsvp_open === "1"}>Open</option>
-        <option value="0" selected={query.rsvp_open === "0"}>Paused</option>
-      </select>
-    </div>
-    <div class="field">
-      <label for="series">Series</label>
-      <select id="series" name="series">
-        {#each [["", "All"], ["parent", "Parent"], ["child", "Child"], ["standalone", "Standalone"]] as [value, label] (value)}
-          <option value={value} selected={value === query.series}>{label}</option>
-        {/each}
-      </select>
-    </div>
-    <div class="field">
-      <label for="fill">Fill</label>
-      <select id="fill" name="fill">
-        {#each [["", "All"], ["full", "Full"], ["has_seats", "Has seats"], ["unlimited", "Unlimited"]] as [value, label] (value)}
-          <option value={value} selected={value === query.fill}>{label}</option>
-        {/each}
-      </select>
-    </div>
+    {@html filterFieldsHtml}
     {@html startsInputsHtml}
-    <div class="field">
-      <button type="submit" class="btn">Filter</button>
-    </div>
-    {#if eventListHasFilters(query)}
-      <div class="field">
-        <a href={eventListClearUrl(query)}>Clear filters</a>
-      </div>
-    {/if}
+    {@html filterActionsHtml}
   </form>
-  {#if query.startsWindow?.error}
-    <p class="notice" role="alert">{query.startsWindow.error}</p>
-  {/if}
-  {#if windowSummary}
-    <p>{windowSummary}</p>
-  {/if}
+  {@html startsFeedbackHtml}
   <p>
     <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
   </p>
@@ -194,17 +152,17 @@ const now = new Date();
       </tbody>
     </table>
   </div>
-  {#if rows.length === 0 && query.page > 1}
+  {#if !query.startsWindow?.error && rows.length === 0 && query.page > 1}
     <p>
       <a href={eventListUrl(query, { page: 1 })}>First page of these results</a>
     </p>
   {/if}
   <nav aria-label="Event pages" class="actions">
-    {#if query.page > 1}
+    {#if !query.startsWindow?.error && query.page > 1}
       <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a>
     {/if}
     <span>Page {query.page}</span>
-    {#if hasNext}
+    {#if !query.startsWindow?.error && hasNext}
       <a rel="next" href={eventListUrl(query, { page: query.page + 1 })}>Next</a>
     {/if}
   </nav>

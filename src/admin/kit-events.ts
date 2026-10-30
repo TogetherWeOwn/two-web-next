@@ -11,14 +11,14 @@
 // audit; this only tells the load which rows and page controls to render.
 // The fetch stays bounded: listEvents over-fetches by exactly one row
 // (EVENT_PAGE_SIZE + 1, no count query), and the view slices to the page.
-import {
-  EVENT_PAGE_SIZE,
-  eventEmptyText,
-  eventStartsWindowSummary,
-  type EventListQuery,
-} from "./event-list";
+import { EVENT_PAGE_SIZE, eventEmptyText, type EventListQuery } from "./event-list";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
-import { renderEventStartsInputsHtml } from "./event-starts-inputs";
+import {
+  renderEventStartsInputsHtml,
+  renderEventStartsFeedbackHtml,
+  renderEventFilterFieldsHtml,
+  renderEventFilterActionsHtml,
+} from "./event-starts-inputs";
 import type { EventListRow } from "./store-event-reads";
 
 /** One events-table row with its timestamps pre-rendered, exactly as the
@@ -44,11 +44,12 @@ export type KitEventListView = {
   rows: KitEventListRow[];
   hasNext: boolean;
   emptyText: string;
-  /** Active UTC window sentence, built on the server so the client bundle
-   * ships neither the formatter nor its copy. */
-  windowSummary: string | null;
+  /** Escaped feedback paragraphs; neither formatter nor templates ship twice. */
+  startsFeedbackHtml: string;
   /** Escaped native date controls; no duplicate labels/template in client JS. */
   startsInputsHtml: string;
+  filterFieldsHtml: string;
+  filterActionsHtml: string;
   /** Pre-rendered pause-review HTML keyed by event key, for published rows
    * with open RSVPs; the page injects it via {@html} so the client bundle
    * carries no review strings or disclosure markup (client gzip ceiling).
@@ -95,8 +96,10 @@ export function buildEventListView(
     rows: fetched.slice(0, EVENT_PAGE_SIZE).map(serializeEventListRow),
     hasNext: fetched.length > EVENT_PAGE_SIZE,
     emptyText: eventEmptyText(query),
-    windowSummary: eventStartsWindowSummary(query.startsWindow),
+    startsFeedbackHtml: renderEventStartsFeedbackHtml(query.startsWindow),
     startsInputsHtml: renderEventStartsInputsHtml(query.startsWindow),
+    filterFieldsHtml: renderEventFilterFieldsHtml(query),
+    filterActionsHtml: renderEventFilterActionsHtml(query),
     pauseReviews,
   };
 }
