@@ -128,6 +128,36 @@ repository floor above. The performance regression suite
 temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
 These import checks do not replace actual Chromium collection: the Lighthouse
 job must still collect all twenty-four samples (eight routes, three runs each) and pass the unchanged assertions.
+Fixture collection survives one transient per step: `npm run lighthouse` runs
+`ci/lighthouse-perf-run.mjs`, which reruns the whole mobile `lhci autorun` a
+single time when any configured URL is short of three independent,
+profile-matched navigations (read from collect's per-run
+`.lighthouseci/lhr-*.json` files), and `npm run lighthouse:quality` does the
+same for the desktop collect. Twenty-four files alone are not sufficient:
+duplicated navigations, wrong-profile samples and surplus samples for one
+route cannot fill another route's quota. A full-evidence assert failure never
+retries. The fixture wrapper rejects `--collect.*`, `--config`,
+`--no-lighthouserc` and all `LHCI_*` environment overrides before changing
+artifacts or launching LHCI, so it never judges a custom crawl against the
+checked-in fixture plan. This includes both `LHCI_COLLECT__NUMBER_OF_RUNS`
+and the flat `LHCI_NUMBER_OF_RUNS` alias; use `lhci autorun` directly for
+custom collections or environment overrides. Other runtime variables such as
+`CHROME_PATH` remain supported. `npm run lighthouse -- --help` and `--version`
+print native LHCI information once, preserve prior evidence, and return its
+status without quota checks or retrying.
+
+The perf selftest also runs the real npm entry point and LHCI launcher/parser/
+autorun/assertion chain against 24 synthetic navigation reports, replacing only
+browser collection, healthcheck and upload in an isolated child. It checks the
+launch arguments/configuration, accepts passing reports, and rejects independent
+LCP/CLS breaches with the unchanged assertions. This is not a live-browser crawl.
+Every collection run writes
+`.lighthouseci/perf-collect.log` (full lhci output) and, on failure,
+`.lighthouseci/perf-collect-diagnosis.md`, which says COLLECT FAILURE (short
+evidence: re-run the step, budgets untouched), BUDGET BREACH (full evidence
+plus an evaluated assertion miss), or an unclassified step failure (full
+evidence, no assertion verdict). Both files ship in the `lighthouse-*`
+artifact.
 
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no
