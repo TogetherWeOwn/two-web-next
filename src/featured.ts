@@ -39,6 +39,65 @@ function featuredTimeoutGuard() {
   return sql`select set_config('lock_timeout', ${`${FEATURED_DB_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${FEATURED_DB_TIMEOUT_MS}ms`}, true)`;
 }
 
+/** Generous row cap per read: normal homepages hold only a handful of slots;
+ * pathological published inventory is bounded even when form-valid. */
+export const FEATURED_ROW_CAP = 100;
+
+/**
+ * SQL-side admission for stored featured text: every projected text column
+ * is judged against the established write maxima of the featured form
+ * (`src/admin/validation-featured-form.ts`: title 255, body 1000, url 255,
+ * image_url 255, image_alt 255), counted in characters — PostgreSQL
+ * `length()` counts characters; checking only the maximum plus one character
+ * avoids scanning whole pathological values. A multibyte value AT a maximum
+ * crosses byte-identical and one character over never crosses at all. Null is
+ * admitted. A row that fails is skipped whole, never truncated after
+ * transfer; healthy siblings keep their order and bytes.
+ */
+const featuredTextAdmission = sql`length(substring(${featuredContents.title} from 1 for 256)) <= 255
+  and (${featuredContents.body} is null or length(substring(${featuredContents.body} from 1 for 1001)) <= 1000)
+  and (${featuredContents.url} is null or length(substring(${featuredContents.url} from 1 for 256)) <= 255)
+  and (${featuredContents.imageUrl} is null or length(substring(${featuredContents.imageUrl} from 1 for 256)) <= 255)
+  and (${featuredContents.imageAlt} is null or length(substring(${featuredContents.imageAlt} from 1 for 256)) <= 255)`;
+
+/**
+ * Collapse one bounded read to its capped rows plus at most one counts-only
+ * diagnostic. The read's single statement left-joins the admitted rows
+ * (probe: cap + 1) onto a counts-only subquery of visibility-matching rows
+ * the admission refused, so the skipped count rides every row — and rides
+ * one all-null sentinel row when nothing was admitted — while no oversized
+ * byte ever crosses the projection. Rows the reader's visibility filter
+ * already excludes are in neither subquery and never count as skipped. The
+ * diagnostic carries counts only, never stored text (sitemap-skip
+ * precedent): `skipped` for refused rows, `limit`/`returned` on saturation.
+ */
+function boundFeaturedRows<Out extends { id: number }>(
+  // The left join types every admitted column nullable: the all-null
+  // sentinel is the only row that uses that, and it is filtered out below.
+  rows: Array<{ [K in keyof Out]: Out[K] | null } & { skippedOversized: unknown }>,
+  status?: { saturated: boolean },
+): Out[] {
+  const skippedCount = Number(rows[0]?.skippedOversized);
+  const skipped = Number.isSafeInteger(skippedCount) && skippedCount > 0 ? skippedCount : 0;
+  const admitted = rows.filter((row) => row.id !== null && row.id !== undefined);
+  const saturated = admitted.length > FEATURED_ROW_CAP;
+  if (status) status.saturated = saturated;
+  const bounded = saturated ? admitted.slice(0, FEATURED_ROW_CAP) : admitted;
+  if (skipped > 0 || saturated) {
+    const diagnostic: { skipped?: number; limit?: number; returned?: number } = {};
+    if (skipped > 0) diagnostic.skipped = skipped;
+    if (saturated) {
+      diagnostic.limit = FEATURED_ROW_CAP;
+      diagnostic.returned = bounded.length;
+    }
+    console.warn("Featured read bounded oversized stored rows.", diagnostic);
+  }
+  return bounded.map(({ skippedOversized, ...row }) => {
+    void skippedOversized;
+    return row as unknown as Out;
+  });
+}
+
 async function withFeaturedDeadline<T>(run: () => Promise<T[]>): Promise<T[]> {
   let timer: ReturnType<typeof setTimeout> | undefined;
   const read = run().catch(() => [] as T[]);
@@ -79,14 +138,29 @@ async function withPublishedFeaturedRead<T>(run: () => Promise<T[]>): Promise<T[
   }
 }
 
-/** Legacy currentlyVisible: start inclusive, end exclusive; no homepage cap. */
-export async function listVisibleFeatured(db: Db, now = new Date()): Promise<VisibleFeatured[]> {
-  return withFeaturedDeadline(() =>
+/**
+ * Legacy currentlyVisible: start inclusive, end exclusive. Stored text is
+ * admitted in SQL (`featuredTextAdmission`) and the read is capped at
+ * `FEATURED_ROW_CAP` rows, so one oversized stored row is skipped whole in
+ * the database instead of being transferred, cached, and serialized. The
+ * default path never throws; the cache can request propagated failures.
+ */
+export async function listVisibleFeatured(
+  db: Db,
+  now = new Date(),
+  propagateFailure = false,
+): Promise<VisibleFeatured[]> {
+  const run = () =>
     db.transaction(async (tx) => {
       // Like optional search analytics: cancel lock waits/slow statements in
       // Postgres, not just the HTTP wait, and never alter pooled session settings.
       await tx.execute(featuredTimeoutGuard());
-      const rows = await tx
+      const visibility = and(
+        eq(featuredContents.isPublished, true),
+        or(isNull(featuredContents.startsAt), lte(featuredContents.startsAt, now)),
+        or(isNull(featuredContents.endsAt), gt(featuredContents.endsAt, now)),
+      );
+      const admitted = tx
         .select({
           id: featuredContents.id,
           title: featuredContents.title,
@@ -94,19 +168,34 @@ export async function listVisibleFeatured(db: Db, now = new Date()): Promise<Vis
           url: featuredContents.url,
           imageUrl: featuredContents.imageUrl,
           imageAlt: featuredContents.imageAlt,
+          position: featuredContents.position,
         })
         .from(featuredContents)
-        .where(
-          and(
-            eq(featuredContents.isPublished, true),
-            or(isNull(featuredContents.startsAt), lte(featuredContents.startsAt, now)),
-            or(isNull(featuredContents.endsAt), gt(featuredContents.endsAt, now)),
-          ),
-        )
-        .orderBy(asc(featuredContents.position), asc(featuredContents.id));
-      return rows.map(safeStoredLink);
-    }),
-  );
+        .where(and(visibility, featuredTextAdmission))
+        .orderBy(asc(featuredContents.position), asc(featuredContents.id))
+        .limit(FEATURED_ROW_CAP + 1)
+        .as("admitted_featured");
+      const skipped = tx
+        .select({ n: sql<number>`count(*)`.as("n") })
+        .from(featuredContents)
+        .where(and(visibility, sql`not (${featuredTextAdmission})`))
+        .as("skipped_featured");
+      const rows = await tx
+        .select({
+          id: admitted.id,
+          title: admitted.title,
+          body: admitted.body,
+          url: admitted.url,
+          imageUrl: admitted.imageUrl,
+          imageAlt: admitted.imageAlt,
+          skippedOversized: skipped.n,
+        })
+        .from(skipped)
+        .leftJoin(admitted, sql`true`)
+        .orderBy(asc(admitted.position), asc(admitted.id));
+      return boundFeaturedRows<VisibleFeatured>(rows).map(safeStoredLink);
+    });
+  return propagateFailure ? withPublishedFeaturedRead(run) : withFeaturedDeadline(run);
 }
 
 export type PublishedFeatured = Pick<
@@ -115,19 +204,41 @@ export type PublishedFeatured = Pick<
 >;
 
 /**
- * Published base list for the homepage guest cache: every published row with
- * its window bounds, same order, same deadline/cancel contract. The homepage
+ * Published base list for the homepage guest cache: every admitted published
+ * row (same SQL admission and row cap as the visible read, so the cached
+ * base never holds oversized stored text) with its window bounds, same
+ * order, same deadline/cancel contract. The homepage
  * applies the live window per request (currentlyVisible in
  * `./featured-status`), so boundary instants stay exact while the
  * time-invariant base is shared across requests. Unlike the legacy visible
  * read, failures and the deadline reject: the only caller, cachedFeatured,
  * logs the one home-pattern warn and serves the empty-list fallback.
+ *
+ * When the caller passes its request time, published rows whose window
+ * already ended are excluded before the row cap: an ended row can never
+ * become visible again (end-exclusive window, time moves forward), so
+ * ordinary accumulated expired inventory must not consume the cap and crowd
+ * live rows out of the cached base. Future-window rows stay in the base —
+ * the per-request window filter needs them — and the exclusion stays safe
+ * for every request at or after the cache fill. The no-`now` path keeps the
+ * legacy time-invariant base exactly (pinned by CONTROL-SQL02 and the
+ * bounded homepage acceptance); no production caller uses it.
  */
-export async function listPublishedFeatured(db: Db): Promise<PublishedFeatured[]> {
+export async function listPublishedFeatured(
+  db: Db,
+  now?: Date,
+  status?: { saturated: boolean },
+): Promise<PublishedFeatured[]> {
   return withPublishedFeaturedRead(() =>
     db.transaction(async (tx) => {
       await tx.execute(featuredTimeoutGuard());
-      const rows = await tx
+      const visibility = now
+        ? and(
+            eq(featuredContents.isPublished, true),
+            or(isNull(featuredContents.endsAt), gt(featuredContents.endsAt, now)),
+          )
+        : eq(featuredContents.isPublished, true);
+      const admitted = tx
         .select({
           id: featuredContents.id,
           title: featuredContents.title,
@@ -137,11 +248,34 @@ export async function listPublishedFeatured(db: Db): Promise<PublishedFeatured[]
           imageAlt: featuredContents.imageAlt,
           startsAt: featuredContents.startsAt,
           endsAt: featuredContents.endsAt,
+          position: featuredContents.position,
         })
         .from(featuredContents)
-        .where(eq(featuredContents.isPublished, true))
-        .orderBy(asc(featuredContents.position), asc(featuredContents.id));
-      return rows.map(safeStoredLink);
+        .where(and(visibility, featuredTextAdmission))
+        .orderBy(asc(featuredContents.position), asc(featuredContents.id))
+        .limit(FEATURED_ROW_CAP + 1)
+        .as("admitted_featured");
+      const skipped = tx
+        .select({ n: sql<number>`count(*)`.as("n") })
+        .from(featuredContents)
+        .where(and(visibility, sql`not (${featuredTextAdmission})`))
+        .as("skipped_featured");
+      const rows = await tx
+        .select({
+          id: admitted.id,
+          title: admitted.title,
+          body: admitted.body,
+          url: admitted.url,
+          imageUrl: admitted.imageUrl,
+          imageAlt: admitted.imageAlt,
+          startsAt: admitted.startsAt,
+          endsAt: admitted.endsAt,
+          skippedOversized: skipped.n,
+        })
+        .from(skipped)
+        .leftJoin(admitted, sql`true`)
+        .orderBy(asc(admitted.position), asc(admitted.id));
+      return boundFeaturedRows<PublishedFeatured>(rows, status).map(safeStoredLink);
     }),
   );
 }

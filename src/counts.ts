@@ -114,16 +114,51 @@ const readLive = cachedRead<LiveCounts>(
   },
 );
 
+// The stored ladder is five rungs (docs/web-v1-contract.md); 20 rows and 64
+// characters per key/label are generous pathological caps (4x/8x the normal
+// ladder) that keep the single-copy community DTO under the 32 KiB
+// promise. MCP additionally budgets the escaped, duplicated tool result
+// in mcp/server.ts. Admission is judged in SQL before transfer:
+// CASE nulls an over-cap key/label in the projection itself (the event
+// egress precedent), so oversized stored text never crosses the driver, and
+// the marker column says why. Length is PostgreSQL `length()` — characters,
+// the unit the caps are stated in — so a multibyte value at the cap crosses
+// byte-identical. One oversized, over-cap, or misshapen row refuses the
+// WHOLE read through the `cachedRead` fallback below: never a partial
+// ladder, never String()-coerced text. The driver-level checks stay as a
+// second line for a driver that hands back non-text cells anyway.
+export const RANK_TEXT_MAX_CHARS = 64;
+export const RANK_ROW_CAP = 20;
+
 const readRanks = cachedRead<Rank[]>("counts.ranks", [], async (sql) => {
   const rows = await sql<Row[]>`
-    SELECT rank_key, rank_label, member_count
-    FROM web_v1.rank_counts ORDER BY rank_order
+    SELECT
+      CASE WHEN rank_key IS NOT NULL AND length(rank_key) <= 64
+            AND rank_label IS NOT NULL AND length(rank_label) <= 64
+           THEN rank_key END AS rank_key,
+      CASE WHEN rank_key IS NOT NULL AND length(rank_key) <= 64
+            AND rank_label IS NOT NULL AND length(rank_label) <= 64
+           THEN rank_label END AS rank_label,
+      member_count,
+      (rank_key IS NOT NULL AND length(rank_key) <= 64
+       AND rank_label IS NOT NULL AND length(rank_label) <= 64) AS rank_text_fits
+    FROM web_v1.rank_counts ORDER BY rank_order LIMIT 21
   `;
-  return rows.map((row) => ({
-    key: String(row.rank_key),
-    label: String(row.rank_label),
-    memberCount: count(row.member_count),
-  }));
+  if (rows.length > RANK_ROW_CAP) throw new Error("RankCountsOverCap");
+  return rows.map((row) => {
+    const key = row.rank_key;
+    const label = row.rank_label;
+    if (
+      row.rank_text_fits === false ||
+      typeof key !== "string" ||
+      typeof label !== "string" ||
+      [...key].length > RANK_TEXT_MAX_CHARS ||
+      [...label].length > RANK_TEXT_MAX_CHARS
+    ) {
+      throw new Error("RankCountsOversized");
+    }
+    return { key, label, memberCount: count(row.member_count) };
+  });
 });
 
 export async function readCounts(env: Env): Promise<Counts> {

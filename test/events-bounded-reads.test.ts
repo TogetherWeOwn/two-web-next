@@ -118,7 +118,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
       teaser: await listHomeUpcoming(countedDb),
       featured: await listVisibleFeatured(countedDb),
     }));
-    // The teaser caps at three rows; the featured read has no cap.
+    // The teaser caps at three rows; the featured cap (100) is far above this seed.
     expect(first.result.teaser).toHaveLength(3);
     expect(first.result.featured).toHaveLength(10);
     // The teaser aggregates stay exact with non-going answers present.

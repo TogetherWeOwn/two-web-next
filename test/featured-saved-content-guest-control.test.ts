@@ -26,15 +26,30 @@ describe("saved preview: unchanged guest query and effect controls", () => {
     expect(calls[0]!.sql).toContain("set_config('lock_timeout'");
     expect(calls[0]!.params).toEqual(["250ms", "250ms"]);
     const read = calls[1]!;
+    // The bounded read keeps one statement: a counts-only leg for rows the
+    // SQL length admission refuses and the admitted leg proper. The same
+    // publication/window predicates scope both legs (params $1-$3, then
+    // $4-$6), so a refused draft or out-of-window row is never counted.
     expect(read.sql).toContain('"featured_contents"."is_published" = $1');
     expect(read.sql).toContain('"featured_contents"."starts_at" is null');
     expect(read.sql).toContain('"featured_contents"."starts_at" <= $2');
     expect(read.sql).toContain('"featured_contents"."ends_at" is null');
     expect(read.sql).toContain('"featured_contents"."ends_at" > $3');
+    expect(read.sql).toContain('"featured_contents"."is_published" = $4');
+    expect(read.sql).toContain('"featured_contents"."starts_at" <= $5');
+    expect(read.sql).toContain('"featured_contents"."ends_at" > $6');
     expect(read.sql).toContain(
       'order by "featured_contents"."position" asc, "featured_contents"."id" asc',
     );
-    expect(read.params).toEqual([true, CHECKED_AT.toISOString(), CHECKED_AT.toISOString()]);
+    expect(read.params).toEqual([
+      true,
+      CHECKED_AT.toISOString(),
+      CHECKED_AT.toISOString(),
+      true,
+      CHECKED_AT.toISOString(),
+      CHECKED_AT.toISOString(),
+      101,
+    ]);
   });
 
   it("CONTROL-SQL02: cached guest base selects published rows with bounds, never unpublished content", async () => {
@@ -42,12 +57,14 @@ describe("saved preview: unchanged guest query and effect controls", () => {
     expect(await listPublishedFeatured(db)).toEqual([]);
     expect(calls).toHaveLength(2);
     const read = calls[1]!;
-    expect(read.sql).toContain('where "featured_contents"."is_published" = $1');
-    expect(read.sql).toContain('"starts_at", "ends_at" from "featured_contents"');
+    // Published-only scopes both bounded legs ($1 refused-count, $2 admitted).
+    expect(read.sql).toContain('where ("featured_contents"."is_published" = $1');
+    expect(read.sql).toContain('"featured_contents"."is_published" = $2');
+    expect(read.sql).toContain('"starts_at", "ends_at", "position" from "featured_contents"');
     expect(read.sql).toContain(
       'order by "featured_contents"."position" asc, "featured_contents"."id" asc',
     );
-    expect(read.params).toEqual([true]);
+    expect(read.params).toEqual([true, true, 101]);
   });
 
   it("CONTROL-effects: real renderers need no network or database write to inspect an admitted live row", async () => {
