@@ -2,9 +2,12 @@
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
+import { ONGOING_COPY } from "../../../src/events/ongoing";
+import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
 import {
   EVENT_FULL_TESTID,
+  EVENT_ONGOING_TESTID,
   RSVP_BUTTON_ISLAND,
   RSVP_CHECK_TESTID,
   RSVP_CLOSED_TESTID,
@@ -177,6 +180,9 @@ const lineup = $derived(
     {#if model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
     {/if}
+    {#if model.isOngoing}
+      <p class="notice" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</p>
+    {/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
   {#if model.joinResult}
@@ -249,6 +255,14 @@ const lineup = $derived(
         {/if}
       </dd>
     </div>
+    {#if model.organizerName}
+      <div>
+        <dt>Hosted by</dt>
+        <dd>
+          <p data-testid="event-organizer">{model.organizerName}</p>
+        </dd>
+      </div>
+    {/if}
     {#if model.series && model.series.hosts.length > 0}
       <div>
         <dt>Series hosts</dt>
@@ -365,6 +379,29 @@ const lineup = $derived(
         >
           <h2 id="event-accessibility-heading">Accessibility</h2>
           <p>{model.accessibilityNotes}</p>
+        </section>
+      {/if}
+      {#if (model.status === "published" || model.status === "draft") && (model.joinUrl || model.joinInstructions)}
+        <section
+          class="event-description event-join-details"
+          aria-labelledby="event-join-details-heading"
+          data-testid="event-join-details"
+        >
+          <h2 id="event-join-details-heading">How to join</h2>
+          {#if model.joinUrl}
+            <p>
+              {#if model.status === "published" && isPublicJoinUrl(model.joinUrl)}
+                <a href={model.joinUrl} data-testid="event-public-join-link">
+                  Open the public joining link
+                </a>
+              {:else}
+                Public joining link: {model.joinUrl}
+              {/if}
+            </p>
+          {/if}
+          {#if model.joinInstructions}
+            <p data-testid="event-join-instructions">{model.joinInstructions}</p>
+          {/if}
         </section>
       {/if}
       {#if model.showJoinPitch}
