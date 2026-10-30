@@ -27,10 +27,12 @@ Severity is impact times confidence, after the disproof pass below:
   could not verify in this repo or its pinned dependencies. Say what is
   unverified instead of labeling a conjecture a confirmed bug.
 - **Security exception:** never drop or downgrade a plausible security issue
-  for lack of full verification. Report suspected vulnerabilities privately
-  as directed by `SECURITY.md`, including the unverified step; reserve Critical
-  for a traced, verified path. Any public note must be non-sensitive and
-  non-exploitative.
+  for lack of full verification; reserve Critical for a traced, verified path.
+  If the vulnerable code is new in this unmerged PR, post a security Warning
+  with the class, location and unverified step, but no exploit steps or
+  payloads. If it affects code already on `main` or deployed, do not describe
+  it publicly: post only a non-sensitive notice that a private report under
+  `SECURITY.md` is required.
 
 ## Disproof pass (before posting any finding)
 
@@ -82,8 +84,9 @@ A missing test alone is not a runtime bug. These are blocking findings:
   the same gate, not just login.
 - **Ingress and jobs** (`src/agent-events/`, `src/jobs/`, `src/throttle.ts`,
   `src/bot/`): caller/guild validation, idempotency keys, and rate limits on
-  agent-event ingress; queue retries must not double-apply effects; writes
-  must repeat the predicates they read (no read-check-write races).
+  agent-event ingress; queue retries must not double-apply effects; a write
+  must repeat the predicates it read or run under the lock/constraint that
+  serialized them (no unguarded read-check-write).
 - **Shared database** (`drizzle/`, `src/db/`): this Postgres is shared with
   the bot, which owns the `web_v1` views — do not flag missing writes to
   bot-owned objects. Never edit an applied migration; schema changes must be
