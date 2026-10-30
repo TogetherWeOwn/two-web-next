@@ -7,6 +7,7 @@ const member = "100000000000000101";
 const otherMember = "100000000000000102";
 const skip = (reason) => ({ skip: true, reason });
 export const A11Y_FREEZE_DATES = "12–14 Oct UTC";
+export const A11Y_OPS_CONTROL_TOKEN = "a11y-operator-fixture-".repeat(2);
 export const coverage = {
   "/discord": skip("External invite redirect, not an HTML page"),
   "/join/discord": skip("OAuth redirect, never contact Discord in CI"),
@@ -38,6 +39,20 @@ export const coverage = {
   "/robots.txt": skip("Plain-text robots policy"),
   "/.well-known/security.txt": skip("Plain-text RFC 9116 security policy"),
   "/up": skip("JSON queue health response"),
+  "/admin/ops-overrides": {
+    cases: [
+      { path: "/admin/ops-overrides", state: "operator-record", opsBearer: true },
+      { path: "/admin/ops-overrides", state: "operator-empty", opsBearer: true, opsState: "empty" },
+      {
+        path: "/admin/ops-overrides",
+        state: "operator-unavailable",
+        opsBearer: true,
+        opsState: "unavailable",
+        status: 503,
+      },
+      { path: "/admin/ops-overrides", state: "operator-refused", status: 401 },
+    ],
+  },
   "/admin/queue/failed/:id/preview": skip(
     "Default-off operator-only JSON advice, not an HTML document",
   ),

@@ -90,6 +90,16 @@ before(async () => {
       {
         name: "offline-kit-admin-data",
         setup(plugin) {
+          // SSR loaders can share the renderer chunk. This render-only fixture
+          // replaces their loads below; any accidental binding read must fail.
+          plugin.onResolve({ filter: /^cloudflare:workers$/ }, () => ({
+            path: "workers-bindings",
+            namespace: "offline-kit-admin",
+          }));
+          plugin.onLoad({ filter: /.*/, namespace: "offline-kit-admin" }, () => ({
+            contents:
+              "export const env = new Proxy({}, {get() {throw new Error('Workers binding read outside render-only admin fixture');}});",
+          }));
           plugin.onLoad({ filter: /[/\\]entries[/\\]hooks\.server\.js$/ }, () => ({
             contents: "export const handle = ({event, resolve}) => resolve(event);",
           }));

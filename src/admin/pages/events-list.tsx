@@ -209,7 +209,20 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                   </td>
                   <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
                   <td>
-                    <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time>
+                    {Number.isFinite(r.startsAt.getTime()) ? (
+                      <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time>
+                    ) : (
+                      <span data-testid={`event-unrenderable-time-${r.eventKey}`}>
+                        Unrenderable time
+                      </span>
+                    )}
+                    {Number.isFinite(r.startsAt.getTime()) &&
+                    !Number.isFinite(r.endsAt.getTime()) ? (
+                      <span data-testid={`event-unrenderable-time-${r.eventKey}`}>
+                        {" "}
+                        (unrenderable end time)
+                      </span>
+                    ) : null}
                   </td>
                   <EventFillCell row={r} />
                   <td>

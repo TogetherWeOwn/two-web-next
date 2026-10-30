@@ -242,6 +242,13 @@ const MATRIX: Case[] = [
   },
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
   // Operational admission is disabled before any session/source/audit lookup.
+  { method: "GET", route: "/admin/ops-overrides", status: 404 },
+  ...["POST", "PUT", "PATCH", "DELETE", "OPTIONS"].map((method) => ({
+    method,
+    route: "/admin/ops-overrides",
+    status: 405,
+    format: "json" as const,
+  })),
   { method: "GET", route: "/admin/queue/failed/:id/preview", status: 404, format: "json" },
   { method: "POST", route: "/admin/queue/failed/:id/redispatch", status: 404, format: "json" },
   // Evidence-only verifier is inert without runtime-only settings, so the
@@ -325,6 +332,7 @@ const MATRIX: Case[] = [
     "/admin/featured",
     "/admin/featured/:id",
     "/admin/featured/:id/delete",
+    "/admin/featured/:id/unpublish",
   ].map((route) => ({
     method: "POST",
     route,

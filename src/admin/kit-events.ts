@@ -18,10 +18,15 @@ import {
   type EventListQuery,
 } from "./event-list";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { renderEventStartsInputsHtml } from "./event-starts-inputs";
 import type { EventListRow } from "./store-event-reads";
 
 /** One events-table row with its timestamps pre-rendered, exactly as the
- * Hono page emits them (<time datetime=ISO>ISO</time>). */
+ * Hono page emits them (<time datetime=ISO>ISO</time>). A stored instant
+ * Postgres can hold but a JS Date cannot represent (infinity, out-of-range
+ * years) decodes to an Invalid Date: it renders as "" so the page shows its
+ * unrenderable-time placeholder and the row stays listed for repair,
+ * instead of one bad row throwing the whole inventory. */
 export type KitEventListRow = {
   eventKey: string;
   title: string;
@@ -42,6 +47,8 @@ export type KitEventListView = {
   /** Active UTC window sentence, built on the server so the client bundle
    * ships neither the formatter nor its copy. */
   windowSummary: string | null;
+  /** Escaped native date controls; no duplicate labels/template in client JS. */
+  startsInputsHtml: string;
   /** Pre-rendered pause-review HTML keyed by event key, for published rows
    * with open RSVPs; the page injects it via {@html} so the client bundle
    * carries no review strings or disclosure markup (client gzip ceiling).
@@ -49,14 +56,23 @@ export type KitEventListView = {
   pauseReviews: Record<string, string>;
 };
 
+/**
+ * ISO text for a stored instant, or "" when it cannot be rendered. The
+ * finite check mirrors the Hono edit twin (src/admin/routes.tsx eventValues):
+ * never call toISOString() on a nonfinite instant.
+ */
+export function renderableIso(instant: Date): string {
+  return Number.isFinite(instant.getTime()) ? instant.toISOString() : "";
+}
+
 export function serializeEventListRow(row: EventListRow): KitEventListRow {
   return {
     eventKey: row.eventKey,
     title: row.title,
     game: row.game,
     status: row.status,
-    startsAt: row.startsAt.toISOString(),
-    endsAt: row.endsAt.toISOString(),
+    startsAt: renderableIso(row.startsAt),
+    endsAt: renderableIso(row.endsAt),
     capacity: row.capacity,
     rsvpOpen: row.rsvpOpen,
     goingCount: row.goingCount,
@@ -80,6 +96,7 @@ export function buildEventListView(
     hasNext: fetched.length > EVENT_PAGE_SIZE,
     emptyText: eventEmptyText(query),
     windowSummary: eventStartsWindowSummary(query.startsWindow),
+    startsInputsHtml: renderEventStartsInputsHtml(query.startsWindow),
     pauseReviews,
   };
 }

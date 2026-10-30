@@ -1,7 +1,8 @@
 // Event detail screen: hero, RSVP, share, attendees, discovery.
 import type { FC } from "hono/jsx";
+import { isPublicJoinUrl } from "./public-join-url";
 import { canonicalUrl } from "../seo";
-import { isValidZone, renderGoingCount } from "../islands/contracts";
+import { EVENT_ONGOING_TESTID, isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
@@ -9,6 +10,7 @@ import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
 import { eventLinkAvailability } from "./link-availability";
+import { ONGOING_COPY, isOngoing } from "./ongoing";
 import type {
   EventAttendee,
   EventLink,
@@ -20,7 +22,7 @@ import type {
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-import { formatEventWhen as fmtWithOffset } from "./date-format";
+import { formatElapsedDuration, formatEventWhen as fmtWithOffset } from "./date-format";
 
 const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now }) => {
   const availability = eventLinkAvailability(event, now);
@@ -113,6 +115,7 @@ export const EventPage: FC<{
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   const accessibilityNotes = e.accessibilityNotes?.trim();
+  const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
   const now = new Date();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
@@ -145,6 +148,11 @@ export const EventPage: FC<{
         {e.status === "cancelled" ? (
           <p class="notice" role="status" data-testid="event-cancelled">
             Cancelled
+          </p>
+        ) : null}
+        {isOngoing(e, now) ? (
+          <p class="notice" data-testid={EVENT_ONGOING_TESTID}>
+            {ONGOING_COPY}
           </p>
         ) : null}
         <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
@@ -184,6 +192,28 @@ export const EventPage: FC<{
             <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
           </dd>
         </div>
+        {e.status === "draft" || e.status === "cancelled" ? null : (
+          <div hidden>
+            <dt>Time from now</dt>
+            <dd
+              class="event-device-timezone"
+              data-event-time-from-now
+              data-starts-at={e.startsAt.toISOString()}
+              data-ends-at={e.endsAt.toISOString()}
+            >
+              <button type="button" hidden data-testid="event-time-from-now-button">
+                Show time from now
+              </button>
+              <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
+            </dd>
+          </div>
+        )}
+        {duration ? (
+          <div>
+            <dt>Duration</dt>
+            <dd>{duration}</dd>
+          </div>
+        ) : null}
         {e.location ? (
           <div>
             <dt>Where</dt>
@@ -267,6 +297,7 @@ export const EventPage: FC<{
         />
         <script src="/islands/rsvp-button.js" defer />
         <script src="/islands/event-device-timezone.js" defer />
+        <script src="/islands/event-time-from-now.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>
@@ -295,7 +326,7 @@ export const EventPage: FC<{
             >
               <h2 id="event-join-details-heading">How to join</h2>
               {e.join_url ? (
-                e.status === "published" ? (
+                e.status === "published" && isPublicJoinUrl(e.join_url) ? (
                   <p>
                     <a href={e.join_url} data-testid="event-public-join-link">
                       Open the public joining link

@@ -45,6 +45,9 @@ export type Env = AgentEventsEnv & {
   BOT_DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
+  // Optional runtime-only bot control bearer for the read-only operator panel.
+  // Unset/short values leave it dark; never provisioned by checked-in config.
+  OPS_CONTROL_TOKEN?: string;
   // Separate default-off operational read boundary. No grant or principal is
   // provisioned here; both settings require independent security review.
   QUEUE_RECONCILE_PREVIEW_ENABLED?: string;

@@ -35,11 +35,12 @@ import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
-import { formatEventWhen, isValidZone } from "./date-format";
+import { formatElapsedDuration, formatEventWhen, isValidZone } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
 import { eventLinkAvailability } from "./link-availability";
+import { isOngoing } from "./ongoing";
 import {
   ATTENDEE_PAGE_SIZE,
   getEventNeighbors,
@@ -138,9 +139,19 @@ export interface KitEventDetailModel {
   /** Maps search URL for the venue; null when no venue is set. The view
    * renders this verbatim and never builds URLs from location itself. */
   directionsUrl: string | null;
+  /** Verified host display name; null when unset. */
+  organizerName: string | null;
+  /** Public joining link; null when unset. */
+  joinUrl: string | null;
+  /** Joining instructions; null when unset. */
+  joinInstructions: string | null;
   status: string;
   isDraft: boolean;
   isPast: boolean;
+  /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
+   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
+   * so a pre-existing fixture without the flag reads as not ongoing. */
+  isOngoing?: boolean;
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -174,6 +185,8 @@ export interface KitEventDetailModel {
   whenText: string;
   /** Server-formatted scheduled end in the event zone, ISO fallback. */
   endsWhenText: string;
+  /** Server-formatted elapsed commitment; absent for an unusable interval. */
+  durationText?: string | null;
   /** Effective display zone (UTC when the stored zone is unknown). */
   zoneLabel: string;
   /** Machine instant for the <time> element, as served. */
@@ -413,6 +426,7 @@ export async function resolveKitEventDetail(
               key: link.eventKey,
               title: link.title,
               whenText: fmt(link.startsAt, link.timezone),
+              datetime: link.startsAt.toISOString(),
               location: link.location,
             })),
             jsonLd: eventJsonLd(event, appUrl),
@@ -532,9 +546,13 @@ export async function resolveKitEventDetail(
           accessibilityNotes: event.accessibilityNotes?.trim() || null,
           location: event.location,
           directionsUrl: event.location ? directionsUrl(event.location) : null,
+          organizerName: event.organizer_name ?? null,
+          joinUrl: event.join_url ?? null,
+          joinInstructions: event.join_instructions ?? null,
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
+          isOngoing: isOngoing(event, now),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,
@@ -559,6 +577,7 @@ export async function resolveKitEventDetail(
           copyLink: pageCanonical,
           whenText: formatEventWhen(event.startsAt, event.timezone),
           endsWhenText: formatEventWhen(event.endsAt, event.timezone),
+          durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
           timeDatetime: event.startsAt.toISOString(),
           attendees,

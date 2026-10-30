@@ -45,16 +45,26 @@ export default defineConfig({
                   name: "admin-errors",
                   test: /\/web\/src\/(?:lib\/(?:AdminShell\.svelte|admin-read-retry\.ts)|routes\/admin\/(?:join-attempts\/)?\+error\.svelte)$/,
                 },
-                // Compress Kit's home and admin markup with the Hono renderers
-                // rather than using separate gzip streams for mirrored pages.
+                // Static content has mirrored Hono/Kit markup too. Keep it in
+                // one SSR gzip stream, without changing client chunk loading.
+                {
+                  name: "content",
+                  test: /\/(?:src\/(?:screens\/(?:about|faq|rules|privacy|join)\.tsx|(?:about|faq|rules|privacy)-content\.ts)|web\/src\/(?:lib\/ContentLeaf\.svelte|routes\/(?:about|faq|rules|privacy|join)\/\+page\.svelte))$/,
+                },
+                // Co-compress native admin loaders and their query authority
+                // with the Kit/Hono renderers. Separate loader gzip streams
+                // otherwise repeat imports and window/filter vocabulary.
+
                 {
                   name: "admin",
-                  test: /\/(?:src\/admin\/|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.svelte$))/,
+                  test: /\/(?:src\/admin\/|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.(?:svelte|server\.ts)$))/,
                 },
-                // Co-compress the Kit profile view with its Hono markup twin.
+                // Co-compress the Kit profile view with its Hono markup twin,
+                // and the Kit member-board entrypoints with the board's Hono
+                // renderers already in this group; loaders keep their boundary.
                 {
                   name: "profiles",
-                  test: /\/src\/(?:profiles\/|lib\/ProfileView\.svelte$)/,
+                  test: /\/src\/(?:profiles\/|lib\/ProfileView\.svelte$|routes\/leaderboards\/members\/\+(?:page|error)\.svelte$)/,
                 },
                 {
                   name: "events",

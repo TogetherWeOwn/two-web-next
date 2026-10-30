@@ -86,6 +86,10 @@ function internalFault(c: Ctx, err: unknown): Response {
   return apiError(c, "internal", PUBLIC_DATA_INTERNAL_MESSAGE, 500);
 }
 
+function unavailable(c: Ctx): Response {
+  return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+}
+
 /**
  * Shared admission check for the read API: the same per-client fixed-window
  * budget as pages and feeds, before any event or database read. Returns the
@@ -405,7 +409,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // settle below, so pre-retire bytes never refill the retired entry.
     const generation = apiPublicCacheGeneration();
     const db = await dbFor(c);
-    if (!db) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    if (!db) return unavailable(c);
     // A refused socket reads as the 503 envelope; query, serializer and
     // budget faults answer the static 500 envelope, never the branded page.
     let body: string;
@@ -417,7 +421,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
           ? { limit, offset: (page - 1) * limit }
           : { limit, offset: (page - 1) * limit, game },
       );
-      if (!listed) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+      if (!listed) return unavailable(c);
       clamped = listed.page;
       const { rows, total } = listed;
       // A filtered total of zero answers the canonical default empty page,
@@ -431,18 +435,15 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
           data: trimmed,
         }));
       } catch (err) {
-        if (err instanceof EventByteCapExceededError)
-          return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+        if (err instanceof EventByteCapExceededError) return unavailable(c);
         throw err;
       }
     } catch (err) {
-      if (isDatabaseUnavailable(err))
-        return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+      if (isDatabaseUnavailable(err)) return unavailable(c);
       return internalFault(c, err);
     }
     // Final guard: an oversized success is never cached or served.
-    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
-      return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
     // Store under the clamped page the database answered, never the raw alias:
     // N past-the-end pages occupy one entry and cannot evict page 1. Filtered
     // entries carry the game so games never share bytes.
@@ -467,7 +468,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // refuses the settle, so a deferred 200 never resurrects a retired entry.
     const generation = apiPublicCacheGeneration();
     const db = await dbFor(c);
-    if (!db) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    if (!db) return unavailable(c);
     // A refused socket reads as the 503 envelope; query, serializer and
     // budget faults answer the static 500 envelope, never the branded page.
     let body: string;
@@ -478,18 +479,15 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       try {
         body = fitByteBudget([dto!], API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => trimmed[0]);
       } catch (err) {
-        if (err instanceof EventByteCapExceededError)
-          return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+        if (err instanceof EventByteCapExceededError) return unavailable(c);
         throw err;
       }
     } catch (err) {
-      if (isDatabaseUnavailable(err))
-        return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+      if (isDatabaseUnavailable(err)) return unavailable(c);
       return internalFault(c, err);
     }
     // Final guard: an oversized success is never cached or served.
-    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
-      return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
     return servePublicJson(c, key, body, generation);
   });
 
