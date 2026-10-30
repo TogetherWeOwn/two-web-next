@@ -17,6 +17,7 @@ import {
   EVENTS_CALENDAR_GRID_TESTID,
   EVENTS_CALENDAR_SCROLL_LABEL,
   EVENTS_CALENDAR_SCROLL_TESTID,
+  EVENT_ONGOING_TESTID,
   GRID_CANCELLED_COPY,
   SCHEDULE_AVAILABILITY_TESTID,
   WEEKDAY_HEADINGS,
@@ -34,6 +35,7 @@ import {
   type CalendarDay,
   type CalendarState,
 } from "../islands/contracts";
+import { ONGOING_COPY } from "./ongoing";
 import {
   type CalRow,
   isTransient,
@@ -138,8 +140,21 @@ export const MonthGrid: FC<{
                       // night. Cancelled and draft rows carry no suffix: the
                       // badge is the verdict there. The suffix sits inside the
                       // visible prefix of the accessible name (WCAG 2.5.3).
-                      const availability = rowAvailability(e, now);
-                      const availabilityText = availability?.text ?? null;
+                      // Keep canonical availability tied to the event interval, not
+                      // the displayed month. Spillover cells use their own month
+                      // when deciding whether to show the snapshot badge.
+                      const inCurrentMonth = day.iso.slice(0, -3) === wallMonth(now, zone);
+                      const availability = rowAvailability(
+                        e,
+                        now,
+                        isTransient(e) && !inCurrentMonth,
+                      );
+                      const ongoing = inCurrentMonth && (availability?.ongoing ?? false);
+                      const availabilityText = availability
+                        ? ongoing
+                          ? `${ONGOING_COPY} ${availability.text}`
+                          : availability.text
+                        : null;
                       return (
                         <li>
                           <a
@@ -172,11 +187,19 @@ export const MonthGrid: FC<{
                                 <span class="schedule-badge">{GRID_CANCELLED_COPY}</span>
                               </>
                             ) : null}
-                            {availabilityText ? (
+                            {ongoing ? (
+                              <>
+                                {" "}
+                                <span class="schedule-badge" data-testid={EVENT_ONGOING_TESTID}>
+                                  {ONGOING_COPY}
+                                </span>
+                              </>
+                            ) : null}
+                            {availability ? (
                               <>
                                 {" "}
                                 <span data-testid={SCHEDULE_AVAILABILITY_TESTID}>
-                                  {availabilityText}
+                                  {availability.text}
                                 </span>
                               </>
                             ) : null}

@@ -21,7 +21,11 @@ export const EventFormPage: FC<{
   roster?: RosterEntry[];
   rosterTotal?: number;
   rosterQuery?: RosterQuery;
-}> = ({ mode, row, values, errors, roster, rosterTotal, rosterQuery }) => {
+  // Refused-edit re-renders only: the roster is read solely on the audited
+  // GET, so a 422 re-render explains its absence instead of dropping the
+  // section silently. Carries no roster data of any kind.
+  rosterHiddenNotice?: boolean;
+}> = ({ mode, row, values, errors, roster, rosterTotal, rosterQuery, rosterHiddenNotice }) => {
   const now = new Date();
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
@@ -43,6 +47,16 @@ export const EventFormPage: FC<{
             rosterTotal={rosterTotal}
             rosterQuery={rosterQuery}
           />
+        ) : mode === "edit" && rosterHiddenNotice && row ? (
+          <section aria-label="RSVP roster" data-testid="roster-hidden-notice">
+            <h2>RSVPs</h2>
+            <p class="notice">
+              The RSVP roster is hidden here because this save was refused. No RSVP data has changed
+              — every response is still recorded. <a href={action}>Reload the edit page</a> to show
+              the roster again. Reloading discards the unsaved edits currently shown, so fix the
+              highlighted fields and save first if you want to keep them.
+            </p>
+          </section>
         ) : null}
       </section>
       <script type="module" src="/islands/admin-event-text-limits.js" />
