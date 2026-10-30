@@ -48,16 +48,17 @@ export const FEATURED_ROW_CAP = 100;
  * is judged against the established write maxima of the featured form
  * (`src/admin/validation-featured-form.ts`: title 255, body 1000, url 255,
  * image_url 255, image_alt 255), counted in characters — PostgreSQL
- * `length()` counts characters, so a multibyte value AT a maximum crosses
- * byte-identical and one character over never crosses at all. Null is
+ * `length()` counts characters; checking only the maximum plus one character
+ * avoids scanning whole pathological values. A multibyte value AT a maximum
+ * crosses byte-identical and one character over never crosses at all. Null is
  * admitted. A row that fails is skipped whole, never truncated after
  * transfer; healthy siblings keep their order and bytes.
  */
-const featuredTextAdmission = sql`length(${featuredContents.title}) <= 255
-  and (${featuredContents.body} is null or length(${featuredContents.body}) <= 1000)
-  and (${featuredContents.url} is null or length(${featuredContents.url}) <= 255)
-  and (${featuredContents.imageUrl} is null or length(${featuredContents.imageUrl}) <= 255)
-  and (${featuredContents.imageAlt} is null or length(${featuredContents.imageAlt}) <= 255)`;
+const featuredTextAdmission = sql`length(substring(${featuredContents.title} from 1 for 256)) <= 255
+  and (${featuredContents.body} is null or length(substring(${featuredContents.body} from 1 for 1001)) <= 1000)
+  and (${featuredContents.url} is null or length(substring(${featuredContents.url} from 1 for 256)) <= 255)
+  and (${featuredContents.imageUrl} is null or length(substring(${featuredContents.imageUrl} from 1 for 256)) <= 255)
+  and (${featuredContents.imageAlt} is null or length(substring(${featuredContents.imageAlt} from 1 for 256)) <= 255)`;
 
 /**
  * Collapse one bounded read to its capped rows plus at most one counts-only
@@ -74,11 +75,13 @@ function boundFeaturedRows<Out extends { id: number }>(
   // The left join types every admitted column nullable: the all-null
   // sentinel is the only row that uses that, and it is filtered out below.
   rows: Array<{ [K in keyof Out]: Out[K] | null } & { skippedOversized: unknown }>,
+  status?: { saturated: boolean },
 ): Out[] {
   const skippedCount = Number(rows[0]?.skippedOversized);
   const skipped = Number.isSafeInteger(skippedCount) && skippedCount > 0 ? skippedCount : 0;
   const admitted = rows.filter((row) => row.id !== null && row.id !== undefined);
   const saturated = admitted.length > FEATURED_ROW_CAP;
+  if (status) status.saturated = saturated;
   const bounded = saturated ? admitted.slice(0, FEATURED_ROW_CAP) : admitted;
   if (skipped > 0 || saturated) {
     const diagnostic: { skipped?: number; limit?: number; returned?: number } = {};
@@ -139,10 +142,15 @@ async function withPublishedFeaturedRead<T>(run: () => Promise<T[]>): Promise<T[
  * Legacy currentlyVisible: start inclusive, end exclusive. Stored text is
  * admitted in SQL (`featuredTextAdmission`) and the read is capped at
  * `FEATURED_ROW_CAP` rows, so one oversized stored row is skipped whole in
- * the database instead of being transferred, cached, and serialized.
+ * the database instead of being transferred, cached, and serialized. The
+ * default path never throws; the cache can request propagated failures.
  */
-export async function listVisibleFeatured(db: Db, now = new Date()): Promise<VisibleFeatured[]> {
-  return withFeaturedDeadline(() =>
+export async function listVisibleFeatured(
+  db: Db,
+  now = new Date(),
+  propagateFailure = false,
+): Promise<VisibleFeatured[]> {
+  const run = () =>
     db.transaction(async (tx) => {
       // Like optional search analytics: cancel lock waits/slow statements in
       // Postgres, not just the HTTP wait, and never alter pooled session settings.
@@ -186,8 +194,8 @@ export async function listVisibleFeatured(db: Db, now = new Date()): Promise<Vis
         .leftJoin(admitted, sql`true`)
         .orderBy(asc(admitted.position), asc(admitted.id));
       return boundFeaturedRows<VisibleFeatured>(rows).map(safeStoredLink);
-    }),
-  );
+    });
+  return propagateFailure ? withPublishedFeaturedRead(run) : withFeaturedDeadline(run);
 }
 
 export type PublishedFeatured = Pick<
@@ -216,7 +224,11 @@ export type PublishedFeatured = Pick<
  * legacy time-invariant base exactly (pinned by CONTROL-SQL02 and the
  * bounded homepage acceptance); no production caller uses it.
  */
-export async function listPublishedFeatured(db: Db, now?: Date): Promise<PublishedFeatured[]> {
+export async function listPublishedFeatured(
+  db: Db,
+  now?: Date,
+  status?: { saturated: boolean },
+): Promise<PublishedFeatured[]> {
   return withPublishedFeaturedRead(() =>
     db.transaction(async (tx) => {
       await tx.execute(featuredTimeoutGuard());
@@ -263,7 +275,7 @@ export async function listPublishedFeatured(db: Db, now?: Date): Promise<Publish
         .from(skipped)
         .leftJoin(admitted, sql`true`)
         .orderBy(asc(admitted.position), asc(admitted.id));
-      return boundFeaturedRows<PublishedFeatured>(rows).map(safeStoredLink);
+      return boundFeaturedRows<PublishedFeatured>(rows, status).map(safeStoredLink);
     }),
   );
 }

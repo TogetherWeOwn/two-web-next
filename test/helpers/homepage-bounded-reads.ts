@@ -870,6 +870,7 @@ export function registerMcpCommunityBudgetTests() {
       const payload = budgetWarns[0]![1] as { ranks: unknown; bytes: unknown };
       expect(payload).toMatchObject({ ranks: 20 });
       expect(typeof payload.bytes).toBe("number");
+      expect(payload).toEqual({ ranks: 20, bytes: expect.any(Number) });
       expect(JSON.stringify(warn.mock.calls)).not.toContain(CTRL);
     });
   });
