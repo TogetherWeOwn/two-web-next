@@ -14,7 +14,6 @@ import {
   cardTimeLabel,
   goingCountText,
   isValidZone,
-  spotsLeftText,
 } from "../islands/contracts";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
@@ -275,20 +274,16 @@ export const Home: FC<{
                               the write path cannot grant; older fixtures
                               without the widened fields fall back inside
                               `teaserAvailability`. */}
-                            {availability?.state === "full" && event.capacity !== null ? (
+                            {availability ? (
                               <>
                                 {" · "}
-                                <span data-testid={SPOTS_LEFT_TESTID}>
-                                  {spotsLeftText(
-                                    event.goingOccupancy ?? event.goingCount,
-                                    event.capacity,
-                                  )}
-                                </span>
-                              </>
-                            ) : availability && availability.state !== "full" ? (
-                              <>
-                                {" · "}
-                                <span data-testid={SCHEDULE_AVAILABILITY_TESTID}>
+                                <span
+                                  data-testid={
+                                    availability.state === "full"
+                                      ? SPOTS_LEFT_TESTID
+                                      : SCHEDULE_AVAILABILITY_TESTID
+                                  }
+                                >
                                   {availability.text}
                                 </span>
                               </>
