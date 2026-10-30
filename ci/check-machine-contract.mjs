@@ -335,7 +335,8 @@ const RESULT_SUBJECT =
 // unrelated suffix text. Direct limit nouns and explicit no-limit claims count too.
 // Consume ranges and explicit count units, but not numeric attributes such as
 // "8-bit" or partial numbers. A count unit must end the hyphenated token too.
-const COUNT_UNIT = String.raw`(?:(?:items?|rows?|entr(?:y|ies))-per-page|items?|rows?|entr(?:y|ies)|per-page)`;
+const COUNT_ITEM_UNIT = String.raw`(?:(?:items?|rows?|entr(?:y|ies))-per-page|items?|rows?|entr(?:y|ies))`;
+const COUNT_UNIT = String.raw`(?:${COUNT_ITEM_UNIT}|per-page)`;
 // Spelled-out counts ("thirty", "twenty-five") declare the same bound as digits.
 const COUNT_SMALL = String.raw`(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?)`;
 const COUNT_WORD = String.raw`(?:(?:${COUNT_SMALL}[-\s]+)?(?:hundred|thousand|million|billion)(?:[-\s]+(?:and[-\s]+)?${COUNT_SMALL})?|${COUNT_SMALL}|dozen)`;
@@ -343,79 +344,256 @@ const COUNT_NUMBER = String.raw`(?:(?:[<>≤≥]=?|=)?\s*[+\-−]?\d+(?:[.,]\d+)
 // Wrappers must enclose the numeric token, not a phrase such as "8-bit entries".
 const COUNT_VALUE = String.raw`(?:${COUNT_NUMBER}|(?:[\[({"'“‘]\s*)+${COUNT_NUMBER}(?:\s*[\])}"'”’])+)`;
 // Qualifiers are whole tokens: "of" + "ten" must never consume "often".
-const COUNT_QUALIFIER = String.raw`(?:at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|about|around|approximately|roughly|nearly|almost|just|over|under|fewer|close|greater|up|most|least|e\.g\.|i\.e\.)(?=[\s:,-]|$)`;
+const COUNT_QUALIFIER = String.raw`(?:more[\s-]+or[\s-]+less|in[\s-]+excess[\s-]+of|a[\s-]+little[\s-]+over|upwards[\s-]+of|at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|about|around|approximately|roughly|nearly|almost|just|over|under|fewer|close|greater|up|most|least|e\.g\.|i\.e\.)(?=[\s:,-]|$)`;
 const QUALIFIED_COUNT = String.raw`(?:[\s:,-]+${COUNT_QUALIFIER})*[\s:,-]*${COUNT_VALUE}`;
+const COUNT_SUBJECT = String.raw`\b(?:collections?|rows?|items?)`;
+const COUNT_NOUN = String.raw`(?:caps?|limits?|bounds?|ceilings?)`;
 const COUNT_BOUNDARY = new RegExp(
-  String.raw`\b(?:collections?|rows?|items?)\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+(?:caps?|limits?|bounds?|ceilings?)\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*(?:caps?|limits?|bounds?|ceilings?)\b)${QUALIFIED_COUNT})`,
+  String.raw`${COUNT_SUBJECT}(?:['’]s?)?\s+(?:(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+${COUNT_NOUN}\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*${COUNT_NOUN}\b)${QUALIFIED_COUNT})|${COUNT_NOUN}\s+(?:is|are)\b${QUALIFIED_COUNT})`,
   "i",
 );
 const RESULT_COUNT = new RegExp(
-  String.raw`${RESULT_SUBJECT.source}\s+(?:contains?|includes?|returns?)\b${QUALIFIED_COUNT}\s+(?:items?|rows?|entr(?:y|ies))\b`,
+  String.raw`(?:${RESULT_SUBJECT.source}|${COUNT_SUBJECT})\s+(?:contains?|includes?|returns?|holds?|shows?)\b${QUALIFIED_COUNT}\s+${COUNT_ITEM_UNIT}\b(?!-)`,
   "i",
 );
 const SIZE_PREDICATE =
   /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
-// Abbreviations carry periods that are not sentence ends; rejoin fragments
-// split after "e.g."/"i.e." so a subject and its predicate stay in one
-// fragment. The original text is kept, so failure messages quote it verbatim.
-const rawFragments = outsideLimits.split(/(?<=[.;!?])\s+/);
-const outsideSentences = [];
-for (const fragment of rawFragments) {
-  const prev = outsideSentences[outsideSentences.length - 1];
-  if (prev !== undefined && /\b(?:e\.g|i\.e)\.$/i.test(prev.trimEnd()))
-    outsideSentences[outsideSentences.length - 1] = `${prev} ${fragment}`;
-  else outsideSentences.push(fragment);
-}
-// Link destinations can contain balanced or escaped parentheses. Consume the
-// whole destination, otherwise a leftover ')' can hide the label's predicate.
-const linkLabels = (text) => {
-  const links = /!?\[([^\]]*)\]\(/g;
-  let output = "";
+// Keep source offsets through normalization so sentence boundaries follow the
+// visible text (not an entity's semicolon or a link destination's punctuation),
+// while diagnostics still quote the original Markdown.
+const applyEdits = (input, edits) => {
+  let text = "";
+  const origins = [];
+  const ends = [];
   let copied = 0;
-  for (let match = links.exec(text); match; match = links.exec(text)) {
+  const append = (value, offsets, endOffsets) => {
+    text += value;
+    for (const offset of offsets) origins.push(offset);
+    for (const offset of endOffsets) ends.push(offset);
+  };
+  for (const edit of edits) {
+    append(
+      input.text.slice(copied, edit.start),
+      input.origins.slice(copied, edit.start),
+      input.ends.slice(copied, edit.start),
+    );
+    append(
+      edit.text,
+      edit.origins ?? Array(edit.text.length).fill(input.origins[edit.start]),
+      edit.ends ?? Array(edit.text.length).fill(input.ends[edit.end - 1]),
+    );
+    copied = edit.end;
+  }
+  append(input.text.slice(copied), input.origins.slice(copied), input.ends.slice(copied));
+  return { text, origins, ends };
+};
+const replaceMapped = (input, pattern, replacement) =>
+  applyEdits(
+    input,
+    Array.from(input.text.matchAll(pattern), (match) => ({
+      start: match.index,
+      end: match.index + match[0].length,
+      ...replacement(match),
+    })),
+  );
+const labelEdit = (input, match) => {
+  const start = match.index + match[0].indexOf("[") + 1;
+  return {
+    text: match[1],
+    origins: input.origins.slice(start, start + match[1].length),
+    ends: input.ends.slice(start, start + match[1].length),
+  };
+};
+// Consume each destination once, including quoted titles and angle URLs.
+// An unmatched opener consumes the scan's suffix: never rescan it quadratically.
+const linkLabels = (input) => {
+  const links = /!?\[([^\]]*)\]\(/g;
+  const edits = [];
+  for (let match = links.exec(input.text); match; match = links.exec(input.text)) {
     let end = links.lastIndex;
     let depth = 1;
-    while (end < text.length && depth > 0) {
-      const char = text[end++];
+    let quote = "";
+    let angle = false;
+    while (end < input.text.length && depth > 0) {
+      const char = input.text[end++];
       if (char === "\\") end++;
+      else if (quote) {
+        if (char === quote) quote = "";
+      } else if (angle) {
+        if (char === ">") angle = false;
+      } else if ((char === '"' || char === "'") && /\s/.test(input.text[end - 2])) quote = char;
+      else if (char === "<") angle = true;
       else if (char === "(") depth++;
       else if (char === ")") depth--;
     }
-    if (depth !== 0) continue;
-    output += text.slice(copied, match.index) + match[1];
-    copied = end;
+    if (depth !== 0) break;
+    edits.push({ start: match.index, end, ...labelEdit(input, match) });
     links.lastIndex = end;
   }
-  return output + text.slice(copied);
+  return applyEdits(input, edits);
 };
-// Every subject/count/size check reads visible text, not markup. The existing
-// HTML parser handles quoted tag attributes and entities without executing or
-// fetching anything. Keep literal snake_case underscores; only paired emphasis
-// markers may join words. Failure messages still quote the original sentence.
 const visibleText = (text) => {
-  const markup = linkLabels(text).replace(/!?\[([^\]]*)\]\[[^\]]*\]/g, "$1");
-  const textContent = (node) =>
-    node.nodeName === "#text" ? node.value : (node.childNodes ?? []).map(textContent).join("");
-  return textContent(parseFragment(markup))
-    .replace(/__([^\n]+?)__/g, "$1")
-    .replace(/(?<![\p{L}\p{N}_])_([^_\n]+)_(?![\p{L}\p{N}_])/gu, "$1")
-    .replace(/[`*~]/g, "");
+  let input = {
+    text,
+    origins: Array.from({ length: text.length }, (_, i) => i),
+    ends: Array.from({ length: text.length }, (_, i) => i + 1),
+  };
+  // Recognize escapes and code spans in one left-to-right pass: backslashes
+  // escape a tick only outside a code span. Code contents are literal Markdown,
+  // not HTML or emphasis, so encode their syntax until markup removal is over.
+  input = replaceMapped(input, /(?<!\\)((?:\\\\)*)\\`|(`+)([\s\S]*?)\2(?!`)/g, (match) => {
+    if (match[2] === undefined) {
+      const start = match.index;
+      const tick = start + match[0].length - 1;
+      return {
+        text: `${match[1]}&#96;`,
+        origins: [
+          ...input.origins.slice(start, start + match[1].length),
+          ...Array(5).fill(input.origins[tick]),
+        ],
+        ends: [
+          ...input.ends.slice(start, start + match[1].length),
+          ...Array(5).fill(input.ends[tick]),
+        ],
+      };
+    }
+    const start = match.index + match[2].length;
+    let literal = "";
+    const origins = [];
+    const ends = [];
+    for (let i = 0; i < match[3].length; i++) {
+      const char = match[3][i];
+      const encoded = /[&<>\[\]!*_~`]/.test(char) ? `&#${char.charCodeAt(0)};` : char;
+      literal += encoded;
+      for (let j = 0; j < encoded.length; j++) {
+        origins.push(input.origins[start + i]);
+        ends.push(input.ends[start + i]);
+      }
+    }
+    return { text: literal, origins, ends };
+  });
+  input = linkLabels(input);
+  input = replaceMapped(input, /!?\[([^\]]*)\]\[[^\]]*\]/g, (match) => labelEdit(input, match));
+  for (const pattern of [/__([^\n]+?)__/g, /(?<![\p{L}\p{N}_])_([^_\n]+)_(?![\p{L}\p{N}_])/gu]) {
+    input = replaceMapped(input, pattern, (match) => {
+      const start = match.index + (match[0].startsWith("__") ? 2 : 1);
+      return {
+        text: match[1],
+        origins: input.origins.slice(start, start + match[1].length),
+        ends: input.ends.slice(start, start + match[1].length),
+      };
+    });
+  }
+  input = replaceMapped(input, /[`*~]/g, () => ({ text: "" }));
+  const output = { text: "", origins: [], ends: [] };
+  const stack = [parseFragment(input.text, { sourceCodeLocationInfo: true })];
+  // Iterative traversal keeps deeply nested, bounded markup on the receipt path.
+  while (stack.length) {
+    const node = stack.pop();
+    if (node.nodeName === "#separator") {
+      output.text += " ";
+      output.origins.push(node.origin);
+      output.ends.push(node.end);
+    } else if (node.nodeName === "#text") {
+      const { startOffset, endOffset } = node.sourceCodeLocation;
+      const raw = {
+        text: input.text.slice(startOffset, endOffset),
+        origins: input.origins.slice(startOffset, endOffset),
+        ends: input.ends.slice(startOffset, endOffset),
+      };
+      const decoded = replaceMapped(
+        raw,
+        /&(?:#[xX][\da-fA-F]+|#\d+|[a-zA-Z][a-zA-Z\d]+);?/g,
+        (match) => ({
+          text: parseFragment(match[0]).childNodes[0]?.value ?? match[0],
+        }),
+      );
+      if (decoded.text !== node.value) throw new Error("Unsupported guide text normalization");
+      output.text += decoded.text;
+      for (const origin of decoded.origins) output.origins.push(origin);
+      for (const end of decoded.ends) output.ends.push(end);
+    } else {
+      // Non-rendered raw text is neither prose nor an entity decoding context.
+      if (["script", "style", "template"].includes(node.tagName)) continue;
+      if (
+        [
+          "br",
+          "p",
+          "div",
+          "li",
+          "ul",
+          "ol",
+          "blockquote",
+          "pre",
+          "section",
+          "article",
+          "hr",
+          "h1",
+          "h2",
+          "h3",
+          "h4",
+          "h5",
+          "h6",
+          "table",
+          "tr",
+          "td",
+          "th",
+          "dt",
+          "dd",
+        ].includes(node.tagName) &&
+        node.sourceCodeLocation
+      ) {
+        const location = node.sourceCodeLocation;
+        output.text += " ";
+        output.origins.push(input.origins[location.startOffset]);
+        output.ends.push(input.origins[location.startOffset]);
+        if (location.endTag)
+          stack.push({
+            nodeName: "#separator",
+            origin: input.ends[location.endTag.endOffset - 1],
+            end: input.ends[location.endTag.endOffset - 1],
+          });
+      }
+      const children = node.childNodes ?? [];
+      for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]);
+    }
+  }
+  return output;
 };
-for (const sentence of outsideSentences) {
-  const flat = sentence.trim();
-  const visible = visibleText(flat);
-  if (
-    flat &&
-    (SIZE_LITERAL.test(visible) ||
-      SIZE_BARE_SUFFIX.test(visible) ||
-      COUNT_BOUNDARY.test(visible) ||
-      RESULT_COUNT.test(visible) ||
-      (RESULT_SUBJECT.test(visible) && SIZE_PREDICATE.test(visible)))
-  )
-    check(
-      `guide states a size or measurement claim outside the canonical Limits: "${flat.slice(0, 80)}"`,
-      false,
-    );
+try {
+  const visible = visibleText(outsideLimits);
+  const sentences = [];
+  let start = 0;
+  let rawStart = 0;
+  for (const separator of visible.text.matchAll(/(?<=[.;!?])\s+/g)) {
+    const end = separator.index;
+    if (/\b(?:e\.g|i\.e)\.$/i.test(visible.text.slice(start, end).trimEnd())) continue;
+    sentences.push({
+      text: visible.text.slice(start, end),
+      rawStart,
+      rawEnd: visible.origins[end],
+    });
+    start = end + separator[0].length;
+    rawStart = visible.ends[start - 1];
+  }
+  sentences.push({ text: visible.text.slice(start), rawStart, rawEnd: outsideLimits.length });
+  for (const sentence of sentences) {
+    const flat = outsideLimits.slice(sentence.rawStart, sentence.rawEnd).trim();
+    if (
+      flat &&
+      (SIZE_LITERAL.test(sentence.text) ||
+        SIZE_BARE_SUFFIX.test(sentence.text) ||
+        COUNT_BOUNDARY.test(sentence.text) ||
+        RESULT_COUNT.test(sentence.text) ||
+        (RESULT_SUBJECT.test(sentence.text) && SIZE_PREDICATE.test(sentence.text)))
+    )
+      check(
+        `guide states a size or measurement claim outside the canonical Limits: "${flat.slice(0, 80)}"`,
+        false,
+      );
+  }
+} catch {
+  check("guide visible-text normalization succeeds", false);
 }
 
 // Real serialization control: 20 maximum-length, escape-heavy descriptions

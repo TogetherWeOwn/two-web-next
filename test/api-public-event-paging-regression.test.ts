@@ -4,16 +4,21 @@
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
-import { listPublicApiEvents, type PublicApiEvent } from "../src/events/reads";
+import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../src/events/reads";
 import * as cache from "../src/public-data/cache";
 import type { PublicApiEventCollectionDto } from "../src/public-data/contracts";
 import { getOpenApiDocument } from "../src/public-data/openapi";
-import { registerPublicApiRoutes } from "../src/public-data/routes";
+import {
+  eventResultBytes,
+  registerPublicApiRoutes,
+  serializeEvent,
+} from "../src/public-data/routes";
 
 vi.mock("../src/admin/db", () => ({ dbFor: async () => ({}) }));
 vi.mock("../src/events/reads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/events/reads")>()),
   listPublicApiEvents: vi.fn(),
+  getPublicApiEvent: vi.fn(),
 }));
 vi.mock("../src/events/routes-shared", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../src/events/routes-shared")>()),
@@ -97,6 +102,7 @@ const pageParameter = () =>
 beforeEach(() => {
   cache.__resetApiPublicCacheForTests();
   list.mockReset();
+  vi.mocked(getPublicApiEvent).mockReset();
   vi.spyOn(Date, "now").mockReturnValue(T0);
   vi.stubGlobal("fetch", () => {
     throw new Error("Network is forbidden in paging regressions");
@@ -106,6 +112,45 @@ afterEach(() => {
   cache.__resetApiPublicCacheForTests();
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
+});
+
+describe("public event detail overflow review regressions (offline)", () => {
+  it.each([17_000, 33_000])(
+    "never echoes refused %i-byte metadata or caches its error",
+    async (length) => {
+      const marker = "rejected-detail-title";
+      const rejected = { ...row(61), title: marker + "M".repeat(length) };
+      const dto = JSON.stringify(serializeEvent(rejected));
+      // The first case fits one DTO but not the duplicated/escaped tool result.
+      expect(Buffer.byteLength(dto) <= 32_768).toBe(length === 17_000);
+      expect(eventResultBytes(dto)).toBeGreaterThan(32_768);
+      vi.mocked(getPublicApiEvent).mockResolvedValue(rejected);
+      const app = new Hono<{ Bindings: Env }>();
+      app.use("*", async (c, next) => {
+        c.set("requestId", "offline-overflow");
+        await next();
+      });
+      registerPublicApiRoutes(app);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await app.request(`${ORIGIN}/api/public/events/${rejected.eventKey}`, {}, {
+          APP_URL: ORIGIN,
+        } as Env);
+        expect(response.status).toBe(503);
+        expect(response.headers.get("cache-control")).toBe("no-store, private");
+        const text = await response.text();
+        expect(JSON.parse(text)).toEqual({
+          error: {
+            code: "unavailable",
+            message: "Event data is temporarily unavailable.",
+            request_id: "offline-overflow",
+            next: "Retry the read shortly.",
+          },
+        });
+        expect(text).not.toContain(marker);
+      }
+      expect(getPublicApiEvent).toHaveBeenCalledTimes(2);
+    },
+  );
 });
 
 describe("public event paging review regressions (offline)", () => {

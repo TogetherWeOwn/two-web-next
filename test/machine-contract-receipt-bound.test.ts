@@ -196,6 +196,35 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     "The JSON is 2M.",
     "The JSON is 2G.",
     "The JSON is 2T.",
+    "`<CallToolResult>` is unbounded.",
+    "The `<response>` is unlimited.",
+    "``<CallToolResult>`` is unbounded.",
+    "Collections contain 30 items.",
+    "Collections include 30 rows.",
+    "Responses hold 30 items.",
+    "Results show 30 rows.",
+    "Responses return 30 items.",
+    "The response returns 30 entries.",
+    ...["more or less", "in excess of", "a little over", "upwards of"].map(
+      (qualifier) => `Rows are limited to ${qualifier} 30.`,
+    ),
+    ...["Collection's", "Collections'", "Collection’s", "Collections’"].flatMap((subject) =>
+      ["limit", "cap"].map((noun) => `${subject} ${noun} is 30 items.`),
+    ),
+    '[Rows](https://example.test/docs "A ) B") are limited to 30.',
+    "[Rows](https://example.test/docs 'A ) B') are limited to 30.",
+    '[Rows](<https://example.test/docs> "A ) B") are limited to 30.',
+    "Rows are limited to &gt; 30.",
+    "Responses occupy 32&nbsp; KB.",
+    "Rows are limited to &#62; 30.",
+    "Responses occupy 32&#160; KB.",
+    "The escaped \\` marker and `<response>` is unlimited.",
+    "Rows<br>are limited to 30.",
+    "<div>Rows</div>are limited to 30.",
+    "Rows<p>are</p>limited to 30.",
+    "The `<response>\\` is unlimited.",
+    "Collections contain 30 items-per-page.",
+    "Responses return 30 items-per-page.",
   ];
 
   it.each(claims)("refuses the paraphrase %j appended after the Limits", (claim) => {
@@ -300,6 +329,28 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     "Responses contain almost-8-bit entries.",
     "Results include: almost 30 venues.",
     "<b>Rows</b> can describe a venue limited to 30 guests.",
+    "The `<response>` documents the advertised schema.",
+    "The `<un_bounded>` flag is documented.",
+    "Responses return 8-bit entries.",
+    "The response returns 8-bit entries.",
+    "Collections contain 8-bit entries.",
+    "Collections include entries from 30 venues.",
+    "Responses hold 8-bit entries.",
+    "Results show 30 venues.",
+    "Rows are limited to more or less 8-bit entries.",
+    "Rows are limited to in excess of 8-bit entries.",
+    "Rows are limited to a little over 8-bit entries.",
+    "Rows are limited to upwards of 8-bit entries.",
+    "Collection’s limit is described in 30 examples.",
+    "Collections’ cap is a venue field with 30 examples.",
+    "Rows can describe &gt; 30 venues.",
+    "Responses document the KB&nbsp; article.",
+    '[Rows](https://example.test/docs "A ) B") can describe 30 venues.',
+    "Collections contain 30 entries-per-hour.",
+    "Responses return 30 items-per-day.",
+    'A style example: <style>p:before { content: "&amp;" }</style> renders separately.',
+    "Rows<br>can describe a venue limited to 30 guests.",
+    "Collections include 30 per-page settings.",
   ])("allows unrelated prose %j", (prose) => {
     const result = run(`${guide}\n${prose}\n`);
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -324,6 +375,52 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     const result = run(guide.replace(pattern, ""));
     expect(result.status, result.stdout + result.stderr).toBe(1);
     expect(JSON.parse(result.stdout).verdict).toBe("fail");
+  });
+
+  it("emits a structured refusal for deeply nested inline HTML", () => {
+    const claim = `${"<b>".repeat(4000)}Rows are limited to 30.${"</b>".repeat(4000)}`;
+    const result = run(`${guide}\n${claim}\n`);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const receipt = JSON.parse(result.stdout);
+    expect(receipt.verdict).toBe("fail");
+    expect(receipt.failures).toContain(
+      `guide states a size or measurement claim outside the canonical Limits: "${claim.slice(0, 80)}"`,
+    );
+    expect(result.stderr).toBe("");
+    expect(Buffer.byteLength(result.stdout, "utf8")).toBeLessThanOrEqual(32_768);
+  });
+
+  it.each(["&nbsp;", "&#32;", "&#x20;"])(
+    "keeps exact source diagnostics across %s separators",
+    (separator) => {
+      const first = "Rows are limited to 30.";
+      const second = "Rows are limited to 40.";
+      const result = run(`${guide}\n${first}${separator}${second}\n`);
+      expect(result.status, result.stdout + result.stderr).toBe(1);
+      const receipt = JSON.parse(result.stdout);
+      expect(receipt.verdict).toBe("fail");
+      expect(receipt.failures).toEqual(
+        [first, second].map(
+          (claim) =>
+            `guide states a size or measurement claim outside the canonical Limits: "${claim}"`,
+        ),
+      );
+    },
+  );
+
+  it("retains structured refusal after unmatched link openers", () => {
+    const result = run(`${guide}\n${"[](".repeat(8000)}\nRows are limited to 30.\n`);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    const receipt = JSON.parse(result.stdout);
+    expect(receipt.verdict).toBe("fail");
+    expect(
+      receipt.failures.some((failure: string) =>
+        failure.startsWith(
+          "guide states a size or measurement claim outside the canonical Limits:",
+        ),
+      ),
+    ).toBe(true);
+    expect(result.stderr).toBe("");
   });
 
   it("caps the failure list and keeps the receipt within 32768 bytes", () => {
