@@ -34,15 +34,17 @@ dynamic fixture, or failed negative control fails the `a11y` job and therefore
 - Public pages, homepage notices, event list/calendar/search/no-results/past
   states, published/draft/cancelled event details, owner profile + validation
   alert, another member's profile, moderator admin pages and missing records are
-  scanned at 360×780 and 1280×900. The matrix has 73 cases / 146 scans
-  (64 explicit cases plus 9 auto-derived static GETs), including seeded and
+  scanned at 360×780 and 1280×900. The matrix has 77 cases / 154 scans
+  (68 explicit cases plus 9 auto-derived static GETs), including seeded and
   missing moderator join-attempt details, populated counts and profile
   stats/milestones, and explicit unavailable-counts/stats cases.
   The extra states cover an archive page beyond the last seeded page, a selected
   calendar month other than the fixture default, and freeze/expired-write banners
   separately and together on the about page. Member event states cover a paused
   event (the hold notice with no join control) and a cancelled event as its
-  member sees it (the notice alone, no RSVP island).
+  member sees it (the notice alone, no RSVP island). Operator override coverage
+  adds populated, empty, upstream-unavailable and bearer-refused HTML states,
+  using a synthetic control bearer rather than moderator-session admission.
 - Branded 404/429/500/503 handlers are exposed by **test-only** routes in
   `ci/a11y-worker.ts`. Production configuration still points at `src/worker.ts`.
 - Canonical migrations and synthetic users/events/RSVPs/featured/join-attempt
@@ -64,7 +66,12 @@ dynamic fixture, or failed negative control fails the `a11y` job and therefore
   `ADMIN_DB.execute` adapter intercepts the two qualified profile stats queries,
   returning keyed synthetic rows through the **real** stats normalizer. Unknown
   `web_v1` queries fail closed; other owned-schema DB operations remain real.
-  Production readers/routes/pages and deployment configuration are unchanged.
+  The operator panel's exact synthetic bot GET and fixture bearer receive a
+  local record response from the audit fetch stub; every other HTTP request
+  still throws. No bot host is contacted. The real operator renderer and bearer
+  admission execute, and content checks pin the record/epoch or explicit empty,
+  unavailable and refused state plus absence of write controls. Production
+  readers/routes/pages and deployment configuration are unchanged by the fixtures.
 - Each browser context selects populated/unavailable read models through a
   test-only request header. Before axe, content assertions require 84 members,
   12 online, numeric rank totals and zero-as-`unclaimed`, or their unavailable
@@ -119,7 +126,7 @@ marks incomplete still need human/manual assessment; that is outside this slice.
 
 ## Acceptance / reproduction
 
-- **Given** seeded local fixtures, **when** `npm run a11y` runs, **then** all 146
+- **Given** seeded local fixtures, **when** `npm run a11y` runs, **then** all 154
   document scans pass with zero WCAG A/AA violations and a rejected sentinel.
 - **Given** populated homepage fixtures, **when** either viewport renders,
   **then** the report records assertions for member/online counts and all five

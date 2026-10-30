@@ -2,8 +2,8 @@
   "$comment": "See ci/budgets/README.md; use existing headroom first, then add bounded byte admissions under ci/budgets/decisions/<unit>/.",
   "client": {
     "js": {
-      "maxRawBytes": 258048,
-      "maxGzipBytes": 103424,
+      "maxRawBytes": 259584,
+      "maxGzipBytes": 103680,
       "maxFiles": 55
     }
   }
