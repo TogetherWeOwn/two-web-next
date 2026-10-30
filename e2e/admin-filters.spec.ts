@@ -76,7 +76,7 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     // event renders for guests and on the public calendar.
     const draft = await guest.request.get(`/e/${draftKey}`, { maxRedirects: 0 });
     expect(draft.status()).toBe(403);
-    await page.getByRole("button", { name: "Publish", exact: true }).click();
+    await page.getByRole("button", { name: /\bPublish\b/ }).click();
     await expect(
       page.getByRole("heading", { name: "Status: published", exact: true }),
     ).toBeVisible();
@@ -101,8 +101,8 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     // Reopen control proves the paused state stuck.
     await page.goto(`/admin/events/${pausedKey}`);
     await page.getByTestId("rsvp-pause-review").locator("summary").click();
-    await page.getByRole("button", { name: "Pause RSVPs", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Reopen RSVPs", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: /\bPause RSVPs\b/ }).click();
+    await expect(page.getByRole("button", { name: /\bReopen RSVPs\b/ })).toBeVisible();
 
     const table = page.getByTestId("events-table");
     const rowFor = (title: string) => table.locator("tbody tr", { hasText: title });

@@ -1,5 +1,5 @@
 <script lang="ts">
-import AdminShell from "#lib/AdminShell.svelte";
+import AdminShell, { searchNotice } from "#lib/AdminShell.svelte";
 import {
   formatActivityCauser,
   activityLogEmptyText,
@@ -51,6 +51,7 @@ const subjectOf = (row: {
         <button type="submit" class="btn">Filter</button>
       </div>
     </form>
+    {@render searchNotice(query)}
     <p id="activity-log-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
     <!-- svelte-ignore a11y_no_noninteractive_tabindex: Hono parity — the scroll region is intentionally keyboard-focusable so keyboard users can scroll the table on narrow screens (axe scrollable-region-focusable requires it). -->
     <div
@@ -66,7 +67,7 @@ const subjectOf = (row: {
           <tr>
             <th scope="col">Who</th>
             <th scope="col">What</th>
-            <th scope="col">When</th>
+            <th scope="col">When (UTC)</th>
             <th scope="col">Subject</th>
           </tr>
         </thead>

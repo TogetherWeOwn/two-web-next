@@ -76,7 +76,11 @@ export function buildEventListView(
   const pauseReviews: Record<string, string> = {};
   for (const row of fetched.slice(0, EVENT_PAGE_SIZE)) {
     if (row.status === "published" && row.rsvpOpen) {
-      pauseReviews[row.eventKey] = renderRsvpPauseReviewHtml(row.title, row.eventKey);
+      pauseReviews[row.eventKey] = renderRsvpPauseReviewHtml(
+        row.title,
+        row.eventKey,
+        renderableIso(row.startsAt),
+      );
     }
   }
   return {

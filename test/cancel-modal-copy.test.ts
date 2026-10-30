@@ -172,7 +172,7 @@ describe("cancel action copy (no confirmation dialog)", () => {
   it("offers Cancel event on the edit screen only for drafts and published events", () => {
     for (const status of ["draft", "published"] as const) {
       const html = editHtml(status);
-      expect(html).toContain('data-testid="cancel-event">Cancel event');
+      expect(html).toMatch(/data-testid="cancel-event"[^>]*>Cancel event/);
     }
     for (const status of ["cancelled", "past"] as const) {
       const html = editHtml(status);
@@ -184,7 +184,7 @@ describe("cancel action copy (no confirmation dialog)", () => {
   it("keeps the editor Cancel leave-link distinct from the Cancel event action", () => {
     const html = editHtml("published");
     expect(html).toContain('<a href="/admin/events">Cancel</a>');
-    expect(html).toContain('data-testid="cancel-event">Cancel event');
+    expect(html).toMatch(/data-testid="cancel-event"[^>]*>Cancel event/);
   });
 
   it("submits cancellations immediately: POST forms, no dialog wiring", () => {
@@ -198,12 +198,12 @@ describe("cancel action copy (no confirmation dialog)", () => {
     const html = editHtml("published");
     expect(html).toContain('<form method="post" action="/admin/events/cancel-published/cancel">');
     expect(html).toContain(
-      '<button type="submit" class="link" data-testid="cancel-event">Cancel event</button>',
+      '<button type="submit" class="link" data-testid="cancel-event" aria-label="Cancel event cancel-published (2026-06-15T00:30:00.000Z)">Cancel event</button>',
     );
   });
 
   it("offers Publish only for drafts, so a cancelled event cannot be republished from the UI", () => {
-    expect(editHtml("draft")).toContain('data-testid="publish-event">Publish');
+    expect(editHtml("draft")).toMatch(/data-testid="publish-event"[^>]*>Publish/);
     for (const status of ["published", "cancelled", "past"] as const) {
       expect(editHtml(status)).not.toContain('data-testid="publish-event"');
     }

@@ -418,7 +418,7 @@ const attemptsPage =
   \`<select id="outcome" name="outcome"></select></form>\` +
   \`<div aria-label="Join attempts list"><table data-testid="join-attempts-table"><thead><tr>\` +
   \`<th scope="col">Outcome</th><th scope="col">Source</th><th scope="col">Discord id</th>\` +
-  \`<th scope="col">Request id</th><th scope="col">Attempted</th></tr></thead>\` +
+  \`<th scope="col">Request id</th><th scope="col">Attempted (UTC)</th></tr></thead>\` +
   \`<tbody><tr><td data-testid="join-attempts-empty">No join attempts.</td></tr></tbody></table></div>\` +
   \`<nav aria-label="Join attempt pages"><span>Page 1</span></nav></section></main>\` +
   \`<footer>Together We Own · moderators only</footer></body></html>\`;

@@ -42,6 +42,9 @@ const atBound = "x".repeat(BOUND);
 const overBound = "x".repeat(BOUND + 1);
 const huge = "x".repeat(8192);
 const NUL = String.fromCharCode(0);
+const NOTICE =
+  "Search terms are limited to 128 characters. Overlong search terms were not applied. Other filters and pagination still apply.";
+const noticeCount = (html: string) => html.split(NOTICE).length - 1;
 
 // One row per free-text field across the five admin list parsers.
 const fields: ReadonlyArray<readonly [string, (value: string) => string]> = [
@@ -90,28 +93,59 @@ describe("admin free-text filter length bound (no DB)", () => {
         roster_order: "asc",
         roster_page: "3",
       }),
-    ).toEqual({ q: "", status: "", sort: "status", order: "asc", page: 3 });
+    ).toEqual({ q: "", status: "", sort: "status", order: "asc", page: 3, searchDropped: true });
     expect(parseJoinAttemptsQuery({ q: huge, outcome: "denied", page: "2" })).toEqual({
       outcome: "denied",
       q: "",
       page: 2,
+      searchDropped: true,
     });
     expect(parseActivityLogQuery({ subject: huge, causer: "123", page: "2" })).toEqual({
       subject: "",
       causer: "123",
       page: 2,
+      searchDropped: true,
     });
     expect(parseActivityLogQuery({ subject: "Event", causer: huge })).toEqual({
       subject: "Event",
       causer: "",
       page: 1,
+      searchDropped: true,
     });
     expect(
       parseEventListQuery({ q: huge, status: "draft", sort: "title", order: "asc", page: "2" }),
     ).toMatchObject({ q: "", status: "draft", sort: "title", order: "asc", page: 2 });
     expect(
       parseFeaturedListQuery({ q: huge, published: "1", sort: "updated_at", order: "desc" }),
-    ).toEqual({ published: "1", q: "", sort: "updated_at", order: "desc", page: 1 });
+    ).toEqual({
+      published: "1",
+      q: "",
+      sort: "updated_at",
+      order: "desc",
+      page: 1,
+      searchDropped: true,
+    });
+  });
+
+  it("marks searchDropped only for a dropped overlong value, never for a kept or empty one", () => {
+    const flag = (query: { searchDropped?: true }) => query.searchDropped ?? false;
+    const parsers: ReadonlyArray<readonly [string, (value: string) => { searchDropped?: true }]> = [
+      ["roster", (v) => parseRosterQuery({ roster_q: v })],
+      ["join-attempts", (v) => parseJoinAttemptsQuery({ q: v })],
+      ["activity subject", (v) => parseActivityLogQuery({ subject: v })],
+      ["activity causer", (v) => parseActivityLogQuery({ causer: v })],
+      ["events", (v) => parseEventListQuery({ q: v })],
+      ["featured", (v) => parseFeaturedListQuery({ q: v })],
+    ];
+    for (const [, parse] of parsers) {
+      expect(flag(parse(""))).toBe(false);
+      expect(flag(parse(" \u0000 "))).toBe(false);
+      expect(flag(parse(atBound))).toBe(false);
+      expect(flag(parse(` ${atBound} `))).toBe(false);
+      expect(flag(parse(overBound))).toBe(true);
+      expect(flag(parse(huge))).toBe(true);
+    }
+    expect(Object.keys(parseRosterQuery({ roster_q: atBound }))).not.toContain("searchDropped");
   });
 
   it("never reflects overlong text into pagination or sort links", () => {
@@ -223,11 +257,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const ids = (html: string) =>
         [...html.matchAll(/data-testid="featured-position-(\d+)"/g)].map((m) => Number(m[1]));
       // Positive control: a normal search still filters.
-      expect(ids(await request("/featured?q=Alpha"))).toEqual([rows[0]!.id]);
+      const normal = await request("/featured?q=Alpha");
+      expect(ids(normal)).toEqual([rows[0]!.id]);
+      expect(noticeCount(normal)).toBe(0);
 
       const html = await request(`/featured?q=${huge}`);
       expect(ids(html).sort()).toEqual(rows.map((r) => r.id).sort());
       expect(html).not.toContain(huge.slice(0, 200));
+      expect(noticeCount(html)).toBe(1);
     });
 
     it("events: overlong q lists unfiltered and is not reflected into the page", async () => {
@@ -244,6 +281,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const html = await request(`/events?q=${huge}`);
       expect(html).toContain("Bound check social");
       expect(html).not.toContain(huge.slice(0, 200));
+      expect(noticeCount(html)).toBe(1);
     });
 
     it("roster: overlong roster_q lists the full roster and is not reflected", async () => {
@@ -269,6 +307,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const html = await request(`/events/01K00000000000000000000018?roster_q=${huge}`);
       expect(html).toContain("RSVPs (2)");
       expect(html).not.toContain(huge.slice(0, 200));
+      expect(noticeCount(html)).toBe(1);
     });
 
     it("join-attempts: overlong q lists unfiltered and is not reflected", async () => {
@@ -287,6 +326,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const html = await request(`/join-attempts?q=${huge}`);
       expect(ids(html).sort()).toEqual(rows.map((r) => r.id).sort());
       expect(html).not.toContain(huge.slice(0, 200));
+      expect(noticeCount(html)).toBe(1);
     });
 
     it("activity-log: overlong subject/causer list unfiltered and are not reflected", async () => {
@@ -309,6 +349,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const html = await request(`/activity-log?subject=${huge}&causer=${huge}`);
       expect(html).toContain("updated event Bound check");
       expect(html).not.toContain(huge.slice(0, 200));
+      expect(noticeCount(html)).toBe(1);
     });
   },
 );

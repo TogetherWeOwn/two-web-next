@@ -7,6 +7,8 @@ export type FeaturedListQuery = {
   sort: FeaturedSort;
   order: SortOrder;
   page: number;
+  /** Set only when an overlong search was dropped, so the page can say so. */
+  searchDropped?: true;
 };
 /** One extra row is fetched as the next-page lookahead, like events. */
 export const FEATURED_PAGE_SIZE = 25;
@@ -14,16 +16,15 @@ export const FEATURED_PAGE_SIZE = 25;
 // Free-text search is bounded before the leading-wildcard ILIKE scan and
 // before reflection into navigation links. Measured on the normalized value
 // (NULs stripped, then trimmed); overlong falls back to absent, never truncated.
-const FEATURED_FREE_TEXT_MAX_LENGTH = 128;
-const boundFeaturedFreeText = (value: string): string =>
-  value.length > FEATURED_FREE_TEXT_MAX_LENGTH ? "" : value;
 
 export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
   const page = Number(params.page);
+  // PostgreSQL text cannot contain NUL; keep this leaf independent of other tables.
+  const q = (params.q ?? "").replaceAll(String.fromCharCode(0), "").trim();
+  const searchDropped = q.length > 128;
   return {
     published: params.published === "1" || params.published === "0" ? params.published : "",
-    // PostgreSQL text cannot contain NUL; keep this leaf independent of other tables.
-    q: boundFeaturedFreeText((params.q ?? "").replaceAll(String.fromCharCode(0), "").trim()),
+    q: searchDropped ? "" : q,
     sort: params.sort === "updated_at" ? "updated_at" : "position",
     order: params.order === "desc" ? "desc" : "asc",
     // Keep the offset within a safe integer, even for adversarial page values.
@@ -34,6 +35,7 @@ export function parseFeaturedListQuery(params: ListParams): FeaturedListQuery {
       Number.isSafeInteger(page * FEATURED_PAGE_SIZE)
         ? page
         : 1,
+    ...(searchDropped ? { searchDropped: true as const } : {}),
   };
 }
 

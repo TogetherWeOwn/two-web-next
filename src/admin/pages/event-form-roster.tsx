@@ -12,7 +12,7 @@ import {
   rosterUrl,
   type RosterQuery,
 } from "../table-list";
-import { TableSortHeader } from "./shell";
+import { SearchDroppedNotice, TableSortHeader } from "./shell";
 
 export const EventRosterSection: FC<{
   eventKey: string;
@@ -61,6 +61,7 @@ export const EventRosterSection: FC<{
           </button>
         </div>
       </form>
+      <SearchDroppedNotice query={rosterQuery} />
       <p id="roster-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
       <div
         class="admin-table-scroll"

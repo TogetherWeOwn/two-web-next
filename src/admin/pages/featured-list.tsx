@@ -10,7 +10,7 @@ import {
   featuredListClearUrl,
   type FeaturedListQuery,
 } from "../featured-list-query";
-import { Shell, TableSortHeader } from "./shell";
+import { SearchDroppedNotice, Shell, TableSortHeader } from "./shell";
 
 export const FeaturedPage: FC<{
   rows: FeaturedRow[];
@@ -58,6 +58,7 @@ export const FeaturedPage: FC<{
           </div>
         ) : null}
       </form>
+      <SearchDroppedNotice query={query} />
       <p id="featured-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
       <div
         class="featured-table-scroll"

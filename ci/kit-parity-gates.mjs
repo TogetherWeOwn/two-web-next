@@ -1133,7 +1133,7 @@ export function assertJoinAttemptsContract({ label, html, headers, status, expec
     failures.push(`${label}: labelled scroll region present`);
   if (!html.includes('data-testid="join-attempts-table"'))
     failures.push(`${label}: attempts table present`);
-  for (const column of ["Outcome", "Source", "Discord id", "Request id", "Attempted"]) {
+  for (const column of ["Outcome", "Source", "Discord id", "Request id", "Attempted (UTC)"]) {
     if (!html.includes(`<th scope="col">${column}</th>`))
       failures.push(`${label}: ${column} column present`);
   }
@@ -1823,7 +1823,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     `<div class="admin-table-scroll" role="region" aria-label="Join attempts list" data-testid="join-attempts-table-scroll">` +
     `<table class="admin-table" data-testid="join-attempts-table"><thead><tr>` +
     `<th scope="col">Outcome</th><th scope="col">Source</th><th scope="col">Discord id</th>` +
-    `<th scope="col">Request id</th><th scope="col">Attempted</th></tr></thead>` +
+    `<th scope="col">Request id</th><th scope="col">Attempted (UTC)</th></tr></thead>` +
     `<tbody><tr><td><a href="/admin/join-attempts/7" aria-label="View join attempt 7: added">added</a></td>` +
     `<td>join</td><td>100000000000000201</td><td>req-7</td><td>2026-10-01T00:00:00.000Z</td></tr></tbody></table></div>` +
     `<nav aria-label="Join attempt pages" class="actions"><span>Page 1</span></nav>` +

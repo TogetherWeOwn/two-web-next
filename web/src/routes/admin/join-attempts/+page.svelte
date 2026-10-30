@@ -1,5 +1,5 @@
 <script lang="ts">
-import AdminShell from "#lib/AdminShell.svelte";
+import AdminShell, { searchNotice } from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
 
 // Markup contract of JoinAttemptsPage (src/admin/pages/join-attempts.tsx):
@@ -46,6 +46,7 @@ const outcomes = $derived(
       <button type="submit" class="btn">Filter</button>
     </div>
   </form>
+  {@render searchNotice(query)}
   <p id="join-attempts-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
   <!-- svelte-ignore a11y_no_noninteractive_tabindex: the labelled scroll region stays keyboard-focusable exactly like the Hono viewer (axe scrollable-region-focusable requires a focusable scroller); role="region" names it, tabindex={0} reaches it. -->
   <div
@@ -63,7 +64,7 @@ const outcomes = $derived(
           <th scope="col">Source</th>
           <th scope="col">Discord id</th>
           <th scope="col">Request id</th>
-          <th scope="col">Attempted</th>
+          <th scope="col">Attempted (UTC)</th>
         </tr>
       </thead>
       <tbody>

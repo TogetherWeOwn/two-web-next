@@ -96,7 +96,7 @@ async function createDraft(admin: Page, stem: string, capacity: number): Promise
 }
 
 async function publishDraft(admin: Page): Promise<void> {
-  await admin.getByRole("button", { name: "Publish", exact: true }).click();
+  await admin.getByRole("button", { name: /\bPublish\b/ }).click();
   await expect(
     admin.getByRole("heading", { name: "Status: published", exact: true }),
   ).toBeVisible();
