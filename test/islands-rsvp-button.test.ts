@@ -363,7 +363,7 @@ function mount(html: string): string {
 }
 
 describe("rsvp-button SSR/server drift", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => vi.useRealTimers().restoreAllMocks());
 
   it("SSR binds the event key and guest page-return link without exposing actions or reading an answer", async () => {
     const p = page();
@@ -382,6 +382,8 @@ describe("rsvp-button SSR/server drift", () => {
   });
 
   it("SSR preserves validated archive and attendee context on both primary guest login destinations", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-01T21:00:00Z"));
     const p = page();
     const res = await p.request(`/e/${KEY}?archivePage=2&archiveQuery=raid&attendees=2`);
     expect(res.status).toBe(200);
