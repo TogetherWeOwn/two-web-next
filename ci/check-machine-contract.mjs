@@ -344,6 +344,7 @@ const COUNT_VALUE = String.raw`(?:${COUNT_NUMBER}|(?:[\[({"'“‘]\s*)+${COUNT_
 // Qualifiers are whole tokens: "of" + "ten" must never consume "often".
 const COUNT_QUALIFIER = String.raw`(?:as[\s-]+many[\s-]+as|as[\s-]+large[\s-]+as|a[\s-]+total[\s-]+of|more[\s-]+or[\s-]+less|in[\s-]+excess[\s-]+of|a[\s-]+little[\s-]+over|upwards[\s-]+of|at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|about|around|approximately|roughly|nearly|almost|just|over|under|fewer|close|greater|up|most|least|e\.g\.|i\.e\.)(?=[\s:,-]|$)`;
 const COUNT_PREFIX = String.raw`(?:[\s:,-]+${COUNT_QUALIFIER})*[\s:,-]*`;
+const COUNT_VALUE_PENDING = String.raw`${COUNT_PREFIX}(?:[\[({"'“‘]\s*)*`;
 const QUALIFIED_COUNT = String.raw`${COUNT_PREFIX}${COUNT_VALUE}`;
 const COUNT_SUBJECT = String.raw`\b(?:collections?|rows?|items?|pages?)`;
 const COUNT_NOUN = String.raw`(?:caps?|limits?|bounds?|ceilings?)`;
@@ -353,7 +354,8 @@ const COUNT_BOUNDARY_VALUE_PREFIX = String.raw`${COUNT_SUBJECT}(?:['’]s?)?\s+(
 const COUNT_ITEM_MODIFIERS = String.raw`(?:(?:published|renderable)\s+)*`;
 // A bare quantity must end a declaration or name a cardinality unit, not the
 // selection domain in a complement such as "limited to 30 venues".
-const COUNT_COMPLEMENT_END = String.raw`(?=\s*(?:$|[.,;!?]|${COUNT_ITEM_MODIFIERS}${COUNT_ITEM_UNIT}\b(?!-)|pages?\b(?!-)|per\b|and\b|with\b|unless\b|when\b))`;
+const COUNT_COMPARISON_SUFFIX = String.raw`(?:or\s+(?:more|less|fewer)|(?:rather\s+than|instead\s+of)\s+${COUNT_VALUE})`;
+const COUNT_COMPLEMENT_END = String.raw`(?=\s*(?:${COUNT_COMPARISON_SUFFIX}\s*)?(?:$|[.,;!?]|${COUNT_ITEM_MODIFIERS}${COUNT_ITEM_UNIT}\b(?!-)|pages?\b(?!-)|(?:per|and|with|unless|when|including)\b))`;
 const COUNT_BOUNDARY = new RegExp(
   String.raw`(?:${COUNT_BOUNDARY_VALUE_PREFIX}${QUALIFIED_COUNT}${COUNT_COMPLEMENT_END}|${COUNT_SUBJECT}(?:['’]s?)?\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+${COUNT_NOUN}\b))`,
   "i",
@@ -363,7 +365,7 @@ const COUNT_BOUNDARY_COMPLETE = new RegExp(
   "i",
 );
 const COUNT_BOUNDARY_PENDING = new RegExp(
-  String.raw`${COUNT_BOUNDARY_VALUE_PREFIX}${COUNT_PREFIX}(?:[\[({"'“‘]\s*)*$`,
+  String.raw`${COUNT_BOUNDARY_VALUE_PREFIX}${COUNT_VALUE_PENDING}$`,
   "i",
 );
 const COUNT_BOUNDARY_SCALAR = new RegExp(`${COUNT_BOUNDARY_VALUE_PREFIX}${QUALIFIED_COUNT}$`, "i");
@@ -380,7 +382,7 @@ const RESULT_COUNT = new RegExp(
   "gi",
 );
 const RESULT_COUNT_PENDING = new RegExp(
-  String.raw`${RESULT_COUNT_SUBJECT}(?:${COUNT_VERB_PREFIX}${COUNT_PREFIX})?$`,
+  String.raw`${RESULT_COUNT_SUBJECT}(?:${COUNT_VERB_PREFIX}${COUNT_VALUE_PENDING})?$`,
   "i",
 );
 // Known result modifiers preserve physical scope without consuming predicates
@@ -396,24 +398,43 @@ const COORDINATED_COUNT = new RegExp(
   "i",
 );
 const COORDINATED_COUNT_PENDING = new RegExp(
-  String.raw`^\s*,?\s*${COUNT_CONNECTOR}\b${COUNT_PREFIX}$`,
+  String.raw`^\s*,?\s*${COUNT_CONNECTOR}\b${COUNT_VALUE_PENDING}$`,
   "i",
 );
 const EXISTENTIAL_PREFIX = String.raw`\bthere\s+(?:are|is)\b`;
 const EXISTENTIAL_COUNT = new RegExp(`${EXISTENTIAL_PREFIX}${QUALIFIED_COUNT_OBJECT}`, "gi");
-const EXISTENTIAL_PENDING = new RegExp(`${EXISTENTIAL_PREFIX}${COUNT_PREFIX}$`, "i");
+const EXISTENTIAL_PENDING = new RegExp(`${EXISTENTIAL_PREFIX}${COUNT_VALUE_PENDING}$`, "i");
 const PAGE_SIZE_PREFIX = String.raw`\b${RESULT_QUALIFIERS}page\s+size\s+(?:is|equals?)\b`;
 const PAGE_SIZE = new RegExp(`${PAGE_SIZE_PREFIX}${QUALIFIED_COUNT}${COUNT_COMPLEMENT_END}`, "i");
-const PAGE_SIZE_PENDING = new RegExp(`${PAGE_SIZE_PREFIX}${COUNT_PREFIX}$`, "i");
+const PAGE_SIZE_PENDING = new RegExp(`${PAGE_SIZE_PREFIX}${COUNT_VALUE_PENDING}$`, "i");
 const perResultCount = (count, tail) =>
   /per[\s-]+(?:page|response)\b/i.test(count[0]) || PER_RESULT_SCOPE.test(tail);
+function existentialResultCount(text, count) {
+  const before = text.slice(0, count.index);
+  const tail = text.slice(count.index + count[0].length);
+  // A locative introduction belongs to this existential, not an earlier
+  // sentence/clause. A named external domain disambiguates "per page".
+  const domain = /(?:^|[,;]|\b(?:and|but)\b)\s*((?:in|for)\s+[^,;]+),?\s*$/i.exec(before)?.[1];
+  // Explicit response/result ownership wins over an ambiguous named page
+  // domain. Strip only adjacent ratio/page adjuncts, never another clause.
+  const scope = tail.replace(/^\s+per[\s-]+(?:event|page)\b/i, "");
+  const explicitScope = PER_RESULT_SCOPE.exec(scope);
+  if (explicitScope && !/\bpage$/i.test(explicitScope[0])) return true;
+  if (/per[\s-]+response\b/i.test(count[0])) return true;
+  if (domain) return PER_RESULT_SCOPE.test(` ${domain}`);
+  return perResultCount(count, tail);
+}
 const SINGLE_RESULT_SUBJECT = new RegExp(
   String.raw`\b(?:(?:single|one|each|every|individual)\s+${RESULT_QUALIFIERS}(?:CallToolResult|results?|responses?|replies|reply|payloads?|DTOs?|bod(?:y|ies)|pages?)|(?:an?|the)\s+${RESULT_QUALIFIERS}(?:CallToolResult|result|response|reply|payload|DTO|body|page))$`,
   "i",
 );
 const WORD_SIZE_PREFIX = String.raw`${RESULT_SUBJECT.source}\s+(?:(?:can|may)\s+be|is|are|occup(?:y|ies))\b`;
+const WORD_BYTE_UNIT = String.raw`(?:bytes?|(?:kilo|mega|giga|tera|peta|exa|kibi|mebi|gibi|tebi|pebi|exbi)bytes?)\b(?!-)`;
+// A space-separated measure is already a declaration, regardless of its
+// continuation. A hyphenated adjective still needs a complete complement:
+// "is a one-megabyte upload field" describes a field, not the result's bytes.
 const WORD_SIZE_DECLARATION = new RegExp(
-  String.raw`${WORD_SIZE_PREFIX}${COUNT_PREFIX}${COUNT_WORD}[\s-]+(?:bytes?|(?:kilo|mega|giga|tera|peta|exa|kibi|mebi|gibi|tebi|pebi|exbi)bytes?)\b(?=\s*(?:$|[.,;!?]|and\b|per\b))`,
+  String.raw`${WORD_SIZE_PREFIX}${COUNT_PREFIX}${COUNT_WORD}(?:\s+${WORD_BYTE_UNIT}|-${WORD_BYTE_UNIT}(?=\s*(?:$|[.,;!?]|and\b|per\b)))`,
   "i",
 );
 const WORD_SIZE_PENDING = new RegExp(String.raw`${WORD_SIZE_PREFIX}${COUNT_PREFIX}$`, "i");
@@ -427,6 +448,19 @@ const AGGREGATE_SCOPE_ONLY = new RegExp(
   `^${AGGREGATE_SCOPE_PHRASE}(?:\\s*,\\s+with\\b[^,.;!?]*)?[.!?]?\\s*$`,
   "i",
 );
+// A reduced relative needs actual API ownership: "returned per response"
+// modifies the count; "events returned for another season" is a new clause.
+function inheritedCountAdjunct(tail) {
+  if (/^\s+(?:per|across|in|on|at|from|for|with|without)\b/i.test(tail)) return true;
+  const participle = /^\s+(?:returned|published|rendered|included|listed|serialized)\b/i.exec(tail);
+  if (!participle) return false;
+  const modifier = tail.slice(participle[0].length);
+  const scope = PER_RESULT_SCOPE.exec(modifier);
+  return (
+    (scope && !/\bpage$/i.test(scope[0])) ||
+    /^\s+(?:in|from)\s+(?:its|the)\s+(?:data\s+)?array\b/i.test(modifier)
+  );
+}
 // Walk only adjacent coordinated objects of this declaration. A later clause
 // with its own subject cannot lend a count to the original result subject.
 function countObjects(text, count) {
@@ -444,9 +478,7 @@ function countObjects(text, count) {
       // not another object inherited from the API result's verb.
       if (
         !/^\s*(?:$|[.,;!?])/.test(tail) &&
-        !AGGREGATE_SCOPE.test(tail) &&
-        !/^\s+in\s+total\b/i.test(tail) &&
-        !PER_RESULT_SCOPE.test(tail) &&
+        !inheritedCountAdjunct(tail) &&
         !COORDINATED_COUNT.test(tail)
       )
         object = null;
@@ -516,7 +548,9 @@ try {
         // a second coordinated object never inherits that object's exemption.
         const perEventScope = /^\s+per[\s-]+event\b/i.test(tail);
         const value = (object.groups.value ?? "").replace(/^[\[({"'“‘\s]+|[\])}"'”’\s]+$/g, "");
-        const singleton = /^(?:only|exactly)?$/i.test((object.groups.quantityPrefix ?? "").trim());
+        const singleton = /^(?:only|exactly)?$/i.test(
+          (object.groups.quantityPrefix ?? "").replace(/[\s:,-]+/g, "").trim(),
+        );
         const one =
           /^one$/i.test(value) || (/^\+?\d+(?:\.\d+)?$/.test(value) && Number(value) === 1);
         const perEvent = perEventScope && singleton && one;
@@ -529,7 +563,7 @@ try {
       COUNT_BOUNDARY.test(sentence.text) ||
       PAGE_SIZE.test(sentence.text) ||
       Array.from(sentence.text.matchAll(EXISTENTIAL_COUNT)).some((count) =>
-        perResultCount(count, sentence.text.slice(count.index + count[0].length)),
+        existentialResultCount(sentence.text, count),
       ) ||
       countClaim ||
       WORD_SIZE_DECLARATION.test(sentence.text) ||

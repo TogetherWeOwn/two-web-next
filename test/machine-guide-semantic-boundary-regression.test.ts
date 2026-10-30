@@ -45,6 +45,44 @@ describe("machine guide quantitative complements and local clauses (offline)", (
   }
 
   it.each([
+    ...["with all fields", "or more", "including its structuredContent"].flatMap((suffix) => [
+      `Every event result is one megabyte ${suffix}.`,
+      `Every event CallToolResult is one megabyte ${suffix}.`,
+    ]),
+    ...["rather than 20", "instead of 20", "or more", "and archived nightly"].flatMap((suffix) => [
+      `Rows are limited to 30 ${suffix}.`,
+      `Collections have a limit of 30 ${suffix}.`,
+    ]),
+    ...[
+      "in its data array",
+      "returned per response",
+      "listed in its data array",
+      "returned for each successful response",
+    ].map((suffix) => `Each response contains one row per event and 30 rows ${suffix}.`),
+    "Each response contains one row per event and 30 rows and 40 rows per response.",
+    "Each response's data array contains 30 rows across two pages.",
+    "<div>Each successful list_events response contains at most</div><div>30 rows.</div>",
+    ...[
+      "Each successful list_events response contains",
+      "There are",
+      "The list_events page size is",
+    ].flatMap((prefix) =>
+      ["(", "[", '"'].flatMap((open) => {
+        const close = open === "(" ? ")" : open === "[" ? "]" : '"';
+        return [
+          `<div>${prefix} ${open}</div><div>30${close} rows per response.</div>`,
+          `<div>${prefix} at most ${open}</div><div>30${close} rows per response.</div>`,
+        ];
+      }),
+    ),
+    "In the seating chart, there are 30 rows per response.",
+    "In the seating chart, there are 30 rows per page in each response.",
+    "<div>Each response contains one row per event and (</div><div>30) rows per response.</div>",
+    "In each list_events response, there are 30 rows.",
+    "For each list_events response, there are 30 published events.",
+    "There are 30 rows per event in each response.",
+    "In each response there are 30 rows.",
+    "There are 30 rows per event for every successful list_events result.",
     "There are 30 rows per list_events response.",
     "<div>There are</div><div>30 rows per response.</div>",
     "<div>The list_events page size is</div><div>30 rows.</div>",
@@ -111,6 +149,32 @@ describe("machine guide quantitative complements and local clauses (offline)", (
       "Each response contains one row per event",
       "Collections contain 30 items across two pages",
     ].map((clause) => `${clause}, and 30 rows appear on each page of the venue seating chart.`),
+    ...["", "only", "exactly", ":", "only:", "exactly:"].flatMap((prefix) =>
+      ["1", "one"].map((value) => `Each response contains ${prefix} ${value} row per event.`),
+    ),
+    "Each response contains one row per event, and 30 events returned for another season.",
+    "Each response contains one row per event, and 30 rows listed the venue names.",
+    "Each response contains one row per event, and 30 rows published the seating plan.",
+    ...["remain on", "were added to"].map(
+      (predicate) =>
+        `Each response contains one row per event, and 30 rows ${predicate} the venue seating chart.`,
+    ),
+    ...["or more", "or fewer", "rather than 20", "instead of 20"].map(
+      (suffix) => `Rows are limited to 30 ${suffix} venues.`,
+    ),
+    "There are 30 rows in the seating chart.",
+    "In the printed venue seating chart, there are 30 rows per page.",
+    "For the venue seating chart, there are 30 rows per page.",
+    "There are 30 rows per event in the seating chart.",
+    ...[
+      "Each successful list_events response contains",
+      "There are",
+      "The list_events page size is",
+    ].flatMap((prefix) => [
+      `<ul><li>${prefix} (</li><li>30) rows per response.</li></ul>`,
+      `<table><tr><td>${prefix} (</td><td>30) rows per response.</td></tr></table>`,
+      `<div>${prefix} (</div><div>8-bit entries).</div>`,
+    ]),
     "Published rows are limited to 30 venues.",
     "Published rows are limited to 30 venues, and the guide explains sign-in.",
     "<div>Published rows are limited to 30</div><div>venues, and the guide explains sign-in.</div>",
