@@ -20,6 +20,20 @@ export const EVENTS_JSON_URL = "/events.json";
 export const GOING_COUNT_ISLAND = "going-count";
 export const GOING_COUNT_TESTID = "event-going-count";
 export const SPOTS_LEFT_TESTID = "event-spots-left";
+/** Schedule availability line on calendar cards and month-grid entries
+ * ("2 seats left", "RSVPs paused", "Ended", "No seat limit",
+ * "Discord-managed"): a server-rendered snapshot from existing row data,
+ * never a reservation. Distinct from {@link SPOTS_LEFT_TESTID}, which stays
+ * the Full-only marker shared with the detail lineup. */
+export const SCHEDULE_AVAILABILITY_TESTID = "event-schedule-availability";
+/** "Happening now" badge on calendar cards, month-grid entries and the detail
+ * hero: a server-rendered snapshot of the clock, shown beside (never instead
+ * of) the availability line. */
+export const EVENT_ONGOING_TESTID = "event-ongoing";
+/** Static retained-responses line on the cancelled (410) detail twins. Never an
+ * island mount: a closed event takes no RSVPs, so there is nothing to refresh,
+ * and the going-count binder harness treats its absence as trivially safe. */
+export const EXISTING_RESPONSES_TESTID = "event-existing-responses";
 /** Stale-qualification note the binder renders inside the badge on refresh
  * failure (`role="status"`, "could not refresh" copy with last-saved
  * context). Mirrors the attendees-live stale/retry precedent. */

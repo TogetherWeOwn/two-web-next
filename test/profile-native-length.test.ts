@@ -110,7 +110,7 @@ async function setup(leaderboardOptOut = false) {
   return { app, cookie, store, save, html, submit };
 }
 
-function expectCodePointForm(html: string) {
+function expectCodePointForm(html: string, formKind: "GET" | "native POST 422") {
   // HTML maxlength counts UTF-16 units and can stop submission before either
   // code-point validator runs. Omitting it also lets over-limit no-JS input
   // reach the server's established errors instead of being silently truncated.
@@ -124,7 +124,16 @@ function expectCodePointForm(html: string) {
   expect(html).toContain(`name="${PROFILE_HONEY_FIELD}" tabindex="-1" autocomplete="off"`);
   expect(html).toContain(`name="${PROFILE_OPENED_AT_FIELD}"`);
   expect(html).toContain('type="submit" data-testid="profile-save"');
-  expect(html).toContain('type="reset" data-testid="profile-cancel"');
+  if (formKind === "native POST 422") {
+    // A reset would restore the rejected draft, not the saved profile.
+    const cancelControls = html.match(/<[^>]*\bdata-testid="profile-cancel"[^>]*>/g);
+    expect(cancelControls).toEqual([
+      `<a class="btn profile-secondary" href="/members/${ID}" data-testid="profile-cancel">`,
+    ]);
+    expect(cancelControls?.[0]).not.toMatch(/\btype\s*=\s*["']reset["']/i);
+  } else {
+    expect(html).toContain('type="reset" data-testid="profile-cancel"');
+  }
 }
 
 for (const path of paths) {
@@ -142,7 +151,7 @@ for (const path of paths) {
         expect(bio.length).toBe(units);
         expect([...games_text]).toHaveLength(1700);
         expect(games.every((game) => [...game].length === 80)).toBe(true);
-        expectCodePointForm(await html());
+        expectCodePointForm(await html(), "GET");
         expect(profileClientErrors(fields)).toEqual({});
         const response = await submit(path, fields);
         expect(response.status).toBe(path === "native POST" ? 303 : 200);
@@ -183,7 +192,7 @@ for (const path of paths) {
         },
       ])(`rejects ${alphabet.name} over-limit $name without saving`, async ({ fields, error }) => {
         const { html, submit, save } = await setup();
-        expectCodePointForm(await html());
+        expectCodePointForm(await html(), "GET");
         const response = await submit(path, fields);
         expect(response.status).toBe(422);
         if (path === "native POST") {
@@ -191,10 +200,11 @@ for (const path of paths) {
           expect(invalidHtml).toContain(error);
           expect(invalidHtml).toContain(fields.bio);
           expect(invalidHtml).toContain(fields.games_text);
-          expectCodePointForm(invalidHtml);
+          expectCodePointForm(invalidHtml, "native POST 422");
         } else {
           expect(await response.json()).toEqual({
-            errors: { [error.startsWith("Keep your bio") ? "bio" : "games"]: error },
+            error: "invalid",
+            fields: { [error.startsWith("Keep your bio") ? "bio" : "games"]: error },
           });
         }
         expect(save).not.toHaveBeenCalled();

@@ -49,24 +49,84 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
   shift text rendering, so either bump is expected to re-baseline through the
   failure artifact in its own PR.
 
+## Evidence lookup
+
+The stable lookup keys here are existing spec/config paths, not a new gate.
+[`e2e.yml`](../.github/workflows/e2e.yml) owns execution order and artifact paths.
+
+| Spec / gate | Existing command | Evidence location |
+| --- | --- | --- |
+| [`public-pages.visual.ts`](../e2e/visual/public-pages.visual.ts) (Hono) | `npx playwright test --config playwright.visual.config.ts` in `browser-smoke` | `test-results-visual/`, `playwright-report-visual/`, `e2e/visual/__screenshots__/` |
+| [`events-index.visual.spec.ts`](../e2e/kit-parity/events-index.visual.spec.ts) (imports viewer visuals) | `npx playwright test --config playwright.kit-visual.config.ts` in `browser-smoke`, before mutable journeys | `test-results-kit-visual/`, `e2e/visual/__screenshots-kit__/`; list reporter only, no Kit-visual HTML report |
+| [`parity.spec.ts`](../e2e/kit-parity/parity.spec.ts) and [`auth-boundaries.spec.ts`](../e2e/kit-parity/auth-boundaries.spec.ts) | `npx playwright test --config playwright.kit-parity.config.ts e2e/kit-parity/parity.spec.ts e2e/kit-parity/auth-boundaries.spec.ts` in `browser-smoke`, after critical journeys | `test-results-kit-parity/`, `playwright-report-kit-parity/`, `test-results/kit-parity-journeys.json`; `ci/check-kit-parity.mjs` writes `test-results/kit-parity-ledger.{json,md}` |
+
+For a read-only local reachability check, use
+`node ci/test-inventory.mjs --strict --json`: existing machine output includes
+`checkId: "playwright-spec-reachability"`, `ok`, `code`, `total`, `reachable`,
+`orphans` and `next_action`. It follows the viewer import without
+loading browser configs or starting workers. Reachability is not executed-test
+evidence. Do not fake runner variables to bypass
+[`e2e/ci-only.mjs`](../e2e/ci-only.mjs), even to load a config for `--list`.
+See [Kit visual states](kit-parity-gates.md#visual-gates) and the
+[read-only performance lookup](performance-budgets.md#read-only-evidence-lookup).
+
+Local fixture screenshots show rendering only; Hono a11y/Lighthouse gates do
+not exercise Kit routes. Kit-specific execution needs its own reports, and
+neither fixture screenshots nor CI parity prove a live release. Use the
+[release contract](releases.md) for exact-revision deployed evidence.
+
 ## When a diff is intentional
 
-1. Download the `e2e-failure-<run>` artifact from the failed run. It holds the
-   expected, actual and diff images under `test-results-visual/`, the whole
-   `e2e/visual/__screenshots__/` directory (committed baselines plus any newly
-   generated ones), and an HTML report under `playwright-report-visual/`.
+1. Download `e2e-failure-<run_id>-<run_attempt>` from the failed `browser-smoke`
+   run and attempt; the exact workflow name is
+   `e2e-failure-${{ github.run_id }}-${{ github.run_attempt }}`. The failure-only
+   upload retains files for 7 days and ignores missing paths. It includes Hono
+   expected/actual/diff images under `test-results-visual/`, committed and newly
+   generated baselines in `e2e/visual/__screenshots__/`, and the HTML report in
+   `playwright-report-visual/`. It also collects `test-results/`,
+   `playwright-report/`, `test-results-kit-visual/`, `test-results-kit-parity/`,
+   `playwright-report-kit-parity/` and `e2e/visual/__screenshots-kit__/` when
+   present; Kit screenshots must use the Kit accept script below, not Hono's.
+   If the artifact or a required image is missing, check the exact attempt's
+   step logs, upload condition and retention. A skipped/not-started suite or an
+   expired/missing upload is not a visual PASS. Obtain the matching evidence
+   through the existing CI flow; do not substitute a different attempt's images
+   or regenerate baselines locally.
 2. Check every diff image. Only accept changes the PR meant to make.
 3. Run `node ci/visual-accept.mjs <unzipped-artifact-dir>`, which copies each
-   `*-actual.png` over its baseline and each new baseline into place. A
-   reviewed actual supersedes the stale committed copy of the same baseline
-   inside the artifact. A baseline-directory copy alone can add a genuinely
-   absent baseline or match an existing one (a byte-identical no-op); it cannot
-   replace differing checkout bytes. A stale-copy conflict names that baseline
-   and refuses the entire plan. Use a current artifact or review a matching
-   actual; do not delete the newer checkout baseline to force acceptance.
-   Conflicting actuals, differing copies without an actual, and unreadable
-   sources or existing targets also refuse before any baseline is written.
-   All source bytes and local targets are preflighted first; apply-time disk
+   `*-actual.png` over its baseline and each new baseline into place. Only
+   actual images under the exact `test-results-visual` directory segment inside
+   the extracted artifact have Hono replacement authority. An extraction folder
+   named like a suite does not itself confer authority. Unrelated, lookalike
+   and Kit suite screenshots are ignored. A reviewed actual supersedes the
+   stale committed copy of the same baseline inside the artifact. Copies under
+   the existing Hono baseline path can add absent baselines or match identical
+   bytes, but cannot replace differing checkout bytes; a reviewed matching
+   actual outranks its stale artifact copy. A baseline-directory copy alone can
+   add a genuinely absent baseline or match an existing one (a byte-identical
+   no-op). A stale-copy conflict names that baseline and refuses the entire
+   plan. Use a current artifact or review a matching actual; do not delete the
+   newer checkout baseline to force acceptance. Conflicting actuals, differing
+   copies without an actual, and unreadable sources or existing targets also
+   refuse before any baseline is written.
+
+   Preview with `node ci/visual-accept.mjs --dry-run <artifact-root>`, or add
+   `--format json` for the versioned verdict with the dry-run plan and next
+   action. Apply uses the same validated plan with `node ci/visual-accept.mjs
+   <artifact-root>`. Validate flags and the entire bounded plan before creating
+   any directory or writing any destination. Input roots must be real
+   directories; reject symlinks at the root, in its ancestry and among
+   discovered descendants, including cycles. The walk permits regular files and
+   directories only; pipes, sockets and devices refuse with `IO_ERROR` before
+   any read. Existing baseline targets must be regular files too. Reject linked
+   destination files, the destination root and linked ancestors. The artifact
+   budget is 64 directory levels (root is level 1) and 4096 visited entries
+   (files and directories, including ignored entries); exceeding either refuses
+   with `ARTIFACT_LIMIT`. Keep resolved sources and
+   destinations inside their intended roots, and apply the source bytes cached
+   during preflight. Any boundary refusal leaves existing destinations and
+   outside files unchanged. All source bytes and local targets are preflighted
+   first. This assumes no concurrent hostile filesystem writer; apply-time disk
    failures are not rolled back.
 
    Suite ownership uses exact directory segments relative to the unzipped
@@ -74,6 +134,25 @@ Each baseline exists at both widths (`<name>-desktop.png`, `<name>-mobile.png`).
    directories (`test-results-kit-visual/`, `test-results-kit-parity/`, and
    `__screenshots-kit__/`) are excluded; use the
    [Kit acceptance guide](kit-parity-gates.md#visual-gates) for those images.
+
+   Both accept scripts take `[--dry-run] [--format json] <artifact-dir>`.
+   `--dry-run` prints a bounded preview of the plan (destinations and sources,
+   skipped sources with a reason, the collision verdict), writes nothing, and
+   exits as the real run would. Human and JSON reports stay within 16 KiB of
+   UTF-8, replace filename controls with `_`, and bound each displayed path to
+   256 characters. JSON retains complete items and counts omissions in
+   `truncated` (including omissions for the byte budget). Display names are
+   diagnostics, not authoritative filesystem paths; output truncation never
+   changes the validated plan or its writes. `--format json` prints one versioned verdict
+   (`version`, `tool`, `mode`, `ok`, `code`, `next_action`, `destinations`,
+   `sources`, plus the dry-run `plan` when previewing). Any other flag, a
+   missing or extra positional, or a missing directory exits 2 before the
+   artifact is read or a baseline written. Refusals exit 1. Output names files
+   by baseline filename or artifact-relative path, never an absolute path or
+   file bytes. Stable `code` values: `OK`, `UNKNOWN_FLAG`, `MISSING_ARG`,
+   `EXTRA_ARGS`, `ARTIFACT_NOT_FOUND`, `NO_CANDIDATES`, `NO_CHANGES` (Hono
+   only), `COLLISION`, `STALE_COPY_CONFLICT`, `IO_ERROR`, `SOURCE_SYMLINK`,
+   `DESTINATION_SYMLINK`, `ARTIFACT_LIMIT`; each comes with a `next_action`.
 4. Commit the updated baselines in the same PR and say why in the PR body.
    Reviewers treat a baseline change like code: an unexplained one is a finding.
 

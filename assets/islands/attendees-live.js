@@ -5,11 +5,14 @@
 // CustomEvent broadcast by the rsvp-button island after every successful
 // write, then re-reads the event page HTML (GET /e/<key>, text/html, with
 // the x-two-island fragment header so the server answers without rotating
-// the single-use session bearer) and swaps the
-// `[data-testid="event-attendees"]` section in place (no full reload). The
-// SSR section and its full-page Refresh link stay as the
-// no-JS fallback; this binder only patches nodes in place, never invents
-// markup beyond the bounded stale/retry signal.
+// the single-use session bearer) and swaps the roster section in place
+// (no full reload) across both member-visible identities: the populated
+// `[data-testid="event-attendees"]` list and the empty-roster
+// `[data-testid="event-roster-empty"]` placeholder. A first RSVP swaps
+// the placeholder for the list; a last withdrawal swaps back. The SSR
+// section and its full-page Refresh link stay as the no-JS fallback;
+// this binder only patches nodes in place, never invents markup beyond
+// the bounded stale/retry signal.
 //
 // Budget: one GET per answered event for this page's own key; non-matching
 // keys fire nothing. No polling. One automatic retry, then a visible
@@ -20,7 +23,10 @@
 // snaps back to page one.
 
 (function () {
-  var SECTION = '[data-testid="event-attendees"]';
+  // Both member-visible roster identities: the populated list and the
+  // empty-roster placeholder. Non-member placeholders (guest nudge,
+  // members-only) never match: those viewers hold no RSVP control, so no
+  // broadcast ever swaps them, and the island never invents them.
   var STALE_TESTID = "event-attendees-stale";
   var RETRY_TESTID = "event-attendees-retry";
   var UPDATED = "going-count-updated";
@@ -61,37 +67,58 @@
     return null;
   }
 
-  // Current attendee page for this view, from ?attendees=N only (no other
-  // query state is copied). Returns "" on page one or when unreadable so the
-  // refresh keeps the default URL. Strict like the server
-  // (parseAttendeePageParam in src/events/reads.ts): the raw value must be a
-  // positive integer in full, and its offset arithmetic must stay exact, so
-  // suffixed ("2x"), fractional ("2.9"), padded ("02") and unsafe values all
-  // fall back to the page-one refresh instead of a page the server never
-  // rendered.
+  // Attendee parsing mirrors parseAttendeePageParam: only full positive
+  // integers with exact offset arithmetic; malformed values stay on page one.
+  // Forward bounded scalar archive state on this read only (255 code points,
+  // like MAX_QUERY_LENGTH). The server remains the archive admission authority.
   var ATTENDEE_PAGE_SIZE = 100;
-  function pageQuery() {
-    var raw = null;
+  function rosterQuery() {
+    var result = new URLSearchParams();
     try {
-      var search = typeof location !== "undefined" && location.search ? location.search : "";
+      var search = typeof location !== "undefined" ? location.search || "" : "";
       var params = new URLSearchParams(search);
-      raw = params.get("attendees");
+      var raw = params.get("attendees");
+      var page = Number(raw);
+      if (
+        /^[1-9]\d*$/.test(raw || "") &&
+        Number.isSafeInteger(page) &&
+        Number.isSafeInteger((page - 1) * ATTENDEE_PAGE_SIZE) &&
+        page > 1
+      )
+        result.set("attendees", raw);
+      // Never repair malformed Unicode or collapse duplicate archive fields.
+      decodeURIComponent(search);
+      var pages = params.getAll("archivePage");
+      var queries = params.getAll("archiveQuery");
+      if (
+        pages.length === 1 &&
+        queries.length <= 1 &&
+        pages[0].length <= 16 &&
+        Array.from(queries[0] || "").length <= 255
+      ) {
+        result.set("archivePage", pages[0]);
+        if (queries.length) result.set("archiveQuery", queries[0]);
+      }
     } catch (_searchUnreadable) {
-      // Fall through to "": an unreadable query keeps the default page-one
-      // refresh instead of firing nothing.
+      // Keep the independently parsed attendee page; absent archive context
+      // returns to All events rather than inventing another search.
     }
-    if (typeof raw !== "string" || !/^[1-9]\d*$/.test(raw)) return "";
-    var page = Number(raw);
-    if (!Number.isSafeInteger(page)) return "";
-    if (!Number.isSafeInteger((page - 1) * ATTENDEE_PAGE_SIZE)) return "";
-    if (page <= 1) return "";
-    return "?attendees=" + raw;
+    var query = result.toString();
+    return query ? "?" + query : "";
   }
 
   function findSection(doc) {
-    var scope = doc || (typeof document !== "undefined" ? document : null);
+    // Bootstrap already requires document; refresh parses may supply their own.
+    var scope = doc || document;
+    // Exact queries also work in the small DOM implementations used by the
+    // island consumers. Only one audience-specific roster renders at a time.
     if (!scope || typeof scope.querySelector !== "function") return null;
-    return scope.querySelector(SECTION);
+    var identities = ["attendees", "roster-empty", "roster-guest-nudge", "roster-members-only"];
+    for (var i = 0; i < identities.length; i++) {
+      var section = scope.querySelector('[data-testid="event-' + identities[i] + '"]');
+      if (section) return section;
+    }
+    return null;
   }
 
   function clearStale() {
@@ -217,23 +244,20 @@
   // the old section). Without this the focus drops to BODY and assistive
   // tech loses its place.
   function restoreFocusAfterSwap(section) {
-    var heading = null;
+    var target;
     try {
-      heading = section.querySelector("#event-attendees-heading");
+      target = section.querySelector("h2") || section;
     } catch (_headingLookupIgnored) {
-      heading = null;
+      target = section;
     }
-    var target = heading || section;
     try {
-      if (target && typeof target.setAttribute === "function") {
-        target.setAttribute("tabindex", "-1");
-      }
+      target?.setAttribute?.("tabindex", "-1");
     } catch (_tabindexIgnored) {
       // Fall through to the focus attempt: the target is still focusable
       // enough in most hosts without the tabindex hint.
     }
     try {
-      if (target && typeof target.focus === "function") target.focus();
+      target?.focus?.();
     } catch (_focusIgnored) {
       // Fall through: the roster still matches the server truth; only the
       // focus restoration is skipped.
@@ -339,7 +363,9 @@
       }
     }
     if (!fresh && old) {
-      // The server renders no section for an empty roster.
+      // No roster shell remains in the authoritative document. Empty member
+      // and downgraded audience shells use the replacement branch above;
+      // this fallback still removes old private names when no shell is served.
       var refocusAfterPrune = focusedInside(old);
       try {
         if (old.parentNode) old.parentNode.removeChild(old);
@@ -453,7 +479,7 @@
       credentials: "same-origin",
     };
     if (controller) options.signal = controller.signal;
-    fetch("/e/" + encodeURIComponent(state.key) + pageQuery(), options).then(
+    fetch("/e/" + encodeURIComponent(state.key) + rosterQuery(), options).then(
       function (res) {
         // Fence stale attempts: only the attempt that owns the current
         // counter may settle. Late headers from a timed-out or superseded

@@ -92,6 +92,7 @@ const MATRIX: Case[] = [
   { method: "GET", route: "/join/discord", status: 503, format: "html" },
   { method: "GET", route: "/join/callback", status: 503, format: "html" },
   { method: "POST", route: "/logout", status: 303, location: "/" },
+  { method: "POST", route: "/logout/everywhere", status: 303, location: "/", actor: "member" },
   {
     method: "POST",
     route: "/auth/qa/:identity",
@@ -177,7 +178,7 @@ const MATRIX: Case[] = [
     format: "json",
     body: "{}",
   },
-  ...["publish", "cancel", "rsvp-pause", "rsvp-reopen"].map((action) => ({
+  ...["publish", "cancel", "duplicate", "rsvp-pause", "rsvp-reopen"].map((action) => ({
     method: "POST",
     route: `/events/:key/${action}`,
     status: 503,
@@ -241,6 +242,13 @@ const MATRIX: Case[] = [
   },
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
   // Operational admission is disabled before any session/source/audit lookup.
+  { method: "GET", route: "/admin/ops-overrides", status: 404 },
+  ...["POST", "PUT", "PATCH", "DELETE", "OPTIONS"].map((method) => ({
+    method,
+    route: "/admin/ops-overrides",
+    status: 405,
+    format: "json" as const,
+  })),
   { method: "GET", route: "/admin/queue/failed/:id/preview", status: 404, format: "json" },
   { method: "POST", route: "/admin/queue/failed/:id/redispatch", status: 404, format: "json" },
   // Evidence-only verifier is inert without runtime-only settings, so the
@@ -318,11 +326,13 @@ const MATRIX: Case[] = [
     "/admin/events/:key",
     "/admin/events/:key/publish",
     "/admin/events/:key/cancel",
+    "/admin/events/:key/duplicate",
     "/admin/events/:key/rsvp-pause",
     "/admin/events/:key/rsvp-reopen",
     "/admin/featured",
     "/admin/featured/:id",
     "/admin/featured/:id/delete",
+    "/admin/featured/:id/unpublish",
   ].map((route) => ({
     method: "POST",
     route,

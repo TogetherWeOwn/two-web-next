@@ -72,7 +72,9 @@ function fakeTag(strings: TemplateStringsArray, ...values: unknown[]) {
       normalized ===
       "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true)";
     const isBounded =
-      values.length === 2 && values.every((value) => value === "2000" || value === "2000ms");
+      values.length === 2 &&
+      (values.every((value) => value === "2000" || value === "2000ms") ||
+        (values[0] === "1950ms" && values[1] === "2000ms"));
     const restoresCallerSettings = values[0] === "17s" && values[1] === "23s";
     if (timeoutConfig && (isBounded || restoresCallerSettings)) return [];
     throw new Error(`unexpected statement: ${text.slice(0, 80)}`);
@@ -368,6 +370,7 @@ describe("evidence-only source/cache verifier admission", () => {
   it.each([
     ["bounded timeout setup", "2000", "2000"],
     ["bounded timeout setup with units", "2000ms", "2000ms"],
+    ["needsSync lock-first timeout setup", "1950ms", "2000ms"],
     ["caller timeout restoration", "17s", "23s"],
   ] as const)(
     "%s does not count as a source read",

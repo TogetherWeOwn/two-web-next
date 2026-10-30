@@ -16,7 +16,12 @@ import {
   type SQL,
 } from "drizzle-orm";
 import type { Db } from "../db/index";
-import { PUBLIC_DATA_BOUNDS, PUBLIC_EVENT_STATUS } from "../public-data/contracts";
+import { containsControlCharacters } from "../admin/validation-shared";
+import {
+  PUBLIC_API_GAME_MAX_LENGTH,
+  PUBLIC_DATA_BOUNDS,
+  PUBLIC_EVENT_STATUS,
+} from "../public-data/contracts";
 import { events, rsvps } from "../db/admin-schema";
 import { users } from "../db/schema";
 import { keyedMemberRead, nonSensitiveRead } from "../member-reads";
@@ -34,6 +39,8 @@ import {
 } from "../islands/contracts";
 import { calendarZone, canonicalIntervalDays, wallDayStart } from "./date-format";
 import type { DiscordEventsSource } from "./discord-transients-types";
+import { normalizePastPage } from "./past-page";
+export { normalizePastPage } from "./past-page";
 
 export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
   /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
@@ -594,13 +601,6 @@ export async function listCalendarPast(
   return Object.assign(visible, { mayBeTruncated: truncated });
 }
 
-/** Invalid HTML archive pages/offsets retain the page-one fallback. */
-export function normalizePastPage(page: number): number {
-  return Number.isSafeInteger(page) && page > 0 && Number.isSafeInteger((page - 1) * PAGE_SIZE)
-    ? page
-    : 1;
-}
-
 /** Past archive: ended (published-then-closed or already `past`), newest first, 20/page. */
 export async function listPast(
   db: Db,
@@ -652,8 +652,19 @@ export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent |
 
 export type EventLink = Pick<
   PublicEvent,
-  "id" | "eventKey" | "title" | "startsAt" | "timezone" | "location"
+  | "id"
+  | "eventKey"
+  | "title"
+  | "startsAt"
+  | "endsAt"
+  | "timezone"
+  | "location"
+  | "game"
+  | "rsvpOpen"
 >;
+
+export { eventLinkAvailability } from "./link-availability";
+
 export interface EventNeighbors {
   previous: EventLink | null;
   next: EventLink | null;
@@ -664,8 +675,11 @@ const eventLinkColumns = {
   eventKey: events.eventKey,
   title: events.title,
   startsAt: events.startsAt,
+  endsAt: events.endsAt,
   timezone: events.timezone,
   location: events.location,
+  game: events.game,
+  rsvpOpen: events.rsvpOpen,
 };
 
 /**
@@ -824,6 +838,7 @@ export async function getEventSeriesContext(
   const textFits = sql<boolean>`(
     octet_length(${events.eventKey}) + octet_length(${events.title}) +
     octet_length(${events.timezone}) + coalesce(octet_length(${events.location}), 0) +
+    coalesce(octet_length(${events.game}), 0) +
     coalesce(octet_length(${events.organizer_name}), 0)
   ) <= ${SERIES_CONTEXT_MAX_TEXT_BYTES}`;
   const rows = await nonSensitiveRead("events", () =>
@@ -834,6 +849,7 @@ export async function getEventSeriesContext(
         title: sql<string>`case when ${textFits} then ${events.title} end`,
         timezone: sql<string>`case when ${textFits} then ${events.timezone} end`,
         location: sql<string | null>`case when ${textFits} then ${events.location} end`,
+        game: sql<string | null>`case when ${textFits} then ${events.game} end`,
         organizer_name: sql<string | null>`case when ${textFits} then ${events.organizer_name} end`,
         recurrenceIndex: events.recurrenceIndex,
         textFits,
@@ -864,8 +880,11 @@ export async function getEventSeriesContext(
     eventKey: row.eventKey,
     title: row.title,
     startsAt: row.startsAt,
+    endsAt: row.endsAt,
     timezone: row.timezone,
     location: row.location,
+    game: row.game,
+    rsvpOpen: row.rsvpOpen,
   });
   // A run of one is a standalone render: the current row with no visible
   // siblings keeps today's markup with no series block at all.
@@ -1124,16 +1143,25 @@ export async function sitemapEvents(
   }));
 }
 
-/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. */
+/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. An optional game narrows to one stored game in the same SQL WHERE, before the cap. */
 export async function listFeed(
   db: Db,
   statuses: ("published" | "cancelled")[],
   now = new Date(),
+  game: string | null = null,
 ): Promise<Array<typeof events.$inferSelect>> {
+  const gameClause = gameCondition(game);
   const rows = await db
     .select()
     .from(events)
-    .where(and(inArray(events.status, statuses), finiteEventWindow, gte(events.endsAt, now)))
+    .where(
+      and(
+        ...(gameClause ? [gameClause] : []),
+        inArray(events.status, statuses),
+        finiteEventWindow,
+        gte(events.endsAt, now),
+      ),
+    )
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
   warnEgressCapacity("feed", rows.length);
@@ -1165,12 +1193,32 @@ export type PublicApiEvent = Omit<PublicEvent, "goingCount" | "goingOccupancy"> 
  * bound as `listJson`, but the going-count aggregate degrades to null instead
  * of failing the page — an unreadable RSVP rollup reads as unknown, never 0.
  * `listJson` stays untouched for the session-gated `/events.json` contract.
+ * Optional `game` narrows to one stored game, trim + case-insensitive exact
+ * via `gameCondition` (the schedule-facet and leaderboard `?activity=`
+ * precedent): the value arrives as a bound parameter, never interpolated, so
+ * stored NULL/blank games never match and hostile input matches nothing.
  */
 export async function listPublicApiEvents(
   db: Db,
-  opts: { limit: number; offset: number },
+  opts: { limit: number; offset: number; game?: string },
 ): Promise<{ rows: PublicApiEvent[]; total: number; page: number }> {
-  const predicate = eq(events.status, PUBLIC_EVENT_STATUS);
+  // Defense-in-depth: direct callers must not read unfiltered for a blank
+  // game or send a NUL to PostgreSQL. Invalid games answer empty without a
+  // database read, matching the route and the save-side character rule.
+  if (opts.game !== undefined) {
+    const trimmed = opts.game.trim();
+    if (
+      trimmed === "" ||
+      [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH ||
+      containsControlCharacters(trimmed)
+    ) {
+      return { rows: [], total: 0, page: 1 };
+    }
+  }
+  const gameClause = opts.game !== undefined ? gameCondition(opts.game) : undefined;
+  const predicate = gameClause
+    ? and(eq(events.status, PUBLIC_EVENT_STATUS), gameClause)
+    : eq(events.status, PUBLIC_EVENT_STATUS);
   const [total] = await db.select({ n: count() }).from(events).where(predicate);
   const n = Number(total?.n ?? 0);
   const lastPage = Math.max(1, Math.ceil(n / opts.limit));

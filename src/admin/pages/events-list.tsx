@@ -1,6 +1,13 @@
-// Admin events-list screen (split from pages.tsx; zero behavior change).
+// Admin events-list screen: shared native filters and a bounded event table.
 
 import type { FC } from "hono/jsx";
+import { raw } from "hono/html";
+import {
+  renderEventStartsInputsHtml,
+  renderEventStartsFeedbackHtml,
+  renderEventFilterFieldsHtml,
+  renderEventFilterActionsHtml,
+} from "../event-starts-inputs";
 import type { EventListRow } from "../store";
 import { goingCountText } from "../../islands/contracts";
 import { eventEmptyText, eventListUrl, type EventListQuery, type EventSort } from "../event-list";
@@ -18,13 +25,17 @@ const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuer
       scope="col"
       aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : "none"}
     >
-      <a
-        href={eventListUrl(query, { sort, order, page: 1 })}
-        aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}
-      >
-        {label}
-        {active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
-      </a>
+      {query.startsWindow?.error ? (
+        <span>{label}</span>
+      ) : (
+        <a
+          href={eventListUrl(query, { sort, order, page: 1 })}
+          aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}
+        >
+          {label}
+          {active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
+        </a>
+      )}
     </th>
   );
 };
@@ -56,72 +67,11 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
     <section>
       <h1>Events</h1>
       <form method="get" action="/admin/events" class="filters">
-        <input type="hidden" name="sort" value={query.sort} />
-        <input type="hidden" name="order" value={query.order} />
-        <div class="field">
-          <label for="q">Search</label>
-          <input id="q" name="q" type="search" value={query.q} />
-        </div>
-        <div class="field">
-          <label for="status">Status</label>
-          <select id="status" name="status">
-            {["", "draft", "published", "cancelled", "past"].map((s) => (
-              <option value={s} selected={s === query.status}>
-                {s === "" ? "All" : s}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div class="field">
-          <label for="rsvp_open">RSVPs</label>
-          <select id="rsvp_open" name="rsvp_open">
-            <option value="" selected={query.rsvp_open === ""}>
-              All
-            </option>
-            <option value="1" selected={query.rsvp_open === "1"}>
-              Open
-            </option>
-            <option value="0" selected={query.rsvp_open === "0"}>
-              Paused
-            </option>
-          </select>
-        </div>
-        <div class="field">
-          <label for="series">Series</label>
-          <select id="series" name="series">
-            {[
-              ["", "All"],
-              ["parent", "Parent"],
-              ["child", "Child"],
-              ["standalone", "Standalone"],
-            ].map(([value, label]) => (
-              <option value={value} selected={value === query.series}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div class="field">
-          <label for="fill">Fill</label>
-          <select id="fill" name="fill">
-            {[
-              ["", "All"],
-              ["full", "Full"],
-              ["has_seats", "Has seats"],
-              ["unlimited", "Unlimited"],
-            ].map(([value, label]) => (
-              <option value={value} selected={value === query.fill}>
-                {label}
-              </option>
-            ))}
-          </select>
-        </div>
-        <div class="field">
-          <button type="submit" class="btn">
-            Filter
-          </button>
-        </div>
+        {raw(renderEventFilterFieldsHtml(query))}
+        {raw(renderEventStartsInputsHtml(query.startsWindow))}
+        {raw(renderEventFilterActionsHtml(query))}
       </form>
+      {raw(renderEventStartsFeedbackHtml(query.startsWindow))}
       <p>
         <a class="btn" href="/admin/events/new" data-testid="new-event">
           New event
@@ -158,10 +108,29 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                 <tr key={r.eventKey}>
                   <td>
                     <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
+                    {r.game?.trim() ? (
+                      <span class="hint">
+                        <br />
+                        {r.game}
+                      </span>
+                    ) : null}
                   </td>
                   <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
                   <td>
-                    <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time>
+                    {Number.isFinite(r.startsAt.getTime()) ? (
+                      <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time>
+                    ) : (
+                      <span data-testid={`event-unrenderable-time-${r.eventKey}`}>
+                        Unrenderable time
+                      </span>
+                    )}
+                    {Number.isFinite(r.startsAt.getTime()) &&
+                    !Number.isFinite(r.endsAt.getTime()) ? (
+                      <span data-testid={`event-unrenderable-time-${r.eventKey}`}>
+                        {" "}
+                        (unrenderable end time)
+                      </span>
+                    ) : null}
                   </td>
                   <EventFillCell row={r} />
                   <td>
@@ -187,14 +156,19 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
           </tbody>
         </table>
       </div>
+      {!query.startsWindow?.error && rows.length === 0 && query.page > 1 ? (
+        <p>
+          <a href={eventListUrl(query, { page: 1 })}>First page of these results</a>
+        </p>
+      ) : null}
       <nav aria-label="Event pages" class="actions">
-        {query.page > 1 ? (
+        {!query.startsWindow?.error && query.page > 1 ? (
           <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>
             Previous
           </a>
         ) : null}
         <span>Page {query.page}</span>
-        {hasNext ? (
+        {!query.startsWindow?.error && hasNext ? (
           <a rel="next" href={eventListUrl(query, { page: query.page + 1 })}>
             Next
           </a>

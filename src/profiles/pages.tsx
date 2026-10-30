@@ -41,46 +41,29 @@ import {
   parseGamesText,
 } from "./composition";
 
-// Stable field/error ids for profile validation association.
-// The server `games` key maps to the `games_text` control; any other key is
-// global and stays in the summary without a fabricated control link.
-export const PROFILE_FIELD_IDS = {
-  bio: "profile-bio",
-  games_text: "profile-games-text",
-  timezone: "profile-timezone",
-  leaderboard_opt_out: "profile-leaderboard-opt-out",
-} as const;
-type ProfileField = keyof typeof PROFILE_FIELD_IDS;
-export const PROFILE_ERROR_IDS: Record<ProfileField, string> = {
-  bio: "profile-bio-error",
-  games_text: "profile-games-text-error",
-  timezone: "profile-timezone-error",
-  leaderboard_opt_out: "profile-leaderboard-opt-out-error",
+import {
+  PROFILE_ERROR_IDS,
+  PROFILE_FIELD_IDS,
+  PROFILE_SHARE_DESCRIPTION,
+  PROFILE_TIMEZONE_HELP_ID,
+  profileFieldForErrorKey,
+  profileInitials,
+  statsDate,
+  statsLabel,
+  type ProfileFormValues,
+} from "./presentation";
+
+export {
+  PROFILE_ERROR_IDS,
+  PROFILE_FIELD_IDS,
+  PROFILE_SHARE_DESCRIPTION,
+  PROFILE_TIMEZONE_HELP_ID,
+  profileFieldForErrorKey,
+  profileInitials,
+  statsDate,
+  statsLabel,
+  type ProfileFormValues,
 };
-// The timezone help text stays associated in both valid and error states.
-export const PROFILE_TIMEZONE_HELP_ID = "profile-timezone-help";
-export const profileFieldForErrorKey = (key: string): ProfileField | null =>
-  key === "bio"
-    ? "bio"
-    : key === "games" || key === "games_text"
-      ? "games_text"
-      : key === "timezone"
-        ? "timezone"
-        : key === "leaderboard_opt_out"
-          ? "leaderboard_opt_out"
-          : null;
-export const statsLabel = (key: string) =>
-  key.replace(/[_-]+/g, " ").replace(/\b\w/g, (letter) => letter.toUpperCase());
-// Legacy parity: the avatar fallback is the first two code points, uppercased.
-export const profileInitials = (username: string) =>
-  [...username].slice(0, 2).join("").toUpperCase() || "?";
-export const statsDate = (date: Date) =>
-  date.toLocaleDateString("en-GB", {
-    day: "numeric",
-    month: "short",
-    year: "numeric",
-    timeZone: "UTC",
-  });
 
 // Recovery is an explicit safe GET to the same profile, never a background
 // retry or an automatic reload: over an unsaved editor the link warns that
@@ -201,22 +184,6 @@ const MemberStatsBlock: FC<{
   );
 };
 
-// Share tags (TOG-6793): the canonical is always the shareable member URL,
-// so /profile and /members/{user} never present as duplicates. The
-// description stays generic on purpose — the only member data in the tags is
-// the name already in the title. Guests are bounced to login before any
-// profile HTML renders, so no tags can leak to them.
-export const PROFILE_SHARE_DESCRIPTION = "A member of Together We Own.";
-
-// Failed-save re-render shape, shared with the Svelte view: preserved inputs
-// plus the 422 error bag, so both renderers show the same form.
-export type ProfileFormValues = {
-  bio: string;
-  games_text: string;
-  timezone: string;
-  leaderboard_opt_out: boolean;
-};
-
 export const ProfilePage: FC<{
   member: MemberView;
   isOwner: boolean;
@@ -229,6 +196,10 @@ export const ProfilePage: FC<{
   values?: ProfileFormValues;
   /** 422/503 re-render: the stats recovery link warns that reloading discards the draft. */
   statsDraftWarning?: boolean;
+  /** Member's displayed game strings the viewer also plays; entries exactly
+   * equal to a value render the shared marker. Absent (or empty) renders the
+   * plain list: own profile and zero-shared never mark. */
+  sharedGames?: string[];
 }> = ({
   member,
   isOwner,
@@ -239,6 +210,7 @@ export const ProfilePage: FC<{
   errors,
   values,
   statsDraftWarning,
+  sharedGames,
 }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
@@ -264,6 +236,14 @@ export const ProfilePage: FC<{
   // refreshes these same nodes; no-JS readers get the seeded state.
   const bioCount = bioCountText(codePoints(form.bio));
   const gamesCount = gamesCountText(parseGamesText(form.games_text));
+  // Exact-match set over the route's computed shared names: the match itself
+  // (trim + case-insensitive) lives in findSharedGames, shared with the Kit
+  // twin, so the view never re-derives it.
+  const shared = new Set(sharedGames ?? []);
+  // Refusal re-render (422/503): the controls' HTML defaults are the
+  // rejected draft, so Cancel cannot be a native reset there — it would
+  // restore the draft itself for a member without JavaScript.
+  const refused = !!errors && Object.keys(errors).length > 0;
   return (
     <Layout
       title={`${member.username} — Member profile`}
@@ -294,6 +274,11 @@ export const ProfilePage: FC<{
           <form method="post" action="/logout" data-testid="profile-signout">
             <button type="submit" class="link">
               Sign out
+            </button>
+          </form>
+          <form method="post" action="/logout/everywhere" data-testid="profile-signout-everywhere">
+            <button type="submit" class="link">
+              Sign out everywhere
             </button>
           </form>
         </div>
@@ -347,6 +332,11 @@ export const ProfilePage: FC<{
                     (isOwner ? PROFILE_EMPTY_COPY.timezoneOwner : PROFILE_EMPTY_COPY.timezoneOther)
                   }`}
                 </p>
+                <div data-local-time-compare={member.timezone ?? ""}>
+                  <button type="button" class="btn profile-secondary" hidden>
+                    Compare local times
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -367,9 +357,16 @@ export const ProfilePage: FC<{
               <div data-testid="profile-games">
                 {member.games.length > 0 ? (
                   <ul>
-                    {member.games.map((g) => (
-                      <li>{g}</li>
-                    ))}
+                    {member.games.map((g) =>
+                      shared.has(g) ? (
+                        <li data-shared-game="true">
+                          {g}
+                          <span data-testid="profile-shared-marker">Shared</span>
+                        </li>
+                      ) : (
+                        <li>{g}</li>
+                      ),
+                    )}
                   </ul>
                 ) : (
                   <p>{isOwner ? PROFILE_EMPTY_COPY.gamesOwner : PROFILE_EMPTY_COPY.gamesOther}</p>
@@ -379,6 +376,7 @@ export const ProfilePage: FC<{
           </div>
         </section>
         <script src="/islands/avatar.js" defer></script>
+        <script src="/islands/local-time-compare.js" defer></script>
         {isOwner ? (
           <section
             class="profile-panel profile-new-member"
@@ -571,13 +569,26 @@ export const ProfilePage: FC<{
                 <button class="btn" type="submit" data-testid={PROFILE_SAVE_TESTID}>
                   {PROFILE_COPY.save}
                 </button>
-                <button
-                  class="btn profile-secondary"
-                  type="reset"
-                  data-testid={PROFILE_CANCEL_TESTID}
-                >
-                  {PROFILE_COPY.cancel}
-                </button>
+                {refused ? (
+                  // A safe GET back to the saved profile discards the draft
+                  // without JavaScript; the island intercepts plain clicks
+                  // and resets in place instead. Same styling as the reset.
+                  <a
+                    class="btn profile-secondary"
+                    href={`/members/${member.id}`}
+                    data-testid={PROFILE_CANCEL_TESTID}
+                  >
+                    {PROFILE_COPY.cancel}
+                  </a>
+                ) : (
+                  <button
+                    class="btn profile-secondary"
+                    type="reset"
+                    data-testid={PROFILE_CANCEL_TESTID}
+                  >
+                    {PROFILE_COPY.cancel}
+                  </button>
+                )}
               </div>
             </form>
             <script src="/islands/member-profile.js" defer></script>

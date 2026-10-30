@@ -128,7 +128,9 @@ describe("admin zero-row tables degrade instead of crashing", () => {
       }),
     );
     expect(html).toContain('data-testid="events-empty"');
-    expect(html).toContain("No events match these filters.");
+    expect(html).toContain("No results on this page.");
+    expect(html).not.toContain("No events match these filters.");
+    expect(html).toContain("First page of these results");
     expect(html).toContain("Page 2");
     expect(html).toContain('rel="prev"');
     expect(html).not.toContain('rel="next"');

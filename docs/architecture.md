@@ -184,7 +184,10 @@ member/moderator flags, and expiry ([src/sessions.ts](../src/sessions.ts),
 sessions have a 120-minute sliding window with rotation on authenticated reads
 (`SESSION_TTL_SECONDS`) and an absolute 24-hour lineage cap
 (`SESSION_ABSOLUTE_MAX_AGE_SECONDS`). Rotation preserves the original login's
-`created_at`; a fresh login is required at the cap. Logout revokes the row. Operators can revoke
+`created_at`; a fresh login is required at the cap. Logout revokes the row;
+sign-out-everywhere (`POST /logout/everywhere`) revokes every live row for the
+acting member through the same hash-only sweep as fresh login, leaving other
+members live. Operators can revoke
 one member's active sessions with
 [bin/revoke-sessions.mjs](../bin/revoke-sessions.mjs) (dry-run count by
 default, `--apply` revokes), implemented in
@@ -262,6 +265,7 @@ exactly once.
 | `src/ai-friendly/` | content |
 | `src/admin/` | admin |
 | `src/admin-wayback.ts` | admin |
+| `src/admission-diagnostics.ts` | observability |
 | `src/agent-events/` | agent-events |
 | `src/alert-probe-error.ts` | observability |
 | `src/alert-probe.ts` | observability |
@@ -284,6 +288,7 @@ exactly once.
 | `src/error-responses.tsx` | entry |
 | `src/errors.tsx` | entry |
 | `src/events/` | events |
+| `src/featured-eligibility.ts` | content |
 | `src/featured-image.ts` | content |
 | `src/featured-policy.ts` | content |
 | `src/featured-status.tsx` | content |
@@ -298,6 +303,7 @@ exactly once.
 | `src/index.tsx` | entry |
 | `src/invite-fallback.ts` | join |
 | `src/invite.ts` | join |
+| `src/json-refusal.ts` | http-guard |
 | `src/islands/` | frontend |
 | `src/jobs/` | jobs |
 | `src/jobs-worker.ts` | jobs |
@@ -326,6 +332,7 @@ exactly once.
 | `src/pages.tsx` | content |
 | `src/pinned-assets.ts` | content |
 | `src/privacy-content.ts` | content |
+| `src/privacy-history.ts` | content |
 | `src/privacy.ts` | content |
 | `src/probes/` | observability |
 | `src/profiles/` | profiles |
@@ -339,6 +346,7 @@ exactly once.
 | `src/roles.ts` | auth |
 | `src/route-ownership.ts` | entry |
 | `src/faq-content.ts` | content |
+| `src/faq-last-reviewed.ts` | content |
 | `src/rules-content.ts` | content |
 | `src/rules-last-updated.ts` | content |
 | `src/same-origin.ts` | http-guard |

@@ -51,5 +51,6 @@ export const load: PageServerLoad = async ({ locals, url, cookies, setHeaders })
     isModerator: outcome.isModerator,
     appUrl: env.APP_URL,
     joinResult: outcome.joinResult,
+    sharedGames: outcome.sharedGames,
   };
 };

@@ -18,6 +18,7 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
     const { method, path } = registrations.get(name)!;
     let auth = "public";
     if (path === "/*") auth = "middleware";
+    else if (path === "/admin/ops-overrides") auth = "ops-control-bearer";
     else if (path === "/admin/queue/source-evidence/:id") auth = "evidence-bearer";
     else if (path.startsWith("/admin/queue/") && registrations.has("ALL /admin/queue/*"))
       auth = "staging-operator";
@@ -48,6 +49,7 @@ export function routeInventory(router: Router): RouteInventoryEntry[] {
       (method === "POST" &&
         (path === "/events/:key/publish" ||
           path === "/events/:key/cancel" ||
+          path === "/events/:key/duplicate" ||
           path === "/events/:key/rsvp-pause" ||
           path === "/events/:key/rsvp-reopen"))
     )

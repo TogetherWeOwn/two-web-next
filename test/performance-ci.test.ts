@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { URL } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+import { beforeAll, describe, expect, it, vi } from "vitest";
 import { sql } from "drizzle-orm";
 import worker, { fixtureEnvForRequest } from "../ci/lighthouse-worker";
 import type { Db } from "../src/db/index";
@@ -403,6 +403,108 @@ describe("performance CI", () => {
     expect(() => assertFixtureContent(path, response, mutate(html), before, after)).toThrow();
   });
 
+  describe.each(["/events", `/e/${fixtureKey}`])("production endpoint admission: %s", (path) => {
+    const before = Date.parse("2030-01-01T20:00:00.000Z");
+    const after = before + 10;
+    const start = "2030-01-08T20:00:00.005Z";
+    const end = "2030-01-08T22:00:00.005Z";
+    let response: Response;
+    let html: string;
+
+    beforeAll(async () => {
+      const requestedAt = Date.now();
+      response = await request(path);
+      html = await response.text();
+      expect(() =>
+        assertFixtureContent(path, response, html, requestedAt, Date.now()),
+      ).not.toThrow();
+      expect([...html.matchAll(/<time\b[^>]*datetime="([^"]+)"/g)]).toHaveLength(2);
+    });
+
+    function withTimes(instants: (string | null)[]) {
+      const replacement = instants
+        .map((instant) =>
+          instant === null
+            ? "<time>Endpoint</time>"
+            : `<time datetime="${instant}">Endpoint</time>`,
+        )
+        .join("");
+      let seen = 0;
+      return html.replace(/<time\b[^>]*>[\s\S]*?<\/time>/g, () =>
+        seen++ === 0 ? replacement : "",
+      );
+    }
+
+    it.each([
+      ["2030-01-08T20:00:00.000Z", "2030-01-08T22:00:00.000Z"],
+      [start, end],
+      ["2030-01-08T20:00:00.010Z", "2030-01-08T22:00:00.010Z"],
+    ])("admits the exact two-hour range starting at %s", (startsAt, endsAt) => {
+      expect(() =>
+        assertFixtureContent(path, response, withTimes([startsAt, endsAt]), before, after),
+      ).not.toThrow();
+    });
+
+    it.each([
+      { name: "missing end", instants: [start] },
+      { name: "missing start", instants: [end] },
+      { name: "no endpoints", instants: [] },
+      { name: "extra endpoint", instants: [start, end, end] },
+      { name: "extra in-window start", instants: [start, end, start] },
+      { name: "swapped endpoints", instants: [end, start] },
+      { name: "duplicate start", instants: [start, start] },
+      { name: "duplicate end", instants: [end, end] },
+      { name: "malformed start", instants: ["invalid", end] },
+      { name: "malformed end", instants: [start, "invalid"] },
+      { name: "start without datetime", instants: [null, end] },
+      { name: "end without datetime", instants: [start, null] },
+      {
+        name: "short duration inside normalized window",
+        instants: [start, "2030-01-08T22:00:00.004Z"],
+      },
+      {
+        name: "long duration inside normalized window",
+        instants: [start, "2030-01-08T22:00:00.006Z"],
+      },
+      {
+        name: "stale range with exact duration",
+        instants: ["2030-01-08T19:59:59.999Z", "2030-01-08T21:59:59.999Z"],
+      },
+      {
+        name: "late range with exact duration",
+        instants: ["2030-01-08T20:00:00.011Z", "2030-01-08T22:00:00.011Z"],
+      },
+      {
+        name: "start shifted into end window with exact duration",
+        instants: [end, "2030-01-09T00:00:00.005Z"],
+      },
+      {
+        name: "module epoch range with exact duration",
+        instants: ["1970-01-08T00:00:00.000Z", "1970-01-08T02:00:00.000Z"],
+      },
+    ])("rejects $name", ({ instants }) => {
+      // Controls prove the body remains admissible; only the endpoints change.
+      expect(() =>
+        assertFixtureContent(path, response, withTimes([start, end]), before, after),
+      ).not.toThrow();
+      expect(() =>
+        assertFixtureContent(path, response, withTimes(instants), before, after),
+      ).toThrow();
+    });
+  });
+
+  it("never normalizes a homepage timestamp into the two-hour end window", async () => {
+    const response = await request("/");
+    const html = await response.text();
+    const before = Date.parse("2030-01-01T20:00:00.000Z");
+    const after = before + 10;
+    expect([...html.matchAll(/<time\b[^>]*datetime="([^"]+)"/g)]).toHaveLength(1);
+    const withStart = html.replace(/datetime="[^"]+"/g, 'datetime="2030-01-08T20:00:00.005Z"');
+    const withEnd = html.replace(/datetime="[^"]+"/g, 'datetime="2030-01-08T22:00:00.005Z"');
+    expect(() => assertFixtureContent("/", response, withStart, before, after)).not.toThrow();
+    expect(() => assertFixtureContent("/", response, withEnd, before, after)).toThrow();
+  });
+
   it("refuses redirects and non-HTML responses before Lighthouse admission", async () => {
     const response = await request("/");
     const html = await response.text();
@@ -625,20 +727,23 @@ describe("performance CI", () => {
     }
   });
 
-  it("loads the pinned Lighthouse toolchain with patched transitive dependencies", () => {
+  it("pins the patched Puppeteer graph only under Lighthouse", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     expect(pkg.devDependencies["@lhci/cli"]).toBe("0.15.1");
     expect(pkg.overrides["@lhci/cli"]).toEqual({ tmp: "0.2.7", "@puppeteer/browsers": "3.2.3" });
-    // GHSA-c475-qrg2-pj4r: only LHCI's proxy chain pulls basic-ftp in.
+    // GHSA-c475-qrg2-pj4r: LHCI's real proxy chain still needs patched FTP.
     expect(pkg.overrides["basic-ftp"]).toBe("6.2.1");
-    // Main's engines floor (^22.23.0 || >=24) satisfies the ESM-only browser
-    // helper's own >=22.12.0 requirement; pin the merged value, not the floor.
-    // 22.23.0 is the verified floor: its ICU 78 renders the suite's pinned
-    // `GMT+00:00` zero offset and its bundled npm 10 accepts the lockfile
-    // with the puppeteer-core proxy-agent override below.
+    // The verified Node floor supports the browser helper's ESM entry point.
     expect(pkg.engines.node).toBe("^22.23.0 || >=24");
-    expect(pkg.overrides["puppeteer-core"]).toEqual({ "proxy-agent": "6.5.0" });
-    // Exercise both module entry points used by LHCI and Lighthouse, without Chrome/network.
+    expect(pkg.overrides["lighthouse"]).toEqual({ "puppeteer-core": "25.16.0" });
+    // Puppeteer 25 no longer declares proxy-agent. Do not force its obsolete
+    // dependency or force Zod 4 into the older BiDi parser's Zod 3 contract.
+    expect(pkg.overrides).not.toHaveProperty("puppeteer-core");
+    expect(pkg.overrides).not.toHaveProperty("zod");
+  });
+
+  it("loads the pinned Lighthouse toolchain with patched transitive dependencies", () => {
+    // Resolve from each real consumer, not an unrelated hoisted root package.
     const loaded = spawnSync(
       process.execPath,
       [
@@ -648,8 +753,10 @@ describe("performance CI", () => {
       import assert from "node:assert/strict";
       import { createRequire } from "node:module";
       import { existsSync, writeFileSync } from "node:fs";
+      import { pathToFileURL } from "node:url";
       const require = createRequire(import.meta.url);
       const lhciRequire = createRequire(require.resolve("@lhci/cli/package.json"));
+      assert.equal(require("@lhci/cli/package.json").version, "0.15.1");
       const tmp = lhciRequire("tmp");
       assert.equal(lhciRequire("tmp/package.json").version, "0.2.7");
       const file = tmp.fileSync({ postfix: ".html" });
@@ -659,17 +766,45 @@ describe("performance CI", () => {
         assert.ok(existsSync(file.name));
       } finally { file.removeCallback(); }
       assert.equal(existsSync(file.name), false);
-      assert.equal(typeof require("puppeteer-core").connect, "function");
-      assert.equal(typeof (await import("puppeteer-core")).connect, "function");
-      assert.equal(typeof (await import("lighthouse")).default, "function");
-      // Both proxy chains (LHCI's and Puppeteer's) must resolve the patched FTP client.
-      for (const chain of [["@lhci/cli", "proxy-agent", "pac-proxy-agent", "get-uri"],
-        ["lighthouse", "puppeteer-core", "proxy-agent", "pac-proxy-agent", "get-uri"]]) {
-        let req = require;
-        for (const name of chain) req = createRequire(req.resolve(name + "/package.json"));
-        assert.equal(req("basic-ftp/package.json").version, "6.2.1");
-        assert.equal(typeof req("basic-ftp").Client, "function");
+      const lighthouseRequire = createRequire(lhciRequire.resolve("lighthouse/package.json"));
+      assert.equal(lhciRequire("lighthouse/package.json").version, "12.6.1");
+      const puppeteer = lighthouseRequire("puppeteer-core/package.json");
+      assert.equal(puppeteer.version, "25.16.0");
+      assert.equal(puppeteer.dependencies["@puppeteer/browsers"], "3.2.6");
+      assert.equal(puppeteer.dependencies["chromium-bidi"], "157.0.8090-0");
+      assert.equal(Object.hasOwn(puppeteer.dependencies, "proxy-agent"), false);
+      const puppeteerRequire = createRequire(lighthouseRequire.resolve("puppeteer-core/package.json"));
+      assert.equal(puppeteerRequire("@puppeteer/browsers/package.json").version, "3.2.6");
+      // CJS and ESM consumers must both load the actual overridden toolchain.
+      assert.equal(typeof lighthouseRequire("puppeteer-core").connect, "function");
+      assert.equal(typeof (await import(pathToFileURL(lighthouseRequire.resolve("puppeteer-core")).href)).connect, "function");
+      assert.equal(typeof puppeteerRequire("@puppeteer/browsers").launch, "function");
+      assert.equal(typeof (await import(pathToFileURL(puppeteerRequire.resolve("@puppeteer/browsers")).href)).launch, "function");
+      assert.equal(typeof (await import(pathToFileURL(lhciRequire.resolve("lighthouse")).href)).default, "function");
+      const bidi = puppeteerRequire("chromium-bidi/package.json");
+      assert.equal(bidi.version, "157.0.8090-0");
+      assert.equal(bidi.dependencies.zod, "^4.6.5");
+      const bidiRequire = createRequire(puppeteerRequire.resolve("chromium-bidi/package.json"));
+      assert.equal(bidiRequire("zod/package.json").version, "4.6.7");
+      // A real parser call catches a superficially clean but incompatible Zod override.
+      const parser = await import(pathToFileURL(bidiRequire.resolve(
+        "./out/Default/gen/src/protocol-parser/protocol-parser.js")).href);
+      const navigation = { context: "fixture-context", url: "https://fixture.invalid/", wait: "complete" };
+      assert.deepEqual(parser.BrowsingContext.parseNavigateParams(navigation), navigation);
+      for (const invalid of [{ ...navigation, url: 123 }, { url: navigation.url }, { ...navigation, wait: "invalid" }]) {
+        assert.throws(() => parser.BrowsingContext.parseNavigateParams(invalid),
+          error => error.error === "invalid argument");
       }
+      // Only traverse declared dependency edges. Hoisting can make proxy-agent
+      // resolvable from Puppeteer even though Puppeteer no longer depends on it.
+      let req = lhciRequire;
+      for (const name of ["proxy-agent", "pac-proxy-agent", "get-uri"]) {
+        assert.equal(typeof req("./package.json").dependencies[name], "string");
+        req = createRequire(req.resolve(name + "/package.json"));
+      }
+      assert.equal(typeof req("./package.json").dependencies["basic-ftp"], "string");
+      assert.equal(req("basic-ftp/package.json").version, "6.2.1");
+      assert.equal(typeof req("basic-ftp").Client, "function");
     `,
       ],
       { encoding: "utf8", timeout: 20000 },

@@ -32,7 +32,9 @@ import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 // @ts-expect-error Standalone CI helper has no declaration file (single-line import: wrapping would detach this from TS7016).
 import { assertNoViolations as gateAssert, WCAG_AA_TAGS as gateTags } from "../ci/a11y-policy.mjs";
 import { kitErrorCopy, type KitErrorStatus } from "../src/kit-errors";
+import { registerAdminReadRetryBrowserAcceptance } from "./helpers/admin-read-retry-browser-acceptance";
 import { registerPastArchiveBrowserAcceptance } from "./helpers/past-archive-search-browser-acceptance";
+import { registerPastSearchContextAcceptance } from "./helpers/past-search-context-browser-acceptance";
 
 const WCAG_AA_TAGS = gateTags as string[];
 const assertNoViolations = gateAssert as (
@@ -236,6 +238,8 @@ export function renderErrorShell(code, adminBack) {
     });
 
     registerPastArchiveBrowserAcceptance(() => browser);
+    registerPastSearchContextAcceptance(() => browser);
+    registerAdminReadRetryBrowserAcceptance(() => browser);
 
     async function loadShell(
       code: KitErrorStatus,

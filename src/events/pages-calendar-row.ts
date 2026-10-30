@@ -3,11 +3,74 @@
 // calendar leaf shares.
 import { transientEventKey } from "../islands/contracts";
 import type { DiscordTransient } from "../islands/contracts";
+import { isOngoing } from "./ongoing";
 import type { PublicEvent } from "./reads";
 
 /** Anything the calendar renders: a persisted row or a Discord transient. */
 export type CalRow = PublicEvent | DiscordTransient;
 export const isTransient = (e: CalRow): e is DiscordTransient => "discordId" in e;
+
+/** Schedule availability verdict shared by list cards and month-grid
+ * entries, so members see paused/full/remaining seats without opening a
+ * night. Deterministic precedence: cancelled and drafts carry no line (the
+ * cancelled badge already says so; drafts are unpublished), then past
+ * (explicit status or the end instant reached — an ongoing interval is not
+ * past just because its start elapsed), paused, full/overfull, and finally
+ * open finite/uncapped. Closed rows never advertise bookable seats; the
+ * copy is a snapshot, never a guaranteed reservation or proof of
+ * attendance. Remaining seats read seat occupancy, never the attributable
+ * named count, so the card never offers a seat the write path cannot
+ * grant. Uncapped rows name the open capacity without inventing a finite
+ * count; Discord-native rows say Discord-managed, never site seats.
+ *
+ * `ongoing` is a separate snapshot flag, never a state: a night under way
+ * keeps its paused/full/seats-left verdict, so RSVP truth is never replaced.
+ * It needs the render instant, ends at the end instant (ended wins) and is
+ * never set for cancelled/draft rows. A Discord transient is ongoing when
+ * Discord reports it active and any announced end has not elapsed. */
+export type ScheduleAvailabilityState =
+  | "past"
+  | "paused"
+  | "full"
+  | "open"
+  | "uncapped"
+  | "transient";
+export interface ScheduleAvailability {
+  state: ScheduleAvailabilityState;
+  /** Concise visible copy, shared by the card line and the grid suffix. */
+  text: string;
+  /** True while the night is under way at the render instant. */
+  ongoing: boolean;
+}
+export function rowAvailability(
+  e: CalRow,
+  now?: Date | null,
+  pastContext = false,
+): ScheduleAvailability | null {
+  if (isTransient(e)) {
+    const ongoing =
+      e.status === "active" &&
+      !pastContext &&
+      now != null &&
+      Number.isFinite(now.getTime()) &&
+      (e.endsAt === null || now.getTime() < e.endsAt.getTime());
+    return { state: "transient", text: "Discord-managed", ongoing };
+  }
+  if (e.status === "draft" || e.status === "cancelled") return null;
+  const ended =
+    pastContext || e.status === "past" || (now != null && e.endsAt.getTime() <= now.getTime());
+  if (ended) return { state: "past", text: "Ended", ongoing: false };
+  const ongoing = now != null && isOngoing(e, now);
+  if (!e.rsvpOpen) return { state: "paused", text: "RSVPs paused", ongoing };
+  if (e.capacity === null) return { state: "uncapped", text: "No seat limit", ongoing };
+  const remaining = Math.max(0, e.capacity - e.goingOccupancy);
+  if (remaining <= 0) return { state: "full", text: "Full", ongoing };
+  return {
+    state: "open",
+    text: remaining === 1 ? "1 seat left" : `${remaining} seats left`,
+    ongoing,
+  };
+}
 export const rowKey = (e: CalRow): string =>
   isTransient(e) ? transientEventKey(e.discordId) : e.eventKey;
 export const rowZone = (e: CalRow, fallback: string): string =>

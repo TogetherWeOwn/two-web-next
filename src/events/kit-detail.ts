@@ -28,6 +28,7 @@ import type {
   EventMissingModel,
   EventMissingSuggestion,
 } from "../kit-event-states";
+import { MAX_RETURN_DESTINATION_BYTES } from "../join/service";
 import { kitPublicReadGuard } from "../kit-past-events";
 import { declareMemberResult } from "../member-reads";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
@@ -35,13 +36,14 @@ import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
-import { formatEventWhen, isValidZone } from "./date-format";
+import { formatElapsedDuration, formatEventWhen, isValidZone } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
+import { eventLinkAvailability } from "./link-availability";
+import { isOngoing } from "./ongoing";
 import {
   ATTENDEE_PAGE_SIZE,
-  attendeePageHref,
   getEventNeighbors,
   getEventSeriesContext,
   getPublicEvent,
@@ -59,6 +61,9 @@ import {
   type ViewerRsvp,
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
+import { archiveContext } from "./archive-context";
+import { archiveEventHref, authReturnHref } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
 import { waitlistPosition } from "./waitlist";
 
 export interface KitEventDetailStore {
@@ -104,6 +109,11 @@ export interface KitEventDetailLink {
   whenText: string;
   datetime: string;
   location: string | null;
+  /** Destination's game; null renders no game line on the preview. */
+  game: string | null;
+  /** Destination's availability verdict at the render instant
+   * (`eventLinkAvailability`); null renders no state line. */
+  availability: string | null;
 }
 
 /** Series run context for the detail view: the hosts behind the run plus the
@@ -123,13 +133,26 @@ export interface KitEventDetailModel {
   description: string | null;
   /** Meta/share copy: the served fallback when the event has no description. */
   shareDescription: string;
+  /** Trimmed accessibility notes; null when the event has none. The section
+   * renders only when set, mirroring the served detail page. */
+  accessibilityNotes: string | null;
   location: string | null;
   /** Maps search URL for the venue; null when no venue is set. The view
    * renders this verbatim and never builds URLs from location itself. */
   directionsUrl: string | null;
+  /** Verified host display name; null when unset. */
+  organizerName: string | null;
+  /** Public joining link; null when unset. */
+  joinUrl: string | null;
+  /** Joining instructions; null when unset. */
+  joinInstructions: string | null;
   status: string;
   isDraft: boolean;
   isPast: boolean;
+  /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
+   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
+   * so a pre-existing fixture without the flag reads as not ongoing. */
+  isOngoing?: boolean;
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -148,6 +171,8 @@ export interface KitEventDetailModel {
   /** Validated roster-refresh href: the bare page path on page 1,
    * `?attendees=N` on a valid N > 1, never raw query text. */
   attendeesRefreshHref: string;
+  /** Navigation-only archive return, absent on direct visits. */
+  archiveReturn?: { href: string; label: string } | null;
   /** Meta robots + x-robots-tag value for draft/past rows; null when indexable. */
   robots: string | null;
   /** Rooted .md alternate path; drafts have no Markdown view. */
@@ -161,6 +186,8 @@ export interface KitEventDetailModel {
   whenText: string;
   /** Server-formatted scheduled end in the event zone, ISO fallback. */
   endsWhenText: string;
+  /** Server-formatted elapsed commitment; absent for an unusable interval. */
+  durationText?: string | null;
   /** Effective display zone (UTC when the stored zone is unknown). */
   zoneLabel: string;
   /** Machine instant for the <time> element, as served. */
@@ -237,16 +264,21 @@ export function eventDetailConsumesFlash(outcome: KitEventDetailOutcome, method:
  * GET /e/:key handler (src/events/routes-detail.tsx): the shared public-read
  * budget runs before any read, and a limited client gets the Hono 429 with its
  * no-store, private headers instead of the page. The hook binds env into this
- * (request, render) => dispatchEventDetailRequest(request, env, render); the
- * core decides WHEN it runs, so the route-id branch is pinned in
+ * (request, render, requestId) => dispatchEventDetailRequest(...); the core
+ * decides WHEN it runs, so the route-id branch is pinned in
  * src/route-ownership.ts instead of in web/src/hooks.server.ts. */
 export async function dispatchEventDetailRequest(
   request: Request,
   env: Env,
   render: () => Promise<Response>,
-  guard: (request: Request, env: Env) => Promise<Response | null> = kitPublicReadGuard,
+  guard: (
+    request: Request,
+    env: Env,
+    requestId?: unknown,
+  ) => Promise<Response | null> = kitPublicReadGuard,
+  requestId?: unknown,
 ): Promise<Response> {
-  const limited = await guard(request, env);
+  const limited = await guard(request, env, requestId);
   if (limited) return limited;
   return render();
 }
@@ -288,7 +320,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
 // Preserve the read-model export used by existing Kit callers.
 export { formatEventWhen } from "./date-format";
 
-function toLink(link: EventLink): KitEventDetailLink {
+function toLink(link: EventLink, now: Date): KitEventDetailLink {
   // Discovery instants use the served long-offset detail format (the hero
   // format), not the calendar grid format.
   return {
@@ -297,6 +329,8 @@ function toLink(link: EventLink): KitEventDetailLink {
     whenText: formatEventWhen(link.startsAt, link.timezone),
     datetime: link.startsAt.toISOString(),
     location: link.location,
+    game: link.game || null,
+    availability: eventLinkAvailability(link, now),
   };
 }
 
@@ -385,6 +419,7 @@ export async function resolveKitEventDetail(
             title: event.title,
             game: event.game,
             eventKey: event.eventKey,
+            existingResponses: event.goingCount,
             icsUrl: `/events/${event.eventKey}.ics`,
             markdownAlternate: `/e/${event.eventKey}.md`,
             upcomingUrl: "/events",
@@ -392,6 +427,7 @@ export async function resolveKitEventDetail(
               key: link.eventKey,
               title: link.title,
               whenText: fmt(link.startsAt, link.timezone),
+              datetime: link.startsAt.toISOString(),
               location: link.location,
             })),
             jsonLd: eventJsonLd(event, appUrl),
@@ -417,6 +453,7 @@ export async function resolveKitEventDetail(
       // Native attendee page from the query (?attendees=<n>), same strict
       // fallback as the served handler: malformed values stay on page 1.
       const attendeePage = parseAttendeePageParam(new URLSearchParams(search).get("attendees"));
+      const archive = archiveContext(search);
       // Member-only projections, mirroring the served Promise.all: attendees
       // and the viewer's own answer never run for anonymous viewers, so an
       // anonymous capture holds no subjects and releases with no audit row.
@@ -463,11 +500,15 @@ export async function resolveKitEventDetail(
         page: attendeePage,
         prevHref:
           attendeePage > 1
-            ? attendeePageHref(event.eventKey, attendees.length === 0 ? 1 : attendeePage - 1)
+            ? archiveEventHref(
+                event.eventKey,
+                archive,
+                attendees.length === 0 ? 1 : attendeePage - 1,
+              )
             : null,
         nextHref:
           attendeeRows.length > ATTENDEE_PAGE_SIZE
-            ? attendeePageHref(event.eventKey, attendeePage + 1)
+            ? archiveEventHref(event.eventKey, archive, attendeePage + 1)
             : null,
       };
       // RSVP closure is decided once here, on the server render instant, with
@@ -501,11 +542,18 @@ export async function resolveKitEventDetail(
           game: event.game,
           description: event.description,
           shareDescription: event.description || "An event at Together We Own.",
+          // Trimmed notes, null when absent or blank: the served detail
+          // page's section rule (src/events/pages-detail.tsx).
+          accessibilityNotes: event.accessibilityNotes?.trim() || null,
           location: event.location,
           directionsUrl: event.location ? directionsUrl(event.location) : null,
+          organizerName: event.organizer_name ?? null,
+          joinUrl: event.join_url ?? null,
+          joinInstructions: event.join_instructions ?? null,
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
+          isOngoing: isOngoing(event, now),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,
@@ -513,10 +561,9 @@ export async function resolveKitEventDetail(
           rsvpClosed,
           canonical: pageCanonical,
           path: pagePath,
-          // Stale-roster refresh keeps the validated attendee page (page 1
-          // stays bare); never the raw query, so foreign params and malformed
-          // values fall back to the bare event path.
-          attendeesRefreshHref: attendeePageHref(event.eventKey, attendeePage),
+          // Keep validated roster/archive state only, never raw query text.
+          attendeesRefreshHref: archiveEventHref(event.eventKey, archive, attendeePage),
+          archiveReturn: archiveReturnLink(archive),
           robots,
           // Drafts have no Markdown view: the session-free .md route 403s for
           // every viewer, so only link it where it answers 200.
@@ -531,6 +578,7 @@ export async function resolveKitEventDetail(
           copyLink: pageCanonical,
           whenText: formatEventWhen(event.startsAt, event.timezone),
           endsWhenText: formatEventWhen(event.endsAt, event.timezone),
+          durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
           timeDatetime: event.startsAt.toISOString(),
           attendees,
@@ -538,21 +586,27 @@ export async function resolveKitEventDetail(
           answer,
           waitlistPosition: position,
           neighbors: {
-            previous: neighbors.previous ? toLink(neighbors.previous) : null,
-            next: neighbors.next ? toLink(neighbors.next) : null,
+            previous: neighbors.previous ? toLink(neighbors.previous, now) : null,
+            next: neighbors.next ? toLink(neighbors.next, now) : null,
           },
-          related: related.map(toLink),
+          related: related.map((link) => toLink(link, now)),
           series: series
             ? {
                 hosts: series.hosts,
-                previous: series.previous ? toLink(series.previous) : null,
-                next: series.next ? toLink(series.next) : null,
+                previous: series.previous ? toLink(series.previous, now) : null,
+                next: series.next ? toLink(series.next, now) : null,
               }
             : null,
           showJoinPitch: !viewer,
-          // The sign-in return keeps the query string, exactly as served;
-          // the join pitch and related-join links use the bare page path.
-          joinReturnTo: `${pagePath}${search}`,
+          // The sign-in return keeps normalized archive/attendee context
+          // bounded to auth's byte cap, never the raw query string; the
+          // join pitch and related-join links use the bare page path.
+          joinReturnTo: authReturnHref(
+            event.eventKey,
+            archive,
+            attendeePage,
+            MAX_RETURN_DESTINATION_BYTES,
+          ),
           joinResult,
           viewerMember: member,
           viewerModerator: viewer?.moderator === true,
