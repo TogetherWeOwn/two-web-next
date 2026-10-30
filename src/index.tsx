@@ -624,8 +624,9 @@ registerJoinRoutes(
       // to consume (otherwise a guest could read another member's banner).
       // Vary stays on every variant: the representation depends on the flash
       // cookie even when this view has nothing to consume. A rendered presence
-      // snapshot says "now", so it keeps only a 60 s shared-cache TTL to match
-      // the widget verdict TTL; the static page without presence keeps 3600 s.
+      // snapshot says "now" when fresh ("as of" when stale-but-preserved), so
+      // it keeps only a 60 s shared-cache TTL to match the widget verdict TTL;
+      // the static page without presence keeps 3600 s.
       const joinResult = await takeJoinResult(c);
       c.header(
         "cache-control",

@@ -11,8 +11,16 @@ import type { PageProps } from "./$types";
 // A component-level <script> is Svelte's own; the island tag is emitted as markup.
 let { data }: PageProps = $props();
 // The server load builds /join/discord from the sanitized query inputs.
-const { inviteUrl, widgetUrl, widgetSnapshot, oneClickHref, appUrl, joinResult, notice } =
-  $derived(data);
+const {
+  inviteUrl,
+  widgetUrl,
+  widgetSnapshot,
+  widgetStale,
+  oneClickHref,
+  appUrl,
+  joinResult,
+  notice,
+} = $derived(data);
 const { HOME_JOIN_RESULT_COPY, JOIN_INTRO } = $derived(data.joinCopy);
 // The island binder is a plain script tag, not hydration: with csr=false the
 // no-JS contract (links, presence or fallback copy in the raw fetch body) holds.
@@ -68,7 +76,9 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
     <div class="join-preview">
       {#if widgetSnapshot}
         <section aria-labelledby="discord-presence-heading" data-testid="join-widget-presence">
-          <h2 id="discord-presence-heading">In {widgetSnapshot.name} now</h2>
+          <h2 id="discord-presence-heading">
+            In {widgetSnapshot.name} {widgetStale ? "as of the last update" : "now"}
+          </h2>
           <p data-testid="join-widget-online">
             <strong>{widgetSnapshot.presenceCount}</strong>{" "}
             {widgetSnapshot.presenceCount === 1 ? "member online" : "members online"}
@@ -84,7 +94,9 @@ const island = '<script src="/islands/join-widget.js" defer></' + "script>";
               {#each widgetSnapshot.channels as channel (channel.id)}<li>{channel.name}</li>{/each}
             </ul>
           {:else}
-            <p>No voice channels open right now.</p>
+            <p>
+              No voice channels open {widgetStale ? "as of the last update." : "right now."}
+            </p>
           {/if}
           <!-- Public page: aggregate presence only (count + channels). The load
             projects the snapshot before returning, so member names never reach
