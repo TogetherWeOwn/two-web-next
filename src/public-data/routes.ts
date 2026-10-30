@@ -17,6 +17,7 @@ import type { Env } from "../env";
 import { varyAccept } from "../errors";
 import { stagingRobots } from "../headers";
 import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../events/reads";
+import { effectiveZone } from "../events/date-format";
 import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
@@ -134,7 +135,8 @@ export async function admitted(c: Ctx): Promise<Response | null> {
 
 /** Legacy event-JSON key order, with a nullable going count. */
 export function serializeEvent(e: PublicApiEvent): PublicApiEventDto {
-  const wall = (d: Date) => `${wallDateIso(d, e.timezone)} ${wallTimeHm(d, e.timezone)}`;
+  const timezone = effectiveZone(e.timezone);
+  const wall = (d: Date) => `${wallDateIso(d, timezone)} ${wallTimeHm(d, timezone)}`;
   return {
     event_key: e.eventKey as PublicEventId,
     title: e.title,
@@ -144,7 +146,7 @@ export function serializeEvent(e: PublicApiEvent): PublicApiEventDto {
     ends_at: e.endsAt.toISOString(),
     starts_at_local: wall(e.startsAt),
     ends_at_local: wall(e.endsAt),
-    timezone: e.timezone,
+    timezone,
     location: e.location,
     capacity: e.capacity,
     going_count: e.goingCount,

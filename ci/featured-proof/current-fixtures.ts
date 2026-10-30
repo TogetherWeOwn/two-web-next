@@ -42,10 +42,10 @@ async function main() {
   const manifest = [];
   for (const [name, markup] of fixtures) {
     // Fixture-only external stylesheet embedding; deployed markup is unmodified.
-    // The guard island is an external script reference (no inline code); drop only that tag so other active content is still refused.
+    // The guard islands are external script references (no inline code); drop only those tags so other active content is still refused.
     const html = String(markup)
       .replace('href="/styles.css"', `href="${stylesheet}"`)
-      .replace(/<script src="\/islands\/admin-event-editor\.js" defer(?:="")?\s*\/?>(?:<\/script>)?/g, "");
+      .replace(/<script src="\/islands\/(?:admin-event-editor|featured-edit-history)\.js" defer(?:="")?\s*\/?>(?:<\/script>)?/g, "");
     if (/<script\b|<style\b|\sstyle=|\son\w+=/i.test(html)) throw new Error("Active or inline content refused");
     await writeFile(join(output, name), html);
     manifest.push({ name, sha256: createHash("sha256").update(html).digest("hex") });

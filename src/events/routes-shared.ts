@@ -15,6 +15,7 @@ import {
 } from "../public-data/contracts";
 import { clampOutageRetryAfter, OUTAGE_RETRY_AFTER_SECONDS, varyAccept } from "../errors";
 import type { PublicEvent } from "./reads";
+import { effectiveZone } from "./date-format";
 
 export type Ctx = Context<{ Bindings: Env }>;
 export type App = Hono<{ Bindings: Env }>;
@@ -145,7 +146,8 @@ export function eventJson(e: PublicEvent) {
   // instants so consumers render the host's wall time without re-resolving
   // the zone; synced_to_discord derives from the mirror column so the raw
   // discord_event_id never leaves the server.
-  const wall = (d: Date) => `${wallDateIso(d, e.timezone)} ${wallTimeHm(d, e.timezone)}`;
+  const timezone = effectiveZone(e.timezone);
+  const wall = (d: Date) => `${wallDateIso(d, timezone)} ${wallTimeHm(d, timezone)}`;
   return {
     event_key: e.eventKey,
     title: e.title,
@@ -155,7 +157,7 @@ export function eventJson(e: PublicEvent) {
     ends_at: e.endsAt.toISOString(),
     starts_at_local: wall(e.startsAt),
     ends_at_local: wall(e.endsAt),
-    timezone: e.timezone,
+    timezone,
     location: e.location,
     capacity: e.capacity,
     going_count: e.goingCount,

@@ -9,6 +9,7 @@ import { featuredImageAllowed, featuredImageSrc } from "../src/featured-image";
 import { adminApp } from "../src/admin/routes";
 import { serializeSigned } from "hono/utils/cookie";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { featuredBaselineFields } from "./helpers/featured-baseline";
 import { waitForNoLockWaiters } from "./helpers/wait-for-no-lock-waiters";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import type { Env } from "../src/env";
@@ -332,8 +333,11 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
       })
     ).split(";")[0]!;
     const admin = adminApp({ sessionStore: store, db: fixture.db });
-    const publish = (path: string, title: string, imageUrl: string) =>
-      admin.request(
+    const publish = async (path: string, title: string, imageUrl: string) => {
+      // Edit posts submit the row's fresh saved-content baseline, the way a
+      // rendered edit form carries it; creates have no saved content to pin.
+      const editId = /^\/featured\/(\d+)$/.exec(path)?.[1];
+      return admin.request(
         path,
         {
           method: "POST",
@@ -343,6 +347,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
             "content-type": "application/x-www-form-urlencoded",
           },
           body: new URLSearchParams({
+            ...(editId ? await featuredBaselineFields(fixture.db, Number(editId)) : {}),
             title,
             image_url: imageUrl,
             image_alt: "Squad photo",
@@ -351,6 +356,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
         },
         { ...env, ADMIN_DB: fixture.db } as EnvWithAdminDb,
       );
+    };
     for (const imageUrl of [
       "https://images.example.test/photo.jpg",
       "http://cdn.discordapp.com/photo.jpg",

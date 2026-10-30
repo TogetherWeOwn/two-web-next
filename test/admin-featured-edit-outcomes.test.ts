@@ -15,6 +15,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { featuredBaselineFields } from "./helpers/featured-baseline";
 import { clearAuditRows } from "./helpers/audit-rows";
 import { events } from "../src/db/admin-schema";
 
@@ -163,7 +164,13 @@ describe.skipIf(!process.env.DATABASE_URL)("featured edit/delete outcomes (agent
     const id = seeded!.id;
     const res = await app().request(
       `/featured/${id}`,
-      form({ title: "Renamed slot", body: "Kept body", position: "1", is_published: "on" }),
+      form({
+        ...(await featuredBaselineFields(db, id)),
+        title: "Renamed slot",
+        body: "Kept body",
+        position: "1",
+        is_published: "on",
+      }),
       liveEnv(),
     );
     expect(res.status).toBe(303);
@@ -177,7 +184,12 @@ describe.skipIf(!process.env.DATABASE_URL)("featured edit/delete outcomes (agent
     const id = seeded!.id;
     const res = await app().request(
       `/featured/${id}`,
-      form({ title: "Edited title", image_url: "https://evil.test/pic.jpg", position: "4" }),
+      form({
+        ...(await featuredBaselineFields(db, id)),
+        title: "Edited title",
+        image_url: "https://evil.test/pic.jpg",
+        position: "4",
+      }),
       liveEnv(),
     );
     expect(res.status).toBe(422);
@@ -196,6 +208,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured edit/delete outcomes (agent
     const flipped = await app().request(
       `/featured/${id}`,
       form({
+        ...(await featuredBaselineFields(db, id)),
         title: "Backwards edit",
         position: "4",
         starts_at: "2026-11-04 11:15",
@@ -207,7 +220,12 @@ describe.skipIf(!process.env.DATABASE_URL)("featured edit/delete outcomes (agent
     expect(await flipped.text()).toContain("The window ends after it starts.");
     const blank = await app().request(
       `/featured/${id}`,
-      form({ title: "", body: "Kept draft body", position: "4" }),
+      form({
+        ...(await featuredBaselineFields(db, id)),
+        title: "",
+        body: "Kept draft body",
+        position: "4",
+      }),
       liveEnv(),
     );
     expect(blank.status).toBe(422);

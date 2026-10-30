@@ -1,0 +1,9 @@
+{
+  "$comment": "Featured-only history binding; see ci/budgets/decisions/bundle/2026-10-28-featured-edit-history.md.",
+  "budgets": {
+    "public/islands/featured-edit-history.js": {
+      "maxRawBytes": 1536,
+      "maxGzipBytes": 768
+    }
+  }
+}

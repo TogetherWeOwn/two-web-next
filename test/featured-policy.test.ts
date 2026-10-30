@@ -35,6 +35,7 @@ import { createMemorySessionStore, type SessionStore } from "../src/sessions";
 import rawApp from "../src/index";
 import app from "./app";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
+import { featuredBaselineFields } from "./helpers/featured-baseline";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const root = new NodeURL("../", import.meta.url);
@@ -272,6 +273,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured policy (agent-testdb)", () 
       `/featured/${id}`,
       form(
         {
+          ...(await featuredBaselineFields(fixture.db, id)),
           title: "Policy slot",
           body: "Hello",
           is_published: "on",

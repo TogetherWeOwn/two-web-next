@@ -6,6 +6,7 @@ import { adminApp } from "../src/admin/routes";
 import {
   createEvent,
   createFeatured,
+  featuredSaveBaseline,
   getEvent,
   getFeatured,
   updateEvent,
@@ -195,7 +196,16 @@ const posts = [
   {
     name: "featured edit image/alt/window/position",
     path: "/admin/featured/7",
-    values: featuredValues,
+    // The edit dispatch submits the mocked row's real saved-content baseline,
+    // the way a rendered edit form carries it; only persistence is doubled.
+    values: {
+      ...featuredValues,
+      saved_baseline: await featuredSaveBaseline({
+        ...featuredRow,
+        startsAtText: null,
+        endsAtText: null,
+      }),
+    },
     links: ["f-image-url", "f-image-alt", "f-ends-at", "f-position"],
     fields: ["image_url", "image_alt", "ends_at", "position"],
   },
