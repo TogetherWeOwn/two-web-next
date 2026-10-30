@@ -2,7 +2,7 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -280,6 +280,13 @@ describe("Event detail share matrix (fixture-only)", () => {
 });
 
 describe("Event detail closed/paused roster copy (fixture-only)", () => {
+  afterEach(() => vi.useRealTimers());
+
+  function freezeRosterClock() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-10T21:00:00Z"));
+  }
+
   // Past, paused and draft events keep a plain honest empty line with no
   // RSVP invitation: the RSVP block on the same page already says no seat
   // can be taken. A guest who could still act (a populated roster to see)
@@ -301,6 +308,7 @@ describe("Event detail closed/paused roster copy (fixture-only)", () => {
   ])(
     "member on an empty roster sees a plain line on %s, never an invitation",
     async (_label, over, verdict, moderator) => {
+      if (_label === "paused RSVPs") freezeRosterClock();
       const source = fixture(over, { going: 0, attendees: [] });
       const response = await source.request(await source.cookie(moderator));
       expect(response.status).toBe(200);
@@ -320,6 +328,7 @@ describe("Event detail closed/paused roster copy (fixture-only)", () => {
   ])(
     "guest on a zero-named-going event sees a plain line on %s, never a be-the-first nudge",
     async (_label, over, rsvpCopy) => {
+      if (_label === "paused RSVPs") freezeRosterClock();
       const source = fixture(over, { going: 0, attendees: [] });
       const response = await source.request();
       expect(response.status).toBe(200);
@@ -338,6 +347,7 @@ describe("Event detail closed/paused roster copy (fixture-only)", () => {
   ])(
     "member with a current %s answer and no listed going sees no listed going, never 'no RSVPs'",
     async (_label, status, answerCopy) => {
+      freezeRosterClock();
       // Correction: the roster lists named going rows only, so an existing
       // maybe/waitlisted answer beside an empty roster must not be
       // contradicted by a "no RSVP responses" claim.
@@ -361,6 +371,7 @@ describe("Event detail closed/paused roster copy (fixture-only)", () => {
   );
 
   it("full by a nameless seat: waitlist action beside a neutral empty roster, never a first-going invite", async () => {
+    freezeRosterClock();
     // Correction: capacity 1, goingOccupancy 1, named goingCount 0 and an
     // empty named roster — the divergent fixture shape from the
     // going-count/roster agreement contract. The adjacent action offers
