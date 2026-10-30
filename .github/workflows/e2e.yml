@@ -114,6 +114,16 @@ jobs:
       - run: npm ci --include=dev --no-audit --no-fund
       - name: Verify CI isolation
         run: node e2e/prepare.mjs
+      # Migrations carry runtime GRANTs to two_web_app
+      # (ci/migration-runtime-rights.mjs). The hosted runner has no psql
+      # guarantee, so provision through the repo's postgres dependency
+      # (installed by the npm ci step above) before the apply.
+      - name: Provision runtime role for migration apply
+        run: >
+          node --input-type=module -e "import postgres from 'postgres';
+          const sql = postgres(process.env.DATABASE_URL, { max: 1 });
+          await sql.unsafe('CREATE ROLE two_web_app NOLOGIN');
+          await sql.end();"
       - name: Apply migrations to disposable Postgres
         run: npm run db:migrate
       - name: Seed journey fixtures

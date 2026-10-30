@@ -544,18 +544,40 @@ test("policy scope pins exact proposal names against schema declarations", async
     "web_oauth_journeys",
   ]);
   const declared = [];
-  for (const rel of ["src/db/schema.ts", "src/db/admin-schema.ts"]) {
+  for (const rel of ["src/db/schema.ts", "src/db/admin-schema.ts", "src/db/overlay-schema.ts"]) {
     const text = readFileSync(new URL(`../${rel}`, import.meta.url), "utf8");
     for (const [, name] of text.matchAll(/pgTable\(\s*"([A-Za-z0-9_]+)"/g)) declared.push(name);
   }
-  // web_session_grace postdates the frozen proposal scope: the census still
-  // surfaces it as an extra-table finding, but the candidate policies read
-  // covers only the exact proposal tables plus the separate ledger. Any other
-  // drift in either direction fails loudly here.
+  // These tables postdate the frozen proposal scope: the census must still
+  // surface each as an extra-table finding. Do not expand POLICY_TABLES or
+  // its fixed SQL to silently authorize them. Any other schema drift in either
+  // direction still fails the exact-name pin.
+  const postProposalTables = ["web_session_grace", "overlay_configs", "overlay_tokens"];
   assert.deepEqual(
     declared.filter((name) => !POLICY_TABLES.includes(name)),
-    ["web_session_grace"],
+    postProposalTables,
   );
+  const { fixture, syntheticClient, syntheticTransport, runSyntheticInventory } = await modules();
+  const image = fixture();
+  for (const [index, relation_name] of postProposalTables.entries()) {
+    const relation_oid = 200 + index;
+    for (const read of ["relations", "columns", "relation_acls", "column_acls"]) {
+      const original = image[read].rows.find((row) => row.relation_oid === 100);
+      assert.ok(original);
+      image[read].rows.push({
+        ...original,
+        relation_oid,
+        ...(read === "relations" ? { relation_name } : {}),
+      });
+    }
+  }
+  const transport = syntheticTransport();
+  assert.equal(
+    await runSyntheticInventory({ client: syntheticClient(image), transport }),
+    "inventory complete",
+  );
+  assert.deepEqual(transport.payloads[0].findings.extraPublicTables, postProposalTables);
+  assert.equal(transport.payloads[0].rightsVerdict, "unknown-stop");
   assert.deepEqual(
     POLICY_TABLES.filter((name) => !declared.includes(name)),
     [],

@@ -22,6 +22,8 @@ const COUNTS = {
   web_sessions: 4,
   web_session_grace: 5,
   join_attempts: 6,
+  overlay_configs: 7,
+  overlay_tokens: 8,
 };
 const CODES = [
   "E_MODE_CONFLICT",
@@ -187,6 +189,8 @@ function fakeClient(failure) {
     const text = strings.join("?").replace(/\s+/g, " ").trim();
     queries.push({ text, values });
     if (failure) throw failure;
+    if (text === "select pg_advisory_xact_lock(hashtextextended('two:overlay:' || ?, 0))")
+      return [];
     const table = text.match(/(?:from|update) (\w+)/i)?.[1];
     if (!(table in remaining)) throw new Error(`Unexpected fixture SQL: ${text}`);
     if (/^select count\(/i.test(text)) return [{ n: remaining[table] }];

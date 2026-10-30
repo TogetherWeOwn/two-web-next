@@ -56,6 +56,8 @@ const ZERO: ErasureCounts = {
   web_sessions: 0,
   web_session_grace: 0,
   join_attempts: 0,
+  overlay_configs: 0,
+  overlay_tokens: 0,
 };
 
 describe.skipIf(!url)("member erasure against already-in-flight rotations", () => {
@@ -224,6 +226,8 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 2,
         web_session_grace: 1,
         join_attempts: 1,
+        overlay_configs: 0,
+        overlay_tokens: 0,
       });
       expect(raced.passes).toBe(raced.deletesPerPass.length);
       expect(raced.deletesPerPass.reduce((total, deleted) => total + deleted, 0)).toBe(
@@ -251,6 +255,8 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 1,
         web_session_grace: 0,
         join_attempts: 1,
+        overlay_configs: 0,
+        overlay_tokens: 0,
       });
       expect(await store.get("race-bystander")).not.toBeNull();
     } finally {
@@ -334,6 +340,8 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 4,
         web_session_grace: 3,
         join_attempts: 1,
+        overlay_configs: 0,
+        overlay_tokens: 0,
       });
       expect(multi.passes).toBe(multi.deletesPerPass.length);
       expect(multi.deletesPerPass.reduce((total, deleted) => total + deleted, 0)).toBe(
@@ -352,6 +360,8 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 1,
         web_session_grace: 1,
         join_attempts: 1,
+        overlay_configs: 0,
+        overlay_tokens: 0,
       });
       expect(await store.get("multi-bystander-source")).toMatchObject({ userId: BYSTANDER });
       expect(await store.get("multi-bystander-successor")).toMatchObject({ userId: BYSTANDER });
@@ -389,6 +399,8 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 1,
         web_session_grace: 0,
         join_attempts: 1,
+        overlay_configs: 0,
+        overlay_tokens: 0,
       });
       expect(won.passes).toBe(won.deletesPerPass.length);
       expect(won.deletesPerPass.reduce((total, deleted) => total + deleted, 0)).toBe(
@@ -415,6 +427,8 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
       passes: 0,
       deletesPerPass: [],
     });
@@ -430,6 +444,8 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 2,
       web_session_grace: 1,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
       passes: 0,
       deletesPerPass: [],
     });
@@ -444,6 +460,8 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 2,
       web_session_grace: 1,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
       passes: 1,
       deletesPerPass: [2],
     });
@@ -476,6 +494,8 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 1,
       web_session_grace: 1,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     });
 
     // Fail the last of the six deletions from inside the database: every
@@ -514,6 +534,8 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 1,
       web_session_grace: 0,
       join_attempts: 1,
+      overlay_configs: 0,
+      overlay_tokens: 0,
     });
   }, 15_000);
 });

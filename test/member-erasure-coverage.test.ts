@@ -2,7 +2,7 @@
 // member-keyed table and column: it introspects the migrations
 // (drizzle/*.sql plus the runtime DDL in src/sessions.ts and
 // src/join/service.ts, which carry the same CREATE/ALTER statements) and the
-// Drizzle table definitions (src/db/schema.ts, src/db/admin-schema.ts), then
+// Drizzle table definitions (src/db/schema.ts, src/db/admin-schema.ts, src/db/overlay-schema.ts), then
 // asserts each member-keyed (table, column) is either erased by eraseMember
 // (its table is in ERASURE_TABLES) or retained with evidence (named in
 // docs/member-erasure.md with its own deletion or retention proof). A second
@@ -30,6 +30,7 @@ type LocatedColumn = { table: string; column: string; source: string };
  * discord_sync_*) and machine-ingress ids (agent_id, guild_id, grant_id) are
  * deliberately not member keys. */
 const MEMBER_KEYED_COLUMNS = new Set([
+  "member_id",
   "user_id",
   "discord_id",
   "viewer_discord_id",
@@ -166,7 +167,7 @@ function collectMigrationColumns(): LocatedColumn[] {
   for (const rel of ["src/sessions.ts", "src/join/service.ts"]) {
     found.push(...columnsFromSqlText(readFileSync(join(root, rel), "utf8"), rel));
   }
-  for (const rel of ["src/db/schema.ts", "src/db/admin-schema.ts"]) {
+  for (const rel of ["src/db/schema.ts", "src/db/admin-schema.ts", "src/db/overlay-schema.ts"]) {
     found.push(...columnsFromDrizzleTables(readFileSync(join(root, rel), "utf8"), rel));
   }
   const seen = new Set<string>();
