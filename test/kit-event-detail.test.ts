@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
@@ -775,6 +775,13 @@ async function memberHtml(): Promise<string> {
 }
 
 describe("Kit detail presentation", () => {
+  afterEach(() => vi.useRealTimers());
+
+  function freezeRosterClock() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-10T21:00:00Z"));
+  }
+
   it("emits one event block and one site block, byte-identical for guest and member", async () => {
     const jsonLdBlocks = (html: string) =>
       [
@@ -879,6 +886,7 @@ describe("Kit detail presentation", () => {
   ])(
     "renders a plain member empty line on %s, never an RSVP invitation",
     async (_label, over, verdict, moderator) => {
+      if (_label === "paused RSVPs") freezeRosterClock();
       // Hono parity: past, paused and draft events keep a plain honest empty
       // line because the RSVP block on the same page already says no seat
       // can be taken.
@@ -914,6 +922,7 @@ describe("Kit detail presentation", () => {
   ])(
     "renders a plain guest zero-named-going line on %s, never a be-the-first nudge",
     async (_label, over, rsvpCopy) => {
+      if (_label === "paused RSVPs") freezeRosterClock();
       // Drafts 403 for non-moderators, so the draft guest has no roster
       // surface to pin.
       const { outcome } = await resolve(
@@ -998,6 +1007,7 @@ describe("Kit detail presentation", () => {
   ])(
     "member with a current %s answer and no listed going sees no listed going, never 'no RSVPs'",
     async (_label, status, answerCopy) => {
+      freezeRosterClock();
       // Correction: the roster lists named going rows only, so an existing
       // maybe/waitlisted answer beside an empty roster must not be
       // contradicted by a "no RSVP responses" claim.
@@ -1023,6 +1033,7 @@ describe("Kit detail presentation", () => {
   );
 
   it("full by a nameless seat: waitlist CTA beside a neutral empty roster, never a first-going invite", async () => {
+    freezeRosterClock();
     // Correction: capacity 1, goingOccupancy 1, named goingCount 0 and an
     // empty named roster — the divergent fixture shape from the
     // going-count/roster agreement contract. The page offers only the
