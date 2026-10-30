@@ -236,10 +236,10 @@ const lineup = $derived(
         <dd>{model.durationText}</dd>
       </div>
     {/if}
-    {#if model.location}
-      <div>
-        <dt>Where</dt>
-        <dd>
+    <div>
+      <dt>Where</dt>
+      <dd>
+        {#if model.location}
           <p data-testid="event-venue">{model.location}</p>
           {#if model.directionsUrl}
             <p>
@@ -248,9 +248,14 @@ const lineup = $derived(
               </a>
             </p>
           {/if}
-        </dd>
-      </div>
-    {/if}{#if model.organizerName}
+        {:else}
+          <p data-testid="event-venue-tbd">
+            Venue TBD — check <a href="/discord">Discord</a> for updates.
+          </p>
+        {/if}
+      </dd>
+    </div>
+    {#if model.organizerName}
       <div>
         <dt>Hosted by</dt>
         <dd>
@@ -499,6 +504,28 @@ const lineup = $derived(
       <p>
         Attendees shown at page load.{" "}
         <a href={model.attendeesRefreshHref} data-testid="event-attendees-refresh">Refresh attendees</a>.
+      </p>
+    </section>
+  {:else}
+    <!-- One shell keeps the named roster states consistent without duplicating
+         markup in the client bundle. The resolver's viewer state, not username,
+         distinguishes a guest from a signed-in non-member. -->
+    <section
+      aria-labelledby="event-roster-heading"
+      data-testid={model.viewerMember ? "event-roster-empty" : model.showJoinPitch ? "event-roster-guest-nudge" : "event-roster-members-only"}
+    >
+      <h2 id="event-roster-heading">Who's going{model.viewerMember ? " (0)" : ""}</h2>
+      <p>
+        {#if model.viewerMember}
+          No one is listed as going yet.
+        {:else if model.showJoinPitch}
+          {model.goingCount > 0 ? `${model.goingCount} going —` : "No one is listed as going yet."}
+          <a href={signIn}>sign in to see who's in</a>.
+        {:else}
+          Members only —
+          <a href="/join?next={encodeURIComponent(model.joinReturnTo)}">join the Discord</a>
+          to see who's in.
+        {/if}
       </p>
     </section>
   {/if}
