@@ -10,6 +10,15 @@ This guide is checked against repository source; it is not a claim that staging
 or production has been exercised. The [parity matrix](parity.md) tracks the
 migration, but its older pending labels are not a substitute for current screens.
 
+## Read response and activity times
+
+The roster's **Answered** column and the activity log's **When** column show UTC.
+Answered is the latest response update, not attendance or the original waitlist
+join time. Valid times retain their precise machine instant in semantic HTML.
+**Time unavailable** means that row has no usable timestamp; other rows remain
+visible. On a narrow screen, focus the labelled table region and scroll
+horizontally to read every column.
+
 ## Get into the panel
 
 1. Open `/admin`. There is no separate admin password or login form: guests go

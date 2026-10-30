@@ -21,12 +21,13 @@ import type { Env } from "../env";
 import { alertRequestError } from "../alerts";
 import { listActivityLog, type ActivityLogViewerRow } from "./reads";
 import { dbFor } from "./db";
+import { formatAdminTime } from "./chronology";
 
 export { formatActivityCauser } from "./table-list";
 
-/** Kit-serializable viewer row: the stable UTC instant travels as ISO text. */
+/** Kit row: exact UTC ISO text, or null when the timestamp is unusable. */
 export type KitActivityLogRow = Omit<ActivityLogViewerRow, "createdAt"> & {
-  createdAt: string;
+  createdAt: string | null;
 };
 
 export type ActivityLogListFn = (
@@ -75,8 +76,8 @@ function reportLoadFailure(
 /**
  * Load the viewer page. Exactly one setHeaders call per path: SvelteKit
  * throws `header_already_set` on a double-set, so the caller must not set
- * headers again on a throw. Rows arrive pre-rendered with ISO instants,
- * exactly as the Hono page emits them inside <time datetime>.
+ * headers again on a throw. Rows carry exact ISO instants, or null for unusable
+ * timestamps; the shared adapter supplies the same UTC labels as Hono.
  */
 export async function loadActivityLogPage({
   env,
@@ -111,7 +112,7 @@ export async function loadActivityLogPage({
     const fetched = await listFn(db, query);
     const rows = fetched.slice(0, ACTIVITY_LOG_PAGE_SIZE).map((r) => ({
       ...r,
-      createdAt: r.createdAt.toISOString(),
+      createdAt: formatAdminTime(r.createdAt).iso,
     }));
     setHeaders(PRIVATE_NO_STORE);
     return { rows, query, hasNext: fetched.length > ACTIVITY_LOG_PAGE_SIZE };
