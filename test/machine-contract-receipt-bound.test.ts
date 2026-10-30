@@ -15,7 +15,8 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { createReceiptPool } from "./machine-contract-receipt-pool";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const guide = readFileSync(join(repo, "docs/machine-interface.md"), "utf8");
@@ -24,9 +25,17 @@ for (const name of Object.keys(env)) {
   if (name.includes("DATABASE_URL") || name.startsWith("PG")) delete env[name];
 }
 
-describe.concurrent("machine contract: paraphrases and receipt bound (offline)", () => {
+// Each test includes fixture setup, a 30 s child, and cleanup; allow 15 s of
+// overhead without spending the child's budget in Vitest's admission queue.
+describe.concurrent("machine contract: paraphrases and receipt bound (offline)", {
+  timeout: 45_000,
+}, () => {
   let root: string;
+  const pool = createReceiptPool();
   beforeAll(() => {
+    // Vitest has no suite-level maxConcurrency option. Set it before this suite's
+    // concurrent group is scheduled and restore it after the suite drains.
+    vi.setConfig({ maxConcurrency: 2 });
     root = mkdtempSync(
       join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "receipt-bound-contract-"),
     );
@@ -37,20 +46,17 @@ describe.concurrent("machine contract: paraphrases and receipt bound (offline)",
       copyFileSync(join(repo, file), join(root, file));
     symlinkSync(join(repo, "node_modules"), join(root, "node_modules"), "dir");
   });
-  // Vitest schedules concurrent cases independently; limit actual CLI children to two.
-  const pending = new Set<Promise<unknown>>();
-  let active = 0;
-  const waiters: Array<() => void> = [];
-
   afterAll(async () => {
-    await Promise.allSettled([...pending]);
-    if (root) rmSync(root, { recursive: true, force: true });
+    try {
+      await pool.drain();
+      if (root) rmSync(root, { recursive: true, force: true });
+    } finally {
+      vi.resetConfig();
+    }
   });
 
   function run(text: string) {
-    const task = (async () => {
-      if (active >= 2) await new Promise<void>((resolve) => waiters.push(resolve));
-      else active++;
+    return pool.run(async () => {
       let fixture: string | undefined;
       try {
         fixture = mkdtempSync(join(root, "case-"));
@@ -91,21 +97,9 @@ describe.concurrent("machine contract: paraphrases and receipt bound (offline)",
           );
         });
       } finally {
-        try {
-          if (fixture) rmSync(fixture, { recursive: true, force: true });
-        } finally {
-          const next = waiters.shift();
-          if (next) next();
-          else active--;
-        }
+        if (fixture) rmSync(fixture, { recursive: true, force: true });
       }
-    })();
-    pending.add(task);
-    void task.then(
-      () => pending.delete(task),
-      () => pending.delete(task),
-    );
-    return task;
+    });
   }
 
   const claims = [

@@ -347,13 +347,25 @@ const COUNT_PREFIX = String.raw`(?:[\s:,-]+${COUNT_QUALIFIER})*[\s:,-]*`;
 const QUALIFIED_COUNT = String.raw`${COUNT_PREFIX}${COUNT_VALUE}`;
 const COUNT_SUBJECT = String.raw`\b(?:collections?|rows?|items?|pages?)`;
 const COUNT_NOUN = String.raw`(?:caps?|limits?|bounds?|ceilings?)`;
+// The same numeric-bound prefix owns complete declarations and unfinished
+// layout blocks; the renderer must not maintain a second sibling grammar.
+const COUNT_BOUNDARY_VALUE_PREFIX = String.raw`${COUNT_SUBJECT}(?:['’]s?)?\s+(?:(?:(?:are|is)\s+)?(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*${COUNT_NOUN}\b)|${COUNT_NOUN}\s+(?:is|are)\b)`;
 const COUNT_BOUNDARY = new RegExp(
-  String.raw`${COUNT_SUBJECT}(?:['’]s?)?\s+(?:(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+${COUNT_NOUN}\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*${COUNT_NOUN}\b)${QUALIFIED_COUNT})|${COUNT_NOUN}\s+(?:is|are)\b${QUALIFIED_COUNT})`,
+  String.raw`(?:${COUNT_BOUNDARY_VALUE_PREFIX}${QUALIFIED_COUNT}|${COUNT_SUBJECT}(?:['’]s?)?\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+${COUNT_NOUN}\b))`,
+  "i",
+);
+const COUNT_BOUNDARY_PENDING = new RegExp(
+  String.raw`^(?:(?:the|an?|each)\s+)?${COUNT_BOUNDARY_VALUE_PREFIX}${COUNT_PREFIX}$`,
   "i",
 );
 const RESULT_COUNT = new RegExp(
-  String.raw`(?:${RESULT_SUBJECT.source}|${COUNT_SUBJECT})(?:\s+(?:can|may|will|must))?\s+(?:contains?|includes?|returns?|holds?|shows?|has|have)\b${COUNT_PREFIX}(?:${COUNT_VALUE}\s+${COUNT_ITEM_UNIT}\b(?!-)|${COUNT_NUMBER_CORE}-${COUNT_ITEM_UNIT}\s+pages?\b)`,
+  String.raw`(?<subject>${RESULT_SUBJECT.source}|${COUNT_SUBJECT})(?:\s+(?:can|may|will|must))?\s+(?:contains?|includes?|returns?|holds?|shows?|has|have)\b${COUNT_PREFIX}(?:${COUNT_VALUE}\s+${COUNT_ITEM_UNIT}\b(?!-)|${COUNT_NUMBER_CORE}-${COUNT_ITEM_UNIT}\s+pages?\b)`,
   "gi",
+);
+const RESULT_QUALIFIERS = String.raw`(?:(?:list_events|get_event|MCP|event|collection|JSON|tool)\s+)*`;
+const SINGLE_RESULT_SUBJECT = new RegExp(
+  String.raw`\b(?:(?:single|one|each|every|individual)\s+${RESULT_QUALIFIERS}(?:CallToolResult|results?|responses?|replies|reply|payloads?|DTOs?|bod(?:y|ies)|pages?)|(?:an?|the)\s+${RESULT_QUALIFIERS}(?:CallToolResult|result|response|reply|payload|DTO|body|page))$`,
+  "i",
 );
 const WORD_SIZE_DECLARATION = new RegExp(
   String.raw`${RESULT_SUBJECT.source}\s+(?:(?:can|may)\s+be|is|are|occup(?:y|ies))\s+(?:as\s+large\s+as\s+)?${COUNT_WORD}[\s-]+(?:bytes?|(?:kilo|mega|giga|tera|peta|exa|kibi|mebi|gibi|tebi|pebi|exbi)bytes?)\b`,
@@ -361,34 +373,54 @@ const WORD_SIZE_DECLARATION = new RegExp(
 );
 const SIZE_PREDICATE =
   /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|uncapped|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
-const AGGREGATE_SCOPE = new RegExp(
-  String.raw`^(?:\s+in\s+total\s*,?)?\s+across\s+(?:(?:all|both)\s+)?(?:the\s+)?(?:(?:multiple|several|many|some|\d+|${COUNT_WORD})\s+)?pages\b|^\s+per[\s-]+event\b`,
+const AGGREGATE_SCOPE_PHRASE = String.raw`(?:(?:\s+in\s+total\s*,?)?\s+across\s+(?:(?:all|both)\s+)?(?:the\s+)?(?:(?:first|last|next|previous)\s+)?(?:(?:multiple|several|many|some|\d+|${COUNT_WORD})\s+)?pages\b|\s+per[\s-]+event\b)`;
+const AGGREGATE_SCOPE = new RegExp(`^${AGGREGATE_SCOPE_PHRASE}`, "i");
+// A following layout block must be only the qualifier. A prefix cannot bind an
+// independent clause such as "Across two pages, the guide explains sign-in."
+const AGGREGATE_SCOPE_ONLY = new RegExp(
+  `^${AGGREGATE_SCOPE_PHRASE}(?:\\s*,\\s+with\\b[^,.;!?]*)?[.!?]?\\s*$`,
   "i",
 );
 // Markdown/HTML parsing owns visibility and statement scope. Source excerpts
 // explain failures but never decide whether a recognized claim is refused.
 try {
   const completesValue = (candidate) =>
-    WORD_SIZE_DECLARATION.test(candidate) || !candidate.matchAll(RESULT_COUNT).next().done;
+    WORD_SIZE_DECLARATION.test(candidate) ||
+    COUNT_BOUNDARY.test(candidate) ||
+    !candidate.matchAll(RESULT_COUNT).next().done;
   const continuesScope = (left, scope) => {
     const count = Array.from(left.matchAll(RESULT_COUNT)).at(-1);
     return (
       !!count &&
       count.index + count[0].length === left.trimEnd().length &&
-      AGGREGATE_SCOPE.test(` ${scope}`)
+      AGGREGATE_SCOPE_ONLY.test(` ${scope}`)
     );
   };
-  for (const sentence of guideStatements(outsideLimits, completesValue, continuesScope)) {
+  const awaitsValue = (candidate) => COUNT_BOUNDARY_PENDING.test(candidate);
+  for (const sentence of guideStatements(
+    outsideLimits,
+    completesValue,
+    continuesScope,
+    awaitsValue,
+  )) {
     const counts = Array.from(sentence.text.matchAll(RESULT_COUNT));
     const countClaim = counts.some((count) => {
       // Aggregate scope is an adjacent page noun phrase, never an open-ended
       // tail scan that a later clause can satisfy.
       const tail = sentence.text.slice(count.index + count[0].length);
+      const aggregate = AGGREGATE_SCOPE.exec(tail);
       const perPage =
         /per[\s-]+(?:page|response)\b/i.test(count[0]) ||
-        /^\s+per[\s-]+(?:page|response)\b/i.test(tail);
-      const aggregate = AGGREGATE_SCOPE.test(tail);
-      return perPage || !aggregate;
+        /^\s+per[\s-]+(?:page|response)\b/i.test(tail) ||
+        (aggregate &&
+          /^\s*,?\s*per[\s-]+(?:page|response)\b/i.test(tail.slice(aggregate[0].length)));
+      // Bind the explicit single-result modifier to this match's subject,
+      // not an unrelated earlier clause. Its physical array cannot aggregate
+      // rows from other results merely because a page qualifier follows.
+      const subjectEnd = count.index + count.groups.subject.length;
+      const singleResult = SINGLE_RESULT_SUBJECT.test(sentence.text.slice(0, subjectEnd));
+      const perEvent = /^\s+per[\s-]+event\b/i.test(tail);
+      return perPage || (singleResult && !perEvent) || !aggregate;
     });
     if (
       SIZE_LITERAL.test(sentence.text) ||

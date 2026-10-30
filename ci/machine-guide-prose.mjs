@@ -193,6 +193,7 @@ export function guideStatements(
   markdown,
   completesValue = () => false,
   continuesScope = () => false,
+  awaitsValue = () => false,
 ) {
   const tree = new Parser().parse(markdown);
   const renderer = new HtmlRenderer();
@@ -226,13 +227,13 @@ export function guideStatements(
   const blocks = visibleBlocks(html);
   for (let i = 0; i < blocks.length; i++) {
     while (
-      INCOMPLETE_DECLARATION.test(blocks[i].text) &&
+      (INCOMPLETE_DECLARATION.test(blocks[i].text) || awaitsValue(blocks[i].text)) &&
       i + 1 < blocks.length &&
       blocks[i].scope === blocks[i + 1].scope
     ) {
       let count = 1;
       if (!DECLARATION_START.test(blocks[i + 1].text)) {
-        if (!VALUE_PREFIX_END.test(blocks[i].text)) break;
+        if (!VALUE_PREFIX_END.test(blocks[i].text) && !awaitsValue(blocks[i].text)) break;
         let candidate = blocks[i].text;
         let end = i;
         for (let j = i + 1; j < blocks.length && blocks[j].scope === blocks[i].scope; j++) {
@@ -265,8 +266,17 @@ export function guideStatements(
       for (let j = i + 1; j < blocks.length && blocks[j].scope === blocks[i].scope; j++) {
         scope += `${scope ? " " : ""}${blocks[j].text}`;
         if (continuesScope(blocks[i].text, scope)) {
-          end = j;
-          break;
+          // Punctuation or a per-response suffix may continue this clause;
+          // do not commit to a standalone qualifier before consuming it.
+          const next = blocks[j + 1];
+          const continued =
+            !/[.!?]$/.test(scope) &&
+            next?.scope === blocks[i].scope &&
+            /^(?:,|per(?:[\s-]+(?:page|response)\b|$))/i.test(next.text);
+          if (!continued) {
+            end = j;
+            break;
+          }
         }
         if (INCOMPLETE_DECLARATION.test(blocks[j].text) || /[.;!?]$/.test(blocks[j].text)) break;
       }
