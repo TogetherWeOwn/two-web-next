@@ -381,6 +381,25 @@ describe("rsvp-button SSR/server drift", () => {
     ).toHaveLength(0);
   });
 
+  it("SSR preserves validated archive and attendee context on both primary guest login destinations", async () => {
+    const p = page();
+    const res = await p.request(`/e/${KEY}?archivePage=2&archiveQuery=raid&attendees=2`);
+    expect(res.status).toBe(200);
+    const primary = mount(await res.text());
+    const anchor = /<a\b[^>]*\bhref="([^"]+)"/.exec(primary);
+    const controller = /\bdata-login-url="([^"]+)"/.exec(primary);
+    expect(anchor).not.toBeNull();
+    expect(controller).not.toBeNull();
+    const href = new URL(anchor![1]!, "https://next.example.test");
+    const dataLoginUrl = new URL(controller![1]!, "https://next.example.test");
+    expect([href.pathname, dataLoginUrl.pathname]).toEqual(["/join/discord", "/join/discord"]);
+    const expectedNext = `/e/${KEY}?attendees=2&archivePage=2&archiveQuery=raid`;
+    expect({
+      href: href.searchParams.get("next"),
+      dataLoginUrl: dataLoginUrl.searchParams.get("next"),
+    }).toEqual({ href: expectedNext, dataLoginUrl: expectedNext });
+  });
+
   it.each([
     ["draft", {}, "Not published yet"],
     ["past", {}, "This one has been and gone"],
