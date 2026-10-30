@@ -34,7 +34,9 @@ export const TableSortHeader: FC<{
   );
 };
 
-export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
+export const Shell: FC<
+  PropsWithChildren<{ title: string; audience?: string; stylesheet?: string }>
+> = ({ title, audience = "moderators only", stylesheet, children }) => (
   <>
     {raw("<!doctype html>")}
     <html lang="en">
@@ -44,6 +46,7 @@ export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, childre
         <title>{title} — TWO admin</title>
         <link rel="stylesheet" href="/styles.css" />
         <link rel="stylesheet" href="/admin-rsvp-review.css" />
+        {stylesheet ? <link rel="stylesheet" href={stylesheet} /> : null}
       </head>
       <body>
         <SkipLink />
@@ -60,7 +63,7 @@ export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, childre
         <main id="main" tabindex={-1}>
           {children}
         </main>
-        <footer>Together We Own · moderators only</footer>
+        <footer>Together We Own · {audience}</footer>
       </body>
     </html>
   </>
