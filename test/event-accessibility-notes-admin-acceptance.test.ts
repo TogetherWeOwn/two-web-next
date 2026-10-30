@@ -12,6 +12,7 @@ import {
 } from "../src/sessions";
 import { clearAuditRows } from "./helpers/audit-rows";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { savedForm } from "./helpers/event-save-document";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
 const APP_URL = "https://next.example.test";
@@ -107,7 +108,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
     }
 
     async function editEvent(key: string, fields: Record<string, string>) {
-      return app().request(`/events/${key}`, form(fields), liveEnv());
+      // The save precondition rides with the moderator's own GET.
+      const page = await app().request(`/events/${key}`, { headers: { cookie } }, liveEnv());
+      expect(page.status).toBe(200);
+      return app().request(
+        `/events/${key}`,
+        form({ ...fields, ...savedForm(await page.text()).hidden }),
+        liveEnv(),
+      );
     }
 
     async function editForm(key: string) {

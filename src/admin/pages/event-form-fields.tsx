@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource hono/jsx */
 // Admin event-form fields and validation notice (split from event-form.tsx; zero behavior change).
 // The <form> element: title/game/description/schedule/location/capacity fields,
 // the create-only recurrence fieldset or the edit-only series note, and the
@@ -5,27 +7,76 @@
 
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
+import { EVENT_BASELINE_FIELD } from "../event-baseline";
 import { adminSaveStatus } from "../save-status";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
 
-export const EventFormFields: FC<{
+/**
+ * A refused save that keeps the typed draft: another moderator committed
+ * first (stale baseline) or the form carried no valid baseline (bypass).
+ * The notice names the refusal, and the native review link re-enters the
+ * current values — the whole workflow stays keyboard-operable with no
+ * scripting, exactly like the validation summary above it.
+ */
+export type SaveConflict = {
+  heading: string;
+  detailLead: string;
+  detailTail: string;
+  reviewHref: string;
+  reviewText: string;
+};
+
+const ConflictNotice: FC<{ conflict: SaveConflict }> = ({ conflict }) => (
+  <div
+    class="notice"
+    role="alert"
+    tabindex={-1}
+    data-testid="save-conflict"
+    data-admin-conflict-summary=""
+    data-admin-save-summary=""
+  >
+    <p>{conflict.heading}</p>
+    <p>
+      {conflict.detailLead} <a href={conflict.reviewHref}>{conflict.reviewText}</a>
+      {conflict.detailTail}
+    </p>
+  </div>
+);
+
+export function EventFormFields({
+  mode,
+  row,
+  values,
+  errors,
+  action,
+  conflict,
+}: {
   mode: "new" | "edit";
-  row?: EventRow;
+  row?: Pick<EventRow, "recurrenceFrequency">;
   values: Record<string, unknown>;
   errors: Record<string, string>;
   action: string;
-}> = ({ mode, row, values, errors, action }) => {
+  conflict?: SaveConflict;
+}) {
   return (
     <>
       <ValidationSummary errors={errors} kind="event" mode={mode} />
+      {conflict ? <ConflictNotice conflict={conflict} /> : null}
       <form
         method="post"
         action={action}
         data-event-editor=""
-        data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
+        data-event-draft={conflict || Object.keys(errors).length > 0 ? "" : undefined}
       >
+        {mode === "edit" ? (
+          <input
+            type="hidden"
+            name={EVENT_BASELINE_FIELD}
+            value={val(values, EVENT_BASELINE_FIELD)}
+          />
+        ) : null}
         <Field name="title" label="Title" errors={errors}>
           {(id) => (
             <input
@@ -216,4 +267,4 @@ export const EventFormFields: FC<{
       {raw(adminSaveStatus)}
     </>
   );
-};
+}

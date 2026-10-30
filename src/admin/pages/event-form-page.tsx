@@ -6,7 +6,7 @@ import type { FC } from "hono/jsx";
 import type { EventRow } from "../store";
 import type { RosterEntry } from "../reads";
 import type { RosterQuery } from "../table-list";
-import { EventFormFields } from "./event-form-fields";
+import { EventFormFields, type SaveConflict } from "./event-form-fields";
 import { EventRosterSection } from "./event-form-roster";
 import { EventStatusSection } from "./event-form-status";
 import { Shell } from "./shell";
@@ -19,17 +19,35 @@ export const EventFormPage: FC<{
   roster?: RosterEntry[];
   rosterTotal?: number;
   rosterQuery?: RosterQuery;
+  conflict?: SaveConflict;
   // Refused-edit re-renders only: the roster is read solely on the audited
   // GET, so a 422 re-render explains its absence instead of dropping the
   // section silently. Carries no roster data of any kind.
   rosterHiddenNotice?: boolean;
-}> = ({ mode, row, values, errors, roster, rosterTotal, rosterQuery, rosterHiddenNotice }) => {
+}> = ({
+  mode,
+  row,
+  values,
+  errors,
+  roster,
+  rosterTotal,
+  rosterQuery,
+  conflict,
+  rosterHiddenNotice,
+}) => {
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
     <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
       <section>
         <h1>{mode === "new" ? "New event" : `Edit ${row!.title}`}</h1>
-        <EventFormFields mode={mode} row={row} values={values} errors={errors} action={action} />
+        <EventFormFields
+          mode={mode}
+          row={row}
+          values={values}
+          errors={errors}
+          action={action}
+          conflict={conflict}
+        />
         {mode === "edit" && row ? <EventStatusSection row={row} /> : null}
         {mode === "edit" && roster ? (
           <EventRosterSection

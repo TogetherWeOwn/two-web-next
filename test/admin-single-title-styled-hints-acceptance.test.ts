@@ -40,6 +40,8 @@ import {
   JoinAttemptPage,
   JoinAttemptsPage,
 } from "../src/admin/pages";
+import { EventFormFields } from "../src/admin/pages/event-form-fields";
+import { EventRosterSection } from "../src/admin/pages/event-form-roster";
 import { JOIN_RETENTION_DAYS } from "../src/admin/reads";
 import type { ActivityLogViewerRow, JoinAttemptRow, RosterEntry } from "../src/admin/reads";
 import type { EventRow } from "../src/admin/store";
@@ -247,8 +249,27 @@ const kitActivityData = () => ({
   hasNext: false,
 });
 
+// Fixture-schema migration only: the edit port now carries canonical escaped
+// server HTML. All E8 acceptance expectations below remain unchanged.
 const kitEditData = () => ({
   view: {
+    formHtml: String(
+      jsx(EventFormFields, {
+        mode: "edit",
+        row: eventRow,
+        values: {},
+        errors: {},
+        action: `/admin/events/${eventRow.eventKey}`,
+      }),
+    ),
+    rosterHtml: String(
+      jsx(EventRosterSection, {
+        eventKey: eventRow.eventKey,
+        action: `/admin/events/${eventRow.eventKey}`,
+        roster,
+        rosterQuery: parseRosterQuery({}),
+      }),
+    ),
     title: eventRow.title,
     key: eventRow.eventKey,
     values: {},

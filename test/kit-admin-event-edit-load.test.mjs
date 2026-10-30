@@ -37,7 +37,9 @@ beforeAll(async () => {
     bundle: true,
     format: "esm",
     platform: "node",
-    tsconfigRaw: { compilerOptions: {} },
+    tsconfigRaw: {
+      compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" },
+    },
     write: false,
     plugins: [
       {

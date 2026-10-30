@@ -27,7 +27,15 @@ import {
 import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
 import { retireApiPublicEventCache } from "../public-data/cache";
-import { audit, boundModeratorWrite, dirty, NotFoundError, type Actor } from "./store-shared";
+import { eventContentBaseline } from "./event-baseline";
+import {
+  audit,
+  boundModeratorWrite,
+  dirty,
+  NotFoundError,
+  StaleBaselineError,
+  type Actor,
+} from "./store-shared";
 
 export type EventRow = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
   /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
@@ -292,11 +300,29 @@ export async function materializeRecurringSeries(db: Db): Promise<number> {
   return created;
 }
 
-export async function updateEvent(
+/** Unconditional update for non-form writers; PATCH retains its own merge contract. */
+export function updateEvent(db: Db, actor: Actor, eventKey: string, input: EventFormInput) {
+  return commitEventUpdate(db, actor, eventKey, input);
+}
+
+/** Form saves compare their baseline only after the committing row lock. */
+export function updateEventIfBaselineMatches(
+  db: Db,
+  actor: Actor,
+  eventKey: string,
+  baseline: string,
+  input: EventFormInput,
+) {
+  // A malformed direct caller cannot accidentally select the unconditional path.
+  return commitEventUpdate(db, actor, eventKey, input, baseline ?? "");
+}
+
+async function commitEventUpdate(
   db: Db,
   actor: Actor,
   eventKey: string,
   input: EventFormInput,
+  baseline?: string,
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
     await db.transaction(async (tx) => {
@@ -309,6 +335,9 @@ export async function updateEvent(
         .where(eq(events.eventKey, eventKey))
         .for("update");
       if (!locked) throw new NotFoundError("event");
+      // The comparison and content mutation share this committing lock.
+      if (baseline !== undefined && (await eventContentBaseline(locked)) !== baseline)
+        throw new StaleBaselineError();
       return commitLockedUpdate(tx, actor, eventKey, locked, input);
     });
   // Committed: the edit is visible to guests on the next fetch (N6).

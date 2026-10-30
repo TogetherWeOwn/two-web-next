@@ -198,7 +198,13 @@ describe.skipIf(!process.env.DATABASE_URL)("event host and join persistence (age
   }
 
   async function editEvent(key: string, fields: Record<string, string>) {
-    return app().request(`/events/${key}`, form(fields), liveEnv());
+    const baseline = formValue(await editForm(key), "saved_baseline");
+    expect(baseline, "edit form carries the server baseline").toBeDefined();
+    return app().request(
+      `/events/${key}`,
+      form({ ...fields, saved_baseline: baseline! }),
+      liveEnv(),
+    );
   }
 
   async function editForm(key: string) {

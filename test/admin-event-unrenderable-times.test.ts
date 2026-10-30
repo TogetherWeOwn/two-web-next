@@ -40,6 +40,7 @@ import {
   type SessionStore,
 } from "../src/sessions";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { savedForm } from "./helpers/event-save-document";
 
 const INVALID = new Date(Number.NaN);
 
@@ -498,6 +499,7 @@ describe("stored infinity timestamps through the admin routes (isolated fixture)
     expect(pageHtml).toContain("Imported night (broken start)");
 
     const body = new URLSearchParams({
+      ...savedForm(pageHtml).hidden,
       title: "Imported night (broken start)",
       starts_at: "2026-11-03 19:00",
       ends_at: "2026-11-03 22:00",

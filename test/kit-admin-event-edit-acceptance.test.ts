@@ -26,6 +26,8 @@ import {
   type KitEventEditRow,
   type KitEventEditView,
 } from "../src/admin/kit-event-edit";
+import { EventRosterSection } from "../src/admin/pages/event-form-roster";
+import { EventFormFields } from "../src/admin/pages/event-form-fields";
 import { ROSTER_PAGE_SIZE } from "../src/admin/table-list";
 
 const db = {} as Db;
@@ -494,30 +496,55 @@ describe("acceptance: no-JS behaviour", () => {
   });
 
   it("every control works without scripts: real forms, submit buttons and anchor navigation", () => {
+    // The edit form is now shared server markup; count it alongside the native
+    // status/roster templates and pin the page's placement of that actual form.
+    const formSource = EventFormFields({
+      mode: "edit",
+      row: baseRow,
+      values: {},
+      errors: {},
+      action: `/admin/events/${baseRow.eventKey}`,
+    }).toString();
+    const rosterSource = EventRosterSection({
+      eventKey: baseRow.eventKey,
+      action: `/admin/events/${baseRow.eventKey}`,
+      roster: [],
+      rosterTotal: 2 * ROSTER_PAGE_SIZE + 1,
+      rosterQuery: { q: "", status: "", sort: "answered", order: "desc", page: 2 },
+    })!.toString();
+    const nativeMarkup = formSource + rosterSource + pageSource;
+    expect(pageSource).toContain("{@html view.rosterHtml}");
+    expect(pageSource).toContain("{@html view.formHtml}");
     // Six source forms: edit update, publish, cancel, duplicate, reopen,
     // roster search. Pause arrives as pre-rendered server HTML via {@html}
     // (client gzip ceiling), never as a source form; the rendered pause and
     // reopen counts are pinned by the pause-review suites instead of this
     // source text.
-    expect(pageSource.match(/<form\b/g) ?? []).toHaveLength(6);
-    expect(pageSource.match(/method="post"/g) ?? []).toHaveLength(5);
-    expect(pageSource.match(/method="get"/g) ?? []).toHaveLength(1);
+    expect(nativeMarkup.match(/<form\b/g) ?? []).toHaveLength(6);
+    expect(nativeMarkup.match(/method="post"/g) ?? []).toHaveLength(5);
+    expect(nativeMarkup.match(/method="get"/g) ?? []).toHaveLength(1);
     // Every button submits its form; nothing depends on a click handler.
-    expect(pageSource.match(/<button\b/g) ?? []).toHaveLength(6);
-    expect(pageSource.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(6);
+    expect(nativeMarkup.match(/<button\b/g) ?? []).toHaveLength(6);
+    expect(nativeMarkup.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(6);
     expect(pageSource).not.toMatch(/\son(click|submit|input|change|keydown)=/);
     expect(pageSource).not.toContain("on:");
     // Sorting and paging are plain links a no-JS browser can follow.
-    expect(pageSource).toContain("<a href={h.url}");
-    expect(pageSource).toContain('<a rel="prev" href={roster.prevUrl}>');
-    expect(pageSource).toContain('<a rel="next" href={roster.nextUrl}>');
+    expect(rosterSource).toContain("roster_sort=status");
+    expect(rosterSource).toContain('<a rel="prev" href="');
+    expect(rosterSource).toContain('<a rel="next" href="');
   });
 
   it("the roster search is a GET form carrying its state in named fields", () => {
-    expect(pageSource).toContain('name="roster_q"');
-    expect(pageSource).toContain('type="search"');
+    expect(pageSource).toContain("{@html view.rosterHtml}");
+    const rosterSource = EventRosterSection({
+      eventKey: baseRow.eventKey,
+      action: `/admin/events/${baseRow.eventKey}`,
+      roster: [],
+    })!.toString();
+    expect(rosterSource).toContain('name="roster_q"');
+    expect(rosterSource).toContain('type="search"');
     // Sort state rides along as hidden fields so a no-JS search keeps it.
-    expect(pageSource).toContain('name="roster_sort"');
-    expect(pageSource).toContain('name="roster_order"');
+    expect(rosterSource).toContain('name="roster_sort"');
+    expect(rosterSource).toContain('name="roster_order"');
   });
 });

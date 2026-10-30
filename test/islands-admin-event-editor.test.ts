@@ -190,4 +190,19 @@ describe("Admin event editor repeated submit", () => {
     b.submit();
     expect(b.searchSubmit().defaultPrevented).toBe(false);
   });
+
+  it("focuses the validation summary on a rejected-draft render", () => {
+    const b = browser({ draft: true, summary: "validation" });
+    expect(b.summaries["[data-admin-validation-summary]"]!.focused).toBe(true);
+  });
+
+  it("focuses the conflict notice on a stale-save refusal render", () => {
+    const b = browser({ draft: true, summary: "conflict" });
+    expect(b.summaries["[data-admin-conflict-summary]"]!.focused).toBe(true);
+  });
+
+  it("moves no refusal focus without the draft marker", () => {
+    const b = browser({ summary: "conflict" });
+    expect(b.summaries["[data-admin-conflict-summary]"]!.focused).toBe(false);
+  });
 });

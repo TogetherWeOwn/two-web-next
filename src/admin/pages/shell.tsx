@@ -2,6 +2,10 @@ import { raw } from "hono/html";
 // Admin page shell and shared helpers (split from pages.tsx; zero behavior change).
 // Shell/TableSortHeader/RsvpAction/Field/val are shared by every admin screen;
 // only the historic public names are re-exported through ../pages.
+// Per-file JSX runtime (react-jsx + hono/jsx, exactly as tsconfig.json): Kit SSR
+// fixtures bundle this module with esbuild outside the root tsconfig.
+/** @jsxRuntime automatic */
+/** @jsxImportSource hono/jsx */
 
 import type { FC, PropsWithChildren } from "hono/jsx";
 import { cloneElement, isValidElement } from "hono/jsx";

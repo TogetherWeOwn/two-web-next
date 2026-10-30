@@ -1,3 +1,5 @@
+/** @jsxRuntime automatic */
+/** @jsxImportSource hono/jsx */
 import type { FC } from "hono/jsx";
 import { validationSummary } from "../form-errors";
 
@@ -15,6 +17,7 @@ export const ValidationSummary: FC<{
       tabindex={-1}
       data-testid="form-errors"
       data-admin-validation-summary=""
+      data-admin-save-summary=""
     >
       <p>Check the highlighted fields and try again.</p>
       <ul>

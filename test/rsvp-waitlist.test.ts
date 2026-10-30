@@ -14,6 +14,7 @@ import type { QueueMessage } from "../src/jobs/types";
 import { withdrawRsvp, writeRsvp } from "../src/events/rsvp";
 import { CAPACITY_BELOW_GOING, waitlistPosition } from "../src/events/waitlist";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
+import { EVENT_BASELINE_FIELD, eventContentBaseline } from "../src/admin/event-baseline";
 import {
   createMemberDataFixture,
   testDatabaseUrl,
@@ -262,6 +263,11 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     // Standalone adminApp mounts no requestLog, so c.get("requestId") is
     // undefined and the dispatch omits correlation (safeRequestId(undefined)
     // is undefined). Live-mounted /admin inherits the outer requestLog.
+    // The save precondition is re-minted per call: a prior edit in the same
+    // test already moved the row. Minted from the stored row, not a GET: a
+    // GET would enter the keyed read boundary, which refuses this suite's
+    // non-numeric moderator id (the render path is pinned elsewhere).
+    const [row] = await db.select().from(events).where(eq(events.eventKey, ev.eventKey));
     return adminApp({ sessionStore: store, db }).request(
       `/events/${ev.eventKey}`,
       {
@@ -274,6 +280,7 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
           starts_at: "2099-01-01T20:00",
           ends_at: "2099-01-01T22:00",
           capacity: capacity === null ? "" : String(capacity),
+          [EVENT_BASELINE_FIELD]: await eventContentBaseline(row!),
         }),
       },
       env,
