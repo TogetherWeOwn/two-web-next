@@ -5,8 +5,10 @@ import {
   isHotzoneSignal,
   joinsRetentionNote,
   loadJoinsGrid,
+  peakCell,
   priorGrid,
   type HeatGrid,
+  type HotzonePeak,
   type HotzoneSignal,
 } from "./hotzones/aggregates";
 import { recordBoardView } from "./hotzones/board-log";
@@ -143,6 +145,8 @@ export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{
   games: { cells: HeatGrid; total: number };
   retentionNote: string | null;
   appUrl: string;
+  available: boolean;
+  peaks: { joins: HotzonePeak | null; voice: HotzonePeak | null; games: HotzonePeak | null };
 }> {
   const { window, label } = seasonOrThrow(args.seasonParam, args.setHeaders);
   const { db } = await dbOrUnavailable(args, "/hotzones");
@@ -154,13 +158,25 @@ export async function loadHotzonesIndexData(args: HotzonesLoadArgs): Promise<{
     resultCount: joins.total,
   });
   args.setHeaders({ "cache-control": "public, max-age=300", vary: "Cookie" });
+  // Leaderboards pattern: `available` is false only when the joins read has
+  // no database (never a silent-zero grid). Peaks reuse the already-loaded
+  // cells: no new reads. The joins peak is null when unavailable or empty.
+  const available = db !== null;
+  const voice = priorGrid("voice");
+  const games = priorGrid("games");
   return {
     season: label,
     joins,
-    voice: priorGrid("voice"),
-    games: priorGrid("games"),
+    voice,
+    games,
     retentionNote: joinsRetentionNote(window),
     appUrl: args.env.APP_URL,
+    available,
+    peaks: {
+      joins: available ? peakCell(joins.cells) : null,
+      voice: peakCell(voice.cells),
+      games: peakCell(games.cells),
+    },
   };
 }
 
@@ -175,6 +191,8 @@ export async function loadHotzoneSignalData(
   retentionNote: string | null;
   estimated: boolean;
   appUrl: string;
+  available: boolean;
+  peak: HotzonePeak | null;
 }> {
   const { window, label } = seasonOrThrow(args.seasonParam, args.setHeaders);
   const signal = args.signalParam;
@@ -192,6 +210,7 @@ export async function loadHotzoneSignalData(
       resultCount: joins.total,
     });
     args.setHeaders({ "cache-control": "public, max-age=300", vary: "Cookie" });
+    const available = db !== null;
     return {
       signal,
       season: label,
@@ -201,6 +220,8 @@ export async function loadHotzoneSignalData(
       retentionNote: joinsRetentionNote(window),
       estimated: false,
       appUrl: args.env.APP_URL,
+      available,
+      peak: available ? peakCell(joins.cells) : null,
     };
   }
   const prior = priorGrid(signal);
@@ -220,6 +241,9 @@ export async function loadHotzoneSignalData(
     retentionNote: null,
     estimated: true,
     appUrl: args.env.APP_URL,
+    // Priors never read the database, so voice/games signals stay available.
+    available: true,
+    peak: peakCell(prior.cells),
   };
 }
 

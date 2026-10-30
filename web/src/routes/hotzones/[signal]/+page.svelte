@@ -1,5 +1,6 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
+import { WEEKDAY_NAMES } from "../../../../../src/hotzones/weekday-names";
 import { canonicalUrl } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
@@ -15,11 +16,20 @@ const {
   retentionNote,
   estimated,
   appUrl,
+  available,
+  peak,
   periodPickerHtml,
 } = $derived(data);
 const destination = $derived(
   season === "all" ? `/hotzones/${signal}` : `/hotzones/${signal}?season=${season}`,
 );
+// Only the joins signal reads the database, so only it renders the outage.
+const unavailable = $derived(!available && !estimated);
+
+// Peak summary copy mirrors the Hono PeakLine exactly (src/hotzones/pages.tsx).
+type Peak = { weekday: number; hour: number; count: number };
+const peakLine = (peak: Peak, estimated: boolean, unit?: string): string =>
+  `${estimated ? "Estimated peak: " : "Peak: "}${WEEKDAY_NAMES[peak.weekday]} ${String(peak.hour).padStart(2, "0")}:00 (${peak.count}${unit ? ` ${unit}` : ""}).`;
 // Back and cross-signal links keep the selected season; absent/all stays canonical.
 const qs = $derived(season === "all" ? "" : `?season=${season}`);
 </script>
@@ -42,11 +52,20 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
   {#if estimated}
     <p>Season-independent seeded estimates of {signal} activity (estimates until bot event-store calibration). Total estimate: {total}.</p>
   {:else}
-    <p>Join activity for season {season}: {total} joins across {eventCount} scheduled gatherings.</p>
+    {#if unavailable}
+      <p>Join activity for season {season}.</p>
+    {:else}
+      <p>Join activity for season {season}: {total} joins across {eventCount} scheduled gatherings.</p>
+    {/if}
     <p>Successful joins only (added or already a member); denied, error and degraded attempts never count.</p>
     {#if retentionNote}<p>{retentionNote}</p>{/if}
   {/if}
   {@html periodPickerHtml}
   <p><a href="/hotzones{qs}">All hot zones</a> · <a href="/hotzones/joins{qs}">joins</a> · <a href="/hotzones/voice{qs}">voice</a> · <a href="/hotzones/games{qs}">games</a></p>
-  {@html gridHtml}
+  {#if unavailable}
+    <p role="status">Join activity is temporarily unavailable.</p>
+  {:else}
+    {#if peak}<p>{peakLine(peak, estimated, estimated ? undefined : "joins")}</p>{/if}
+    {@html gridHtml}
+  {/if}
 </Shell>

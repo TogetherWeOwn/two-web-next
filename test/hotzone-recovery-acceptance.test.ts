@@ -137,6 +137,26 @@ function fixture() {
     throttleStore,
     eventStore,
     transaction,
+    // Opt in only for healthy-grid controls; the default stays null and the
+    // poison DB still proves error routes never reach an aggregate read.
+    healthyEmpty: () => {
+      const whereResult = Object.assign(Promise.resolve([{ n: 0 }]), {
+        groupBy: async () => [],
+      });
+      const tx = {
+        execute: async () => [],
+        select: () => ({
+          from: () => ({
+            where: () => whereResult,
+            leftJoin: () => ({ where: () => whereResult }),
+          }),
+        }),
+        insert: () => ({ values: async () => [] }),
+      };
+      currentDb = {
+        transaction: async (run: (transaction: typeof tx) => Promise<unknown>) => run(tx),
+      } as unknown as Db;
+    },
     poison: () => {
       currentDb = poisonDb;
     },
@@ -632,12 +652,16 @@ describe("hotzone valid and outage stability", () => {
     "still renders a valid ?season=%s as a cached 200 board with no error recovery",
     async (season) => {
       const f = fixture();
+      f.healthyEmpty();
       const response = await f.request(`/hotzones?season=${season}`);
       expect(response.status, season).toBe(200);
       expect(response.headers.get("cache-control"), season).toBe("public, max-age=300");
       expect(response.headers.get("vary"), season).toBe("Cookie");
       const body = await response.text();
       expect(body, season).toContain("<table");
+      expect(body.match(/<table\b/g), season).toHaveLength(3);
+      expect(body, season).toContain("0 joins across 0 scheduled gatherings");
+      expect(body, season).not.toContain("Join activity is temporarily unavailable.");
       for (const signal of SIGNALS) expect(body, season).toContain(`/hotzones/${signal}`);
       expect(body, season).not.toContain(INDEX_TESTID);
       for (const signal of SIGNALS) expect(body, season).not.toContain(SIGNAL_TESTID(signal));
@@ -650,12 +674,66 @@ describe("hotzone valid and outage stability", () => {
     "still renders the valid %s signal with no error recovery",
     async (signal) => {
       const f = fixture();
+      f.healthyEmpty();
       const response = await f.request(`/hotzones/${signal}?season=2026`);
       expect(response.status, signal).toBe(200);
+      expect(response.headers.get("cache-control"), signal).toBe("public, max-age=300");
+      expect(response.headers.get("vary"), signal).toBe("Cookie");
       const body = await response.text();
       expect(body, signal).toContain("<table");
+      expect(body, signal).not.toContain("Join activity is temporarily unavailable.");
+      if (signal === "joins") expect(body, signal).toContain("0 joins");
       expect(body, signal).not.toContain(INDEX_TESTID);
       for (const other of SIGNALS) expect(body, signal).not.toContain(SIGNAL_TESTID(other));
+    },
+  );
+
+  it.each(PATHS)(
+    "keeps null-DB %s a cached 200 with honest joins unavailability and no error recovery",
+    async (path) => {
+      const f = fixture();
+      const response = await f.request(`${path}?season=2026`);
+      expect(response.status, path).toBe(200);
+      expect(response.headers.get("cache-control"), path).toBe("public, max-age=300");
+      expect(response.headers.get("vary"), path).toBe("Cookie");
+      const body = await response.text();
+      expect(body, path).not.toContain(INDEX_TESTID);
+      for (const signal of SIGNALS) expect(body, path).not.toContain(SIGNAL_TESTID(signal));
+      expect(body, path).not.toContain("We will be right back");
+      expect(body, path).not.toContain("broke on our side");
+      expect(body, path).not.toContain("0 joins");
+      if (path === "/hotzones" || path === "/hotzones/joins") {
+        expect(body, path).toMatch(
+          /<p\b[^>]*role="status"[^>]*>Join activity is temporarily unavailable\.<\/p>/,
+        );
+        const joins =
+          path === "/hotzones"
+            ? body.match(
+                /<section\b[^>]*aria-labelledby="hotzones-joins-heading"[^>]*>[\s\S]*?<\/section>/,
+              )?.[0]
+            : body;
+        expect(joins, path).toBeDefined();
+        expect(joins, path).not.toContain("<table");
+        expect(joins, path).not.toContain("Peak:");
+      } else {
+        expect(body, path).not.toContain("Join activity is temporarily unavailable.");
+        expect(body, path).toContain("<table");
+        expect(body, path).toContain("Estimated peak:");
+      }
+      if (path === "/hotzones") {
+        for (const signal of ["voice", "games"]) {
+          const prior = body.match(
+            new RegExp(
+              `<section\\b[^>]*aria-labelledby="hotzones-${signal}-heading"[^>]*>[\\s\\S]*?<\\/section>`,
+            ),
+          )?.[0];
+          expect(prior, signal).toBeDefined();
+          expect(prior, signal).toContain("<table");
+          expect(prior, signal).toContain("Estimated peak:");
+          expect(prior, signal).not.toContain("Join activity is temporarily unavailable.");
+        }
+        expect(body.match(/<table\b/g), path).toHaveLength(2);
+      }
     },
   );
 

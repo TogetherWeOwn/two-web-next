@@ -41,6 +41,10 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
       ),
       retentionNote: data.retentionNote,
       appUrl: data.appUrl,
+      available: data.available,
+      joinsPeak: data.peaks.joins,
+      voicePeak: data.peaks.voice,
+      gamesPeak: data.peaks.games,
       periodPickerHtml: renderPeriodPicker("/hotzones", data.season),
     };
   } catch (err) {

@@ -7,8 +7,8 @@ import type { FC } from "hono/jsx";
 import { Layout, RecoveryShell, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
 import type { HeatGrid } from "./aggregates";
-import { HOTZONE_SIGNALS, WEEKDAY_NAMES } from "./aggregates";
-import type { HotzoneSignal } from "./aggregates";
+import { HOTZONE_SIGNALS, peakCell, WEEKDAY_NAMES } from "./aggregates";
+import type { HotzonePeak, HotzoneSignal } from "./aggregates";
 import { utcPeriodShortcuts } from "./season";
 
 const HOURS = Array.from({ length: 24 }, (_, h) => h);
@@ -59,6 +59,26 @@ const Grid: FC<{ cells: HeatGrid; caption: string }> = ({ cells, caption }) => {
 export const renderHotzoneGrid = (cells: HeatGrid, caption: string) =>
   (<Grid cells={cells} caption={caption} />).toString();
 
+// One peak summary line per grid, computed from already-loaded cells (no new
+// reads). Joins peaks never carry the "estimated" qualifier (real data);
+// voice/games peaks always do. Kit Svelte mirrors this exact copy.
+const PeakLine: FC<{ peak: HotzonePeak; estimated: boolean; unit?: string }> = ({
+  peak,
+  estimated,
+  unit,
+}) => (
+  <p>
+    {estimated ? "Estimated peak: " : "Peak: "}
+    {WEEKDAY_NAMES[peak.weekday]} {String(peak.hour).padStart(2, "0")}:00 ({peak.count}
+    {unit ? ` ${unit}` : ""}).
+  </p>
+);
+
+// Joins outage line, same shape as the leaderboards outage line. Rendered only
+// for the joins section/signal when the joins read has no database; the joins
+// grid hides then (no silent zeros) while priors still render.
+const JoinsOutageLine: FC = () => <p role="status">Join activity is temporarily unavailable.</p>;
+
 // Native period picker shared by Hono and Kit: a GET form whose action stays
 // on the current index/signal route, plus server-derived UTC shortcuts. No
 // JavaScript dependency; the committed season renders back into the input so
@@ -107,7 +127,24 @@ export const HotzonesIndexPage: FC<{
   voice: HeatGrid;
   games: HeatGrid;
   retentionNote?: string | null;
-}> = ({ appUrl, season, joins, joinsTotal, eventCount, voice, games, retentionNote }) => {
+  /** False when the joins read has no database; omitted means available. */
+  available?: boolean;
+}> = ({
+  appUrl,
+  season,
+  joins,
+  joinsTotal,
+  eventCount,
+  voice,
+  games,
+  retentionNote,
+  available = true,
+}) => {
+  // Peaks come from the already-loaded cells; no new reads. The joins peak is
+  // null when unavailable or empty, so no callout renders either way.
+  const joinsPeak = available ? peakCell(joins) : null;
+  const voicePeak = peakCell(voice);
+  const gamesPeak = peakCell(games);
   // Every signal link keeps the selected season; absent/all stays canonical
   // with no query, matching the canonical URL and login return-to.
   const qs = season === "all" ? "" : `?season=${season}`;
@@ -127,10 +164,14 @@ export const HotzonesIndexPage: FC<{
       <main class="events-page" id="main" tabindex={-1}>
         <p class="strap">Activity rhythms</p>
         <h1>Hot zones</h1>
-        <p>
-          Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across{" "}
-          {eventCount} scheduled gatherings.
-        </p>
+        {available ? (
+          <p>
+            Aggregate activity by hour and weekday for season {season}: {joinsTotal} joins across{" "}
+            {eventCount} scheduled gatherings.
+          </p>
+        ) : (
+          <p>Aggregate activity by hour and weekday for season {season}.</p>
+        )}
         <p>
           Successful joins only (added or already a member); denied, error and degraded attempts
           never count.
@@ -154,7 +195,14 @@ export const HotzonesIndexPage: FC<{
           <h2 id="hotzones-joins-heading">
             <a href={`/hotzones/joins${qs}`}>Joins</a>
           </h2>
-          <Grid cells={joins} caption={`Join activity for season ${season}`} />
+          {!available ? (
+            <JoinsOutageLine />
+          ) : (
+            <>
+              {joinsPeak ? <PeakLine peak={joinsPeak} estimated={false} unit="joins" /> : null}
+              <Grid cells={joins} caption={`Join activity for season ${season}`} />
+            </>
+          )}
         </section>
         <section aria-labelledby="hotzones-voice-heading">
           <h2 id="hotzones-voice-heading">
@@ -163,6 +211,7 @@ export const HotzonesIndexPage: FC<{
           <p>
             Season-independent seeded estimates of voice activity (estimates until calibration).
           </p>
+          {voicePeak ? <PeakLine peak={voicePeak} estimated /> : null}
           <Grid cells={voice} caption="Season-independent seeded estimate of voice activity" />
         </section>
         <section aria-labelledby="hotzones-games-heading">
@@ -172,6 +221,7 @@ export const HotzonesIndexPage: FC<{
           <p>
             Season-independent seeded estimates of games activity (estimates until calibration).
           </p>
+          {gamesPeak ? <PeakLine peak={gamesPeak} estimated /> : null}
           <Grid cells={games} caption="Season-independent seeded estimate of games activity" />
         </section>
       </main>
@@ -188,10 +238,15 @@ export const HotzoneSignalPage: FC<{
   total: number;
   eventCount?: number;
   retentionNote?: string | null;
-}> = ({ appUrl, signal, season, cells, total, eventCount, retentionNote }) => {
+  /** False when the joins read has no database; omitted means available. Only
+      the joins signal reads the database, so only it renders the outage. */
+  available?: boolean;
+}> = ({ appUrl, signal, season, cells, total, eventCount, retentionNote, available = true }) => {
   const qs = season === "all" ? "" : `?season=${season}`;
   const path = `/hotzones/${signal}${qs}`;
   const estimated = signal !== "joins";
+  const unavailable = !available && !estimated;
+  const peak = unavailable ? null : peakCell(cells);
   return (
     <Layout
       title={`${signal} hot zone — Together We Own`}
@@ -215,10 +270,14 @@ export const HotzoneSignalPage: FC<{
           </p>
         ) : (
           <>
-            <p>
-              Join activity for season {season}: {total} joins
-              {eventCount !== undefined ? ` across ${eventCount} scheduled gatherings` : ""}.
-            </p>
+            {unavailable ? (
+              <p>Join activity for season {season}.</p>
+            ) : (
+              <p>
+                Join activity for season {season}: {total} joins
+                {eventCount !== undefined ? ` across ${eventCount} scheduled gatherings` : ""}.
+              </p>
+            )}
             <p>
               Successful joins only (added or already a member); denied, error and degraded attempts
               never count.
@@ -231,14 +290,23 @@ export const HotzoneSignalPage: FC<{
           <a href={`/hotzones${qs}`}>All hot zones</a> · <a href={`/hotzones/joins${qs}`}>joins</a>{" "}
           · <a href={`/hotzones/voice${qs}`}>voice</a> · <a href={`/hotzones/games${qs}`}>games</a>
         </p>
-        <Grid
-          cells={cells}
-          caption={
-            estimated
-              ? `Season-independent seeded estimate of ${signal} activity`
-              : `Join activity for season ${season}`
-          }
-        />
+        {unavailable ? (
+          <JoinsOutageLine />
+        ) : (
+          <>
+            {peak ? (
+              <PeakLine peak={peak} estimated={estimated} unit={estimated ? undefined : "joins"} />
+            ) : null}
+            <Grid
+              cells={cells}
+              caption={
+                estimated
+                  ? `Season-independent seeded estimate of ${signal} activity`
+                  : `Join activity for season ${season}`
+              }
+            />
+          </>
+        )}
       </main>
       <SiteFooter />
     </Layout>

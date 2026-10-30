@@ -60,6 +60,8 @@ export const load: PageServerLoad = async ({ params, url, locals, setHeaders }) 
       retentionNote: data.retentionNote,
       estimated: data.estimated,
       appUrl: data.appUrl,
+      available: data.available,
+      peak: data.peak,
       periodPickerHtml: renderPeriodPicker(`/hotzones/${data.signal}`, data.season),
     };
   } catch (err) {

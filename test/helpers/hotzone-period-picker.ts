@@ -189,7 +189,7 @@ export async function renderPeriodRequest(
 // markers without ever building a rewritten copy of the markup. Tags
 // become a single space, matching the previous tag-strip, then whitespace
 // collapses as before.
-function text(html: string) {
+export function text(html: string) {
   const parts: string[] = [];
   let index = 0;
   while (index < html.length) {
