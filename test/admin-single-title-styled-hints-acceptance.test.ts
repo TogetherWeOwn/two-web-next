@@ -34,6 +34,7 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { jsx } from "hono/jsx/jsx-runtime";
 import { beforeAll, describe, expect, it } from "vitest";
+import { renderSavedEventReviewHtml } from "../src/admin/pages/event-form-review";
 import {
   ActivityLogPage,
   EventFormPage,
@@ -259,6 +260,12 @@ const kitEditData = () => ({
     showPublish: false,
     showCancel: true,
     rsvpAction: null,
+    savedReviewHtml: renderSavedEventReviewHtml({
+      href: `/events/${eventRow.eventKey}`,
+      updatedAt: eventRow.updatedAt.toISOString(),
+      guidance: "This saved event is already published. Saving edits updates the published record.",
+      corrections: [],
+    }),
     roster: {
       total: 1,
       query: { q: "", status: "", sort: "answered", order: "desc", page: 1 },

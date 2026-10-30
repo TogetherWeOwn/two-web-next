@@ -50,7 +50,18 @@ export function testDatabaseUrl(raw: string, runner = process.env): URL {
     url.username === "postgres" &&
     url.password === "ci" &&
     url.pathname === "/postgres";
-  if (!agentTest && !ciService) return refuse();
+  // Browser-smoke workflow (e2e.yml): disposable postgres:17 service with the
+  // same agent_test/empty/two_web_next credentials as the local test host,
+  // but on the CI loopback. Narrow to the exact tuple; neighboring hosts,
+  // users, passwords, databases and partial CI flags still refuse.
+  const ciBrowserService =
+    runner.GITHUB_ACTIONS === "true" &&
+    runner.CI === "true" &&
+    url.hostname === "127.0.0.1" &&
+    url.username === "agent_test" &&
+    url.password === "" &&
+    url.pathname === "/two_web_next";
+  if (!agentTest && !ciService && !ciBrowserService) return refuse();
   return url;
 }
 
