@@ -31,9 +31,19 @@ const commands = [
   ["npm", ["run", "lint"]],
   ["npm", ["run", "typecheck"]],
   ["npm", ["run", "config:check"]],
-  // SQL suites skip without DATABASE_URL; test/review-p1-verify.test.ts keeps its
-  // P1-3 refusal proofs offline and gates its live-DB proofs behind skipIf.
-  ["npm", ["run", "test"]],
+  // Keep the hermetic projection proofs, but exclude the two real-Postgres
+  // groups from this fixture-only entrypoint. The unfiltered CI coverage run
+  // still executes every database proof against its disposable service DB.
+  [
+    "npm",
+    [
+      "run",
+      "test",
+      "--",
+      "--testNamePattern",
+      "^(?!(?:stored-text admission through real PostgreSQL|documented stored-text byte boundaries through PostgreSQL)(?:\\s|$))",
+    ],
+  ],
   [process.execPath, ["--test", ...a11yTests]],
   ["npm", ["run", "test:cutover"]],
   // Smoke self-tests answer a stubbed local HTTP server; they never reach a Worker or database.
