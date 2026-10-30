@@ -49,6 +49,70 @@ export const stripTrailingSlash = (url: string) => url.replace(/\/+$/, "");
 export const canonicalUrl = (appUrl: string, path: string): string =>
   `${stripTrailingSlash(appUrl)}${path}`;
 
+// State-derived discovery titles are shared by Hono and Kit. Keep them with
+// canonicalUrl, which both Kit pages already import, to avoid an extra client
+// chunk. Callers add the site suffix and renderers escape the text.
+const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
+/** Trimmed query capped at 40 code points; "" when blank.
+ * Mirrors matchQuery (src/events/search-query.ts): strip NUL before normalizing
+ * newlines, then trim. The Unicode/dotAll pattern counts code points including
+ * interior line breaks and replaces only a nonempty tail beyond the limit. */
+function titleQuery(q: string | undefined | null): string {
+  return (q ?? "")
+    .replace(/\u0000/g, "")
+    .replace(/\r\n?/g, "\n")
+    .trim()
+    .replace(/^(.{40}).+/su, "$1…");
+}
+
+/** "June 2030" for a "YYYY-MM" wall month; null when it is not one. */
+function monthLabel(month: string | undefined | null): string | null {
+  const match = /^(\d{4})-(0[1-9]|1[0-2])$/.exec(month ?? "");
+  return match ? `${MONTH_NAMES[Number(match[2]) - 1]} ${match[1]}` : null;
+}
+
+/** Upcoming schedule: search beats month; the plain list keeps "Events". */
+export function eventsTitle(state: { view: string; month: string; q?: string | null }): string {
+  const q = titleQuery(state.q);
+  if (q) return `Events matching “${q}”`;
+  const label = state.view === "calendar" ? monthLabel(state.month) : null;
+  return label ? `Events — ${label}` : "Events";
+}
+
+export const EVENTS_SEARCH_TOO_LONG_TITLE = "Events — search too long";
+
+/** Past archive: search beats page; the first page keeps "Past events". */
+export function pastEventsTitle(page: number, q?: string | null): string {
+  const query = titleQuery(q);
+  if (query) return `Past events matching “${query}”`;
+  return page > 1 ? `Past events — page ${page}` : "Past events";
+}
+
+/** Hot zones index: "all" keeps "Hot zones"; a season names itself. */
+export function hotzonesTitle(season: string): string {
+  return season === "all" ? "Hot zones" : `Hot zones — ${season}`;
+}
+
+/** Hot-zone signal page: "all" keeps "<signal> hot zone"; a season names itself. */
+export function hotzoneSignalTitle(signal: string, season: string): string {
+  const base = `${signal} hot zone`;
+  return season === "all" ? base : `${base} — ${season}`;
+}
+
 // Brand share image (rich unfurls): one approved static asset reused as the
 // og:image on every canonical page — no new artwork, no per-event covers.
 // PNG, not the SVG logo: Discord and X crawlers unfurl PNG reliably while
