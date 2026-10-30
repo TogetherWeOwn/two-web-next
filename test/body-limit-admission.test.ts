@@ -57,13 +57,14 @@ const CAP_FIRST_ROUTES = new Set([
   "POST /__probe/alert",
 ]);
 
-// Moderator featured create/update/delete refuse oversized bodies before the
+// Moderator featured writes refuse oversized bodies before the
 // shared throttle (the moderator guard still runs first): cap-first, not
 // throttle-first.
 const FEATURED_WRITE_CAP_FIRST = new Set([
   "POST /admin/featured",
   "POST /admin/featured/:id",
   "POST /admin/featured/:id/delete",
+  "POST /admin/featured/:id/unpublish",
 ]);
 
 // Logout (both single and everywhere) and QA login refuse oversized bodies

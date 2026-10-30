@@ -3,6 +3,7 @@
 // calendar leaf shares.
 import { transientEventKey } from "../islands/contracts";
 import type { DiscordTransient } from "../islands/contracts";
+import { isOngoing } from "./ongoing";
 import type { PublicEvent } from "./reads";
 
 /** Anything the calendar renders: a persisted row or a Discord transient. */
@@ -20,7 +21,13 @@ export const isTransient = (e: CalRow): e is DiscordTransient => "discordId" in 
  * attendance. Remaining seats read seat occupancy, never the attributable
  * named count, so the card never offers a seat the write path cannot
  * grant. Uncapped rows name the open capacity without inventing a finite
- * count; Discord-native rows say Discord-managed, never site seats. */
+ * count; Discord-native rows say Discord-managed, never site seats.
+ *
+ * `ongoing` is a separate snapshot flag, never a state: a night under way
+ * keeps its paused/full/seats-left verdict, so RSVP truth is never replaced.
+ * It needs the render instant, ends at the end instant (ended wins) and is
+ * never set for cancelled/draft rows. A Discord transient is ongoing when
+ * Discord reports it active and any announced end has not elapsed. */
 export type ScheduleAvailabilityState =
   | "past"
   | "paused"
@@ -32,11 +39,14 @@ export interface ScheduleAvailability {
   state: ScheduleAvailabilityState;
   /** Concise visible copy, shared by the card line and the grid suffix. */
   text: string;
+  /** True while the night is under way at the render instant. */
+  ongoing: boolean;
 }
 /** The persisted-row slice the verdict reads. A null end never reads Ended:
  * only a known end instant at or before `now` closes seats. */
 interface AvailabilityRow {
   status: string;
+  startsAt?: Date | undefined;
   endsAt: Date | null;
   rsvpOpen: boolean;
   capacity: number | null;
@@ -53,14 +63,20 @@ function availabilityFor(
     pastContext ||
     e.status === "past" ||
     (now != null && e.endsAt !== null && e.endsAt.getTime() <= now.getTime());
-  if (ended) return { state: "past", text: "Ended" };
-  if (!e.rsvpOpen) return { state: "paused", text: "RSVPs paused" };
-  if (e.capacity === null) return { state: "uncapped", text: "No seat limit" };
+  if (ended) return { state: "past", text: "Ended", ongoing: false };
+  const ongoing =
+    now != null &&
+    e.startsAt != null &&
+    e.endsAt != null &&
+    isOngoing({ status: e.status, startsAt: e.startsAt, endsAt: e.endsAt }, now);
+  if (!e.rsvpOpen) return { state: "paused", text: "RSVPs paused", ongoing };
+  if (e.capacity === null) return { state: "uncapped", text: "No seat limit", ongoing };
   const remaining = Math.max(0, e.capacity - e.goingOccupancy);
-  if (remaining <= 0) return { state: "full", text: "Full" };
+  if (remaining <= 0) return { state: "full", text: "Full", ongoing };
   return {
     state: "open",
     text: remaining === 1 ? "1 seat left" : `${remaining} seats left`,
+    ongoing,
   };
 }
 
@@ -69,7 +85,15 @@ export function rowAvailability(
   now?: Date | null,
   pastContext = false,
 ): ScheduleAvailability | null {
-  if (isTransient(e)) return { state: "transient", text: "Discord-managed" };
+  if (isTransient(e)) {
+    const ongoing =
+      e.status === "active" &&
+      !pastContext &&
+      now != null &&
+      Number.isFinite(now.getTime()) &&
+      (e.endsAt === null || now.getTime() < e.endsAt.getTime());
+    return { state: "transient", text: "Discord-managed", ongoing };
+  }
   return availabilityFor(e, now, pastContext);
 }
 
@@ -81,6 +105,7 @@ export function rowAvailability(
  * `GoingCountState.occupancy` precedent). */
 export interface TeaserAvailabilityRow {
   status?: string | undefined;
+  startsAt?: Date | undefined;
   endsAt?: Date | undefined;
   rsvpOpen?: boolean | undefined;
   capacity: number | null;
@@ -99,6 +124,7 @@ export function teaserAvailability(
   return availabilityFor(
     {
       status: e.status ?? "published",
+      startsAt: e.startsAt,
       endsAt: e.endsAt ?? null,
       rsvpOpen: e.rsvpOpen ?? true,
       capacity: e.capacity,

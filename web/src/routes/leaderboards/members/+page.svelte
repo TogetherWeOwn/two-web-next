@@ -1,5 +1,6 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
+import { boardCaption } from "../../../../../src/leaderboards/captions";
 import { canonicalUrl } from "../../../../../src/seo";
 import { utcPeriodShortcuts } from "../../../../../src/hotzones/season";
 import type { PageProps } from "./$types";
@@ -8,11 +9,15 @@ let { data }: PageProps = $props();
 const { season, scope, activity, rows, viewerUsername, available, appUrl } = $derived(data);
 const periods = utcPeriodShortcuts();
 const label = $derived(activity === null ? "every game" : activity);
-const destination = (nextScope: string, nextSeason = season) => {
+const destination = (
+  nextScope: string,
+  nextSeason = season,
+  nextActivity: string | null = activity,
+) => {
   const params = new URLSearchParams();
   if (nextSeason !== "all") params.set("season", nextSeason);
   if (nextScope !== "overall") params.set("scope", nextScope);
-  if (activity !== null) params.set("activity", activity);
+  if (nextActivity !== null) params.set("activity", nextActivity);
   const query = params.toString();
   return query === "" ? "/leaderboards/members" : `/leaderboards/members?${query}`;
 };
@@ -66,10 +71,16 @@ const destination = (nextScope: string, nextSeason = season) => {
   {#if !available}
     <p role="status">Rankings are temporarily unavailable.</p>
   {:else if rows.length === 0}
-    <p role="status">{scope === "relative" ? "You are not ranked for this season and game yet." : "Nobody is ranked for this season and game yet."}</p>
+    {#if scope === "relative"}
+      <p role="status">You are not ranked for this season and game yet. See the <a href={destination("overall")}>overall board</a>, or answer going to get ranked at an upcoming <a href="/events">event</a>.</p>
+    {:else if activity === null}
+      <p role="status">Nobody is ranked for this season and game yet. Browse <a href="/events">events</a> to get ranked.</p>
+    {:else}
+      <p role="status">Nobody is ranked for this season and game yet. Browse <a href="/events">events</a> to get ranked, or <a href={destination("overall", season, null)}>show every game</a>.</p>
+    {/if}
   {:else}
     <table class="member-board-table">
-      <caption>Going counts, season {season}, {label}</caption>
+      <caption>{boardCaption({ season, scope, activity })}</caption>
       <thead><tr><th scope="col">Rank</th><th scope="col">Member</th><th scope="col">Going</th></tr></thead>
       <tbody>
         {#each rows as row}

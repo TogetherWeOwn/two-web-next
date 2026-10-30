@@ -671,8 +671,19 @@ export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent |
 
 export type EventLink = Pick<
   PublicEvent,
-  "id" | "eventKey" | "title" | "startsAt" | "timezone" | "location"
+  | "id"
+  | "eventKey"
+  | "title"
+  | "startsAt"
+  | "endsAt"
+  | "timezone"
+  | "location"
+  | "game"
+  | "rsvpOpen"
 >;
+
+export { eventLinkAvailability } from "./link-availability";
+
 export interface EventNeighbors {
   previous: EventLink | null;
   next: EventLink | null;
@@ -683,8 +694,11 @@ const eventLinkColumns = {
   eventKey: events.eventKey,
   title: events.title,
   startsAt: events.startsAt,
+  endsAt: events.endsAt,
   timezone: events.timezone,
   location: events.location,
+  game: events.game,
+  rsvpOpen: events.rsvpOpen,
 };
 
 /**
@@ -843,6 +857,7 @@ export async function getEventSeriesContext(
   const textFits = sql<boolean>`(
     octet_length(${events.eventKey}) + octet_length(${events.title}) +
     octet_length(${events.timezone}) + coalesce(octet_length(${events.location}), 0) +
+    coalesce(octet_length(${events.game}), 0) +
     coalesce(octet_length(${events.organizer_name}), 0)
   ) <= ${SERIES_CONTEXT_MAX_TEXT_BYTES}`;
   const rows = await nonSensitiveRead("events", () =>
@@ -853,6 +868,7 @@ export async function getEventSeriesContext(
         title: sql<string>`case when ${textFits} then ${events.title} end`,
         timezone: sql<string>`case when ${textFits} then ${events.timezone} end`,
         location: sql<string | null>`case when ${textFits} then ${events.location} end`,
+        game: sql<string | null>`case when ${textFits} then ${events.game} end`,
         organizer_name: sql<string | null>`case when ${textFits} then ${events.organizer_name} end`,
         recurrenceIndex: events.recurrenceIndex,
         textFits,
@@ -883,8 +899,11 @@ export async function getEventSeriesContext(
     eventKey: row.eventKey,
     title: row.title,
     startsAt: row.startsAt,
+    endsAt: row.endsAt,
     timezone: row.timezone,
     location: row.location,
+    game: row.game,
+    rsvpOpen: row.rsvpOpen,
   });
   // A run of one is a standalone render: the current row with no visible
   // siblings keeps today's markup with no series block at all.

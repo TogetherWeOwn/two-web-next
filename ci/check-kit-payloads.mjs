@@ -26,6 +26,11 @@ const SERVER_FILE = /^\+(?:.*\.)?server\./;
 // ci/kit-public-payloads.json; this table owns the describe/it mapping and
 // fails closed on drift (unknown ID, unmapped assertion, vacuous check).
 const CHECK_MATCHERS = [
+  {
+    id: "kit-payload-root-layout",
+    describe: "Kit root layout load: requestId forwarding",
+    testContains: null,
+  },
   { id: "kit-payload-detector", describe: "no-member-data detector", testContains: null },
   { id: "kit-payload-home", describe: "Kit GET / anonymous payload", testContains: null },
   { id: "kit-payload-events", describe: "Kit GET /events anonymous payload", testContains: null },

@@ -7,6 +7,7 @@ import {
   EVENT_CARD_TESTID,
   EVENT_DISCORD_RSVP_TESTID,
   EVENT_DRAFT_TESTID,
+  EVENT_ONGOING_TESTID,
   SCHEDULE_AVAILABILITY_TESTID,
   SPOTS_LEFT_TESTID,
   cardDayLabel,
@@ -18,6 +19,8 @@ import {
   spotsLeftText,
   wallTimeHm,
 } from "../islands/contracts";
+import { effectiveZone } from "./date-format";
+import { ONGOING_COPY } from "./ongoing";
 import { ScheduleDate } from "./pages-shared";
 import { searchContext } from "./search-context";
 import { matchQuery } from "./search-query";
@@ -59,7 +62,7 @@ export const CalCard: FC<{
   inviteUrl: string;
   loginReturnTo: string | null;
 }> = ({ e, zone, now = new Date(), isPast, q = "", member, inviteUrl, loginReturnTo }) => {
-  const tz = rowZone(e, zone);
+  const tz = effectiveZone(rowZone(e, zone));
   const transient = isTransient(e);
   const cancelled = !transient && e.status === "cancelled";
   // The drawer context wins over row dates: a card shown under past events
@@ -129,6 +132,16 @@ export const CalCard: FC<{
               {" "}
               <span class="schedule-badge" data-testid={EVENT_CANCELLED_TESTID}>
                 Cancelled
+              </span>{" "}
+            </>
+          ) : null}
+          {/* Snapshot clock badge beside the availability line, never instead
+              of it: paused/full/seats-left stay the RSVP truth. */}
+          {availability?.ongoing ? (
+            <>
+              {" "}
+              <span class="schedule-badge" data-testid={EVENT_ONGOING_TESTID}>
+                {ONGOING_COPY}
               </span>{" "}
             </>
           ) : null}

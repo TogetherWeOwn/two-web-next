@@ -2,9 +2,12 @@
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
+import { ONGOING_COPY } from "../../../src/events/ongoing";
+import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
 import {
   EVENT_FULL_TESTID,
+  EVENT_ONGOING_TESTID,
   RSVP_BUTTON_ISLAND,
   RSVP_CHECK_TESTID,
   RSVP_CLOSED_TESTID,
@@ -55,6 +58,7 @@ let { model }: { model: KitEventDetailModel } = $props();
 // every deferred script runs after parsing, with all of its mount nodes present.
 const detailIslands = [
   "event-device-timezone",
+  "event-time-from-now",
   "rsvp-button",
   "copy-link",
   "event-share",
@@ -104,6 +108,19 @@ const lineup = $derived(
   {/if}
 </svelte:head>
 
+{#snippet destinationPreview(event: NonNullable<KitEventDetailModel["neighbors"]["previous"]>)}
+  <time datetime={event.datetime}>{event.whenText}</time>
+  {#if event.location}
+    {" "}<span class="event-related-location">{event.location}</span>
+  {/if}
+  {#if event.game}
+    {" "}<span class="event-related-game">{event.game}</span>
+  {/if}
+  {#if event.availability}
+    {" "}<span class="event-related-state">{event.availability}</span>
+  {/if}
+{/snippet}
+
 {#snippet eventPagination(neighbors: KitEventDetailModel["neighbors"] | null | undefined, series: boolean)}
   {#snippet eventLink(event: KitEventDetailModel["neighbors"]["previous"], previous: boolean)}
     {#if event}
@@ -113,10 +130,7 @@ const lineup = $derived(
         data-testid="event-{series ? 'series-' : ''}{previous ? 'previous' : 'next'}"
       >
         <span>{previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}</span>{" "}
-        <time datetime={event.datetime}>{event.whenText}</time>
-        {#if event.location}
-          <span class="event-related-location">{event.location}</span>
-        {/if}
+        {@render destinationPreview(event)}
       </a>
     {/if}
   {/snippet}
@@ -166,6 +180,9 @@ const lineup = $derived(
     {#if model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
     {/if}
+    {#if model.isOngoing}
+      <p class="notice" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</p>
+    {/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
   {#if model.joinResult}
@@ -199,6 +216,26 @@ const lineup = $derived(
         <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
       </dd>
     </div>
+    {#if !model.isDraft}
+      <div hidden>
+        <dt>Time from now</dt>
+        <dd
+          class="event-device-timezone"
+          data-event-time-from-now
+          data-starts-at={model.timeDatetime}
+          data-ends-at={model.endsAt}
+        >
+          <button type="button" hidden data-testid="event-time-from-now-button">Show time from now</button>
+          <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
+        </dd>
+      </div>
+    {/if}
+    {#if model.durationText}
+      <div>
+        <dt>Duration</dt>
+        <dd>{model.durationText}</dd>
+      </div>
+    {/if}
     {#if model.location}
       <div>
         <dt>Where</dt>
@@ -213,7 +250,15 @@ const lineup = $derived(
           {/if}
         </dd>
       </div>
-    {/if}{#if model.series && model.series.hosts.length > 0}
+    {/if}{#if model.organizerName}
+      <div>
+        <dt>Hosted by</dt>
+        <dd>
+          <p data-testid="event-organizer">{model.organizerName}</p>
+        </dd>
+      </div>
+    {/if}
+    {#if model.series && model.series.hosts.length > 0}
       <div>
         <dt>Series hosts</dt>
         <dd>
@@ -331,6 +376,29 @@ const lineup = $derived(
           <p>{model.accessibilityNotes}</p>
         </section>
       {/if}
+      {#if (model.status === "published" || model.status === "draft") && (model.joinUrl || model.joinInstructions)}
+        <section
+          class="event-description event-join-details"
+          aria-labelledby="event-join-details-heading"
+          data-testid="event-join-details"
+        >
+          <h2 id="event-join-details-heading">How to join</h2>
+          {#if model.joinUrl}
+            <p>
+              {#if model.status === "published" && isPublicJoinUrl(model.joinUrl)}
+                <a href={model.joinUrl} data-testid="event-public-join-link">
+                  Open the public joining link
+                </a>
+              {:else}
+                Public joining link: {model.joinUrl}
+              {/if}
+            </p>
+          {/if}
+          {#if model.joinInstructions}
+            <p data-testid="event-join-instructions">{model.joinInstructions}</p>
+          {/if}
+        </section>
+      {/if}
       {#if model.showJoinPitch}
         <section class="event-pitch" data-testid="event-join-pitch" aria-label="Join the community">
           <p>
@@ -446,10 +514,7 @@ const lineup = $derived(
             <li>
               <a href="/e/{event.key}" data-testid="event-related-link">
                 {event.title}{" "}
-                <time datetime={event.datetime}>{event.whenText}</time>
-                {#if event.location}
-                  {" "}<span class="event-related-location">{event.location}</span>
-                {/if}
+                {@render destinationPreview(event)}
               </a>
             </li>
           {/each}

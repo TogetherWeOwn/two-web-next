@@ -425,14 +425,14 @@ describe.skipIf(!process.env.DATABASE_URL)(
       }, 20_000);
     }
 
-    for (const statementTimeout of [false, true]) {
-      it(statementTimeout
-        ? "a still-blocked native INSERT reaches its database timeout without holding ACK or leaking its pool"
-        : "a native INSERT that commits after handler pool shutdown is cancelled before send and compensated", async () => {
+    for (const releaseBeforeBound of [false, true]) {
+      it(releaseBeforeBound
+        ? "a native INSERT released before the ledger bound commits and dispatches the successor"
+        : "a still-blocked native INSERT is cancelled server-side within the ledger bound without holding ACK or leaking its pool", async () => {
         const messages = await prepare();
         // A server-side trigger holds only the successor INSERT, not handler SQL.
-        // Its receipt proves a late COMMIT actually happened, not just a rolled
-        // back statement or a fake ledger promise returning after a timer.
+        // Its receipt proves a COMMIT actually happened, not just a rolled back
+        // statement or a fake ledger promise returning after a timer.
         await observer`create table successor_insert_receipts (job_id uuid primary key)`;
         await observer`create function hold_successor_insert() returns trigger language plpgsql as $$
         begin
@@ -466,51 +466,89 @@ describe.skipIf(!process.env.DATABASE_URL)(
             interval: 10,
             timeout: 2000,
           });
+          const parkedAt = Date.now(); // ~INSERT start: polling began before it parked.
+          if (releaseBeforeBound) {
+            held.release(); // Commit inside the 2 s ledger bound (positive control).
+            await holding;
+            await expectAckAndShutdown(messages, work);
+            await Promise.all(background);
+            // A brief sub-bound wait still commits and dispatches exactly once.
+            expect(send).toHaveBeenCalledOnce();
+            const successor = send.mock.calls[0]![0] as SyncMessage;
+            expect(successor).toMatchObject({ kind: "sync-event", eventKey: firstKey });
+            expect(await observer`select job_id from successor_insert_receipts`).toEqual([
+              { job_id: successor.jobId },
+            ]);
+            expect(
+              warnings.mock.calls.some(
+                ([text]) => text === "sync successor dispatch failed; reconcile will retry",
+              ),
+            ).toBe(false);
+            expect(await observer`select job_id from queue_jobs`).toEqual([
+              { job_id: successor.jobId },
+            ]);
+            expect(await observer`select key from job_unique_locks`).toEqual([
+              { key: uniqueKey(firstKey) },
+            ]);
+            await observer`drop trigger hold_successor_insert on queue_jobs`;
+            transport.bot = {
+              upsertEvent: vi.fn<BotClient["upsertEvent"]>(async () => ({
+                ok: true,
+                requestId: null,
+                discordEventId: "discord-successor",
+              })),
+              cancelEvent: vi.fn(),
+              postAnnouncement: vi.fn(),
+              assignRole: vi.fn(),
+            };
+            const message = delivery(successor);
+            await handleQueue(
+              { messages: [message] } as unknown as MessageBatch<unknown>,
+              env,
+              ctx,
+            );
+            expect(message.ack).toHaveBeenCalledOnce();
+            expect(message.retry).not.toHaveBeenCalled();
+            expect(await pgEventStore(observer).needsSync(firstKey)).toBe(false);
+            expect(await observer`select job_id from queue_jobs`).toEqual([]);
+            expect(await observer`select key from job_unique_locks`).toEqual([]);
+            return;
+          }
           await expectAckAndShutdown(messages, work);
           expect(send).not.toHaveBeenCalled();
-          expect(await blocked()).toHaveLength(1); // Still server-side, AFTER shutdown.
-          if (statementTimeout) {
-            // AB7 producer deadline: the 2000 ms bound fires before the 5 s
-            // statement_timeout, so dispatch rejects as a transport wait while
-            // the blocked INSERT is still server-side. The cancelled server
-            // query and the empty receipts below still prove the database
-            // timeout itself happened.
-            await Promise.all(background);
-            // Class-only since the successor-dispatch redaction: the timeout
-            // error's raw message ("statement timeout") must not reach the
-            // log, only its bounded class.
-            const dispatchWarns = warnings.mock.calls.filter(
-              ([text]) => text === "sync successor dispatch failed; reconcile will retry",
-            );
-            expect(dispatchWarns.length).toBeGreaterThanOrEqual(1);
-            for (const [, detail] of dispatchWarns) {
-              expect(detail).toEqual({ exception: "BotTransportError" });
-            }
-            // The server-side INSERT outlives the deadline; wait for
-            // statement_timeout to cancel it before asserting it is gone.
-            await vi.waitFor(async () => expect(await blocked()).toHaveLength(0), {
-              interval: 100,
-              timeout: 15_000,
-            });
-            await vi.waitFor(() => expect(pools.every(({ ended }) => ended)).toBe(true), {
-              timeout: 15_000,
-            });
-          }
-          held.release();
-          await holding;
-          await awaitDispatchFailure();
-          expect(send).not.toHaveBeenCalled(); // Deadline abort prevents a late send.
-          // The blocked INSERT settles after the holder commits; wait for its
-          // receipt instead of asserting it immediately.
-          await vi.waitFor(
-            async () =>
-              expect(await observer`select job_id from successor_insert_receipts`).toHaveLength(
-                statementTimeout ? 0 : 1,
-              ),
-            { timeout: 10_000 },
+          // The holder never released, so only the server-side 2 s ledger bound
+          // can free the parked INSERT. 4000 ms from parking sits far under the
+          // 5 s pool statement_timeout that used to be the only cancellation.
+          await vi.waitFor(async () => expect(await blocked()).toHaveLength(0), {
+            interval: 50,
+            timeout: 10_000,
+          });
+          expect(Date.now() - parkedAt).toBeLessThan(4000);
+          expect(
+            await observer`select pid from pg_locks
+            where locktype = 'advisory' and pid = ${holderPid} and granted`,
+          ).toHaveLength(1); // Holder still holds: the bound freed the INSERT.
+          await Promise.all(background);
+          await vi.waitFor(() => expect(pools.every(({ ended }) => ended)).toBe(true), {
+            timeout: 10_000,
+          });
+          // Class-only since the successor-dispatch redaction: the error's raw
+          // message must not reach the log, only its bounded class. Which class
+          // wins is a ~50 ms race: the server lock cancel surfaces PostgresError
+          // unless the 2 s client producer deadline takes that remaining 50 ms.
+          const dispatchWarns = warnings.mock.calls.filter(
+            ([text]) => text === "sync successor dispatch failed; reconcile will retry",
           );
-          // The late compensation runs after the blocked INSERT settles; wait
-          // for it instead of asserting it immediately.
+          expect(dispatchWarns.length).toBeGreaterThanOrEqual(1);
+          for (const [, detail] of dispatchWarns) {
+            expect(Object.keys(detail as object)).toEqual(["exception"]);
+            expect(["PostgresError", "BotTransportError"]).toContain(
+              (detail as { exception: string }).exception,
+            );
+          }
+          // Cancelled before the holder released, the INSERT can never commit
+          // late: no receipt, no ledger orphan, and the lease is compensated.
+          expect(await observer`select job_id from successor_insert_receipts`).toEqual([]);
           await vi.waitFor(
             async () => expect(await observer`select job_id from queue_jobs`).toEqual([]),
             { timeout: 10_000 },
@@ -519,7 +557,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
             async () => expect(await observer`select key from job_unique_locks`).toEqual([]),
             { timeout: 10_000 },
           );
+          held.release();
+          await holding;
+          expect(await observer`select job_id from successor_insert_receipts`).toEqual([]);
+          expect(send).not.toHaveBeenCalled();
           await observer`drop trigger hold_successor_insert on queue_jobs`;
+          expect(await pgEventStore(observer).needsSync(firstKey)).toBe(true);
           await recover();
         } finally {
           held.release();

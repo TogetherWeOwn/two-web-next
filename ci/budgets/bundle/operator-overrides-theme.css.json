@@ -1,0 +1,9 @@
+{
+  "$comment": "See ci/budgets/README.md; changing this ceiling needs a decision file in ci/budgets/decisions/bundle/.",
+  "budgets": {
+    "public/operator-overrides-theme.css": {
+      "maxRawBytes": 512,
+      "maxGzipBytes": 256
+    }
+  }
+}
