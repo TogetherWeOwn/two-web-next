@@ -14,6 +14,7 @@ import { getPublicApiEvent, listPublicApiEvents } from "../events/reads";
 import {
   API_PUBLIC_BOUNDS,
   PUBLIC_DATA_INTERNAL_MESSAGE,
+  parsePublicApiGame,
   parsePublicEventId,
   type PublicApiEventCollectionDto,
   type PublicDataErrorCode,
@@ -89,7 +90,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
     "list_events",
     {
       description:
-        "List published community events, soonest first. Read-only: paging clamps to 20 rows per page and long descriptions trim to fit 32 KiB.",
+        "List published community events, soonest first. Read-only: paging clamps to 20 rows per page and long descriptions trim to fit 32 KiB. The optional game filter is an exact, case-insensitive match on the stored game name.",
       inputSchema: z.object({
         page: z.number().int().min(1).default(1),
         per_page: z
@@ -98,11 +99,27 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
           .min(1)
           .max(API_PUBLIC_BOUNDS.maxPageSize)
           .default(API_PUBLIC_BOUNDS.defaultPageSize),
+        // No length bound in the schema: an oversized value must reach the
+        // handler and answer the canonical empty collection like REST, not
+        // a JSON-RPC schema error. Validation happens in-handler below.
+        game: z
+          .string()
+          .describe(
+            "Optional stored game name for an exact, case-insensitive match (trimmed; no substring search). Absent reads unfiltered; present-but-blank, oversized or unknown answers the empty collection.",
+          )
+          .optional(),
       }),
       outputSchema: publicApiEventCollectionOutputSchema,
       annotations: READ_ONLY,
     },
-    async ({ page, per_page }) => {
+    async ({ page, per_page, game }) => {
+      // The one parse rule shared with REST (contracts.ts): invalid games
+      // answer the canonical empty collection at default paging before any
+      // database read — never unfiltered, never a tool error.
+      const parsedGame = parsePublicApiGame(game);
+      if (parsedGame.kind === "empty") {
+        return toolJson(serializeEventCollection([], 0, 1, API_PUBLIC_BOUNDS.defaultPageSize));
+      }
       if (!db) return toolError("unavailable", UNAVAILABLE);
       // A refused socket reads as the unavailable error; programming errors
       // alert and return the static message (the SDK turns a throw into an
@@ -112,12 +129,18 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
         listed = await listPublicApiEvents(db, {
           limit: per_page,
           offset: (page - 1) * per_page,
+          ...(parsedGame.kind === "filter" ? { game: parsedGame.game } : {}),
         });
       } catch (err: unknown) {
         if (isDatabaseUnavailable(err)) return toolError("unavailable", UNAVAILABLE);
         return internalError(err);
       }
       if (!listed) return toolError("unavailable", UNAVAILABLE);
+      // Mirror REST: a filtered total of zero answers the canonical default
+      // empty page, ignoring the requested paging.
+      if (parsedGame.kind === "filter" && listed.total === 0) {
+        return toolJson(serializeEventCollection([], 0, 1, API_PUBLIC_BOUNDS.defaultPageSize));
+      }
       const payload: PublicApiEventCollectionDto = serializeEventCollection(
         listed.rows.map(serializeEvent),
         listed.total,
@@ -154,13 +177,14 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
       annotations: READ_ONLY,
     },
     async ({ event_key }) => {
-      // Static message: the rejected key is never reflected.
-      if (!parsePublicEventId(event_key))
-        return toolError("invalid_request", "That event key is not valid.");
+      // Static message: the rejected key is never reflected. A case-variant
+      // ULID canonicalizes to the stored uppercase form before lookup.
+      const eventId = parsePublicEventId(event_key);
+      if (!eventId) return toolError("invalid_request", "That event key is not valid.");
       if (!db) return toolError("unavailable", UNAVAILABLE);
       let row;
       try {
-        row = await getPublicApiEvent(db, event_key);
+        row = await getPublicApiEvent(db, eventId);
       } catch (err) {
         if (isDatabaseUnavailable(err)) return toolError("unavailable", UNAVAILABLE);
         return internalError(err);

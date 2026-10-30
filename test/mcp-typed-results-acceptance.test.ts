@@ -592,9 +592,9 @@ describe.skipIf(!process.env.DATABASE_URL)("C4 typed results: advertised output 
     expect(JSON.parse(missingText)).toEqual({
       error: { code: "not_found", message: expect.any(String) },
     });
-    // Rejected keys never reflect and never validate as successes either.
+    // U is outside Crockford base32: rejected keys never reflect or validate as successes.
     const bad = toolResult(
-      await callTool("get_event", { event_key: "01j00000000000000000000001" }, 5),
+      await callTool("get_event", { event_key: "01u00000000000000000000001" }, 5),
     );
     expect(bad["isError"]).toBe(true);
     expect(bad["structuredContent"]).toBeUndefined();
@@ -602,7 +602,7 @@ describe.skipIf(!process.env.DATABASE_URL)("C4 typed results: advertised output 
     expect(JSON.parse(badText)).toEqual({
       error: { code: "invalid_request", message: expect.any(String) },
     });
-    expect(badText).not.toContain("01j000");
+    expect(badText).not.toContain("01u000");
   });
 
   it("community and join results validate with nulls and equal REST bytes", async () => {
