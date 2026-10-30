@@ -1156,6 +1156,15 @@ const storedTextOver = (column: AnyPgColumn, maxBytes: number) =>
 const admittedText = <T extends string | null>(column: AnyPgColumn, maxBytes: number) =>
   sql<T>`case when ${storedTextOver(column, maxBytes)} then null else ${column} end`;
 
+/**
+ * One refusal marker shared by both egress surfaces: a row is refused when
+ * any single listed field is over its own budget. The `case when` template
+ * lives here once, and each column's over-budget predicate is declared once
+ * below and referenced, so no surface restates the same SQL twice.
+ */
+const anyStoredTextOver = (...over: SQL[]) =>
+  sql<number>`case when ${sql.join(over, sql` or `)} then 1 else 0 end`;
+
 function warnEgressTextRefusal(surface: "sitemap" | "feed", skipped: number): void {
   if (skipped > 0) {
     console.warn("Event egress read refused oversized stored text.", {
@@ -1174,21 +1183,20 @@ export async function sitemapEvents(
   // and an oversized key arrives only as the refusal marker.
   const rows = await db
     .select({
-      eventKey: admittedText<string>(events.eventKey, EGRESS_EVENT_KEY_MAX_BYTES),
+      eventKey: admittedText<string>(events.eventKey, 256),
       startsAt: events.startsAt,
       endsAt: events.endsAt,
       updatedAt: events.updatedAt,
-      textRefused: sql<number>`case when ${storedTextOver(
-        events.eventKey,
-        EGRESS_EVENT_KEY_MAX_BYTES,
-      )} then 1 else 0 end`,
     })
     .from(events)
     .where(eq(events.status, "published"))
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
   warnEgressCapacity("sitemap", rows.length);
-  const admitted = rows.filter((r) => r.textRefused !== 1);
+  // The admitted key is NULL exactly when the stored key is over its byte
+  // budget, so the refusal set is read straight off the projection and this
+  // surface needs no second marker in the same SELECT.
+  const admitted = rows.filter((r) => r.eventKey !== null);
   warnEgressTextRefusal("sitemap", rows.length - admitted.length);
   // One poison row (unrenderable window, or an updatedAt outside the JS Date
   // range) must not empty the sitemap via the route's static fallback:
@@ -1245,34 +1253,27 @@ export async function listFeed(
   game: string | null = null,
 ): Promise<FeedEvent[]> {
   const gameClause = gameCondition(game);
-  const textRefused = sql<number>`case when ${storedTextOver(
-    events.eventKey,
-    EGRESS_EVENT_KEY_MAX_BYTES,
-  )} or ${storedTextOver(events.title, EGRESS_TITLE_MAX_BYTES)} or ${storedTextOver(
-    events.game,
-    EGRESS_GAME_MAX_BYTES,
-  )} or ${storedTextOver(events.description, EGRESS_DESCRIPTION_MAX_BYTES)} or ${storedTextOver(
-    events.timezone,
-    EGRESS_TIMEZONE_MAX_BYTES,
-  )} or ${storedTextOver(events.location, EGRESS_LOCATION_MAX_BYTES)} or ${storedTextOver(
-    events.organizer_name,
-    EGRESS_ORGANIZER_MAX_BYTES,
-  )} then 1 else 0 end`;
+  const textRefused = anyStoredTextOver(
+    storedTextOver(events.eventKey, 256),
+    storedTextOver(events.title, 400),
+    storedTextOver(events.game, 400),
+    storedTextOver(events.description, 4000),
+    storedTextOver(events.timezone, 256),
+    storedTextOver(events.location, 1020),
+    storedTextOver(events.organizer_name, 2000),
+  );
   const rows = await db
     .select({
       id: events.id,
-      eventKey: admittedText<string>(events.eventKey, EGRESS_EVENT_KEY_MAX_BYTES),
-      title: admittedText<string>(events.title, EGRESS_TITLE_MAX_BYTES),
-      game: admittedText<string | null>(events.game, EGRESS_GAME_MAX_BYTES),
-      description: admittedText<string | null>(events.description, EGRESS_DESCRIPTION_MAX_BYTES),
+      eventKey: admittedText<string>(events.eventKey, 256),
+      title: admittedText<string>(events.title, 400),
+      game: admittedText<string | null>(events.game, 400),
+      description: admittedText<string | null>(events.description, 4000),
       startsAt: events.startsAt,
       endsAt: events.endsAt,
-      timezone: admittedText<string>(events.timezone, EGRESS_TIMEZONE_MAX_BYTES),
-      location: admittedText<string | null>(events.location, EGRESS_LOCATION_MAX_BYTES),
-      organizer_name: admittedText<string | null>(
-        events.organizer_name,
-        EGRESS_ORGANIZER_MAX_BYTES,
-      ),
+      timezone: admittedText<string>(events.timezone, 256),
+      location: admittedText<string | null>(events.location, 1020),
+      organizer_name: admittedText<string | null>(events.organizer_name, 2000),
       status: events.status,
       updatedAt: events.updatedAt,
       icsSequence: events.icsSequence,
