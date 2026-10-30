@@ -1,17 +1,19 @@
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { listEvents } from "../src/admin/store-event-reads";
-import { events } from "../src/db/admin-schema";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import {
+  createPlanningWindowFixture,
+  type PlanningWindowFixture,
+} from "./helpers/admin-event-planning-window-db";
 
 // Pin the integration boundary: date bounds must AND with the entire Past OR,
 // including stored-past rows whose end is still in the future.
 describe("UTC start window with both Past eligibility branches", () => {
-  let fixture: MemberDataFixture;
+  let fixture: PlanningWindowFixture;
   const now = new Date("2030-06-17T12:00:00.000Z");
   const keys = (rows: { eventKey: string }[]) => rows.map((row) => row.eventKey).sort();
 
   beforeAll(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    fixture = await createPlanningWindowFixture([]);
   });
   afterAll(() => fixture?.dispose());
   beforeEach(async () => {
@@ -25,7 +27,7 @@ describe("UTC start window with both Past eligibility branches", () => {
         ["inside", "2030-06-15T12:00:00.000Z"],
         ["upper", "2030-06-16T00:00:00.000Z"],
       ]) {
-        await fixture.db.insert(events).values({
+        await fixture.insertEvent({
           eventKey: `${status}-${key}`,
           title: `${status} ${key}`,
           status,
@@ -34,22 +36,20 @@ describe("UTC start window with both Past eligibility branches", () => {
         });
       }
     }
-    await fixture.db.insert(events).values([
-      {
-        eventKey: "ongoing",
-        title: "Published ongoing",
-        status: "published",
-        startsAt: new Date("2030-06-15T12:00:00Z"),
-        endsAt: now,
-      },
-      {
-        eventKey: "draft-ended",
-        title: "Draft ended",
-        status: "draft",
-        startsAt: new Date("2030-06-15T12:00:00Z"),
-        endsAt: new Date("2030-06-16T01:00:00Z"),
-      },
-    ]);
+    await fixture.insertEvent({
+      eventKey: "ongoing",
+      title: "Published ongoing",
+      status: "published",
+      startsAt: new Date("2030-06-15T12:00:00Z"),
+      endsAt: now,
+    });
+    await fixture.insertEvent({
+      eventKey: "draft-ended",
+      title: "Draft ended",
+      status: "draft",
+      startsAt: new Date("2030-06-15T12:00:00Z"),
+      endsAt: new Date("2030-06-16T01:00:00Z"),
+    });
   });
   afterEach(() => vi.useRealTimers());
 
