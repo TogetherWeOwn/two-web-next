@@ -66,16 +66,20 @@ const DEFAULT_ACL_QUERY = `
     CROSS JOIN LATERAL aclexplode(d.defaclacl) AS acl
    WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user)
      AND d.defaclobjtype IN ('r', 'S')
-     AND (d.defaclnamespace = 0 OR n.nspname = 'public')
+     AND (d.defaclnamespace = 0 OR n.nspname IN ('public', 'drizzle'))
    ORDER BY 1, 2, 3, 4, 5, 6
 `;
 
 export function validateDefaultAclRows(rows) {
   const errors = [];
   for (const row of rows) {
+    // Only the public-scoped shape stays reviewed: a global sequence
+    // default also fires in the drizzle schema, so it would grant the
+    // runtime role the runner's own migration-ledger sequence, and a
+    // drizzle-scoped default targets that ledger directly.
     const isReviewedSequenceDefault =
       row.object_type === "S" &&
-      ["(global)", "public"].includes(row.schema_name) &&
+      row.schema_name === "public" &&
       row.grantee === runtimeRole &&
       row.grantor === row.current_user &&
       ["USAGE", "SELECT"].includes(row.privilege_type) &&
@@ -83,6 +87,61 @@ export function validateDefaultAclRows(rows) {
     if (!isReviewedSequenceDefault) {
       errors.push(
         `unreviewed default ACL: ${row.object_type}/${row.schema_name}/${row.grantee}/${row.privilege_type}`,
+      );
+    }
+  }
+  return errors;
+}
+
+// The ledger table and its serial sequence are runner infrastructure: the
+// runtime role and PUBLIC must hold no rights on either, whatever default
+// ACLs say. pg_get_serial_sequence errors on a missing ledger, so the
+// sequence lookup stays behind the to_regclass guard. Ownership is authority
+// even with NULL/revoked ACLs; column grants live separately in attacl.
+// USAGE follows inherited privileges; SET also covers assumable roles;
+// MEMBER WITH ADMIN OPTION covers roles the runtime can upgrade its own
+// membership of to INHERIT/SET, which is equally effective authority.
+const LEDGER_ACL_QUERY = `
+  WITH targets(oid) AS (
+    SELECT to_regclass('drizzle.__drizzle_migrations')
+    UNION ALL
+    SELECT CASE WHEN to_regclass('drizzle.__drizzle_migrations') IS NULL THEN NULL
+                ELSE pg_get_serial_sequence('drizzle.__drizzle_migrations', 'id')::regclass END
+  ), objects AS (
+    SELECT c.* FROM targets JOIN pg_class AS c ON c.oid = targets.oid
+  ), rights(object_name, grantee, privilege_type, is_grantable) AS (
+    SELECT relname, relowner, 'OWNER', true FROM objects
+    UNION ALL
+    SELECT c.relname, acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM objects AS c
+      CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+    UNION ALL
+    SELECT c.relname || '.' || a.attname, acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM objects AS c
+      JOIN pg_attribute AS a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+      CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
+  )
+  SELECT object_name,
+         CASE WHEN grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END AS grantee,
+         privilege_type,
+         is_grantable,
+         CASE WHEN grantee = 0 THEN true ELSE EXISTS (
+           SELECT 1 FROM pg_roles AS runtime
+            WHERE runtime.rolname = 'two_web_app'
+              AND (pg_has_role(runtime.oid, rights.grantee, 'USAGE')
+                   OR pg_has_role(runtime.oid, rights.grantee, 'SET')
+                   OR pg_has_role(runtime.oid, rights.grantee, 'MEMBER WITH ADMIN OPTION'))
+         ) END AS runtime_access
+    FROM rights
+   ORDER BY 1, 2, 3, 4
+`;
+
+export function validateLedgerAclRows(rows) {
+  const errors = [];
+  for (const row of rows) {
+    if (row.grantee === runtimeRole || row.grantee === "PUBLIC" || row.runtime_access === true) {
+      errors.push(
+        `runtime rights on migration ledger object: ${row.object_name}/${row.grantee}/${row.privilege_type}`,
       );
     }
   }
@@ -105,6 +164,14 @@ export async function assertRuntimeDefaultAcl(client) {
   const errors = validateDefaultAclRows(
     rows.map((row) => ({ ...row, current_user: identity.current_user })),
   );
+  if (errors.length)
+    throw new DefaultAclRefusal(`Migration default-ACL guard refused: ${errors.join("; ")}`);
+  await assertRuntimeLedgerAcl(client);
+}
+
+export async function assertRuntimeLedgerAcl(client) {
+  const rows = await client.unsafe(LEDGER_ACL_QUERY);
+  const errors = validateLedgerAclRows(rows);
   if (errors.length)
     throw new DefaultAclRefusal(`Migration default-ACL guard refused: ${errors.join("; ")}`);
 }

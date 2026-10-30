@@ -4,7 +4,11 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
 import { assertMigrationAdmission } from "./migration-admission.mjs";
-import { DefaultAclRefusal, assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
+import {
+  DefaultAclRefusal,
+  assertRuntimeDefaultAcl,
+  assertRuntimeLedgerAcl,
+} from "./migration-runtime-rights.mjs";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
@@ -337,6 +341,15 @@ export async function runMigration(mode, env = process.env, options = {}) {
       await transaction`create table if not exists drizzle.__drizzle_migrations (
         id serial primary key, hash text not null, created_at bigint
       )`;
+      // A default ACL that fired on this bootstrap (or an older exposed
+      // ledger) must roll the whole transaction back before any migration
+      // statement runs. Surface only the intentional refusal, as in plan.
+      try {
+        await assertRuntimeLedgerAcl(transaction);
+      } catch (error) {
+        if (error instanceof DefaultAclRefusal) refuse(error.message);
+        throw error;
+      }
       for (const migration of pending) {
         for (const statement of migration.sql) await transaction.unsafe(statement);
         await transaction`insert into drizzle.__drizzle_migrations (hash, created_at)
