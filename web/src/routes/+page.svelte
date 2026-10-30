@@ -1,11 +1,14 @@
 <script lang="ts">
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
+import { teaserAvailability } from "../../../src/events/pages-calendar-row";
 import type { HomeUpcomingRow } from "../../../src/events/reads";
 import { groupTeaserEvents } from "../../../src/events/teaser-groups";
 import { featuredImageSrc } from "../../../src/featured-image";
 import type { HomeNotice } from "../../../src/home-copy";
 import {
+  EVENT_CARD_HOST_TESTID,
+  SCHEDULE_AVAILABILITY_TESTID,
   SPOTS_LEFT_TESTID,
   cardTimeLabel,
   goingCountText,
@@ -44,7 +47,22 @@ const siteGraph = $derived(siteJsonLd(appUrl));
 // Same shared buckets as the Hono screen: group the capped rows at render.
 // The explicit row type recovers what $derived destructuring widens (see
 // noticeText above): without it the groups widen to the helper's input.
-const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, new Date()));
+// One render instant feeds grouping and every availability verdict, so a
+// row that ended between the read and this render reads Ended in the
+// template instead of advertising seats (the Hono screen's contract).
+const now = new Date();
+const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents, now));
+// Svelte text interpolation leaves ">" raw where Hono JSX emits "&gt;", so
+// the stored game/host text is pre-escaped whole and rendered with {@html},
+// keeping the twins byte-identical: every markup character is
+// entity-encoded first, so the html tag can never inject elements.
+const escapeSharedText = (s: string): string =>
+  s
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
 </script>
 
 {#snippet guestChrome()}
@@ -213,15 +231,21 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
                   </time>
                 </p>
                 <h3>{event.title}</h3>
+                {#if event.source !== "discord"}{@const game = (event.game ?? "").trim()}{@const host = (event.organizer_name ?? "").trim()}{#if game}<p>{@html escapeSharedText(game)}</p>{/if}{#if host}<p data-testid={EVENT_CARD_HOST_TESTID}>{@html `Hosted by ${escapeSharedText(host)}`}</p>{/if}{/if}
                 {#if event.location}<p>{event.location}</p>{/if}
                 {#if event.source === "discord"}
+                  <p data-testid={SCHEDULE_AVAILABILITY_TESTID}>Discord-managed</p>
                   <p>RSVP in Discord</p>
                 {:else}
+                  {@const availability = teaserAvailability(event, now)}
                   <p>
                     {goingCountText(event.goingCount, event.capacity)}
-                    {#if event.capacity !== null && (event.goingOccupancy ?? event.goingCount) >= event.capacity}
+                    {#if availability?.state === "full"}
                       {" · "}
                       <span data-testid={SPOTS_LEFT_TESTID}>Full</span>
+                    {:else if availability}
+                      {" · "}
+                      <span data-testid={SCHEDULE_AVAILABILITY_TESTID}>{availability.text}</span>
                     {/if}
                   </p>
                 {/if}

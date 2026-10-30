@@ -42,6 +42,44 @@ export interface ScheduleAvailability {
   /** True while the night is under way at the render instant. */
   ongoing: boolean;
 }
+/** The persisted-row slice the verdict reads. A null end never reads Ended:
+ * only a known end instant at or before `now` closes seats. */
+interface AvailabilityRow {
+  status: string;
+  startsAt?: Date | undefined;
+  endsAt: Date | null;
+  rsvpOpen: boolean;
+  capacity: number | null;
+  goingOccupancy: number;
+}
+
+function availabilityFor(
+  e: AvailabilityRow,
+  now?: Date | null,
+  pastContext = false,
+): ScheduleAvailability | null {
+  if (e.status === "draft" || e.status === "cancelled") return null;
+  const ended =
+    pastContext ||
+    e.status === "past" ||
+    (now != null && e.endsAt !== null && e.endsAt.getTime() <= now.getTime());
+  if (ended) return { state: "past", text: "Ended", ongoing: false };
+  const ongoing =
+    now != null &&
+    e.startsAt != null &&
+    e.endsAt != null &&
+    isOngoing({ status: e.status, startsAt: e.startsAt, endsAt: e.endsAt }, now);
+  if (!e.rsvpOpen) return { state: "paused", text: "RSVPs paused", ongoing };
+  if (e.capacity === null) return { state: "uncapped", text: "No seat limit", ongoing };
+  const remaining = Math.max(0, e.capacity - e.goingOccupancy);
+  if (remaining <= 0) return { state: "full", text: "Full", ongoing };
+  return {
+    state: "open",
+    text: remaining === 1 ? "1 seat left" : `${remaining} seats left`,
+    ongoing,
+  };
+}
+
 export function rowAvailability(
   e: CalRow,
   now?: Date | null,
@@ -56,20 +94,44 @@ export function rowAvailability(
       (e.endsAt === null || now.getTime() < e.endsAt.getTime());
     return { state: "transient", text: "Discord-managed", ongoing };
   }
-  if (e.status === "draft" || e.status === "cancelled") return null;
-  const ended =
-    pastContext || e.status === "past" || (now != null && e.endsAt.getTime() <= now.getTime());
-  if (ended) return { state: "past", text: "Ended", ongoing: false };
-  const ongoing = now != null && isOngoing(e, now);
-  if (!e.rsvpOpen) return { state: "paused", text: "RSVPs paused", ongoing };
-  if (e.capacity === null) return { state: "uncapped", text: "No seat limit", ongoing };
-  const remaining = Math.max(0, e.capacity - e.goingOccupancy);
-  if (remaining <= 0) return { state: "full", text: "Full", ongoing };
-  return {
-    state: "open",
-    text: remaining === 1 ? "1 seat left" : `${remaining} seats left`,
-    ongoing,
-  };
+  return availabilityFor(e, now, pastContext);
+}
+
+/** Homepage teaser slice (`HomeEvent` in `./reads`): the same public fields
+ * the widened teaser read projects. Older hand-built fixtures may omit the
+ * newer fields, so each one carries the fallback the renderers already
+ * promise: a missing end never reads Ended, a missing `rsvpOpen` reads
+ * open, and a missing occupancy falls back to the named count (the
+ * `GoingCountState.occupancy` precedent). */
+export interface TeaserAvailabilityRow {
+  status?: string | undefined;
+  startsAt?: Date | undefined;
+  endsAt?: Date | undefined;
+  rsvpOpen?: boolean | undefined;
+  capacity: number | null;
+  goingCount: number;
+  goingOccupancy?: number | undefined;
+}
+
+/** Teaser availability with the schedule verdict's precedence and copy, so
+ * a homepage row and its schedule card never disagree about bookable seats.
+ * `now` is the render instant: a row that ended between read and render
+ * reads Ended instead of advertising seats. */
+export function teaserAvailability(
+  e: TeaserAvailabilityRow,
+  now: Date,
+): ScheduleAvailability | null {
+  return availabilityFor(
+    {
+      status: e.status ?? "published",
+      startsAt: e.startsAt,
+      endsAt: e.endsAt ?? null,
+      rsvpOpen: e.rsvpOpen ?? true,
+      capacity: e.capacity,
+      goingOccupancy: e.goingOccupancy ?? e.goingCount,
+    },
+    now,
+  );
 }
 export const rowKey = (e: CalRow): string =>
   isTransient(e) ? transientEventKey(e.discordId) : e.eventKey;

@@ -57,15 +57,21 @@ export type PublicEvent = Omit<typeof events.$inferSelect, "accessibilityNotes">
 export type HomeEvent = Pick<
   PublicEvent,
   "eventKey" | "title" | "startsAt" | "timezone" | "location" | "goingCount" | "capacity"
-> & {
-  /** Seat occupancy for the teaser full verdict, like `waitlist.goingCount`.
-   * `listHomeUpcoming` always projects it (no extra query: `withGoing`
-   * already batches both aggregates), so the live teaser never offers a seat
-   * the write path cannot grant. Optional only for older hand-built
-   * fixtures: renderers fall back to the named `goingCount` when absent
-   * (the `GoingCountState.occupancy` precedent). Aggregate only. */
-  goingOccupancy?: number;
-};
+> &
+  Partial<Pick<PublicEvent, "endsAt" | "game" | "organizer_name" | "status" | "rsvpOpen">> & {
+    /** Seat occupancy for the teaser full verdict, like `waitlist.goingCount`.
+     * `listHomeUpcoming` always projects it (no extra query: `withGoing`
+     * already batches both aggregates), so the live teaser never offers a seat
+     * the write path cannot grant. Optional only for older hand-built
+     * fixtures: renderers fall back to the named `goingCount` when absent
+     * (the `GoingCountState.occupancy` precedent). Aggregate only. The
+     * widened availability fields above (`endsAt`, `status`, `rsvpOpen`,
+     * plus the trimmed public `game`/`organizer_name`) are optional for the
+     * same older-fixture reason; `listHomeUpcoming` always projects them
+     * from its existing full-row select. The organizer is the public
+     * display name already rendered on schedule cards — never a user id. */
+    goingOccupancy?: number;
+  };
 
 export const PAGE_SIZE = PAST_EVENTS_PAGE_SIZE;
 export const JSON_DEFAULT_LIMIT = PUBLIC_DATA_BOUNDS.defaultPageSize;
@@ -362,8 +368,13 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
         eventKey,
         title,
         startsAt,
+        endsAt,
         timezone,
         location,
+        game,
+        organizer_name,
+        status,
+        rsvpOpen,
         goingCount,
         goingOccupancy,
         capacity,
@@ -371,8 +382,16 @@ export async function listHomeUpcoming(db: Db, now = new Date()): Promise<HomeEv
         eventKey,
         title,
         startsAt,
+        endsAt,
         timezone,
         location,
+        // Trimmed like the schedule card's host line: stored whitespace
+        // reads as blank, so renderers can test one empty value. Public
+        // display text only — no creator or member identity joins here.
+        game: game?.trim() ?? null,
+        organizer_name: organizer_name?.trim() ?? null,
+        status,
+        rsvpOpen,
         goingCount,
         goingOccupancy,
         capacity,
