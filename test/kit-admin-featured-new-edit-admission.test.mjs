@@ -5,7 +5,9 @@
 // parent() is still pending. Admitted create returns the empty model with one
 // private/no-store header write; admitted edit reads once through the real
 // resolveKitFeaturedEdit and preserves the view/header behavior with the Hono
-// 404/503 mappings.
+// 404/503 mappings. The create load's reuse read keeps the same failure
+// distinction: a missing database and a classified outage 503 through the
+// real shared resolver, while an ordinary read error rethrows unchanged.
 //
 // Bundles both real routes with esbuild (like test/kit-admin-featured-load)
 // so a missing `await parent()` fails here instead of shipping a guard
@@ -207,6 +209,65 @@ describe("Kit featured-new load: moderator admission ordering", () => {
     const data = await newLoad({ parent, setHeaders: (h) => headerCalls.push(h) });
     expect(data).toEqual({});
     expect(headerCalls).toEqual([{ "cache-control": "private, no-store" }]);
+  });
+
+  it("a reuse source with a missing database 503s with no store read or header write", async () => {
+    globalThis.__kitFeaturedFormDb = null;
+    const parent = async () => ({ actor: { id: "100000000000000111", username: "mod" } });
+    const headerCalls = [];
+    const err = await newLoad({
+      parent,
+      url: new URL("https://example.com/admin/featured/new?source=41"),
+      setHeaders: (h) => headerCalls.push(h),
+    }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(err?.status).toBe(503);
+    expect(dbForCalls()).toEqual(["dbFor"]);
+    expect(getCalls()).toEqual([]);
+    expect(headerCalls).toEqual([]);
+  });
+
+  it("a classified reuse-read outage 503s with no header write", async () => {
+    const outage = Object.assign(new Error("connection terminated"), {
+      name: "PostgresError",
+      code: "57P01",
+    });
+    globalThis.__kitFeaturedFormGetImpl = async () => Promise.reject(outage);
+    const parent = async () => ({ actor: { id: "100000000000000111", username: "mod" } });
+    const headerCalls = [];
+    const err = await newLoad({
+      parent,
+      url: new URL("https://example.com/admin/featured/new?source=41"),
+      setHeaders: (h) => headerCalls.push(h),
+    }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(err?.status).toBe(503);
+    expect(getCalls()).toHaveLength(1);
+    expect(getCalls()[0][1]).toBe(41);
+    expect(headerCalls).toEqual([]);
+  });
+
+  it("an ordinary reuse-read failure rethrows unchanged instead of mapping to 503", async () => {
+    const failure = new TypeError("fixture programming error");
+    globalThis.__kitFeaturedFormGetImpl = async () => Promise.reject(failure);
+    const parent = async () => ({ actor: { id: "100000000000000111", username: "mod" } });
+    const headerCalls = [];
+    const err = await newLoad({
+      parent,
+      url: new URL("https://example.com/admin/featured/new?source=41"),
+      setHeaders: (h) => headerCalls.push(h),
+    }).then(
+      () => null,
+      (e) => e,
+    );
+    expect(err).toBe(failure);
+    expect(getCalls()).toHaveLength(1);
+    expect(getCalls()[0][1]).toBe(41);
+    expect(headerCalls).toEqual([]);
   });
 });
 

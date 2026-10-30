@@ -583,6 +583,17 @@ The editor reloads stored window bounds at full microsecond precision, so saving
 unrelated changes keeps the existing precision: leave the two fields as loaded.
 Retyping a bound to minute precision narrows it on purpose.
 
+### Reuse a saved slot as a new slot
+
+On a saved slot's edit page, **Reuse as new slot** opens the **New featured
+slot** form with the headline, body, link and image fields already filled in.
+It only fills the form: the original slot is unchanged and nothing is saved
+until you press **Create**. **Published**, the show window and **Position**
+start at the usual new-slot defaults, so set them deliberately for the new
+slot. Stored links and image hosts are checked again when you press
+**Create**, under the rules in force then. If the saved slot cannot be
+reused, the form says so and offers an empty new slot instead.
+
 ### Preview and safe editing
 
 The edit page shows a **Homepage preview** panel with two parts. **Saved

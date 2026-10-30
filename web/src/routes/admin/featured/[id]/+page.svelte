@@ -28,9 +28,13 @@ let { data }: PageProps = $props();
 const island = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
+<!-- Like the new-slot editor, this is never hydrated. Strip unused form and
+     preview markup from Kit's structural client node, not from SSR output. -->
+{#if import.meta.env?.SSR !== false}
 <AdminShell title={`Edit ${data.view.title}`}>
 <section class="featured-form">
   <h1>Edit {data.view.title}</h1>
+  <p><a href={`/admin/featured/new?source=${data.view.id}`}>Reuse as new slot</a></p>
   <section
     class="featured-preview"
     aria-labelledby="featured-preview-heading"
@@ -145,3 +149,4 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
 </section>
 {@html island}
 </AdminShell>
+{/if}

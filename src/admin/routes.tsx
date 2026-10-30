@@ -82,6 +82,7 @@ import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors
 import { safeRequestId } from "../request-log";
 import { dashboardJoinFunnel, FUNNEL_READ_DEADLINE_MS } from "./join-funnel";
 import { getJoinAttempt, listActivityLog, listJoinAttempts, listRoster } from "./reads";
+import { resolveFeaturedReuse } from "./featured-reuse";
 import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
 import {
@@ -683,20 +684,28 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     );
   });
 
-  admin.get("/featured/new", (c) => {
+  admin.get("/featured/new", async (c) => {
     declareAccess(c, {
       resource: "featured_contents",
       action: "view",
       route: "admin.featured.create",
     });
+    const outcome = await resolveFeaturedReuse(
+      new URL(c.req.url).searchParams,
+      () => dbOr503(c),
+      getFeatured,
+    );
+    if (outcome.kind === "unavailable")
+      return bufferedMemberText(c, "Admin temporarily unavailable", 503);
     return bufferedMemberHtml(
       c,
       <FeaturedFormPage
         appUrl={c.env.APP_URL}
         imageHosts={c.env.FEATURED_IMAGE_HOSTS}
         mode="new"
-        values={{}}
+        values={outcome.values}
         errors={{}}
+        reuseNotice={outcome.notice}
       />,
     );
   });
