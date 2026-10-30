@@ -15,9 +15,30 @@ import { buildEventCreateView } from "../src/admin/kit-event-create.ts";
 import { resolveKitEventEdit } from "../src/admin/kit-event-edit.ts";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages.tsx";
+import { securityHeadersFor } from "../src/headers.ts";
 import { registerPlanningWindowBrowserAcceptance } from "../test/helpers/admin-event-planning-window-browser.ts";
 
-registerPlanningWindowBrowserAcceptance(() => browser);
+// Independent of registration: deleting a case or the registration call must
+// fail the existing required receipt, even if its eleven contrast leaves pass.
+const expectedPlanningCases = [
+  "Hono/1280/false",
+  "Hono/1280/true",
+  "Hono/390/false",
+  "Hono/390/true",
+  "Kit/1280/false",
+  "Kit/1280/true",
+  "Kit/390/false",
+  "Kit/390/true",
+];
+const completedPlanningCases = new Set();
+registerPlanningWindowBrowserAcceptance(
+  () => browser,
+  renderPlanningWindow,
+  (id) => {
+    assert.equal(completedPlanningCases.has(id), false, `duplicate planning browser case: ${id}`);
+    completedPlanningCases.add(id);
+  },
+);
 
 const output = resolve("web/.svelte-kit/output");
 const evidence = process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
@@ -26,6 +47,19 @@ let scratch;
 let browser;
 let server;
 let fixtures;
+let data;
+
+async function renderPlanningWindow(path, loaded) {
+  data = loaded.data;
+  const response = await server.respond(new Request(path), {
+    getClientAddress: () => "127.0.0.1",
+  });
+  const headers = new Headers(response.headers);
+  for (const [name, value] of Object.entries(loaded.headers)) headers.set(name, value);
+  for (const [name, value] of securityHeadersFor({ path: new URL(path).pathname, method: "GET" }))
+    headers.set(name, value);
+  return new Response(await response.arrayBuffer(), { status: response.status, headers });
+}
 
 before(async () => {
   scratch = await mkdtemp(
@@ -114,7 +148,6 @@ before(async () => {
     ],
     logLevel: "silent",
   });
-  let data;
   const { fixtureServer } = await import(pathToFileURL(entry).href);
   server = fixtureServer(() => data);
   await server.init({ env: {}, read: (file) => readFile(join(output, "client", file)) });
@@ -139,6 +172,13 @@ after(async () => {
 
 // Named suite: the executed-count verifier admits only cases under this title.
 describe("Kit admin contrast", () => {
+  after(() => {
+    assert.deepEqual(
+      [...completedPlanningCases].sort(),
+      [...expectedPlanningCases].sort(),
+      "required planning-window browser cases did not all execute successfully",
+    );
+  });
   for (const width of [1280, 390]) {
     for (const name of ["event-new", "event-edit", "featured-new", "featured-edit", "dashboard"]) {
       test(`Kit admin contrast: ${name} at ${width}`, async () => {

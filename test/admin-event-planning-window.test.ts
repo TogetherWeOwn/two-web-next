@@ -1,17 +1,18 @@
 // Independent acceptance: UTC start-date windows, not event overlap or local dates.
 // Owned tests: the implementation handoff must preserve this file unchanged.
-// Run with the README-approved disposable DATABASE_URL; no live services.
+// Use an explicit approved disposable DATABASE_URL or the offline SQL backend.
 import { eq } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/postgres-js";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { adminApp } from "../src/admin/routes";
-import { events, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
-import { adminSchema, schema } from "../src/db/index";
+import { memberDataAccessLogs } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { compilePlanningWindowKit } from "./helpers/admin-event-planning-window";
+import {
+  createPlanningWindowFixture,
+  type PlanningWindowFixture,
+} from "./helpers/admin-event-planning-window-db";
 import {
   compileAdminRetryKit,
   retryAnchors,
@@ -77,7 +78,7 @@ export const invalidPlanningQueries = [
 describe.each(["Hono", "Kit"] as const)(
   "%s admin events UTC planning window (real classified reads)",
   (twin) => {
-    let fixture: MemberDataFixture;
+    let fixture: PlanningWindowFixture;
     let kit: Awaited<ReturnType<typeof compilePlanningWindowKit>>;
     let adminRetry: AdminRetryKit;
     const store = createMemorySessionStore();
@@ -123,34 +124,25 @@ describe.each(["Hono", "Kit"] as const)(
     beforeAll(async () => {
       if (twin === "Kit") kit = await compilePlanningWindowKit();
       if (twin === "Kit") adminRetry = await compileAdminRetryKit();
-      fixture = await createMemberDataFixture(
-        process.env.DATABASE_URL || "postgres://agent_test@agent-testdb:5432/two_web_next",
-      );
-      fixture.db = drizzle(fixture.client, {
-        schema: { ...schema, ...adminSchema },
-        logger: { logQuery: (sql, params) => queries.push({ sql, params }) },
-      });
+      fixture = await createPlanningWindowFixture(queries);
     });
     afterAll(async () => fixture?.dispose());
     beforeEach(async () => {
       await fixture.reset();
       cookie = await session(true);
       for (const [key, instant] of edgeRows) {
-        const [row] = await fixture.db
-          .insert(events)
-          .values({
-            eventKey: `window-${key}`,
-            title: `Planning ${key}`,
-            status: "published",
-            startsAt: new Date(instant),
-            endsAt: new Date("2032-03-03T12:00:00Z"),
-            timezone: "America/Los_Angeles",
-            capacity: 2,
-            rsvpOpen: false,
-          })
-          .returning();
-        // Date cannot express microseconds; retain them in the actual DB fixture.
-        await fixture.client`UPDATE events SET starts_at = ${instant}::timestamptz WHERE id = ${row!.id}`;
+        const row = await fixture.insertEvent({
+          eventKey: `window-${key}`,
+          title: `Planning ${key}`,
+          status: "published",
+          startsAt: new Date(instant),
+          endsAt: new Date("2032-03-03T12:00:00Z"),
+          timezone: "America/Los_Angeles",
+          capacity: 2,
+          rsvpOpen: false,
+        });
+        // Date cannot express microseconds; retain them in either SQL backend.
+        await fixture.setStartInstant(row.id, instant);
       }
       queries.length = 0;
     });
@@ -231,42 +223,181 @@ describe.each(["Hono", "Kit"] as const)(
       expect(text(html)).toMatch(/exclusive|excluding|before|\)/i);
     });
 
-    it("RED filters before paging, combines existing predicates and retains every bound on sort and pager", async () => {
-      for (let i = 0; i < 28; i++) {
-        const [row] = await fixture.db
-          .insert(events)
-          .values({
-            eventKey: `window-page-${i}`,
-            title: "Paging planning fixture",
+    it.each([
+      {
+        bound: "starts_from=2032-02-29",
+        absent: "starts_before",
+        summary: "Showing events that start at or after 2032-02-29 00:00 UTC (included).",
+      },
+      {
+        bound: "starts_before=2032-03-02",
+        absent: "starts_from",
+        summary: "Showing events that start before 2032-03-02 00:00 UTC (excluded).",
+      },
+    ])(
+      "one-sided $bound pins summaries and complete navigation hrefs",
+      async ({ bound, absent, summary }) => {
+        for (let i = 0; i < 53; i++)
+          await fixture.insertEvent({
+            eventKey: `navigation-${i}`,
+            title: "Navigation fixture",
             status: "published",
-            capacity: 1,
-            rsvpOpen: false,
             startsAt: new Date("2032-03-01T12:00:00Z"),
             endsAt: new Date("2032-03-01T13:00:00Z"),
-          })
-          .returning();
-        await fixture.db
-          .insert(rsvps)
-          .values({ eventId: row!.id, userId: viewer, status: "going" });
+          });
+        const query = `q=Navigation+fixture&${bound}&sort=title&order=asc`;
+        const html = await (await request(`${query}&page=2`)).text();
+        expect(keys(html)).toEqual(Array.from({ length: 25 }, (_, i) => `navigation-${i + 25}`));
+        const active = text(html)
+          .replace(/\s+/g, " ")
+          .match(/Showing events that start[^.]*\./)?.[0];
+        expect(active).toBe(summary);
+        expect(active).not.toContain(absent === "starts_from" ? "at or after" : "before");
+        const absentInput = html.match(new RegExp(`<input[^>]*name="${absent}"[^>]*>`))?.[0];
+        expect(absentInput).toContain('value=""');
+        function href(
+          markup: string,
+          matches: (anchor: ReturnType<typeof links>[number]) => boolean,
+          expected: string,
+        ) {
+          const anchor = links(markup).find(matches);
+          expect(anchor, `missing ${expected}`).toBeDefined();
+          expect(anchor!.url.href).toBe(new URL(expected, env.APP_URL).href);
+          expect(anchor!.url.searchParams.has(absent)).toBe(false);
+          return anchor!.url;
+        }
+        href(
+          html,
+          ({ attrs }) => attrs.includes('aria-label="Sort by title descending"'),
+          `/admin/events?q=Navigation+fixture&${bound}&sort=title&order=desc`,
+        );
+        href(
+          html,
+          ({ attrs }) => attrs.includes('aria-label="Sort by status ascending"'),
+          `/admin/events?q=Navigation+fixture&${bound}&sort=status&order=asc`,
+        );
+        href(
+          html,
+          ({ attrs }) => attrs.includes('aria-label="Sort by starts (utc) ascending"'),
+          `/admin/events?q=Navigation+fixture&${bound}&sort=starts_at&order=asc`,
+        );
+        href(html, ({ attrs }) => attrs.includes('rel="prev"'), `/admin/events?${query}`);
+        const next = href(
+          html,
+          ({ attrs }) => attrs.includes('rel="next"'),
+          `/admin/events?${query}&page=3`,
+        );
+        expect(keys(await (await request(next.search.slice(1))).text())).toEqual([
+          "navigation-50",
+          "navigation-51",
+          "navigation-52",
+        ]);
+        const pastEnd = await (await request(`${query}&page=99`)).text();
+        expect(keys(pastEnd)).toEqual([]);
+        const first = href(
+          pastEnd,
+          ({ tag }) => /first page of these results/i.test(text(tag)),
+          `/admin/events?${query}`,
+        );
+        expect(keys(await (await request(first.search.slice(1))).text())).toHaveLength(25);
+        href(
+          pastEnd,
+          ({ tag }) => /clear filters/i.test(text(tag)),
+          "/admin/events?sort=title&order=asc",
+        );
+        if (twin === "Kit") {
+          const { body } = adminRetry.render(
+            "admin",
+            retryPage(503, `/admin/events?${query}&page=2`, "/admin/events"),
+          );
+          const retries = await retryAnchors(body);
+          expect(retries).toHaveLength(1);
+          expect(retries[0]!.href).toBe(`/admin/events?${query}&page=2`);
+          expect(new URL(retries[0]!.href, env.APP_URL).searchParams.has(absent)).toBe(false);
+        }
+      },
+    );
+
+    it.each([
+      ["parent", "1", "selection-parent-open"],
+      ["parent", "0", "selection-parent-paused"],
+      ["child", "1", "selection-child-open"],
+      ["child", "0", "selection-child-paused"],
+      ["standalone", "1", "selection-standalone-open"],
+      ["standalone", "0", "selection-standalone-paused"],
+    ])(
+      "dated series=%s AND rsvp_open=%s excludes in-window distractors",
+      async (series, rsvpOpen, wanted) => {
+        for (const open of [true, false]) {
+          const suffix = open ? "open" : "paused";
+          const base = {
+            title: "Combined selector fixture",
+            status: "published" as const,
+            capacity: 1,
+            rsvpOpen: open,
+            startsAt: new Date("2032-03-01T12:00:00Z"),
+            endsAt: new Date("2032-03-01T13:00:00Z"),
+          };
+          const parent = await fixture.insertEvent({
+            ...base,
+            eventKey: `selection-parent-${suffix}`,
+            recurrenceFrequency: "weekly",
+          });
+          const child = await fixture.insertEvent({
+            ...base,
+            eventKey: `selection-child-${suffix}`,
+            parentEventId: parent.id,
+          });
+          const standalone = await fixture.insertEvent({
+            ...base,
+            eventKey: `selection-standalone-${suffix}`,
+          });
+          for (const row of [parent, child, standalone])
+            await fixture.insertRsvp({ eventId: row.id, userId: viewer, status: "going" });
+        }
+        const filters = `q=Combined+selector+fixture&status=published&series=${series}&fill=full&rsvp_open=${rsvpOpen}&sort=starts_at&order=asc`;
+        for (const dates of [
+          "",
+          `${windowQuery}&`,
+          "starts_from=2032-02-29&",
+          "starts_before=2032-03-02&",
+        ]) {
+          const response = await request(`${dates}${filters}`);
+          expect(response.status).toBe(200);
+          expect(
+            keys(await response.text()),
+            `selection with ${dates || "no date window"}`,
+          ).toEqual([wanted]);
+        }
+      },
+    );
+
+    it("RED filters before paging, combines existing predicates and retains every bound on sort and pager", async () => {
+      for (let i = 0; i < 28; i++) {
+        const row = await fixture.insertEvent({
+          eventKey: `window-page-${i}`,
+          title: "Paging planning fixture",
+          status: "published",
+          capacity: 1,
+          rsvpOpen: false,
+          startsAt: new Date("2032-03-01T12:00:00Z"),
+          endsAt: new Date("2032-03-01T13:00:00Z"),
+        });
+        await fixture.insertRsvp({ eventId: row.id, userId: viewer, status: "going" });
       }
       // Later-starting distractors would fill the first page if the window were
       // applied only after LIMIT/OFFSET. An overlap-only predicate admits them too.
       for (let i = 0; i < 30; i++) {
-        const [outside] = await fixture.db
-          .insert(events)
-          .values({
-            eventKey: `window-outside-${i}`,
-            title: "Paging planning fixture",
-            status: "published",
-            capacity: 1,
-            rsvpOpen: false,
-            startsAt: new Date("2032-03-02T00:00:00Z"),
-            endsAt: new Date("2032-03-03T00:00:00Z"),
-          })
-          .returning();
-        await fixture.db
-          .insert(rsvps)
-          .values({ eventId: outside!.id, userId: viewer, status: "going" });
+        const outside = await fixture.insertEvent({
+          eventKey: `window-outside-${i}`,
+          title: "Paging planning fixture",
+          status: "published",
+          capacity: 1,
+          rsvpOpen: false,
+          startsAt: new Date("2032-03-02T00:00:00Z"),
+          endsAt: new Date("2032-03-03T00:00:00Z"),
+        });
+        await fixture.insertRsvp({ eventId: outside.id, userId: viewer, status: "going" });
       }
       const query = `${windowQuery}&q=Paging+planning+fixture&status=published&series=standalone&fill=full&rsvp_open=0&sort=starts_at&order=desc`;
       queries.length = 0;

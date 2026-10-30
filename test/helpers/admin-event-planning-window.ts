@@ -21,7 +21,13 @@ import { setPage } from "$app/state";
 import { load } from "./web/src/routes/admin/events/+page.server.ts";
 import { memberReadResponse } from "./src/member-reads.ts";
 import { setEnv } from "cloudflare:workers";
-export async function request({env, path, actor = "moderator"}) {
+export async function loadData(args) {
+  let data;
+  const response = await request({...args, captureData: value => {data = value;}});
+  if (response.status !== 200 || !data) throw new Error("Planning-window loader did not produce a successful inventory");
+  return {data, headers: Object.fromEntries(response.headers)};
+}
+export async function request({env, path, actor = "moderator", captureData}) {
   setEnv(env);
   const headers = new Headers({"content-type": "text/html; charset=utf-8"});
   const actorData = {id: "100000000000000111", username: "Fixture moderator"};
@@ -40,6 +46,7 @@ export async function request({env, path, actor = "moderator"}) {
           },
           setHeaders: values => {for (const [key, value] of Object.entries(values)) headers.set(key, value);}
         });
+        captureData?.(data);
         const {head, body} = render(Page, {props: {data}});
         return new Response('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">' + head + '</head><body>' + body + '</body></html>', {headers});
       } catch (error) {
@@ -104,6 +111,10 @@ export async function request({env, path, actor = "moderator"}) {
     `data:text/javascript;base64,${Buffer.from(outputFiles[0]!.text).toString("base64")}`
   );
   return {
+    loadData: compiled.loadData as (args: { env: Env; path: string }) => Promise<{
+      data: Record<string, unknown>;
+      headers: Record<string, string>;
+    }>,
     request: compiled.request as (args: {
       env: Env;
       path: string;

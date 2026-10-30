@@ -1,17 +1,41 @@
 // Registered in the existing unconditional Kit admin Chromium CI suite.
 // These canned classified reads prove rendered controls/navigation, not SQL filtering.
 import assert from "node:assert/strict";
-import { existsSync, readFileSync, mkdirSync } from "node:fs";
+import { existsSync, readFileSync, mkdirSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { before, test } from "node:test";
+import AxeBuilder from "@axe-core/playwright";
 import type { Browser, Locator } from "playwright";
 import { compilePlanningWindowKit } from "./admin-event-planning-window";
 import { pageShellFixture } from "./page-shells";
 
 // Browser callbacks run in Chromium; keep their DOM surface local to this module.
 declare const document: { activeElement: unknown };
+declare function getComputedStyle(element: unknown): { color: string; backgroundColor: string };
 
-export function registerPlanningWindowBrowserAcceptance(getBrowser: () => Browser) {
+function contrastRatio(color: string, background: string): number {
+  function luminance(value: string) {
+    const rgb = /^rgb\((\d+),\s*(\d+),\s*(\d+)\)$/.exec(value);
+    assert.ok(rgb, `notice contrast requires an opaque, measurable RGB color: ${value}`);
+    const linear = rgb.slice(1).map((component) => {
+      const channel = Number(component) / 255;
+      return channel <= 0.04045 ? channel / 12.92 : ((channel + 0.055) / 1.055) ** 2.4;
+    });
+    return linear[0]! * 0.2126 + linear[1]! * 0.7152 + linear[2]! * 0.0722;
+  }
+  const a = luminance(color);
+  const b = luminance(background);
+  return (Math.max(a, b) + 0.05) / (Math.min(a, b) + 0.05);
+}
+
+type LoadedPlanningWindow = Awaited<
+  ReturnType<Awaited<ReturnType<typeof compilePlanningWindowKit>>["loadData"]>
+>;
+export function registerPlanningWindowBrowserAcceptance(
+  getBrowser: () => Browser,
+  renderKit: (path: string, loaded: LoadedPlanningWindow) => Promise<Response>,
+  completed: (id: string) => void,
+) {
   let kit: Awaited<ReturnType<typeof compilePlanningWindowKit>>;
   before(async () => {
     kit = await compilePlanningWindowKit();
@@ -49,18 +73,28 @@ export function registerPlanningWindowBrowserAcceptance(getBrowser: () => Browse
                 const response =
                   twin === "Hono"
                     ? await fixture.request(`/admin/events${url.search}`)
-                    : await kit.request({ env: fixture.env, path: url.href });
-                let html = await response.text();
+                    : await renderKit(
+                        url.href,
+                        await kit.loadData({ env: fixture.env, path: url.href }),
+                      );
+                const html = await response.text();
                 if (twin === "Kit")
-                  html = html.replace("</head>", `<style>${kit.css}</style></head>`);
+                  assert.match(
+                    html,
+                    /_app\/immutable\/assets\/0\.[^"]+\.css/,
+                    "actual Kit root stylesheet",
+                  );
                 return route.fulfill({
                   status: response.status,
                   headers: Object.fromEntries(response.headers),
                   body: html,
                 });
               }
-              const file = resolve(publicRoot, `.${url.pathname}`);
-              if (file.startsWith(`${publicRoot}/`) && existsSync(file)) {
+              const directory = url.pathname.startsWith("/_app/")
+                ? resolve("web/.svelte-kit/output/client")
+                : publicRoot;
+              const file = resolve(directory, `.${url.pathname}`);
+              if (file.startsWith(`${directory}/`) && existsSync(file)) {
                 return route.fulfill({
                   body: readFileSync(file),
                   contentType: file.endsWith(".css")
@@ -69,7 +103,9 @@ export function registerPlanningWindowBrowserAcceptance(getBrowser: () => Browse
                       ? "text/javascript"
                       : file.endsWith(".svg")
                         ? "image/svg+xml"
-                        : "application/octet-stream",
+                        : file.endsWith(".woff2")
+                          ? "font/woff2"
+                          : "application/octet-stream",
                 });
               }
               return route.fulfill({ status: 404, body: "" });
@@ -89,11 +125,13 @@ export function registerPlanningWindowBrowserAcceptance(getBrowser: () => Browse
               (await page.locator('[data-testid^="event-status-"]').count()) > 0,
               "fixture renders an actual event row",
             );
-            const evidence = process.env.PLANNING_WINDOW_EVIDENCE_DIR;
+            const evidence =
+              process.env.PLANNING_WINDOW_EVIDENCE_DIR ??
+              process.env.KIT_ADMIN_CONTRAST_EVIDENCE_DIR;
             if (evidence && !javaScriptEnabled) {
               mkdirSync(evidence, { recursive: true });
               await page.screenshot({
-                path: resolve(evidence, `${twin.toLowerCase()}-${width}-baseline.png`),
+                path: resolve(evidence, `${twin.toLowerCase()}-${width}-inventory.png`),
                 fullPage: true,
               });
             }
@@ -138,10 +176,67 @@ export function registerPlanningWindowBrowserAcceptance(getBrowser: () => Browse
             assert.equal(await from.inputValue(), "2030-01-01");
             assert.equal(await beforeDate.inputValue(), "2030-01-03");
             assert.ok(requests.length >= 2, "the no-JS form actually navigated");
+            const invalid = await page.goto(
+              `${origin}/admin/events?starts_from=2032-03-02&starts_before=2032-02-29`,
+            );
+            assert.ok(
+              [200, 400, 422].includes(invalid!.status()),
+              "invalid dates reach a safe response",
+            );
+            const csp = invalid!.headers()["content-security-policy"];
+            assert.ok(csp, "the browser response must carry the production CSP");
+            const styles = /(?:^|;)\s*style-src\s+([^;]+)/.exec(csp)?.[1];
+            assert.equal(styles?.trim(), "'self'", "no inline-style allowance or CSP bypass");
+            if (twin === "Kit")
+              assert.ok(
+                await page.locator('link[rel="stylesheet"][href*="/_app/"]').count(),
+                "real Kit root CSS loaded",
+              );
+            const notice = page.locator('.event-window-notice[role="alert"]');
+            assert.equal(await notice.count(), 1, "invalid window notice is actually rendered");
+            assert.ok(await notice.isVisible(), "invalid window notice is visible");
+            assert.match(await notice.innerText(), /date window was not applied/i);
+            const measured = await notice.evaluate((el) => ({
+              color: getComputedStyle(el).color,
+              background: getComputedStyle(el).backgroundColor,
+            }));
+            const ratio = contrastRatio(measured.color, measured.background);
+            assert.ok(
+              ratio >= 4.5,
+              `invalid notice text contrast ${ratio.toFixed(2)}:1 is below 4.5:1`,
+            );
+            // Axe injects page scripts, so only use it on the JS-enabled twin.
+            // The real no-JS document above still gets the same 4.5:1 measurement.
+            const contrast = javaScriptEnabled
+              ? await new AxeBuilder({ page })
+                  .include('.event-window-notice[role="alert"]')
+                  .withRules(["color-contrast"])
+                  .analyze()
+              : null;
+            if (evidence) {
+              const name = `${twin.toLowerCase()}-${width}-invalid-js-${javaScriptEnabled}`;
+              if (!javaScriptEnabled)
+                await page.screenshot({ path: resolve(evidence, `${name}.png`), fullPage: true });
+              writeFileSync(
+                resolve(evidence, `${name}.json`),
+                JSON.stringify({ csp, measured, ratio, axe: contrast }, null, 2),
+              );
+            }
+            if (contrast) {
+              assert.deepEqual(contrast.incomplete, [], "notice contrast must be measurable");
+              assert.deepEqual(contrast.violations, [], "invalid notice must meet text contrast");
+              assert.ok(
+                contrast.passes.some(
+                  (rule) => rule.id === "color-contrast" && rule.nodes.length > 0,
+                ),
+                "axe actually measured the notice, not an empty include",
+              );
+            }
             assert.deepEqual(escaped, [], "no remote services or mutations");
           } finally {
             await context.close();
           }
+          completed(`${twin}/${width}/${javaScriptEnabled}`);
         });
       }
     }
