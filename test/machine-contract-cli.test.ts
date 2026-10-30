@@ -30,6 +30,10 @@ describe("standalone machine-contract CLI", () => {
       join(repo, "ci/check-machine-contract.mjs"),
       join(root, "ci/check-machine-contract.mjs"),
     );
+    copyFileSync(
+      join(repo, "ci/machine-guide-prose.mjs"),
+      join(root, "ci/machine-guide-prose.mjs"),
+    );
     copyFileSync(join(repo, "package.json"), join(root, "package.json"));
     copyFileSync(join(repo, "tsconfig.json"), join(root, "tsconfig.json"));
     cpSync(join(repo, "src"), join(root, "src"), { recursive: true });

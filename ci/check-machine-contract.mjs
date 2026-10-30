@@ -11,7 +11,7 @@
 import { existsSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
-import { parseFragment } from "parse5";
+import { guideStatements } from "./machine-guide-prose.mjs";
 import { llmsTxt } from "../src/ai-friendly/md";
 import {
   communitySnapshotOutputSchema,
@@ -298,13 +298,12 @@ check(
 // Changing the limits therefore means changing this constant in the same PR.
 const CANONICAL_LIMITS = [
   "- Collections cap at 20 rows per response (`per_page` clamps to 20); past-the-end pages clamp to the last page.",
-  "- Every event result fits 32 KiB, measured on the serialized MCP `CallToolResult` object: the text content plus the `structuredContent` copy, with string escaping counted. The REST JSON body is the same DTO bytes, so it is smaller. Long descriptions trim with a `…` marker, rows are never dropped; metadata that cannot fit answers `unavailable`.",
+  "- Every event result fits 32 KiB, measured on the largest enabled serialized MCP `CallToolResult` object: the text content, the `structuredContent` copy and SDK-added `resultType` and server-info `_meta` fields, with string escaping counted. The REST JSON body is the same DTO bytes, so it is smaller. Long descriptions trim with a `…` marker, rows are never dropped; metadata plus marked description minima that cannot fit answers `unavailable`.",
   "- The JSON-RPC envelope (the client-chosen request ID, SSE and HTTP framing) is outside that measure and is not bounded by it.",
   "- Events are published-only: drafts and cancelled rows read as not found.",
   "- Unknown counts read as `null`, never `0` (`going_count`, `going_occupancy`, `member_count`, `online_count`).",
 ].join(" ");
 const normalizedGuide = guide.replace(/\r\n/g, "\n");
-const flatGuide = normalizedGuide.replace(/\s+/g, " ");
 const limitsMatch = /(?:^|\n)## Limits[\t ]*\n([\s\S]*?)(?=\n##[\t ]|$)/.exec(normalizedGuide);
 const limitsSection = (limitsMatch?.[1] ?? "").replace(/\s+/g, " ").trim();
 check(
@@ -315,11 +314,9 @@ check(
   "guide has exactly one `## Limits` section",
   (normalizedGuide.match(/^## Limits[\t ]*$/gm) ?? []).length === 1,
 );
-let outsideLimits = limitsMatch
-  ? flatGuide.replace(limitsMatch[0].replace(/\s+/g, " ").trim(), " ")
-  : flatGuide;
+let outsideLimits = limitsMatch ? normalizedGuide.replace(limitsMatch[0], "\n") : normalizedGuide;
 // Existing parity prose describes equality, not a size boundary.
-outsideLimits = outsideLimits.replace("Same DTOs as the MCP tools, byte for byte.", " ");
+outsideLimits = outsideLimits.replace(/Same DTOs as the MCP\s+tools,\s+byte for byte\./, " ");
 // A number with a byte unit or the bare ceiling is a size claim on its own.
 // Otherwise require both a result/transport subject and a measurement
 // predicate. Bare "fits", "bytes", "within" or "counted" can describe schemas,
@@ -335,260 +332,59 @@ const RESULT_SUBJECT =
 // unrelated suffix text. Direct limit nouns and explicit no-limit claims count too.
 // Consume ranges and explicit count units, but not numeric attributes such as
 // "8-bit" or partial numbers. A count unit must end the hyphenated token too.
-const COUNT_ITEM_UNIT = String.raw`(?:(?:items?|rows?|entr(?:y|ies))-per-page|items?|rows?|entr(?:y|ies))`;
+const COUNT_ITEM_UNIT = String.raw`(?:(?:items?|rows?|entr(?:y|ies))-per-(?:page|response)|items?|rows?|entr(?:y|ies))`;
 const COUNT_UNIT = String.raw`(?:${COUNT_ITEM_UNIT}|per-page)`;
 // Spelled-out counts ("thirty", "twenty-five") declare the same bound as digits.
 const COUNT_SMALL = String.raw`(?:zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|(?:twenty|thirty|forty|fifty|sixty|seventy|eighty|ninety)(?:[-\s](?:one|two|three|four|five|six|seven|eight|nine))?)`;
 const COUNT_WORD = String.raw`(?:(?:${COUNT_SMALL}[-\s]+)?(?:hundred|thousand|million|billion)(?:[-\s]+(?:and[-\s]+)?${COUNT_SMALL})?|${COUNT_SMALL}|dozen)`;
-const COUNT_NUMBER = String.raw`(?:(?:[<>≤≥]=?|=)?\s*[+\-−]?\d+(?:[.,]\d+)*(?:-\d+(?:[.,]\d+)*)?|\b${COUNT_WORD})(?:-${COUNT_UNIT})?\b(?!-|[.,]\d)`;
+const COUNT_NUMBER_CORE = String.raw`(?:(?:[<>≤≥]=?|=)?\s*[+\-−]?\d+(?:[.,]\d+)*(?:-\d+(?:[.,]\d+)*)?|\b${COUNT_WORD})`;
+const COUNT_NUMBER = String.raw`${COUNT_NUMBER_CORE}(?:-${COUNT_UNIT})?\b(?!-|[.,]\d)`;
 // Wrappers must enclose the numeric token, not a phrase such as "8-bit entries".
 const COUNT_VALUE = String.raw`(?:${COUNT_NUMBER}|(?:[\[({"'“‘]\s*)+${COUNT_NUMBER}(?:\s*[\])}"'”’])+)`;
 // Qualifiers are whole tokens: "of" + "ten" must never consume "often".
 const COUNT_QUALIFIER = String.raw`(?:more[\s-]+or[\s-]+less|in[\s-]+excess[\s-]+of|a[\s-]+little[\s-]+over|upwards[\s-]+of|at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|about|around|approximately|roughly|nearly|almost|just|over|under|fewer|close|greater|up|most|least|e\.g\.|i\.e\.)(?=[\s:,-]|$)`;
-const QUALIFIED_COUNT = String.raw`(?:[\s:,-]+${COUNT_QUALIFIER})*[\s:,-]*${COUNT_VALUE}`;
-const COUNT_SUBJECT = String.raw`\b(?:collections?|rows?|items?)`;
+const COUNT_PREFIX = String.raw`(?:[\s:,-]+${COUNT_QUALIFIER})*[\s:,-]*`;
+const QUALIFIED_COUNT = String.raw`${COUNT_PREFIX}${COUNT_VALUE}`;
+const COUNT_SUBJECT = String.raw`\b(?:collections?|rows?|items?|pages?)`;
 const COUNT_NOUN = String.raw`(?:caps?|limits?|bounds?|ceilings?)`;
 const COUNT_BOUNDARY = new RegExp(
   String.raw`${COUNT_SUBJECT}(?:['’]s?)?\s+(?:(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+${COUNT_NOUN}\b|(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*${COUNT_NOUN}\b)${QUALIFIED_COUNT})|${COUNT_NOUN}\s+(?:is|are)\b${QUALIFIED_COUNT})`,
   "i",
 );
 const RESULT_COUNT = new RegExp(
-  String.raw`(?:${RESULT_SUBJECT.source}|${COUNT_SUBJECT})\s+(?:contains?|includes?|returns?|holds?|shows?)\b${QUALIFIED_COUNT}\s+${COUNT_ITEM_UNIT}\b(?!-)`,
+  String.raw`(?:${RESULT_SUBJECT.source}|${COUNT_SUBJECT})(?:\s+(?:can|may|will|must))?\s+(?:contains?|includes?|returns?|holds?|shows?|has|have)\b${COUNT_PREFIX}(?:${COUNT_VALUE}\s+${COUNT_ITEM_UNIT}\b(?!-)|${COUNT_NUMBER_CORE}-${COUNT_ITEM_UNIT}\s+pages?\b)`,
+  "gi",
+);
+const WORD_SIZE_DECLARATION = new RegExp(
+  String.raw`${RESULT_SUBJECT.source}\s+(?:(?:can|may)\s+be|is|are)\s+(?:as\s+large\s+as\s+)?${COUNT_WORD}[\s-]+(?:bytes?|(?:kilo|mega|giga|tera|peta|exa|kibi|mebi|gibi|tebi|pebi|exbi)bytes?)\b`,
   "i",
 );
 const SIZE_PREDICATE =
-  /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
-// Keep source offsets through normalization so sentence boundaries follow the
-// visible text (not an entity's semicolon or a link destination's punctuation),
-// while diagnostics still quote the original Markdown.
-const applyEdits = (input, edits) => {
-  let text = "";
-  const origins = [];
-  const ends = [];
-  let copied = 0;
-  const append = (value, offsets, endOffsets) => {
-    text += value;
-    for (const offset of offsets) origins.push(offset);
-    for (const offset of endOffsets) ends.push(offset);
-  };
-  for (const edit of edits) {
-    append(
-      input.text.slice(copied, edit.start),
-      input.origins.slice(copied, edit.start),
-      input.ends.slice(copied, edit.start),
-    );
-    append(
-      edit.text,
-      edit.origins ?? Array(edit.text.length).fill(input.origins[edit.start]),
-      edit.ends ?? Array(edit.text.length).fill(input.ends[edit.end - 1]),
-    );
-    copied = edit.end;
-  }
-  append(input.text.slice(copied), input.origins.slice(copied), input.ends.slice(copied));
-  return { text, origins, ends };
-};
-const replaceMapped = (input, pattern, replacement) =>
-  applyEdits(
-    input,
-    Array.from(input.text.matchAll(pattern), (match) => ({
-      start: match.index,
-      end: match.index + match[0].length,
-      ...replacement(match),
-    })),
-  );
-const labelEdit = (input, match) => {
-  const start = match.index + match[0].indexOf("[") + 1;
-  return {
-    text: match[1],
-    origins: input.origins.slice(start, start + match[1].length),
-    ends: input.ends.slice(start, start + match[1].length),
-  };
-};
-// Consume each destination once, including quoted titles and angle URLs.
-// An unmatched opener consumes the scan's suffix: never rescan it quadratically.
-const linkLabels = (input) => {
-  const links = /!?\[([^\]]*)\]\(/g;
-  const edits = [];
-  for (let match = links.exec(input.text); match; match = links.exec(input.text)) {
-    let end = links.lastIndex;
-    let depth = 1;
-    let quote = "";
-    let angle = false;
-    while (end < input.text.length && depth > 0) {
-      const char = input.text[end++];
-      if (char === "\\") end++;
-      else if (quote) {
-        if (char === quote) quote = "";
-      } else if (angle) {
-        if (char === ">") angle = false;
-      } else if ((char === '"' || char === "'") && /\s/.test(input.text[end - 2])) quote = char;
-      else if (char === "<") angle = true;
-      else if (char === "(") depth++;
-      else if (char === ")") depth--;
-    }
-    if (depth !== 0) break;
-    edits.push({ start: match.index, end, ...labelEdit(input, match) });
-    links.lastIndex = end;
-  }
-  return applyEdits(input, edits);
-};
-const visibleText = (text) => {
-  let input = {
-    text,
-    origins: Array.from({ length: text.length }, (_, i) => i),
-    ends: Array.from({ length: text.length }, (_, i) => i + 1),
-  };
-  // Recognize escapes and code spans in one left-to-right pass: backslashes
-  // escape a tick only outside a code span. Code contents are literal Markdown,
-  // not HTML or emphasis, so encode their syntax until markup removal is over.
-  input = replaceMapped(input, /(?<!\\)((?:\\\\)*)\\`|(`+)([\s\S]*?)\2(?!`)/g, (match) => {
-    if (match[2] === undefined) {
-      const start = match.index;
-      const tick = start + match[0].length - 1;
-      return {
-        text: `${match[1]}&#96;`,
-        origins: [
-          ...input.origins.slice(start, start + match[1].length),
-          ...Array(5).fill(input.origins[tick]),
-        ],
-        ends: [
-          ...input.ends.slice(start, start + match[1].length),
-          ...Array(5).fill(input.ends[tick]),
-        ],
-      };
-    }
-    const start = match.index + match[2].length;
-    let literal = "";
-    const origins = [];
-    const ends = [];
-    for (let i = 0; i < match[3].length; i++) {
-      const char = match[3][i];
-      const encoded = /[&<>\[\]!*_~`]/.test(char) ? `&#${char.charCodeAt(0)};` : char;
-      literal += encoded;
-      for (let j = 0; j < encoded.length; j++) {
-        origins.push(input.origins[start + i]);
-        ends.push(input.ends[start + i]);
-      }
-    }
-    return { text: literal, origins, ends };
-  });
-  input = linkLabels(input);
-  input = replaceMapped(input, /!?\[([^\]]*)\]\[[^\]]*\]/g, (match) => labelEdit(input, match));
-  for (const pattern of [/__([^\n]+?)__/g, /(?<![\p{L}\p{N}_])_([^_\n]+)_(?![\p{L}\p{N}_])/gu]) {
-    input = replaceMapped(input, pattern, (match) => {
-      const start = match.index + (match[0].startsWith("__") ? 2 : 1);
-      return {
-        text: match[1],
-        origins: input.origins.slice(start, start + match[1].length),
-        ends: input.ends.slice(start, start + match[1].length),
-      };
-    });
-  }
-  input = replaceMapped(input, /[`*~]/g, () => ({ text: "" }));
-  const output = { text: "", origins: [], ends: [] };
-  const stack = [parseFragment(input.text, { sourceCodeLocationInfo: true })];
-  // Iterative traversal keeps deeply nested, bounded markup on the receipt path.
-  while (stack.length) {
-    const node = stack.pop();
-    if (node.nodeName === "#separator") {
-      output.text += " ";
-      output.origins.push(node.origin);
-      output.ends.push(node.end);
-    } else if (node.nodeName === "#text") {
-      const { startOffset, endOffset } = node.sourceCodeLocation;
-      const raw = {
-        text: input.text.slice(startOffset, endOffset),
-        origins: input.origins.slice(startOffset, endOffset),
-        ends: input.ends.slice(startOffset, endOffset),
-      };
-      const decoded = replaceMapped(
-        raw,
-        /&(?:#[xX][\da-fA-F]+|#\d+|[a-zA-Z][a-zA-Z\d]+);?/g,
-        (match) => ({
-          text: parseFragment(match[0]).childNodes[0]?.value ?? match[0],
-        }),
-      );
-      if (decoded.text !== node.value) throw new Error("Unsupported guide text normalization");
-      output.text += decoded.text;
-      for (const origin of decoded.origins) output.origins.push(origin);
-      for (const end of decoded.ends) output.ends.push(end);
-    } else {
-      // Non-rendered raw text is neither prose nor an entity decoding context.
-      if (["script", "style", "template"].includes(node.tagName)) continue;
-      if (
-        [
-          "br",
-          "p",
-          "div",
-          "li",
-          "ul",
-          "ol",
-          "blockquote",
-          "pre",
-          "section",
-          "article",
-          "hr",
-          "h1",
-          "h2",
-          "h3",
-          "h4",
-          "h5",
-          "h6",
-          "table",
-          "tr",
-          "td",
-          "th",
-          "dt",
-          "dd",
-        ].includes(node.tagName) &&
-        node.sourceCodeLocation
-      ) {
-        const location = node.sourceCodeLocation;
-        output.text += " ";
-        output.origins.push(input.origins[location.startOffset]);
-        output.ends.push(input.origins[location.startOffset]);
-        if (location.endTag)
-          stack.push({
-            nodeName: "#separator",
-            origin: input.ends[location.endTag.endOffset - 1],
-            end: input.ends[location.endTag.endOffset - 1],
-          });
-      }
-      const children = node.childNodes ?? [];
-      for (let i = children.length - 1; i >= 0; i--) stack.push(children[i]);
-    }
-  }
-  return output;
-};
+  /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|uncapped|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
+// Markdown/HTML parsing owns visibility and statement scope. Source excerpts
+// explain failures but never decide whether a recognized claim is refused.
 try {
-  const visible = visibleText(outsideLimits);
-  const sentences = [];
-  let start = 0;
-  let rawStart = 0;
-  for (const separator of visible.text.matchAll(/(?<=[.;!?])\s+/g)) {
-    const end = separator.index;
-    if (/\b(?:e\.g|i\.e)\.$/i.test(visible.text.slice(start, end).trimEnd())) continue;
-    sentences.push({
-      text: visible.text.slice(start, end),
-      rawStart,
-      rawEnd: visible.origins[end],
+  for (const sentence of guideStatements(outsideLimits)) {
+    const counts = Array.from(sentence.text.matchAll(RESULT_COUNT));
+    const countClaim = counts.some((count, index) => {
+      const tail = sentence.text.slice(count.index + count[0].length, counts[index + 1]?.index);
+      const perPage =
+        /per[\s-]+(?:page|response)\b/i.test(count[0]) ||
+        /^\s+per[\s-]+(?:page|response)\b/i.test(tail);
+      const aggregate =
+        /^(?:\s+in\s+total)?\s+across\s+[^.!?]*\bpages\b|^\s+per[\s-]+event\b/i.test(tail);
+      return perPage || !aggregate;
     });
-    start = end + separator[0].length;
-    rawStart = visible.ends[start - 1];
-  }
-  sentences.push({ text: visible.text.slice(start), rawStart, rawEnd: outsideLimits.length });
-  for (const sentence of sentences) {
-    const flat = outsideLimits.slice(sentence.rawStart, sentence.rawEnd).trim();
     if (
-      flat &&
-      (SIZE_LITERAL.test(sentence.text) ||
-        SIZE_BARE_SUFFIX.test(sentence.text) ||
-        COUNT_BOUNDARY.test(sentence.text) ||
-        RESULT_COUNT.test(sentence.text) ||
-        (RESULT_SUBJECT.test(sentence.text) && SIZE_PREDICATE.test(sentence.text)))
+      SIZE_LITERAL.test(sentence.text) ||
+      SIZE_BARE_SUFFIX.test(sentence.text) ||
+      COUNT_BOUNDARY.test(sentence.text) ||
+      countClaim ||
+      WORD_SIZE_DECLARATION.test(sentence.text) ||
+      (RESULT_SUBJECT.test(sentence.text) && SIZE_PREDICATE.test(sentence.text))
     )
       check(
-        `guide states a size or measurement claim outside the canonical Limits: "${flat.slice(0, 80)}"`,
+        `guide states a size or measurement claim outside the canonical Limits: "${sentence.raw.slice(0, 80)}"${sentence.context ? ` (visible: "${sentence.context.slice(0, 80)}")` : ""}`,
         false,
       );
   }

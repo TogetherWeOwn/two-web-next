@@ -146,7 +146,7 @@ describe("machine contract: paraphrases and receipt bound (offline)", () => {
     "[Collections](https://example.test/docs) cap at 30 items.",
     "Res**ult**s are unbounded.",
     "[Rows](https://example.test/docs) are limited to 30.",
-    "Res__ult__s are unlimited.",
+    "**Res**ult**s** are unlimited.",
     ...["almost", "just", "over", "under", "fewer than", "close to"].map(
       (qualifier) => `Rows are limited to ${qualifier} 30.`,
     ),

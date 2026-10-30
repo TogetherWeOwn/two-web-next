@@ -34,8 +34,9 @@ import {
   publicApiEventOutputSchema,
 } from "./output-schemas";
 
-export const MCP_SERVER_NAME = "two-web-next";
-export const MCP_SERVER_VERSION = "1.0.0";
+import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "./identity";
+
+export { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "./identity";
 
 /**
  * Exact tool allowlist. T1 lists published events, T2 reads one event, T3

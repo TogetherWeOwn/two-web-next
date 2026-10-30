@@ -20,6 +20,7 @@ import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../
 import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
+import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "../mcp/identity";
 import { requestRoute } from "../request-log";
 import { JOIN_INTRO } from "../screens/join";
 import {
@@ -223,16 +224,15 @@ export class EventByteCapExceededError extends Error {
 }
 
 /**
- * Bytes of the MCP `CallToolResult` that carries `body`: the text content
- * (the body re-escaped as a JSON string) plus `structuredContent` (the body
- * again, verbatim). `structuredContent` is the parsed body, and a parsed then
- * re-stringified DTO is byte-identical, so it is spliced in unparsed. The
- * JSON-RPC envelope (request id, SSE/HTTP framing) is deliberately outside
- * this measure: it carries a client-chosen id.
+ * Worst enabled MCP result projection: the text copy, structured copy and the
+ * 2026-07-28 SDK's resultType and serverInfo stamps. Legacy results omit the
+ * stamps and are smaller. A parsed and re-stringified DTO is byte-identical,
+ * so its structured copy is spliced in unparsed. JSON-RPC request IDs and
+ * SSE/HTTP framing are outside the result budget.
  */
 export function eventResultBytes(body: string): number {
   return TEXT.encode(
-    `{"content":[{"type":"text","text":${JSON.stringify(body)}}],"structuredContent":${body}}`,
+    `{"content":[{"type":"text","text":${JSON.stringify(body)}}],"structuredContent":${body},"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":${JSON.stringify({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION })}}}`,
   ).length;
 }
 
@@ -241,11 +241,10 @@ export function eventResultBytes(body: string): number {
  * until the typed result (see eventResultBytes) fits. REST serves the same
  * fitted bytes as MCP, so one authority bounds both surfaces and the REST
  * body is always the smaller of the two. Shortened descriptions end in …;
- * rows are never dropped, so paging stays stable. Always terminates: a
- * one-character description collapses to empty. Throws
- * EventByteCapExceededError when no description remains but the result still
- * exceeds the cap — irreducible metadata (title/game/location) must refuse,
- * never return oversized.
+ * rows are never dropped, so paging stays stable. A shortened nonempty
+ * description retains at least an ellipsis; the marker is never trimmed
+ * again. If marked minima and metadata still overflow, the static unavailable
+ * error takes precedence over an oversized or misleading success.
  */
 export function fitByteBudget(
   rows: PublicApiEventDto[],
@@ -259,6 +258,7 @@ export function fitByteBudget(
     for (const row of rows) {
       if (
         row.description &&
+        row.description !== "…" &&
         (!longest?.description || row.description.length > longest.description.length)
       )
         longest = row;
@@ -268,10 +268,7 @@ export function fitByteBudget(
     // (emoji, some CJK) mid-pair emits a lone surrogate that strict JSON
     // decoders reject. Array.from splits on whole code points.
     const codePoints = Array.from(longest.description);
-    longest.description =
-      codePoints.length <= 1
-        ? ""
-        : `${codePoints.slice(0, Math.ceil(codePoints.length / 2) - 1).join("")}…`;
+    longest.description = `${codePoints.slice(0, Math.ceil(codePoints.length / 2) - 1).join("")}…`;
     body = JSON.stringify(wrap(rows));
   }
 }

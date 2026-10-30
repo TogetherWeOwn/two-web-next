@@ -6,8 +6,8 @@ machine surface only.
 
 ## Endpoints
 
-- `POST /mcp` — JSON-RPC MCP server, protocol `2025-06-18`, no auth and
-  no session. Four read-only tools: `list_events`, `get_event`,
+- `POST /mcp` — JSON-RPC MCP server, supporting `2025-06-18` and negotiated
+  `2026-07-28`, no auth and no session. Four read-only tools: `list_events`, `get_event`,
   `get_community`, `get_join`. Every tool advertises a typed
   `outputSchema` through `tools/list`; success results carry
   `structuredContent` matching it.
@@ -21,12 +21,12 @@ machine surface only.
 
 - Collections cap at 20 rows per response (`per_page` clamps to 20);
   past-the-end pages clamp to the last page.
-- Every event result fits 32 KiB, measured on the serialized MCP
-  `CallToolResult` object: the text content plus the
-  `structuredContent` copy, with string escaping counted. The REST JSON
-  body is the same DTO bytes, so it is smaller. Long descriptions trim
-  with a `…` marker, rows are never dropped; metadata that cannot fit
-  answers `unavailable`.
+- Every event result fits 32 KiB, measured on the largest enabled serialized MCP
+  `CallToolResult` object: the text content, the `structuredContent` copy and
+  SDK-added `resultType` and server-info `_meta` fields, with string escaping
+  counted. The REST JSON body is the same DTO bytes, so it is smaller. Long
+  descriptions trim with a `…` marker, rows are never dropped; metadata plus
+  marked description minima that cannot fit answers `unavailable`.
 - The JSON-RPC envelope (the client-chosen request ID, SSE and HTTP
   framing) is outside that measure and is not bounded by it.
 - Events are published-only: drafts and cancelled rows read as not found.
