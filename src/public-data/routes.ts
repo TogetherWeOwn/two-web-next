@@ -444,10 +444,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       if (game !== null && total === 0) return await emptyEventCollection(c, generation);
       const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
       try {
-        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
-          ...payload,
-          data: trimmed,
-        }));
+        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, () => payload);
       } catch (err) {
         if (err instanceof EventByteCapExceededError) return unavailable(c);
         throw err;

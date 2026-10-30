@@ -342,7 +342,7 @@ const COUNT_NUMBER = String.raw`${COUNT_NUMBER_CORE}(?:-${COUNT_UNIT})?\b(?!-|[.
 // Wrappers must enclose the numeric token, not a phrase such as "8-bit entries".
 const COUNT_VALUE = String.raw`(?:${COUNT_NUMBER}|(?:[\[({"'“‘]\s*)+${COUNT_NUMBER}(?:\s*[\])}"'”’])+)`;
 // Qualifiers are whole tokens: "of" + "ten" must never consume "often".
-const COUNT_QUALIFIER = String.raw`(?:more[\s-]+or[\s-]+less|in[\s-]+excess[\s-]+of|a[\s-]+little[\s-]+over|upwards[\s-]+of|at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|about|around|approximately|roughly|nearly|almost|just|over|under|fewer|close|greater|up|most|least|e\.g\.|i\.e\.)(?=[\s:,-]|$)`;
+const COUNT_QUALIFIER = String.raw`(?:as[\s-]+many[\s-]+as|as[\s-]+large[\s-]+as|a[\s-]+total[\s-]+of|more[\s-]+or[\s-]+less|in[\s-]+excess[\s-]+of|a[\s-]+little[\s-]+over|upwards[\s-]+of|at|to|of|a|an|the|maximum|minimum|upper|lower|no|more|less|than|only|exactly|about|around|approximately|roughly|nearly|almost|just|over|under|fewer|close|greater|up|most|least|e\.g\.|i\.e\.)(?=[\s:,-]|$)`;
 const COUNT_PREFIX = String.raw`(?:[\s:,-]+${COUNT_QUALIFIER})*[\s:,-]*`;
 const QUALIFIED_COUNT = String.raw`${COUNT_PREFIX}${COUNT_VALUE}`;
 const COUNT_SUBJECT = String.raw`\b(?:collections?|rows?|items?|pages?)`;
@@ -350,40 +350,73 @@ const COUNT_NOUN = String.raw`(?:caps?|limits?|bounds?|ceilings?)`;
 // The same numeric-bound prefix owns complete declarations and unfinished
 // layout blocks; the renderer must not maintain a second sibling grammar.
 const COUNT_BOUNDARY_VALUE_PREFIX = String.raw`${COUNT_SUBJECT}(?:['’]s?)?\s+(?:(?:(?:are|is)\s+)?(?:(?:caps?|capped|limits?|limited|bounds?|bounded)\b|(?:have|has)\s+(?:(?:a|an|the|upper|lower|maximum|minimum|hard|soft|fixed)\s+)*${COUNT_NOUN}\b)|${COUNT_NOUN}\s+(?:is|are)\b)`;
+const COUNT_ITEM_MODIFIERS = String.raw`(?:(?:published|renderable)\s+)*`;
+// A bare quantity must end a declaration or name a cardinality unit, not the
+// selection domain in a complement such as "limited to 30 venues".
+const COUNT_COMPLEMENT_END = String.raw`(?=\s*(?:$|[.,;!?]|${COUNT_ITEM_MODIFIERS}${COUNT_ITEM_UNIT}\b(?!-)|pages?\b(?!-)|per\b|and\b|with\b|unless\b|when\b))`;
 const COUNT_BOUNDARY = new RegExp(
-  String.raw`(?:${COUNT_BOUNDARY_VALUE_PREFIX}${QUALIFIED_COUNT}|${COUNT_SUBJECT}(?:['’]s?)?\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+${COUNT_NOUN}\b))`,
+  String.raw`(?:${COUNT_BOUNDARY_VALUE_PREFIX}${QUALIFIED_COUNT}${COUNT_COMPLEMENT_END}|${COUNT_SUBJECT}(?:['’]s?)?\s+(?:(?:are|is)\s+)?(?:(?:unbounded|unlimited)\b|(?:have|has)\s+no\s+${COUNT_NOUN}\b))`,
+  "i",
+);
+const COUNT_BOUNDARY_COMPLETE = new RegExp(
+  String.raw`${COUNT_BOUNDARY_VALUE_PREFIX}${QUALIFIED_COUNT}(?:\s+[a-z][\w-]*)?`,
   "i",
 );
 const COUNT_BOUNDARY_PENDING = new RegExp(
   String.raw`${COUNT_BOUNDARY_VALUE_PREFIX}${COUNT_PREFIX}(?:[\[({"'“‘]\s*)*$`,
   "i",
 );
-const COUNT_OBJECT = String.raw`(?:(?<value>${COUNT_VALUE})\s+${COUNT_ITEM_UNIT}\b(?!-)|${COUNT_NUMBER_CORE}-${COUNT_ITEM_UNIT}\s+pages?\b)`;
+const COUNT_BOUNDARY_SCALAR = new RegExp(`${COUNT_BOUNDARY_VALUE_PREFIX}${QUALIFIED_COUNT}$`, "i");
+const COUNT_COMPLEMENT = new RegExp(
+  String.raw`^(?:${COUNT_ITEM_MODIFIERS}${COUNT_ITEM_UNIT}|pages?|venues?|locations?|categories|examples?|fields?|settings?)\b(?!-)(?=\s*(?:$|[.!?;]|,\s*(?:and|but)\b))`,
+  "i",
+);
+const COUNT_OBJECT = String.raw`(?:(?<value>${COUNT_VALUE})\s+${COUNT_ITEM_MODIFIERS}${COUNT_ITEM_UNIT}\b(?!-)|${COUNT_NUMBER_CORE}-${COUNT_ITEM_UNIT}\s+pages?\b)`;
+const QUALIFIED_COUNT_OBJECT = String.raw`(?<quantityPrefix>${COUNT_PREFIX})${COUNT_OBJECT}`;
+const RESULT_COUNT_SUBJECT = String.raw`(?:${RESULT_SUBJECT.source}|${COUNT_SUBJECT})(?:['’]s\s+(?:data\s+)?array)?`;
+const COUNT_VERB_PREFIX = String.raw`(?:\s+(?:can|may|will|must))?(?:\s+only)?\s+(?:contains?|includes?|returns?|holds?|shows?|has|have)\b`;
 const RESULT_COUNT = new RegExp(
-  String.raw`(?<subject>${RESULT_SUBJECT.source}|${COUNT_SUBJECT})(?:\s+(?:can|may|will|must))?\s+(?:contains?|includes?|returns?|holds?|shows?|has|have)\b${COUNT_PREFIX}${COUNT_OBJECT}`,
+  String.raw`(?<subject>${RESULT_COUNT_SUBJECT})${COUNT_VERB_PREFIX}${QUALIFIED_COUNT_OBJECT}`,
   "gi",
+);
+const RESULT_COUNT_PENDING = new RegExp(
+  String.raw`${RESULT_COUNT_SUBJECT}(?:${COUNT_VERB_PREFIX}${COUNT_PREFIX})?$`,
+  "i",
 );
 // Known result modifiers preserve physical scope without consuming predicates
 // such as "each event documents how API results ..." as one noun phrase.
-const RESULT_QUALIFIERS = String.raw`(?:(?:list_events|get_event|MCP|event|collection|JSON|tool|HTTP|API|successful|failed|serialized|typed|published|cached|empty|nonempty|newly)\s+)*`;
+const RESULT_QUALIFIERS = String.raw`(?:(?:list_events|get_event|MCP|event|collection|JSON|JSON-RPC|tool|HTTP|API|successful|failed|serialized|typed|published|cached|empty|nonempty|newly|paginated|individual)\s+)*`;
 const PER_RESULT_SCOPE = new RegExp(
-  String.raw`^\s+(?:per[\s-]+${RESULT_QUALIFIERS}(?:page|response)|(?:in|for)\s+(?:each|every|a|the|one|single)\s+${RESULT_QUALIFIERS}(?:page|response))\b`,
+  String.raw`^\s+(?:per[\s-]+${RESULT_QUALIFIERS}(?:page|response|result)|(?:in|for)\s+(?:each|every|a|the|one|single)\s+${RESULT_QUALIFIERS}(?:page|response|result))\b`,
   "i",
 );
+const COUNT_CONNECTOR = String.raw`(?:as\s+well\s+as|and|with|plus|including)`;
 const COORDINATED_COUNT = new RegExp(
-  String.raw`^\s*,?\s*(?:and|with|plus)\b${COUNT_PREFIX}${COUNT_OBJECT}`,
+  String.raw`^\s*,?\s*${COUNT_CONNECTOR}\b${QUALIFIED_COUNT_OBJECT}`,
   "i",
 );
+const COORDINATED_COUNT_PENDING = new RegExp(
+  String.raw`^\s*,?\s*${COUNT_CONNECTOR}\b${COUNT_PREFIX}$`,
+  "i",
+);
+const EXISTENTIAL_PREFIX = String.raw`\bthere\s+(?:are|is)\b`;
+const EXISTENTIAL_COUNT = new RegExp(`${EXISTENTIAL_PREFIX}${QUALIFIED_COUNT_OBJECT}`, "gi");
+const EXISTENTIAL_PENDING = new RegExp(`${EXISTENTIAL_PREFIX}${COUNT_PREFIX}$`, "i");
+const PAGE_SIZE_PREFIX = String.raw`\b${RESULT_QUALIFIERS}page\s+size\s+(?:is|equals?)\b`;
+const PAGE_SIZE = new RegExp(`${PAGE_SIZE_PREFIX}${QUALIFIED_COUNT}${COUNT_COMPLEMENT_END}`, "i");
+const PAGE_SIZE_PENDING = new RegExp(`${PAGE_SIZE_PREFIX}${COUNT_PREFIX}$`, "i");
 const perResultCount = (count, tail) =>
   /per[\s-]+(?:page|response)\b/i.test(count[0]) || PER_RESULT_SCOPE.test(tail);
 const SINGLE_RESULT_SUBJECT = new RegExp(
   String.raw`\b(?:(?:single|one|each|every|individual)\s+${RESULT_QUALIFIERS}(?:CallToolResult|results?|responses?|replies|reply|payloads?|DTOs?|bod(?:y|ies)|pages?)|(?:an?|the)\s+${RESULT_QUALIFIERS}(?:CallToolResult|result|response|reply|payload|DTO|body|page))$`,
   "i",
 );
+const WORD_SIZE_PREFIX = String.raw`${RESULT_SUBJECT.source}\s+(?:(?:can|may)\s+be|is|are|occup(?:y|ies))\b`;
 const WORD_SIZE_DECLARATION = new RegExp(
-  String.raw`${RESULT_SUBJECT.source}\s+(?:(?:can|may)\s+be|is|are|occup(?:y|ies))\s+(?:as\s+large\s+as\s+)?${COUNT_WORD}[\s-]+(?:bytes?|(?:kilo|mega|giga|tera|peta|exa|kibi|mebi|gibi|tebi|pebi|exbi)bytes?)\b`,
+  String.raw`${WORD_SIZE_PREFIX}${COUNT_PREFIX}${COUNT_WORD}[\s-]+(?:bytes?|(?:kilo|mega|giga|tera|peta|exa|kibi|mebi|gibi|tebi|pebi|exbi)bytes?)\b(?=\s*(?:$|[.,;!?]|and\b|per\b))`,
   "i",
 );
+const WORD_SIZE_PENDING = new RegExp(String.raw`${WORD_SIZE_PREFIX}${COUNT_PREFIX}$`, "i");
 const SIZE_PREDICATE =
   /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|uncapped|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
 const AGGREGATE_SCOPE_PHRASE = String.raw`(?:(?:\s+in\s+total\s*,?)?\s+across\s+(?:(?:all|both)\s+)?(?:the\s+)?(?:(?:first|last|next|previous)\s+)?(?:(?:multiple|several|many|some|\d+|${COUNT_WORD})\s+)?pages\b|\s+per[\s-]+event\b)`;
@@ -405,7 +438,19 @@ function countObjects(text, count) {
     const remaining = aggregate ? tail.slice(aggregate[0].length) : tail;
     objects.push({ object, tail, aggregate, remaining });
     object = COORDINATED_COUNT.exec(remaining);
-    if (object) tail = remaining.slice(object[0].length);
+    if (object) {
+      tail = remaining.slice(object[0].length);
+      // A numeric noun phrase followed by its own predicate is a new clause,
+      // not another object inherited from the API result's verb.
+      if (
+        !/^\s*(?:$|[.,;!?])/.test(tail) &&
+        !AGGREGATE_SCOPE.test(tail) &&
+        !/^\s+in\s+total\b/i.test(tail) &&
+        !PER_RESULT_SCOPE.test(tail) &&
+        !COORDINATED_COUNT.test(tail)
+      )
+        object = null;
+    }
   }
   return objects;
 }
@@ -415,24 +460,38 @@ function countObjects(text, count) {
 try {
   const completesValue = (candidate) =>
     WORD_SIZE_DECLARATION.test(candidate) ||
-    COUNT_BOUNDARY.test(candidate) ||
+    COUNT_BOUNDARY_COMPLETE.test(candidate) ||
+    PAGE_SIZE.test(candidate) ||
+    !candidate.matchAll(EXISTENTIAL_COUNT).next().done ||
     !candidate.matchAll(RESULT_COUNT).next().done;
   const continuesScope = (left, scope) => {
     const count = Array.from(left.matchAll(RESULT_COUNT)).at(-1);
+    const candidate = ` ${scope.split(/;\s+/, 1)[0]}`;
+    const aggregate = AGGREGATE_SCOPE.exec(candidate);
     return (
       !!count &&
       count.index + count[0].length === left.trimEnd().length &&
-      AGGREGATE_SCOPE_ONLY.test(` ${scope.split(/;\s+/, 1)[0]}`)
+      (AGGREGATE_SCOPE_ONLY.test(candidate) ||
+        (aggregate && /^\s*,\s*(?:and|but)\b/i.test(candidate.slice(aggregate[0].length))))
     );
   };
-  const awaitsValue = (candidate) => COUNT_BOUNDARY_PENDING.test(candidate);
+  const awaitsValue = (candidate) =>
+    COUNT_BOUNDARY_PENDING.test(candidate) ||
+    (RESULT_COUNT_PENDING.test(candidate) && candidate.matchAll(RESULT_COUNT).next().done) ||
+    EXISTENTIAL_PENDING.test(candidate) ||
+    PAGE_SIZE_PENDING.test(candidate) ||
+    WORD_SIZE_PENDING.test(candidate);
   const continuesCount = (left, right) => {
+    if (COUNT_BOUNDARY_SCALAR.test(left) && COUNT_COMPLEMENT.test(right)) return true;
     const count = Array.from(left.matchAll(RESULT_COUNT)).at(-1);
-    return (
-      !!count &&
-      countObjects(left, count).at(-1).remaining.trim() === "" &&
-      COORDINATED_COUNT.test(` ${right}`)
-    );
+    if (!count) return false;
+    const remaining = countObjects(left, count).at(-1).remaining;
+    const candidate = /^\s*,?\s*$/.test(remaining)
+      ? ` ${right}`
+      : COORDINATED_COUNT_PENDING.test(remaining)
+        ? `${remaining} ${right}`
+        : "";
+    return COORDINATED_COUNT.test(candidate) || COORDINATED_COUNT_PENDING.test(candidate);
   };
   for (const sentence of guideStatements(
     outsideLimits,
@@ -447,7 +506,8 @@ try {
       // not an unrelated earlier clause. Its physical array cannot aggregate
       // rows from other results merely because a page qualifier follows.
       const subjectEnd = count.index + count.groups.subject.length;
-      const singleResult = SINGLE_RESULT_SUBJECT.test(sentence.text.slice(0, subjectEnd));
+      const subject = sentence.text.slice(0, subjectEnd).replace(/['’]s\s+(?:data\s+)?array$/i, "");
+      const singleResult = SINGLE_RESULT_SUBJECT.test(subject);
       return countObjects(sentence.text, count).some(({ object, tail, aggregate, remaining }) => {
         const perPage =
           perResultCount(object, tail) ||
@@ -456,7 +516,10 @@ try {
         // a second coordinated object never inherits that object's exemption.
         const perEventScope = /^\s+per[\s-]+event\b/i.test(tail);
         const value = (object.groups.value ?? "").replace(/^[\[({"'“‘\s]+|[\])}"'”’\s]+$/g, "");
-        const perEvent = perEventScope && /^(?:1|one)$/i.test(value);
+        const singleton = /^(?:only|exactly)?$/i.test((object.groups.quantityPrefix ?? "").trim());
+        const one =
+          /^one$/i.test(value) || (/^\+?\d+(?:\.\d+)?$/.test(value) && Number(value) === 1);
+        const perEvent = perEventScope && singleton && one;
         return perPage || (!perEvent && (singleResult || perEventScope || !aggregate));
       });
     });
@@ -464,6 +527,10 @@ try {
       SIZE_LITERAL.test(sentence.text) ||
       SIZE_BARE_SUFFIX.test(sentence.text) ||
       COUNT_BOUNDARY.test(sentence.text) ||
+      PAGE_SIZE.test(sentence.text) ||
+      Array.from(sentence.text.matchAll(EXISTENTIAL_COUNT)).some((count) =>
+        perResultCount(count, sentence.text.slice(count.index + count[0].length)),
+      ) ||
       countClaim ||
       WORD_SIZE_DECLARATION.test(sentence.text) ||
       (RESULT_SUBJECT.test(sentence.text) && SIZE_PREDICATE.test(sentence.text))

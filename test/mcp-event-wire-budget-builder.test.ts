@@ -231,6 +231,27 @@ describe("MCP emitted-result bytes and marked description minima", () => {
     vi.unstubAllGlobals();
   });
 
+  it("keeps the collection array identity and exact wrapper bytes through every fitting iteration", () => {
+    const sources = Array.from({ length: 20 }, (_, i) =>
+      row(i + 1, { description: "d".repeat(1000) }),
+    );
+    const cloned = collection(sources);
+    const retained = collection(sources);
+    let calls = 0;
+    const expected = fitByteBudget(cloned.data, CAP, (trimmed) => ({ ...cloned, data: trimmed }));
+    const actual = fitByteBudget(retained.data, CAP, (trimmed) => {
+      calls++;
+      expect(trimmed).toBe(retained.data);
+      return retained;
+    });
+    expect(calls).toBeGreaterThan(1);
+    expect(actual).toBe(expected);
+    expect(eventResultBytes(actual)).toBeLessThanOrEqual(CAP);
+    expect(retained.data).toHaveLength(20);
+    expect(retained.data.some((item) => item.description?.endsWith("…"))).toBe(true);
+    expect(retained.meta).toEqual(cloned.meta);
+  });
+
   it("budgets actual negotiated modern list results and preserves legacy and REST parity on cold and warm reads", async () => {
     const rows = Array.from({ length: 20 }, (_, i) => row(i + 1, { description: "d".repeat(393) }));
     // Independently tune form-valid input to land at the legacy result boundary.

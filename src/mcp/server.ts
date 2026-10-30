@@ -65,25 +65,21 @@ function toolError(code: PublicDataErrorCode, message: string) {
 }
 
 function toolJson(value: object) {
-  const structuredContent = value as Record<string, unknown>;
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value) }],
-    structuredContent,
+    structuredContent: value as Record<string, unknown>,
   };
 }
 
 const UNAVAILABLE = "Event data is temporarily unavailable.";
-// Programming faults reuse the REST 500 message (same static bytes, same
-// privacy boundary); the real error goes to error.alert only.
-const INTERNAL = PUBLIC_DATA_INTERNAL_MESSAGE;
-
 export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
   const { env, db } = deps;
   // Per-request server (see src/mcp/routes.ts), so the closure's request ID
   // is the one on this POST's http.request line: tool failures correlate.
   const internalError = (err: unknown) => {
     alertRequestError(err, { method: "POST", route: "/mcp", requestId: deps.requestId });
-    return toolError("internal", INTERNAL);
+    // Match the REST 500 privacy boundary; only error.alert receives the fault.
+    return toolError("internal", PUBLIC_DATA_INTERNAL_MESSAGE);
   };
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
 
@@ -133,10 +129,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
       // echoes err.message) and never an oversized success.
       let body: string;
       try {
-        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
-          ...payload,
-          data: trimmed,
-        }));
+        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, () => payload);
       } catch (err) {
         if (err instanceof EventByteCapExceededError) return toolError("unavailable", UNAVAILABLE);
         return internalError(err);
