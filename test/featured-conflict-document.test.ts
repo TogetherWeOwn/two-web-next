@@ -12,6 +12,7 @@ import type { Db } from "../src/db/index";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import { savedForm } from "./helpers/featured-save-document";
+import { featuredEditorDocument } from "./helpers/featured-editor-document";
 
 vi.mock("../src/admin/store", async (original) => ({
   ...(await original<typeof import("../src/admin/store")>()),
@@ -103,6 +104,27 @@ describe("featured conflict document", () => {
       expect(getFeatured).toHaveBeenCalledTimes(1);
       expect(html.match(/src="\/islands\/auth-status.js"/g)).toHaveLength(1);
       expect(response.headers.get("cache-control")).toBe("private, no-store");
+
+      // This real 409 has no field errors: deleting only `|| conflict` must
+      // lose protection before any new input, not be rescued by validation.
+      const browser = featuredEditorDocument(html, { path: "/admin/featured/1" });
+      expect(browser.querySelector("[data-admin-validation-summary]")).toBeNull();
+      expect(
+        browser.querySelector('[data-testid="featured-save-conflict"]')?.getAttribute("role"),
+      ).toBe("alert");
+      expect(browser.depart()).toMatchObject({ defaultPrevented: true, returnValue: "" });
+      expect(browser.values()).toMatchObject({
+        title: "Complete refused draft",
+        body: "Keep these notes",
+      });
+      expect(browser.values()).toEqual(savedForm(html).fields);
+      const save = browser.querySelector('[data-testid="save-featured"]');
+      expect(save?.getAttribute("type")).toBe("submit");
+      expect(save?.hasAttribute("disabled")).toBe(false);
+      expect(browser.submit().defaultPrevented).toBe(false);
+      expect(browser.editor.getAttribute("aria-busy")).toBe("true");
+      expect(browser.depart().defaultPrevented).toBe(false);
+      expect(browser.values()).toEqual(savedForm(html).fields);
     },
   );
 });
