@@ -199,9 +199,10 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         >
           <option value="" selected={val("recurrence_frequency") === ""}>Does not repeat</option>
           <option value="weekly" selected={val("recurrence_frequency") === "weekly"}>Weekly</option>
+          <option value="monthly" selected={val("recurrence_frequency") === "monthly"}>Monthly</option>
         </select>
         <p id="f-recurrence-frequency-hint" class="hint">
-          Empty = a one-off event. Weeks keep the same wall time in the zone above across clock
+          Empty = a one-off event. Repeats keep the same wall time in the zone above across clock
           changes.
         </p>
         {#if errors.recurrence_frequency}
