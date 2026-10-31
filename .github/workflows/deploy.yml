@@ -267,6 +267,14 @@ jobs:
         run: node bin/revision-check.mjs https://next.togetherweown.com "$DEPLOY_SHA"
         env:
           DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      # The owner-facing marker (src/version.ts) must agree once the step above
+      # proved the new Version serves. Kept out of bin/smoke.mjs on purpose: a
+      # rollback to a Version that predates /version must still pass the
+      # post-rollback smoke.
+      - name: Verify /version reports the deployed commit
+        run: node bin/version-check.mjs https://next.togetherweown.com "$DEPLOY_SHA"
+        env:
+          DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       # Post-deploy smoke scope (mirrors e2e-staging.yml): a deploy whose
       # head commit only touches docs prose or the `test/` unit tree the
       # checkers never execute skips the smoke steps below — the full suite,

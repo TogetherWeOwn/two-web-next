@@ -264,6 +264,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /rules.md` | public | ai-friendly-md: curated Markdown alternate with last-updated stamp, static TTL, staging noindex |
 | `GET /sitemap_index.xml` | public | seo: frozen sitemap |
 | `GET /up` | public | up: always-200 queue health |
+| `GET /version` | public | version: deploy commit and upload time from version metadata, no-store, DB-free |
 | `OPTIONS /admin/ops-overrides` | ops-control-bearer | dashboard-operator-override-panel-acceptance: writes refuse locally |
 | `OPTIONS /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
 | `OPTIONS /mcp` | public | mcp: CORS preflight for the stateless public MCP; answered by the handler, no body, no budget burn |

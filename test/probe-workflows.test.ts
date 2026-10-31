@@ -691,12 +691,19 @@ describe("deployed revision marker is bound per environment", () => {
       deploy.indexOf("run: npx wrangler deploy --config web/wrangler.staging.jsonc"),
     );
     expect(verify).toBeLessThan(deploy.indexOf("node bin/smoke.mjs"));
+    // /version is checked only after /up proved the new Version serves.
+    const version = deploy.indexOf(
+      'run: node bin/version-check.mjs https://next.togetherweown.com "$DEPLOY_SHA"\n',
+    );
+    expect(version).toBeGreaterThan(verify);
+    expect(version).toBeLessThan(deploy.indexOf("node bin/smoke.mjs"));
     // The tag and the verified commit come from the same CI-verified expression.
     // Both staging deploys (web and jobs Workers) share that one tag, so the
-    // expression appears three times: web deploy, jobs deploy, verify step.
+    // expression appears four times: web deploy, jobs deploy, and the /up and
+    // /version verify steps.
     const expr =
       "DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}";
-    expect(deploy.split(expr)).toHaveLength(4);
+    expect(deploy.split(expr)).toHaveLength(5);
   });
 });
 

@@ -329,6 +329,18 @@ binding isolation before any remote mutation.
    deployments` wins. Record the production app `revision.version_id` and
    `revision.commit` separately from the Tail Worker version.
 
+   `GET /version` answers what is live without the readiness envelope:
+   `{ "sha": "<commit>", "deployedAt": "<ISO 8601 UTC>" }`, uncached, with no
+   database read ([src/version.ts](../src/version.ts)). `sha` is the same
+   tag-derived commit as `revision.commit`; `deployedAt` is the time
+   Cloudflare recorded for the Version's upload, which the deploy jobs do
+   right before serving it. After a rollback both fields describe the older
+   Version. A Version without the binding answers nulls; one that predates
+   the route answers 404. The staging deploy fails closed when `/version`
+   disagrees with the deployed SHA (`Verify /version reports the deployed
+   commit`); after a production promotion, check the apex the same way with
+   `node bin/version-check.mjs https://togetherweown.com <sha>`.
+
 3. Normal path: successful full CI on `main` invokes
    [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), with the exact CI-verified SHA. The `staging` Environment supplies scoped
    secrets and has no required reviewers; there is no human approval gate.

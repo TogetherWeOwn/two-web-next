@@ -380,6 +380,11 @@
     "auth": "public"
   },
   {
+    "method": "GET",
+    "path": "/version",
+    "auth": "public"
+  },
+  {
     "method": "OPTIONS",
     "path": "/admin/ops-overrides",
     "auth": "ops-control-bearer"
