@@ -347,7 +347,7 @@ export const KIT_RENDERER_VALUE = "kit";
 // DOES reach the hook (dev, future adapter change) falls through to Hono's
 // host-guarded ASSETS branch with full headers, never to Kit resolve.
 const RESERVED_PREFIXES = ["/api/", "/_app/"];
-const RESERVED_EXACT = new Set(["/up", "/csp-reports"]);
+const RESERVED_EXACT = new Set(["/up", "/version", "/csp-reports"]);
 
 // Kit data requests carry the page path with this suffix; ownership follows
 // the underlying page, with or without CSR.

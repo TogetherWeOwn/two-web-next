@@ -51,7 +51,9 @@ The repository rulesets enforce the following on `main`:
 
 - `protect-main`: changes arrive through a pull request, the branch cannot be
   deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
-  `gitleaks` and `e2e-ok` must pass, plus Paperclip Review 5/5 on the exact head.
+  `gitleaks` and `e2e-ok` must pass on the exact head, and so must the two
+  review app checks, CodeRabbit and Devin Review. No approving review is
+  required.
 
   The journeys count only through the aggregator in e2e.yml: it fails when the
   scope job fails or the browser journeys fail or are cancelled, and passes a
@@ -59,6 +61,13 @@ The repository rulesets enforce the following on `main`:
   draft.
 
 - `pr-conventions`: `pr-lint` must pass.
+
+Who merges (owner decision 2026-10-31): the agent that did the work merges a PR
+once every required check is green and each review finding is fixed or answered
+with evidence. A merge to `main` deploys production (ci, then deploy, then
+e2e-staging, then deploy-production), so it also needs the owner's approval
+through `request_confirmation` on the card. So does every other production
+deploy, such as a manual dispatch or promotion.
 
 ### Pull-request size labels (advisory)
 
@@ -135,9 +144,10 @@ below-cutoff branch rows need `PR_STANDARDS_MODE`.
 | Internal card ID in a commit subject (first checker, `INTERNAL_ID_LEVEL: "warning"`) | Warns only |
 | Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 
-GitHub does not enforce an approval count here. Team policy does: an independent
-reviewer, who did not write the change, reviews the exact head SHA that merges, CI
-is green on that SHA, and a new push needs a new review.
+GitHub does not enforce an approval count here, and neither does team policy.
+Independent review comes from the two review app checks, CodeRabbit and Devin
+Review, which run on the head SHA, and a new push re-runs them. The merge rule is
+the one in "Who merges" above.
 
 `pr-lint` lives in `.github/workflows/pr-gates.yml` and runs through
 `ci/pr-lint-output.py check`: first `ci/check-pr-conventions.py` (it fails on a
@@ -258,10 +268,8 @@ categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
 stay out of the notes. Each squash-merged PR title becomes one entry, so
 write it for a reader of the release notes: imperative mood, one user-facing change.
 
-Versioning is SemVer, starting at `0.1.0`; `1.0.0` marks the production
-cutover: `release-as: 1.0.0` in `release-please-config.json` makes the
-cutover promote cut `v1.0.0`. Before `1.0.0`, `feat!` / `BREAKING CHANGE` bumps the minor version;
-from `1.0.0` onward, it bumps the major version.
+Versioning is SemVer. `v1.0.0` marked the production cutover (2026-10-18);
+`feat!` / `BREAKING CHANGE` now bumps the major version.
 
 ## Local development
 
@@ -273,6 +281,41 @@ npm run format                   # formatting only; never rewrites lint violatio
 npm run lint                     # read-only Biome lint + format gate
 npm run check                    # lint + format + typecheck + config drift + tests
 ```
+
+### Verify a change before opening a PR
+
+`bin/local-ci.sh` (also `npm run ci:local --`) reproduces the Vitest gates of
+the CI `check` job on any host with Docker. It needs no `.dev.vars` and no
+credentials. Network access is needed only to pull `node:24-bookworm` and
+`postgres:17`, and for `npm ci` to reach the npm registry when the local npm
+cache is cold. Each shard gets its own disposable Postgres 17 container on its
+own Docker network, aliased `agent-testdb` so the `testDatabaseUrl` guard
+accepts it. Nothing is published on host ports. Suites run in the CI job image
+as your user. Containers and networks are removed on exit.
+
+```sh
+bin/local-ci.sh -- test/events.test.ts test/event-page.test.ts  # only the affected files
+bin/local-ci.sh -- test/admin                                   # every file matching a filter
+bin/local-ci.sh -j 8                                            # full gate on 8 shards
+bin/local-ci.sh -j 8 --no-coverage --no-static                  # suite only, quicker
+```
+
+- Focused runs apply migrations to a fresh database and run `vitest run` on the
+  given files or filters. Start with the test files beside the code you changed
+  and the files that import it (`git grep -l <module> test/`).
+- A full run does lint, typecheck, migrations, and `vitest run --coverage`
+  split over `-j N` shards (default `nproc / 4` capped at 8; up to 16 explicitly). It then merges the
+  shard reports, so pass counts and coverage thresholds cover the whole suite.
+  Last, it reruns the hotzone suite under `TZ=America/Los_Angeles` and runs Tier-0.
+  Shard logs are in `.local-ci/<run>/logs/`, so concurrent runs never share files.
+- `npm ci` (root and `web/`) runs inside the CI image the first time and again
+  whenever a lockfile changes. `--install` forces it. Each run holds a shared lock
+  on the dependencies while it runs, and an install waits for the exclusive lock, so
+  `npm ci` never replaces `node_modules` under another run in the same checkout.
+- Run the full gate before you open a PR that touches `src/`, `test/` or
+  migrations. Paste the merged `Test Files` / `Tests` lines into Verification.
+- Not covered: the browser journeys (`e2e-ok`), the a11y job, the Kit build and
+  parity gates, and Semgrep. CI still runs them on the PR.
 
 Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
 [`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both
