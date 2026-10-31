@@ -28,12 +28,17 @@ const env: Env = {
 
 const MOD = { userId: "100000000000000111", username: "mod" };
 
-/** A moderator bearer whose rotation always loses, with the re-read row chosen by the test. */
+/**
+ * A moderator bearer whose rotation loses to a competing tab: the competitor
+ * rotates first, so the guard's own rotate() really fails and its re-read
+ * resolves through predecessor grace. The test chooses the re-read's role.
+ */
 async function racedStore(reread: { moderator: boolean }) {
   const inner = createMemorySessionStore();
   const token = newSessionToken();
+  const tokenHash = await hashToken(token);
   await inner.create({
-    tokenHash: await hashToken(token),
+    tokenHash,
     userId: MOD.userId,
     username: MOD.username,
     avatar: null,
@@ -50,9 +55,13 @@ async function racedStore(reread: { moderator: boolean }) {
       reads++;
       return row && reads > 1 ? { ...row, moderator: reread.moderator } : row;
     },
-    rotate: async () => {
+    rotate: async (oldHash, replacement) => {
       rotations++;
-      return false;
+      const competitor = await hashToken(newSessionToken());
+      if (!(await inner.rotate(oldHash, { ...replacement, tokenHash: competitor }))) {
+        throw new Error("competing rotation should win");
+      }
+      return inner.rotate(oldHash, replacement);
     },
   };
   const serialized = await serializeSigned("__Host-two_session", token, SESSION_SECRET, {
@@ -61,14 +70,22 @@ async function racedStore(reread: { moderator: boolean }) {
     httpOnly: true,
     sameSite: "Lax",
   });
-  return { store, cookie: serialized.split(";")[0]!, counts: () => ({ reads, rotations }) };
+  return {
+    store,
+    cookie: serialized.split(";")[0]!,
+    counts: () => ({ reads, rotations }),
+    // Grace-only: the bearer still reads, but has no status key of its own.
+    graceOnly: async () =>
+      (await inner.get(tokenHash)) !== null && (await inner.statusHash(tokenHash)) === null,
+  };
 }
 
 describe("admin guard: rotation lost a race", () => {
   it("refuses a moderator demoted between the read and the re-read", async () => {
-    const { store, cookie, counts } = await racedStore({ moderator: false });
+    const { store, cookie, counts, graceOnly } = await racedStore({ moderator: false });
     const res = await adminApp(store).request("/", { headers: { cookie } }, env);
     expect(counts()).toEqual({ reads: 2, rotations: 1 });
+    expect(await graceOnly()).toBe(true);
     expect(res.status).toBe(403);
     const body = await res.text();
     expect(body).toContain("You do not have access to this");
@@ -77,9 +94,10 @@ describe("admin guard: rotation lost a race", () => {
   });
 
   it("serves a still-moderator grace re-read without minting a cookie", async () => {
-    const { store, cookie, counts } = await racedStore({ moderator: true });
+    const { store, cookie, counts, graceOnly } = await racedStore({ moderator: true });
     const res = await adminApp(store).request("/", { headers: { cookie } }, env);
     expect(counts()).toEqual({ reads: 2, rotations: 1 });
+    expect(await graceOnly()).toBe(true);
     expect(res.status).toBe(200);
     expect(await res.text()).toContain(MOD.username);
     expect(res.headers.getSetCookie().some((c) => c.startsWith("__Host-two_session="))).toBe(false);
