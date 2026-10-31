@@ -116,7 +116,11 @@ for (const renderer of ["Hono", "Kit"] as Renderer[]) {
                 page,
                 page.getByRole("link", { name: new RegExp(`^${recovery}(?:$|\\s)`) }),
               );
-              await expect(page.getByText("Inventory fixture 1", { exact: true })).toBeVisible();
+              // The native cancellation review also names the saved event;
+              // assert the navigable result, not its hidden review duplicate.
+              await expect(
+                page.getByRole("link", { name: "Inventory fixture 1", exact: true }),
+              ).toBeVisible();
               const destination = new URL(page.url());
               expect(destination.origin).toBe(origin);
               expect(destination.pathname).toBe(`/admin/${inventory}`);
@@ -160,7 +164,9 @@ for (const renderer of ["Hono", "Kit"] as Renderer[]) {
         const page = await context.newPage();
         await page.goto(`${origin}/admin/${inventory}?q=missing&page=3`);
         await activateByKeyboard(page, page.getByRole("link", { name: "Previous", exact: true }));
-        await expect(page.getByText("Inventory fixture 1", { exact: true })).toBeVisible();
+        await expect(
+          page.getByRole("link", { name: "Inventory fixture 1", exact: true }),
+        ).toBeVisible();
         const destination = new URL(page.url());
         expect(destination.searchParams.get("q")).toBe("missing");
         expect(destination.searchParams.get("page")).toBe("2");

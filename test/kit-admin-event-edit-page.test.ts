@@ -15,6 +15,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { renderTerminalReviewHtml } from "../src/admin/terminal-review";
 
 const source = readFileSync(
   fileURLToPath(new URL("../web/src/routes/admin/events/[key]/+page.svelte", import.meta.url).href),
@@ -99,14 +100,24 @@ describe("Kit event-edit page contract", () => {
     expect(source).toContain("/publish");
     expect(source).toContain('data-testid="publish-event"');
     expect(source).toContain(">Publish<");
-    expect(source).toContain("/cancel");
-    expect(source).toContain('testId="cancel-event"');
-    expect(source).toContain("<TerminalReview");
-    expect(source).toContain('kind="cancel"');
-    expect(source).toContain("title={view.title}");
-    expect(source).toContain("rsvp-pause");
+    expect(source).toContain("{@html view.cancelReviewHtml}");
+    const review = renderTerminalReviewHtml({
+      kind: "cancel",
+      title: "Saved event",
+      targetId: "event-key",
+      testId: "cancel-event",
+    });
+    expect(review).toContain('action="/admin/events/event-key/cancel"');
+    expect(review).toContain('data-testid="cancel-event"');
+    expect(review).toContain("Cancel event");
+    // Pause renders through pre-rendered server HTML ({@html}): the action
+    // and copy live in the load data, never as literals here (client gzip
+    // ceiling). Reopen stays an inlined one-click form.
+    expect(source).toContain('view.rsvpAction === "rsvp-pause"');
+    expect(source).toContain("{@html view.pauseReviewHtml");
+    expect(source).not.toMatch(/action=\{[^}]*rsvp-pause/);
+    expect(source).not.toMatch(/action="[^"]*rsvp-pause/);
     expect(source).toContain("rsvp-reopen");
-    expect(source).toContain("Pause RSVPs");
     expect(source).toContain("Reopen RSVPs");
   });
 

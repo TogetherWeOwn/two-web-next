@@ -9,6 +9,7 @@
 // /events.json contract is untouched.
 import type { Context, Hono } from "hono";
 import { dbFor } from "../admin/db";
+import { containsControlCharacters } from "../admin/validation-shared";
 import { alertRequestError } from "../alerts";
 import { readCounts, type Counts } from "../counts";
 import { isDatabaseUnavailable } from "../db/errors";
@@ -23,6 +24,7 @@ import { requestRoute } from "../request-log";
 import { JOIN_INTRO } from "../screens/join";
 import {
   API_PUBLIC_BOUNDS,
+  PUBLIC_API_GAME_MAX_LENGTH,
   PUBLIC_DATA_ERROR_NEXT,
   PUBLIC_DATA_INTERNAL_MESSAGE,
   PUBLIC_EVENT_STATUS,
@@ -82,6 +84,10 @@ function internalFault(c: Ctx, err: unknown): Response {
   });
   varyAccept(c);
   return apiError(c, "internal", PUBLIC_DATA_INTERNAL_MESSAGE, 500);
+}
+
+function unavailable(c: Ctx): Response {
+  return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
 }
 
 /**
@@ -307,6 +313,30 @@ async function servePublicJson(
   return c.body(body, 200, headers);
 }
 
+/**
+ * Invalid and unknown games share the canonical empty page, but never occupy
+ * per-input entries in the shared 64-entry cache. Downstream caching and
+ * ETag/304 still apply, unless retirement overtook a database-backed read.
+ */
+async function emptyEventCollection(c: Ctx, expectedGeneration?: number): Promise<Response> {
+  const body = JSON.stringify(
+    serializeEventCollection([], 0, 1, API_PUBLIC_BOUNDS.defaultPageSize),
+  );
+  const etag = await etagFor(body);
+  const cacheControl =
+    expectedGeneration !== undefined && expectedGeneration !== apiPublicCacheGeneration()
+      ? "public, max-age=0, must-revalidate"
+      : PUBLIC_MAX_AGE;
+  if (matchesIfNoneMatch(c.req.header("if-none-match"), etag)) {
+    return c.body(null, 304, { etag, "cache-control": cacheControl });
+  }
+  return c.body(body, 200, {
+    "content-type": "application/json; charset=UTF-8",
+    "cache-control": cacheControl,
+    etag,
+  });
+}
+
 function parseLimit(raw: string): number {
   return /^[+-]?\d+$/.test(raw)
     ? Math.max(1, Math.min(Number(raw), API_PUBLIC_BOUNDS.maxPageSize))
@@ -331,17 +361,47 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
   app.get("/api/public/events", async (c) => {
     const refused = await admitted(c);
     if (refused) return refused;
+    // Optional `game` facet: absent reads unfiltered (byte-identical CONTROL);
+    // present trims and bounds here, matches case-insensitively exact in the
+    // reader as a bound parameter. Present-but-blank, oversized and unknown
+    // degrade to the empty page, never a 422 and never unfiltered. The raw
+    // value is never reflected in a body, message or header.
+    const rawGame = c.req.query("game");
+    let game: string | null = null;
+    let gameKey: string | null = null;
+    if (rawGame !== undefined) {
+      const trimmed = rawGame.trim();
+      if (
+        trimmed === "" ||
+        [...trimmed].length > PUBLIC_API_GAME_MAX_LENGTH ||
+        containsControlCharacters(trimmed)
+      ) {
+        return emptyEventCollection(c);
+      }
+      game = trimmed;
+      // Cache by the lowercased form so `Chess` and `chess` share one entry;
+      // the reader lowercases again for the SQL binding.
+      gameKey = trimmed.toLowerCase();
+    }
     const limit = parseLimit(c.req.query("per_page") ?? c.req.query("limit") ?? "");
     const page = parsePage(c.req.query("page") ?? "1");
-    const key = apiPublicCacheKey("GET", "/api/public/events", `?limit=${limit}&page=${page}`);
+    const canonicalQuery = gameKey
+      ? `?limit=${limit}&page=${page}&game=${encodeURIComponent(gameKey)}`
+      : `?limit=${limit}&page=${page}`;
+    const key = apiPublicCacheKey("GET", "/api/public/events", canonicalQuery);
     const hit = readApiPublicCache(key);
     if (hit) return cachedEntry(c, hit);
     // Out-of-range replay: only an entry at its own last page proves a clamp,
     // so never combine metadata and bytes from different cached snapshots.
-    const clampTarget = findCachedClampTarget(limit, page);
+    // The game isolates clamps: each game's past-the-end page replays only its
+    // own last page.
+    const clampTarget = findCachedClampTarget(limit, page, gameKey);
     if (clampTarget !== null && clampTarget !== page) {
+      const clampedQuery = gameKey
+        ? `?limit=${limit}&page=${clampTarget}&game=${encodeURIComponent(gameKey)}`
+        : `?limit=${limit}&page=${clampTarget}`;
       const clampedHit = readApiPublicCache(
-        apiPublicCacheKey("GET", "/api/public/events", `?limit=${limit}&page=${clampTarget}`),
+        apiPublicCacheKey("GET", "/api/public/events", clampedQuery),
       );
       if (clampedHit) return cachedEntry(c, clampedHit);
     }
@@ -349,19 +409,25 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // settle below, so pre-retire bytes never refill the retired entry.
     const generation = apiPublicCacheGeneration();
     const db = await dbFor(c);
-    if (!db) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    if (!db) return unavailable(c);
     // A refused socket reads as the 503 envelope; query, serializer and
     // budget faults answer the static 500 envelope, never the branded page.
     let body: string;
     let clamped: number = page;
     try {
-      const listed = await listPublicApiEvents(db, {
-        limit,
-        offset: (page - 1) * limit,
-      });
-      if (!listed) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+      const listed = await listPublicApiEvents(
+        db,
+        game === null
+          ? { limit, offset: (page - 1) * limit }
+          : { limit, offset: (page - 1) * limit, game },
+      );
+      if (!listed) return unavailable(c);
       clamped = listed.page;
       const { rows, total } = listed;
+      // A filtered total of zero answers the canonical default empty page,
+      // ignoring the requested paging: unknown and hostile games degrade to
+      // one representation, never a 422 and never unfiltered rows.
+      if (game !== null && total === 0) return await emptyEventCollection(c, generation);
       const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
       try {
         body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
@@ -369,25 +435,22 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
           data: trimmed,
         }));
       } catch (err) {
-        if (err instanceof EventByteCapExceededError)
-          return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+        if (err instanceof EventByteCapExceededError) return unavailable(c);
         throw err;
       }
     } catch (err) {
-      if (isDatabaseUnavailable(err))
-        return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+      if (isDatabaseUnavailable(err)) return unavailable(c);
       return internalFault(c, err);
     }
     // Final guard: an oversized success is never cached or served.
-    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
-      return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
     // Store under the clamped page the database answered, never the raw alias:
-    // N past-the-end pages occupy one entry and cannot evict page 1.
-    const storeKey = apiPublicCacheKey(
-      "GET",
-      "/api/public/events",
-      `?limit=${limit}&page=${clamped}`,
-    );
+    // N past-the-end pages occupy one entry and cannot evict page 1. Filtered
+    // entries carry the game so games never share bytes.
+    const storeQuery = gameKey
+      ? `?limit=${limit}&page=${clamped}&game=${encodeURIComponent(gameKey)}`
+      : `?limit=${limit}&page=${clamped}`;
+    const storeKey = apiPublicCacheKey("GET", "/api/public/events", storeQuery);
     return servePublicJson(c, storeKey, body, generation);
   });
 
@@ -405,7 +468,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
     // refuses the settle, so a deferred 200 never resurrects a retired entry.
     const generation = apiPublicCacheGeneration();
     const db = await dbFor(c);
-    if (!db) return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    if (!db) return unavailable(c);
     // A refused socket reads as the 503 envelope; query, serializer and
     // budget faults answer the static 500 envelope, never the branded page.
     let body: string;
@@ -416,18 +479,15 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       try {
         body = fitByteBudget([dto!], API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => trimmed[0]);
       } catch (err) {
-        if (err instanceof EventByteCapExceededError)
-          return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+        if (err instanceof EventByteCapExceededError) return unavailable(c);
         throw err;
       }
     } catch (err) {
-      if (isDatabaseUnavailable(err))
-        return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+      if (isDatabaseUnavailable(err)) return unavailable(c);
       return internalFault(c, err);
     }
     // Final guard: an oversized success is never cached or served.
-    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
-      return apiError(c, "unavailable", "Event data is temporarily unavailable.", 503);
+    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
     return servePublicJson(c, key, body, generation);
   });
 

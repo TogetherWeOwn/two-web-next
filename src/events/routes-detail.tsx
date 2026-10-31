@@ -8,13 +8,13 @@ import {
   NotFoundPage,
 } from "../errors";
 import { bufferedMemberHtml, bufferedMemberText, memberReadBoundary } from "../member-reads";
+import { MAX_RETURN_DESTINATION_BYTES } from "../join/service";
 import { readJoinResult, takeJoinResult } from "../return-journey";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import {
   ATTENDEE_PAGE_SIZE,
-  attendeePageHref,
   getEventNeighbors,
   getEventSeriesContext,
   getPublicEvent,
@@ -28,6 +28,8 @@ import {
   type EventSeriesContext,
   type PublicEvent,
 } from "./reads";
+import { archiveContext } from "./archive-context";
+import { archiveEventHref, authReturnHref } from "./attendee-paths";
 import { waitlistPosition } from "./waitlist";
 import { recordAccess } from "../admin/store";
 import { EventGonePage, EventPage } from "./pages";
@@ -192,6 +194,7 @@ export function registerDetailRoutes(
           // Both go through the keyed read, so every retrieved identity —
           // lookahead included — is audited before any private bytes release.
           const attendeePage = parseAttendeePageParam(c.req.query("attendees"));
+          const archive = archiveContext(new URL(c.req.url).search);
           // Decorative reads fail open: a flaky neighbors/related lookup
           // settles to its empty shape instead of 503ing the whole page.
           // The page already renders both shapes (a lone event has null
@@ -234,12 +237,26 @@ export function registerDetailRoutes(
             page: attendeePage,
             prevHref:
               attendeePage > 1
-                ? attendeePageHref(e.eventKey, attendees.length === 0 ? 1 : attendeePage - 1)
+                ? archiveEventHref(
+                    e.eventKey,
+                    archive,
+                    attendees.length === 0 ? 1 : attendeePage - 1,
+                  )
                 : null,
             nextHref:
-              attendeeLookahead.length > 0 ? attendeePageHref(e.eventKey, attendeePage + 1) : null,
+              attendeeLookahead.length > 0
+                ? archiveEventHref(e.eventKey, archive, attendeePage + 1)
+                : null,
           };
-          const returnTo = c.req.path + new URL(c.req.url).search;
+          // Auth return (`?next=`): normalized archive/attendee context
+          // bounded to auth's byte cap, never the raw request query — an
+          // oversized next is refused by auth and loses the way back here.
+          const returnTo = authReturnHref(
+            e.eventKey,
+            archive,
+            attendeePage,
+            MAX_RETURN_DESTINATION_BYTES,
+          );
           return bufferedMemberHtml(
             c,
             <EventPage
@@ -249,6 +266,7 @@ export function registerDetailRoutes(
               series={series}
               attendees={attendees}
               attendeesPaging={attendeesPaging}
+              archive={archive}
               appUrl={c.env.APP_URL}
               jsonLd={jsonLd(e, c.env.APP_URL)}
               siteJsonLd={siteIdentities(c.env.APP_URL)}

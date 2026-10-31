@@ -10,8 +10,9 @@ import { test } from "node:test";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { initializeConfig } from "lighthouse/core/config/config.js";
 import diagnosticsConfig from "./lighthouse-diagnostics.config.mjs";
+import { navigationMetadata } from "../test/lighthouse-navigation-fixtures.mjs";
 import DocumentTiming, { documentTiming } from "./lighthouse-document-timing.mjs";
-import { main as mobile } from "./lighthouse-origin-run.mjs";
+import { UP_TIMEOUT_MS, main as mobile } from "./lighthouse-origin-run.mjs";
 import { main as desktop, loadCollectedLhrs } from "./lighthouse-quality-run.mjs";
 
 test("diagnostic audit is additive and does not change scoring, gathers, mobile settings or existing audits", async () => {
@@ -46,10 +47,10 @@ const lib = require("./lighthouse-origin-lib.cjs");
 const origin = "https://next.togetherweown.com";
 const { collect } = lib.buildConfig({ origin }).ci;
 const urls = collect.url.flatMap((url) => Array(collect.numberOfRuns).fill(url));
-const lhr = (url, server = 100) => ({
+const lhr = (url, server = 100, profile = "mobile") => ({
+  ...navigationMetadata(profile, { deployed: true }),
   requestedUrl: url,
   finalUrl: url,
-  fetchTime: "2026-10-22T12:00:00.000Z",
   categories: Object.fromEntries(
     ["performance", "accessibility", "best-practices", "seo"].map((id) => [id, { score: 1 }]),
   ),
@@ -64,7 +65,15 @@ const lhr = (url, server = 100) => ({
   ),
 });
 
-async function scenario(t, steps) {
+const withTiming = (report, details) =>
+  details
+    ? {
+        ...report,
+        audits: { ...report.audits, "main-document-timing": { score: null, details } },
+      }
+    : report;
+
+async function scenario(t, steps, { fetchImpl, upTimeoutMs, onLhci } = {}) {
   const root = await mkdtemp(
     join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "lh-evidence-"),
   );
@@ -75,13 +84,15 @@ async function scenario(t, steps) {
     dir,
     env: {},
     log: () => {},
-    fetchImpl: async () => ({ status: 200, text: async () => "" }),
+    fetchImpl: fetchImpl ?? (async () => ({ status: 200, text: async () => "" })),
+    ...(upTimeoutMs ? { upTimeoutMs } : {}),
     lhci: async () => {
+      onLhci?.();
       const step = steps[calls++];
       for (const [i, url] of (step.urls ?? urls).entries()) {
         await writeFile(
           join(dir, `lhr-${calls * 1000 + i}.json`),
-          JSON.stringify(lhr(url, step.server)),
+          JSON.stringify(withTiming(lhr(url, step.server), step.timing?.(url, i))),
         );
       }
       await writeFile(join(dir, "assertion-results.json"), step.assertions ?? "[]");
@@ -103,7 +114,7 @@ async function runDesktop(dir) {
     run: async () => {
       await mkdir(join(dir, "quality"), { recursive: true });
       for (const [i, url] of urls.entries()) {
-        await writeFile(join(dir, `lhr-${9000 + i}.json`), JSON.stringify(lhr(url, 25)));
+        await writeFile(join(dir, `lhr-${9000 + i}.json`), JSON.stringify(lhr(url, 25, "desktop")));
       }
       return { exitCode: 0, output: "desktop fixture" };
     },
@@ -175,6 +186,9 @@ const resource = {
   responseHeaders: [
     { name: "X-Request-ID", value: "0123456789abcdef-LHR" },
     { name: "CF-Ray", value: "0123456789abcdef-LHR" },
+    { name: "CF-Cache-Status", value: "HIT" },
+    { name: "Age", value: "12" },
+    { name: "Server-Timing", value: 'cfEdge;dur=5, cfOrigin;dur=640.5;desc="origin"' },
     { name: "Set-Cookie", value: "DO_NOT_COPY" },
     { name: "Authorization", value: "DO_NOT_COPY" },
     { name: "X-Arbitrary", value: "DO_NOT_COPY" },
@@ -202,6 +216,9 @@ test("allowlist retains correlation and native server wait only, without header/
       "timestamp",
       "requestId",
       "cfRay",
+      "cfCacheStatus",
+      "ageSeconds",
+      "serverTiming",
       "protocol",
       "edgeColo",
       "servingRevision",
@@ -209,6 +226,10 @@ test("allowlist retains correlation and native server wait only, without header/
       "serverWaitMs",
     ].sort(),
   );
+  assert.equal(result.schemaVersion, 2);
+  assert.equal(result.cfCacheStatus, "HIT");
+  assert.equal(result.ageSeconds, 12);
+  assert.equal(result.serverTiming, 'cfEdge;dur=5, cfOrigin;dur=640.5;desc="origin"');
   assert.equal(result.requestId, "0123456789abcdef-LHR");
   assert.equal(result.cfRay, "0123456789abcdef-LHR");
   assert.equal(result.edgeColo, "LHR");
@@ -319,6 +340,9 @@ test("invalid, duplicate, absent metadata and timing are unknown, never inferred
     "timestamp",
     "requestId",
     "cfRay",
+    "cfCacheStatus",
+    "ageSeconds",
+    "serverTiming",
     "protocol",
     "edgeColo",
     "servingRevision",
@@ -565,4 +589,338 @@ test("malformed assertions stay failing over full samples, regardless of diagnos
     await readFile(join(dir, "mobile-attempts", "attempt-1", "assertion-results.json"), "utf8"),
     "{broken",
   );
+});
+
+test("cache, age and server-timing headers accept only bounded well-formed values", () => {
+  const at = (headers) =>
+    documentTiming(
+      { ...resource, responseHeaders: headers.map(([name, value]) => ({ name, value })) },
+      [],
+    );
+  assert.equal(at([["cf-cache-status", "dynamic"]]).cfCacheStatus, "DYNAMIC");
+  assert.equal(at([["cf-cache-status", "HIT; <script>"]]).cfCacheStatus, "unknown");
+  assert.equal(
+    at([
+      ["cf-cache-status", "HIT"],
+      ["cf-cache-status", "MISS"],
+    ]).cfCacheStatus,
+    "unknown",
+  );
+  assert.equal(at([["age", "0"]]).ageSeconds, 0);
+  for (const bad of ["-1", "1.5", "12abc", "", "99999999999"])
+    assert.equal(at([["age", bad]]).ageSeconds, "unknown", bad);
+  assert.equal(at([["server-timing", "cfOrigin;dur=640"]]).serverTiming, "cfOrigin;dur=640");
+  // Valid-shaped values on either side of the 256-character cap: the grammar alone
+  // accepts both, so only the length bound separates them.
+  const metrics = Array.from({ length: 21 }, () => "edge;dur=1").join(", ");
+  const atCap = `${metrics}, abcd`;
+  assert.equal(atCap.length, 256);
+  assert.equal(at([["server-timing", atCap]]).serverTiming, atCap);
+  const overCap = `${metrics}, abcde`;
+  assert.equal(overCap.length, 257);
+  assert.equal(at([["server-timing", overCap]]).serverTiming, "unknown");
+  for (const good of [
+    'cfL4;desc="?proto=TCP&rtt=20"',
+    'edge;dur=12.5, origin;desc="origin";dur=640',
+    "cache;desc=HIT",
+  ])
+    assert.equal(at([["server-timing", good]]).serverTiming, good, good);
+  for (const bad of [
+    "a|b",
+    "x".repeat(300),
+    "<b>",
+    "",
+    "edge;dur=not-a-number",
+    ",,,",
+    "edge;dur=",
+    'edge;desc="a|b"',
+    'edge;desc="<b>"',
+    "edge\n;dur=1",
+    "edge;unknown=1",
+  ])
+    assert.equal(at([["server-timing", bad]]).serverTiming, "unknown", bad);
+});
+
+const sha = (c) => c.repeat(40);
+const upResponse = (commit) => ({
+  status: 200,
+  text: async () => JSON.stringify({ status: "ok", revision: { version_id: "v", commit } }),
+});
+// Discovery GETs return an empty body (no event); /up answers from the queue.
+const fetchWithUp =
+  (queue, seen = []) =>
+  async (url) => {
+    seen.push(String(url));
+    if (String(url) === `${origin}/up`) {
+      const next = queue.shift();
+      if (next instanceof Error) throw next;
+      return next ?? { status: 503, text: async () => "not json" };
+    }
+    return { status: 200, text: async () => "" };
+  };
+const timingFor = (url, i) => ({
+  schemaVersion: 2,
+  timestamp: `2026-10-27T02:28:${String(10 + i).padStart(2, "0")}.000Z`,
+  requestId: "unknown",
+  cfRay: `${String(i).padStart(16, "0")}-LHR`,
+  cfCacheStatus: i % 2 ? "HIT" : "DYNAMIC",
+  ageSeconds: i % 2 ? 7 : "unknown",
+  serverTiming: i === 0 ? "cfOrigin;dur=640" : "unknown",
+  serverWaitMs: 100 + i,
+});
+
+test("summary records the served revision before and after the collect and each navigation's serving headers", async (t) => {
+  const seen = [];
+  const { dir, code } = await scenario(t, [{ timing: timingFor }], {
+    fetchImpl: fetchWithUp([upResponse(sha("a")), upResponse(sha("a"))], seen),
+  });
+  assert.equal(code, 0);
+  assert.equal(seen.filter((u) => u === `${origin}/up`).length, 2);
+  const md = await readFile(join(dir, "watch-summary.md"), "utf8");
+  assert.match(md, /### Served revision/);
+  assert.match(
+    md,
+    new RegExp(`\\| 1 \\| ${"a".repeat(12)} \\| ${"a".repeat(12)} \\| same at both reads \\|`),
+  );
+  assert.match(md, /### Serving evidence per navigation/);
+  assert.match(
+    md,
+    /\| \/ \| 1 \| 2026-10-27T02:28:10\.000Z \| 0000000000000000-LHR \| DYNAMIC \| - \| cfOrigin;dur=640 \| 100 \|/,
+  );
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  assert.deepEqual(json.servedRevision, [
+    { attempt: 1, before: sha("a"), after: sha("a"), verdict: "same at both reads" },
+  ]);
+  const events = json.rows.find((r) => r.path === "/events");
+  assert.equal(events.serving.length, 3);
+  assert.equal(events.serving[2].cfCacheStatus, "HIT");
+  assert.equal(events.serving[2].ageSeconds, 7);
+});
+
+test("a revision that changes mid-collect is flagged; /up failure is unknown and never fails the run", async (t) => {
+  {
+    const { dir, code } = await scenario(t, [{ timing: timingFor }], {
+      fetchImpl: fetchWithUp([upResponse(sha("a")), upResponse(sha("b"))]),
+    });
+    assert.equal(code, 0);
+    const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+    assert.equal(json.servedRevision[0].verdict, "changed during collect");
+    assert.match(await readFile(join(dir, "watch-summary.md"), "utf8"), /CHANGED during collect/);
+  }
+  {
+    const { dir, code } = await scenario(t, [{}], {
+      fetchImpl: fetchWithUp([new Error("boom"), upResponse("not-a-sha")]),
+    });
+    assert.equal(code, 0);
+    const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+    assert.deepEqual(json.servedRevision, [
+      { attempt: 1, before: "unknown", after: "unknown", verdict: "unknown" },
+    ]);
+    // An LHR with no timing audit renders "-"/unknown, never a made-up value.
+    assert.equal(json.rows[0].serving[0].cfRay, "unknown");
+  }
+});
+
+test("a retried collect brackets every attempt and the budget verdict is unchanged", async (t) => {
+  const { dir, code, calls } = await scenario(
+    t,
+    [{ urls: urls.slice(0, 2) }, { urls: urls.slice(0, 2) }],
+    {
+      fetchImpl: fetchWithUp([
+        upResponse(sha("a")),
+        upResponse(sha("a")),
+        upResponse(sha("a")),
+        upResponse(sha("c")),
+      ]),
+    },
+  );
+  assert.equal(code, 1);
+  assert.equal(calls, 2);
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  assert.deepEqual(
+    json.servedRevision.map((r) => [r.attempt, r.verdict]),
+    [
+      [1, "same at both reads"],
+      [2, "changed during collect"],
+    ],
+  );
+});
+
+test("summary re-validates stored serving values: hostile or mistyped fields become unknown", async (t) => {
+  const hostile = () => ({
+    schemaVersion: 2,
+    timestamp: "yesterday",
+    cfRay: "a|b",
+    cfCacheStatus: "<b>",
+    ageSeconds: "12",
+    serverTiming: "a|b<img>",
+    serverWaitMs: "12",
+  });
+  const { dir } = await scenario(t, [{ timing: hostile }]);
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  for (const entry of json.rows.flatMap((row) => row.serving ?? [])) {
+    for (const key of [
+      "timestamp",
+      "cfRay",
+      "cfCacheStatus",
+      "ageSeconds",
+      "serverTiming",
+      "serverWaitMs",
+    ])
+      assert.equal(entry[key], "unknown", key);
+  }
+  const md = await readFile(join(dir, "watch-summary.md"), "utf8");
+  assert.doesNotMatch(md, /a\|b|<b>|<img>/);
+  for (const bad of [-1, Number.POSITIVE_INFINITY]) {
+    const { dir: d } = await scenario(t, [{ timing: () => ({ ...hostile(), ageSeconds: bad }) }]);
+    const j = JSON.parse(await readFile(join(d, "watch-summary.json"), "utf8"));
+    assert.equal(j.rows[0].serving[0].ageSeconds, "unknown", String(bad));
+  }
+});
+
+test("summary rejects a well-formed but oversized stored Server-Timing value", async (t) => {
+  const oversized = Array.from({ length: 30 }, () => "edge;dur=1").join(", ");
+  assert.ok(oversized.length > 256);
+  const { dir } = await scenario(t, [
+    { timing: () => ({ ...documentTiming(resource, []), serverTiming: oversized }) },
+  ]);
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  assert.equal(json.rows[0].serving[0].serverTiming, "unknown");
+  assert.ok(!(await readFile(join(dir, "watch-summary.md"), "utf8")).includes(oversized));
+});
+
+test("a valid quoted Server-Timing description survives from response header to summary", async (t) => {
+  const value = 'cfL4;desc="?proto=TCP&rtt=20"';
+  const { dir } = await scenario(t, [
+    {
+      timing: () =>
+        documentTiming({ ...resource, responseHeaders: [{ name: "server-timing", value }] }, []),
+    },
+  ]);
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  assert.equal(json.rows[0].serving[0].serverTiming, value);
+  assert.ok((await readFile(join(dir, "watch-summary.md"), "utf8")).includes(value));
+});
+
+test("a /up read that fails on only one side is unknown, never a deploy", async (t) => {
+  for (const queue of [
+    [upResponse(sha("a")), new Error("blip")],
+    [new Error("blip"), upResponse(sha("a"))],
+  ]) {
+    const { dir, code } = await scenario(t, [{}], { fetchImpl: fetchWithUp(queue) });
+    assert.equal(code, 0);
+    const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+    assert.equal(json.servedRevision[0].verdict, "unknown");
+  }
+});
+
+test("a non-200 /up response with a valid commit records unknown, never a revision", async (t) => {
+  const bad = (status) => ({
+    status,
+    text: async () =>
+      JSON.stringify({ status: "ok", revision: { version_id: "v", commit: sha("a") } }),
+  });
+  for (const status of [503, 302, 404]) {
+    const { dir, code } = await scenario(t, [{}], {
+      fetchImpl: fetchWithUp([bad(status), bad(status)]),
+    });
+    assert.equal(code, 0);
+    const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+    assert.deepEqual(
+      json.servedRevision,
+      [{ attempt: 1, before: "unknown", after: "unknown", verdict: "unknown" }],
+      `status ${status}`,
+    );
+  }
+});
+
+test("the /up read is bounded, manual-redirect, and cannot stall or fail the collect", async (t) => {
+  const inits = [];
+  const hang = async (url, init) => {
+    if (String(url) !== `${origin}/up`) return { status: 200, text: async () => "" };
+    inits.push(init);
+    return new Promise((_, reject) => {
+      init.signal.addEventListener("abort", () => reject(init.signal.reason));
+    });
+  };
+  const { dir, code } = await scenario(t, [{}], { fetchImpl: hang, upTimeoutMs: 20 });
+  assert.equal(code, 0);
+  assert.equal(inits.length, 2);
+  for (const init of inits) {
+    assert.equal(init.redirect, "manual");
+    assert.ok(init.signal instanceof AbortSignal && init.signal.aborted, "bounded by a timeout");
+  }
+  const json = JSON.parse(await readFile(join(dir, "watch-summary.json"), "utf8"));
+  assert.deepEqual(json.servedRevision, [
+    { attempt: 1, before: "unknown", after: "unknown", verdict: "unknown" },
+  ]);
+});
+
+test("the shipped /up bound stays 10 seconds", () => {
+  assert.equal(UP_TIMEOUT_MS, 10_000);
+});
+
+test("each collect attempt reads /up before lhci starts and again after it ends", async (t) => {
+  const seen = [];
+  const mark = () => seen.push("lhci");
+  const { code } = await scenario(t, [{ urls: urls.slice(0, 2) }, { urls: urls.slice(0, 2) }], {
+    fetchImpl: fetchWithUp(
+      [upResponse(sha("a")), upResponse(sha("a")), upResponse(sha("a")), upResponse(sha("a"))],
+      seen,
+    ),
+    onLhci: mark,
+  });
+  assert.equal(code, 1);
+  assert.deepEqual(
+    seen.filter((entry) => entry === "lhci" || entry === `${origin}/up`),
+    [`${origin}/up`, "lhci", `${origin}/up`, `${origin}/up`, "lhci", `${origin}/up`],
+  );
+});
+
+const marginalLcp = JSON.stringify([
+  {
+    url: `${origin}/`,
+    auditId: "largest-contentful-paint",
+    level: "error",
+    actual: 2060,
+    expected: 2000,
+  },
+]);
+const marginalStep = () => ({ assertions: marginalLcp, exitCode: 1 });
+
+test("a marginal retry archives attempt 1's revision and the diagnosis carries every attempt's", async (t) => {
+  const { dir, code } = await scenario(t, [marginalStep(), marginalStep()], {
+    fetchImpl: fetchWithUp([
+      upResponse(sha("a")),
+      upResponse(sha("a")),
+      upResponse(sha("a")),
+      upResponse(sha("b")),
+    ]),
+  });
+  assert.equal(code, 1);
+  const first = JSON.parse(await readFile(join(dir, "watch-summary.attempt1.json"), "utf8"));
+  assert.deepEqual(first.servedRevision, [
+    { attempt: 1, before: sha("a"), after: sha("a"), verdict: "same at both reads" },
+  ]);
+  const firstMd = await readFile(join(dir, "watch-summary.attempt1.md"), "utf8");
+  assert.match(firstMd, /### Served revision/);
+  assert.match(firstMd, /same at both reads/);
+  const diagnosis = await readFile(join(dir, "origin-collect-diagnosis.md"), "utf8");
+  assert.match(diagnosis, /served revision, attempt 1: a{40} -> a{40} \(same at both reads\)/);
+  assert.match(diagnosis, /served revision, attempt 2: a{40} -> b{40} \(changed during collect\)/);
+  assert.doesNotMatch(diagnosis, /systematic, not variance/);
+  assert.match(diagnosis, /do not treat this as systematic/);
+});
+
+test("a marginal retry that breaches twice on a stable revision is still called systematic", async (t) => {
+  const { dir } = await scenario(t, [marginalStep(), marginalStep()], {
+    fetchImpl: fetchWithUp([
+      upResponse(sha("a")),
+      upResponse(sha("a")),
+      upResponse(sha("a")),
+      upResponse(sha("a")),
+    ]),
+  });
+  const diagnosis = await readFile(join(dir, "origin-collect-diagnosis.md"), "utf8");
+  assert.match(diagnosis, /systematic, not variance/);
 });

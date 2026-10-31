@@ -83,6 +83,7 @@ const GATED_LABELS = new Set([
   "moderator",
   "staging-operator",
   "evidence-bearer",
+  "ops-control-bearer",
 ]);
 // Reuse exact reviewed registrations, not a blanket /admin or auth-label exemption.
 const REVIEWED_GATED = new Map(

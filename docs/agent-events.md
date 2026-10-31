@@ -25,7 +25,13 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
   increasing wall times; updates still refuse a resolved end at or before the start.
   Shared-row edits also enforce the Going capacity floor and promote available FIFO seats under the row lock.
 - Atomicity is Postgres only: `pg_advisory_xact_lock` per grant (create/read) or per event (mutations), with
-  `lock_timeout` → `503 operation_busy`. Idempotency rows are re-checked under the lock, so concurrent duplicate
+  transaction-local `lock_timeout` and `statement_timeout` → `503 operation_busy` for lock waits
+  (`55P03`) or cancelled executing statements (`57014`). Both bounds use
+  `max(1, floor(lockWaitMs))` milliseconds per statement. Shield, inner-budget and operation transactions
+  install them before work; grant lookup, pre-transaction replay lookup and denial audits each use a
+  separate short bounded transaction. No transaction-duration deadline bounds the read's bot HTTP await,
+  and write-back still starts only after commit. Aborted verdicts add no hits of their own; earlier
+  committed admission layers keep their hits. Idempotency rows are re-checked under the lock, so concurrent duplicate
   deliveries execute once and all get the original answer (`replayed: true`). A pre-found replay revalidates
   grant liveness after the idempotency wait under a grant lock (no operation lock): a grant disabled, removed
   or expired during the wait is refused `403 grant_disabled`/`grant_expired` instead of replaying. Caller next
@@ -48,7 +54,13 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
   plus shed drops are a lower-bound signal over the isolate's lifetime, not an exact per-window total:
   pending drops flush only on a later tokenless refusal, never on idle or a token-bearing refusal, and
   disappear on isolate restart; a delayed shed can include drops from an earlier window. Grantless (missing/unknown
-  grant) 401s write zero audit rows by contract (sampled warn only). Contention 503s keep an exact audit.
+  grant) 401s write zero audit rows by contract (sampled warn only). Contention 503s make one bounded
+  `operation_busy` audit attempt in its own short transaction with the admission's lock/statement deadlines
+  and no bucket lock. A completed attempt persists one exact audit row; a timed-out attempt rolls back and
+  persists no row, and keeps the same retryable 503 with the same request_id. Post-verdict
+  stale-hit cleanup stays capped (1000 rows, five-minute cutoff, single-flight) with a 1 ms lock bound
+  and a 250 ms statement budget; cancellation rolls back only the cleanup and defers the drain to a
+  later pass, never changing the decided verdict.
   Receipt window is the latest 50, chronological. Signer/digest/replay protocol assertions are unchanged.
   Replay bodies are bound as text then cast to JSONB objects, independent of Drizzle's client serializers;
   earlier double-encoded JSONB strings remain readable without rewriting the saved receipt.

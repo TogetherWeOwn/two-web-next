@@ -9,18 +9,29 @@
 // admin.featured.edit): the same canonical parseRecordId admission (a
 // non-canonical spelling 404s before any record lookup), the same shared
 // getFeatured read, the same featuredValues shape for the form, and the same
-// shared featuredStatus()/currentlyVisible() preview the Hono edit page
-// renders. Dates cross into the view pre-rendered as UTC ISO strings. The
+// shared saved eligibility the Hono edit page renders, including an unavailable
+// verdict for published undecodable bounds. Dates cross into the view as UTC ISO strings, with
+// the exact saved SQL text alongside for driver-undecodable bounds (BC,
+// infinity). The
 // POST /admin/featured/:id and POST /admin/featured/:id/delete siblings and
 // the guarded /admin/featured-contents/:id/edit legacy redirect stay
 // Hono-owned, so this model carries no write.
 import type { Db } from "../db/index";
 import { isDatabaseUnavailable } from "../db/errors";
 import { alertRequestError } from "../alerts";
-import { currentlyVisible, featuredStatus, type FeaturedStatus } from "../featured-status";
+import {
+  FEATURED_OPEN_END_COPY,
+  FEATURED_OPEN_START_COPY,
+  FEATURED_WINDOW_RULES_COPY,
+  featuredBoundDisplay,
+  featuredEligibilityReasonFor,
+  featuredEligibilityStatus,
+  type FeaturedEligibilityStatus,
+} from "../featured-eligibility";
 import { safeStoredLink } from "../featured";
 import { featuredImageSrc } from "../featured-image";
 import { parseRecordId } from "./record-id";
+import { renderTerminalReviewHtml } from "./terminal-review";
 import type { FeaturedEditRow } from "./store-featured";
 
 /** The edit-form values the Hono featuredValues() helper renders. */
@@ -39,13 +50,22 @@ export type KitFeaturedEditValues = {
 export type KitFeaturedEditView = {
   id: number;
   title: string;
+  deleteReviewHtml: string;
   values: KitFeaturedEditValues;
-  status: FeaturedStatus;
+  status: FeaturedEligibilityStatus;
+  /** Resolve shared copy server-side; even csr=false emits a structural client chunk. */
+  eligibilityReason: string;
+  startsAtLabel: string;
+  endsAtLabel: string;
+  windowRules: string;
   visible: boolean;
   startsAt: string | null;
   endsAt: string | null;
+  /** Exact saved SQL text of each bound (null when open); the panel shows it when the instant is undecodable (BC, infinity). */
+  startsAtText: string | null;
+  endsAtText: string | null;
   updatedAt: string;
-  /** Evaluation instant featuredStatus() ran at (Hono prints now, not updatedAt). */
+  /** Saved eligibility evaluation instant (Hono prints now, not updatedAt). */
   checkedAt: string;
   /** Homepage-policy preview src (null when the homepage suppresses the image). */
   imageSrc: string | null;
@@ -107,11 +127,23 @@ export async function resolveKitFeaturedEdit(
   // stored-link policy so the preview cannot link what the homepage hides.
   // The form value below stays raw so the moderator can correct the link.
   const previewUrl = safeStoredLink({ url: row.url }).url;
+  // BC and infinite bounds decode to Dates toISOString() cannot render; the
+  // shared display helper keeps the ISO for finite instants and falls back to
+  // the exact saved text so the load never throws on them.
+  const startBound = featuredBoundDisplay(row.startsAt, row.startsAtText);
+  const endBound = featuredBoundDisplay(row.endsAt, row.endsAtText);
+  const status = featuredEligibilityStatus(row, now);
   return {
     kind: "ok",
     view: {
       id: row.id,
       title: row.title,
+      deleteReviewHtml: renderTerminalReviewHtml({
+        kind: "delete",
+        title: row.title,
+        targetId: String(row.id),
+        testId: "delete-featured",
+      }),
       values: {
         title: row.title,
         body: row.body ?? "",
@@ -123,10 +155,26 @@ export async function resolveKitFeaturedEdit(
         starts_at: row.startsAtText ?? "",
         ends_at: row.endsAtText ?? "",
       },
-      status: featuredStatus(row, now),
-      visible: currentlyVisible(row, now),
-      startsAt: row.startsAt ? row.startsAt.toISOString() : null,
-      endsAt: row.endsAt ? row.endsAt.toISOString() : null,
+      status,
+      eligibilityReason: featuredEligibilityReasonFor(status),
+      startsAtLabel:
+        startBound.kind === "instant"
+          ? startBound.iso
+          : startBound.kind === "text"
+            ? startBound.text
+            : FEATURED_OPEN_START_COPY,
+      endsAtLabel:
+        endBound.kind === "instant"
+          ? endBound.iso
+          : endBound.kind === "text"
+            ? endBound.text
+            : FEATURED_OPEN_END_COPY,
+      windowRules: FEATURED_WINDOW_RULES_COPY,
+      visible: status === "live",
+      startsAt: startBound.kind === "instant" ? startBound.iso : null,
+      endsAt: endBound.kind === "instant" ? endBound.iso : null,
+      startsAtText: row.startsAtText ?? null,
+      endsAtText: row.endsAtText ?? null,
       updatedAt: row.updatedAt.toISOString(),
       checkedAt: now.toISOString(),
       imageSrc,

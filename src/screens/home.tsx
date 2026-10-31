@@ -77,7 +77,9 @@ export const Home: FC<{
             <p class="notice" role="status" data-testid="notice">
               {NOTICES[notice]}
             </p>
-            {(notice === "signin_failed" || notice === "signin_unavailable") && (
+            {(notice === "signin_failed" ||
+              notice === "signin_denied" ||
+              notice === "signin_unavailable") && (
               <p>
                 <a href="/auth/discord" data-testid="notice-retry">
                   Try signing in again

@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
@@ -46,8 +46,10 @@
     {
       "includes": [
         "assets/styles.css",
+        "assets/admin-rsvp-review.css",
         "assets/admin-terminal-review.css",
         "public/styles.css",
+        "public/admin-rsvp-review.css",
         "public/admin-terminal-review.css",
         "public/theme.css",
         "public/profile-theme.css",
@@ -55,7 +57,8 @@
         "public/event-theme.css",
         "ci/a11y.mjs",
         "ci/featured-proof/**",
-        "public/islands/**"
+        "public/islands/**",
+        "**/*.md"
       ],
       "formatter": { "enabled": false }
     },

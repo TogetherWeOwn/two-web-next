@@ -1,12 +1,16 @@
 // Event detail screen: hero, RSVP, share, attendees, discovery.
 import type { FC } from "hono/jsx";
+import { isPublicJoinUrl } from "./public-join-url";
 import { canonicalUrl } from "../seo";
-import { isValidZone, renderGoingCount } from "../islands/contracts";
+import { EVENT_ONGOING_TESTID, isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
-import { attendeePageHref } from "./attendee-paths";
+import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
+import { archiveReturnLink } from "./archive-links";
+import { eventLinkAvailability } from "./link-availability";
+import { ONGOING_COPY, isOngoing } from "./ongoing";
 import type {
   EventAttendee,
   EventLink,
@@ -18,21 +22,41 @@ import type {
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-import { formatEventWhen as fmtWithOffset } from "./date-format";
+import { formatElapsedDuration, formatEventWhen as fmtWithOffset } from "./date-format";
 
-const DestinationPreview: FC<{ event: EventLink }> = ({ event }) => (
-  <>
-    {Number.isFinite(event.startsAt.getTime()) ? (
-      <>
-        {" "}
-        <time datetime={event.startsAt.toISOString()}>
-          {fmtWithOffset(event.startsAt, event.timezone)}
-        </time>
-      </>
-    ) : null}
-    {event.location ? <span class="event-related-location">{event.location}</span> : null}
-  </>
-);
+const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now }) => {
+  const availability = eventLinkAvailability(event, now);
+  return (
+    <>
+      {Number.isFinite(event.startsAt.getTime()) ? (
+        <>
+          {" "}
+          <time datetime={event.startsAt.toISOString()}>
+            {fmtWithOffset(event.startsAt, event.timezone)}
+          </time>
+        </>
+      ) : null}
+      {event.location ? (
+        <>
+          {" "}
+          <span class="event-related-location">{event.location}</span>
+        </>
+      ) : null}
+      {event.game ? (
+        <>
+          {" "}
+          <span class="event-related-game">{event.game}</span>
+        </>
+      ) : null}
+      {availability ? (
+        <>
+          {" "}
+          <span class="event-related-state">{availability}</span>
+        </>
+      ) : null}
+    </>
+  );
+};
 
 // Legacy show.blade.php pitch (data-testid="event-join-pitch"): guests only —
 // the blade wraps it in @guest, so any signed-in viewer (member or
@@ -54,6 +78,7 @@ export const EventPage: FC<{
   attendees?: EventAttendee[];
   /** Native attendee page window; omitted renders the legacy single page. */
   attendeesPaging?: EventAttendeesPaging;
+  archive?: ArchiveContext | null;
   appUrl: string;
   jsonLd: string;
   siteJsonLd?: string;
@@ -74,6 +99,7 @@ export const EventPage: FC<{
   series = null,
   attendees = [],
   attendeesPaging = { page: 1, prevHref: null, nextHref: null },
+  archive,
   appUrl,
   jsonLd,
   siteJsonLd,
@@ -88,6 +114,9 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
+  const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
+  // Share one render instant with the lineup and RSVP control.
+  const now = new Date();
   const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
@@ -103,6 +132,7 @@ export const EventPage: FC<{
       robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
       markdownAlternate={markdownAlternate}
       siteJsonLd={siteJsonLd}
+      backLink={archiveReturnLink(archive)}
     >
       <section class="event-hero" aria-label="Event overview">
         <p class="event-kicker">{e.game || "Community event"}</p>
@@ -119,6 +149,11 @@ export const EventPage: FC<{
         {e.status === "cancelled" ? (
           <p class="notice" role="status" data-testid="event-cancelled">
             Cancelled
+          </p>
+        ) : null}
+        {isOngoing(e, now) ? (
+          <p class="notice" data-testid={EVENT_ONGOING_TESTID}>
+            {ONGOING_COPY}
           </p>
         ) : null}
         <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
@@ -158,19 +193,47 @@ export const EventPage: FC<{
             <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
           </dd>
         </div>
-        {e.location ? (
-          <div>
-            <dt>Where</dt>
-            <dd>
-              <p data-testid="event-venue">{e.location}</p>
-              <p>
-                <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
-                  Get directions
-                </a>
-              </p>
+        {e.status === "draft" || e.status === "cancelled" ? null : (
+          <div hidden>
+            <dt>Time from now</dt>
+            <dd
+              class="event-device-timezone"
+              data-event-time-from-now
+              data-starts-at={e.startsAt.toISOString()}
+              data-ends-at={e.endsAt.toISOString()}
+            >
+              <button type="button" hidden data-testid="event-time-from-now-button">
+                Show time from now
+              </button>
+              <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
             </dd>
           </div>
+        )}
+        {duration ? (
+          <div>
+            <dt>Duration</dt>
+            <dd>{duration}</dd>
+          </div>
         ) : null}
+        <div>
+          <dt>Where</dt>
+          <dd>
+            {e.location ? (
+              <>
+                <p data-testid="event-venue">{e.location}</p>
+                <p>
+                  <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
+                    Get directions
+                  </a>
+                </p>
+              </>
+            ) : (
+              <p data-testid="event-venue-tbd">
+                Venue TBD — check <a href="/discord">Discord</a> for updates.
+              </p>
+            )}
+          </dd>
+        </div>
         {e.organizer_name ? (
           <div>
             <dt>Hosted by</dt>
@@ -196,17 +259,43 @@ export const EventPage: FC<{
                   going: e.goingCount,
                   occupancy: e.goingOccupancy,
                   capacity: e.capacity,
-                  showSpotsLeft: true,
+                  // Reconciliation can lag: published rows stop inviting at
+                  // their end, using the same server instant as RSVP below.
+                  // Draft previews retain the line. The binder patches existing
+                  // spots nodes only, so refresh cannot recreate it after close.
+                  showSpotsLeft:
+                    e.status === "draft" || (e.status === "published" && e.endsAt > now),
                   announcement: null,
                 }),
               }}
             />
           </dd>
         </div>
+        <div hidden>
+          <dt>Compare in another timezone</dt>
+          <dd class="event-device-timezone" data-event-chosen-timezone>
+            <label for="chosen-timezone-input">Timezone (IANA identifier)</label>
+            <input
+              type="text"
+              id="chosen-timezone-input"
+              data-testid="event-chosen-timezone-input"
+              maxlength={64}
+              hidden
+              autocomplete="off"
+              spellcheck={false}
+            />
+            <p data-testid="event-chosen-timezone-examples">e.g. Europe/London, Asia/Tokyo</p>
+            <button type="button" hidden data-testid="event-chosen-timezone-button">
+              Compare times
+            </button>
+            <p role="status" aria-live="polite" data-testid="event-chosen-timezone-status"></p>
+          </dd>
+        </div>
       </dl>
       <div class="event-rsvp">
         <RsvpButton
           e={e}
+          now={now}
           member={member}
           answer={answer}
           waitlistPosition={waitlistPosition}
@@ -215,6 +304,7 @@ export const EventPage: FC<{
         />
         <script src="/islands/rsvp-button.js" defer />
         <script src="/islands/event-device-timezone.js" defer />
+        <script src="/islands/event-time-from-now.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>
@@ -225,7 +315,11 @@ export const EventPage: FC<{
             </section>
           ) : null}
           {accessibilityNotes ? (
-            <section class="event-description" aria-labelledby="event-accessibility-heading">
+            <section
+              class="event-description"
+              data-testid="event-accessibility"
+              aria-labelledby="event-accessibility-heading"
+            >
               <h2 id="event-accessibility-heading">Accessibility</h2>
               <p>{accessibilityNotes}</p>
             </section>
@@ -239,7 +333,7 @@ export const EventPage: FC<{
             >
               <h2 id="event-join-details-heading">How to join</h2>
               {e.join_url ? (
-                e.status === "published" ? (
+                e.status === "published" && isPublicJoinUrl(e.join_url) ? (
                   <p>
                     <a href={e.join_url} data-testid="event-public-join-link">
                       Open the public joining link
@@ -294,8 +388,33 @@ export const EventPage: FC<{
             <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
               Copy link
             </a>
+            {e.status === "published" ? (
+              <>
+                <span hidden data-native-share-sep aria-hidden="true">
+                  {" · "}
+                </span>
+                <button
+                  type="button"
+                  hidden
+                  data-native-share
+                  data-share-title={e.title}
+                  data-share-url={canonical}
+                  data-testid="event-share"
+                >
+                  Share
+                </button>
+              </>
+            ) : null}
           </p>
           <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+          {e.status === "published" ? (
+            <p
+              role="status"
+              aria-live="polite"
+              data-testid="event-share-status"
+              data-native-share-status
+            ></p>
+          ) : null}
         </section>
       </div>
       {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
@@ -343,7 +462,7 @@ export const EventPage: FC<{
           <p>
             Attendees shown at page load.{" "}
             <a
-              href={attendeePageHref(e.eventKey, attendeesPaging.page)}
+              href={archiveEventHref(e.eventKey, archive, attendeesPaging.page)}
               data-testid="event-attendees-refresh"
             >
               Refresh attendees
@@ -351,8 +470,43 @@ export const EventPage: FC<{
             .
           </p>
         </section>
-      ) : null}
+      ) : (
+        // One accessible shell for guest, non-member and empty member states.
+        // Later attendee pages retain the populated/stale-page branch above.
+        <section
+          aria-labelledby="event-roster-heading"
+          data-testid={
+            member
+              ? "event-roster-empty"
+              : session
+                ? "event-roster-members-only"
+                : "event-roster-guest-nudge"
+          }
+        >
+          <h2 id="event-roster-heading">Who's going{member ? " (0)" : ""}</h2>
+          <p>
+            {member ? (
+              "No one is listed as going yet."
+            ) : session ? (
+              <>
+                Members only —{" "}
+                <a href={`/join?next=${encodeURIComponent(returnTo ?? path)}`}>join the Discord</a>{" "}
+                to see who's in.
+              </>
+            ) : (
+              <>
+                {e.goingCount > 0 ? `${e.goingCount} going —` : "No one is listed as going yet."}{" "}
+                <a href={`/join/discord?next=${encodeURIComponent(returnTo ?? path)}`}>
+                  sign in to see who's in
+                </a>
+                .
+              </>
+            )}
+          </p>
+        </section>
+      )}
       <script src="/islands/copy-link.js" defer />
+      <script src="/islands/event-share.js" defer />
       <script src="/islands/going-count.js" defer />
       <script src="/islands/attendees-live.js" defer />
       <script
@@ -370,13 +524,13 @@ export const EventPage: FC<{
                 data-testid="event-series-previous"
               >
                 <span>← Previous in series: {series.previous.title}</span>
-                <DestinationPreview event={series.previous} />
+                <DestinationPreview event={series.previous} now={now} />
               </a>
             ) : null}{" "}
             {series.next ? (
               <a href={`/e/${series.next.eventKey}`} rel="next" data-testid="event-series-next">
                 <span>Next in series: {series.next.title} →</span>
-                <DestinationPreview event={series.next} />
+                <DestinationPreview event={series.next} now={now} />
               </a>
             ) : null}
           </nav>
@@ -386,13 +540,13 @@ export const EventPage: FC<{
             {neighbors.previous ? (
               <a href={`/e/${neighbors.previous.eventKey}`} rel="prev" data-testid="event-previous">
                 <span>← Previous event: {neighbors.previous.title}</span>
-                <DestinationPreview event={neighbors.previous} />
+                <DestinationPreview event={neighbors.previous} now={now} />
               </a>
             ) : null}{" "}
             {neighbors.next ? (
               <a href={`/e/${neighbors.next.eventKey}`} rel="next" data-testid="event-next">
                 <span>Next event: {neighbors.next.title} →</span>
-                <DestinationPreview event={neighbors.next} />
+                <DestinationPreview event={neighbors.next} now={now} />
               </a>
             ) : null}
           </nav>
@@ -404,16 +558,8 @@ export const EventPage: FC<{
               {related.map((event) => (
                 <li>
                   <a href={`/e/${event.eventKey}`} data-testid="event-related-link">
-                    {event.title}{" "}
-                    <time datetime={event.startsAt.toISOString()}>
-                      {fmtWithOffset(event.startsAt, event.timezone)}
-                    </time>
-                    {event.location ? (
-                      <>
-                        {" "}
-                        <span class="event-related-location">{event.location}</span>
-                      </>
-                    ) : null}
+                    {event.title}
+                    <DestinationPreview event={event} now={now} />
                   </a>
                 </li>
               ))}

@@ -1,6 +1,5 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
-import TerminalReview from "#lib/TerminalReview.svelte";
 import type { PageProps } from "./$types";
 import {
   eventListUrl,
@@ -18,9 +17,13 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // strings from the load, exactly as the Hono page emits them. No island and
 // no event handlers: every control is a plain GET form, sort/paging link or
 // POST form to the Hono-owned mutation endpoints, so the page works with
-// JavaScript disabled, exactly like the Hono panel.
+// JavaScript disabled, exactly like the Hono panel. The pause review below
+// arrives as pre-rendered server HTML via load data (the same
+// src/admin/rsvp-review.ts renderer Hono mirrors), injected via {@html}:
+// inlined literals or a shared component would breach the client gzip and
+// file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
-const { query, rows, hasNext, emptyText } = $derived(data);
+const { query, rows, hasNext, emptyText, pauseReviews, cancelReviews } = $derived(data);
 const now = new Date();
 </script>
 
@@ -56,8 +59,9 @@ const now = new Date();
     <input type="hidden" name="sort" value={query.sort} />
     <input type="hidden" name="order" value={query.order} />
     <div class="field">
-      <label for="q">Search</label>
-      <input id="q" name="q" type="search" value={query.q} />
+      <label for="q">Search titles and games</label>
+      <input id="q" name="q" type="search" value={query.q} aria-describedby="q-help" />
+      <p class="hint" id="q-help">Matches event titles and saved games.</p>
     </div>
     <div class="field">
       <label for="status">Status</label>
@@ -137,10 +141,20 @@ const now = new Date();
             <tr>
               <td>
                 <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
+                {#if r.game?.trim()}
+                  <span class="hint"><br />{r.game}</span>
+                {/if}
               </td>
               <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
               <td>
-                <time datetime={r.startsAt}>{r.startsAt}</time>
+                {#if r.startsAt}
+                  <time datetime={r.startsAt}>{r.startsAt}</time>
+                {:else}
+                  <span data-testid={`event-unrenderable-time-${r.eventKey}`}>Unrenderable time</span>
+                {/if}
+                {#if r.startsAt && !r.endsAt}
+                  <span data-testid={`event-unrenderable-time-${r.eventKey}`}> (unrenderable end time)</span>
+                {/if}
               </td>
               {@render fillCell(r)}
               <td>
@@ -150,20 +164,18 @@ const now = new Date();
                   </form>
                 {/if}
                 {#if r.status === "draft" || r.status === "published"}
-                  <TerminalReview
-                    kind="cancel"
-                    title={r.title}
-                    targetId={r.eventKey}
-                    action={`/admin/events/${r.eventKey}/cancel`}
-                  />
+                  {@html cancelReviews[r.eventKey] ?? ""}
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
-                  {@const action = r.rsvpOpen ? "rsvp-pause" : "rsvp-reopen"}
-                  <form method="post" action={`/admin/events/${r.eventKey}/${action}`}>
-                    <button type="submit" class="link" data-testid={action}>
-                      {r.rsvpOpen ? "Pause RSVPs" : "Reopen RSVPs"}
-                    </button>
-                  </form>
+                  {#if r.rsvpOpen}
+                    {@html pauseReviews[r.eventKey] ?? ""}
+                  {:else}
+                    <form method="post" action={`/admin/events/${r.eventKey}/rsvp-reopen`}>
+                      <button type="submit" class="link" data-testid="rsvp-reopen">
+                        Reopen RSVPs
+                      </button>
+                    </form>
+                  {/if}
                 {/if}
               </td>
             </tr>

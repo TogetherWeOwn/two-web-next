@@ -1,6 +1,7 @@
 import { readFileSync, readdirSync, statSync } from "node:fs";
 import { join, extname } from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import { dispatchHookRequest, type HookDispatchDeps } from "../src/route-ownership";
 // @ts-expect-error Standalone CI tooling has no declaration file.
 import { readWranglerConfig } from "../ci/wrangler-config.mjs";
 import { RECONCILE_CRON } from "../src/jobs/constants";
@@ -261,7 +262,11 @@ describe("analytics write-degradation warning docs", () => {
     expect(section).toContain("normalized_board_key");
     expect(section).toContain("carry no member identity");
     expect(section).toContain("warning to its `http.request` by ID, not by time window");
-    expect(section).toContain("Kit-served lines omit it");
+    expect(section).toContain(
+      "Kit-served hotzones and members-board lines carry the validated dispatch id",
+    );
+    expect(section).toContain("Kit-served event searches omit `request_id`");
+    expect(section).toContain("correlate those by time window and route");
   });
 
   it("gives a read-only aggregate check on the analytics tables", () => {
@@ -647,5 +652,286 @@ describe("refused-write and invite-config warning docs", () => {
     expect(leaves).toContain("alertRequestError");
     expect(leaves).toContain("inviteAlerts");
     expect(leaves).toContain("c.redirect(destination, 302)");
+  });
+});
+
+describe("kit session-bridge and auth-status probe runbook row cites", () => {
+  const HEADING = "### Kit session-bridge and auth-status probe warnings";
+  const ROUTE_OWNERSHIP = "src/route-ownership.ts";
+  const KIT_SESSION = "src/kit-session.ts";
+  const BRIDGE = "kit session bridge unavailable; rendering without locals.";
+  const PROBE = "kit auth-status probe unavailable; rendering without probe cookie.";
+  const ROTATION = "kit event-detail rotation unavailable; rendering without renewal.";
+  const ADMIN = "kit admin renewal unavailable; rendering without renewal.";
+  // Emitted by the fallback-document style-hash read, not a session leg: no row
+  // in this section (a separate rowing decision), but it must stay named here.
+  const FALLBACK_STYLE_PROBE =
+    "kit fallback style probe unreadable; serving without the style hash.";
+
+  function section(): string {
+    const docs = readFileSync(DOCS_PATH, "utf8");
+    const start = docs.indexOf(HEADING);
+    expect(start, `missing ${HEADING} in ${DOCS_PATH}`).toBeGreaterThanOrEqual(0);
+    const rest = docs.slice(start + HEADING.length);
+    const next = rest.search(/\n#{1,3} /);
+    return next === -1 ? rest : rest.slice(0, next);
+  }
+
+  function rowFor(message: string): string {
+    const row = section()
+      .split("\n")
+      .find((l) => l.startsWith(`| \`${message}\` |`));
+    expect(row, `missing row for \`${message}\` in ${HEADING}`).toBeDefined();
+    return row as string;
+  }
+
+  function sourceLines(file: string): string[] {
+    return readFileSync(file, "utf8").split("\n");
+  }
+
+  /** 1-based line of the console.warn emitting the literal message. */
+  function warnLine(file: string, message: string): number {
+    const idx = sourceLines(file).findIndex(
+      (l) => l.includes("console.warn") && l.includes(`"${message}"`),
+    );
+    expect(idx, `${file} still warns "${message}"`).toBeGreaterThanOrEqual(0);
+    return idx + 1;
+  }
+
+  /**
+   * `file:start-end` of the construct opening at the first line matching
+   * `open` (a line offset back handles a multi-line `if (`) and closing at the
+   * first later line equal to `close` (the construct's own indentation).
+   */
+  function span(file: string, open: RegExp, close: string, backOffset = 0): string {
+    const lines = sourceLines(file);
+    const at = lines.findIndex((l) => open.test(l));
+    expect(at, `${file} still declares ${open}`).toBeGreaterThanOrEqual(0);
+    const start = at - backOffset;
+    const end = lines.findIndex((l, i) => i > at && l === close);
+    expect(end, `${file} closes ${open} with "${close}"`).toBeGreaterThan(at);
+    return `${file}:${start + 1}-${end + 1}`;
+  }
+
+  /** Every `src/<any file>.ts:N` or `:N-M` source cite anywhere in the row. */
+  function cites(row: string): string[] {
+    return [...row.matchAll(/src\/[\w./-]+\.ts:\d+(?:-\d+)?/g)].map((m) => m[0]);
+  }
+
+  const ownership = {
+    viewerOf: () => span(ROUTE_OWNERSHIP, /^function viewerOf\(/, "}"),
+    bridge: () => span(ROUTE_OWNERSHIP, /^ {2}const bridgeSession = async/, "  };"),
+    probe: () => span(ROUTE_OWNERSHIP, /^ {4}deps\.authStatusCookieFor &&$/, "  }", 1),
+    rotationPredicate: () =>
+      span(ROUTE_OWNERSHIP, /^function releasedEventDetailRenewsSession\(/, "}"),
+    rotationAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(deps\.eventDetailRotationFor &&/, "  }"),
+    adminPredicate: () => span(ROUTE_OWNERSHIP, /^function releasedAdminRenewsSession\(/, "}"),
+    adminAppend: () => span(ROUTE_OWNERSHIP, /^ {2}if \(deps\.adminRenewalFor &&/, "  }"),
+  };
+  const session = {
+    bridge: () => span(KIT_SESSION, /^export function kitSessionBridge\(/, "}"),
+    rotation: () => span(KIT_SESSION, /^export function kitEventDetailRotationFor\(/, "}"),
+    adminRenewal: () => span(KIT_SESSION, /^export function kitAdminRenewalFor\(/, "}"),
+    signer: () => span(KIT_SESSION, /^export function kitAuthStatusCookieFor\(/, "}"),
+  };
+
+  /** The row names the span (a `file:N-M` string) computed from the source now. */
+  function expectCited(row: string, cite: string): void {
+    expect(row, `row cites ${cite}`).toContain(cite);
+  }
+
+  /** The cite's line range holds the emitting console.warn. */
+  function expectContainsWarn(cite: string, file: string, message: string): void {
+    const [, start, end] = cite.match(/:(\d+)-(\d+)$/) as RegExpMatchArray;
+    const at = warnLine(file, message);
+    expect(at, `${cite} contains the "${message}" warn at ${at}`).toBeGreaterThanOrEqual(
+      Number(start),
+    );
+    expect(at).toBeLessThanOrEqual(Number(end));
+  }
+
+  it("says four warnings and has a row for each", () => {
+    const body = section();
+    expect(body).toContain("Four `console.warn` lines from the Kit hook dispatch");
+    for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) rowFor(message);
+    // Every `kit ...` warn in the dispatch module is either rowed here or
+    // named as known-unrowed, so a fifth (any phrasing) cannot land silently.
+    const source = readFileSync(ROUTE_OWNERSHIP, "utf8");
+    const emitted = [...source.matchAll(/console\.warn\(\s*"(kit [^"]+)"/g)].map((m) => m[1]);
+    expect([...emitted].sort()).toEqual(
+      [BRIDGE, PROBE, ROTATION, ADMIN, FALLBACK_STYLE_PROBE].sort(),
+    );
+  });
+
+  it("pins every range cite to the span it names, with the emitting warn inside", () => {
+    const bridge = rowFor(BRIDGE);
+    expectCited(bridge, ownership.bridge());
+    expectCited(bridge, ownership.viewerOf());
+    expectCited(bridge, session.bridge());
+    expectContainsWarn(ownership.bridge(), ROUTE_OWNERSHIP, BRIDGE);
+
+    const probe = rowFor(PROBE);
+    expectCited(probe, ownership.probe());
+    expectCited(probe, session.signer());
+    expectContainsWarn(ownership.probe(), ROUTE_OWNERSHIP, PROBE);
+
+    const rotation = rowFor(ROTATION);
+    expectCited(rotation, ownership.rotationPredicate());
+    expectCited(rotation, ownership.rotationAppend());
+    expectCited(rotation, session.rotation());
+    expectContainsWarn(ownership.rotationAppend(), ROUTE_OWNERSHIP, ROTATION);
+
+    const admin = rowFor(ADMIN);
+    expectCited(admin, ownership.adminPredicate());
+    expectCited(admin, ownership.adminAppend());
+    expectCited(admin, session.adminRenewal());
+    expectContainsWarn(ownership.adminAppend(), ROUTE_OWNERSHIP, ADMIN);
+  });
+
+  it("leaves no cite in these rows that is not one of the pinned spans", () => {
+    const allowed: Record<string, string[]> = {
+      [BRIDGE]: [ownership.bridge(), ownership.viewerOf(), session.bridge()],
+      [PROBE]: [ownership.probe(), session.signer()],
+      [ROTATION]: [ownership.rotationPredicate(), ownership.rotationAppend(), session.rotation()],
+      [ADMIN]: [ownership.adminPredicate(), ownership.adminAppend(), session.adminRenewal()],
+    };
+    for (const [message, spans] of Object.entries(allowed)) {
+      for (const cite of cites(rowFor(message))) {
+        expect(spans, `${cite} in the "${message}" row is not a pinned span`).toContain(cite);
+      }
+    }
+  });
+
+  it("pins each cited test line to the case the row means", () => {
+    const expected: Record<string, Record<string, RegExp>> = {
+      [BRIDGE]: {
+        "test/kit-member-dispatch.test.ts:266": /a failed session bridge leaves the viewer unknown/,
+      },
+      [PROBE]: {
+        "test/kit-member-dispatch.test.ts:219":
+          /keeps an authorized admin response when the probe rejects/,
+      },
+      [ROTATION]: {
+        "test/kit-event-detail-session-renewal.test.ts:499":
+          /a rotation store error delivers the released 200/,
+        "test/kit-event-detail-session-renewal.test.ts:533":
+          /re-verifies the cookie: forged locals/,
+      },
+      [ADMIN]: {
+        "test/kit-admin-session-renewal.test.ts:685":
+          /a rotation store error delivers the released 200/,
+        "test/kit-admin-renewal-404.test.ts:235":
+          /a rotation store failure on a 404 sets no cookie/,
+        "test/kit-admin-session-renewal.test.ts:852": /re-verifies the cookie: forged locals/,
+      },
+    };
+    for (const [message, pins] of Object.entries(expected)) {
+      const cited = [...rowFor(message).matchAll(/`(test\/[\w-]+\.test\.ts:\d+)`/g)].map(
+        (m) => m[1],
+      );
+      expect([...cited].sort(), `test cites in the "${message}" row`).toEqual(
+        Object.keys(pins).sort(),
+      );
+      for (const [cite, title] of Object.entries(pins)) {
+        const [file, line] = cite.split(":") as [string, string];
+        const text = sourceLines(file)[Number(line) - 1] ?? "";
+        expect(text, `${cite} cited in the "${message}" row`).toMatch(/^\s*it\(/);
+        expect(text, `${cite} is the case the "${message}" row means`).toMatch(title);
+      }
+    }
+  });
+
+  it("carries the class-only exception field on every Kit dispatch warn", () => {
+    const source = readFileSync(ROUTE_OWNERSHIP, "utf8");
+    for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) {
+      const start = source.indexOf(`console.warn("${message}"`);
+      expect(start, `missing warn "${message}"`).toBeGreaterThanOrEqual(0);
+      const payload = source.slice(start, source.indexOf("});", start) + 3);
+      // Pin the complete call, including the closing delimiters: a safe
+      // exception alongside an added field or argument is not class-only.
+      expect(payload).toBe(
+        `console.warn("${message}", {\n        exception: (err as Error)?.constructor?.name ?? "unknown",\n      });`,
+      );
+      expect(payload).not.toMatch(/\.message|String\(err|request_id/);
+    }
+  });
+
+  for (const { message, provider, path, route } of [
+    { message: BRIDGE, provider: "sessionFor", path: "/profile", route: "/profile" },
+    { message: PROBE, provider: "authStatusCookieFor", path: "/admin", route: "/admin" },
+    {
+      message: ROTATION,
+      provider: "eventDetailRotationFor",
+      path: "/e/:key",
+      route: "/e/[key]",
+    },
+    { message: ADMIN, provider: "adminRenewalFor", path: "/admin", route: "/admin" },
+  ] as const) {
+    it.each([
+      { failure: new Error("private-error-sentinel"), exception: "Error" },
+      { failure: new TypeError("private-error-sentinel"), exception: "TypeError" },
+      { failure: null, exception: "unknown" },
+    ])(
+      `emits only the message and exception class when ${provider} rejects ($exception)`,
+      async ({ failure, exception }) => {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        try {
+          const appUrl = "https://next.example.test";
+          const pathname = path.replace(":key", "01ARZ3NDEKTSV4RRFFQ69G5FAV");
+          const request = new Request(`${appUrl}${pathname}`);
+          const reject = vi.fn(async () => {
+            throw failure;
+          });
+          const deps: HookDispatchDeps = {
+            appUrl,
+            manifest: [
+              {
+                method: "GET",
+                path,
+                enabled: true,
+                reads: { resource: "runbook", action: "view", route: "runbook.warn" },
+              },
+            ],
+            honoFetch: vi.fn(async () => new Response("hono")),
+            resolve: vi.fn(
+              async () => new Response("kit", { headers: { "content-type": "text/html" } }),
+            ),
+            accessSink: async () => async () => true,
+            sessionFor: async () => ({
+              status: "authenticated",
+              session: {
+                userId: "100000000000000101",
+                username: "fixture",
+                avatar: null,
+                member: true,
+                moderator: true,
+              },
+              returnTo: null,
+              joinResult: null,
+              expiredWrite: null,
+            }),
+            [provider]: reject,
+          };
+          const response = await dispatchHookRequest(
+            { request, url: new URL(request.url), route: { id: route } },
+            deps,
+          );
+          expect(reject).toHaveBeenCalledTimes(1);
+          expect(response.status).toBe(200);
+          expect(response.headers.getSetCookie()).toEqual([]);
+          // Compare all calls and every argument, not just one safe field in an
+          // otherwise unrestricted payload (or a second, secret-bearing call).
+          expect(warn.mock.calls).toEqual([[message, { exception }]]);
+        } finally {
+          warn.mockRestore();
+        }
+      },
+    );
+  }
+
+  it("documents each message as class-only in its row", () => {
+    for (const message of [BRIDGE, PROBE, ROTATION, ADMIN]) {
+      expect(rowFor(message)).toContain("`exception`");
+    }
   });
 });

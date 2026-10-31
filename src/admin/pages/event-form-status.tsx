@@ -10,7 +10,7 @@ export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
   return (
     <section aria-label="Status">
       <h2>Status: {row.status}</h2>
-      <div class="actions terminal-actions">
+      <div class="actions rsvp-actions terminal-actions">
         {row.status === "draft" ? (
           <form method="post" action={`/admin/events/${row.eventKey}/publish`}>
             <button type="submit" class="btn" data-testid="publish-event">
@@ -23,9 +23,15 @@ export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
             kind="cancel"
             title={row.title}
             targetId={row.eventKey}
-            action={`/admin/events/${row.eventKey}/cancel`}
             testId="cancel-event"
           />
+        ) : null}
+        {row.status === "draft" || row.status === "published" || row.status === "cancelled" ? (
+          <form method="post" action={`/admin/events/${row.eventKey}/duplicate`}>
+            <button type="submit" class="link" data-testid="duplicate-event">
+              Duplicate as draft
+            </button>
+          </form>
         ) : null}
         <RsvpAction row={row} />
       </div>

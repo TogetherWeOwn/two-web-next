@@ -9,14 +9,17 @@
 // redirect) during mixed mode. The guarded
 // /admin/featured-contents/:id/edit legacy redirect stays Hono-owned too.
 //
-// Source-text by design: the root Vitest suite cannot compile .svelte, and
-// these pins are the exact selectors the admin E2E suite drives.
+// Existing selector pins remain; saved-preview assertions now execute compiled
+// Svelte SSR so the shared presentation can move without requiring inline markup.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { renderTerminalReviewHtml } from "../src/admin/terminal-review";
 import { featuredStatus } from "../src/featured-status";
 import { parseRecordId } from "../src/admin/record-id";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit";
+import { CHECKED_AT, savedFeatured } from "./helpers/featured-saved-content-cases";
+import { renderSavedKit } from "./helpers/featured-saved-content-render";
 
 const source = readFileSync(
   fileURLToPath(
@@ -31,11 +34,18 @@ const load = readFileSync(
   "utf8",
 );
 
+const deleteReview = renderTerminalReviewHtml({
+  kind: "delete",
+  title: "Saved slot",
+  targetId: "7",
+  testId: "delete-featured",
+});
+
 describe("Kit featured-edit page contract", () => {
   it("posts plain no-JS forms to the Hono-owned edit and delete endpoints", () => {
     expect(source).toContain('method="post"');
     expect(source).toContain("/admin/featured/");
-    expect(source).toContain("/delete");
+    expect(deleteReview).toContain('action="/admin/featured/7/delete"');
     expect(source).not.toContain("on:submit");
     expect(source).not.toContain("onsubmit");
   });
@@ -58,7 +68,7 @@ describe("Kit featured-edit page contract", () => {
 
   it("keeps the Hono edit controls, hints, actions and delete affordance the E2E suite drives", () => {
     expect(source).toContain('data-testid="save-featured"');
-    expect(source).toContain('testId="delete-featured"');
+    expect(deleteReview).toContain('data-testid="delete-featured"');
     expect(source).toContain('href="/admin/featured"');
     expect(source).toContain("cdn.discordapp.com");
     expect(source).toContain("screen-reader");
@@ -67,28 +77,35 @@ describe("Kit featured-edit page contract", () => {
     expect(source).toContain("Show from (UTC");
     expect(source).toContain("Show until (UTC");
     expect(source).toContain("Save");
-    expect(source).toContain("<TerminalReview");
-    expect(source).toContain('kind="delete"');
-    expect(source).toContain("title={data.view.title}");
+    expect(source).toContain("{@html data.view.deleteReviewHtml}");
+    expect(deleteReview).toContain("Delete this slot");
+    expect(deleteReview).toContain("Saved slot");
   });
 
-  it("keeps the homepage preview with the shared status and the hidden-slot note", () => {
-    expect(source).toContain('data-testid="featured-preview"');
-    expect(source).toContain("Homepage preview");
-    expect(source).toContain("refresh this preview");
-    expect(source).toContain("featured-preview-hidden");
-    expect(source).toContain("<img");
-    expect(source).toContain("href={data.view.previewUrl}");
-    expect(source).not.toContain("href={data.view.values.url}");
-    expect(source).toContain("value={data.view.values.url}");
+  it("keeps a saved card separately from the unpublished homepage eligibility verdict", async () => {
+    const html = await renderSavedKit(savedFeatured({ isPublished: false }));
+    expect(html).toContain('data-testid="featured-preview"');
+    expect(html).toContain("Saved content preview");
+    expect(html).toContain("Homepage eligibility");
+    expect(html).not.toContain('data-testid="featured-preview-hidden"');
+    expect(html).toContain('data-testid="featured-item"');
+    expect(html).toContain('href="https://example.com/community-night"');
+    expect(html).toContain('data-status="unpublished"');
+    const unsafe = await renderSavedKit(savedFeatured({ url: "javascript:alert(1)" }));
+    expect(unsafe).not.toContain('href="javascript:alert(1)"');
+    expect(unsafe).toContain('value="javascript:alert(1)"');
   });
 
-  it("renders the preview image through the shared policy with the alt fallback and evaluation time", () => {
-    expect(source).toContain("data.view.imageSrc");
-    expect(source).toContain("data.view.imageAlt");
-    expect(source).toContain('referrerpolicy="no-referrer"');
-    expect(source).toContain("data.view.checkedAt");
-    expect(source).not.toContain("src={data.view.values.image_url}");
+  it("renders the admitted preview image with the homepage alt fallback and evaluation time", async () => {
+    const html = await renderSavedKit(savedFeatured({ imageAlt: null }));
+    expect(html).toContain('src="https://cdn.discordapp.com/attachments/1/2/board.webp"');
+    expect(html).toContain('alt="Saved community night"');
+    expect(html).toContain('referrerpolicy="no-referrer"');
+    expect(html).toContain(CHECKED_AT.toISOString());
+    const blocked = await renderSavedKit(
+      savedFeatured({ imageUrl: "https://unapproved.example.com/no.webp" }),
+    );
+    expect(blocked).not.toContain('src="https://unapproved.example.com/no.webp"');
   });
 
   it("mounts the progressive dirty-draft/double-submit guard island and no client handlers, so repeat submits cannot apply twice with JS and the page works without it", () => {

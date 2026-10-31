@@ -10,7 +10,7 @@
 // machine-only contracts win, feeds stay non-HTML) but operates on a plain
 // Request, so the Kit hook and Svelte loads can use it without a Hono Context.
 //
-// 400 is the one status without a RecoveryShell counterpart: its Hono twin is
+// 400 has no RecoveryShell counterpart: its Hono twin is
 // the member-shell board-filter page (src/leaderboards/pages.tsx), so the
 // title and lead below are Kit's own client-error copy, never outage copy.
 // 422 is the other: its Hono twin is the overlong-search notice page
@@ -93,7 +93,8 @@ function isMachinePath(path: string, method: string): boolean {
   if (method === "GET" || method === "HEAD") return path === "/events.json";
   if (method === "POST") {
     return (
-      path === "/events" || /^\/events\/[^/]+\/(publish|cancel|rsvp-pause|rsvp-reopen)$/.test(path)
+      path === "/events" ||
+      /^\/events\/[^/]+\/(publish|cancel|duplicate|rsvp-pause|rsvp-reopen)$/.test(path)
     );
   }
   if (method === "PATCH") return /^\/events\/[^/]+$/.test(path);

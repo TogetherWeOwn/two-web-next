@@ -2,9 +2,9 @@
 //
 // Ledger docs/w15-events-acceptance-ledger.md (`Unit/EventCancelModalCopyTest`
 // row): the cancellation dialog copy/state is not covered by the server
-// transition guard. In Next there is deliberately no modal: mutating buttons
-// submit immediately (docs/moderator-admin-guide.md: "there is no
-// action-confirmation dialog"). This suite pins that replacement contract
+// transition guard. Next uses a native disclosure rather than a modal: only
+// the final submit inside the cancellation review invokes the existing POST.
+// This suite pins that replacement contract
 // from the island contract (src/islands/contracts.ts) and its agreement with
 // the server guard (src/admin/validation.ts: cancelled is terminal, no
 // reopen/republish, past-banner coexistence).
@@ -164,7 +164,7 @@ describe("cancel action copy (native review, no JavaScript dialog)", () => {
     for (const status of ["cancelled", "past"] as const) {
       const html = listHtml(status);
       expect(html).not.toContain(`action="/admin/events/cancel-${status}/cancel"`);
-      expect(html).not.toContain(">Cancel event</button>");
+      expect(html).not.toContain(">Cancel</button>");
       expect(html).not.toContain(">Cancel event</button>");
     }
   });

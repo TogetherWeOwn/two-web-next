@@ -2,9 +2,12 @@
 import JsonLd from "#lib/JsonLd.svelte";
 import Shell from "#lib/Shell.svelte";
 import type { KitEventDetailModel } from "../../../src/events/kit-detail";
+import { ONGOING_COPY } from "../../../src/events/ongoing";
+import { isPublicJoinUrl } from "../../../src/events/public-join-url";
 import { HOME_JOIN_RESULT_COPY } from "../../../src/home-copy";
 import {
   EVENT_FULL_TESTID,
+  EVENT_ONGOING_TESTID,
   RSVP_BUTTON_ISLAND,
   RSVP_CHECK_TESTID,
   RSVP_CLOSED_TESTID,
@@ -55,8 +58,10 @@ let { model }: { model: KitEventDetailModel } = $props();
 // every deferred script runs after parsing, with all of its mount nodes present.
 const detailIslands = [
   "event-device-timezone",
+  "event-time-from-now",
   "rsvp-button",
   "copy-link",
+  "event-share",
   "going-count",
   "attendees-live",
 ]
@@ -83,7 +88,10 @@ const lineup = $derived(
     going: model.goingCount,
     occupancy: model.goingOccupancy,
     capacity: model.capacity,
-    showSpotsLeft: true,
+    // Use the server's RSVP verdict for elapsed published rows too: status
+    // reconciliation can lag behind the event's end. Draft previews keep
+    // their spots line; the browser clock never decides closure.
+    showSpotsLeft: model.status !== "past" && model.status !== "cancelled" && closed !== "past",
     announcement: null,
   }),
 );
@@ -100,6 +108,19 @@ const lineup = $derived(
   {/if}
 </svelte:head>
 
+{#snippet destinationPreview(event: NonNullable<KitEventDetailModel["neighbors"]["previous"]>)}
+  <time datetime={event.datetime}>{event.whenText}</time>
+  {#if event.location}
+    {" "}<span class="event-related-location">{event.location}</span>
+  {/if}
+  {#if event.game}
+    {" "}<span class="event-related-game">{event.game}</span>
+  {/if}
+  {#if event.availability}
+    {" "}<span class="event-related-state">{event.availability}</span>
+  {/if}
+{/snippet}
+
 {#snippet eventPagination(neighbors: KitEventDetailModel["neighbors"] | null | undefined, series: boolean)}
   {#snippet eventLink(event: KitEventDetailModel["neighbors"]["previous"], previous: boolean)}
     {#if event}
@@ -109,10 +130,7 @@ const lineup = $derived(
         data-testid="event-{series ? 'series-' : ''}{previous ? 'previous' : 'next'}"
       >
         <span>{previous ? "← Previous" : "Next"} {series ? "in series" : "event"}: {event.title}{previous ? "" : " →"}</span>{" "}
-        <time datetime={event.datetime}>{event.whenText}</time>
-        {#if event.location}
-          <span class="event-related-location">{event.location}</span>
-        {/if}
+        {@render destinationPreview(event)}
       </a>
     {/if}
   {/snippet}
@@ -152,7 +170,7 @@ const lineup = $derived(
   accountChrome={model.viewerUsername ? memberChrome : undefined}
 >
   <nav class="event-back" aria-label="Event calendar">
-    <a href="/events">← All events</a>
+    <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
   </nav>
   <section class="event-hero" aria-label="Event overview">
     <p class="event-kicker">{model.game ?? "Community event"}</p>
@@ -161,6 +179,9 @@ const lineup = $derived(
     {/if}
     {#if model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
+    {/if}
+    {#if model.isOngoing}
+      <p class="notice" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</p>
     {/if}
     <h1 data-waitlist-position={model.waitlistPosition ?? ""}>{model.title}</h1>
   </section>
@@ -195,10 +216,30 @@ const lineup = $derived(
         <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
       </dd>
     </div>
-    {#if model.location}
+    {#if !model.isDraft}
+      <div hidden>
+        <dt>Time from now</dt>
+        <dd
+          class="event-device-timezone"
+          data-event-time-from-now
+          data-starts-at={model.timeDatetime}
+          data-ends-at={model.endsAt}
+        >
+          <button type="button" hidden data-testid="event-time-from-now-button">Show time from now</button>
+          <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
+        </dd>
+      </div>
+    {/if}
+    {#if model.durationText}
       <div>
-        <dt>Where</dt>
-        <dd>
+        <dt>Duration</dt>
+        <dd>{model.durationText}</dd>
+      </div>
+    {/if}
+    <div>
+      <dt>Where</dt>
+      <dd>
+        {#if model.location}
           <p data-testid="event-venue">{model.location}</p>
           {#if model.directionsUrl}
             <p>
@@ -207,9 +248,22 @@ const lineup = $derived(
               </a>
             </p>
           {/if}
+        {:else}
+          <p data-testid="event-venue-tbd">
+            Venue TBD — check <a href="/discord">Discord</a> for updates.
+          </p>
+        {/if}
+      </dd>
+    </div>
+    {#if model.organizerName}
+      <div>
+        <dt>Hosted by</dt>
+        <dd>
+          <p data-testid="event-organizer">{model.organizerName}</p>
         </dd>
       </div>
-    {/if}{#if model.series && model.series.hosts.length > 0}
+    {/if}
+    {#if model.series && model.series.hosts.length > 0}
       <div>
         <dt>Series hosts</dt>
         <dd>
@@ -220,6 +274,24 @@ const lineup = $derived(
     <div>
       <dt>The lineup</dt>
       <dd><p>{@html lineup}</p></dd>
+    </div>
+    <div hidden>
+      <dt>Compare in another timezone</dt>
+      <dd class="event-device-timezone" data-event-chosen-timezone>
+        <label for="chosen-timezone-input">Timezone (IANA identifier)</label>
+        <input
+          type="text"
+          id="chosen-timezone-input"
+          data-testid="event-chosen-timezone-input"
+          maxlength="64"
+          hidden
+          autocomplete="off"
+          spellcheck="false"
+        />
+        <p data-testid="event-chosen-timezone-examples">e.g. Europe/London, Asia/Tokyo</p>
+        <button type="button" hidden data-testid="event-chosen-timezone-button">Compare times</button>
+        <p role="status" aria-live="polite" data-testid="event-chosen-timezone-status"></p>
+      </dd>
     </div>
   </dl>
   <div class="event-rsvp">
@@ -299,6 +371,39 @@ const lineup = $derived(
           <p>{model.description}</p>
         </section>
       {/if}
+      {#if model.accessibilityNotes}
+        <section
+          class="event-description"
+          data-testid="event-accessibility"
+          aria-labelledby="event-accessibility-heading"
+        >
+          <h2 id="event-accessibility-heading">Accessibility</h2>
+          <p>{model.accessibilityNotes}</p>
+        </section>
+      {/if}
+      {#if (model.status === "published" || model.status === "draft") && (model.joinUrl || model.joinInstructions)}
+        <section
+          class="event-description event-join-details"
+          aria-labelledby="event-join-details-heading"
+          data-testid="event-join-details"
+        >
+          <h2 id="event-join-details-heading">How to join</h2>
+          {#if model.joinUrl}
+            <p>
+              {#if model.status === "published" && isPublicJoinUrl(model.joinUrl)}
+                <a href={model.joinUrl} data-testid="event-public-join-link">
+                  Open the public joining link
+                </a>
+              {:else}
+                Public joining link: {model.joinUrl}
+              {/if}
+            </p>
+          {/if}
+          {#if model.joinInstructions}
+            <p data-testid="event-join-instructions">{model.joinInstructions}</p>
+          {/if}
+        </section>
+      {/if}
       {#if model.showJoinPitch}
         <section class="event-pitch" data-testid="event-join-pitch" aria-label="Join the community">
           <p>
@@ -331,8 +436,27 @@ const lineup = $derived(
         <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
           Copy link
         </a>
+        {#if model.status === "published"}<span hidden data-native-share-sep aria-hidden="true">{" · "}</span><button
+            type="button"
+            hidden
+            data-native-share
+            data-share-title={model.title}
+            data-share-url={model.canonical}
+            data-testid="event-share"
+          >
+            Share
+          </button>
+        {/if}
       </p>
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+      {#if model.status === "published"}
+        <p
+          role="status"
+          aria-live="polite"
+          data-testid="event-share-status"
+          data-native-share-status
+        ></p>
+      {/if}
     </section>
   </div>
   {#if model.attendees.length > 0 || (model.viewerMember && model.attendeesPaging.page > 1)}
@@ -382,6 +506,28 @@ const lineup = $derived(
         <a href={model.attendeesRefreshHref} data-testid="event-attendees-refresh">Refresh attendees</a>.
       </p>
     </section>
+  {:else}
+    <!-- One shell keeps the named roster states consistent without duplicating
+         markup in the client bundle. The resolver's viewer state, not username,
+         distinguishes a guest from a signed-in non-member. -->
+    <section
+      aria-labelledby="event-roster-heading"
+      data-testid={model.viewerMember ? "event-roster-empty" : model.showJoinPitch ? "event-roster-guest-nudge" : "event-roster-members-only"}
+    >
+      <h2 id="event-roster-heading">Who's going{model.viewerMember ? " (0)" : ""}</h2>
+      <p>
+        {#if model.viewerMember}
+          No one is listed as going yet.
+        {:else if model.showJoinPitch}
+          {model.goingCount > 0 ? `${model.goingCount} going —` : "No one is listed as going yet."}
+          <a href={signIn}>sign in to see who's in</a>.
+        {:else}
+          Members only —
+          <a href="/join?next={encodeURIComponent(model.joinReturnTo)}">join the Discord</a>
+          to see who's in.
+        {/if}
+      </p>
+    </section>
   {/if}
   {@html detailIslands}
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
@@ -395,10 +541,7 @@ const lineup = $derived(
             <li>
               <a href="/e/{event.key}" data-testid="event-related-link">
                 {event.title}{" "}
-                <time datetime={event.datetime}>{event.whenText}</time>
-                {#if event.location}
-                  {" "}<span class="event-related-location">{event.location}</span>
-                {/if}
+                {@render destinationPreview(event)}
               </a>
             </li>
           {/each}

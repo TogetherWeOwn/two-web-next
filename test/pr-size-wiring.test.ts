@@ -85,6 +85,6 @@ describe("pr-size advisory wiring", () => {
   });
 
   it("keeps the Monday weekly tally schedule in the caller", () => {
-    expect(workflow).toMatch(/\n  schedule:\n    - cron: '17 7 \* \* 1'\n/);
+    expect(workflow).toMatch(/\n  schedule:\n    - cron: (["'])17 7 \* \* 1\1\n/);
   });
 });

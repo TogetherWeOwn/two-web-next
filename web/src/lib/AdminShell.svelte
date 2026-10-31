@@ -16,6 +16,7 @@ let { title, children }: { title: string; children: Snippet } = $props();
   <title>{title} — TWO admin</title>
   <meta name="robots" content="noindex, nofollow" />
   <link rel="stylesheet" href="/styles.css" />
+  <link rel="stylesheet" href="/admin-rsvp-review.css" />
   <link rel="stylesheet" href="/admin-terminal-review.css" />
   <script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script>
 </svelte:head>

@@ -36,7 +36,7 @@ expires within two hours (120 minutes after its last session-refreshing page vie
 normal browsing can rotate and extend that idle window, but never beyond
 24 hours from the login that started the session lineage. Rotation preserves
 that start time; reaching the absolute cap requires a fresh sign-in and role
-lookup. Kit-served admin pages renew the sliding session exactly like the Hono
+lookup. Kit-served admin pages rotate the session exactly like the Hono
 panel, under the same absolute cap. For immediate invalidation,
 an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply
@@ -165,6 +165,21 @@ falls back to those exits. This does not enable any additional Kit route cohort.
 If the outage continues, use the response's support reference when contacting
 the maintainers.
 
+## Pending or unconfirmed saves
+
+With JavaScript enabled, event and featured-content editors show **Saving… Please
+wait.** when you submit. Repeating the action in the same open form during the
+next ten seconds sends no extra submission and explains that saving is already
+pending; this does not suppress submissions in another tab or document. This feedback
+does not move keyboard focus or confirm success.
+
+If the page has not navigated after ten seconds, the message says saving is not
+confirmed. Your draft remains in the current document. Check the saved record
+before resubmitting: the first write may have succeeded. There is no automatic
+retry or draft storage across navigation. Returning to the document clears stale
+save feedback without marking your draft saved. Native forms still submit
+normally without JavaScript, but do not show this client-side feedback.
+
 ## Recover an empty event or featured list
 
 On `/admin/events` and `/admin/featured`, **Clear filters** appears when a
@@ -221,19 +236,21 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/events/:key` | **Save** event fields. |
 | POST | `/admin/events/:key/publish` | **Publish** a draft. |
 | POST | `/admin/events/:key/cancel` | **Cancel** / **Cancel event**. |
-| POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling. |
+| POST | `/admin/events/:key/duplicate` | **Duplicate as draft**: copy the event into a new unpublished draft. |
+| POST | `/admin/events/:key/rsvp-pause` | **Pause RSVPs** without cancelling, after a native review step. |
 | POST | `/admin/events/:key/rsvp-reopen` | **Reopen RSVPs** on an eligible event. |
 | GET | `/admin/featured` | Featured content list, title/publication filters, sorting and pagination. |
 | GET | `/admin/featured/new` | **New featured slot** form. |
 | POST | `/admin/featured` | **Create** a slot. |
 | GET | `/admin/featured/:id` | Edit a slot. |
 | POST | `/admin/featured/:id` | **Save** slot settings. |
+| POST | `/admin/featured/:id/unpublish` | **Unpublish** a slot without revalidating its other saved fields. |
 | POST | `/admin/featured/:id/delete` | **Delete this slot**. |
 | GET | `/admin/join-attempts` | Read-only join diagnostics, filters and pagination. |
 | GET | `/admin/join-attempts/:id` | Read-only attempt outcome and trace detail. |
 | GET | `/admin/activity-log` | Read-only activity log, subject/causer filters and pagination. |
 
-These are the 19 canonical routes in `src/admin/routes.tsx` (10 GET, 9 POST).
+These are the 21 canonical routes in `src/admin/routes.tsx` (10 GET, 11 POST).
 Five additional GET routes retain legacy bookmarks as 301 redirects:
 
 | Legacy path | Destination |
@@ -244,9 +261,11 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 | `/admin/featured-contents/create` | `/admin/featured/new` |
 | `/admin/featured-contents/:id/edit` | `/admin/featured/:id` with the native ID resolved from the imported legacy ID, not a native-ID fallback. |
 
-All 24 routes (15 GET, 9 POST) use the moderator guard. Legacy redirects drop
+All 26 routes (15 GET, 11 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
+Pausing RSVPs opens a native review first: open **Review pause**, check the
+named event and consequence, then press the final **Pause RSVPs**.
 Event cancellation and featured deletion first open a native review panel with
 **Review cancellation** or **Review deletion**. Check its saved title, ID and
 consequence before pressing the final **Cancel event** or **Delete this slot**
@@ -259,7 +278,7 @@ separate unsaved-changes warning is not action approval.
 ### Kit admin shells (shipped; join-attempts pair Kit-served)
 
 Each of the 10 admin GET routes above also ships a Kit shell. The
-mixed-mode truth: the migration is GET-only; all 9 POST form actions stay
+mixed-mode truth: the migration is GET-only; all 11 POST form actions stay
 Hono with no manifest entries of their own. Most shell entries in
 `src/route-ownership.ts` (`ROUTE_MANIFEST`) still read `enabled: false`, so
 Hono serves those pages; the join-attempts list and detail entries read
@@ -303,7 +322,7 @@ the remaining moderator-admin journeys stay Hono-only, ledgered as skipped.
 Before publishing, use the [event page content readiness checklist](event-content-readiness.md) to confirm members can decide whether and how to attend.
 
 1. Open `/admin/events`, choose **New event**, or open an existing event by its
-   title. **Search** matches title only; **Status** filters `draft`, `published`,
+   title. **Search** matches titles and saved games; **Status** filters `draft`, `published`,
    `cancelled` or `past`. **RSVPs** filters Open/Paused; **Series** filters
    Parent/Child/Standalone; **Fill** filters Full/Has seats/Unlimited.
    Full/Has seats compare finite capacity with **Going** answers only, not Maybe
@@ -372,6 +391,12 @@ leave-page warning for unsaved changes (including after a rejected Save).
   Use the [event cancellation and reschedule communication checklist](events-communications.md)
   after verifying the site state.
 - `past` is a list filter/status, not something moderators set with a button.
+- **Duplicate as draft** on edit copies a draft, published or cancelled event
+  into a new unpublished draft titled `Copy of …` with the same venue, access,
+  joining, capacity and organizer, a fresh key, and cleared RSVPs, series
+  linkage and Discord mirror state. The copy is never published or announced:
+  review it and publish it like any new draft. A series parent duplicates as
+  one standalone event; siblings are never materialized.
   Public pages can classify an event as past by its end time even while the stored
   status still says `published`; the admin `past` filter need not include every
   ended event.
@@ -417,7 +442,10 @@ existing-responses count as attendance.
 ### Pause or reopen RSVPs
 
 Published events that have not ended show **Pause RSVPs** or **Reopen RSVPs**
-on the list and edit screen. These actions keep the event published; pausing is
+on the list and edit screen. Pausing opens a native review naming the saved
+event and the consequence (signups close, the waitlist line freezes) before
+the final submit; closing the review changes nothing and **Reopen RSVPs**
+stays one-click. These actions keep the event published; pausing is
 not cancellation and does not remove existing answers. Reopening can promote
 waiting members into available seats in first-in-first-out order. Both changed
 settings attempt asynchronous Discord write-back, not immediate delivery.
@@ -538,6 +566,14 @@ while retaining filters and return to page 1. Use **Previous**/**Next** for
 25-row pages, which keep filters and sort; the bar shows the current page
 number. There is no drag-and-drop ordering.
 
+Published rows offer **Unpublish** below the title, including scheduled and expired
+slots. It immediately turns off publication and returns to the list, without
+changing or revalidating any other saved field. Use it to withdraw a slot even
+when an old image URL would fail the current edit-form rules. Unpublished rows
+have no action; repeating the same withdrawal succeeds without another change
+or activity-log entry. Changed withdrawals are audited and retire the guest
+homepage cache. There is no list action to republish a slot.
+
 ### Field rules
 
 | Field | Rule |
@@ -557,14 +593,22 @@ Retyping a bound to minute precision narrows it on purpose.
 
 ### Preview and safe editing
 
-The edit page shows a **Homepage preview** panel: the last saved content,
-checked at the printed UTC time. Pressing **Create** or **Save** refreshes it.
-Typed-but-unsaved edits never appear there, and neither do rejected
-submissions: after a failed save the form keeps the submitted values for
-correction while the preview still shows the last saved row. The new-slot page
-has no preview. When the slot is not currently visible, the panel says so
-instead of rendering the slot. An inline preview is not proof of guest homepage
-delivery: verify the homepage as a guest after an authorized change.
+The edit page shows a **Homepage preview** panel with two parts. **Saved
+content preview** renders the last saved card — headline, body, admitted link
+and image — for every saved status, unpublished included, checked at the
+printed UTC time. **Homepage eligibility** separately reports the status badge,
+the reason (publication off, starts in the future, window ended, or eligible)
+and the saved UTC window bounds; an absent bound means the window is open on
+that side. For a published slot with a saved bound the editor cannot decode
+(such as a BC timestamp or infinity), the panel reports **unavailable** rather
+than asserting eligibility; the exact saved bound text remains visible. An
+unchecked **Published** setting still reports **unpublished** first. Pressing
+**Create** or **Save** refreshes both. Typed-but-unsaved
+edits never appear in the card, and neither do rejected submissions: after a
+failed save the form keeps the submitted values for correction while the card
+and eligibility still show the last saved row. The new-slot page has no
+preview. Neither part is proof of guest homepage delivery: verify the homepage
+as a guest after an authorized change.
 
 Follow one coherent workflow per approved change:
 
@@ -573,15 +617,19 @@ Follow one coherent workflow per approved change:
    the submitted values stay in the form.
 3. On success the page reloads: inspect the refreshed preview and status badge.
 4. Verify the homepage as a guest before claiming the change is live.
-5. To withdraw a slot without removing its record, uncheck **Published** and save.
+5. To withdraw a slot without removing its record, use **Unpublish** on the list.
+   Unchecking **Published** in the editor and saving also works when all fields
+   pass current validation.
 
 Leaving the page with unsaved changes triggers a browser warning; the
 rejected-save redisplay is guarded the same way. There is no autosave: an
 unsaved draft exists only in the open document, so leaving or reloading without
-saving loses it. A repeated **Save** within 10 seconds is ignored; if a save
-seems interrupted, reopen the slot and check its stored settings before saving
-again. An expired session shows a notice and keeps the edits; use its sign-in
-link to recover.
+saving loses it. With JavaScript, a repeated **Save** in the same open form
+within 10 seconds is ignored; if a save seems interrupted, reopen the slot and
+check its stored settings before saving again. When the background session check
+detects expiry, it shows a notice and keeps the edits in that document; use its
+sign-in link to recover. Expiry first discovered by a submitted POST can instead
+navigate to write recovery without preserving the draft.
 
 Use only public links and media you are authorized to share; do not paste
 private-service URLs, personal data, or expiring/signed URLs into site content.
@@ -628,7 +676,10 @@ Stop and escalate any refusal rather than seeking another access path.
 
 For outcome meanings and safe escalation, use the
 [join troubleshooting guide](troubleshooting-join.md#moderator-diagnostics-and-escalation).
-Request ID is normally blank for the current live Discord add-member call.
+Request ID carries the website's correlation ID (the callback's
+`x-request-id`) on `denied` and `error` rows, so those rows join to request
+logs. On `added`, `already_member`, `degraded` and `rate_limited` rows it
+stays blank because the live add-member call returns no request ID.
 The ordinary sign-in flow does not write these rows; absence is not proof of
 success or no attempted join. Keep member identifiers private.
 

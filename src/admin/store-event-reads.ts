@@ -13,6 +13,8 @@ import {
   inArray,
   isNotNull,
   isNull,
+  lt,
+  or,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -39,8 +41,27 @@ export async function listEvents(db: Db, params: EventListParams): Promise<Event
   return db.transaction(async (tx) => {
     await nonSensitiveRead("timeouts", () => boundInventoryRead(tx));
     const conds: (SQL | undefined)[] = [];
-    if (opts.q) conds.push(ilike(events.title, `%${escapeLikeTerm(opts.q)}%`));
-    if (opts.status) conds.push(eq(events.status, opts.status));
+    if (opts.q) {
+      // One literal case-insensitive match against title OR the stored game,
+      // composed inside the same ANDed predicates as before. Null games never
+      // match the game arm, so title-only rows behave exactly as they did.
+      const pattern = `%${escapeLikeTerm(opts.q)}%`;
+      conds.push(or(ilike(events.title, pattern), ilike(events.game, pattern)));
+    }
+    if (opts.status === "past")
+      // Same definition as the public archive (src/events/reads.ts listPast):
+      // stored-past rows plus published rows whose endsAt is before now.
+      // Every other status keeps the literal stored-status match, and the
+      // predicate stays inside the same ANDed single read so search, paging
+      // and the Kit list inherit it unchanged. Rows keep their true stored
+      // status label; no transition or migration writes here.
+      conds.push(
+        or(
+          eq(events.status, "past"),
+          and(eq(events.status, "published"), lt(events.endsAt, new Date())),
+        ),
+      );
+    else if (opts.status) conds.push(eq(events.status, opts.status));
     if (opts.rsvp_open !== "") conds.push(eq(events.rsvpOpen, opts.rsvp_open === "1"));
     if (opts.series === "parent")
       conds.push(and(isNull(events.parentEventId), isNotNull(events.recurrenceFrequency)));

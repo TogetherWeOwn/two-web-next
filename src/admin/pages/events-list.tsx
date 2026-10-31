@@ -67,8 +67,11 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
         <input type="hidden" name="sort" value={query.sort} />
         <input type="hidden" name="order" value={query.order} />
         <div class="field">
-          <label for="q">Search</label>
-          <input id="q" name="q" type="search" value={query.q} />
+          <label for="q">Search titles and games</label>
+          <input id="q" name="q" type="search" value={query.q} aria-describedby="q-help" />
+          <p class="hint" id="q-help">
+            Matches event titles and saved games.
+          </p>
         </div>
         <div class="field">
           <label for="status">Status</label>
@@ -171,10 +174,29 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                 <tr key={r.eventKey}>
                   <td>
                     <a href={`/admin/events/${r.eventKey}`}>{r.title}</a>
+                    {r.game?.trim() ? (
+                      <span class="hint">
+                        <br />
+                        {r.game}
+                      </span>
+                    ) : null}
                   </td>
                   <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
                   <td>
-                    <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time>
+                    {Number.isFinite(r.startsAt.getTime()) ? (
+                      <time datetime={r.startsAt.toISOString()}>{r.startsAt.toISOString()}</time>
+                    ) : (
+                      <span data-testid={`event-unrenderable-time-${r.eventKey}`}>
+                        Unrenderable time
+                      </span>
+                    )}
+                    {Number.isFinite(r.startsAt.getTime()) &&
+                    !Number.isFinite(r.endsAt.getTime()) ? (
+                      <span data-testid={`event-unrenderable-time-${r.eventKey}`}>
+                        {" "}
+                        (unrenderable end time)
+                      </span>
+                    ) : null}
                   </td>
                   <EventFillCell row={r} />
                   <td>
@@ -186,12 +208,7 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                       </form>
                     ) : null}
                     {r.status === "draft" || r.status === "published" ? (
-                      <TerminalReview
-                        kind="cancel"
-                        title={r.title}
-                        targetId={r.eventKey}
-                        action={`/admin/events/${r.eventKey}/cancel`}
-                      />
+                      <TerminalReview kind="cancel" title={r.title} targetId={r.eventKey} />
                     ) : null}
                     <RsvpAction row={r} />
                   </td>

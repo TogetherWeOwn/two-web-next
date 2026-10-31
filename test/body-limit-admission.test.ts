@@ -43,31 +43,38 @@ const CAP_FIRST_ROUTES = new Set([
   "PATCH /events/:key",
   "POST /events/:key/publish",
   "POST /events/:key/cancel",
+  "POST /events/:key/duplicate",
   "POST /events/:key/rsvp-pause",
   "POST /events/:key/rsvp-reopen",
   "POST /admin/events",
   "POST /admin/events/:key",
   "POST /admin/events/:key/publish",
   "POST /admin/events/:key/cancel",
+  "POST /admin/events/:key/duplicate",
   "POST /admin/events/:key/rsvp-pause",
   "POST /admin/events/:key/rsvp-reopen",
   "POST /admin/queue/failed/:id/redispatch",
   "POST /__probe/alert",
 ]);
 
-// Moderator featured create/update/delete refuse oversized bodies before the
+// Moderator featured writes refuse oversized bodies before the
 // shared throttle (the moderator guard still runs first): cap-first, not
 // throttle-first.
 const FEATURED_WRITE_CAP_FIRST = new Set([
   "POST /admin/featured",
   "POST /admin/featured/:id",
   "POST /admin/featured/:id/delete",
+  "POST /admin/featured/:id/unpublish",
 ]);
 
-// Logout and QA login refuse oversized bodies before the shared throttle:
-// cap-first, not throttle-first. The QA identity/token gate still runs before
-// the cap.
-const AUTH_CAP_FIRST = new Set(["POST /logout", "POST /auth/qa/:identity"]);
+// Logout (both single and everywhere) and QA login refuse oversized bodies
+// before the shared throttle: cap-first, not throttle-first. The QA
+// identity/token gate still runs before the cap.
+const AUTH_CAP_FIRST = new Set([
+  "POST /logout",
+  "POST /logout/everywhere",
+  "POST /auth/qa/:identity",
+]);
 
 function routeInfo(key: string) {
   const [method, pattern] = key.split(" ");
@@ -274,7 +281,11 @@ describe("global gates reject before admission or buffering", () => {
         if (gate === "missing-origin") request.headers.delete("origin");
         const response = await app.request(request, undefined, env);
         expect(response.status).toBe(gate === "host" ? 404 : 403);
-        if (gate !== "host") expect(await response.json()).toEqual({ error: "cross_origin" });
+        if (gate !== "host")
+          expect(await response.json()).toEqual({
+            error: "cross_origin",
+            request_id: expect.any(String),
+          });
         expect(pull).not.toHaveBeenCalled();
         expect(sql).not.toHaveBeenCalled();
         await request.body?.cancel().catch(() => {});

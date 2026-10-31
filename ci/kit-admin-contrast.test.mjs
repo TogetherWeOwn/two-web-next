@@ -5,7 +5,7 @@ import assert from "node:assert/strict";
 import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { after, before, test } from "node:test";
+import { after, before, describe, test } from "node:test";
 import { pathToFileURL } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { build } from "esbuild";
@@ -124,174 +124,178 @@ after(async () => {
   if (scratch) await rm(scratch, { recursive: true, force: true });
 });
 
-for (const width of [1280, 390]) {
-  for (const name of ["event-new", "event-edit", "featured-new", "featured-edit", "dashboard"]) {
-    test(`Kit admin contrast: ${name} at ${width}`, async () => {
-      const f = fixtures.find((fixture) => fixture.name === name);
-      const isDashboard = name === "dashboard";
-      const context = await browser.newContext({
-        viewport: { width, height: width === 390 ? 844 : 800 },
-      });
-      const unexpected = [];
-      const errors = [];
-      try {
-        await context.route("**/*", async (route) => {
-          const url = new URL(route.request().url());
-          if (url.origin !== origin || route.request().method() !== "GET") {
+// Named suite: the executed-count verifier admits only cases under this title.
+describe("Kit admin contrast", () => {
+  for (const width of [1280, 390]) {
+    for (const name of ["event-new", "event-edit", "featured-new", "featured-edit", "dashboard"]) {
+      test(`Kit admin contrast: ${name} at ${width}`, async () => {
+        const f = fixtures.find((fixture) => fixture.name === name);
+        const isDashboard = name === "dashboard";
+        const context = await browser.newContext({
+          viewport: { width, height: width === 390 ? 844 : 800 },
+        });
+        const unexpected = [];
+        const errors = [];
+        try {
+          await context.route("**/*", async (route) => {
+            const url = new URL(route.request().url());
+            if (url.origin !== origin || route.request().method() !== "GET") {
+              unexpected.push(url.pathname);
+              return route.abort();
+            }
+            if (url.pathname === f.path)
+              return route.fulfill({ contentType: "text/html", body: f.html });
+            const directory = url.pathname.startsWith("/_app/")
+              ? join(output, "client")
+              : resolve("public");
+            const asset = resolve(directory, url.pathname.slice(1));
+            if (asset.startsWith(directory + "/") && /\.(css|js|woff2)$/.test(asset)) {
+              return route.fulfill({
+                contentType: asset.endsWith(".css")
+                  ? "text/css"
+                  : asset.endsWith(".js")
+                    ? "text/javascript"
+                    : "font/woff2",
+                body: await readFile(asset),
+              });
+            }
             unexpected.push(url.pathname);
             return route.abort();
+          });
+          const page = await context.newPage();
+          page.on("pageerror", (error) => errors.push(error.message));
+          await page.goto(origin + f.path);
+          if (isDashboard) {
+            await page.locator('[data-testid="admin-actor"]').first().waitFor();
+          } else {
+            await page.locator("[data-event-editor]").first().waitFor();
           }
-          if (url.pathname === f.path)
-            return route.fulfill({ contentType: "text/html", body: f.html });
-          const directory = url.pathname.startsWith("/_app/")
-            ? join(output, "client")
-            : resolve("public");
-          const asset = resolve(directory, url.pathname.slice(1));
-          if (asset.startsWith(directory + "/") && /\.(css|js|woff2)$/.test(asset)) {
-            return route.fulfill({
-              contentType: asset.endsWith(".css")
-                ? "text/css"
-                : asset.endsWith(".js")
-                  ? "text/javascript"
-                  : "font/woff2",
-              body: await readFile(asset),
-            });
+          if (isDashboard) {
+            assert.equal(
+              await page.locator(".card p").count(),
+              4,
+              "four resource-card descriptions are actually present",
+            );
+          } else {
+            assert.equal(
+              (await page.locator(".hint").count()) > 0,
+              true,
+              "help text is actually present",
+            );
           }
-          unexpected.push(url.pathname);
-          return route.abort();
-        });
-        const page = await context.newPage();
-        page.on("pageerror", (error) => errors.push(error.message));
-        await page.goto(origin + f.path);
-        if (isDashboard) {
-          await page.locator('[data-testid="admin-actor"]').first().waitFor();
-        } else {
-          await page.locator("[data-event-editor]").first().waitFor();
-        }
-        if (isDashboard) {
-          assert.equal(
-            await page.locator(".card p").count(),
-            4,
-            "four resource-card descriptions are actually present",
+          if (name === "event-new") assert.equal(await page.locator("fieldset label").count(), 3);
+          const axe = new AxeBuilder({ page });
+          if (isDashboard) {
+            // Card descriptions and footer only: the card heading links carry
+            // the UA dark-scheme link color with no author rule, which fails on
+            // the light cards on pristine main too. That pre-existing defect is
+            // recorded in docs/evidence/kit-admin-contrast/README.md, not
+            // guarded here; this suite owns the surfaces the slice restyles.
+            axe.include(".card p").include("footer");
+          } else {
+            axe.include(".hint").include("footer").include("fieldset");
+          }
+          const result = await axe.withRules(["color-contrast"]).analyze();
+          const measured = await page
+            .locator(
+              isDashboard ? ".card p, footer" : ".hint, footer, fieldset label, fieldset legend",
+            )
+            .evaluateAll(
+              (elements, cardContainer) =>
+                elements.map((el) => ({
+                  text: el.textContent.trim(),
+                  color: getComputedStyle(el).color,
+                  background: getComputedStyle(el.closest(cardContainer) ?? document.body)
+                    .backgroundColor,
+                })),
+              isDashboard ? ".card" : "fieldset",
+            );
+          if (evidence) {
+            await page.screenshot({ path: join(evidence, `${name}-${width}.png`), fullPage: true });
+            await writeFile(
+              join(evidence, `${name}-${width}.json`),
+              JSON.stringify(
+                { violations: result.violations, incomplete: result.incomplete, measured },
+                null,
+                2,
+              ),
+            );
+          }
+          assert.deepEqual(unexpected, [], "no live or mutating requests");
+          assert.deepEqual(errors, [], "shipped islands execute without errors");
+          assert.deepEqual(
+            result.incomplete,
+            [],
+            "contrast must be measurable, not an axe incomplete",
           );
-        } else {
-          assert.equal(
-            (await page.locator(".hint").count()) > 0,
-            true,
-            "help text is actually present",
-          );
-        }
-        if (name === "event-new") assert.equal(await page.locator("fieldset label").count(), 3);
-        const axe = new AxeBuilder({ page });
-        if (isDashboard) {
-          // Card descriptions and footer only: the card heading links carry
-          // the UA dark-scheme link color with no author rule, which fails on
-          // the light cards on pristine main too. That pre-existing defect is
-          // recorded in docs/evidence/kit-admin-contrast/README.md, not
-          // guarded here; this suite owns the surfaces the slice restyles.
-          axe.include(".card p").include("footer");
-        } else {
-          axe.include(".hint").include("footer").include("fieldset");
-        }
-        const result = await axe.withRules(["color-contrast"]).analyze();
-        const measured = await page
-          .locator(
-            isDashboard ? ".card p, footer" : ".hint, footer, fieldset label, fieldset legend",
-          )
-          .evaluateAll(
-            (elements, cardContainer) =>
-              elements.map((el) => ({
-                text: el.textContent.trim(),
-                color: getComputedStyle(el).color,
-                background: getComputedStyle(el.closest(cardContainer) ?? document.body)
-                  .backgroundColor,
-              })),
-            isDashboard ? ".card" : "fieldset",
-          );
-        if (evidence) {
-          await page.screenshot({ path: join(evidence, `${name}-${width}.png`), fullPage: true });
-          await writeFile(
-            join(evidence, `${name}-${width}.json`),
-            JSON.stringify(
-              { violations: result.violations, incomplete: result.incomplete, measured },
-              null,
-              2,
-            ),
-          );
-        }
-        assert.deepEqual(unexpected, [], "no live or mutating requests");
-        assert.deepEqual(errors, [], "shipped islands execute without errors");
-        assert.deepEqual(
-          result.incomplete,
-          [],
-          "contrast must be measurable, not an axe incomplete",
-        );
-        assert.deepEqual(
-          result.violations.map((v) => ({
-            id: v.id,
-            nodes: v.nodes.map((n) => ({ target: n.target, summary: n.failureSummary })),
-          })),
-          [],
-        );
-      } finally {
-        await context.close();
-      }
-    });
-  }
-}
-
-test("Hono light admin presentation keeps its original colors", async () => {
-  const context = await browser.newContext({ javaScriptEnabled: false });
-  try {
-    const pages = [
-      await EventFormPage({ mode: "new", values: {}, errors: {} }).toString(),
-      await FeaturedFormPage({ mode: "new", values: {}, errors: {} }).toString(),
-    ];
-    const page = await context.newPage();
-    let html;
-    await context.route("**/*", async (route) => {
-      const url = new URL(route.request().url());
-      if (url.pathname === "/hono") return route.fulfill({ contentType: "text/html", body: html });
-      if (url.pathname === "/styles.css")
-        return route.fulfill({
-          contentType: "text/css",
-          body: await readFile("public/styles.css"),
-        });
-      return route.abort();
-    });
-    for (html of pages) {
-      await page.goto(origin + "/hono");
-      await page.locator(".hint").first().waitFor();
-      assert.deepEqual(
-        await page.locator("body").evaluate((el) => ({
-          color: getComputedStyle(el).color,
-          background: getComputedStyle(el).backgroundColor,
-        })),
-        { color: "rgb(22, 19, 15)", background: "rgb(244, 239, 230)" },
-      );
-      for (const selector of [".hint", "footer"]) {
-        assert.equal(
-          await page
-            .locator(selector)
-            .first()
-            .evaluate((el) => getComputedStyle(el).color),
-          "rgb(107, 98, 87)",
-        );
-      }
-      if (await page.locator("fieldset").count()) {
-        assert.deepEqual(
-          await page
-            .locator("fieldset")
-            .first()
-            .evaluate((el) => ({
-              color: getComputedStyle(el).color,
-              background: getComputedStyle(el).backgroundColor,
+          assert.deepEqual(
+            result.violations.map((v) => ({
+              id: v.id,
+              nodes: v.nodes.map((n) => ({ target: n.target, summary: n.failureSummary })),
             })),
-          { color: "rgb(22, 19, 15)", background: "rgb(255, 253, 248)" },
-        );
-      }
+            [],
+          );
+        } finally {
+          await context.close();
+        }
+      });
     }
-  } finally {
-    await context.close();
   }
+
+  test("Hono light admin presentation keeps its original colors", async () => {
+    const context = await browser.newContext({ javaScriptEnabled: false });
+    try {
+      const pages = [
+        await EventFormPage({ mode: "new", values: {}, errors: {} }).toString(),
+        await FeaturedFormPage({ mode: "new", values: {}, errors: {} }).toString(),
+      ];
+      const page = await context.newPage();
+      let html;
+      await context.route("**/*", async (route) => {
+        const url = new URL(route.request().url());
+        if (url.pathname === "/hono")
+          return route.fulfill({ contentType: "text/html", body: html });
+        if (url.pathname === "/styles.css")
+          return route.fulfill({
+            contentType: "text/css",
+            body: await readFile("public/styles.css"),
+          });
+        return route.abort();
+      });
+      for (html of pages) {
+        await page.goto(origin + "/hono");
+        await page.locator(".hint").first().waitFor();
+        assert.deepEqual(
+          await page.locator("body").evaluate((el) => ({
+            color: getComputedStyle(el).color,
+            background: getComputedStyle(el).backgroundColor,
+          })),
+          { color: "rgb(22, 19, 15)", background: "rgb(244, 239, 230)" },
+        );
+        for (const selector of [".hint", "footer"]) {
+          assert.equal(
+            await page
+              .locator(selector)
+              .first()
+              .evaluate((el) => getComputedStyle(el).color),
+            "rgb(107, 98, 87)",
+          );
+        }
+        if (await page.locator("fieldset").count()) {
+          assert.deepEqual(
+            await page
+              .locator("fieldset")
+              .first()
+              .evaluate((el) => ({
+                color: getComputedStyle(el).color,
+                background: getComputedStyle(el).backgroundColor,
+              })),
+            { color: "rgb(22, 19, 15)", background: "rgb(255, 253, 248)" },
+          );
+        }
+      }
+    } finally {
+      await context.close();
+    }
+  });
 });

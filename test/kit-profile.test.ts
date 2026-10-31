@@ -202,6 +202,8 @@ describe("Kit profile model: reads declare the retrieved subject", () => {
       isOwner: false,
       isModerator: false,
       joinResult: null,
+      // Bob stores no games, so nothing of Alice's list is shared with him.
+      sharedGames: [],
     });
   });
 });
@@ -381,11 +383,11 @@ describe("Kit profile view: single-source Hono parity", () => {
     expect(editor).toMatch(
       /\sdata-island\s*=\s*\{\s*MEMBER_PROFILE_ISLAND\s*\}|\{\s*\.\.\.\s*\{\s*\[\s*MOUNT_ATTR\s*\]\s*:\s*MEMBER_PROFILE_ISLAND\s*\}\s*\}/,
     );
-    // Hono-owned profile helpers stay imported from their source module.
+    // Both renderers share the dependency-free presentation source.
     for (const name of ["PROFILE_FIELD_IDS", "profileInitials", "PROFILE_SHARE_DESCRIPTION"]) {
       expect(page, name).toContain(name);
     }
-    expect(page).toContain('from "../../../src/profiles/pages"');
+    expect(page).toContain('from "../../../src/profiles/presentation"');
   });
 
   it("keeps member data out of markup helpers: interpolation only, no raw HTML of member fields", () => {

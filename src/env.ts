@@ -45,6 +45,9 @@ export type Env = AgentEventsEnv & {
   BOT_DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
+  // Optional runtime-only bot control bearer for the read-only operator panel.
+  // Unset/short values leave it dark; never provisioned by checked-in config.
+  OPS_CONTROL_TOKEN?: string;
   // Separate default-off operational read boundary. No grant or principal is
   // provisioned here; both settings require independent security review.
   QUEUE_RECONCILE_PREVIEW_ENABLED?: string;
@@ -130,6 +133,11 @@ export type Session = {
   member: boolean;
   moderator: boolean;
 };
+
+// What the site header reads from a session: the viewer name plus the member
+// bit (board link). Narrower than Session so crossings that only feed chrome
+// carry nothing else — never ids, avatars or tokens.
+export type HeaderSession = Pick<Session, "username" | "member">;
 
 // W14: agent-events ingress. Postgres comes through a Hyperdrive binding in the worker; tests
 // and `wrangler dev` inject a connection string via the same shape (agent-testdb only).

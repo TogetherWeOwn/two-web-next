@@ -43,6 +43,7 @@ import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { document, tag, testId, text } from "./helpers/schedule-search-context-acceptance";
 import type { Db } from "../src/db/index";
 import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
@@ -304,6 +305,16 @@ function optionsOf(selectHtml: string): { value: string; label: string; selected
   });
 }
 
+// Complete native heading/link text of every rendered card, in order. A
+// search match may wrap title segments in <mark>, which breaks the raw-HTML
+// substring a plain title check looks for; the parsed link text is the title
+// a reader sees, so searched-card title assertions inspect it instead.
+function cardTitleTexts(html: string): string[] {
+  return testId(document(html), EVENT_CARD_TESTID).map((card) =>
+    text(tag(tag(card, "h3")[0]!, "a")[0]!),
+  );
+}
+
 function statusInner(html: string, testid: string): string | null {
   return (
     new RegExp(`<p\\b[^>]*data-testid="${testid}"[^>]*>([\\s\\S]*?)</p>`).exec(html)?.[1] ?? null
@@ -475,9 +486,10 @@ describe("Hono list: filtering", () => {
     const res = await src.request("/events?q=Paged&game=Chess");
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("Paged Chess Meetup");
-    expect(html).not.toContain("Paged Go Meetup");
-    expect(html).not.toContain("Unrelated Chess Meetup");
+    const titles = cardTitleTexts(html);
+    expect(titles).toContain("Paged Chess Meetup");
+    expect(titles).not.toContain("Paged Go Meetup");
+    expect(titles).not.toContain("Unrelated Chess Meetup");
     const status = statusInner(html, EVENTS_SEARCH_STATUS_TESTID);
     expect(status).not.toBeNull();
     expect(status!).toContain("Paged");
@@ -553,8 +565,9 @@ describe("Hono list: unknown and blank degrade to unfiltered", () => {
     const res = await src.request("/events?q=Paged&game=NoSuchGame");
     expect(res.status).toBe(200);
     const html = await res.text();
-    expect(html).toContain("Paged Chess Meetup");
-    expect(html).toContain("Paged Go Meetup");
+    const titles = cardTitleTexts(html);
+    expect(titles).toContain("Paged Chess Meetup");
+    expect(titles).toContain("Paged Go Meetup");
     expect(statusInner(html, EVENTS_SEARCH_STATUS_TESTID)).toContain(eventsSearchHitCopy("Paged"));
     const select = selectFor(html);
     expect(select).not.toBeNull();
@@ -877,7 +890,7 @@ describe("CONTROL: existing search and calendar contracts", () => {
     const hit = await src.request("/events?q=Paged");
     expect(hit.status).toBe(200);
     const hitHtml = await hit.text();
-    expect(hitHtml).toContain("Paged Chess Meetup");
+    expect(cardTitleTexts(hitHtml)).toContain("Paged Chess Meetup");
     expect(statusInner(hitHtml, EVENTS_SEARCH_STATUS_TESTID)).toContain(
       eventsSearchHitCopy("Paged"),
     );

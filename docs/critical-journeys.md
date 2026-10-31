@@ -12,7 +12,7 @@ non-Actions execution.
 | --- | --- | --- |
 | Homepage → join CTA → Discord OAuth → member profile | `e2e/join.spec.ts` | Real CTA navigation; intercepted authorize redirect; Worker token/user/guild-add stubs called; signed-in profile renders |
 | QA sign-in → keyboard profile edit | `e2e/profile.spec.ts` | Genuine QA session cookie; tab order and Enter submit; PATCH 200; saved status focused; values survive reload |
-| Events list → event page → RSVP going → withdraw | `e2e/events.spec.ts` | Real going/withdraw controls; PUT 201 and DELETE 204; both states persist after reload |
+| Events list → event page → RSVP going → withdraw | `e2e/events.spec.ts` | Real controls; fresh PUT 201 with `status: going` and `synced_to_discord_at: null`; before reload, exact `Saved. Syncing to Discord.` note visible and no synced note; DELETE 204 removes both sync notes; confirmation and withdrawal persist after reload. This proves immediate pending sync, not successful Discord delivery |
 | Capacity-1 waitlist join → leave, and promotion on seat-holder withdraw | `e2e/event-waitlist.spec.ts` | Capacity-1 fixtures: moderator fills the seat, member waitlist-joins at `#1 in line`, leaves and the join control returns; second fixture: seat-holder withdraw promotes automatically (`You're in`, `1 of 1 going`, no claim click), persisting across reload; fixtures cancelled in `finally` through the request API |
 | Moderator → create draft → publish → filter admin list → cancel | `e2e/admin-filters.spec.ts` | Real form/redirect; draft hidden from guest (403); publish status; guest view 200 and public calendar navigation; Status draft/published and RSVPs Open/Paused filters each show only matching rows; JSON cancel renders the guest 410 notice, refused RSVP write and STATUS:CANCELLED feed |
 | Pause → refused RSVP with the paused reason → reopen → RSVP restored | `e2e/event-pause.spec.ts` | Moderator pauses through the admin form; member sees the paused notice with no going control; a request-API PUT is refused 403 `event_not_open` with `why: paused` and the seat count is unchanged; both transitions persist across reload; reopen restores the going control and a browser-click PUT answers 201 (`You're in`, `1 of 10 going`), persisting across reload; the fixture is cancelled in `finally` through the request API |
@@ -88,13 +88,22 @@ synchronization.
 
 ## Running and inspecting evidence
 
-- Locally/controller: `env -u DATABASE_URL npm run check` (no live SQL/browser).
+- Locally/controller: `env -u DATABASE_URL npm run check` runs fixture-only
+  checks, not live SQL or browser journeys. Featured-unpublish SQL cases use
+  the existing integration gate in `test/admin.test.ts`; six registration and
+  rendering cases remain ungated in the two featured-unpublish suites. No new
+  conditional skip is added. Full SQL verification still needs the disposable
+  test database described in the README.
 - On the `ubuntu-latest` runner: `npm run e2e` after prepare, migrations,
   seed and `npx playwright install --with-deps chromium`.
 - Chromium only, one worker, fresh browser context per spec, zero retries.
 - On failure, the job uploads `test-results/` traces/screenshots and the HTML
-  `playwright-report/` under `e2e-failure-<run>-<attempt>` for seven days.
-  Do not upload `.dev.vars`; traces can contain only disposable CI sessions.
+  `playwright-report/` under `e2e-failure-<run>-<attempt>` for seven days,
+  except manual dispatches on `test/rsvp-pending-control-*` refs: intentional
+  controls upload no raw failure directories. Browser checks and cleanup still
+  run. Do not upload `.dev.vars` or publish control captures manually; even
+  disposable CI sessions can appear in traces. This exception does not change
+  staging's derived-ledger-only artifact policy.
 - Require a green `e2e-ok` result on the exact PR head, together with
   `ci-ok`, `gitleaks`, `pr-lint`, and independent Code Reviewer approval before
   squash merge. A green static check does not prove the browser journeys.
@@ -127,7 +136,7 @@ Coverage reuses the CI journey logic with staging-safe setup:
 | --- | --- | --- |
 | QA sign-in, member and moderator | `e2e/staging/auth.spec.ts` | Saved storage states open `/profile` (`QA Member`) and `/admin/events` (`Events`); bad token and unknown identity answer 404 |
 | Events list, search miss, calendar month step | `e2e/staging/events-list.spec.ts` | `events-content` plus list or never-empty; unique miss string shows the miss block and clears; month label steps forward and back |
-| Fixture event, RSVP going, withdraw, waitlist join + leave, waitlist promotion, cancel | `e2e/staging/event-rsvp.spec.ts` (local pre-merge pin: `e2e/event-waitlist.spec.ts`) | Moderator draft → publish; member PUT 201, `You're in`, reload persists; DELETE 204, going returns; capacity-1 fixture: moderator fills the seat, member waitlist-join asserts `#1 in line`, leave returns the join control; second capacity-1 fixture: moderator withdraws (204) and the member's reload shows `You're in` and `1 of 1 going` with `waitlist-position`, `waitlist-claim`, `waitlist-join` and `event-full` gone (promotion is automatic, no claim click), persisting across another reload; every fixture cancelled in `finally` through the request API (no cleanup page), with the global teardown sweep as backstop |
+| Fixture event, RSVP going, withdraw, waitlist join + leave, waitlist promotion, cancel | `e2e/staging/event-rsvp.spec.ts` (local pre-merge pin: `e2e/event-waitlist.spec.ts`) | Moderator draft → publish; member PUT 201 with `status: going` and `synced_to_discord_at: null`, exact pending-sync note visible and synced note absent before reload; `You're in` persists after reload (a consumer may have synced by then); DELETE 204 removes both sync notes and going returns. Pending is not successful Discord delivery; capacity-1 fixture: moderator fills the seat, member waitlist-join asserts `#1 in line`, leave returns the join control; second capacity-1 fixture: moderator withdraws (204) and the member's reload shows `You're in` and `1 of 1 going` with `waitlist-position`, `waitlist-claim`, `waitlist-join` and `event-full` gone (promotion is automatic, no claim click), persisting across another reload; every fixture cancelled in `finally` through the request API (no cleanup page), with the global teardown sweep as backstop |
 | QA member keyboard profile edit | `e2e/staging/profile.spec.ts` | Same 1000 ms floor and Tab flow as CI; PATCH 200; `Profile saved.` focused; unique bio and games survive reload |
 | Moderator draft create and cancel | `e2e/staging/admin.spec.ts` | `Create draft` → `Status: draft`; guest draft 403; `Review cancellation` → `Cancel event` → `Status: cancelled`; guest cancelled 410. Never publishes |
 | Moderator featured slot create, homepage render, edit, delete | `e2e/featured.spec.ts` (local CI proves the same journey before merge against wrangler dev) + `e2e/staging/featured.spec.ts` (post-deploy proves it on staging with a bounded homepage poll) | `/admin/featured/new` form (published, UTC window, last position, no image) → `/admin/featured/<id>`; guest `/` shows a `featured-item` under `featured-content` ("From the community team") with the headline and body (bounded poll); edited headline replaces the old one; `Review deletion` → `delete-featured` → guest `/` drops it and `/admin/featured/<id>` answers 404; the fixture is deleted by id in `finally` through the request API, so a red run leaves no live card on the homepage |

@@ -48,6 +48,91 @@ function isBlankLocation(value: string | null | undefined): boolean {
   return value == null || value.trim() === "";
 }
 
+const DUPLICATE_TITLE_PREFIX = "Copy of ";
+const DUPLICATE_TITLE_LIMIT = 100;
+
+/**
+ * The duplicate's title: "Copy of <source>", truncated by code point (never
+ * UTF-16) so the whole title fits the 100-character form limit.
+ */
+export function duplicateTitle(source: string): string {
+  const room = DUPLICATE_TITLE_LIMIT - DUPLICATE_TITLE_PREFIX.length;
+  const codes = [...source];
+  if (codes.length <= room) return `${DUPLICATE_TITLE_PREFIX}${source}`;
+  return `${DUPLICATE_TITLE_PREFIX}${codes.slice(0, room).join("")}`;
+}
+
+/**
+ * Duplicate an event as a new draft (S4). The copy takes the source's
+ * venue/access/joining/capacity/organizer/times, a fresh key, and the
+ * duplicating moderator as creator; RSVPs, series linkage, Discord mirror
+ * state and agent linkage are cleared, and rsvpOpen resets to open. The copy
+ * is always a draft, so there is never a write-back, no queue row, and no
+ * sibling materialization.
+ *
+ * The copied fields are validated against the current form rules (via the
+ * PATCH merge, which also preserves exact fold/gap instants through the
+ * carriers): a source whose stored fields fail validation refuses with 422
+ * instead of cloning a corrupt row. The source row itself is never written.
+ */
+export async function duplicateEvent(
+  db: Db,
+  actor: Actor,
+  eventKey: string,
+): Promise<{ row: EventRow; writeBack: WriteBack }> {
+  const result: { row: EventRow } = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
+    // A plain read, not FOR UPDATE: there is no transition to judge against
+    // the latest committed state, and any committed version copies cleanly,
+    // so a duplicate never blocks behind an in-flight edit.
+    const [source] = await tx.select().from(events).where(eq(events.eventKey, eventKey));
+    if (!source) throw new NotFoundError("event");
+    // PostgreSQL accepts infinite timestamps, but wall-time/ISO formatting does
+    // not. Refuse them as field errors before deriving any display values.
+    const fields: Record<string, string> = {};
+    if (!Number.isFinite(source.startsAt.getTime())) fields.starts_at = "Enter a valid start time.";
+    if (!Number.isFinite(source.endsAt.getTime())) fields.ends_at = "Enter a valid end time.";
+    if (Object.keys(fields).length > 0) throw new ValidationError(fields);
+    // Validate the original title too: prefixing/truncation must not hide a
+    // blank title or a prohibited character beyond the copy's cutoff.
+    const input = mergePatchInput(source, {});
+    const [row] = await tx
+      .insert(events)
+      .values({
+        eventKey: newEventKey(),
+        title: duplicateTitle(input.title),
+        game: input.game,
+        description: input.description,
+        accessibilityNotes: input.accessibilityNotes,
+        startsAt: input.startsAtUtc,
+        endsAt: input.endsAtUtc,
+        timezone: input.timezone,
+        location: input.location,
+        organizer_name: input.organizer_name ?? null,
+        join_url: input.join_url ?? null,
+        join_instructions: input.join_instructions ?? null,
+        capacity: input.capacity,
+        status: "draft",
+        createdBy: actor.id,
+      })
+      .returning();
+    if (!row) throw new Error("event duplicate insert returned no row");
+    await audit(tx, {
+      subjectType: "Event",
+      subjectId: row.eventKey,
+      causerId: actor.id,
+      description: `duplicated event ${row.title} from ${source.title}`,
+      properties: dirty({} as Record<string, unknown>, row),
+    });
+    return { row };
+  });
+  // Committed: same retirement point as createEvent, only after success.
+  retireAnonEventCaches();
+  retireApiPublicEventCache();
+  await retireHomeGuestCache();
+  return { row: result.row, writeBack: null };
+}
+
 export async function createEvent(
   db: Db,
   actor: Actor,
@@ -277,11 +362,23 @@ export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>)
       ? merged.timezone.trim() || "Europe/London"
       : "Europe/London";
   if (!isKnownTimezone(tz)) throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
-  merged.starts_at ??= utcToWall(base.startsAt, tz);
-  merged.ends_at ??= utcToWall(base.endsAt, tz);
+  // A stored instant a JS Date cannot represent has no wall text and no UTC
+  // carrier: an omitted field refuses as a field error (same copy as the
+  // duplicate guard), while a supplied replacement parses fresh — exactly
+  // how the edit POST treats a nonfinite carrier.
+  const fields: Record<string, string> = {};
+  if (merged.starts_at == null) {
+    if (Number.isFinite(base.startsAt.getTime())) merged.starts_at = utcToWall(base.startsAt, tz);
+    else fields.starts_at = "Enter a valid start time.";
+  }
+  if (merged.ends_at == null) {
+    if (Number.isFinite(base.endsAt.getTime())) merged.ends_at = utcToWall(base.endsAt, tz);
+    else fields.ends_at = "Enter a valid end time.";
+  }
+  if (Object.keys(fields).length > 0) throw new ValidationError(fields);
   return parseEventForm(merged, {
-    startsAtUtc: base.startsAt.toISOString(),
-    endsAtUtc: base.endsAt.toISOString(),
+    startsAtUtc: Number.isFinite(base.startsAt.getTime()) ? base.startsAt.toISOString() : undefined,
+    endsAtUtc: Number.isFinite(base.endsAt.getTime()) ? base.endsAt.toISOString() : undefined,
   });
 }
 
@@ -399,8 +496,14 @@ async function shiftFutureChildren(
   oldStartsAt: Date,
   oldEndsAt: Date,
 ): Promise<NonNullable<WriteBack>[]> {
-  const startDelta = parent.startsAt.getTime() - oldStartsAt.getTime();
-  const endDelta = parent.endsAt.getTime() - oldEndsAt.getTime();
+  // Repairing a nonfinite parent time supplies no old instant to shift from.
+  // Preserve that child column, while still applying any finite peer delta.
+  const startDelta = Number.isFinite(oldStartsAt.getTime())
+    ? parent.startsAt.getTime() - oldStartsAt.getTime()
+    : 0;
+  const endDelta = Number.isFinite(oldEndsAt.getTime())
+    ? parent.endsAt.getTime() - oldEndsAt.getTime()
+    : 0;
   if (startDelta === 0 && endDelta === 0) return [];
   const lockedChildren = await tx
     .select()
@@ -419,7 +522,9 @@ async function shiftFutureChildren(
     const proposedStart = child.startsAt.getTime() + startDelta;
     const proposedEnd = child.endsAt.getTime() + endDelta;
     if (proposedEnd <= proposedStart) {
-      throw new ValidationError({ ends_at: "The end is after the start." });
+      throw new ValidationError({
+        ends_at: `The end is after the start. Blocking occurrence: ${child.eventKey}.`,
+      });
     }
   }
   const owed: NonNullable<WriteBack>[] = [];
@@ -544,7 +649,14 @@ export async function setRsvpOpen(
     if (open && !locked.rsvpOpen && locked.status === "published")
       await lockWaitlist(tx, locked.id);
     const now = clock();
-    if (locked.status !== "published" || locked.endsAt <= now) {
+    // An unrenderable end (Invalid Date) is not a live event: every
+    // comparison with it is false, so without the finite check the writer
+    // would accept a pause/reopen the inventory refuses to offer.
+    if (
+      locked.status !== "published" ||
+      !Number.isFinite(locked.endsAt.getTime()) ||
+      locked.endsAt <= now
+    ) {
       throw new ValidationError({
         rsvp_open: "Only published events that have not ended can pause or reopen RSVPs.",
       });

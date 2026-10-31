@@ -6,12 +6,17 @@
 // wall-clock fill across DST folds and gaps, the full status-transition
 // admission table, duplicate reads/rows/params, audit-failure refusal with
 // no roster leak, and the no-JS form semantics a browser without scripts
-// relies on. Hermetic by construction: the resolver deps are fakes and the
-// page pins are source-text, because the root Vitest suite cannot compile
-// .svelte. No database, staging or production data is touched.
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
-import { describe, expect, it, vi } from "vitest";
+// relies on. Hermetic by construction: resolver reads use fixtures. Duplicate
+// form assertions compile and execute the real Svelte SSR page for each status;
+// the older structural pins below still inspect source text. No database,
+// staging or production data is touched.
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "esbuild";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import {
   resolveKitEventEdit,
@@ -388,10 +393,10 @@ const pageSource = readFileSync(
   fileURLToPath(new URL("../web/src/routes/admin/events/[key]/+page.svelte", import.meta.url).href),
   "utf8",
 );
-// The cancel control lives in the shared TerminalReview disclosure, rendered
-// by the page; no-JS counts must see through that component boundary.
+// The cancel control arrives as escaped server-only markup, as pause does.
+// Source-form counts include the canonical renderer rather than a client component.
 const terminalReviewSource = readFileSync(
-  fileURLToPath(new URL("../web/src/lib/TerminalReview.svelte", import.meta.url).href),
+  fileURLToPath(new URL("../src/admin/native-review.ts", import.meta.url).href),
   "utf8",
 );
 const loadSource = readFileSync(
@@ -400,6 +405,85 @@ const loadSource = readFileSync(
   ),
   "utf8",
 );
+
+describe("acceptance: Kit duplicate form submits to duplicate, never cancel", () => {
+  const root = fileURLToPath(new URL("../", import.meta.url).href);
+  let scratch = "";
+  let renderPage: (data: { view: KitEventEditView }) => string;
+
+  beforeAll(async () => {
+    scratch = mkdtempSync(
+      join(process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir(), "kit-duplicate-form-"),
+    );
+    const webRequire = createRequire(join(root, "web/package.json"));
+    const { compile } = webRequire("svelte/compiler") as {
+      compile(source: string, options: Record<string, unknown>): { js: { code: string } };
+    };
+    const entry = join(scratch, "entry.mjs");
+    writeFileSync(
+      entry,
+      `import { render } from "svelte/server";
+import Page from ${JSON.stringify(join(root, "web/src/routes/admin/events/[key]/+page.svelte"))};
+export function renderPage(data) { return render(Page, { props: { data } }).body; }`,
+    );
+    const outfile = join(scratch, "bundle.mjs");
+    await build({
+      entryPoints: [entry],
+      outfile,
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      logLevel: "warning",
+      tsconfigRaw: { compilerOptions: {} },
+      absWorkingDir: root,
+      nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
+      alias: { "#lib": join(root, "web/src/lib") },
+      plugins: [
+        {
+          name: "kit-duplicate-form-ssr",
+          setup(plugin) {
+            plugin.onLoad({ filter: /\.svelte$/ }, ({ path }) => ({
+              contents: compile(readFileSync(path, "utf8"), {
+                generate: "server",
+                dev: false,
+                filename: path,
+              }).js.code,
+              loader: "js",
+              resolveDir: dirname(path),
+            }));
+          },
+        },
+      ],
+    });
+    renderPage = (await import(pathToFileURL(outfile).href)).renderPage;
+  });
+
+  afterAll(() => {
+    if (scratch) rmSync(scratch, { recursive: true, force: true });
+  });
+
+  // Mutant: change only the page's duplicate form action to /cancel. Form
+  // counts stay identical, but each executed status branch must fail here.
+  it.each(["draft", "published", "cancelled"] as const)(
+    "%s renders Duplicate as draft inside its own POST /duplicate form",
+    async (status) => {
+      const key = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+      const view = await okView({}, { get: async () => ({ ...baseRow, eventKey: key, status }) });
+      const html = renderPage({ view });
+      const duplicateForms = [...html.matchAll(/<form\b[^>]*>[\s\S]*?<\/form>/g)]
+        .map(([form]) => form)
+        .filter((form) => /<button\b[^>]*>[\s\S]*?Duplicate as draft[\s\S]*?<\/button>/.test(form));
+      expect(duplicateForms).toHaveLength(1);
+      const form = duplicateForms[0]!;
+      const openingTag = form.slice(0, form.indexOf(">") + 1);
+      expect(openingTag).toContain('method="post"');
+      expect(openingTag).toContain(`action="/admin/events/${key}/duplicate"`);
+      expect(openingTag).not.toContain(`/admin/events/${key}/cancel`);
+      expect(form).toMatch(/<button\b[^>]*type="submit"[^>]*>/);
+      expect(form).toContain('data-testid="duplicate-event"');
+    },
+  );
+});
 
 describe("acceptance: duplicate query params resolve first-wins in the load", () => {
   it("the load keeps the first value per key, never the last duplicate", () => {
@@ -416,18 +500,15 @@ describe("acceptance: no-JS behaviour", () => {
   });
 
   it("every control works without scripts: real forms, submit buttons and anchor navigation", () => {
-    // The page must actually render the shared cancel control; the counts
-    // below would otherwise stay green if it were dropped.
-    expect(pageSource).toContain("<TerminalReview");
-    // Five forms: edit update, publish, cancel (inside TerminalReview),
-    // RSVP toggle, roster search.
+    // Cancellation and pause are server-rendered; duplicate and reopen remain
+    // source forms. The compiled SSR suites pin the final controls and endpoints.
+    expect(pageSource).toContain("{@html view.cancelReviewHtml}");
     const rendered = pageSource + terminalReviewSource;
-    expect(rendered.match(/<form\b/g) ?? []).toHaveLength(5);
-    expect(rendered.match(/method="post"/g) ?? []).toHaveLength(4);
+    expect(rendered.match(/<form\b/g) ?? []).toHaveLength(6);
+    expect(rendered.match(/method="post"/g) ?? []).toHaveLength(5);
     expect(rendered.match(/method="get"/g) ?? []).toHaveLength(1);
-    // Every button submits its form; nothing depends on a click handler.
-    expect(rendered.match(/<button\b/g) ?? []).toHaveLength(5);
-    expect(rendered.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(5);
+    expect(rendered.match(/<button\b/g) ?? []).toHaveLength(6);
+    expect(rendered.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(6);
     expect(rendered).not.toMatch(/\son(click|submit|input|change|keydown)=/);
     expect(pageSource).not.toContain("on:");
     // The shared control's `action: string` prop contains a bare "on:", so

@@ -33,14 +33,20 @@ import { eventKeyAllowed } from "../events/keys";
 import {
   parseRosterQuery,
   ROSTER_PAGE_SIZE,
+  ROSTER_STATUSES,
   rosterEmptyText,
+  rosterRangeText,
+  rosterRecovery,
   rosterUrl,
   type ListParams,
   type RosterQuery,
   type RosterSort,
+  type RosterStatus,
   type SortOrder,
 } from "./table-list";
-import { utcToWall } from "./validation-wall-time";
+import { isKnownTimezone, utcToWall } from "./validation-wall-time";
+import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { renderTerminalReviewHtml } from "./terminal-review";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -75,16 +81,30 @@ export type KitEventEditSortHeader = {
   marker: string;
 };
 
+/** One native answer-facet option, mirroring the Hono roster select exactly. */
+export type KitEventEditStatusOption = {
+  value: RosterStatus;
+  label: string;
+  selected: boolean;
+};
+
 export type KitEventEditRosterView = {
   total: number;
   query: RosterQuery;
   entries: KitEventEditRosterEntry[];
   rangeStart: number;
   rangeEnd: number;
+  /** Shared Hono/Kit range copy: matching responses, never seats or attendance. */
+  rangeText: string;
+  /** Native answer-facet options in Hono order: All first, then each status. */
+  statusOptions: KitEventEditStatusOption[];
   hasPrev: boolean;
   hasNext: boolean;
   prevUrl: string | null;
   nextUrl: string | null;
+  /** Scoped recovery, exactly like the Hono section; null while rows render. */
+  clearUrl: string | null;
+  firstUrl: string | null;
   /** Past-end and zero-row copy, exactly like the Hono section; null when rows render. */
   emptyText: string | null;
   sortHeaders: KitEventEditSortHeader[];
@@ -102,11 +122,16 @@ export type KitEventEditView = {
   isDraft: boolean;
   showPublish: boolean;
   showCancel: boolean;
+  cancelReviewHtml: string;
   rsvpAction: "rsvp-pause" | "rsvp-reopen" | null;
   /** The Hono series-move hint for series parents; null for one-offs. */
   seriesNote: string | null;
   endsAt: string;
   roster: KitEventEditRosterView;
+  /** Pre-rendered pause-review HTML when rsvpAction is rsvp-pause, else null;
+   * the page injects it via {@html} so the client bundle carries no review
+   * strings or disclosure markup (client gzip ceiling). */
+  pauseReviewHtml: string | null;
 };
 
 export type KitEventEditOutcome =
@@ -214,6 +239,19 @@ export async function resolveKitEventEdit(
   const rangeEnd = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + entries.length : 0;
   const hasPrev = query.page > 1;
   const hasNext = query.page * ROSTER_PAGE_SIZE < roster.total;
+  const endFinite = Number.isFinite(row.endsAt.getTime());
+  const rsvpAction: "rsvp-pause" | "rsvp-reopen" | null =
+    row.status === "published" && endFinite && row.endsAt > now
+      ? row.rsvpOpen
+        ? "rsvp-pause"
+        : "rsvp-reopen"
+      : null;
+  const showCancel = row.status === "draft" || row.status === "published";
+  const recovery = rosterRecovery(row.eventKey, query, entries.length, roster.total);
+  // Same guard as the Hono edit fill: a corrupt zone or unrenderable instant
+  // stays visible for correction but is never formatted.
+  const knownTimezone = isKnownTimezone(row.timezone);
+  const startFinite = Number.isFinite(row.startsAt.getTime());
   return {
     kind: "ok",
     view: {
@@ -226,8 +264,8 @@ export async function resolveKitEventEdit(
         description: row.description ?? "",
         // Wall text in the row's zone — what the moderator typed is what they
         // see; the stored instant is preserved by the Hono UTC carriers.
-        starts_at: utcToWall(row.startsAt, row.timezone),
-        ends_at: utcToWall(row.endsAt, row.timezone),
+        starts_at: knownTimezone && startFinite ? utcToWall(row.startsAt, row.timezone) : "",
+        ends_at: knownTimezone && endFinite ? utcToWall(row.endsAt, row.timezone) : "",
         timezone: row.timezone,
         location: row.location ?? "",
         capacity: row.capacity === null ? "" : String(row.capacity),
@@ -236,27 +274,38 @@ export async function resolveKitEventEdit(
       hasErrors: false,
       isDraft: false,
       showPublish: row.status === "draft",
-      showCancel: row.status === "draft" || row.status === "published",
-      rsvpAction:
-        row.status === "published" && row.endsAt > now
-          ? row.rsvpOpen
-            ? "rsvp-pause"
-            : "rsvp-reopen"
-          : null,
+      showCancel,
+      cancelReviewHtml: showCancel
+        ? renderTerminalReviewHtml({
+            kind: "cancel",
+            title: row.title,
+            targetId: row.eventKey,
+            testId: "cancel-event",
+          })
+        : "",
+      rsvpAction,
       seriesNote: row.recurrenceFrequency
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
-      endsAt: row.endsAt.toISOString(),
+      endsAt: endFinite ? row.endsAt.toISOString() : "",
       roster: {
         total: roster.total,
         query,
         entries,
         rangeStart,
         rangeEnd,
+        rangeText: rosterRangeText(rangeStart, rangeEnd, roster.total),
+        statusOptions: ROSTER_STATUSES.map((o) => ({
+          value: o.value,
+          label: o.label,
+          selected: o.value === query.status,
+        })),
         hasPrev,
         hasNext,
         prevUrl: hasPrev ? rosterUrl(row.eventKey, query, { page: query.page - 1 }) : null,
         nextUrl: hasNext ? rosterUrl(row.eventKey, query, { page: query.page + 1 }) : null,
+        clearUrl: recovery.clearUrl,
+        firstUrl: recovery.firstUrl,
         emptyText:
           entries.length === 0
             ? roster.total > 0
@@ -270,6 +319,8 @@ export async function resolveKitEventEdit(
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
       },
+      pauseReviewHtml:
+        rsvpAction === "rsvp-pause" ? renderRsvpPauseReviewHtml(row.title, row.eventKey) : null,
     },
   };
 }
