@@ -3,7 +3,7 @@
 //
 //   node bin/version-check.mjs <origin> <40-hex-commit>
 //
-// Passes when `sha` equals the commit and `deployedAt` is an ISO 8601 time no
+// Passes when `sha` equals the commit and `deployedAt` is a canonical ISO 8601 UTC time no
 // later than now (plus clock skew). Retries briefly, then fails closed. The
 // staging deploy runs it after bin/revision-check.mjs proved the new Version
 // serves; an operator can run it against the apex after a promotion.
@@ -19,8 +19,11 @@ export function versionMismatch(data, expected, now = Date.now()) {
   if (data === null || typeof data !== "object" || Array.isArray(data))
     return "/version is not a JSON object";
   if (data.sha !== expected) return `/version sha is ${data.sha ?? "null"}, expected ${expected}`;
+  // The route emits Date#toISOString(); anything else Date.parse happens to
+  // accept (a bare "2026", a locale string) is not an upload instant.
   const at = typeof data.deployedAt === "string" ? Date.parse(data.deployedAt) : Number.NaN;
-  if (Number.isNaN(at)) return "/version deployedAt is not a timestamp";
+  if (Number.isNaN(at) || new Date(at).toISOString() !== data.deployedAt)
+    return "/version deployedAt is not an ISO 8601 UTC timestamp";
   if (at > now + SKEW_MS) return `/version deployedAt ${data.deployedAt} is in the future`;
   return null;
 }
