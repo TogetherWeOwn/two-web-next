@@ -20,6 +20,7 @@ import app from "./app";
 import { adminApp } from "../src/admin/routes";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
+import { agentEventGrants } from "../src/db/schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import type { QueueMessage } from "../src/jobs/types";
@@ -292,6 +293,106 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(child.startsAt.toISOString()).toBe(times.wantStart);
       expect(child.endsAt.toISOString()).toBe(times.wantEnd);
     });
+
+    // A timezone-only edit keeps the parent's instants but changes its wall
+    // time. Children follow the new zone's weekly schedule and timezone. The
+    // UK and EU leave summer time together on 25 October 2099, so London to
+    // Paris never moves an instant; New York leaves it a week later.
+    for (const surface of ["native Save", "JSON PATCH"] as const) {
+      it.each([
+        {
+          zone: "Europe/Paris",
+          wall: { starts_at: "2099-10-18 20:00", ends_at: "2099-10-18 22:00" },
+          retimedStart: "2099-10-25T19:00:00.000Z",
+          retimedEnd: "2099-10-25T21:00:00.000Z",
+          laterZone: "Europe/Paris",
+          dispatched: [] as string[],
+        },
+        {
+          zone: "America/New_York",
+          wall: { starts_at: "2099-10-18 14:00", ends_at: "2099-10-18 16:00" },
+          retimedStart: "2099-10-25T18:00:00.000Z",
+          retimedEnd: "2099-10-25T20:00:00.000Z",
+          laterZone: "Europe/London",
+          dispatched: ["series-tz-near"],
+        },
+      ])(`${surface}: a London to $zone timezone-only edit across the clock change`, async (c) => {
+        const [parent, near, later] = await seedSeries([
+          {
+            eventKey: "series-tz-near",
+            startsAt: "2099-10-25T19:00:00Z",
+            endsAt: "2099-10-25T21:00:00Z",
+          },
+          {
+            eventKey: "series-tz-later",
+            startsAt: "2099-11-01T19:00:00Z",
+            endsAt: "2099-11-01T21:00:00Z",
+          },
+        ]);
+        await db
+          .update(events)
+          .set({
+            startsAt: new Date("2099-10-18T18:00:00Z"),
+            endsAt: new Date("2099-10-18T20:00:00Z"),
+          })
+          .where(eq(events.id, parent!.id));
+        await db.update(events).set({ timezone: c.laterZone }).where(eq(events.id, later!.id));
+        const [grant] = await db
+          .insert(agentEventGrants)
+          .values({
+            agentId: "series-tz-agent",
+            companyId: "synthetic-company",
+            guildId: baseEnv.DISCORD_GUILD_ID,
+            verifierHash: `series-tz-${surface}-${c.zone}`,
+          })
+          .returning();
+        for (const child of [near!, later!]) {
+          await db
+            .update(events)
+            .set({
+              agentGrantId: child === near ? grant!.id : null,
+              agentVersion: 7,
+              updatedAt: new Date("2026-01-01T00:00:00Z"),
+            })
+            .where(eq(events.id, child.id));
+        }
+        const laterBefore = await stored("series-tz-later");
+        const res =
+          surface === "JSON PATCH"
+            ? await patch(parent!.eventKey, { timezone: c.zone })
+            : await post(`/events/${parent!.eventKey}`, { ...FORM, ...c.wall, timezone: c.zone });
+        expect(res.status).toBe(surface === "JSON PATCH" ? 200 : 303);
+        const edited = await stored(parent!.eventKey);
+        expect(edited.startsAt.toISOString()).toBe("2099-10-18T18:00:00.000Z");
+        expect(edited.timezone).toBe(c.zone);
+
+        // Paris keeps the instant (timezone-only write); New York moves it.
+        const movedNear = await stored("series-tz-near");
+        expect(movedNear.startsAt.toISOString()).toBe(c.retimedStart);
+        expect(movedNear.endsAt.toISOString()).toBe(c.retimedEnd);
+        expect(movedNear.timezone).toBe(c.zone);
+        expect(movedNear.agentVersion).toBe(8);
+        expect(movedNear.updatedAt.getTime()).toBeGreaterThan(laterBefore.updatedAt.getTime());
+
+        // A child already in Paris is untouched; a London child after both
+        // clock changes keeps its instant and takes only the New York zone.
+        const movedLater = await stored("series-tz-later");
+        if (c.laterZone === c.zone) {
+          expect(movedLater).toEqual(laterBefore);
+        } else {
+          expect(movedLater.startsAt.toISOString()).toBe("2099-11-01T19:00:00.000Z");
+          expect(movedLater.endsAt.toISOString()).toBe("2099-11-01T21:00:00.000Z");
+          expect(movedLater.timezone).toBe(c.zone);
+          expect(movedLater.updatedAt.getTime()).toBeGreaterThan(laterBefore.updatedAt.getTime());
+        }
+
+        const childDispatches = vi
+          .mocked(dispatchWriteBack)
+          .mock.calls.map(([, writeBack]) => writeBack?.eventKey)
+          .filter((key) => key !== parent!.eventKey);
+        expect(childDispatches).toEqual(c.dispatched);
+      });
+    }
 
     it.each([null, 99])(
       "JSON PATCH: a child with recurrence index %s keeps the flat parent delta",
