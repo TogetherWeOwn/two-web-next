@@ -9,7 +9,7 @@ import { build } from "esbuild";
 import { chromium, request as apiRequest } from "playwright";
 import AxeBuilder from "@axe-core/playwright";
 import { serializeSigned } from "hono/utils/cookie";
-import { A11Y_FREEZE_DATES } from "./a11y-cases.mjs";
+import { A11Y_FREEZE_DATES, A11Y_OPS_CONTROL_TOKEN } from "./a11y-cases.mjs";
 import { assertNoViolations, auditCases, redactAuditLog, AUDIT_VIEWPORTS, WCAG_AA_TAGS } from "./a11y-policy.mjs";
 import { AUDIT_BROWSER_OPTIONS, createAuditLifecycle, stopChildProcess } from "./a11y-lifecycle.mjs";
 import { buildAuditWorker } from "./a11y-build.mjs";
@@ -105,7 +105,7 @@ try {
       lifecycle.assertRunning();
       const label = `${scenario.identity} ${scenario.path} ${scenario.state || "default"} ${viewport.width}px`;
       const result = { ...scenario, viewport, label };
-      const context = await browser.newContext({ viewport, ignoreHTTPSErrors: true, extraHTTPHeaders: { "x-a11y-read-state": scenario.readState || "populated", "x-a11y-freeze-banner": ["freeze-banner", "both-banners"].includes(scenario.state) ? "true" : "false" } });
+      const context = await browser.newContext({ viewport, ignoreHTTPSErrors: true, extraHTTPHeaders: { "x-a11y-read-state": scenario.readState || "populated", "x-a11y-freeze-banner": ["freeze-banner", "both-banners"].includes(scenario.state) ? "true" : "false", "x-a11y-ops-state": scenario.opsState || "populated", ...(scenario.opsBearer ? { authorization: `Bearer ${A11Y_OPS_CONTROL_TOKEN}` } : {}) } });
       // Block every off-origin browser request, including redirects to Discord.
       await context.route("**/*", (route) => new URL(route.request().url()).origin === origin ? route.continue() : route.abort());
       const page = await context.newPage();

@@ -47,6 +47,14 @@ Subscribe link, the `.ics` download and the copyable feed URL all carry the
 committed game, and the calendar label names it. Blank means every game; a valid
 unknown game yields an empty scoped calendar, never all games.
 
+Published nights show **Happening now** from their start instant until, but not
+including, their end instant. The schedule cards, current-month grid cells and
+event detail use a server snapshot, not a live clock; existing page caching
+still applies. The label sits beside RSVP availability, so a night can still
+be full or paused. Drafts, cancelled and
+ended nights never carry it; Discord-managed rows use Discord's active status
+and any announced end. The label is not proof of attendance.
+
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
 the ordinary archive. See the [archive search contract](docs/past-archive-search.md)
