@@ -125,6 +125,17 @@ repeat apply and preservation of another member's live session and grace.
 
 A second apply is a no-op: every count returns 0.
 
+### Freed seats
+
+Deleting a `going` RSVP frees a seat. In the same transaction, apply hands
+each freed seat to the event's waitlist head, exactly as a member's own
+withdrawal does (`promoteWaitlist` in `src/events/waitlist.ts`). It first
+locks the member's events in id order, the same order the RSVP verbs use.
+The `rsvps` trigger advances each affected event's `sync_revision`, so the
+reconcile cron re-syncs Discord for published and cancelled events. The CLI
+has no Worker queue, so it does not enqueue the sync itself. Dry-run writes
+nothing and promotes no one.
+
 ### Provisional: profile rows (not yet enforced)
 
 These rows land with the profiles changes: per-field visibility, handles

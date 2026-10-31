@@ -32,6 +32,8 @@ const run = (args: string[] = [], env: Record<string, string> = {}) =>
 
 const MEMBER_A = "100000000000000201";
 const MEMBER_B = "100000000000000202";
+const WAITER_1 = "100000000000000203";
+const WAITER_2 = "100000000000000204";
 const EVENT_KEY = "01J000000000000000000000E1";
 
 describe("member-erasure id validation (no database)", () => {
@@ -517,6 +519,49 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
     expect(
       ((await fixture.client`select count(*)::int as n from events`) as { n: number }[])[0]!.n,
     ).toBe(1);
+  });
+
+  it("apply hands a freed seat to the waitlist head and advances the event's sync revision", async () => {
+    // Full event: A and B hold both seats, one waiter heads the line, another waits behind.
+    await fixture.client`update events set status = 'published', capacity = 2, rsvp_open = true
+      where id = ${eventId}`;
+    await fixture.client`insert into rsvps (event_id, user_id, status, created_at)
+      values (${eventId}, ${WAITER_1}, 'waitlisted', '2099-01-01T00:00:00Z'),
+             (${eventId}, ${WAITER_2}, 'waitlisted', '2099-01-01T00:00:01Z')`;
+    const revision = async () =>
+      (
+        (await fixture.client`select sync_revision::int as r from events where id = ${eventId}`) as {
+          r: number;
+        }[]
+      )[0]!.r;
+    const before = await revision();
+    await eraseMember(fixture.client as unknown as Parameters<typeof eraseMember>[0], MEMBER_A, {
+      dryRun: false,
+    });
+    const answers = await fixture.client`select user_id, status from rsvps
+      where event_id = ${eventId} order by user_id`;
+    expect([...answers]).toEqual([
+      { user_id: MEMBER_B, status: "going" },
+      { user_id: WAITER_1, status: "going" },
+      { user_id: WAITER_2, status: "waitlisted" },
+    ]);
+    expect(await revision()).toBeGreaterThan(before);
+  });
+
+  it("dry-run leaves a full event's waitlist and sync revision untouched", async () => {
+    await fixture.client`update events set status = 'published', capacity = 2, rsvp_open = true
+      where id = ${eventId}`;
+    await fixture.client`insert into rsvps (event_id, user_id, status)
+      values (${eventId}, ${WAITER_1}, 'waitlisted')`;
+    const snapshot = async () => [
+      ...(await fixture.client`select e.sync_revision::int as r, r.user_id, r.status, r.updated_at
+        from events e join rsvps r on r.event_id = e.id where e.id = ${eventId} order by r.user_id`),
+    ];
+    const before = await snapshot();
+    await eraseMember(fixture.client as unknown as Parameters<typeof eraseMember>[0], MEMBER_A, {
+      dryRun: true,
+    });
+    expect(await snapshot()).toEqual(before);
   });
 
   it("a second apply is a no-op", async () => {

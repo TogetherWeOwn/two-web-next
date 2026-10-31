@@ -5,7 +5,6 @@ import { keyedMemberRead } from "../member-reads";
 import { rsvps, type Event } from "../db/admin-schema";
 
 type SeatWriter = Pick<PgDatabase<PgQueryResultHKT>, "select" | "update">;
-type Tx = Parameters<Parameters<Db["transaction"]>[0]>[0];
 
 export const CAPACITY_BELOW_GOING =
   "Capacity cannot be lower than the number of members already going.";
@@ -51,7 +50,7 @@ export async function waitlistPosition(
 /** RSVP verbs must finish every promotion-row wait before checking expiry/debiting
  * the member budget. Lock the current line behind the event lock; accepted writes
  * can then settle any heads (including a new caller row) without another writer wait. */
-export async function lockWaitlist(tx: Tx, eventId: number): Promise<void> {
+export async function lockWaitlist(tx: Pick<SeatWriter, "select">, eventId: number): Promise<void> {
   await tx
     .select({ id: rsvps.id })
     .from(rsvps)
