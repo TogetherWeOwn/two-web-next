@@ -1,7 +1,7 @@
 # Production cutover go/no-go gates — closed
 
 Record closed 2026-10-31 at `main`
-`2e55cb1e3bc6b9513fcb5884cd8e6c930bf82344`, from public repo state only.
+`47dd89b885ff0d9ef78edeeb72ec0caed211e5b2`, from public repo state only.
 **The production cutover is complete.** The apex `togetherweown.com` has
 served the production Worker (`two-web-next-production`) since the DNS flip
 at 2026-10-10 00:52 UTC. The 48h post-flip watch ran to 2026-10-12 00:52 UTC,
