@@ -253,7 +253,7 @@ export const LIST_EVENTS_TRIMMED_NOTICE =
   'Some descriptions were shortened to fit the 32 KiB result limit and end in "…". No rows were dropped. For longer descriptions, call list_events with a smaller per_page and step page up to meta.last_page, or call get_event with an event_key.';
 
 export function getEventTrimmedNotice(eventKey: string): string {
-  return `This description was shortened to fit the 32 KiB result limit and ends in "…". The full text is on the event page at /events/${eventKey}.`;
+  return `This description was shortened to fit the 32 KiB result limit and ends in "…". The full text is on the public event page at /e/${eventKey}.`;
 }
 
 export type FittedEventBody = { body: string; trimmed: boolean };

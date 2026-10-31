@@ -18,6 +18,7 @@ import {
 } from "../src/public-data/contracts";
 import {
   eventResultBytes,
+  fitByteBudget,
   getEventTrimmedNotice,
   LIST_EVENTS_TRIMMED_NOTICE,
 } from "../src/public-data/routes";
@@ -192,7 +193,7 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
     expect(LIST_EVENTS_TRIMMED_NOTICE).toContain("per_page");
     expect(LIST_EVENTS_TRIMMED_NOTICE).toContain("meta.last_page");
     expect(LIST_EVENTS_TRIMMED_NOTICE).toContain("get_event");
-    expect(getEventTrimmedNotice(key(7))).toContain(`/events/${key(7)}`);
+    expect(getEventTrimmedNotice(key(7))).toContain(`/e/${key(7)}`);
   });
 
   it("an untrimmed result carries no notice", async () => {
@@ -202,6 +203,26 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
     const one = await callTool("2025-06-18", "get_event", { event_key: key(5) });
     expectFittedSuccess(one);
     expect((one.structuredContent as PublicApiEventDto).description).toBe("A short night.");
+  });
+
+  it("fitByteBudget keeps a result exactly at the cap and trims one byte over", () => {
+    const dto = () => [{ event_key: key(1), description: ESCAPED } as PublicApiEventDto];
+    const wrap = (rows: PublicApiEventDto[]) => ({ data: rows });
+    const exact = eventResultBytes(JSON.stringify(wrap(dto())));
+
+    // An untrimmed result carries no notice, so it fits at exactly the cap.
+    const atCap = fitByteBudget(dto(), exact, wrap, LIST_EVENTS_TRIMMED_NOTICE);
+    expect(atCap.trimmed).toBe(false);
+    expect(eventResultBytes(atCap.body)).toBe(exact);
+    expect(JSON.parse(atCap.body).data[0].description).toBe(ESCAPED);
+
+    // One byte over trims, and the trimmed body fits with its notice counted.
+    const oneOver = fitByteBudget(dto(), exact - 1, wrap, LIST_EVENTS_TRIMMED_NOTICE);
+    expect(oneOver.trimmed).toBe(true);
+    expect(eventResultBytes(oneOver.body, LIST_EVENTS_TRIMMED_NOTICE)).toBeLessThanOrEqual(
+      exact - 1,
+    );
+    expect(JSON.parse(oneOver.body).data[0].description.endsWith("…")).toBe(true);
   });
 
   for (const protocol of PROTOCOLS) {
