@@ -204,6 +204,15 @@ function markdownTree(markdown) {
     parser.inlineParser.parse(inline);
     return renderer.render(inline);
   };
+  const renderBlocks = (text) => {
+    const fragmentParser = new Parser();
+    const processInlines = fragmentParser.processInlines;
+    fragmentParser.processInlines = function (block) {
+      this.refmap = { ...parser.refmap, ...this.refmap };
+      processInlines.call(this, block);
+    };
+    return renderer.render(fragmentParser.parse(text));
+  };
   const lines = markdown.split("\n");
   const paragraphs = [];
   const walker = tree.walker();
@@ -211,20 +220,49 @@ function markdownTree(markdown) {
   while ((event = walker.next()))
     if (event.entering && event.node.type === "paragraph") paragraphs.push(event.node);
   for (const node of paragraphs) {
-    let quoteDepth = 0;
+    const containers = [];
     for (let parent = node.parent; parent; parent = parent.parent)
-      if (parent.type === "block_quote") quoteDepth++;
-    const raw = sourceText(node, lines)
-      .split("\n")
-      .map((line, index) => {
-        // sourcepos removes the first line's container prefix; continuation
-        // lines still carry the ancestor blockquotes, not cell content.
-        if (index > 0)
-          for (let depth = 0; depth < quoteDepth; depth++) line = line.replace(/^\s*>\s?/, "");
-        return line;
+      if (["block_quote", "item"].includes(parent.type)) containers.unshift(parent);
+    const physical = sourceText(node, lines).split("\n");
+    const records = physical.map((source, index) => {
+      // Only indentation/container prefixes expand tabs. Inline cell source
+      // remains unchanged. sourcepos already removed the first line's prefix.
+      let line = source.replace(/^[ >\t]*/, (prefix) => {
+        let column = 0;
+        return Array.from(prefix, (char) => {
+          const width = char === "\t" ? 4 - (column % 4) : 1;
+          column += width;
+          return char === "\t" ? " ".repeat(width) : char;
+        }).join("");
       });
+      let sameContainer = true;
+      if (index > 0) {
+        for (const container of containers) {
+          const prefix =
+            container.type === "block_quote"
+              ? /^ {0,3}> ?/.exec(line)?.[0]
+              : new RegExp(
+                  `^ {${container._listData.markerOffset + container._listData.padding}}`,
+                ).exec(line)?.[0];
+          if (prefix === undefined) {
+            sameContainer = false;
+            break;
+          }
+          line = line.slice(prefix.length);
+        }
+      }
+      return { text: line, sameContainer, code: /^ {4}/.test(line) };
+    });
+    const raw = records.map((record) => record.text);
+    const tableLine = (index) => records[index].sameContainer && !records[index].code;
     const delimiter = raw.findIndex((line, index) => {
-      if (index === 0 || !raw[index - 1].includes("|")) return false;
+      if (
+        index === 0 ||
+        !tableLine(index) ||
+        !tableLine(index - 1) ||
+        !raw[index - 1].includes("|")
+      )
+        return false;
       const cells = tableCells(line);
       return (
         cells.length === tableCells(raw[index - 1]).length &&
@@ -238,11 +276,14 @@ function markdownTree(markdown) {
         .map((_, index) => `<${tag}>${renderInline(cells[index] ?? "")}</${tag}>`)
         .join("")}</tr>`;
     const prefix = raw.slice(0, delimiter - 1).join("\n");
+    let end = delimiter + 1;
+    while (end < raw.length && tableLine(end)) end++;
+    const suffix = raw.slice(end).join("\n");
     const table = new Node("html_block", node.sourcepos);
     table.literal = `${prefix ? renderInline(prefix) : ""}<table>${renderRow(header, "th")}${raw
-      .slice(delimiter + 1)
+      .slice(delimiter + 1, end)
       .map((row) => renderRow(tableCells(row), "td"))
-      .join("")}</table>\n`;
+      .join("")}</table>\n${suffix ? renderBlocks(suffix) : ""}`;
     node.insertBefore(table);
     node.unlink();
   }

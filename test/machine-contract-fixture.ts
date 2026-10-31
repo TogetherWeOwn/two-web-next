@@ -3,8 +3,8 @@ import { isAbsolute, join, resolve } from "node:path";
 import { parse } from "@babel/parser";
 import { buildSync } from "esbuild";
 
-// Bundle only repository modules; package imports remain the real installed dependencies.
-// Every caller still starts a fresh checker process for every fixture.
+// Bundle repository modules and the real installed dependencies. Every caller
+// still starts a fresh checker process for every fixture.
 export function compileMachineContractFixture(root: string): void {
   if (!isAbsolute(root)) throw new Error("Machine contract fixture root must be absolute");
   const entry = join(root, "ci/check-machine-contract.mjs");
@@ -17,18 +17,21 @@ export function compileMachineContractFixture(root: string): void {
     metafile: true,
     platform: "node",
     format: "esm",
-    packages: "external",
     target: "node22",
     logLevel: "silent",
   });
 
-  // Bundling relocates every module to ci/. Fail closed if a source module starts
-  // depending on its own location or cwd. The checker has exactly one intentional
-  // location reference: its fixture root is the parent of the output's ci/ dir.
+  // Bundling relocates every module to ci/. Inspect all source and package
+  // inputs, failing closed on location or cwd dependencies. JSON is data, not
+  // JavaScript; parse it separately. The checker has one intentional root reference.
   let rootReferences = 0;
   for (const input of Object.keys(result.metafile.inputs)) {
     const path = resolve(root, input);
     const text = readFileSync(path, "utf8");
+    if (path.endsWith(".json")) {
+      JSON.parse(text);
+      continue;
+    }
     if (
       path === entry &&
       !text.includes('const repoRoot = fileURLToPath(new URL("../", import.meta.url));')
@@ -50,6 +53,7 @@ export function compileMachineContractFixture(root: string): void {
       start?: number | null;
       end?: number | null;
       object?: Node;
+      meta?: Node;
       property?: Node;
       [key: string]: unknown;
     };
@@ -61,11 +65,16 @@ export function compileMachineContractFixture(root: string): void {
       }
       const node = value as Node;
       if (node.type === "MetaProperty") {
-        const expression = grandparent && text.slice(grandparent.start ?? 0, grandparent.end ?? 0);
-        if (path !== entry || expression !== 'new URL("../", import.meta.url)') {
-          throw new Error(`Unsupported import.meta in bundled checker input: ${input}`);
+        if (node.meta?.name === "import" && node.property?.name === "meta") {
+          const expression =
+            grandparent && text.slice(grandparent.start ?? 0, grandparent.end ?? 0);
+          if (path !== entry || expression !== 'new URL("../", import.meta.url)') {
+            throw new Error(`Unsupported import.meta in bundled checker input: ${input}`);
+          }
+          rootReferences++;
+        } else if (node.meta?.name !== "new" || node.property?.name !== "target") {
+          throw new Error(`Unsupported meta property in bundled checker input: ${input}`);
         }
-        rootReferences++;
       }
       if (
         (node.type === "Identifier" && (node.name === "__dirname" || node.name === "__filename")) ||

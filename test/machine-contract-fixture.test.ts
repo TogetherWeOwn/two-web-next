@@ -12,6 +12,7 @@ import {
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
+import { buildSync } from "esbuild";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { compileMachineContractFixture } from "./machine-contract-fixture";
 
@@ -79,6 +80,10 @@ describe("compiled machine contract fixture", () => {
       [guide, 0],
       [`${guide}\nEvent collection responses contain 30 rows-per-response.\n`, 1],
       [`${guide}\n<!-- Event collection responses contain 30 rows-per-response. -->\n`, 0],
+      [
+        `${guide}\n| Info | Note |\n| --- | --- |\n| Stuff | Each [response][ref] contains 30 rows per response. |\n\n[ref]: https://example.test/\n`,
+        1,
+      ],
     ] as const) {
       writeFileSync(join(root, "docs/machine-interface.md"), text);
       compare(status);
@@ -114,5 +119,112 @@ describe("compiled machine contract fixture", () => {
     writeFileSync(checker, changedRoot);
     expect(() => compileMachineContractFixture(root)).toThrow(/Unsupported/);
     expect(readFileSync(checker, "utf8")).toBe(changedRoot);
+  });
+
+  it("checks bundled package inputs while accepting JSON data and new.target", () => {
+    const dependency = join(root, "fixtures/node_modules/guard-probe");
+    mkdirSync(dependency, { recursive: true });
+    const module = join(dependency, "index.mjs");
+    writeFileSync(
+      join(dependency, "data.json"),
+      JSON.stringify({ ok: true, text: "import.meta.url __dirname process.cwd()" }),
+    );
+    writeFileSync(
+      schema,
+      `${originalSchema}\nimport "../../fixtures/node_modules/guard-probe/index.mjs";\n`,
+    );
+    const safe = `import data from "./data.json";
+if (!data.ok) throw new Error("JSON data was not bundled");
+export function probe() { return new.target; }
+`;
+    writeFileSync(module, safe);
+    copyFileSync(join(root, "ci/source-machine-contract.mjs"), checker);
+    writeFileSync(join(root, "docs/machine-interface.md"), guide);
+    compileMachineContractFixture(root);
+    const result = spawnSync(
+      process.execPath,
+      ["ci/check-machine-contract.mjs", "--format", "json"],
+      {
+        cwd: root,
+        env,
+        encoding: "utf8",
+        timeout: 30_000,
+      },
+    );
+    expect(result.error).toBeUndefined();
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).verdict).toBe("pass");
+    expect(result.stderr).toBe("");
+
+    for (const probe of [
+      "void import.meta.url;",
+      "process.cwd();",
+      "void __dirname;",
+      "void __filename;",
+    ]) {
+      writeFileSync(module, `${safe}\n${probe}\n`);
+      copyFileSync(join(root, "ci/source-machine-contract.mjs"), checker);
+      const before = readFileSync(checker, "utf8");
+      expect(() => compileMachineContractFixture(root)).toThrow(/Unsupported/);
+      expect(readFileSync(checker, "utf8")).toBe(before);
+    }
+    writeFileSync(schema, originalSchema);
+  });
+
+  it("preserves real modern SDK client interaction with a bundled server", () => {
+    writeFileSync(schema, originalSchema);
+    const serverEntry = join(root, "ci/sdk-server-entry.mjs");
+    const serverBundle = join(root, "ci/sdk-server-bundle.mjs");
+    writeFileSync(serverEntry, 'export { createPublicMcpServer } from "../src/mcp/server";\n');
+    buildSync({
+      absWorkingDir: root,
+      entryPoints: [serverEntry],
+      outfile: serverBundle,
+      bundle: true,
+      platform: "node",
+      format: "esm",
+      target: "node22",
+      logLevel: "silent",
+    });
+    const client = `import { Client } from "@modelcontextprotocol/client";
+import { InMemoryTransport } from "@modelcontextprotocol/server";
+import { createPublicMcpServer } from "SERVER_MODULE";
+const server = createPublicMcpServer({ env: { APP_URL: "https://machine-contract-check.local", DISCORD_INVITE_URL: "https://discord.gg/machine-contract-check" }, db: null });
+const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+const sdk = new Client({ name: "fixture-client", version: "0" }, { capabilities: {} });
+await server.connect(serverTransport);
+await sdk.connect(clientTransport);
+const tools = await sdk.listTools();
+const result = await sdk.callTool({ name: "get_join", arguments: {} });
+console.log(JSON.stringify({ version: sdk.getServerVersion(), tools, result }));
+await sdk.close();
+await server.close();
+`;
+    const sourceClient = join(root, "ci/sdk-client-source.mjs");
+    const bundleClient = join(root, "ci/sdk-client-bundle.mjs");
+    writeFileSync(sourceClient, client.replace("SERVER_MODULE", "../src/mcp/server"));
+    writeFileSync(bundleClient, client.replace("SERVER_MODULE", "./sdk-server-bundle.mjs"));
+    const options = { cwd: root, env, encoding: "utf8" as const, timeout: 30_000 };
+    const source = spawnSync(process.execPath, ["--import", "tsx", sourceClient], options);
+    const bundled = spawnSync(process.execPath, [bundleClient], options);
+    expect(source.error).toBeUndefined();
+    expect(bundled.error).toBeUndefined();
+    expect(source.status, source.stderr).toBe(0);
+    expect({ status: bundled.status, stdout: bundled.stdout, stderr: bundled.stderr }).toEqual({
+      status: source.status,
+      stdout: source.stdout,
+      stderr: source.stderr,
+    });
+    const output = JSON.parse(bundled.stdout);
+    expect(output.tools.tools.map((tool: { name: string }) => tool.name).sort()).toEqual([
+      "get_community",
+      "get_event",
+      "get_join",
+      "list_events",
+    ]);
+    expect(output.result.structuredContent.invite_url).toBe(
+      "https://discord.gg/machine-contract-check",
+    );
+    expect(JSON.parse(output.result.content[0].text)).toEqual(output.result.structuredContent);
   });
 });

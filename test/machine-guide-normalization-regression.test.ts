@@ -98,6 +98,7 @@ describe("machine guide Markdown contexts and declarations (offline)", () => {
     "| Topic | Note |\n| --- | --- |\n| [Event results](https://example.test) | Limited availability |",
     "| Topic | Note |\n| --- | --- |\n| Event results | Named a\\|b; limited availability |",
     "| Topic | Note |\n| --- | --- |\n| Each response contains 30 | rows per response |",
+    "| Topic | Note |\n| --- | --- |\n| venue | available | Rows are limited to 30. |",
   ])("keeps GFM table cells and rows independent: %j", (table) => {
     const result = run(table);
     expect(result.status, result.stdout + result.stderr).toBe(0);
@@ -105,6 +106,15 @@ describe("machine guide Markdown contexts and declarations (offline)", () => {
   });
 
   const refused = [
+    "> | Topic | Note |\n| --- | --- |\n| Intro | B | Each response contains 30 rows per response. |",
+    "| Topic | Note |\n    | --- | --- |\n| venue | available | Rows are limited to 30. |",
+    "| Topic | Note |\n| --- | --- |\n    venue | available | Rows are limited to 30.",
+    "| Topic | Note |\n| --- | --- |\n\tvenue | available | Rows are limited to 30.",
+    "| Topic | Note |\n| --- | --- |\n    venue | available | <!-- Rows are limited to 30. -->",
+    "| Topic | Note |\n| --- | --- |\n    venue | available\nEach [response][ref] contains 30 rows per response.\n\n[ref]: https://example.test/",
+    "> | Topic | Note |\n> | --- | --- |\n>     venue | available | Rows are limited to 30.",
+    "- | Topic | Note |\n      | --- | --- |\n  | venue | available | Rows are limited to 30. |",
+    "- | Topic | Note |\n  | --- | --- |\n      venue | available | Rows are limited to 30.",
     ...["[response][ref]", "[response][]", "[response]"].map(
       (subject) =>
         `| Info | Note |\n| --- | --- |\n| Stuff | Each ${subject} contains 30 rows per response. |\n\n[ref]: https://example.test/\n[response]: https://example.test/`,

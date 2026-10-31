@@ -101,6 +101,36 @@ describe("machine guide quantitative complements and local clauses (offline)", (
     "In the seating chart, there are 30 rows per response.",
     "In the seating chart, there are 30 rows per page in each response.",
     "<div>Each response contains one row per event and (</div><div>30) rows per response.</div>",
+    ...[
+      "in each API response",
+      "per page in each API response",
+      "on each page in each API response",
+    ].map(
+      (scope) =>
+        `For the list_events API, there are 30 rows per page in the documentation’s example table, and 30 rows ${scope}.`,
+    ),
+    ...[
+      "and in each API response",
+      ", as well as in each API response",
+      "and in each API page",
+      "in each API response",
+    ].map(
+      (scope) =>
+        `For the list_events API, there are 30 rows per page in the documentation’s example table ${scope}.`,
+    ),
+    ...["API event", "API published event", "list_events successful event", "MCP cached event"].map(
+      (scope) =>
+        `For the list_events API, there are 30 rows per page in the documentation’s example table and in each ${scope} page.`,
+    ),
+    "Each list_events response contains one row per event and 30 rows returned in each response of the API.",
+    "In `list_events`, there are 30 rows per page.",
+    "In the list_events API, there are 30 rows on each page.",
+    "Each list_events response contains -1 row per event.",
+    "Each list_events response contains −1 row per event.",
+    "Each list_events response contains one row per event and 30 rows returned in each response.",
+    "Each response contains one row per event and 30 rows returned per page by the API.",
+    "For the list_events API, there are 30 rows per page in each response.",
+    "For the list_events API, there are 30 rows on each page in each response.",
     "In each list_events response, there are 30 rows.",
     "For each list_events response, there are 30 published events.",
     "There are 30 rows per event in each response.",
@@ -168,6 +198,25 @@ describe("machine guide quantitative complements and local clauses (offline)", (
   });
 
   it.each([
+    ...[
+      "have been displayed",
+      "will be displayed",
+      "may be displayed",
+      "had been displayed",
+      "must be displayed",
+    ].map(
+      (predicate) =>
+        `Each response contains one row per event, and 30 rows returned per page by the seating chart ${predicate}.`,
+    ),
+    "For the list_events API, there are 30 rows per page in the documentation’s example table, and 30 rows per page in the documentation’s example table.",
+    "Each response contains one row per event, and 30 rows returned per page by the venue seating chart are visible.",
+    "Each response contains one row per event, and 30 rows returned per page by the seating chart were visible.",
+    "For the list_events API, there are 30 rows per page in the documentation's example table and in each page.",
+    "For the list_events API, there are 30 rows per page in the documentation's example table and in the documentation's example table.",
+    "For the list_events API, there are 30 rows per page in the documentation's example table.",
+    "For the list_events API, there are 30 rows on each page in the documentation's example table.",
+    "For the list_events API, there are 15 rows per page in the documentation's example table, illustrating two pages with 15 rows each in an example response.",
+    "For the list_events API, there are 2 example pages with 15 rows per page in the documentation's example table.",
     "In the list_events API, there are 30 examples in the guide.",
     "In the seating chart, there are 30 rows per page.",
     "Each response contains one row per event and 30 rows returned per seating-chart page.",

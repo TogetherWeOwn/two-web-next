@@ -200,18 +200,69 @@ describe("standalone machine-contract CLI", () => {
     });
   });
 
-  it("drains a failing JSON receipt through a small backpressured pipe", () => {
+  it.each([false, true])(
+    "drains a failing JSON receipt through a pipe (remove resize capability: %s)",
+    (removeResize) => {
+      writeFileSync(join(root, "docs/machine-interface.md"), checkedGuide());
+      withInjectedFailures(
+        'Array.from({length: 50}, (_, i) => String(i).padStart(2, "0") + "x".repeat(280))',
+        () => {
+          const python = `import fcntl, os, select, subprocess, sys, time\nif sys.argv[2] == "missing":\n    if hasattr(fcntl, "F_SETPIPE_SZ"):\n        delattr(fcntl, "F_SETPIPE_SZ")\n    assert not hasattr(fcntl, "F_SETPIPE_SZ")\nr, w = os.pipe()\nif hasattr(fcntl, "F_SETPIPE_SZ"):\n    assert fcntl.fcntl(w, fcntl.F_SETPIPE_SZ, 4096) == 4096\np = subprocess.Popen([sys.argv[1], '--import', 'tsx', 'ci/check-machine-contract.mjs', '--format', 'json'], stdout=w, stderr=subprocess.PIPE)\nos.close(w)\ntry:\n    time.sleep(1)\n    deadline = time.monotonic() + 10\n    chunks = []\n    while True:\n        ready, _, _ = select.select([r], [], [], max(0, deadline - time.monotonic()))\n        if not ready:\n            raise TimeoutError('checker did not close stdout')\n        chunk = os.read(r, 65536)\n        if not chunk:\n            break\n        chunks.append(chunk)\n    _, err = p.communicate(timeout=max(0.1, deadline - time.monotonic()))\n    sys.stdout.buffer.write(b''.join(chunks))\n    sys.stderr.buffer.write(err)\n    sys.exit(p.returncode)\nfinally:\n    os.close(r)\n    if p.poll() is None:\n        p.kill()\n        p.wait()\n`;
+          const result = spawnSync(
+            "python3",
+            ["-c", python, process.execPath, removeResize ? "missing" : "native"],
+            {
+              cwd: root,
+              timeout: 15_000,
+            },
+          );
+          expect(result.error).toBeUndefined();
+          expect(result.status, result.stderr.toString()).toBe(1);
+          expect(result.stderr.toString()).toBe("");
+          expect(result.stdout.length).toBeGreaterThan(4096);
+          const parsed = receipt(result.stdout);
+          expect(parsed.failures).toHaveLength(50);
+          expect(parsed.failure_count).toBe(50);
+        },
+      );
+    },
+  );
+
+  it("drains a delayed stdout write independently of pipe capacity", () => {
     writeFileSync(join(root, "docs/machine-interface.md"), checkedGuide());
+    const preload = join(root, "delay-stdout.cjs");
+    const marker = join(root, "stdout-intercepted");
+    writeFileSync(
+      preload,
+      `const fs = require("node:fs");
+const original = process.stdout.write.bind(process.stdout);
+process.stdout.write = function (...args) {
+  fs.writeFileSync(process.env.STDOUT_MARKER, "intercepted");
+  setTimeout(() => original(...args), 100);
+  return false;
+};
+`,
+    );
     withInjectedFailures(
       'Array.from({length: 50}, (_, i) => String(i).padStart(2, "0") + "x".repeat(280))',
       () => {
-        const python = `import fcntl, os, select, subprocess, sys, time\nr, w = os.pipe()\nfcntl.fcntl(w, fcntl.F_SETPIPE_SZ, 4096)\np = subprocess.Popen([sys.argv[1], '--import', 'tsx', 'ci/check-machine-contract.mjs', '--format', 'json'], stdout=w, stderr=subprocess.PIPE)\nos.close(w)\ntry:\n    time.sleep(1)\n    deadline = time.monotonic() + 10\n    chunks = []\n    while True:\n        ready, _, _ = select.select([r], [], [], max(0, deadline - time.monotonic()))\n        if not ready:\n            raise TimeoutError('checker did not close stdout')\n        chunk = os.read(r, 65536)\n        if not chunk:\n            break\n        chunks.append(chunk)\n    _, err = p.communicate(timeout=max(0.1, deadline - time.monotonic()))\n    sys.stdout.buffer.write(b''.join(chunks))\n    sys.stderr.buffer.write(err)\n    sys.exit(p.returncode)\nfinally:\n    os.close(r)\n    if p.poll() is None:\n        p.kill()\n        p.wait()\n`;
-        const result = spawnSync("python3", ["-c", python, process.execPath], {
-          cwd: root,
-          timeout: 15_000,
-        });
+        const result = spawnSync(
+          process.execPath,
+          [
+            "--require",
+            preload,
+            "--import",
+            "tsx",
+            "ci/check-machine-contract.mjs",
+            "--format",
+            "json",
+          ],
+          { cwd: root, env: { ...process.env, STDOUT_MARKER: marker }, timeout: 15_000 },
+        );
         expect(result.error).toBeUndefined();
         expect(result.status, result.stderr.toString()).toBe(1);
+        expect(result.stderr.toString()).toBe("");
+        expect(readFileSync(marker, "utf8")).toBe("intercepted");
         expect(result.stdout.length).toBeGreaterThan(4096);
         const parsed = receipt(result.stdout);
         expect(parsed.failures).toHaveLength(50);

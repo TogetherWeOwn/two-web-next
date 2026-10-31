@@ -400,11 +400,16 @@ const RESULT_COUNT_PENDING = new RegExp(
 // Known result modifiers preserve physical scope without consuming predicates
 // such as "each event documents how API results ..." as one noun phrase.
 const RESULT_QUALIFIERS = String.raw`(?:(?:list_events|get_event|MCP|event|collection|JSON|JSON-RPC|tool|HTTP|API|successful|failed|serialized|typed|published|cached|empty|nonempty|newly|paginated|individual)\s+)*`;
+const API_PAGE_SCOPE = new RegExp(
+  String.raw`\b(?:list_events|get_event|MCP|API|tool)\s+${RESULT_QUALIFIERS}page$`,
+  "i",
+);
 const PER_RESULT_SCOPE = new RegExp(
-  String.raw`^\s+(?:per[\s-]+${RESULT_QUALIFIERS}(?:page|response|result)|(?:in|for)\s+(?:each|every|a|the|one|single)\s+${RESULT_QUALIFIERS}(?:page|response|result))\b`,
+  String.raw`^\s+(?:per[\s-]+${RESULT_QUALIFIERS}(?:page|response|result)|(?:in|on|for)\s+(?:each|every|a|the|one|single)\s+${RESULT_QUALIFIERS}(?:page|response|result))\b`,
   "i",
 );
 const COUNT_CONNECTOR = String.raw`(?:as\s+well\s+as|and|with|plus|including)`;
+const COORDINATED_SCOPE = new RegExp(String.raw`^\s*,?\s*${COUNT_CONNECTOR}\b`, "i");
 const COORDINATED_COUNT = new RegExp(
   String.raw`^\s*,?\s*${COUNT_CONNECTOR}\b${QUALIFIED_COUNT_OBJECT}`,
   "i",
@@ -429,13 +434,27 @@ function existentialResultCount(text, count) {
   const domain = /(?:^|[,;]|\b(?:and|but)\b)\s*((?:in|for)\s+[^,;]+),?\s*$/i.exec(before)?.[1];
   // Explicit response/result ownership wins over an ambiguous named page
   // domain. Strip only adjacent ratio/page adjuncts, never another clause.
-  const scope = tail.replace(/^\s+per[\s-]+(?:event|page)\b/i, "");
+  const scope = tail.replace(
+    /^\s+(?:per[\s-]+(?:event|page)|(?:in|on|for)\s+(?:each|every|a|the|one|single)\s+page)\b/i,
+    "",
+  );
   const explicitScope = PER_RESULT_SCOPE.exec(scope);
   if (explicitScope && !/\bpage$/i.test(explicitScope[0])) return true;
   if (/per[\s-]+response\b/i.test(count[0])) return true;
+  // Exclude only this documentation-owned object, not a following
+  // coordinated count that can explicitly name an actual API response.
+  const example = /^\s+in\s+(?:the\s+)?documentation['’]s\s+example\s+table\b/i.exec(scope);
+  if (example) {
+    const rest = scope.slice(example[0].length);
+    const sharedScope = PER_RESULT_SCOPE.exec(rest.replace(COORDINATED_SCOPE, ""));
+    if (sharedScope && (!/\bpage$/i.test(sharedScope[0]) || API_PAGE_SCOPE.test(sharedScope[0])))
+      return true;
+    const next = COORDINATED_COUNT.exec(rest);
+    return next ? existentialResultCount(rest, next) : false;
+  }
   if (domain) {
     const apiOwner = new RegExp(
-      String.raw`^(?:in|for)\s+(?:the\s+)?${RESULT_QUALIFIERS}(?:API|tool|endpoint)$`,
+      String.raw`^(?:in|for)\s+(?:the\s+)?(?:${RESULT_QUALIFIERS}(?:API|tool|endpoint)|list_events|get_event)$`,
       "i",
     ).test(domain.trim());
     return PER_RESULT_SCOPE.test(` ${domain}`) || (apiOwner && perResultCount(count, tail));
@@ -478,8 +497,14 @@ function inheritedCountAdjunct(tail) {
   if (!participle) return false;
   const modifier = tail.slice(participle[0].length);
   const scope = PER_RESULT_SCOPE.exec(modifier);
+  const afterScope = scope ? modifier.slice(scope[0].length) : "";
   return (
-    (scope && !/^\s+of\b/i.test(modifier.slice(scope[0].length))) ||
+    (scope &&
+      (!/^\s+of\b/i.test(afterScope) ||
+        /^\s+of\s+(?:the\s+)?(?:API|tool|endpoint|list_events|get_event)\b/i.test(afterScope)) &&
+      !/^\s+by\s+(?:the\s+)?(?:venue\s+)?seating\s+chart\s+(?:are|were|is|was|have|has|had|can|could|may|might|will|would|must|should|do|does|did)\b/i.test(
+        afterScope,
+      )) ||
     /^\s+(?:in|from)\s+(?:its|the)\s+(?:data\s+)?array\b/i.test(modifier)
   );
 }
@@ -573,7 +598,7 @@ try {
         const perEventScope = /^\s+per[\s-]+event\b/i.test(tail);
         const value = (object.groups.value ?? "").replace(/^[\[({"'“‘\s]+|[\])}"'”’\s]+$/g, "");
         const singleton = /^(?:only|exactly)?$/i.test(
-          (object.groups.quantityPrefix ?? "").replace(/[\s:,-]+/g, "").trim(),
+          (object.groups.quantityPrefix ?? "").replace(/[\s:,]+/g, "").trim(),
         );
         const one =
           /^one$/i.test(value) || (/^\+?\d+(?:\.\d+)?$/.test(value) && Number(value) === 1);
