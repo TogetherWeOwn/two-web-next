@@ -39,6 +39,7 @@ export const coverage = {
   "/robots.txt": skip("Plain-text robots policy"),
   "/.well-known/security.txt": skip("Plain-text RFC 9116 security policy"),
   "/up": skip("JSON queue health response"),
+  "/version": skip("JSON deploy commit response"),
   "/admin/ops-overrides": {
     cases: [
       { path: "/admin/ops-overrides", state: "operator-record", opsBearer: true },
