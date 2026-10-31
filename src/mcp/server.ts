@@ -20,6 +20,7 @@ import {
 } from "../public-data/contracts";
 import {
   EventByteCapExceededError,
+  eventResultBytes,
   fitByteBudget,
   serializeCommunity,
   serializeEvent,
@@ -33,8 +34,9 @@ import {
   publicApiEventOutputSchema,
 } from "./output-schemas";
 
-export const MCP_SERVER_NAME = "two-web-next";
-export const MCP_SERVER_VERSION = "1.0.0";
+import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "./identity";
+
+export { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "./identity";
 
 /**
  * Exact tool allowlist. T1 lists published events, T2 reads one event, T3
@@ -63,25 +65,21 @@ function toolError(code: PublicDataErrorCode, message: string) {
 }
 
 function toolJson(value: object) {
-  const structuredContent = value as Record<string, unknown>;
   return {
     content: [{ type: "text" as const, text: JSON.stringify(value) }],
-    structuredContent,
+    structuredContent: value as Record<string, unknown>,
   };
 }
 
 const UNAVAILABLE = "Event data is temporarily unavailable.";
-// Programming faults reuse the REST 500 message (same static bytes, same
-// privacy boundary); the real error goes to error.alert only.
-const INTERNAL = PUBLIC_DATA_INTERNAL_MESSAGE;
-
 export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
   const { env, db } = deps;
   // Per-request server (see src/mcp/routes.ts), so the closure's request ID
   // is the one on this POST's http.request line: tool failures correlate.
   const internalError = (err: unknown) => {
     alertRequestError(err, { method: "POST", route: "/mcp", requestId: deps.requestId });
-    return toolError("internal", INTERNAL);
+    // Match the REST 500 privacy boundary; only error.alert receives the fault.
+    return toolError("internal", PUBLIC_DATA_INTERNAL_MESSAGE);
   };
   const server = new McpServer({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION });
 
@@ -89,7 +87,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
     "list_events",
     {
       description:
-        "List published community events, soonest first. Read-only: paging clamps to 20 rows per page and long descriptions trim to fit 32 KiB.",
+        "List published community events, soonest first. Read-only: paging clamps to 20 rows per page and long descriptions trim so the whole result fits 32 KiB.",
       inputSchema: z.object({
         page: z.number().int().min(1).default(1),
         per_page: z
@@ -124,21 +122,19 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
         listed.page,
         per_page,
       );
-      // The same byte budget as REST: trim descriptions, never drop rows.
+      // The same byte budget as REST, measured on this result (text plus typed
+      // copy): trim descriptions, never drop rows.
       // Irreducible metadata refuses with the unavailable tool error inside
       // the unchanged JSON-RPC result envelope — never a throw (the SDK
       // echoes err.message) and never an oversized success.
       let body: string;
       try {
-        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
-          ...payload,
-          data: trimmed,
-        }));
+        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, () => payload);
       } catch (err) {
         if (err instanceof EventByteCapExceededError) return toolError("unavailable", UNAVAILABLE);
         return internalError(err);
       }
-      if (new TextEncoder().encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
+      if (eventResultBytes(body) > API_PUBLIC_BOUNDS.maxBodyBytes)
         return toolError("unavailable", UNAVAILABLE);
       return toolJson(JSON.parse(body) as Record<string, unknown>);
     },
@@ -173,7 +169,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
         if (err instanceof EventByteCapExceededError) return toolError("unavailable", UNAVAILABLE);
         return internalError(err);
       }
-      if (new TextEncoder().encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
+      if (eventResultBytes(body) > API_PUBLIC_BOUNDS.maxBodyBytes)
         return toolError("unavailable", UNAVAILABLE);
       return toolJson(JSON.parse(body) as Record<string, unknown>);
     },

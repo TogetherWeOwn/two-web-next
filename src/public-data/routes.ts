@@ -20,6 +20,7 @@ import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../
 import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
+import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "../mcp/identity";
 import { requestRoute } from "../request-log";
 import { JOIN_INTRO } from "../screens/join";
 import {
@@ -223,12 +224,27 @@ export class EventByteCapExceededError extends Error {
 }
 
 /**
+ * Worst enabled MCP result projection: the text copy, structured copy and the
+ * 2026-07-28 SDK's resultType and serverInfo stamps. Legacy results omit the
+ * stamps and are smaller. A parsed and re-stringified DTO is byte-identical,
+ * so its structured copy is spliced in unparsed. JSON-RPC request IDs and
+ * SSE/HTTP framing are outside the result budget.
+ */
+export function eventResultBytes(body: string): number {
+  return TEXT.encode(
+    `{"content":[{"type":"text","text":${JSON.stringify(body)}}],"structuredContent":${body},"resultType":"complete","_meta":{"io.modelcontextprotocol/serverInfo":${JSON.stringify({ name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION })}}}`,
+  ).length;
+}
+
+/**
  * Fits a collection inside the byte cap by halving the longest description
- * until the wrapped body fits. Shortened descriptions end in …; rows are
- * never dropped, so paging stays stable. Always terminates: a one-character
- * description collapses to empty. Throws EventByteCapExceededError when no
- * description remains but the body still exceeds the cap — irreducible
- * metadata (title/game/location) must refuse, never return oversized.
+ * until the typed result (see eventResultBytes) fits. REST serves the same
+ * fitted bytes as MCP, so one authority bounds both surfaces and the REST
+ * body is always the smaller of the two. Shortened descriptions end in …;
+ * rows are never dropped, so paging stays stable. A shortened nonempty
+ * description retains at least an ellipsis; the marker is never trimmed
+ * again. If marked minima and metadata still overflow, the static unavailable
+ * error takes precedence over an oversized or misleading success.
  */
 export function fitByteBudget(
   rows: PublicApiEventDto[],
@@ -237,11 +253,12 @@ export function fitByteBudget(
 ): string {
   let body = JSON.stringify(wrap(rows));
   for (;;) {
-    if (TEXT.encode(body).length <= maxBytes) return body;
+    if (eventResultBytes(body) <= maxBytes) return body;
     let longest: PublicApiEventDto | null = null;
     for (const row of rows) {
       if (
         row.description &&
+        row.description !== "…" &&
         (!longest?.description || row.description.length > longest.description.length)
       )
         longest = row;
@@ -251,10 +268,7 @@ export function fitByteBudget(
     // (emoji, some CJK) mid-pair emits a lone surrogate that strict JSON
     // decoders reject. Array.from splits on whole code points.
     const codePoints = Array.from(longest.description);
-    longest.description =
-      codePoints.length <= 1
-        ? ""
-        : `${codePoints.slice(0, Math.ceil(codePoints.length / 2) - 1).join("")}…`;
+    longest.description = `${codePoints.slice(0, Math.ceil(codePoints.length / 2) - 1).join("")}…`;
     body = JSON.stringify(wrap(rows));
   }
 }
@@ -430,10 +444,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       if (game !== null && total === 0) return await emptyEventCollection(c, generation);
       const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
       try {
-        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
-          ...payload,
-          data: trimmed,
-        }));
+        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, () => payload);
       } catch (err) {
         if (err instanceof EventByteCapExceededError) return unavailable(c);
         throw err;
@@ -443,7 +454,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       return internalFault(c, err);
     }
     // Final guard: an oversized success is never cached or served.
-    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
+    if (eventResultBytes(body) > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
     // Store under the clamped page the database answered, never the raw alias:
     // N past-the-end pages occupy one entry and cannot evict page 1. Filtered
     // entries carry the game so games never share bytes.
@@ -487,7 +498,7 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       return internalFault(c, err);
     }
     // Final guard: an oversized success is never cached or served.
-    if (TEXT.encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
+    if (eventResultBytes(body) > API_PUBLIC_BOUNDS.maxBodyBytes) return unavailable(c);
     return servePublicJson(c, key, body, generation);
   });
 
