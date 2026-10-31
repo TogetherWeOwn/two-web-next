@@ -129,6 +129,17 @@ temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
 These import checks do not replace actual Chromium collection: the Lighthouse
 job must still collect all twenty-four samples (eight routes, three runs each) and pass the unchanged assertions.
 
+Mobile collection survives one transient the same way desktop does:
+`npm run lighthouse` runs `ci/lighthouse-perf-run.mjs`, which uses the desktop
+runner's flow with the mobile config. It reruns the whole `lhci autorun` once
+when any planned URL is short of its three samples, and never when full
+evidence failed an assertion. Every run writes `.lighthouseci/perf-collect.log`
+and, on failure, `.lighthouseci/perf-collect-diagnosis.md` (COLLECT FAILURE,
+BUDGET BREACH or an unclassified step failure). Both ship in the
+`lighthouse-<sha>` artifact. Its selftest evaluates the real mobile assertions
+over synthetic reports: a short collect retries, and an LCP over budget fails
+without a retry.
+
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no
 Hyperdrive, database, queue, cron, remote service or deployment route. The fixture

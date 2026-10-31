@@ -418,9 +418,10 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // merged builds 336673 and 336672; margin 223; lower 336640 rejects by 33),
 // the host/join 337152 ceiling, the ongoing-night 337408 ceiling, and the
 // honest roster/venue 337664 ceiling on current main (two composed builds
-// 337545 and 337547; main's 337408 rejects by 137 and 139), and the Kit
-// outage-header CTA 337920 ceiling (two merged builds 337705 and 337708;
-// main's 337664 rejects by 41 and 44).
+// 337545 and 337547; main's 337408 rejects by 137 and 139), and the
+// GET /version 337920 ceiling on current main (two composed builds 337717
+// and 337718; main's 337664 rejects by 53 and 54), which also admits the Kit
+// outage-header CTA composed with it (two builds 337793 and 337795).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -445,7 +446,7 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   337152: { intervalBytes: 337015, exactBytes: 337152, overBytes: 337153 },
   337408: { intervalBytes: 337286, exactBytes: 337408, overBytes: 337409 },
   337664: { intervalBytes: 337545, exactBytes: 337664, overBytes: 337665 },
-  337920: { intervalBytes: 337708, exactBytes: 337920, overBytes: 337921 },
+  337920: { intervalBytes: 337795, exactBytes: 337920, overBytes: 337921 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
@@ -821,7 +822,7 @@ function shippingServerGzipCases() {
         name: "server gzip newly allowed interval",
         group: "kit.server.js",
         axis: "gzip",
-        bytes: 337708,
+        bytes: 337795,
       },
       { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 337920 },
       {
@@ -1041,20 +1042,20 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
   ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   ...shippingClientGzipCases(),
-  // Outage-header CTA on current main: 1207372 raw; the previous 1207040 cap rejects.
+  // Outage-header CTA composed with GET /version: 1207652 raw; the previous 1207552 cap rejects.
   {
     name: "server raw newly allowed interval",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1207372,
+    bytes: 1207652,
   },
-  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1207552 },
+  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1208064 },
   {
     name: "server raw one byte over",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1207553,
-    ceiling: 1207552,
+    bytes: 1208065,
+    ceiling: 1208064,
     breach: true,
   },
   {

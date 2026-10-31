@@ -51,7 +51,9 @@ The repository rulesets enforce the following on `main`:
 
 - `protect-main`: changes arrive through a pull request, the branch cannot be
   deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
-  `gitleaks` and `e2e-ok` must pass, plus Paperclip Review 5/5 on the exact head.
+  `gitleaks` and `e2e-ok` must pass on the exact head, and so must the two
+  review app checks, CodeRabbit and Devin Review. No approving review is
+  required.
 
   The journeys count only through the aggregator in e2e.yml: it fails when the
   scope job fails or the browser journeys fail or are cancelled, and passes a
@@ -59,6 +61,13 @@ The repository rulesets enforce the following on `main`:
   draft.
 
 - `pr-conventions`: `pr-lint` must pass.
+
+Who merges (owner decision 2026-10-31): the agent that did the work merges a PR
+once every required check is green and each review finding is fixed or answered
+with evidence. A merge to `main` deploys production (ci, then deploy, then
+e2e-staging, then deploy-production), so it also needs the owner's approval
+through `request_confirmation` on the card. So does every other production
+deploy, such as a manual dispatch or promotion.
 
 ### Pull-request size labels (advisory)
 
@@ -135,9 +144,10 @@ below-cutoff branch rows need `PR_STANDARDS_MODE`.
 | Internal card ID in a commit subject (first checker, `INTERNAL_ID_LEVEL: "warning"`) | Warns only |
 | Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 
-GitHub does not enforce an approval count here. Team policy does: an independent
-reviewer, who did not write the change, reviews the exact head SHA that merges, CI
-is green on that SHA, and a new push needs a new review.
+GitHub does not enforce an approval count here, and neither does team policy.
+Independent review comes from the two review app checks, CodeRabbit and Devin
+Review, which run on the head SHA, and a new push re-runs them. The merge rule is
+the one in "Who merges" above.
 
 `pr-lint` lives in `.github/workflows/pr-gates.yml` and runs through
 `ci/pr-lint-output.py check`: first `ci/check-pr-conventions.py` (it fails on a
