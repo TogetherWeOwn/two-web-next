@@ -420,7 +420,8 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // honest roster/venue 337664 ceiling on current main (two composed builds
 // 337545 and 337547; main's 337408 rejects by 137 and 139), and the
 // GET /version 337920 ceiling on current main (two composed builds 337717
-// and 337718; main's 337664 rejects by 53 and 54).
+// and 337718; main's 337664 rejects by 53 and 54), which also admits the Kit
+// outage-header CTA composed with it (two builds 337793 and 337795).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -445,7 +446,7 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   337152: { intervalBytes: 337015, exactBytes: 337152, overBytes: 337153 },
   337408: { intervalBytes: 337286, exactBytes: 337408, overBytes: 337409 },
   337664: { intervalBytes: 337545, exactBytes: 337664, overBytes: 337665 },
-  337920: { intervalBytes: 337718, exactBytes: 337920, overBytes: 337921 },
+  337920: { intervalBytes: 337795, exactBytes: 337920, overBytes: 337921 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
@@ -468,8 +469,9 @@ test("shipping budget: server gzip allocation is explicitly approved", () => {
 // The host/join carry-over with render-time URL checks adds raw 258560
 // (measured 258282). The honest roster/venue states add raw 259584
 // (two merged builds 259224; the lower 258560 rejects by 664), with the
-// gzip ceiling unchanged. Any other loaded ceiling fails its allocation
-// control and its boundary cases.
+// gzip ceiling unchanged. The Kit outage-header CTA adds raw 260096 and
+// gzip 103936 (two builds 259746/103695; the lower pair rejects by 162/15).
+// Any other loaded ceiling fails its allocation control and its boundary cases.
 const SHIPPING_CLIENT_RAW_CAP = shippingClientBudget?.maxRawBytes;
 const SHIPPING_CLIENT_GZIP_CAP = shippingClientBudget?.maxGzipBytes;
 const SHIPPING_CLIENT_RAW_ALLOCATIONS = {
@@ -478,18 +480,20 @@ const SHIPPING_CLIENT_RAW_ALLOCATIONS = {
   258048: { intervalBytes: 257638, exactBytes: 258048, overBytes: 258049 },
   258560: { intervalBytes: 258282, exactBytes: 258560, overBytes: 258561 },
   259584: { intervalBytes: 259224, exactBytes: 259584, overBytes: 259585 },
+  260096: { intervalBytes: 259746, exactBytes: 260096, overBytes: 260097 },
 };
 const SHIPPING_CLIENT_GZIP_ALLOCATIONS = {
   103168: { exactBytes: 103168, overBytes: 103169 },
   103424: { intervalBytes: 103302, exactBytes: 103424, overBytes: 103425 },
   103680: { intervalBytes: 103569, exactBytes: 103680, overBytes: 103681 },
+  103936: { intervalBytes: 103695, exactBytes: 103936, overBytes: 103937 },
 };
 const SHIPPING_CLIENT_RAW_UNSUPPORTED =
   `unsupported client raw allocation ${String(SHIPPING_CLIENT_RAW_CAP)}: ` +
-  `expected one of 257024, 257536, 258048, 258560, 259584`;
+  `expected one of 257024, 257536, 258048, 258560, 259584, 260096`;
 const SHIPPING_CLIENT_GZIP_UNSUPPORTED =
   `unsupported client gzip allocation ${String(SHIPPING_CLIENT_GZIP_CAP)}: ` +
-  `expected one of 103168, 103424, 103680`;
+  `expected one of 103168, 103424, 103680, 103936`;
 
 test("shipping budget: client raw allocation is explicitly approved", () => {
   assert.ok(
@@ -818,7 +822,7 @@ function shippingServerGzipCases() {
         name: "server gzip newly allowed interval",
         group: "kit.server.js",
         axis: "gzip",
-        bytes: 337718,
+        bytes: 337795,
       },
       { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 337920 },
       {
@@ -933,6 +937,25 @@ function shippingClientRawCases() {
       },
     ];
   }
+  if (SHIPPING_CLIENT_RAW_CAP === 260096) {
+    return [
+      {
+        name: "client raw newly allowed interval",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 259746,
+      },
+      { name: "client raw exact ceiling", group: "kit.client.js", axis: "raw", bytes: 260096 },
+      {
+        name: "client raw one byte over",
+        group: "kit.client.js",
+        axis: "raw",
+        bytes: 260097,
+        ceiling: 260096,
+        breach: true,
+      },
+    ];
+  }
   return [
     { name: "client raw newly allowed interval", unsupported: SHIPPING_CLIENT_RAW_UNSUPPORTED },
     { name: "client raw exact ceiling", unsupported: SHIPPING_CLIENT_RAW_UNSUPPORTED },
@@ -991,6 +1014,25 @@ function shippingClientGzipCases() {
       },
     ];
   }
+  if (SHIPPING_CLIENT_GZIP_CAP === 103936) {
+    return [
+      {
+        name: "client gzip newly allowed interval",
+        group: "kit.client.js",
+        axis: "gzip",
+        bytes: 103695,
+      },
+      { name: "client gzip exact ceiling", group: "kit.client.js", axis: "gzip", bytes: 103936 },
+      {
+        name: "client gzip one byte over",
+        group: "kit.client.js",
+        axis: "gzip",
+        bytes: 103937,
+        ceiling: 103936,
+        breach: true,
+      },
+    ];
+  }
   return [
     { name: "client gzip exact ceiling", unsupported: SHIPPING_CLIENT_GZIP_UNSUPPORTED },
     { name: "client gzip one byte over", unsupported: SHIPPING_CLIENT_GZIP_UNSUPPORTED },
@@ -1000,20 +1042,20 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
   ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   ...shippingClientGzipCases(),
-  // GET /version on current main: 1207318 raw; the previous 1207040 cap rejects.
+  // Outage-header CTA composed with GET /version: 1207652 raw; the previous 1207552 cap rejects.
   {
     name: "server raw newly allowed interval",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1207318,
+    bytes: 1207652,
   },
-  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1207552 },
+  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1208064 },
   {
     name: "server raw one byte over",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1207553,
-    ceiling: 1207552,
+    bytes: 1208065,
+    ceiling: 1208064,
     breach: true,
   },
   {

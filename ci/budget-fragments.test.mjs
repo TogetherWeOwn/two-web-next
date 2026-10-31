@@ -142,7 +142,8 @@ function kitFixture(t, fragments) {
 // list, then deep-compares the rest of the plan.
 // 337408 admits the ongoing-night composition on statement-deadline main
 // (measured 337286; the previous 337152 ceiling rejects by 134).
-// 337920 admits GET /version on current main (measured 337718; 337664 rejects by 54).
+// 337920 admits GET /version on current main (measured 337718; 337664 rejects by 54)
+// and the Kit outage-header CTA composed with it (two builds 337793 and 337795).
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
   335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920,
 ];
@@ -155,7 +156,9 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // the lower 1205248 step rejects by 45).
 // 1207040 admits the roster/venue composition (1206782; main 1205504 rejects by 1278).
 // 1207552 admits GET /version on current main (1207318; 1207040 rejects by 278).
-const SHIPPING_SERVER_RAW_ALLOCATIONS = [1203200, 1203968, 1205504, 1207040, 1207552];
+// 1208064 admits the Kit outage-header CTA composed with GET /version
+// (two builds 1207650 and 1207652; main 1207552 rejects by 98 and 100).
+const SHIPPING_SERVER_RAW_ALLOCATIONS = [1203200, 1203968, 1205504, 1207040, 1207552, 1208064];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
 // on current main (measured union 258023 raw / 103383 gzip, margins 25 / 41;
@@ -171,6 +174,9 @@ const SHIPPING_CLIENT_JS_ALLOCATIONS = [
   // Honest roster/venue states: two merged builds 259224/103522; the lower
   // 258560 raw step rejects by 664, gzip ceiling unchanged.
   [259584, 103680],
+  // Kit outage-header CTA: two builds 259746/103695; the lower pair rejects
+  // raw by 162 and gzip by 15.
+  [260096, 103936],
 ];
 
 function assertShippingKitBudget(actual) {
@@ -182,7 +188,7 @@ function assertShippingKitBudget(actual) {
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -283,6 +289,19 @@ test("shipping oracle admits the measured /version server allocations together",
   });
 });
 
+test("shipping oracle admits the measured outage-header allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1208064, maxGzipBytes: 337920 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 260096, maxGzipBytes: 103936 },
+    },
+  });
+});
+
 test("shipping oracle admits the measured 1203968 server raw allocation", () => {
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
@@ -300,7 +319,9 @@ test("shipping oracle admits the measured ongoing-night server allocations", () 
 });
 
 test("shipping oracle rejects an unsupported server raw allocation", () => {
-  for (const maxRawBytes of [1203201, 1203712, 1203967, 1203969, 1205248, 1205503, 1205505]) {
+  for (const maxRawBytes of [
+    1203201, 1203712, 1203967, 1203969, 1205248, 1205503, 1205505, 1207551, 1207553,
+  ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes } },
@@ -314,7 +335,7 @@ test("shipping oracle rejects an unsupported server raw allocation", () => {
 
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
   for (const maxGzipBytes of [
-    335105, 335359, 335616, 336385, 336641, 336897, 337153, 337407, 337409,
+    335105, 335359, 335616, 336385, 336641, 336897, 337153, 337407, 337409, 337919, 337921,
   ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
@@ -383,6 +404,12 @@ test("shipping oracle rejects client js pairs outside the admitted list", () => 
     [258561, 103680],
     [258560, 103679],
     [258560, 103681],
+    [260096, 103680],
+    [259584, 103936],
+    [260095, 103936],
+    [260097, 103936],
+    [260096, 103935],
+    [260096, 103937],
   ]) {
     assert.throws(
       () =>
