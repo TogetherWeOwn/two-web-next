@@ -240,8 +240,8 @@ real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
 4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test, the
    smoke suite, and the link check below; record the results and verify the two
    dates above against the source pin and `expiry - 90 × 24 hours` in UTC.
-   Required checks under that contract and independent Paperclip Review 5/5 must
-   pass on the exact head before the existing merge automation proceeds. No
+   The required checks under that contract, including `CodeRabbit` and
+   `Devin Review`, must pass on the exact head before the PR merges. No
    database is needed:
 
    ```sh
@@ -295,9 +295,12 @@ environment. There is no `[env.staging]` configuration. Do not add `--env
 staging` or invent a different Worker target. Verify the approved account and
 binding isolation before any remote mutation.
 
-1. Require independent Code Reviewer approval on the exact head SHA and green
-   `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`; the approving reviewer squash-merges,
-   not the author. Record the merged SHA and intended target.
+1. Require green `ci-ok`, `e2e-ok`, `gitleaks`, `pr-lint`, `CodeRabbit` and
+   `Devin Review` on the exact head SHA, with every review finding fixed or
+   answered with evidence, and the owner's approval through
+   `request_confirmation` on the card (this merge deploys production). The
+   agent that did the work then squash-merges. Record the merged SHA and
+   intended target.
 2. Before release, capture the current deployment and its **version ID** (not
    its deployment ID) as the known-good rollback pointer. The following are
    remote metadata reads, not database probes; approved Cloudflare credentials
