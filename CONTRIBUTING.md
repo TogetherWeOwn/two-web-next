@@ -144,9 +144,10 @@ below-cutoff branch rows need `PR_STANDARDS_MODE`.
 | Internal card ID in a commit subject (first checker, `INTERNAL_ID_LEVEL: "warning"`) | Warns only |
 | Advisory references in the PR title or body, or an internal reference in the branch name below the cutoff (upstream gate, `PR_STANDARDS_MODE: "warn"`) | Warns only |
 
-GitHub does not enforce an approval count here. Team policy does: an independent
-reviewer, who did not write the change, reviews the exact head SHA that merges, CI
-is green on that SHA, and a new push needs a new review.
+GitHub does not enforce an approval count here, and neither does team policy.
+Independent review comes from the two review app checks, CodeRabbit and Devin
+Review, which run on the head SHA, and a new push re-runs them. The merge rule is
+the one in "Who merges" above.
 
 `pr-lint` lives in `.github/workflows/pr-gates.yml` and runs through
 `ci/pr-lint-output.py check`: first `ci/check-pr-conventions.py` (it fails on a

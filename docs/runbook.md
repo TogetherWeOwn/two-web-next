@@ -295,9 +295,12 @@ environment. There is no `[env.staging]` configuration. Do not add `--env
 staging` or invent a different Worker target. Verify the approved account and
 binding isolation before any remote mutation.
 
-1. Require independent Code Reviewer approval on the exact head SHA and green
-   `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`; the approving reviewer squash-merges,
-   not the author. Record the merged SHA and intended target.
+1. Require green `ci-ok`, `e2e-ok`, `gitleaks`, `pr-lint`, `CodeRabbit` and
+   `Devin Review` on the exact head SHA, with every review finding fixed or
+   answered with evidence, and the owner's approval through
+   `request_confirmation` on the card (this merge deploys production). The
+   agent that did the work then squash-merges. Record the merged SHA and
+   intended target.
 2. Before release, capture the current deployment and its **version ID** (not
    its deployment ID) as the known-good rollback pointer. The following are
    remote metadata reads, not database probes; approved Cloudflare credentials
