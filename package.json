@@ -4,6 +4,9 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "postinstall": "node ci/build-leaf-css.mjs",
+    "build:leaf-css": "node ci/build-leaf-css.mjs",
+    "predev": "node ci/build-leaf-css.mjs",
     "dev": "wrangler dev",
     "deploy": "wrangler deploy",
     "typecheck": "tsc --noEmit && tsc --noEmit -p ci/tsconfig.json",
@@ -101,7 +104,8 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
-    "@babel/parser": "7.29.9",
+    "@babel/parser": "8.0.7",
+    "@babel/types": "8.0.6",
     "@biomejs/biome": "2.6.2",
     "@cloudflare/workers-types": "^5.20261023.1",
     "@lhci/cli": "0.15.1",

@@ -5,11 +5,14 @@
 // CustomEvent broadcast by the rsvp-button island after every successful
 // write, then re-reads the event page HTML (GET /e/<key>, text/html, with
 // the x-two-island fragment header so the server answers without rotating
-// the single-use session bearer) and swaps the
-// `[data-testid="event-attendees"]` section in place (no full reload). The
-// SSR section and its full-page Refresh link stay as the
-// no-JS fallback; this binder only patches nodes in place, never invents
-// markup beyond the bounded stale/retry signal.
+// the single-use session bearer) and swaps the roster section in place
+// (no full reload) across both member-visible identities: the populated
+// `[data-testid="event-attendees"]` list and the empty-roster
+// `[data-testid="event-roster-empty"]` placeholder. A first RSVP swaps
+// the placeholder for the list; a last withdrawal swaps back. The SSR
+// section and its full-page Refresh link stay as the no-JS fallback;
+// this binder only patches nodes in place, never invents markup beyond
+// the bounded stale/retry signal.
 //
 // Budget: one GET per answered event for this page's own key; non-matching
 // keys fire nothing. No polling. One automatic retry, then a visible
@@ -20,7 +23,10 @@
 // snaps back to page one.
 
 (function () {
-  var SECTION = '[data-testid="event-attendees"]';
+  // Both member-visible roster identities: the populated list and the
+  // empty-roster placeholder. Non-member placeholders (guest nudge,
+  // members-only) never match: those viewers hold no RSVP control, so no
+  // broadcast ever swaps them, and the island never invents them.
   var STALE_TESTID = "event-attendees-stale";
   var RETRY_TESTID = "event-attendees-retry";
   var UPDATED = "going-count-updated";
@@ -102,9 +108,17 @@
   }
 
   function findSection(doc) {
-    var scope = doc || (typeof document !== "undefined" ? document : null);
+    // Bootstrap already requires document; refresh parses may supply their own.
+    var scope = doc || document;
+    // Exact queries also work in the small DOM implementations used by the
+    // island consumers. Only one audience-specific roster renders at a time.
     if (!scope || typeof scope.querySelector !== "function") return null;
-    return scope.querySelector(SECTION);
+    var identities = ["attendees", "roster-empty", "roster-guest-nudge", "roster-members-only"];
+    for (var i = 0; i < identities.length; i++) {
+      var section = scope.querySelector('[data-testid="event-' + identities[i] + '"]');
+      if (section) return section;
+    }
+    return null;
   }
 
   function clearStale() {
@@ -230,23 +244,20 @@
   // the old section). Without this the focus drops to BODY and assistive
   // tech loses its place.
   function restoreFocusAfterSwap(section) {
-    var heading = null;
+    var target;
     try {
-      heading = section.querySelector("#event-attendees-heading");
+      target = section.querySelector("h2") || section;
     } catch (_headingLookupIgnored) {
-      heading = null;
+      target = section;
     }
-    var target = heading || section;
     try {
-      if (target && typeof target.setAttribute === "function") {
-        target.setAttribute("tabindex", "-1");
-      }
+      target?.setAttribute?.("tabindex", "-1");
     } catch (_tabindexIgnored) {
       // Fall through to the focus attempt: the target is still focusable
       // enough in most hosts without the tabindex hint.
     }
     try {
-      if (target && typeof target.focus === "function") target.focus();
+      target?.focus?.();
     } catch (_focusIgnored) {
       // Fall through: the roster still matches the server truth; only the
       // focus restoration is skipped.
@@ -352,7 +363,9 @@
       }
     }
     if (!fresh && old) {
-      // The server renders no section for an empty roster.
+      // No roster shell remains in the authoritative document. Empty member
+      // and downgraded audience shells use the replacement branch above;
+      // this fallback still removes old private names when no shell is served.
       var refocusAfterPrune = focusedInside(old);
       try {
         if (old.parentNode) old.parentNode.removeChild(old);

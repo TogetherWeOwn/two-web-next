@@ -714,8 +714,9 @@ function controlledDriver(_url, options) {
   client.unsafe = query;
   client.begin = async (callback) => {
     if (process.env.MIGRATION_DRIVER_CRASH) {
+      const crash = process.env.MIGRATION_DRIVER_CRASH;
       setImmediate(() => {
-        if (process.env.MIGRATION_DRIVER_CRASH === "matching") {
+        if (crash === "matching" || crash === "matching-reject") {
           const error = new TypeError("Cannot read properties of null (reading 'write')");
           error.stack =
             "TypeError: Cannot read properties of null (reading 'write')\n" +
@@ -725,6 +726,10 @@ function controlledDriver(_url, options) {
         throw new Error("cli-nonmatching-uncaught-exception");
       });
       await new Promise((resolve) => setImmediate(resolve));
+      // A rejection after the crash exercises the catch-side dedup guard:
+      // the uncaught handler already printed the diagnostic, so the catch
+      // must not print it a second time.
+      if (crash === "matching-reject") throw new Error("cli-post-crash-rejection");
       console.log("driver continuation after crash");
       return [];
     }
@@ -868,6 +873,27 @@ test("the actual CLI rethrows nonmatching uncaught exceptions instead of masking
     assert.equal(matching.status, 1);
     assert.equal(matching.stderr.trim(), withheld);
     assert.match(matching.stdout, /driver continuation after crash/);
+  });
+});
+
+test("a matching crash followed by a runner rejection prints exactly one diagnostic", () => {
+  withControlledMigrationDriver(({ preload }) => {
+    const result = spawnSync(process.execPath, ["--import", preload, script, "apply"], {
+      encoding: "utf8",
+      timeout: 15000,
+      env: {
+        ...process.env,
+        ...mainEnv,
+        GITHUB_STEP_SUMMARY: "",
+        // Synthetic credential accepted by admission only; the loader replaces
+        // postgres before construction, so no DNS/socket/database is touched.
+        PLANETSCALE_STAGING_DATABASE_URL: `postgres://fixture.${PLANETSCALE_STAGING_BRANCH_ID}:fixture@${PLANETSCALE_STAGING_HOST}/fixture?sslmode=require`,
+        MIGRATION_DRIVER_CRASH: "matching-reject",
+      },
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 1);
+    assert.equal(result.stderr.trim(), withheld);
   });
 });
 
