@@ -20,6 +20,7 @@ import {
 } from "../public-data/contracts";
 import {
   EventByteCapExceededError,
+  eventResultBytes,
   fitByteBudget,
   serializeCommunity,
   serializeEvent,
@@ -33,8 +34,7 @@ import {
   publicApiEventOutputSchema,
 } from "./output-schemas";
 
-export const MCP_SERVER_NAME = "two-web-next";
-export const MCP_SERVER_VERSION = "1.0.0";
+import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "./identity";
 
 /**
  * Exact tool allowlist. T1 lists published events, T2 reads one event, T3
@@ -89,7 +89,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
     "list_events",
     {
       description:
-        "List published community events, soonest first. Read-only: paging clamps to 20 rows per page and long descriptions trim to fit 32 KiB.",
+        "List published community events, soonest first. Read-only: paging clamps to 20 rows per page and long descriptions trim so the whole result fits 32 KiB.",
       inputSchema: z.object({
         page: z.number().int().min(1).default(1),
         per_page: z
@@ -124,7 +124,8 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
         listed.page,
         per_page,
       );
-      // The same byte budget as REST: trim descriptions, never drop rows.
+      // The same byte budget as REST, measured on this whole tool result (text
+      // plus structured copy): trim descriptions, never drop rows.
       // Irreducible metadata refuses with the unavailable tool error inside
       // the unchanged JSON-RPC result envelope — never a throw (the SDK
       // echoes err.message) and never an oversized success.
@@ -138,7 +139,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
         if (err instanceof EventByteCapExceededError) return toolError("unavailable", UNAVAILABLE);
         return internalError(err);
       }
-      if (new TextEncoder().encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
+      if (eventResultBytes(body) > API_PUBLIC_BOUNDS.maxBodyBytes)
         return toolError("unavailable", UNAVAILABLE);
       return toolJson(JSON.parse(body) as Record<string, unknown>);
     },
@@ -173,7 +174,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
         if (err instanceof EventByteCapExceededError) return toolError("unavailable", UNAVAILABLE);
         return internalError(err);
       }
-      if (new TextEncoder().encode(body).length > API_PUBLIC_BOUNDS.maxBodyBytes)
+      if (eventResultBytes(body) > API_PUBLIC_BOUNDS.maxBodyBytes)
         return toolError("unavailable", UNAVAILABLE);
       return toolJson(JSON.parse(body) as Record<string, unknown>);
     },

@@ -20,6 +20,7 @@ import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../
 import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
+import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "../mcp/identity";
 import { requestRoute } from "../request-log";
 import { JOIN_INTRO } from "../screens/join";
 import {
@@ -222,9 +223,29 @@ export class EventByteCapExceededError extends Error {
   }
 }
 
+// The serverInfo stamp the MCP SDK adds to result `_meta` on newer protocols.
+const MCP_SERVER_INFO_META = JSON.stringify({
+  "io.modelcontextprotocol/serverInfo": { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
+});
+
+/**
+ * Bytes of the largest serialized MCP tool result that carries this event
+ * body: the text copy (string-escaped), the structuredContent copy, and the
+ * `resultType` and serverInfo `_meta` the SDK adds on newer protocols. Older
+ * protocols omit those stamps, so their results are smaller. The JSON-RPC
+ * envelope (the client-chosen id) and SSE/HTTP framing are not counted.
+ */
+export function eventResultBytes(body: string): number {
+  return TEXT.encode(
+    `{"content":[{"type":"text","text":${JSON.stringify(body)}}],"structuredContent":${body},"resultType":"complete","_meta":${MCP_SERVER_INFO_META}}`,
+  ).length;
+}
+
 /**
  * Fits a collection inside the byte cap by halving the longest description
- * until the wrapped body fits. Shortened descriptions end in …; rows are
+ * until the MCP tool result for the wrapped body fits (see eventResultBytes).
+ * REST serves the same fitted bytes, so the REST body is always smaller and
+ * the two surfaces never drift. Shortened descriptions end in …; rows are
  * never dropped, so paging stays stable. Always terminates: a one-character
  * description collapses to empty. Throws EventByteCapExceededError when no
  * description remains but the body still exceeds the cap — irreducible
@@ -237,7 +258,7 @@ export function fitByteBudget(
 ): string {
   let body = JSON.stringify(wrap(rows));
   for (;;) {
-    if (TEXT.encode(body).length <= maxBytes) return body;
+    if (eventResultBytes(body) <= maxBytes) return body;
     let longest: PublicApiEventDto | null = null;
     for (const row of rows) {
       if (
