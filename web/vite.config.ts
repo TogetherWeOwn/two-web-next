@@ -51,11 +51,13 @@ export default defineConfig({
                   name: "content",
                   test: /\/(?:src\/(?:screens\/(?:about|faq|rules|privacy|join)\.tsx|(?:about|faq|rules|privacy)-content\.ts)|web\/src\/(?:lib\/ContentLeaf\.svelte|routes\/(?:about|faq|rules|privacy|join)\/\+page\.svelte))$/,
                 },
-                // Compress Kit's home and admin markup with the Hono renderers
-                // rather than using separate gzip streams for mirrored pages.
+                // Co-compress native admin loaders and their query authority
+                // with the Kit/Hono renderers. Separate loader gzip streams
+                // otherwise repeat imports and window/filter vocabulary.
+
                 {
                   name: "admin",
-                  test: /\/(?:src\/admin\/|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.svelte$))/,
+                  test: /\/(?:src\/admin\/|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.(?:svelte|server\.ts)$))/,
                 },
                 // Co-compress the Kit profile view with its Hono markup twin,
                 // and the Kit member-board entrypoints with the board's Hono

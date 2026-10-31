@@ -23,7 +23,8 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // inlined literals or a shared component would breach the client gzip and
 // file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
-const { query, rows, hasNext, emptyText, pauseReviews } = $derived(data);
+const { query, rows, hasNext, emptyText, startsFeedbackHtml, startsInputsHtml, pauseReviews } =
+  $derived(data);
 const now = new Date();
 </script>
 
@@ -31,12 +32,16 @@ const now = new Date();
   {@const active = query.sort === sort}
   {@const order = active && query.order === "asc" ? "desc" : "asc"}
   <th scope="col" aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : "none"}>
-    <a
-      href={eventListUrl(query, { sort, order, page: 1 })}
-      aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}
-    >
-      {label}{active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
-    </a>
+    {#if query.startsWindow?.error}
+      <span>{label}</span>
+    {:else}
+      <a
+        href={eventListUrl(query, { sort, order, page: 1 })}
+        aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}
+      >
+        {label}{active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
+      </a>
+    {/if}
   </th>
 {/snippet}
 
@@ -95,6 +100,7 @@ const now = new Date();
         {/each}
       </select>
     </div>
+    {@html startsInputsHtml}
     <div class="field">
       <button type="submit" class="btn">Filter</button>
     </div>
@@ -104,6 +110,7 @@ const now = new Date();
       </div>
     {/if}
   </form>
+  {@html startsFeedbackHtml}
   <p>
     <a class="btn" href="/admin/events/new" data-testid="new-event">New event</a>
   </p>
@@ -186,17 +193,17 @@ const now = new Date();
       </tbody>
     </table>
   </div>
-  {#if rows.length === 0 && query.page > 1}
+  {#if !query.startsWindow?.error && rows.length === 0 && query.page > 1}
     <p>
       <a href={eventListUrl(query, { page: 1 })}>First page of these results</a>
     </p>
   {/if}
   <nav aria-label="Event pages" class="actions">
-    {#if query.page > 1}
+    {#if !query.startsWindow?.error && query.page > 1}
       <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>Previous</a>
     {/if}
     <span>Page {query.page}</span>
-    {#if hasNext}
+    {#if !query.startsWindow?.error && hasNext}
       <a rel="next" href={eventListUrl(query, { page: query.page + 1 })}>Next</a>
     {/if}
   </nav>

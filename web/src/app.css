@@ -112,6 +112,10 @@ html body {
 .kit-admin fieldset {
   background: var(--color-lobby-raised);
 }
+/* The shared pale refusal notice needs dark ink even on Kit's dark canvas. */
+.kit-admin .event-window-notice {
+  color: var(--ink);
+}
 
 .base-theme.schedule-theme,
 .base-theme[data-theme="schedule"] {

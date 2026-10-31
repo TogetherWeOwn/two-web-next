@@ -1,7 +1,7 @@
 import { error } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import { dbFor } from "../../../../../src/admin/db";
-import { parseEventListQuery } from "../../../../../src/admin/event-list";
+import { eventListParams, parseEventListQuery } from "../../../../../src/admin/event-list";
 import { buildEventListView } from "../../../../../src/admin/kit-events";
 import { listEvents } from "../../../../../src/admin/store-event-reads";
 import { isDatabaseUnavailable } from "../../../../../src/db/errors";
@@ -39,10 +39,9 @@ export const load: PageServerLoad = async ({ parent, url, setHeaders }) => {
   await parent();
   const db = await dbFor({ env });
   if (!db) error(503, "Admin temporarily unavailable");
-  // First value wins per key, matching the Hono handler's c.req.query():
-  // Object.fromEntries(url.searchParams) would keep the last duplicate.
-  const raw: Record<string, string> = {};
-  for (const [k, v] of url.searchParams) if (!(k in raw)) raw[k] = v;
+  // First value wins per key (the date bounds keep every repeat so the shared
+  // parser can refuse duplicates), identical to the Hono handler.
+  const raw = eventListParams(url.searchParams);
   const query = parseEventListQuery(raw);
   let fetched;
   try {

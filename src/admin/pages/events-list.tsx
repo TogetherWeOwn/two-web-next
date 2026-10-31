@@ -1,6 +1,8 @@
-// Admin events-list screen (split from pages.tsx; zero behavior change).
+// Admin events-list screen: shared native filters and a bounded event table.
 
 import type { FC } from "hono/jsx";
+import { raw } from "hono/html";
+import { renderEventStartsInputsHtml, renderEventStartsFeedbackHtml } from "../event-starts-inputs";
 import type { EventListRow } from "../store";
 import { goingCountText } from "../../islands/contracts";
 import {
@@ -25,13 +27,17 @@ const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuer
       scope="col"
       aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : "none"}
     >
-      <a
-        href={eventListUrl(query, { sort, order, page: 1 })}
-        aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}
-      >
-        {label}
-        {active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
-      </a>
+      {query.startsWindow?.error ? (
+        <span>{label}</span>
+      ) : (
+        <a
+          href={eventListUrl(query, { sort, order, page: 1 })}
+          aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}
+        >
+          {label}
+          {active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
+        </a>
+      )}
     </th>
   );
 };
@@ -126,6 +132,7 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
             ))}
           </select>
         </div>
+        {raw(renderEventStartsInputsHtml(query.startsWindow))}
         <div class="field">
           <button type="submit" class="btn">
             Filter
@@ -137,6 +144,7 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
           </div>
         ) : null}
       </form>
+      {raw(renderEventStartsFeedbackHtml(query.startsWindow))}
       <p>
         <a class="btn" href="/admin/events/new" data-testid="new-event">
           New event
@@ -221,19 +229,19 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
           </tbody>
         </table>
       </div>
-      {rows.length === 0 && query.page > 1 ? (
+      {!query.startsWindow?.error && rows.length === 0 && query.page > 1 ? (
         <p>
           <a href={eventListUrl(query, { page: 1 })}>First page of these results</a>
         </p>
       ) : null}
       <nav aria-label="Event pages" class="actions">
-        {query.page > 1 ? (
+        {!query.startsWindow?.error && query.page > 1 ? (
           <a rel="prev" href={eventListUrl(query, { page: query.page - 1 })}>
             Previous
           </a>
         ) : null}
         <span>Page {query.page}</span>
-        {hasNext ? (
+        {!query.startsWindow?.error && hasNext ? (
           <a rel="next" href={eventListUrl(query, { page: query.page + 1 })}>
             Next
           </a>
