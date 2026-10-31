@@ -52,6 +52,7 @@ import {
   upHttpStatus,
   withHealthReadTimeout,
 } from "./up";
+import { versionBody } from "./version";
 import { requestLog, safeRequestId } from "./request-log";
 import { sameOrigin } from "./same-origin";
 import { trustHosts } from "./trust-hosts";
@@ -736,6 +737,13 @@ app.get("/up", async (c) => {
       }
     }
   }
+});
+
+// `GET /version` — the live deploy commit and upload time (src/version.ts).
+// DB-free and session-free; `no-store` so a reader never sees a cached deploy.
+app.get("/version", (c) => {
+  c.header("cache-control", "no-store");
+  return c.json(versionBody(c.env.CF_VERSION_METADATA));
 });
 
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
