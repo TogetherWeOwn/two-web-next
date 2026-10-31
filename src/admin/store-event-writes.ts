@@ -362,11 +362,23 @@ export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>)
       ? merged.timezone.trim() || "Europe/London"
       : "Europe/London";
   if (!isKnownTimezone(tz)) throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
-  merged.starts_at ??= utcToWall(base.startsAt, tz);
-  merged.ends_at ??= utcToWall(base.endsAt, tz);
+  // A stored instant a JS Date cannot represent has no wall text and no UTC
+  // carrier: an omitted field refuses as a field error (same copy as the
+  // duplicate guard), while a supplied replacement parses fresh — exactly
+  // how the edit POST treats a nonfinite carrier.
+  const fields: Record<string, string> = {};
+  if (merged.starts_at == null) {
+    if (Number.isFinite(base.startsAt.getTime())) merged.starts_at = utcToWall(base.startsAt, tz);
+    else fields.starts_at = "Enter a valid start time.";
+  }
+  if (merged.ends_at == null) {
+    if (Number.isFinite(base.endsAt.getTime())) merged.ends_at = utcToWall(base.endsAt, tz);
+    else fields.ends_at = "Enter a valid end time.";
+  }
+  if (Object.keys(fields).length > 0) throw new ValidationError(fields);
   return parseEventForm(merged, {
-    startsAtUtc: base.startsAt.toISOString(),
-    endsAtUtc: base.endsAt.toISOString(),
+    startsAtUtc: Number.isFinite(base.startsAt.getTime()) ? base.startsAt.toISOString() : undefined,
+    endsAtUtc: Number.isFinite(base.endsAt.getTime()) ? base.endsAt.toISOString() : undefined,
   });
 }
 
@@ -637,7 +649,14 @@ export async function setRsvpOpen(
     if (open && !locked.rsvpOpen && locked.status === "published")
       await lockWaitlist(tx, locked.id);
     const now = clock();
-    if (locked.status !== "published" || locked.endsAt <= now) {
+    // An unrenderable end (Invalid Date) is not a live event: every
+    // comparison with it is false, so without the finite check the writer
+    // would accept a pause/reopen the inventory refuses to offer.
+    if (
+      locked.status !== "published" ||
+      !Number.isFinite(locked.endsAt.getTime()) ||
+      locked.endsAt <= now
+    ) {
       throw new ValidationError({
         rsvp_open: "Only published events that have not ended can pause or reopen RSVPs.",
       });

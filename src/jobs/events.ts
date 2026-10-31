@@ -3,7 +3,7 @@ import { and, inArray, isNotNull } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import * as schema from "../db/admin-schema";
 import { materializeMissingInstances } from "../admin/store";
-import { SYNC_EVENT } from "./constants";
+import { LEDGER_DB_LOCK_TIMEOUT_MS, LEDGER_DB_TIMEOUT_MS, SYNC_EVENT } from "./constants";
 import { queueExceptionClass } from "./queue-error";
 import type { EventStore, EventUpsert, StaleEventKeysPage, SyncAttempt, TxClient } from "./types";
 
@@ -77,7 +77,7 @@ function markerOf(row: { preview_read_at?: unknown } | undefined): unknown {
  * still settles later messages. Kept equal to the consumer's
  * `LEDGER_TIMEOUT_MS`; change both together.
  */
-export const FAIL_SYNC_DB_TIMEOUT_MS = 2000;
+export const FAIL_SYNC_DB_TIMEOUT_MS = LEDGER_DB_TIMEOUT_MS;
 export function pgEventStore(
   sql: ReturnType<typeof postgres> | TxClient,
   {
@@ -99,9 +99,12 @@ export function pgEventStore(
     statementTimeout = `${FAIL_SYNC_DB_TIMEOUT_MS}ms`,
   ) =>
     tx`select set_config('lock_timeout', ${lockTimeout}, true), set_config('statement_timeout', ${statementTimeout}, true)`;
-  const withSyncTimeout = async <T>(work: (tx: TxClient) => Promise<T>): Promise<T> => {
+  const withSyncTimeout = async <T>(
+    work: (tx: TxClient) => Promise<T>,
+    lockTimeout = `${FAIL_SYNC_DB_TIMEOUT_MS}ms`,
+  ): Promise<T> => {
     const bounded = async (tx: TxClient): Promise<T> => {
-      await setSyncTimeouts(tx);
+      await setSyncTimeouts(tx, lockTimeout);
       return work(tx);
     };
     const boundedExisting = async (tx: TxClient): Promise<T> => {
@@ -116,7 +119,7 @@ export function pgEventStore(
       const [previous] =
         await tx`select current_setting('lock_timeout') as lock_timeout, current_setting('statement_timeout') as statement_timeout`;
       return transaction.savepoint(async (nested) => {
-        await setSyncTimeouts(nested);
+        await setSyncTimeouts(nested, lockTimeout);
         const result = await work(nested);
         await setSyncTimeouts(nested, previous.lock_timeout, previous.statement_timeout);
         return result;
@@ -371,9 +374,17 @@ export function pgEventStore(
         where idempotency_key = ${idempotencyKey}::uuid and state = 'pending' and terminal_reason is null`;
     },
     needsSync: async (eventKey) => {
-      // A single-key eligibility check always answers an array, never a page.
-      const eligibility = await staleKeys(eventKey);
-      return (Array.isArray(eligibility) ? eligibility : eligibility.keys).length > 0;
+      // Same server-side bound as the sibling sync statements: this
+      // eligibility read rides the cleanup pool behind the consumer's
+      // client-side race, so a lock-blocked SELECT is cancelled by Postgres
+      // instead of outliving the abandoned wait on that pool's connection.
+      // The lock bound sits 50ms under the statement bound so the lock wait
+      // surfaces as 55P03, not the statement timer's 57014.
+      return withSyncTimeout(async (sql) => {
+        // A single-key eligibility check always answers an array, never a page.
+        const eligibility = await staleKeys(eventKey, undefined, undefined, sql);
+        return (Array.isArray(eligibility) ? eligibility : eligibility.keys).length > 0;
+      }, `${LEDGER_DB_LOCK_TIMEOUT_MS}ms`);
     },
     async hasFailedSync(eventKey) {
       const rows = await sql`select 1${readMarker()} from event_sync_attempts rejected

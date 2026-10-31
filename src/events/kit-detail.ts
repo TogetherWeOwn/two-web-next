@@ -28,6 +28,7 @@ import type {
   EventMissingModel,
   EventMissingSuggestion,
 } from "../kit-event-states";
+import { MAX_RETURN_DESTINATION_BYTES } from "../join/service";
 import { kitPublicReadGuard } from "../kit-past-events";
 import { declareMemberResult } from "../member-reads";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
@@ -40,6 +41,7 @@ import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
 import { eventLinkAvailability } from "./link-availability";
+import { isOngoing } from "./ongoing";
 import {
   ATTENDEE_PAGE_SIZE,
   getEventNeighbors,
@@ -60,7 +62,7 @@ import {
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
 import { archiveContext } from "./archive-context";
-import { archiveEventHref } from "./attendee-paths";
+import { archiveEventHref, authReturnHref } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
 import { waitlistPosition } from "./waitlist";
 
@@ -138,9 +140,19 @@ export interface KitEventDetailModel {
   /** Maps search URL for the venue; null when no venue is set. The view
    * renders this verbatim and never builds URLs from location itself. */
   directionsUrl: string | null;
+  /** Verified host display name; null when unset. */
+  organizerName: string | null;
+  /** Public joining link; null when unset. */
+  joinUrl: string | null;
+  /** Joining instructions; null when unset. */
+  joinInstructions: string | null;
   status: string;
   isDraft: boolean;
   isPast: boolean;
+  /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
+   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
+   * so a pre-existing fixture without the flag reads as not ongoing. */
+  isOngoing?: boolean;
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -415,6 +427,7 @@ export async function resolveKitEventDetail(
               key: link.eventKey,
               title: link.title,
               whenText: fmt(link.startsAt, link.timezone),
+              datetime: link.startsAt.toISOString(),
               location: link.location,
             })),
             jsonLd: eventJsonLd(event, appUrl),
@@ -534,9 +547,13 @@ export async function resolveKitEventDetail(
           accessibilityNotes: event.accessibilityNotes?.trim() || null,
           location: event.location,
           directionsUrl: event.location ? directionsUrl(event.location) : null,
+          organizerName: event.organizer_name ?? null,
+          joinUrl: event.join_url ?? null,
+          joinInstructions: event.join_instructions ?? null,
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
+          isOngoing: isOngoing(event, now),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,
@@ -581,9 +598,15 @@ export async function resolveKitEventDetail(
               }
             : null,
           showJoinPitch: !viewer,
-          // The sign-in return keeps the query string, exactly as served;
-          // the join pitch and related-join links use the bare page path.
-          joinReturnTo: `${pagePath}${search}`,
+          // The sign-in return keeps normalized archive/attendee context
+          // bounded to auth's byte cap, never the raw query string; the
+          // join pitch and related-join links use the bare page path.
+          joinReturnTo: authReturnHref(
+            event.eventKey,
+            archive,
+            attendeePage,
+            MAX_RETURN_DESTINATION_BYTES,
+          ),
           joinResult,
           viewerMember: member,
           viewerModerator: viewer?.moderator === true,

@@ -36,6 +36,11 @@
   },
   {
     "method": "DELETE",
+    "path": "/admin/ops-overrides",
+    "auth": "ops-control-bearer"
+  },
+  {
+    "method": "DELETE",
     "path": "/admin/queue/source-evidence/:id",
     "auth": "evidence-bearer"
   },
@@ -138,6 +143,11 @@
     "method": "GET",
     "path": "/admin/join-attempts/:id",
     "auth": "moderator"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/ops-overrides",
+    "auth": "ops-control-bearer"
   },
   {
     "method": "GET",
@@ -371,6 +381,11 @@
   },
   {
     "method": "OPTIONS",
+    "path": "/admin/ops-overrides",
+    "auth": "ops-control-bearer"
+  },
+  {
+    "method": "OPTIONS",
     "path": "/admin/queue/source-evidence/:id",
     "auth": "evidence-bearer"
   },
@@ -378,6 +393,11 @@
     "method": "OPTIONS",
     "path": "/mcp",
     "auth": "public"
+  },
+  {
+    "method": "PATCH",
+    "path": "/admin/ops-overrides",
+    "auth": "ops-control-bearer"
   },
   {
     "method": "PATCH",
@@ -448,6 +468,16 @@
     "method": "POST",
     "path": "/admin/featured/:id/delete",
     "auth": "moderator"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/featured/:id/unpublish",
+    "auth": "moderator"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/ops-overrides",
+    "auth": "ops-control-bearer"
   },
   {
     "method": "POST",
@@ -528,6 +558,11 @@
     "method": "POST",
     "path": "/members/:user",
     "auth": "member-owner"
+  },
+  {
+    "method": "PUT",
+    "path": "/admin/ops-overrides",
+    "auth": "ops-control-bearer"
   },
   {
     "method": "PUT",

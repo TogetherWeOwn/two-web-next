@@ -47,6 +47,14 @@ Subscribe link, the `.ics` download and the copyable feed URL all carry the
 committed game, and the calendar label names it. Blank means every game; a valid
 unknown game yields an empty scoped calendar, never all games.
 
+Published nights show **Happening now** from their start instant until, but not
+including, their end instant. The schedule cards, current-month grid cells and
+event detail use a server snapshot, not a live clock; existing page caching
+still applies. The label sits beside RSVP availability, so a night can still
+be full or paused. Drafts, cancelled and
+ended nights never carry it; Discord-managed rows use Discord's active status
+and any announced end. The label is not proof of attendance.
+
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
 the ordinary archive. See the [archive search contract](docs/past-archive-search.md)
@@ -91,6 +99,20 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
 
+Root and `web/` installs generate the ignored critical-CSS module through
+`postinstall`. If install scripts are disabled (`npm ci --ignore-scripts`),
+run the generator explicitly **from the repository root before typecheck,
+tests or bundling**:
+
+```sh
+node ci/build-leaf-css.mjs
+# Or, from the root: npm run build:leaf-css
+```
+
+The generator uses only Node builtins, so it also works before dependency
+installation. See [security-pin contracts](docs/security-pin-contracts.md)
+for the offline static gate and generated-hash review evidence.
+
 Set the local origin in `.dev.vars` to match Wrangler's local server and the
 Discord application's registered callbacks (`${APP_URL}/auth/discord/callback`
 and `${APP_URL}/join/callback`).
@@ -129,9 +151,15 @@ For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-Always supply the test URL for full-suite runs. Live suites skip when
-`DATABASE_URL` is unset; `test/review-p1-verify.test.ts` gates its live-DB
-proofs behind the same skip and keeps its P1-3 refusal proofs offline.
+Always supply the test URL for full-suite SQL coverage. The DB-free lane
+(`env -u DATABASE_URL npm run check`) runs fixture-only checks; existing live
+suites skip when `DATABASE_URL` is unset. `test/review-p1-verify.test.ts` keeps
+its P1-3 refusal proofs offline. Featured-unpublish SQL proofs run under the
+pre-existing integration gate in `test/admin.test.ts`; the six registration
+and rendering proofs in `test/admin-featured-unpublish-acceptance.test.ts`
+and `test/admin-featured-unpublish-invariants.test.ts` remain ungated. This
+preserves the DB-free lane without adding a conditional skip. It does not
+replace disposable-DB verification or browser evidence.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
@@ -286,6 +314,7 @@ to execute the same Chromium proof.
 | `test/calendar-game-subscription-acceptance.test.ts` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS` | `CALENDAR_GAME_SUBSCRIPTION_BROWSER_TESTS=true npx vitest run test/calendar-game-subscription-acceptance.test.ts` |
 | `test/event-device-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/event-device-timezone-ends.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-device-timezone-ends.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
+| `ci/event-time-from-now.test.mjs` | None—always runs | `node --import tsx --test ci/event-time-from-now.test.mjs` (56 real Chromium cases on Hono and Kit renders with a frozen clock and the shipped minified island; TAP-verified in `a11y`; see [docs/event-time-from-now.md](docs/event-time-from-now.md)) |
 | `test/event-chosen-timezone.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/event-chosen-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-device-timezone.test.ts` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS` | `PROFILE_DEVICE_TIMEZONE_BROWSER_TESTS=true npx vitest run test/profile-device-timezone.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
 | `test/profile-local-time-comparison-acceptance.test.ts` | `A11Y_BROWSER_TESTS` | `A11Y_BROWSER_TESTS=true npx vitest run test/profile-local-time-comparison-acceptance.test.ts` (also needs `npm ci --prefix web --include=dev` once) |
@@ -569,6 +598,9 @@ network-free (it checks resolved config) and the smoke requires a valid
 root dot, and rejects redirects. Both URLs must be HTTP(S), without credentials,
 query strings or fragments. A distinct hostname alone does not prove staging
 isolation: the runtime/receiver/custody holds still apply.
+The smoke and drill examples below are **preview-only**: they perform no bot
+actions. Real execution requires `--apply` and the prerequisites in the
+[bot probe staging procedure](docs/bot-probe-staging.md).
 
 ```sh
 npm run check:worker-moderators                   # source deployment preflight
