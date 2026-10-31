@@ -6,7 +6,10 @@ Source: legacy [two-web](https://github.com/TogetherWeOwn/two-web) @ `e1e939a`
 policies, middleware, services, config, views, content, public).
 Next side: this repo @ `7a91cbbb9` (2026-10-19).
 
-Flip gate (owner): re-run before W16; the DNS flip needs **0 unmapped rows**.
+**Cutover complete.** The DNS flip ran on 2026-10-10 with **0 unmapped
+rows**, and the apex has served `two-web-next` since then
+([closed cutover gates](cutover-gates.md)). This matrix is now the parity
+record; keep it current when a legacy-facing behavior changes.
 A row is mapped when it names a card or is **dropped, with a reason**.
 `✅ done` = merged to `main`. Everything else names the owning card.
 
@@ -16,7 +19,9 @@ W1 ✅, W2 ✅, W3 ✅, W4 ✅, W5 ✅, W6 ✅, W7 ✅, W8 ✅, W9 ✅, W10 ✅
 [TOG-9839](/TOG/issues/TOG-9839) done), W11 ✅, W12 ✅,
 W13 ✅, W14 ✅, S1 ✅ · W15 ✅ ([TOG-9697](/TOG/issues/TOG-9697) done,
 QA PASS on main `ea51a83e`) ·
-W16 ⛔ ([TOG-10112](/TOG/issues/TOG-10112) done, parent [TOG-9698](/TOG/issues/TOG-9698) still blocked).
+W16 ✅ (cutover: production flipped 2026-10-10, `/up` healthy with 0 pending
+migrations, 48h watch closed 2026-10-12; see
+[cutover-migration-ledger.md](cutover-migration-ledger.md#production-apply-outcome)).
 
 Database-outage acceptance is maintained separately in
 [`db-outage-matrix.md`](db-outage-matrix.md) and
@@ -317,8 +322,8 @@ and the legacy JSON show (owning event-JSON card done 2026-10-02;
 17/17 green at HEAD on agent-testdb). The §3 agent-events row stays unmarked:
 `docs/agent-events.md:50` still records the optional W8 carrier as unbound in
 checked-in Wrangler. The admission and smoke-probe cards closed since the last
-pin (texts updated); W16 stays ⛔ on the still-blocked cutover-rehearsal parent.
+pin (texts updated). W16 is ✅: the cutover closed on 2026-10-12.
 Kit-side moves (#886/#914/#879 event/member-board ownership, #960 admin lists)
 are out of scope and touch no Hono parity claim; the §12 Kit session-bridge
 divergence still pins `src/kit-session.ts`. No row invalidated, so no
-follow-up card. Re-run this matrix before the DNS flip.
+follow-up card.
