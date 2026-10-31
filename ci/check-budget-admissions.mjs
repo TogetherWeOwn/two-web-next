@@ -499,6 +499,13 @@ export async function checkBudgetAdmissions({
     if (prior?.startsWith("public/")) provenRenames.set(next, prior);
   }
   for (const [next, prior] of queueRenames) provenRenames.set(next, prior);
+  // Git's own rename detection over the served inventory is the authoritative,
+  // always-available source: it keeps the ceiling-inheritance rule effective on
+  // every event rather than only where provider provenance was injected.
+  const status = git(root, "diff", "--name-status", "-M", base, head, "--", "public");
+  for (const match of status.matchAll(/^R\d*\t(\S+)\t(\S+)$/gm)) {
+    if (!provenRenames.has(match[2])) provenRenames.set(match[2], match[1]);
+  }
   validateAllocationChanges(
     root,
     base,

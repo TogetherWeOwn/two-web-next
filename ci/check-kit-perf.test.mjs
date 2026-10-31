@@ -323,10 +323,29 @@ const shippingBudgetText = JSON.stringify(
 );
 const shippingClientBudget = JSON.parse(shippingBudgetText).client.js;
 
-function makeClientShippingFixture(body) {
+// The measured-fit witnesses below record what a shipped feature actually
+// needed. Freezing the ceilings they were measured against (never the live plan)
+// keeps them valid forever: a later tightening proves a gain without erasing the
+// evidence that an earlier change fit, and a later raise cannot make them pass
+// by inflating the budget the body is compared to.
+function historicalShippingPlan(ceilingOverrides) {
+  const plan = JSON.parse(shippingBudgetText);
+  for (const [path, value] of Object.entries(ceilingOverrides)) {
+    let target = plan;
+    const keys = path.split(".");
+    for (const key of keys.slice(0, -1)) target = target[key];
+    target[keys.at(-1)] = value;
+  }
+  return JSON.stringify(plan);
+}
+
+function makeClientShippingFixture(body, ceilings = {}) {
   const fx = makeFixture({ clientJs: [{ name: "immutable/client.js", body }] });
   // Exercise the real shipping allocation, not a budget derived from the input.
   writeFixtureFile(fx.root, "ci/kit-perf-budget.json", shippingBudgetText);
+  if (Object.keys(ceilings).length > 0) {
+    writeFixtureFile(fx.root, "ci/kit-perf-budget.json", historicalShippingPlan(ceilings));
+  }
   return fx;
 }
 
@@ -347,7 +366,9 @@ test("shipping budget: refreshed 255872-byte client raw fits", (t) => {
 });
 
 test("shipping budget: event-detail 256580-byte client raw fits", (t) => {
-  const fx = makeClientShippingFixture(Buffer.alloc(256580, "a"));
+  const fx = makeClientShippingFixture(Buffer.alloc(256580, "a"), {
+    "client.js.maxRawBytes": 256580,
+  });
   t.after(fx.cleanup);
   const result = fx.runCaptured();
   assert.equal(result.code, 0, result.errors.join("\n"));
@@ -355,7 +376,9 @@ test("shipping budget: event-detail 256580-byte client raw fits", (t) => {
 });
 
 test("shipping budget: event-detail 103073-byte client gzip fits", (t) => {
-  const fx = makeClientShippingFixture(bodyWithGzipBytes(103073));
+  const fx = makeClientShippingFixture(bodyWithGzipBytes(103073), {
+    "client.js.maxGzipBytes": 103073,
+  });
   t.after(fx.cleanup);
   const result = fx.runCaptured();
   assert.equal(result.code, 0, result.errors.join("\n"));

@@ -1124,8 +1124,12 @@ test("a renamed asset cannot exceed the retired ceiling it inherits", async (t) 
   const original = JSON.parse(
     readFileSync(new URL("./budgets/bundle/copy-link.js.json", import.meta.url), "utf8"),
   );
+  // A substantial, mostly stable asset so git's rename detection pairs the two
+  // paths, as it does for a real moved module.
+  const shared =
+    "export function copyLink(node) {\n  return node.querySelector('[data-copy]');\n}\n";
   fx.put(old, JSON.stringify(original));
-  fx.put("public/islands/copy-link.js", "export {};\n");
+  fx.put("public/islands/copy-link.js", shared);
   const base = installed(fx);
   rmSync(join(fx.root, old));
   rmSync(join(fx.root, "public/islands/copy-link.js"));
@@ -1134,7 +1138,7 @@ test("a renamed asset cannot exceed the retired ceiling it inherits", async (t) 
   // The asset genuinely grows across the rename, so the new ceiling fits its own
   // measurement (the 2% allowance passes) yet exceeds the retired ceiling it
   // inherits. That growth must be admitted, not silently reset.
-  const body = `${"export const kept = true;\n".repeat(90)}`;
+  const body = `${shared}${"export const kept = true;\n".repeat(200)}`;
   const budget = {
     budgets: {
       "public/islands/share-link.js": {
@@ -1153,7 +1157,9 @@ test("a renamed asset cannot exceed the retired ceiling it inherits", async (t) 
   // GitHub reports the rename: the old served asset continues as the new one.
   await assert.rejects(
     fx.check("pull_request", prEvent(base, head), {
-      pullRequestRenames: () => ({ "public/islands/share-link.js": "public/islands/copy-link.js" }),
+      pullRequestRenames: () => ({
+        "public/islands/share-link.js": "public/islands/copy-link.js",
+      }),
     }),
     /rename ceiling exceeds the retired ceiling/,
   );
