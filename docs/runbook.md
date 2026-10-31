@@ -240,8 +240,8 @@ real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
 4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test, the
    smoke suite, and the link check below; record the results and verify the two
    dates above against the source pin and `expiry - 90 × 24 hours` in UTC.
-   Required checks under that contract and independent Paperclip Review 5/5 must
-   pass on the exact head before the existing merge automation proceeds. No
+   The required checks under that contract, including `CodeRabbit` and
+   `Devin Review`, must pass on the exact head before the PR merges. No
    database is needed:
 
    ```sh

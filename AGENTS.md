@@ -64,6 +64,7 @@ A user-visible change to a page, component, CSS, typography, navigation, form, o
 - Behavior matches the request.
 - Tests pass locally, and `npm run check` is green.
 - A UI change carries the evidence listed under UI changes.
-- CI is green on the exact head SHA that merges: `ci-ok`, `gitleaks`, `e2e-ok` and `pr-lint` are required, plus Paperclip Review 5/5 on the exact head.
-- A reviewer who did not write the code approved that head SHA.
+- Every required check is green on the exact head SHA that merges: `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review`. No approving review is required.
+- Every review finding is fixed, or answered with evidence.
+- The agent that did the work merges it. Owner governance (2026-10-31): gate-green PRs merge without owner approval, and only production deploys need the owner, through `request_confirmation` on the card. A merge to `main` here deploys production, so it waits for that approval; so does every other production deploy.
 - The PR is squash-merged, and the docs it made stale are updated.

@@ -51,7 +51,9 @@ The repository rulesets enforce the following on `main`:
 
 - `protect-main`: changes arrive through a pull request, the branch cannot be
   deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
-  `gitleaks` and `e2e-ok` must pass, plus Paperclip Review 5/5 on the exact head.
+  `gitleaks` and `e2e-ok` must pass on the exact head, and so must the two
+  review app checks, CodeRabbit and Devin Review. No approving review is
+  required.
 
   The journeys count only through the aggregator in e2e.yml: it fails when the
   scope job fails or the browser journeys fail or are cancelled, and passes a
@@ -59,6 +61,13 @@ The repository rulesets enforce the following on `main`:
   draft.
 
 - `pr-conventions`: `pr-lint` must pass.
+
+Who merges (owner decision 2026-10-31): the agent that did the work merges a PR
+once every required check is green and each review finding is fixed or answered
+with evidence. A merge to `main` deploys production (ci, then deploy, then
+e2e-staging, then deploy-production), so it also needs the owner's approval
+through `request_confirmation` on the card. So does every other production
+deploy, such as a manual dispatch or promotion.
 
 ### Pull-request size labels (advisory)
 
