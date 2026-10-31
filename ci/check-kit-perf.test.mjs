@@ -420,6 +420,7 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // honest roster/venue 337664 ceiling on current main (two composed builds
 // 337545 and 337547; main's 337408 rejects by 137 and 139).
 // The MCP result-budget composition adds the 337920 ceiling (measured 337750; 337664 rejects by 86).
+// The MCP truncation-notice composition adds the 338176 ceiling (measured 338157; 337920 rejects by 237).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -445,10 +446,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   337408: { intervalBytes: 337286, exactBytes: 337408, overBytes: 337409 },
   337664: { intervalBytes: 337545, exactBytes: 337664, overBytes: 337665 },
   337920: { intervalBytes: 337750, exactBytes: 337920, overBytes: 337921 },
+  338176: { intervalBytes: 338157, exactBytes: 338176, overBytes: 338177 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920`;
+  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176`;
 
 test("shipping budget: server gzip allocation is explicitly approved", () => {
   assert.ok(
@@ -830,6 +832,25 @@ function shippingServerGzipCases() {
       },
     ];
   }
+  if (SHIPPING_SERVER_GZIP_CAP === 338176) {
+    return [
+      {
+        name: "server gzip newly allowed interval",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 338157,
+      },
+      { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 338176 },
+      {
+        name: "server gzip one byte over",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 338177,
+        ceiling: 338176,
+        breach: true,
+      },
+    ];
+  }
   return [
     { name: "server gzip newly allowed interval", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
     { name: "server gzip exact ceiling", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
@@ -999,20 +1020,20 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
   ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   ...shippingClientGzipCases(),
-  // MCP result-budget composition: 1207360 raw; the previous 1207040 cap rejects.
+  // MCP truncation-notice composition: 1208594 raw; the previous 1207552 cap rejects.
   {
     name: "server raw newly allowed interval",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1207360,
+    bytes: 1208594,
   },
-  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1207552 },
+  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1208832 },
   {
     name: "server raw one byte over",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1207553,
-    ceiling: 1207552,
+    bytes: 1208833,
+    ceiling: 1208832,
     breach: true,
   },
   {

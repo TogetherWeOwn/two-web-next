@@ -143,8 +143,9 @@ function kitFixture(t, fragments) {
 // 337408 admits the ongoing-night composition on statement-deadline main
 // (measured 337286; the previous 337152 ceiling rejects by 134).
 // 337920 admits the MCP result-budget composition (measured 337750; 337664 rejects by 86).
+// 338176 admits the MCP truncation-notice composition (measured 338157; 337920 rejects by 237).
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
-  335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920,
+  335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176,
 ];
 // Admitted server.js maxRawBytes allocations. The SHIPPING_KIT_BUDGET pin
 // above (1203200) is the historical baseline; 1203968 admits the
@@ -155,7 +156,8 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // the lower 1205248 step rejects by 45).
 // 1207040 admits the roster/venue composition (1206782; main 1205504 rejects by 1278).
 // 1207552 admits the MCP result-budget composition (measured 1207360; 1207040 rejects by 320).
-const SHIPPING_SERVER_RAW_ALLOCATIONS = [1203200, 1203968, 1205504, 1207040, 1207552];
+// 1208832 admits the MCP truncation-notice composition (measured 1208594; 1207552 rejects by 1042).
+const SHIPPING_SERVER_RAW_ALLOCATIONS = [1203200, 1203968, 1205504, 1207040, 1207552, 1208832];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
 // on current main (measured union 258023 raw / 103383 gzip, margins 25 / 41;
@@ -177,12 +179,12 @@ function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176`,
   );
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208832`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -291,6 +293,15 @@ test("shipping oracle admits the measured MCP result-budget composition server a
     ...SHIPPING_KIT_BUDGET,
     server: {
       js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1207552, maxGzipBytes: 337920 },
+    },
+  });
+});
+
+test("shipping oracle admits the measured MCP truncation-notice composition server allocations", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1208832, maxGzipBytes: 338176 },
     },
   });
 });
