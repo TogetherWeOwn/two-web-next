@@ -16,7 +16,7 @@ import {
   type PublicApiEventCollectionDto,
   type PublicApiEventDto,
 } from "../src/public-data/contracts";
-import { eventResultBytes } from "../src/public-data/routes";
+import { eventResultBytes, fitByteBudget } from "../src/public-data/routes";
 import app from "./app";
 
 vi.mock("../src/admin/db", () => ({ dbFor: async () => ({}) }));
@@ -176,6 +176,20 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
         _meta: { "io.modelcontextprotocol/serverInfo": { name: "two-web-next", version: "1.0.0" } },
       }),
     );
+  });
+
+  it("fitByteBudget keeps a result exactly at the cap and trims one byte over", () => {
+    const dto = () => [{ event_key: key(1), description: ESCAPED } as PublicApiEventDto];
+    const wrap = (rows: PublicApiEventDto[]) => ({ data: rows });
+    const exact = eventResultBytes(JSON.stringify(wrap(dto())));
+
+    const atCap = fitByteBudget(dto(), exact, wrap);
+    expect(eventResultBytes(atCap)).toBe(exact);
+    expect(JSON.parse(atCap).data[0].description).toBe(ESCAPED);
+
+    const oneOver = fitByteBudget(dto(), exact - 1, wrap);
+    expect(eventResultBytes(oneOver)).toBeLessThanOrEqual(exact - 1);
+    expect(JSON.parse(oneOver).data[0].description.endsWith("…")).toBe(true);
   });
 
   for (const protocol of PROTOCOLS) {
