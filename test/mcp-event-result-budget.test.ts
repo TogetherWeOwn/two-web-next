@@ -16,7 +16,11 @@ import {
   type PublicApiEventCollectionDto,
   type PublicApiEventDto,
 } from "../src/public-data/contracts";
-import { eventResultBytes } from "../src/public-data/routes";
+import {
+  eventResultBytes,
+  getEventTrimmedNotice,
+  LIST_EVENTS_TRIMMED_NOTICE,
+} from "../src/public-data/routes";
 import app from "./app";
 
 vi.mock("../src/admin/db", () => ({ dbFor: async () => ({}) }));
@@ -143,10 +147,12 @@ async function callTool(protocol: Protocol, name: string, args: Record<string, u
   return message.result;
 }
 
-function expectFittedSuccess(result: ToolResult) {
+// A trimmed result carries the notice as a second text block, inside the cap.
+function expectFittedSuccess(result: ToolResult, notice?: string) {
   expect(result.isError).toBeUndefined();
-  expect(result.content).toHaveLength(1);
+  expect(result.content).toHaveLength(notice === undefined ? 1 : 2);
   expect(JSON.parse(result.content[0]!.text)).toEqual(result.structuredContent);
+  if (notice !== undefined) expect(result.content[1]).toEqual({ type: "text", text: notice });
   expect(bytes(result), "whole serialized tool result").toBeLessThanOrEqual(CAP);
 }
 
@@ -176,6 +182,26 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
         _meta: { "io.modelcontextprotocol/serverInfo": { name: "two-web-next", version: "1.0.0" } },
       }),
     );
+    expect(eventResultBytes(body, "Shortened.")).toBe(
+      eventResultBytes(body) + bytes({ type: "text", text: "Shortened." }) + 1,
+    );
+  });
+
+  it("the notices say the text was shortened and how to read more", () => {
+    expect(LIST_EVENTS_TRIMMED_NOTICE).toContain("shortened");
+    expect(LIST_EVENTS_TRIMMED_NOTICE).toContain("per_page");
+    expect(LIST_EVENTS_TRIMMED_NOTICE).toContain("meta.last_page");
+    expect(LIST_EVENTS_TRIMMED_NOTICE).toContain("get_event");
+    expect(getEventTrimmedNotice(key(7))).toContain(`/events/${key(7)}`);
+  });
+
+  it("an untrimmed result carries no notice", async () => {
+    useRows([row(5, "A short night.")]);
+    const listed = await callTool("2025-06-18", "list_events", { page: 1, per_page: 20 });
+    expectFittedSuccess(listed);
+    const one = await callTool("2025-06-18", "get_event", { event_key: key(5) });
+    expectFittedSuccess(one);
+    expect((one.structuredContent as PublicApiEventDto).description).toBe("A short night.");
   });
 
   for (const protocol of PROTOCOLS) {
@@ -186,7 +212,7 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
       // never have bounded the doubled result either.
       expect(rows.length * ESCAPED.length).toBeGreaterThan(CAP);
       const result = await callTool(protocol, "list_events", { page: 1, per_page: 20 });
-      expectFittedSuccess(result);
+      expectFittedSuccess(result, LIST_EVENTS_TRIMMED_NOTICE);
       const structured = result.structuredContent as PublicApiEventCollectionDto;
       expect(structured.data.map((r) => r.event_key)).toEqual(rows.map((r) => r.eventKey));
       for (const dto of structured.data) expectTrimmed(dto, ESCAPED);
@@ -196,7 +222,7 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
       const original = ESCAPED.repeat(10);
       useRows([row(7, original)]);
       const result = await callTool(protocol, "get_event", { event_key: key(7) });
-      expectFittedSuccess(result);
+      expectFittedSuccess(result, getEventTrimmedNotice(key(7)));
       expectTrimmed(result.structuredContent as PublicApiEventDto, original);
     });
   }
@@ -206,11 +232,11 @@ describe("MCP event results fit the budget at the serialized tool-result boundar
     const original = "D".repeat(24_000);
     useRows([row(9, original)]);
     const result = await callTool("2025-06-18", "get_event", { event_key: key(9) });
-    expectFittedSuccess(result);
+    expectFittedSuccess(result, getEventTrimmedNotice(key(9)));
     expectTrimmed(result.structuredContent as PublicApiEventDto, original);
   });
 
-  it("REST serves the same fitted bytes as the MCP structured result", async () => {
+  it("REST serves the same fitted bytes as the MCP structured result, without the notice", async () => {
     const rows = Array.from({ length: 20 }, (_, i) => row(i + 1, ESCAPED));
     useRows(rows);
     const result = await callTool("2025-06-18", "list_events", { page: 1, per_page: 20 });

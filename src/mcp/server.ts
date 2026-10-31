@@ -22,6 +22,8 @@ import {
   EventByteCapExceededError,
   eventResultBytes,
   fitByteBudget,
+  getEventTrimmedNotice,
+  LIST_EVENTS_TRIMMED_NOTICE,
   serializeCommunity,
   serializeEvent,
   serializeEventCollection,
@@ -70,6 +72,13 @@ function toolJson(value: object) {
   };
 }
 
+/** An event result; a trimmed one adds its notice as a second text block. */
+function eventToolJson(body: string, notice: string | undefined) {
+  const result = toolJson(JSON.parse(body) as Record<string, unknown>);
+  if (notice !== undefined) result.content.push({ type: "text", text: notice });
+  return result;
+}
+
 const UNAVAILABLE = "Event data is temporarily unavailable.";
 // Programming faults reuse the REST 500 message (same static bytes, same
 // privacy boundary); the real error goes to error.alert only.
@@ -89,7 +98,7 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
     "list_events",
     {
       description:
-        "List published community events, soonest first. Read-only: paging clamps to 20 rows per page and long descriptions trim so the whole result fits 32 KiB.",
+        "List published community events, soonest first. Read-only: paging clamps to 20 rows per page and long descriptions trim so the whole result fits 32 KiB; a trimmed result adds a text notice on how to read more.",
       inputSchema: z.object({
         page: z.number().int().min(1).default(1),
         per_page: z
@@ -129,19 +138,22 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
       // Irreducible metadata refuses with the unavailable tool error inside
       // the unchanged JSON-RPC result envelope — never a throw (the SDK
       // echoes err.message) and never an oversized success.
-      let body: string;
+      let fitted;
       try {
-        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
-          ...payload,
-          data: trimmed,
-        }));
+        fitted = fitByteBudget(
+          payload.data,
+          API_PUBLIC_BOUNDS.maxBodyBytes,
+          (trimmed) => ({ ...payload, data: trimmed }),
+          LIST_EVENTS_TRIMMED_NOTICE,
+        );
       } catch (err) {
         if (err instanceof EventByteCapExceededError) return toolError("unavailable", UNAVAILABLE);
         return internalError(err);
       }
-      if (eventResultBytes(body) > API_PUBLIC_BOUNDS.maxBodyBytes)
+      const notice = fitted.trimmed ? LIST_EVENTS_TRIMMED_NOTICE : undefined;
+      if (eventResultBytes(fitted.body, notice) > API_PUBLIC_BOUNDS.maxBodyBytes)
         return toolError("unavailable", UNAVAILABLE);
-      return toolJson(JSON.parse(body) as Record<string, unknown>);
+      return eventToolJson(fitted.body, notice);
     },
   );
 
@@ -167,16 +179,21 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
         return internalError(err);
       }
       if (!row) return toolError("not_found", "No published event with that key.");
-      let body: string;
+      let fitted;
+      let trimmedNotice: string;
       try {
-        body = fitByteBudget([serializeEvent(row)], API_PUBLIC_BOUNDS.maxBodyBytes, (t) => t[0]);
+        const dto = serializeEvent(row);
+        // The stored key, as REST uses, so both reserve the same notice bytes.
+        trimmedNotice = getEventTrimmedNotice(dto.event_key);
+        fitted = fitByteBudget([dto], API_PUBLIC_BOUNDS.maxBodyBytes, (t) => t[0], trimmedNotice);
       } catch (err) {
         if (err instanceof EventByteCapExceededError) return toolError("unavailable", UNAVAILABLE);
         return internalError(err);
       }
-      if (eventResultBytes(body) > API_PUBLIC_BOUNDS.maxBodyBytes)
+      const notice = fitted.trimmed ? trimmedNotice : undefined;
+      if (eventResultBytes(fitted.body, notice) > API_PUBLIC_BOUNDS.maxBodyBytes)
         return toolError("unavailable", UNAVAILABLE);
-      return toolJson(JSON.parse(body) as Record<string, unknown>);
+      return eventToolJson(fitted.body, notice);
     },
   );
 
