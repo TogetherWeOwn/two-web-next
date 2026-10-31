@@ -196,8 +196,17 @@ enable/disable/force changes outside a separately reviewed policy change.
 The custom migration runner also performs a read-only catalog preflight against
 the active migration role's table/sequence defaults before planning or applying.
 It refuses to run as the runtime role, refuses table defaults, and refuses any
-sequence default outside the reviewed `two_web_app` `USAGE`/`SELECT` set; the
-refusal names the offending reason while other database errors stay masked. The
+sequence default outside the reviewed `public`-scoped `two_web_app`
+`USAGE`/`SELECT` set. A global sequence default is not reviewed: it also fires
+in the `drizzle` schema, so it would grant the runtime role the migration
+ledger's own sequence, and a `drizzle`-scoped default targets that ledger
+directly, so both scopes are examined and refused. The preflight, and the
+apply transaction again right after ledger bootstrap, also refuse while the
+ledger table or its serial sequence (found through `pg_get_serial_sequence`)
+carries any `two_web_app` or `PUBLIC` right; the runner never revokes such a
+right itself, so an already-exposed ledger stays refused until the right is
+removed outside the runner. The refusal names the offending reason while
+other database errors stay masked. The
 runner also pins `standard_conforming_strings=on` per connection and
 transaction, matching the guard's string lexing even under a hostile database
 default. It does not change ACLs or role membership. The ledger keeps the canonical Drizzle
