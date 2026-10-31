@@ -548,6 +548,51 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
     expect(await revision()).toBeGreaterThan(before);
   });
 
+  it("apply promotes nobody when the erased answer never held a seat", async () => {
+    // A seat is open, but A's maybe never held it: erasure refills only the seats it frees.
+    await fixture.client`update events set status = 'published', capacity = 2, rsvp_open = true
+      where id = ${eventId}`;
+    await fixture.client`update rsvps set status = 'maybe' where user_id = ${MEMBER_A}`;
+    await fixture.client`insert into rsvps (event_id, user_id, status)
+      values (${eventId}, ${WAITER_1}, 'waitlisted')`;
+    const removed = await eraseMember(
+      fixture.client as unknown as Parameters<typeof eraseMember>[0],
+      MEMBER_A,
+      { dryRun: false },
+    );
+    expect(removed.rsvps).toBe(1);
+    const answers = await fixture.client`select user_id, status from rsvps
+      where event_id = ${eventId} order by user_id`;
+    expect([...answers]).toEqual([
+      { user_id: MEMBER_B, status: "going" },
+      { user_id: WAITER_1, status: "waitlisted" },
+    ]);
+  });
+
+  it.each([
+    ["paused", "published", false, "2099-11-04T22:00:00Z"],
+    ["cancelled", "cancelled", true, "2099-11-04T22:00:00Z"],
+    ["ended", "published", true, "2000-01-01T00:00:00Z"],
+  ])("apply leaves the waitlist frozen on a %s event", async (_label, status, open, endsAt) => {
+    await fixture.client`update events set status = ${status}, capacity = 2, rsvp_open = ${open},
+      starts_at = least(starts_at, ${endsAt}::timestamptz - interval '2 hours'), ends_at = ${endsAt}
+      where id = ${eventId}`;
+    await fixture.client`insert into rsvps (event_id, user_id, status)
+      values (${eventId}, ${WAITER_1}, 'waitlisted')`;
+    const removed = await eraseMember(
+      fixture.client as unknown as Parameters<typeof eraseMember>[0],
+      MEMBER_A,
+      { dryRun: false },
+    );
+    expect(removed.rsvps).toBe(1);
+    const answers = await fixture.client`select user_id, status from rsvps
+      where event_id = ${eventId} order by user_id`;
+    expect([...answers]).toEqual([
+      { user_id: MEMBER_B, status: "going" },
+      { user_id: WAITER_1, status: "waitlisted" },
+    ]);
+  });
+
   it("dry-run leaves a full event's waitlist and sync revision untouched", async () => {
     await fixture.client`update events set status = 'published', capacity = 2, rsvp_open = true
       where id = ${eventId}`;

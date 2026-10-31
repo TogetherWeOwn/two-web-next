@@ -133,8 +133,11 @@ withdrawal does (`promoteWaitlist` in `src/events/waitlist.ts`). It first
 locks the member's events in id order, the same order the RSVP verbs use.
 The `rsvps` trigger advances each affected event's `sync_revision`, so the
 reconcile cron re-syncs Discord for published and cancelled events. The CLI
-has no Worker queue, so it does not enqueue the sync itself. Dry-run writes
-nothing and promotes no one.
+has no Worker queue, so it does not enqueue the sync itself. Nor can it retire
+the Worker's isolate-local guest caches (`src/events/anon-cache.ts`), so a
+guest page can show the old going count until its entry expires: up to 60 s
+on `/events` and 300 s on `/events/past`. Dry-run writes nothing and promotes
+no one.
 
 ### Provisional: profile rows (not yet enforced)
 
