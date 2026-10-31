@@ -102,6 +102,7 @@ import {
   FeaturedPage,
   JoinAttemptPage,
   JoinAttemptsPage,
+  type RecoveryLink,
 } from "./pages";
 
 type Vars = QueuePreviewVars;
@@ -148,9 +149,14 @@ function errorPage(
   status: 404 | 422 | 503,
   heading: string,
   detail?: string,
+  recovery?: RecoveryLink[],
 ) {
   c.status(status);
-  return bufferedMemberHtml(c, <ErrorPage heading={heading} detail={detail} />, status);
+  return bufferedMemberHtml(
+    c,
+    <ErrorPage heading={heading} detail={detail} recovery={recovery} />,
+    status,
+  );
 }
 
 function adminUnavailable(c: Context<Vars>) {
@@ -617,6 +623,12 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
               422,
               "That transition is not allowed",
               err.fields.status ?? err.fields.ends_at ?? err.fields.rsvp_open,
+              // Nothing changed. Offer plain GET links back to the event and
+              // the list; never a form that would retry the refused POST.
+              [
+                { href: `/admin/events/${key}`, label: "Back to the event" },
+                { href: "/admin/events", label: "Back to events" },
+              ],
             );
           }
           throw err;
