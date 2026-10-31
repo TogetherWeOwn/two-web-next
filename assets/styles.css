@@ -52,6 +52,8 @@ dl.facts > div { display: block; }
 legend { font-weight: 700; padding: 0 .5rem; }
 .field .error { color: #9a3412; font-size: .9rem; margin-top: .25rem; }
 .actions { display: flex; gap: .75rem; align-items: center; margin-top: 1.5rem; }
+/* Terminal-action review rules live in assets/admin-terminal-review.css
+   (admin-shell link), not here: styles.css is inlined on public pages. */
 .filters { display: flex; gap: .75rem; align-items: end; margin-bottom: 1rem; flex-wrap: wrap; }
 .filters .field { margin: 0; }
 .featured-form { overflow-wrap: anywhere; }

@@ -77,7 +77,9 @@ describe("pr-size advisory wiring", () => {
     const labelJob = job("pr-size");
     expect(labelJob.match(/^      exclude-extra:/gm)).toHaveLength(1);
     const extra = labelJob.match(/exclude-extra: "([^"]*)"/)?.[1] ?? "";
-    expect(extra).toBe("public/islands/**,public/styles.css,drizzle/meta/**");
+    expect(extra).toBe(
+      "public/islands/**,public/styles.css,public/admin-terminal-review.css,drizzle/meta/**",
+    );
     expect(extra).not.toContain("drizzle/*.sql");
     expect(extra.split(",")).not.toContain("drizzle/**");
   });

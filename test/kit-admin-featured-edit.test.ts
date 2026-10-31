@@ -14,6 +14,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it, vi } from "vitest";
+import { renderTerminalReviewHtml } from "../src/admin/terminal-review";
 import { featuredStatus } from "../src/featured-status";
 import { parseRecordId } from "../src/admin/record-id";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit";
@@ -33,11 +34,18 @@ const load = readFileSync(
   "utf8",
 );
 
+const deleteReview = renderTerminalReviewHtml({
+  kind: "delete",
+  title: "Saved slot",
+  targetId: "7",
+  testId: "delete-featured",
+});
+
 describe("Kit featured-edit page contract", () => {
   it("posts plain no-JS forms to the Hono-owned edit and delete endpoints", () => {
     expect(source).toContain('method="post"');
     expect(source).toContain("/admin/featured/");
-    expect(source).toContain("/delete");
+    expect(deleteReview).toContain('action="/admin/featured/7/delete"');
     expect(source).not.toContain("on:submit");
     expect(source).not.toContain("onsubmit");
   });
@@ -60,7 +68,7 @@ describe("Kit featured-edit page contract", () => {
 
   it("keeps the Hono edit controls, hints, actions and delete affordance the E2E suite drives", () => {
     expect(source).toContain('data-testid="save-featured"');
-    expect(source).toContain('data-testid="delete-featured"');
+    expect(deleteReview).toContain('data-testid="delete-featured"');
     expect(source).toContain('href="/admin/featured"');
     expect(source).toContain("cdn.discordapp.com");
     expect(source).toContain("screen-reader");
@@ -69,7 +77,9 @@ describe("Kit featured-edit page contract", () => {
     expect(source).toContain("Show from (UTC");
     expect(source).toContain("Show until (UTC");
     expect(source).toContain("Save");
-    expect(source).toContain("Delete this slot");
+    expect(source).toContain("{@html data.view.deleteReviewHtml}");
+    expect(deleteReview).toContain("Delete this slot");
+    expect(deleteReview).toContain("Saved slot");
   });
 
   it("keeps a saved card separately from the unpublished homepage eligibility verdict", async () => {

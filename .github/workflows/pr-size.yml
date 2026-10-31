@@ -56,7 +56,7 @@ jobs:
       # snapshot under drizzle/meta/ per migration), excluded on top of
       # the script's built-in lockfile/generated/fixture list. The
       # hand-written drizzle/*.sql migrations stay counted.
-      exclude-extra: "public/islands/**,public/styles.css,drizzle/meta/**"
+      exclude-extra: "public/islands/**,public/styles.css,public/admin-terminal-review.css,drizzle/meta/**"
 
   pr-size-weekly:
     name: pr-size-weekly

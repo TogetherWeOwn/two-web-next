@@ -1,0 +1,16 @@
+/* Terminal-action review disclosure (admin only). Served as a separate
+   stylesheet linked from the admin shell so these rules never enter the
+   inlined leaf critical-CSS bundle: the homepage LCP ratchets
+   (test/homepage-mobile-lcp-acceptance.test.ts) forbid regrowing the shared
+   inlined bytes, and only admin surfaces render .terminal-* markup. The
+   admin shell already loads stylesheets externally, so no-JS rendering is
+   unaffected. Source for public/admin-terminal-review.css (esbuild --minify
+   via `npm run build:assets`; drift fails CI). */
+.terminal-actions { flex-wrap: wrap; align-items: flex-start; }
+.terminal-review { max-width: 32rem; min-width: 0; overflow-wrap: anywhere; }
+.terminal-review summary { min-height: 44px; padding: .5rem 0; color: var(--brand); cursor: pointer; font-weight: 700; }
+.terminal-review[open] { width: 100%; padding: .75rem 1rem; border: 1px solid #d8cfc0; border-radius: .5rem; background: #fffdf8; }
+.featured-form > .terminal-review { margin-top: 1.5rem; }
+.terminal-review p { margin: .75rem 0; }
+.terminal-review-id { color: var(--muted); font-size: .85rem; }
+.admin-table .terminal-review { min-width: 16rem; }

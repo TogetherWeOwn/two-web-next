@@ -31,6 +31,7 @@ import {
 import { safeStoredLink } from "../featured";
 import { featuredImageSrc } from "../featured-image";
 import { parseRecordId } from "./record-id";
+import { renderTerminalReviewHtml } from "./terminal-review";
 import type { FeaturedEditRow } from "./store-featured";
 
 /** The edit-form values the Hono featuredValues() helper renders. */
@@ -49,6 +50,7 @@ export type KitFeaturedEditValues = {
 export type KitFeaturedEditView = {
   id: number;
   title: string;
+  deleteReviewHtml: string;
   values: KitFeaturedEditValues;
   status: FeaturedEligibilityStatus;
   /** Resolve shared copy server-side; even csr=false emits a structural client chunk. */
@@ -136,6 +138,12 @@ export async function resolveKitFeaturedEdit(
     view: {
       id: row.id,
       title: row.title,
+      deleteReviewHtml: renderTerminalReviewHtml({
+        kind: "delete",
+        title: row.title,
+        targetId: String(row.id),
+        testId: "delete-featured",
+      }),
       values: {
         title: row.title,
         body: row.body ?? "",

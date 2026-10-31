@@ -30,7 +30,8 @@ const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.ur
 // one new-asset fragment ported from an open branch during its post-split
 // merge: public/islands/event-time-from-now.js 2048/1024 (see
 // ci/budgets/decisions/bundle/2026-10-26-event-time-from-now.md).
-// Aggregation must reproduce them exactly: any drift here is a budget
+// The terminal-review feature adds only its new 1024/512 stylesheet unit.
+// Aggregation must reproduce these pins exactly: any drift here is a budget
 // change, which needs its own decision file, never a silent edit.
 const SHIPPING_KIT_BUDGET = {
   worker: { "_worker.js": { maxRawBytes: 3584, maxGzipBytes: 1536 } },
@@ -60,6 +61,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
   "public/admin-rsvp-review.css": { maxRawBytes: 1024, maxGzipBytes: 512 },
+  "public/admin-terminal-review.css": { maxRawBytes: 1024, maxGzipBytes: 512 },
   "public/operator-overrides-theme.css": { maxRawBytes: 512, maxGzipBytes: 256 },
   "public/theme.css": { maxRawBytes: 15360, maxGzipBytes: 3584 },
   "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
@@ -414,7 +416,7 @@ test("shipping oracle rejects off-axis drift at the 258048/103424 client js allo
   }
 });
 
-test("bundle fragments aggregate to the exact pre-split ceilings", () => {
+test("bundle fragments aggregate to the exact pinned shipping ceilings", () => {
   assert.deepEqual(loadBundleBudgets(repoRoot), SHIPPING_BUNDLE_BUDGETS);
 });
 

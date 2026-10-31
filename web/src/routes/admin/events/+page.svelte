@@ -23,7 +23,7 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // inlined literals or a shared component would breach the client gzip and
 // file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
-const { query, rows, hasNext, emptyText, pauseReviews } = $derived(data);
+const { query, rows, hasNext, emptyText, pauseReviews, cancelReviews } = $derived(data);
 const now = new Date();
 </script>
 
@@ -164,9 +164,7 @@ const now = new Date();
                   </form>
                 {/if}
                 {#if r.status === "draft" || r.status === "published"}
-                  <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                    <button type="submit" class="link">Cancel</button>
-                  </form>
+                  {@html cancelReviews[r.eventKey] ?? ""}
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
                   {#if r.rsvpOpen}

@@ -2,9 +2,9 @@
 //
 // Ledger docs/w15-events-acceptance-ledger.md (`Unit/EventCancelModalCopyTest`
 // row): the cancellation dialog copy/state is not covered by the server
-// transition guard. In Next there is deliberately no modal: mutating buttons
-// submit immediately (docs/moderator-admin-guide.md: "there is no
-// action-confirmation dialog"). This suite pins that replacement contract
+// transition guard. Next uses a native disclosure rather than a modal: only
+// the final submit inside the cancellation review invokes the existing POST.
+// This suite pins that replacement contract
 // from the island contract (src/islands/contracts.ts) and its agreement with
 // the server guard (src/admin/validation.ts: cancelled is terminal, no
 // reopen/republish, past-banner coexistence).
@@ -143,7 +143,7 @@ function goneHtml(): string {
   return String(jsx(EventGonePage, { e: publicEvent({ status: "cancelled" }), jsonLd: "{}" }));
 }
 
-describe("cancel action copy (no confirmation dialog)", () => {
+describe("cancel action copy (native review, no JavaScript dialog)", () => {
   it("pins the island testids for the cancelled banner and the closed RSVP control", () => {
     expect(EVENT_CANCELLED_TESTID).toBe("event-cancelled");
     expect(RSVP_CLOSED_TESTID).toBe("rsvp-closed");
@@ -159,7 +159,7 @@ describe("cancel action copy (no confirmation dialog)", () => {
     for (const status of ["draft", "published"] as const) {
       const html = listHtml(status);
       expect(html).toContain(`action="/admin/events/cancel-${status}/cancel"`);
-      expect(html).toContain(">Cancel</button>");
+      expect(html).toContain(">Cancel event</button>");
     }
     for (const status of ["cancelled", "past"] as const) {
       const html = listHtml(status);
@@ -187,7 +187,7 @@ describe("cancel action copy (no confirmation dialog)", () => {
     expect(html).toContain('data-testid="cancel-event">Cancel event');
   });
 
-  it("submits cancellations immediately: POST forms, no dialog wiring", () => {
+  it("keeps the existing POST inside an initially closed native review, with no dialog wiring", () => {
     for (const status of ["draft", "published", "cancelled", "past"] as const) {
       const html = listHtml(status) + editHtml(status);
       expect(html).not.toContain("<dialog");
@@ -195,10 +195,16 @@ describe("cancel action copy (no confirmation dialog)", () => {
       expect(html).not.toContain("showModal");
       expect(html).not.toContain("window.confirm");
     }
+    for (const html of [listHtml("published"), editHtml("published")]) {
+      const review = html.match(/<details\b[^>]*>[\s\S]*?<\/details>/)?.[0] ?? "";
+      expect(review).toContain('<details class="terminal-review">');
+      expect(review).toContain("Review cancellation</summary>");
+      expect(review).toContain('action="/admin/events/cancel-published/cancel"');
+    }
     const html = editHtml("published");
     expect(html).toContain('<form method="post" action="/admin/events/cancel-published/cancel">');
     expect(html).toContain(
-      '<button type="submit" class="link" data-testid="cancel-event">Cancel event</button>',
+      '<button type="submit" class="btn" data-testid="cancel-event">Cancel event</button>',
     );
   });
 

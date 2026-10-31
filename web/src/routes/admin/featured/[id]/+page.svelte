@@ -135,13 +135,7 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
     </div>
   </form>
   {@html '<p data-admin-save-status="" role="status" aria-live="polite" aria-atomic="true"></p>'}
-  <form method="post" action={`/admin/featured/${data.view.id}/delete`}>
-    <div class="actions">
-      <button type="submit" class="link" data-testid="delete-featured">
-        Delete this slot
-      </button>
-    </div>
-  </form>
+  {@html data.view.deleteReviewHtml}
 </section>
 {@html island}
 </AdminShell>

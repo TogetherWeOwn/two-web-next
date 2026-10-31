@@ -393,6 +393,12 @@ const pageSource = readFileSync(
   fileURLToPath(new URL("../web/src/routes/admin/events/[key]/+page.svelte", import.meta.url).href),
   "utf8",
 );
+// The cancel control arrives as escaped server-only markup, as pause does.
+// Source-form counts include the canonical renderer rather than a client component.
+const terminalReviewSource = readFileSync(
+  fileURLToPath(new URL("../src/admin/native-review.ts", import.meta.url).href),
+  "utf8",
+);
 const loadSource = readFileSync(
   fileURLToPath(
     new URL("../web/src/routes/admin/events/[key]/+page.server.ts", import.meta.url).href,
@@ -494,19 +500,20 @@ describe("acceptance: no-JS behaviour", () => {
   });
 
   it("every control works without scripts: real forms, submit buttons and anchor navigation", () => {
-    // Six source forms: edit update, publish, cancel, duplicate, reopen,
-    // roster search. Pause arrives as pre-rendered server HTML via {@html}
-    // (client gzip ceiling), never as a source form; the rendered pause and
-    // reopen counts are pinned by the pause-review suites instead of this
-    // source text.
-    expect(pageSource.match(/<form\b/g) ?? []).toHaveLength(6);
-    expect(pageSource.match(/method="post"/g) ?? []).toHaveLength(5);
-    expect(pageSource.match(/method="get"/g) ?? []).toHaveLength(1);
-    // Every button submits its form; nothing depends on a click handler.
-    expect(pageSource.match(/<button\b/g) ?? []).toHaveLength(6);
-    expect(pageSource.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(6);
-    expect(pageSource).not.toMatch(/\son(click|submit|input|change|keydown)=/);
+    // Cancellation and pause are server-rendered; duplicate and reopen remain
+    // source forms. The compiled SSR suites pin the final controls and endpoints.
+    expect(pageSource).toContain("{@html view.cancelReviewHtml}");
+    const rendered = pageSource + terminalReviewSource;
+    expect(rendered.match(/<form\b/g) ?? []).toHaveLength(6);
+    expect(rendered.match(/method="post"/g) ?? []).toHaveLength(5);
+    expect(rendered.match(/method="get"/g) ?? []).toHaveLength(1);
+    expect(rendered.match(/<button\b/g) ?? []).toHaveLength(6);
+    expect(rendered.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(6);
+    expect(rendered).not.toMatch(/\son(click|submit|input|change|keydown)=/);
     expect(pageSource).not.toContain("on:");
+    // The shared control's `action: string` prop contains a bare "on:", so
+    // legacy Svelte directives there need a markup-precise check instead.
+    expect(terminalReviewSource).not.toMatch(/\son:\w+/);
     // Sorting and paging are plain links a no-JS browser can follow.
     expect(pageSource).toContain("<a href={h.url}");
     expect(pageSource).toContain('<a rel="prev" href={roster.prevUrl}>');
