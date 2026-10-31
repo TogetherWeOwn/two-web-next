@@ -13,7 +13,7 @@
 // - 403/429/500/503 headers render the invite "Open Discord" CTA with the
 //   same href/label/testid contract as Hono's cta branch; no OAuth start
 //   (/join/discord or /auth/discord) anywhere on those pages.
-// - 400/404/410 headers keep the sign-in CTA exactly as today (parity pin).
+// - 400/404/410/422 headers keep the sign-in CTA exactly as today (parity pin).
 // - Kit 400/404/410 gain the event search form, markup-matching the Hono
 //   NotFoundPage and EventMissing twins; other statuses gain no form.
 // - The boundary still reads no session/DB/network; noindex intact;
@@ -44,8 +44,8 @@ const INVITE = "https://discord.gg/fixture-invite";
 // Hono sends these members to the invite because the OAuth start cannot help
 // them; Kit must match. Every other Kit status keeps the sign-in header.
 const OUTAGE: KitErrorStatus[] = [403, 429, 500, 503];
-const SIGNIN: KitErrorStatus[] = [400, 404, 410];
-const ALL: KitErrorStatus[] = [400, 404, 403, 410, 429, 500, 503];
+const SIGNIN: KitErrorStatus[] = [400, 404, 410, 422];
+const ALL: KitErrorStatus[] = [400, 404, 403, 410, 422, 429, 500, 503];
 
 type RenderErrorShell = (
   code: KitErrorStatus,
@@ -276,7 +276,7 @@ describe("acceptance: Kit 404 restores the event search form", () => {
     expect(body).toContain('data-testid="error-all-events"');
   });
 
-  it.each([403, 429, 500, 503] as const)(
+  it.each([403, 422, 429, 500, 503] as const)(
     "%d renders no search form: the form is 400/404/410-only",
     (code) => {
       const { body } = renderShell(code);
