@@ -71,6 +71,24 @@ function mainPull(pr, repo) {
   return pr?.base?.ref === "main" && pr?.base?.repo?.full_name === repo;
 }
 
+// GitHub expresses a requested delay either as delta-seconds or as an
+// HTTP-date in retry-after, and as a UNIX-seconds quota reset in
+// x-ratelimit-reset. Read whichever is present, in that precedence.
+function retryDelaySeconds(headers) {
+  const header = (name) => {
+    const value = typeof headers.get === "function" ? headers.get(name) : headers[name];
+    return typeof value === "string" ? value : null;
+  };
+  const retryAfter = header("retry-after");
+  if (retryAfter && /^\d+$/.test(retryAfter)) return Number(retryAfter);
+  const date = retryAfter && Date.parse(retryAfter);
+  if (Number.isFinite(date)) return Math.max(0, Math.ceil((date - Date.now()) / 1000));
+  const reset = header("x-ratelimit-reset");
+  if (reset && /^\d+$/.test(reset))
+    return Math.max(0, Number(reset) - Math.ceil(Date.now() / 1000));
+  return 0;
+}
+
 export function githubRequest(repo, token, fetchImpl = fetch, options = {}) {
   if (!/^[\w.-]+\/[\w.-]+$/.test(repo) || !token)
     throw new Error("GitHub provenance requires repository and read token");
@@ -101,8 +119,16 @@ export function githubRequest(repo, token, fetchImpl = fetch, options = {}) {
             throw new Error(`GitHub provenance network error for ${endpoint}`, { cause: error });
         }
         if (response?.ok) {
-          body = await response.json();
-          break;
+          // Reading the body is part of the transport: a stream that terminates
+          // after the response arrives is retried exactly like a failed fetch.
+          try {
+            body = await response.json();
+            break;
+          } catch (error) {
+            if (attempt === 2)
+              throw new Error(`GitHub provenance body error for ${endpoint}`, { cause: error });
+            response = null;
+          }
         }
         if (response) {
           const transient =
@@ -114,8 +140,7 @@ export function githubRequest(repo, token, fetchImpl = fetch, options = {}) {
           if (!transient || attempt === 2)
             throw new Error(`GitHub provenance API ${response.status} for ${endpoint}`);
         }
-        const retryAfter = response?.headers?.get("retry-after");
-        const seconds = retryAfter && /^\d+$/.test(retryAfter) ? Number(retryAfter) : 0;
+        const seconds = retryDelaySeconds(new Headers(response?.headers));
         // Do not retry before GitHub's requested delay; fail closed instead of
         // holding the required job indefinitely for an excessive delay.
         if (seconds > 120)
@@ -183,7 +208,15 @@ function isSafeFragmentChange(before, after) {
   return compare(before, after);
 }
 
-function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly) {
+function validateAllocationChanges(
+  root,
+  base,
+  baseFiles,
+  headFiles,
+  head,
+  installOnly,
+  renamesServed,
+) {
   const records = admissions(
     root,
     new Map([...headFiles].filter(([file]) => !baseFiles.has(file))),
@@ -197,9 +230,39 @@ function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly
       for (const unit of budgetUnits("bundle", plan.budgets).keys()) existing.add(unit);
     }
   }
-  // A retired identity cannot be recycled as a fresh base to reset its caps.
-  for (const record of admissions(root, baseFiles).filter((row) => row.action === "retire")) {
-    for (const unit of budgetUnits("bundle", record.budget.budgets).keys()) existing.add(unit);
+  // A retired identity cannot be recycled as a fresh base to reset its caps. Keep
+  // the retired asset's effective ceiling keyed by its served path: a rename
+  // that re-registers the very same asset may only carry those ceilings forward
+  // or tighten them, never exceed them.
+  const retiredCeilings = new Map();
+  const retiredPaths = new Set();
+  // Retirement evidence can arrive in this very contribution (a rename retires
+  // the old identity and initializes the new one together), so read it from the
+  // base history and from this change's own added files.
+  for (const record of [
+    ...admissions(root, baseFiles),
+    ...admissions(root, new Map([...headFiles].filter(([file]) => !baseFiles.has(file)))),
+  ].filter((row) => row.action === "retire")) {
+    const served = Object.keys(record.budget.budgets)[0];
+    retiredPaths.add(served);
+    for (const [unit, entry] of budgetUnits("bundle", record.budget.budgets)) {
+      existing.add(unit);
+      retiredCeilings.set(`${served}\u0000${entry.path.at(-1)}`, entry.value);
+    }
+  }
+  // Which retired served asset each new one continues: the retire/initial pairs
+  // in this very change, matched on fragment naming (a renames b -> b). A rename
+  // is recorded as retiring the old identity and initializing the new one, so
+  // that pairing is the recognition; an unrelated new asset has no prior ceiling
+  // to inherit and its growth goes through the ordinary admission caps instead.
+  const inheritedAssets = new Map();
+  for (const record of records.filter((row) => row.action === "initial")) {
+    const served = Object.keys(record.budget.budgets)[0];
+    // A recognized rename: the provider reports the old served path as the origin
+    // of the new one, and retiring that identity is part of the same change.
+    const prior = renamesServed.get(served);
+    if (prior !== undefined && retiredCeilings.has(`${prior}\u0000maxRawBytes`))
+      inheritedAssets.set(served, prior);
   }
   for (const record of records) {
     const { fragment, budget, measured, action } = record;
@@ -212,7 +275,10 @@ function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly
     )
       throw new Error(`allocation must match a new/deleted fragment: ${fragment}`);
     const blob = (action === "initial" ? headFiles : baseFiles).get(fragment);
-    if (JSON.stringify(JSON.parse(git(root, "cat-file", "blob", blob))) !== JSON.stringify(budget))
+    // Compare the mapping structurally: JSON member order is a serialization
+    // detail, not part of the lifecycle contract (see ci/budgets/README.md
+    // "budget must reproduce the fragment's complete JSON mapping").
+    if (!sameJsonMapping(JSON.parse(git(root, "cat-file", "blob", blob)), budget))
       throw new Error(`allocation fragment evidence mismatch: ${fragment}`);
     const asset = Object.keys(budget.budgets)[0];
     const identity = git(
@@ -236,6 +302,16 @@ function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly
         if (existing.has(unit))
           throw new Error(`duplicate initial allocation for existing unit: ${unit}`);
         existing.add(unit);
+        // A rename must not launder an oversized asset into fresh ceilings. When
+        // the identical served bytes are in flight under a new path, this initial
+        // allocation is that retired asset under a new identity: the new ceiling
+        // may only carry the retired one forward, or tighten it.
+        const axis = entry.path.at(-1);
+        const priorPath = inheritedAssets.get(asset);
+        const prior =
+          priorPath === undefined ? undefined : retiredCeilings.get(`${priorPath}\u0000${axis}`);
+        if (prior !== undefined && entry.value > prior)
+          throw new Error(`rename ceiling exceeds the retired ceiling: ${unit}`);
         const actual = sizes[entry.path.at(-1)];
         if (
           measured[unit] !== actual ||
@@ -271,6 +347,23 @@ function validateAllocationChanges(root, baseFiles, headFiles, head, installOnly
   return { initial, retired };
 }
 
+// Deep structural equality for JSON values: arrays compare element-wise in
+// order (order is meaningful there), objects compare by member set and value
+// however the source spelled them.
+function sameJsonMapping(a, b) {
+  if (a === b) return true;
+  if (Array.isArray(a) || Array.isArray(b)) {
+    if (!Array.isArray(a) || !Array.isArray(b) || a.length !== b.length) return false;
+    return a.every((item, index) => sameJsonMapping(item, b[index]));
+  }
+  if (!a || !b || typeof a !== "object" || typeof b !== "object") return false;
+  const keys = Object.keys(a);
+  return (
+    keys.length === Object.keys(b).length &&
+    keys.every((key) => key in b && sameJsonMapping(a[key], b[key]))
+  );
+}
+
 async function mergedPull(commit, repo, request) {
   const pulls = await request(`commits/${commit}/pulls`);
   const matching = pulls.filter(
@@ -291,6 +384,7 @@ async function queueAttribution(
   initialAllocations,
 ) {
   const attributed = new Map();
+  const accumulatedRenames = new Map();
   const commits = git(root, "rev-list", "--first-parent", "--reverse", `${base}..${head}`)
     .split("\n")
     .filter(Boolean);
@@ -303,10 +397,12 @@ async function queueAttribution(
     const files = snapshot(root, commit);
     const { initial, retired } = validateAllocationChanges(
       root,
+      previous,
       previousFiles,
       files,
       commit,
       initialAllocations,
+      accumulatedRenames,
     );
     const added = [...files.keys()].filter((file) => !previousFiles.has(file));
     if (added.length) {
@@ -337,16 +433,28 @@ async function queueAttribution(
         if (proof.length !== 1 || attributed.has(file))
           throw new Error(`missing/ambiguous PR file attribution: ${file}`);
         attributed.set(file, number);
+        for (const entry of prFiles) {
+          if (entry.status === "renamed" && entry.previous_filename?.startsWith("public/"))
+            accumulatedRenames.set(entry.filename, entry.previous_filename);
+        }
       }
     }
     previous = commit;
     previousFiles = files;
   }
   if (previous !== head) throw new Error("empty/unsupported queue attribution range");
-  return attributed;
+  return { attributed, renames: accumulatedRenames };
 }
 
-export async function checkBudgetAdmissions({ root, repo, eventName, event, now, request }) {
+export async function checkBudgetAdmissions({
+  root,
+  repo,
+  eventName,
+  event,
+  now,
+  request,
+  pullRequestRenames,
+}) {
   const head = sha(git(root, "rev-parse", "HEAD"));
   let base;
   if (eventName === "pull_request") {
@@ -379,7 +487,27 @@ export async function checkBudgetAdmissions({ root, repo, eventName, event, now,
   // already be in the trusted base; the exception cannot be reused later.
   const installing = !git(root, "ls-tree", base, "--", "ci/check-budget-admissions.mjs");
   const initialAllocations = installing ? new Set([DEPLOY_BASE]) : new Set();
-  validateAllocationChanges(root, baseFiles, headFiles, head, initialAllocations);
+  // Which served asset the provider reports each new one as continuing. On a pull
+  // request this comes from the PR's file list; on a merge group the queue
+  // traversal supplies its own per-contribution provenance. It is injected
+  // rather than fetched here so hermetic fixtures can exercise both paths.
+  let queueRenames = new Map();
+  const provenRenames = new Map();
+  for (const [next, prior] of Object.entries(
+    eventName === "pull_request" ? (pullRequestRenames?.(event) ?? {}) : {},
+  )) {
+    if (prior?.startsWith("public/")) provenRenames.set(next, prior);
+  }
+  for (const [next, prior] of queueRenames) provenRenames.set(next, prior);
+  validateAllocationChanges(
+    root,
+    base,
+    baseFiles,
+    headFiles,
+    head,
+    initialAllocations,
+    provenRenames,
+  );
   if (headFiles.has(DEPLOY_BASE) && !baseFiles.has(DEPLOY_BASE)) {
     loadDeployBase(root);
     const evidence = JSON.parse(
@@ -449,7 +577,7 @@ export async function checkBudgetAdmissions({ root, repo, eventName, event, now,
       if (record.pr !== event.number) throw new Error(`PR attribution mismatch: ${record.file}`);
     }
   } else {
-    const attributed = await queueAttribution(
+    const queue = await queueAttribution(
       root,
       base,
       head,
@@ -460,9 +588,10 @@ export async function checkBudgetAdmissions({ root, repo, eventName, event, now,
       initialAllocations,
     );
     for (const record of proposed) {
-      if (record.pr !== attributed.get(record.file))
+      if (record.pr !== queue.attributed.get(record.file))
         throw new Error(`queue PR attribution mismatch: ${record.file}`);
     }
+    queueRenames = queue.renames;
   }
   const newUnits = new Set(
     proposed

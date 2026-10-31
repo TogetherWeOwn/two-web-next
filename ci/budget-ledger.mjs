@@ -62,14 +62,123 @@ function parseFrontMatter(file, text, fields) {
   ) {
     throw new Error(`${file}: front matter must contain exactly ${fields.join(", ")}`);
   }
-  // Count keys lexically, including escaped spellings, with JSON's own string
-  // parser. Admission values are flat; lifecycle mappings also reject duplicate
-  // keys at any nesting level (their schema uses unique field names).
-  const keys = [...front[1].matchAll(/("(?:[^"\\]|\\.)*")\s*:/g)].map((key) => JSON.parse(key[1]));
-  if ((fields === FIELDS && keys.length !== fields.length) || new Set(keys).size !== keys.length) {
-    throw new Error(`${file}: duplicate front matter key`);
+  // JSON.parse silently keeps the last of any duplicate member name. Walk the raw
+  // text token by token and reject duplicates WITHIN one JSON object: distinct
+  // objects may legitimately reuse a member name ($meta.pr beside the record's
+  // own pr), so every object keeps its own scope, never one flat set.
+  const duplicate = findDuplicateMember(front[1]);
+  if (duplicate) throw new Error(`${file}: duplicate front matter key: ${duplicate}`);
+  // A flat admission carries exactly its documented fields. Counting members
+  // there too keeps a repeated field from hiding behind a colliding nested name.
+  if (fields === FIELDS && countTopLevelMembers(front[1]) !== fields.length) {
+    throw new Error(`${file}: front matter must contain exactly ${fields.join(", ")}`);
   }
   return data;
+}
+
+// Token-level JSON walk. Strings and escapes are consumed whole, so a colon or
+// brace inside a quoted value can never be mistaken for structure.
+function walkJson(text, visit) {
+  let index = 0;
+  const peek = () => text[index];
+  const readString = () => {
+    const start = index;
+    index += 1; // opening quote
+    while (index < text.length) {
+      const char = text[index];
+      if (char === "\\") index += 2;
+      else if (char === '"') {
+        index += 1;
+        return JSON.parse(text.slice(start, index));
+      } else index += 1;
+    }
+    throw new Error("unterminated string in front matter");
+  };
+  const walkValue = () => {
+    while (index < text.length) {
+      const char = peek();
+      if (char === "{") {
+        index += 1;
+        visit("open-object");
+        while (index < text.length) {
+          while (index < text.length && /\s/.test(peek())) index += 1;
+          if (peek() === "}") {
+            index += 1;
+            visit("close-object");
+            return;
+          }
+          if (peek() === '"') visit("member", readString());
+          while (index < text.length && /\s/.test(peek())) index += 1;
+          if (peek() !== ":") throw new Error("expected ':' after front matter member");
+          index += 1;
+          while (index < text.length && /\s/.test(peek())) index += 1;
+          walkValue();
+          while (index < text.length && /\s/.test(peek())) index += 1;
+          if (peek() === ",") index += 1;
+          else if (peek() === "}") continue;
+          else throw new Error("expected ',' or '}' in front matter object");
+        }
+      } else if (char === "[") {
+        index += 1;
+        visit("open-array");
+        while (index < text.length) {
+          while (index < text.length && /\s/.test(peek())) index += 1;
+          if (peek() === "]") {
+            index += 1;
+            visit("close-array");
+            return;
+          }
+          walkValue();
+          while (index < text.length && /\s/.test(peek())) index += 1;
+          if (peek() === ",") index += 1;
+          else if (peek() === "]") continue;
+          else throw new Error("expected ',' or ']' in front matter array");
+        }
+      } else if (char === '"') {
+        visit("value", readString());
+        return;
+      } else {
+        const rest = text.slice(index);
+        const match = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?/.exec(rest);
+        if (!match) throw new Error("unexpected character in front matter");
+        index += match[0].length;
+        visit("value");
+        return;
+      }
+    }
+  };
+  walkValue();
+  while (index < text.length && /\s/.test(peek())) index += 1;
+  if (index !== text.length) throw new Error("trailing content in front matter");
+}
+
+function findDuplicateMember(text) {
+  let duplicate = null;
+  const scopes = [new Set()];
+  walkJson(text, (kind, name) => {
+    if (kind === "member") {
+      const scope = scopes[scopes.length - 1];
+      if (scope.has(name) && duplicate === null) duplicate = name;
+      scope.add(name);
+    } else if (kind === "open-object" || kind === "open-array") {
+      scopes.push(new Set());
+    } else if (kind === "close-object" || kind === "close-array") {
+      scopes.pop();
+    }
+  });
+  return duplicate;
+}
+
+function countTopLevelMembers(text) {
+  let count = 0;
+  // The root object itself is not nesting; only objects inside it are.
+  let nested = -1;
+  walkJson(text, (kind) => {
+    if (kind === "member" && nested === 0) count += 1;
+    else if (kind === "open-object" || kind === "open-array") nested += 1;
+    else if (kind === "close-object" || kind === "close-array") nested -= 1;
+  });
+  return count;
 }
 
 // Lifecycle evidence does not add a percentage delta. The adapter proves the

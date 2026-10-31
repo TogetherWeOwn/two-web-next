@@ -325,6 +325,28 @@ test("allocation front matter rejects duplicate nested keys including escaped sp
   assert.throws(() => parseAllocation(file, `---\n${json}\n---\n`), /duplicate front matter key/);
 });
 
+test("allocation front matter allows the same key name in distinct nested objects", () => {
+  // $ metadata may name a member that a top-level field also names (a PR number
+  // in $meta beside the record's own pr, for instance). Duplicate detection is
+  // per JSON object scope, never across unrelated objects: a fleet of distinct
+  // objects that each legitimately reuse one name must still parse.
+  const file = "ci/budgets/decisions/allocations/2026-10-28-initial.md";
+  const json = JSON.stringify({
+    action: "initial",
+    fragment: "ci/budgets/bundle/new.js.json",
+    budget: {
+      $meta: { pr: 42 },
+      budgets: { "public/islands/new.js": { maxRawBytes: 27, maxGzipBytes: 47 } },
+    },
+    measured: { "bundle-public-islands-new-js-raw": 27, "bundle-public-islands-new-js-gzip": 47 },
+    cause: "New island; checked imports for duplicate or accidental dependencies.",
+    pr: 42,
+  });
+  const record = parseAllocation(file, `---\n${json}\n---\n`);
+  assert.equal(record.budget.$meta.pr, 42);
+  assert.equal(record.pr, 42);
+});
+
 test("effective loader ignores old deltas for retired assets", (t) => {
   const root = scratch(t);
   const unit = "bundle-public-islands-copy-link-js-gzip";

@@ -368,6 +368,35 @@ test("installed checker admits a measured new island with its own initial decisi
   assert.equal(result.proposed.length, 1);
 });
 
+test("initial allocation evidence is compared structurally, not by key order", async (t) => {
+  // The README requires the same complete JSON mapping, not the same member
+  // order: the asset's ceilings may be serialized as {maxGzipBytes,maxRawBytes}
+  // in the fragment and {maxRawBytes,maxGzipBytes} in the decision (or vice
+  // versa) and still describe one identical budget. Serializing both sides and
+  // comparing text would make byte order part of the lifecycle contract.
+  const fx = fixture(t);
+  const base = installed(fx);
+  const { fragment, budget, measured } = newIsland(fx, {});
+  const ceilings = budget.budgets["public/islands/new.js"];
+  // Same mapping, deliberately reversed member order in the committed fragment.
+  const fragmentOrder = { maxGzipBytes: ceilings.maxGzipBytes, maxRawBytes: ceilings.maxRawBytes };
+  fx.put(fragment, JSON.stringify({ budgets: { "public/islands/new.js": fragmentOrder } }));
+  // The decision keeps the opposite serialization of the very same mapping.
+  const decisionOrder = { maxRawBytes: ceilings.maxRawBytes, maxGzipBytes: ceilings.maxGzipBytes };
+  lifecycle(
+    fx,
+    "initial",
+    fragment,
+    { budgets: { "public/islands/new.js": decisionOrder } },
+    measured,
+  );
+  const head = fx.commit("reordered island budget");
+  const result = await fx.check("pull_request", prEvent(base, head));
+  assert.equal(result.proposed.length, 1);
+  assert.equal(result.proposed[0].action, "initial");
+  assert.deepEqual(Object.keys(result.proposed[0].budget.budgets), ["public/islands/new.js"]);
+});
+
 for (const invalid of ["margin", "measurement", "missing decision", "existing unit"]) {
   test(`initial allocation rejects ${invalid}`, async (t) => {
     const fx = fixture(t);
@@ -494,6 +523,79 @@ test("GitHub provenance retries transient responses and network errors with boun
     assert.equal(calls, 3);
     assert.deepEqual(waits, [1000, 2000]);
   }
+});
+
+test("GitHub provenance retries a body stream that fails after the response", async () => {
+  // A response that resolves and then refuses to yield its body is a transport
+  // fault, not a verdict: the retry loop must cover the body read too.
+  let calls = 0;
+  const request = githubRequest(
+    repo,
+    "fake-test-token",
+    async () => {
+      calls += 1;
+      if (calls < 3)
+        return {
+          ok: true,
+          json: async () => {
+            throw new TypeError("terminated");
+          },
+        };
+      return { ok: true, json: async () => [{ number: 42 }] };
+    },
+    { sleep: async () => {}, random: () => 0 },
+  );
+  assert.deepEqual(await request("commits/example/pulls"), [{ number: 42 }]);
+  assert.equal(calls, 3);
+});
+
+test("GitHub provenance honors both Retry-After forms and the quota reset", async () => {
+  // GitHub sends either delta-seconds or an HTTP-date in retry-after, and a
+  // rate-limit reset timestamp in x-ratelimit-reset. All three are honored; an
+  // excessive delay still fails closed rather than holding the job forever.
+  const start = Date.now();
+  const cases = [
+    ["retry-after seconds", { "retry-after": "7" }, 7000],
+    // Relative to the real clock: an HTTP-date and a UNIX reset both name a
+    // wall-clock instant, so the delay is that instant minus now.
+    ["retry-after http-date", { "retry-after": new Date(start + 45_000).toUTCString() }, 45_000],
+    [
+      "ratelimit reset",
+      { "x-ratelimit-reset": String(Math.trunc((start + 30_000) / 1000)) },
+      30_000,
+    ],
+  ];
+  for (const [label, headers, expected] of cases) {
+    let calls = 0;
+    const waits = [];
+    const request = githubRequest(
+      repo,
+      "fake-test-token",
+      async () => {
+        calls += 1;
+        if (calls < 2) return { ok: false, status: 429, headers };
+        return { ok: true, json: async () => [{ number: 42 }] };
+      },
+      { sleep: async (ms) => waits.push(ms), random: () => 0 },
+    );
+    assert.deepEqual(await request("commits/example/pulls"), [{ number: 42 }], label);
+    assert.equal(calls, 2, label);
+    // The requested delay wins over exponential backoff, up to the 120s bound.
+    assert.ok(
+      waits[0] >= expected - 1000,
+      `${label}: waited ${waits[0]}ms, expected >= ${expected - 1000}ms`,
+    );
+  }
+  // An excessive requested delay fails closed instead of sleeping for it.
+  await assert.rejects(
+    githubRequest(
+      repo,
+      "fake-test-token",
+      async () => ({ ok: false, status: 429, headers: { "retry-after": "600" } }),
+      { sleep: async () => {}, random: () => 0 },
+    )("commits/example/pulls"),
+    /retry delay exceeds bound/,
+  );
 });
 
 test("GitHub provenance caches complete paginated responses per endpoint", async () => {
@@ -1012,6 +1114,51 @@ test("initial lifecycle decision must match the actual committed fragment", asyn
   await assert.rejects(fx.check("pull_request", prEvent(base, head)), /evidence mismatch/);
 });
 
+test("a renamed asset cannot exceed the retired ceiling it inherits", async (t) => {
+  // Same served bytes under a new path: the renamed unit inherits the retired
+  // ceilings. A larger fresh ceiling for the identical asset is refused, because
+  // that growth would otherwise owe the 0.5%/2% admission guard.
+  const fx = fixture(t);
+  const old = "ci/budgets/bundle/copy-link.js.json";
+  const replacement = "ci/budgets/bundle/share-link.js.json";
+  const original = JSON.parse(
+    readFileSync(new URL("./budgets/bundle/copy-link.js.json", import.meta.url), "utf8"),
+  );
+  fx.put(old, JSON.stringify(original));
+  fx.put("public/islands/copy-link.js", "export {};\n");
+  const base = installed(fx);
+  rmSync(join(fx.root, old));
+  rmSync(join(fx.root, "public/islands/copy-link.js"));
+  lifecycle(fx, "retire", old, original);
+  const ceilings = original.budgets["public/islands/copy-link.js"];
+  // The asset genuinely grows across the rename, so the new ceiling fits its own
+  // measurement (the 2% allowance passes) yet exceeds the retired ceiling it
+  // inherits. That growth must be admitted, not silently reset.
+  const body = `${"export const kept = true;\n".repeat(90)}`;
+  const budget = {
+    budgets: {
+      "public/islands/share-link.js": {
+        maxRawBytes: Math.max(Buffer.byteLength(body), ceilings.maxRawBytes + 256),
+        maxGzipBytes: gzipSync(body).length,
+      },
+    },
+  };
+  fx.put("public/islands/share-link.js", body);
+  fx.put(replacement, JSON.stringify(budget));
+  lifecycle(fx, "initial", replacement, budget, {
+    "bundle-public-islands-share-link-js-raw": Buffer.byteLength(body),
+    "bundle-public-islands-share-link-js-gzip": gzipSync(body).length,
+  });
+  const head = fx.commit("rename and grow (#42)");
+  // GitHub reports the rename: the old served asset continues as the new one.
+  await assert.rejects(
+    fx.check("pull_request", prEvent(base, head), {
+      pullRequestRenames: () => ({ "public/islands/share-link.js": "public/islands/copy-link.js" }),
+    }),
+    /rename ceiling exceeds the retired ceiling/,
+  );
+});
+
 test("PR cannot raise a ceiling when its measured result fits existing headroom", async (t) => {
   const fx = fixture(t);
   fx.add();
@@ -1119,12 +1266,18 @@ test("metadata edits cannot conceal changes to ceilings or nested fields", async
   }
 });
 
-test("fragment comments point to additive admissions rather than archived decisions", () => {
+test("fragment comments never point authors at the frozen archives", () => {
+  // Top-level $ metadata is optional and its wording is not a contract (the
+  // documented initial-allocation example in ci/budgets/README.md carries no
+  // $comment at all). When a fragment does carry one it must not send the next
+  // author to ci/budgets/decisions/kit-perf/ or .../bundle/, which are frozen
+  // history, never new capacity — that is how main's operator-overrides-theme
+  // fragment landed with an obsolete pointer and had to be corrected.
   for (const dir of ["kit", "bundle"]) {
     const root = new URL(`./budgets/${dir}/`, import.meta.url);
     for (const name of readdirSync(root).filter((file) => file.endsWith(".json"))) {
       const data = JSON.parse(readFileSync(new URL(name, root), "utf8"));
-      assert.match(data.$comment, /decisions\/<unit>\//, name);
+      if (typeof data.$comment !== "string") continue;
       assert.doesNotMatch(data.$comment, /decisions\/(kit-perf|bundle)\//, name);
     }
   }
