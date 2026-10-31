@@ -19,6 +19,16 @@ describe("Past-filter fixture backend selection", () => {
       await expect(
         fixture.db.transaction(async (tx) => {
           await tx.execute(sql`select 1`);
+          // A stored-past write inside the failed transaction must not survive it.
+          await fixture.seed([
+            {
+              eventKey: "rolled-back",
+              title: "Rolled back",
+              status: "past",
+              startsAt: new Date("2030-06-15T18:00:00.000Z"),
+              endsAt: new Date("2030-06-15T19:00:00.000Z"),
+            },
+          ]);
           throw new Error("fixture rollback");
         }),
       ).rejects.toThrow("fixture rollback");
