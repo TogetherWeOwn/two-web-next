@@ -317,7 +317,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           synthName(0),
           synthName(PAGE),
           "event-attendees",
-          "Who's going",
+          'id="event-attendees-heading"',
           "attendees=2",
         ])
           expect(html).not.toContain(value);

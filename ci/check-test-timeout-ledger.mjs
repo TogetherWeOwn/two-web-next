@@ -124,6 +124,16 @@ function keyName(node, computed = false) {
   return undefined;
 }
 
+// The module specifier expression of a dynamic `import(...)`, or undefined
+// for any other node. Babel 8 emits ImportExpression { source }; Babel 7
+// emitted CallExpression { callee: Import, arguments: [source] }. Accept
+// both so this gate keeps failing closed across the parser major.
+function dynamicImportSource(node) {
+  if (node?.type === "ImportExpression") return node.source;
+  if (CALL.has(node?.type) && node.callee?.type === "Import") return node.arguments[0];
+  return undefined;
+}
+
 function isImportMetaUrl(node) {
   return (
     node?.type === "MemberExpression" &&
@@ -501,11 +511,7 @@ function moduleScope(file, source) {
   visit(ast, (node) => {
     if (node.type === "VariableDeclarator" && node.id.type === "Identifier" && node.init) {
       const init = node.init.type === "AwaitExpression" ? node.init.argument : node.init;
-      if (
-        init.type === "CallExpression" &&
-        init.callee.type === "Import" &&
-        ["node:module", "module"].includes(keyName(init.arguments[0], true))
-      )
+      if (["node:module", "module"].includes(keyName(dynamicImportSource(init), true)))
         createRequireNamespaces.add(node.id.name);
     }
   });
@@ -633,15 +639,13 @@ function moduleScope(file, source) {
       bindPattern(node.left, node.right);
   });
   visit(ast, (node) => {
-    if (
-      ["CallExpression", "OptionalCallExpression"].includes(node.type) &&
-      node.callee.type === "Import"
-    ) {
-      const specifier = keyName(node.arguments[0], true);
+    const importSource = dynamicImportSource(node);
+    if (importSource !== undefined) {
+      const specifier = keyName(importSource, true);
       if (specifier !== undefined) scope.loads.push(specifier);
-      else if (isGeneratedBundleImport(scope, node.arguments[0])) return;
+      else if (isGeneratedBundleImport(scope, importSource)) return;
       else {
-        const source = sourceFileURLSpecifier(scope, node.arguments[0]);
+        const source = sourceFileURLSpecifier(scope, importSource);
         if (source) scope.loads.push(source);
         else throw new Error(`${file}: dynamic module specifier is not statically verifiable`);
       }
@@ -750,6 +754,10 @@ function values(ctx, scope, expression, stack = new Set()) {
         // setConfig is the one vi member that sets a limit.
         return [VI_API.has(value.vitest) && key === "setConfig" ? { vitest: SET_CONFIG } : value];
       });
+    }
+    case "ImportExpression": {
+      const specifier = keyName(node.source, true);
+      return specifier === undefined ? [] : [{ scope, source: specifier }];
     }
     case "CallExpression":
     case "OptionalCallExpression": {
@@ -1225,6 +1233,9 @@ function verifyConfigRoots(root, config, base, ast, hasTestBlock) {
     );
   };
   visit(ast, (node) => {
+    // Babel 8 represents dynamic import as an expression, not a call.
+    if (hasTestBlock && node.type === "ImportExpression")
+      throw new Error(`${config}: config calls are not statically verifiable`);
     if (hasTestBlock && ["CallExpression", "OptionalCallExpression"].includes(node.type)) {
       const callee = node.callee;
       const property = ["MemberExpression", "OptionalMemberExpression"].includes(callee?.type)
@@ -3521,6 +3532,36 @@ function selftest() {
         "base.config.ts": 'export default { root: "sub" };',
         "test/a.test.ts": 'it("root", () => {});',
         "sub/test/a.test.ts": 'it("unlisted", () => {}, 5000);',
+      },
+      [],
+      2,
+      ["config calls are not statically verifiable"],
+    );
+    check(
+      "dynamic import beside a literal test config fails closed",
+      {
+        "vitest.config.ts": [
+          'await import("./helper.mjs");',
+          rootConfig(["test/**/*.test.ts"]),
+        ].join("\n"),
+        "helper.mjs": "export const ready = true;",
+        "test/a.test.ts": 'it("clean", () => {});',
+      },
+      [],
+      2,
+      ["config calls are not statically verifiable"],
+    );
+    check(
+      "dynamically imported config with a decoy test block fails closed",
+      {
+        "vitest.config.ts": [
+          'const actual = await import("./actual-config.mjs");',
+          'const decoy = { test: { include: ["clean/**/*.test.ts"], testTimeout: 30_000 } };',
+          "export default actual.default;",
+        ].join("\n"),
+        "actual-config.mjs": rootConfig(["hidden/**/*.test.ts"]),
+        "clean/a.test.ts": 'it("clean", () => {});',
+        "hidden/unpinned.test.ts": 'it("unpinned", () => {}, 5000);',
       },
       [],
       2,

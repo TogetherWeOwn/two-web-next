@@ -47,6 +47,14 @@ Subscribe link, the `.ics` download and the copyable feed URL all carry the
 committed game, and the calendar label names it. Blank means every game; a valid
 unknown game yields an empty scoped calendar, never all games.
 
+Published nights show **Happening now** from their start instant until, but not
+including, their end instant. The schedule cards, current-month grid cells and
+event detail use a server snapshot, not a live clock; existing page caching
+still applies. The label sits beside RSVP availability, so a night can still
+be full or paused. Drafts, cancelled and
+ended nights never carry it; Discord-managed rows use Discord's active status
+and any announced end. The label is not proof of attendance.
+
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
 the ordinary archive. See the [archive search contract](docs/past-archive-search.md)
@@ -143,9 +151,15 @@ For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-Always supply the test URL for full-suite runs. Live suites skip when
-`DATABASE_URL` is unset; `test/review-p1-verify.test.ts` gates its live-DB
-proofs behind the same skip and keeps its P1-3 refusal proofs offline.
+Always supply the test URL for full-suite SQL coverage. The DB-free lane
+(`env -u DATABASE_URL npm run check`) runs fixture-only checks; existing live
+suites skip when `DATABASE_URL` is unset. `test/review-p1-verify.test.ts` keeps
+its P1-3 refusal proofs offline. Featured-unpublish SQL proofs run under the
+pre-existing integration gate in `test/admin.test.ts`; the six registration
+and rendering proofs in `test/admin-featured-unpublish-acceptance.test.ts`
+and `test/admin-featured-unpublish-invariants.test.ts` remain ungated. This
+preserves the DB-free lane without adding a conditional skip. It does not
+replace disposable-DB verification or browser evidence.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.

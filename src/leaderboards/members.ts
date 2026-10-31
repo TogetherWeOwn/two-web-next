@@ -11,9 +11,11 @@ import type { Db } from "../db/index";
 import { containsControlCharacters } from "../admin/validation-shared";
 import { keyedMemberRead } from "../member-reads";
 import { pgSeasonBound, type SeasonWindow } from "../hotzones/season";
+import { OVERALL_CAP, RELATIVE_NEIGHBORS } from "./captions";
 
-/** Neighbors shown above and below the viewer in the relative scope. */
-export const RELATIVE_NEIGHBORS = 5;
+// The window constants live in ./captions (the pure caption module both
+// twins import); re-exported here so ranking readers keep one import.
+export { OVERALL_CAP, RELATIVE_NEIGHBORS };
 /**
  * Longest accepted `?activity=` game name (after trimming, in code points,
  * counted before lowercasing — exactly as the event form counts).
@@ -68,9 +70,6 @@ export function parseActivityParam(raw: string | null | undefined): ActivityPars
 
 export type RankedMember = { userId: string; username: string; count: number };
 export type BoardRow = RankedMember & { rank: number };
-
-/** Members shown on the overall board: ranks 1..100. */
-export const OVERALL_CAP = 100;
 
 type AggregateRow = { user_id: string; username: string; count: number | string };
 type RankRow = { user_id: string; rank: number | string };
