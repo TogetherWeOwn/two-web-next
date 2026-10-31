@@ -174,18 +174,41 @@ for i in $(seq 1 "$shards"); do start_postgres "$i"; done
 if command -v sha256sum >/dev/null; then sha256() { sha256sum; }; else sha256() { shasum -a 256; }; fi
 stamp="$(cat package-lock.json web/package-lock.json | sha256 | cut -d' ' -f1)-$NODE_IMAGE"
 stamp_ok() { [[ -f $1/.local-ci-stamp && "$(cat "$1/.local-ci-stamp")" == "$stamp" ]]; }
-if ((force_install)) || ! stamp_ok node_modules || ! stamp_ok web/node_modules; then
+deps_ok() { stamp_ok node_modules && stamp_ok web/node_modules; }
+install_deps() {
   step "install root and web/ dependencies (npm ci)"
-  # Concurrent runs in one checkout share node_modules, so installs hold a
-  # lock and re-check the stamps: a run that waited reuses the fresh install.
-  install="if ((! $force_install)) && [[ \$(cat node_modules/.local-ci-stamp 2>/dev/null) == '$stamp' && \$(cat web/node_modules/.local-ci-stamp 2>/dev/null) == '$stamp' ]]; then
-    echo 'local-ci: another run just installed dependencies; reusing them'; exit 0
-  fi
-  npm ci --include=dev --no-audit --no-fund && npm ci --prefix web --include=dev --no-audit --no-fund &&
+  in_node 1 "npm ci --include=dev --no-audit --no-fund && npm ci --prefix web --include=dev --no-audit --no-fund &&
     echo '$stamp' >node_modules/.local-ci-stamp && echo '$stamp' >web/node_modules/.local-ci-stamp"
-  in_node 1 "flock .local-ci/install.lock bash -c $(printf '%q' "$install")"
+}
+# Concurrent runs in one checkout share node_modules. Each run holds a shared
+# lock for as long as it uses them, and npm ci needs the exclusive lock, so an
+# install waits for active runs to finish and never removes files under them.
+# A run that waited for the lock re-checks the stamps and reuses a fresh install.
+if command -v flock >/dev/null; then
+  exec 9>.local-ci/install.lock
+  while :; do
+    if ((force_install)) || ! deps_ok; then
+      flock -xn 9 || { step "waiting for other local-ci runs in this checkout to finish"; flock -x 9; }
+      if ((force_install)) || ! deps_ok; then
+        install_deps
+      else
+        step "another run just installed dependencies; reusing them"
+      fi
+      force_install=0
+    else
+      step "dependencies match lockfiles; skipping npm ci (use --install to force)"
+    fi
+    flock -s 9
+    deps_ok && break
+    flock -u 9
+  done
 else
-  step "dependencies match lockfiles; skipping npm ci (use --install to force)"
+  echo "local-ci: flock not found; do not run local-ci concurrently in this checkout" >&2
+  if ((force_install)) || ! deps_ok; then
+    install_deps
+  else
+    step "dependencies match lockfiles; skipping npm ci (use --install to force)"
+  fi
 fi
 
 for i in $(seq 1 "$shards"); do wait_postgres "$i"; done
