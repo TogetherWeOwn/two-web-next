@@ -1848,8 +1848,10 @@ prove exactly-once remote effects. See [consumer error paths](../src/jobs/consum
 
 [bin/db-backup.sh](../bin/db-backup.sh) supports `backup`, `promote-weekly`,
 `rotate`, `check` — **there is no `restore` subcommand**. `check` downloads
-each manifest-listed archive and verifies its bytes against its digest receipt;
-it does not prove restorability or row counts.
+each manifest-listed archive and verifies its bytes against its digest receipt.
+A legacy archive with no receipt in the manifest is reported `unverified` and
+still exits zero; add `--require-verified` to fail on it. `check` does not
+prove restorability or row counts.
 The [nightly workflow](../.github/workflows/db-backup.yml) runs at `03:17Z`
 and can skip green when `PLANETSCALE_STAGING_DATABASE_URL` is absent. Green/skipped is
 not a successful backup. Its `branch` input changes the object prefix only:
