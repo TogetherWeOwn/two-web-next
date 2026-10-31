@@ -372,6 +372,12 @@ export const EventPage: FC<{
         </div>
         <section class="event-share" aria-labelledby="event-share-heading">
           <h2 id="event-share-heading">Save the date</h2>
+          {e.status === "draft" ? (
+            <p data-testid="event-share-draft-note">
+              Moderator-only preview: only moderators can open this draft, so do not share these
+              calendar and link actions with members yet.
+            </p>
+          ) : null}
           <p>
             <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">
               Add to calendar (.ics)
@@ -384,10 +390,6 @@ export const EventPage: FC<{
                 </a>
               </>
             ) : null}
-            {" · "}
-            <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
-              Copy link
-            </a>
             {e.status === "published" ? (
               <>
                 <span hidden data-native-share-sep aria-hidden="true">
@@ -405,6 +407,22 @@ export const EventPage: FC<{
                 </button>
               </>
             ) : null}
+          </p>
+          <div class="event-share-manual">
+            <label for="event-link-url">Event link</label>
+            <input
+              id="event-link-url"
+              data-testid="event-link-url"
+              type="text"
+              value={canonical}
+              readonly
+            />
+            <a href={canonical} data-copy-link={canonical} hidden data-testid="event-copy-link">
+              Copy link
+            </a>
+          </div>
+          <p data-testid="event-manual-copy">
+            Select the event link and copy it manually to share it.
           </p>
           <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
           {e.status === "published" ? (

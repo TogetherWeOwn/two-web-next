@@ -424,6 +424,12 @@ const lineup = $derived(
     </div>
     <section class="event-share" aria-labelledby="event-share-heading">
       <h2 id="event-share-heading">Save the date</h2>
+      {#if model.isDraft}
+        <p data-testid="event-share-draft-note">
+          Moderator-only preview: only moderators can open this draft, so do not share these
+          calendar and link actions with members yet.
+        </p>
+      {/if}
       <p>
         <a href={model.icsUrl} data-testid="event-ics">Add to calendar (.ics)</a>
         {#if model.googleCalendarUrl}
@@ -432,10 +438,6 @@ const lineup = $derived(
             Google Calendar
           </a>
         {/if}
-        {" · "}
-        <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
-          Copy link
-        </a>
         {#if model.status === "published"}<span hidden data-native-share-sep aria-hidden="true">{" · "}</span><button
             type="button"
             hidden
@@ -447,6 +449,22 @@ const lineup = $derived(
             Share
           </button>
         {/if}
+      </p>
+      <div class="event-share-manual">
+        <label for="event-link-url">Event link</label>
+        <input
+          id="event-link-url"
+          data-testid="event-link-url"
+          type="text"
+          value={model.canonical}
+          readonly
+        />
+        <a href={model.copyLink} data-copy-link={model.copyLink} hidden data-testid="event-copy-link">
+          Copy link
+        </a>
+      </div>
+      <p data-testid="event-manual-copy">
+        Select the event link and copy it manually to share it.
       </p>
       <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
       {#if model.status === "published"}

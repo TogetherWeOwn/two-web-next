@@ -210,6 +210,8 @@ describe("event detail theme", () => {
     // 6650: two hidden-row rules (+192 bytes over 6414) keep each deferred
     // island row's laid-out size while hidden, so revealing it never shifts
     // content (CLS); the 7168 ceiling is unchanged.
-    expect(css.length).toBeLessThan(6650);
+    // 6850: the union of the 6550 share-input selector set and the 6650
+    // hidden-row rules measures 6732; still no @import/url and under 7168.
+    expect(css.length).toBeLessThan(6850);
   });
 });
