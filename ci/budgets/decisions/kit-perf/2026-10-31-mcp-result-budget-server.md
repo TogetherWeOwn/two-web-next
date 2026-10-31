@@ -3,10 +3,10 @@
 The Kit server bundle imports the whole Hono app (`web/src/lib/server/hono.ts`
 imports `src/index`), so the MCP event result budget lands in it. The fix
 adds `eventResultBytes`, the serverInfo stamp it counts, and the shared
-`src/mcp/identity.ts` constants. Main left 2 raw bytes of headroom, so any
-server growth needs a new step. A chunk diff against main shows only that
-code in `chunks/src.js`; no duplicate or unneeded import accounts for the
-growth.
+`src/mcp/identity.ts` constants. After `GET /version` (#1974) took the
+1207552 / 337920 step, main leaves 234 raw bytes of headroom, and the fix
+needs 322. A chunk diff against main shows only that code in
+`chunks/src.js`; no duplicate or unneeded import accounts for the growth.
 
 ## Measurements
 
@@ -17,25 +17,24 @@ toolchain.
 
 | Tree | Server files | Raw bytes | Gzip bytes | Result |
 |---|---:|---:|---:|---|
-| Main `219c532a`, build 1 | 116 | 1207036 | 337630 | passes 1207040 / 337664 |
-| Main `219c532a`, build 2 | 116 | 1207038 | 337629 | passes 1207040 / 337664 |
-| Feature on main, build 1 | 116 | 1207358 | 337749 | passes 1207552 / 337920 |
-| Feature on main, build 2 | 116 | 1207360 | 337750 | passes 1207552 / 337920 |
+| Main `c0fadacb`, build 1 | 116 | 1207318 | 337717 | passes 1207552 / 337920 |
+| Main `c0fadacb`, build 2 | 116 | 1207316 | 337719 | passes 1207552 / 337920 |
+| Feature on main, build 1 | 116 | 1207640 | 337840 | passes 1207808 / 337920 |
+| Feature on main, build 2 | 116 | 1207640 | 337835 | passes 1207808 / 337920 |
 
-Feature delta: +322 raw / +121 gzip bytes, all in `chunks/src.js`. The
-smallest fitting 256B-aligned ceilings are 1207552 raw (192B margin) and
-337920 gzip (170B margin). The lower raw step, 1207296, rejects by 64B;
-the previous gzip ceiling, 337664, rejects by 86B.
+Feature delta: +322 raw / +118 to +123 gzip bytes, all in `chunks/src.js`.
+Only the raw axis breaches: main's 1207552 ceiling rejects by 88B. The
+smallest fitting 256B-aligned raw ceiling is 1207808 (168B margin). Gzip
+still fits main's 337920 ceiling (80B margin), so it is unchanged.
 
 Client JS, client CSS and the Worker entry are unchanged. The main Worker
 bundle still fits its own budget (`npm run worker-budget`).
 
 ## Bounded admission and tests
 
-Raw rises by 512B (0.0424%) and gzip by 256B (0.0758%), each below the
-0.5% per-feature byte-budget limit. The shipping oracle explicitly admits
-this pair; fixed 1207552 / 1207553 raw and 337920 / 337921 gzip controls
-prove exact-fit and one-byte-over behavior.
+Raw rises by 256B (0.0212%), below the 0.5% per-feature byte-budget limit.
+The shipping oracle explicitly admits the 1207808 / 337920 pair; fixed
+1207808 / 1207809 raw controls prove exact-fit and one-byte-over behavior.
 
 Undo: revert this PR, including its fragment change and admission
 controls. No runtime target, scanner, coverage floor, required check, or
