@@ -697,6 +697,12 @@ describe("deployed revision marker is bound per environment", () => {
     );
     expect(version).toBeGreaterThan(verify);
     expect(version).toBeLessThan(deploy.indexOf("node bin/smoke.mjs"));
+    // A deploy of a commit that predates the checker (and /version) skips the
+    // step instead of failing on a missing module.
+    expect(deploy).toContain(
+      "      - name: Verify /version reports the deployed commit\n" +
+        "        if: hashFiles('bin/version-check.mjs') != ''\n",
+    );
     // The tag and the verified commit come from the same CI-verified expression.
     // Both staging deploys (web and jobs Workers) share that one tag, so the
     // expression appears four times: web deploy, jobs deploy, and the /up and
