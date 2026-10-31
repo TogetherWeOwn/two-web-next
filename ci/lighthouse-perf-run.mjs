@@ -13,7 +13,7 @@
 // Selftest: node ci/lighthouse-perf-run.mjs --selftest (hermetic: stubbed
 // collect, the real mobile assertions, temp dirs, no network or browser).
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -94,24 +94,28 @@ async function selftest() {
         output: `stub ${calls}${breached ? `\n${ASSERT_FAILURE_MARKER}\n` : ""}`,
       };
     };
-    const code = await main([], {
-      profile,
-      env: {},
-      run,
-      qualityDir: reportsDir,
-      lhciDir,
-      logFile: join(caseDir, "perf-collect.log"),
-      diagnosisFile: join(caseDir, "perf-collect-diagnosis.md"),
-      log: () => {},
-    });
-    const read = (name) => {
-      try {
-        return readFileSync(join(caseDir, name), "utf8");
-      } catch {
-        return "";
-      }
-    };
-    return { code, calls, configs, diagnosis: read("perf-collect-diagnosis.md") };
+    try {
+      const code = await main([], {
+        profile,
+        env: {},
+        run,
+        qualityDir: reportsDir,
+        lhciDir,
+        logFile: join(caseDir, "perf-collect.log"),
+        diagnosisFile: join(caseDir, "perf-collect-diagnosis.md"),
+        log: () => {},
+      });
+      const read = (name) => {
+        try {
+          return readFileSync(join(caseDir, name), "utf8");
+        } catch {
+          return "";
+        }
+      };
+      return { code, calls, configs, diagnosis: read("perf-collect-diagnosis.md") };
+    } finally {
+      rmSync(caseDir, { recursive: true, force: true });
+    }
   };
 
   // Transient collect failure, then a full passing collect: one retry, green,
