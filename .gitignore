@@ -23,3 +23,5 @@ __pycache__/
 # regenerated on every install via postinstall. Never commit; the drift suite
 # (test/leaf-css-drift.test.ts) is the gate that bytes match the sources.
 src/*-critical-css.ts
+# bin/local-ci.sh scratch output (blob reports, logs, container HOME).
+.local-ci/

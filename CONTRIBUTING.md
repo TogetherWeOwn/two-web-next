@@ -274,6 +274,38 @@ npm run lint                     # read-only Biome lint + format gate
 npm run check                    # lint + format + typecheck + config drift + tests
 ```
 
+### Verify a change before opening a PR
+
+`bin/local-ci.sh` (also `npm run ci:local --`) reproduces the Vitest gates of
+the CI `check` job on any host with Docker. It needs no `.dev.vars`, no
+credentials and no network access beyond pulling `node:24-bookworm` and
+`postgres:17`. Each shard gets its own disposable Postgres 17 container on its
+own Docker network, aliased `agent-testdb` so the `testDatabaseUrl` guard
+accepts it. Nothing is published on host ports. Suites run in the CI job image
+as your user. Containers and networks are removed on exit.
+
+```sh
+bin/local-ci.sh -- test/events.test.ts test/event-page.test.ts  # only the affected files
+bin/local-ci.sh -- test/admin                                   # every file matching a filter
+bin/local-ci.sh -j 8                                            # full gate on 8 shards
+bin/local-ci.sh -j 8 --no-coverage --no-static                  # suite only, quicker
+```
+
+- Focused runs apply migrations to a fresh database and run `vitest run` on the
+  given files or filters. Start with the test files beside the code you changed
+  and the files that import it (`git grep -l <module> test/`).
+- A full run does lint, typecheck, migrations, and `vitest run --coverage`
+  split over `-j N` shards (default `nproc / 4`, at most 8). It then merges the
+  shard reports, so pass counts and coverage thresholds cover the whole suite.
+  Last, it reruns the hotzone suite under `TZ=America/Los_Angeles` and runs Tier-0.
+  Shard logs are in `.local-ci/logs/`.
+- `npm ci` (root and `web/`) runs inside the CI image the first time and again
+  whenever a lockfile changes. `--install` forces it.
+- Run the full gate before you open a PR that touches `src/`, `test/` or
+  migrations. Paste the merged `Test Files` / `Tests` lines into Verification.
+- Not covered: the browser journeys (`e2e-ok`), the a11y job, the Kit build and
+  parity gates, and Semgrep. CI still runs them on the PR.
+
 Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
 [`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both
 lint and formatting. `npm run format` only formats; it does not apply lint fixes
