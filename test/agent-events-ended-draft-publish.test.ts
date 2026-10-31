@@ -1,7 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { clearAuditRows } from "./helpers/audit-rows";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { createMemberDataFixture } from "./helpers/member-data-db";
+import {
+  createEndedDraftIngressDb,
+  type EndedDraftFixture,
+} from "./helpers/ended-draft-ingress-db";
 import { DEFAULT_CONFIG, handleAgentEvent, type IngressEffects } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
 import { dispatchWriteBack } from "../src/admin/writeback";
@@ -41,11 +45,13 @@ const fields = {
 
 // Acceptance: the machine publish path must refuse an already-ended owned
 // draft exactly like the moderator transition does (strict end-before-now),
-// judged on the locked row at publication time. Real web SQL against an
-// isolated test schema, an in-memory queue and no bot contact; only the
-// decision clock (Date) is faked, timers stay real for lock waits.
-describe.skipIf(!process.env.DATABASE_URL)("agent publish of ended drafts (agent-testdb)", () => {
-  let fixture: MemberDataFixture;
+// judged on the locked row at publication time. Every case runs without a
+// database against the shared ingress double plus event-row rendezvous. A
+// configured DATABASE_URL instead runs the same assertions on real web SQL
+// in a guarded isolated schema, including an observed PostgreSQL row wait.
+// Only Date is faked; timers stay real. Neither backend contacts the bot.
+describe("agent publish of ended drafts", () => {
+  let fixture: EndedDraftFixture;
   let credential: string;
   let env: Env;
   let effects: IngressEffects;
@@ -74,12 +80,20 @@ describe.skipIf(!process.env.DATABASE_URL)("agent publish of ended drafts (agent
       WHERE operation = 'publish' AND event_key = ${event_key} ORDER BY id`;
 
   beforeAll(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 8 });
+    fixture = process.env.DATABASE_URL
+      ? await createMemberDataFixture(process.env.DATABASE_URL, { max: 8 })
+      : createEndedDraftIngressDb();
   });
   afterAll(async () => {
     await fixture?.dispose();
   });
   beforeEach(async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => {
+        throw new Error("Ended-draft acceptance must not contact the network");
+      }),
+    );
     await fixture.reset();
     await fixture.client`DELETE FROM agent_event_idempotency_keys`;
     await clearAuditRows(fixture.client, ["agent_event_audits"]);
@@ -115,7 +129,14 @@ describe.skipIf(!process.env.DATABASE_URL)("agent publish of ended drafts (agent
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date(ENDS - 3600_000));
   });
-  afterEach(() => vi.useRealTimers());
+  afterEach(() => {
+    try {
+      expect(fetch).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
+    }
+  });
 
   it.each([1, 3600_000])(
     "refuses publish %i ms after the draft ended, with no mutation, write-back or stored receipt",
@@ -209,7 +230,13 @@ describe.skipIf(!process.env.DATABASE_URL)("agent publish of ended drafts (agent
       vi.setSystemTime(new Date(ENDS + 1));
     } finally {
       release();
-      await holder;
+      try {
+        await holder;
+      } finally {
+        // Drain the request even if the observer fails, before restoring Date
+        // or resetting either backing store for the next test.
+        await publish;
+      }
     }
     const result = await publish!;
     expect(result.status).toBe(422);
@@ -244,7 +271,7 @@ describe.skipIf(!process.env.DATABASE_URL)("agent publish of ended drafts (agent
 
   it("keeps the blank-location refusal for a draft that has not ended", async () => {
     const event_key = await create();
-    await fixture.client`UPDATE events SET location = '   ' WHERE event_key = ${event_key}`;
+    await fixture.client`UPDATE events SET location = ${"   "} WHERE event_key = ${event_key}`;
     const publish = await call("publish", { event_key });
     expect(publish.status).toBe(422);
     expect(publish.body).toMatchObject({
@@ -258,13 +285,13 @@ describe.skipIf(!process.env.DATABASE_URL)("agent publish of ended drafts (agent
   it("keeps ownership refusal ahead of the ended check for a foreign ended draft", async () => {
     await create();
     await fixture.client`INSERT INTO events (event_key, title, starts_at, ends_at, location)
-      VALUES ('foreign-ended', 'Foreign', '2099-07-01T20:00:00Z', '2099-07-01T22:00:00Z', 'Voice')`;
+      VALUES (${"foreign-ended"}, ${"Foreign"}, ${"2099-07-01T20:00:00Z"}, ${"2099-07-01T22:00:00Z"}, ${"Voice"})`;
     vi.setSystemTime(new Date(ENDS + 3600_000));
     const publish = await call("publish", { event_key: "foreign-ended" });
     expect(publish.status).toBe(403);
     expect(publish.body.reason).toBe("foreign_event");
     expect(
-      (await fixture.client`SELECT status FROM events WHERE event_key = 'foreign-ended'`)[0]!
+      (await fixture.client`SELECT status FROM events WHERE event_key = ${"foreign-ended"}`)[0]!
         .status,
     ).toBe("draft");
     expect(sent).toHaveLength(0);
