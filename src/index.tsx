@@ -741,10 +741,9 @@ app.get("/up", async (c) => {
 
 // `GET /version` — the live deploy commit and upload time (src/version.ts).
 // DB-free and session-free; `no-store` so a reader never sees a cached deploy.
-app.get("/version", (c) => {
-  c.header("cache-control", "no-store");
-  return c.json(versionBody(c.env.CF_VERSION_METADATA));
-});
+app.get("/version", (c) =>
+  c.json(versionBody(c.env.CF_VERSION_METADATA), 200, { "cache-control": "no-store" }),
+);
 
 // Branded error pages (N2: TOG-9906) — DB-free, never echo internals.
 registerErrorHandlers(app);

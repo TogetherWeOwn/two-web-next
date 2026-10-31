@@ -978,20 +978,20 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
   ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   ...shippingClientGzipCases(),
-  // Roster/venue composition on current main: 1206782 raw; the previous 1205504 cap rejects.
+  // GET /version on roster/venue main: 1207064 raw; the previous 1207040 cap rejects.
   {
     name: "server raw newly allowed interval",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1206782,
+    bytes: 1207064,
   },
-  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1207040 },
+  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1207552 },
   {
     name: "server raw one byte over",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1207041,
-    ceiling: 1207040,
+    bytes: 1207553,
+    ceiling: 1207552,
     breach: true,
   },
   {

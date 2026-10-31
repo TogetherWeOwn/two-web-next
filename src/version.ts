@@ -10,14 +10,14 @@ import { buildShaFromTag } from "./release-tag";
 
 export type VersionBody = { sha: string | null; deployedAt: string | null };
 
-function isoTimestamp(value: unknown): string | null {
-  if (typeof value !== "string" || value === "") return null;
-  const ms = Date.parse(value);
-  return Number.isNaN(ms) ? null : new Date(ms).toISOString();
-}
-
-export function versionBody(
-  meta: { tag?: unknown; timestamp?: unknown } | null | undefined,
-): VersionBody {
-  return { sha: buildShaFromTag(meta?.tag), deployedAt: isoTimestamp(meta?.timestamp) };
+export function versionBody({
+  tag,
+  timestamp: t,
+}: {
+  tag?: unknown;
+  timestamp?: unknown;
+} = {}): VersionBody {
+  // NaN (unparseable or empty), false (not a string) and the epoch read as unknown.
+  const ms = typeof t === "string" && Date.parse(t);
+  return { sha: buildShaFromTag(tag), deployedAt: ms ? new Date(ms).toISOString() : null };
 }
