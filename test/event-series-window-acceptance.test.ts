@@ -248,6 +248,80 @@ describe.skipIf(!process.env.DATABASE_URL)(
       });
     }
 
+    // A timezone change with an end-only PATCH leaves starts_at derived from
+    // the stored instant. Start and end must still follow the new zone's
+    // schedule together, not split between a flat 0 and a cross-zone shift.
+    it.each([
+      {
+        name: "London to UTC keeps the child's length",
+        parentZone: "Europe/London",
+        oldStart: "2099-03-22T12:00:00Z",
+        oldEnd: "2099-03-22T14:00:00Z",
+        childStart: "2099-03-29T11:00:00Z",
+        childEnd: "2099-03-29T13:00:00Z",
+        edits: { timezone: "UTC", ends_at: "2099-03-22 14:30" },
+        wantStart: "2099-03-29T12:00:00.000Z",
+        wantEnd: "2099-03-29T14:30:00.000Z",
+      },
+      {
+        name: "UTC to London is not refused",
+        parentZone: "UTC",
+        oldStart: "2099-03-22T12:00:00Z",
+        oldEnd: "2099-03-22T12:30:00Z",
+        childStart: "2099-03-29T12:00:00Z",
+        childEnd: "2099-03-29T12:30:00Z",
+        edits: { timezone: "Europe/London", ends_at: "2099-03-22 12:40" },
+        wantStart: "2099-03-29T11:00:00.000Z",
+        wantEnd: "2099-03-29T11:40:00.000Z",
+      },
+    ])("JSON PATCH: a timezone change with only ends_at: $name", async (times) => {
+      const [parent] = await seedSeries([
+        { eventKey: "series-dst-child", startsAt: times.childStart, endsAt: times.childEnd },
+      ]);
+      await db
+        .update(events)
+        .set({
+          timezone: times.parentZone,
+          startsAt: new Date(times.oldStart),
+          endsAt: new Date(times.oldEnd),
+        })
+        .where(eq(events.id, parent!.id));
+      const res = await patch(parent!.eventKey, times.edits);
+      expect(res.status).toBe(200);
+      const child = await stored("series-dst-child");
+      expect(child.startsAt.toISOString()).toBe(times.wantStart);
+      expect(child.endsAt.toISOString()).toBe(times.wantEnd);
+    });
+
+    it.each([null, 99])(
+      "JSON PATCH: a child with recurrence index %s keeps the flat parent delta",
+      async (recurrenceIndex) => {
+        const [parent, child] = await seedSeries([
+          {
+            eventKey: "series-dst-child",
+            startsAt: "2099-03-29T00:30:00Z",
+            endsAt: "2099-03-29T00:50:00Z",
+          },
+        ]);
+        await db
+          .update(events)
+          .set({
+            startsAt: new Date("2099-03-22T00:30:00Z"),
+            endsAt: new Date("2099-03-22T00:50:00Z"),
+          })
+          .where(eq(events.id, parent!.id));
+        await db.update(events).set({ recurrenceIndex }).where(eq(events.id, child!.id));
+        const res = await patch(parent!.eventKey, {
+          starts_at: "2099-03-22 02:30",
+          ends_at: "2099-03-22 02:50",
+        });
+        expect(res.status).toBe(200);
+        const moved = await stored("series-dst-child");
+        expect(moved.startsAt.toISOString()).toBe("2099-03-29T02:30:00.000Z");
+        expect(moved.endsAt.toISOString()).toBe("2099-03-29T02:50:00.000Z");
+      },
+    );
+
     it("identifies the shortened child atomically: no rows, audits, promotions or write-backs", async () => {
       const [parent] = await seedSeries([SHORTENED, SIBLING]);
       await db.insert(rsvps).values([

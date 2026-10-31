@@ -534,17 +534,16 @@ async function shiftFutureChildren(
   const after = canSchedule
     ? occurrences(parent.startsAt, parent.endsAt, parent.timezone, "weekly", maxIndex)
     : null;
+  // Shift both columns by their slot differences together. An unchanged column
+  // in the same zone differs by exactly 0, and a timezone change then moves
+  // start and end consistently with the new zone's weekly schedule.
   const proposed = children.map((child) => {
     const oldSlot = before?.get(child.recurrenceIndex ?? 0);
     const newSlot = after?.get(child.recurrenceIndex ?? 0);
     const startShift =
-      oldSlot && newSlot && startDelta !== 0
-        ? newSlot.startsAt.getTime() - oldSlot.startsAt.getTime()
-        : startDelta;
+      oldSlot && newSlot ? newSlot.startsAt.getTime() - oldSlot.startsAt.getTime() : startDelta;
     const endShift =
-      oldSlot && newSlot && endDelta !== 0
-        ? newSlot.endsAt.getTime() - oldSlot.endsAt.getTime()
-        : endDelta;
+      oldSlot && newSlot ? newSlot.endsAt.getTime() - oldSlot.endsAt.getTime() : endDelta;
     return {
       child,
       startsAt: new Date(child.startsAt.getTime() + startShift),
