@@ -28,5 +28,4 @@ production promote, which tags a release (see the GitHub Releases page and
 [docs/releases.md](docs/releases.md)).
 
 We accept reports about the live site and the latest tagged release. The
-latest tag as of 2026-10-12 is `v0.4.0`; a tag can trail what is live, so say
-which one your report concerns.
+tag can trail what is live, so say which one your report concerns.

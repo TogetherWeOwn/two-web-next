@@ -5,7 +5,7 @@ import { adminSaveStatus } from "../src/admin/save-status";
 // The four Kit form twins inline the save-status markup instead of importing
 // src/admin/save-status.ts: a module imported from four client entries splits
 // its own shared chunk and breaches the client file-count cap in
-// ci/kit-perf-budget.json. The module stays the single authority; these tests
+// ci/budgets/kit/client-js.json. The module stays the single authority; these tests
 // fail closed when a twin's copy drifts from it or re-adds the import.
 const KIT_FORM_TWINS = [
   "web/src/routes/admin/events/new/+page.svelte",

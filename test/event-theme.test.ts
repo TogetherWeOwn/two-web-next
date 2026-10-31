@@ -203,7 +203,7 @@ describe("event detail theme", () => {
     expect(css).not.toContain("url(");
     // 6150: the four Display stacks each carry the metric-matched
     // 'Display Fallback' (+80 bytes over the pre-unification 5992); the
-    // ci/bundle-budget.json ceiling (7168 raw) is unchanged.
+    // ci/budgets/bundle/event-theme.css.json ceiling (7168 raw) is unchanged.
     // 6430: the chosen-timezone input rule (+216 bytes over 6125) themes the
     // native input with semantic tokens instead of shipping a white box on the
     // dark event theme; still no @import/url and far under the 7168 ceiling.

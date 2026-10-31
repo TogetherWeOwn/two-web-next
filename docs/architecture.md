@@ -24,7 +24,8 @@ Global middleware runs in this order for every request
 1. Request logging plus static security headers and the staging robots tag,
    with handler errors settled to the branded 500 (`app.use`).
 2. `trustHosts()`: refuses foreign `Host` values before routing.
-3. `sameOrigin`, `authStatusScript`, `expiredWriteBanner`, `freezeBanner`.
+3. `sameOrigin`, `authStatusScript`, `expiredWriteBanner`, `freezeBanner`,
+   `webmcpPilot`.
 
 Route-scoped middleware applies per route instead: body-size budgets on the
 agent-events and logout/QA posts, admission and throttles on the agent
