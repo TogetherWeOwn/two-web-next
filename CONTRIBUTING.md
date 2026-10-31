@@ -301,7 +301,8 @@ bin/local-ci.sh -j 8 --no-coverage --no-static                  # suite only, qu
   Last, it reruns the hotzone suite under `TZ=America/Los_Angeles` and runs Tier-0.
   Shard logs are in `.local-ci/<run>/logs/`, so concurrent runs never share files.
 - `npm ci` (root and `web/`) runs inside the CI image the first time and again
-  whenever a lockfile changes. `--install` forces it.
+  whenever a lockfile changes. `--install` forces it. Installs hold a lock, so
+  concurrent runs in one checkout wait instead of overwriting each other's install.
 - Run the full gate before you open a PR that touches `src/`, `test/` or
   migrations. Paste the merged `Test Files` / `Tests` lines into Verification.
 - Not covered: the browser journeys (`e2e-ok`), the a11y job, the Kit build and

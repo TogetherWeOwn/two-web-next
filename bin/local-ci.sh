@@ -176,9 +176,14 @@ stamp="$(cat package-lock.json web/package-lock.json | sha256 | cut -d' ' -f1)-$
 stamp_ok() { [[ -f $1/.local-ci-stamp && "$(cat "$1/.local-ci-stamp")" == "$stamp" ]]; }
 if ((force_install)) || ! stamp_ok node_modules || ! stamp_ok web/node_modules; then
   step "install root and web/ dependencies (npm ci)"
-  in_node 1 "npm ci --include=dev --no-audit --no-fund && npm ci --prefix web --include=dev --no-audit --no-fund"
-  echo "$stamp" >node_modules/.local-ci-stamp
-  echo "$stamp" >web/node_modules/.local-ci-stamp
+  # Concurrent runs in one checkout share node_modules, so installs hold a
+  # lock and re-check the stamps: a run that waited reuses the fresh install.
+  install="if ((! $force_install)) && [[ \$(cat node_modules/.local-ci-stamp 2>/dev/null) == '$stamp' && \$(cat web/node_modules/.local-ci-stamp 2>/dev/null) == '$stamp' ]]; then
+    echo 'local-ci: another run just installed dependencies; reusing them'; exit 0
+  fi
+  npm ci --include=dev --no-audit --no-fund && npm ci --prefix web --include=dev --no-audit --no-fund &&
+    echo '$stamp' >node_modules/.local-ci-stamp && echo '$stamp' >web/node_modules/.local-ci-stamp"
+  in_node 1 "flock .local-ci/install.lock bash -c $(printf '%q' "$install")"
 else
   step "dependencies match lockfiles; skipping npm ci (use --install to force)"
 fi
