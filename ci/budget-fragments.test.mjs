@@ -153,7 +153,8 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // 1205504 admits that main plus ongoing-night renderers (measured 1205293;
 // the lower 1205248 step rejects by 45).
 // 1207040 admits the roster/venue composition (1206782; main 1205504 rejects by 1278).
-const SHIPPING_SERVER_RAW_ALLOCATIONS = [1203200, 1203968, 1205504, 1207040];
+// 1207552 admits the Kit outage-header CTA (1207118; main 1207040 rejects by 78).
+const SHIPPING_SERVER_RAW_ALLOCATIONS = [1203200, 1203968, 1205504, 1207040, 1207552];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
 // on current main (measured union 258023 raw / 103383 gzip, margins 25 / 41;
@@ -169,6 +170,9 @@ const SHIPPING_CLIENT_JS_ALLOCATIONS = [
   // Honest roster/venue states: two merged builds 259224/103522; the lower
   // 258560 raw step rejects by 664, gzip ceiling unchanged.
   [259584, 103680],
+  // Kit outage-header CTA: two builds 259746/103695; the lower pair rejects
+  // raw by 162 and gzip by 15.
+  [260096, 103936],
 ];
 
 function assertShippingKitBudget(actual) {
@@ -180,7 +184,7 @@ function assertShippingKitBudget(actual) {
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -268,6 +272,19 @@ test("shipping oracle admits the measured roster/venue allocations together", ()
   });
 });
 
+test("shipping oracle admits the measured outage-header allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1207552, maxGzipBytes: 337664 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 260096, maxGzipBytes: 103936 },
+    },
+  });
+});
+
 test("shipping oracle admits the measured 1203968 server raw allocation", () => {
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
@@ -285,7 +302,9 @@ test("shipping oracle admits the measured ongoing-night server allocations", () 
 });
 
 test("shipping oracle rejects an unsupported server raw allocation", () => {
-  for (const maxRawBytes of [1203201, 1203712, 1203967, 1203969, 1205248, 1205503, 1205505]) {
+  for (const maxRawBytes of [
+    1203201, 1203712, 1203967, 1203969, 1205248, 1205503, 1205505, 1207551, 1207553,
+  ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
       server: { js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes } },
@@ -368,6 +387,12 @@ test("shipping oracle rejects client js pairs outside the admitted list", () => 
     [258561, 103680],
     [258560, 103679],
     [258560, 103681],
+    [260096, 103680],
+    [259584, 103936],
+    [260095, 103936],
+    [260097, 103936],
+    [260096, 103935],
+    [260096, 103937],
   ]) {
     assert.throws(
       () =>
