@@ -6,8 +6,9 @@
 # Every shard gets its own disposable postgres:17 container on its own Docker
 # network, aliased `agent-testdb` so the shared testDatabaseUrl guard accepts
 # it unchanged. Suites run in node:24-bookworm (the CI job image) as the
-# calling user. Nothing is published on host ports and nothing outside this
-# checkout is touched; containers and networks are removed on exit.
+# calling user. Nothing is published on host ports; outside this checkout only
+# the npm cache in $HOME/.npm is written. Containers and networks are removed
+# on exit.
 set -euo pipefail
 
 usage() {

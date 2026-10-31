@@ -99,7 +99,7 @@ are not incident entries; read those sections directly when that work is authori
   to an issue. Follow [SECURITY.md](../SECURITY.md) for private disclosure.
 
 All commands run from this repository root in Bash, with Node 24 and the
-lockfile-installed Wrangler (4.143.1 at this revision). Database drill commands
+lockfile-installed Wrangler. Database drill commands
 also need PostgreSQL client tools compatible with the server, Python 3 and `psql`.
 Remote batches use fail-fast subshells: a failed command stops that batch without
 changing the caller's shell options. Stop the incident workflow on failure;
@@ -448,8 +448,8 @@ migration is performed by its selftest.
   before connecting: postgres.js does not implement SCRAM channel binding and
   would forward the libpq-only flag as a startup setting, so stripping it keeps
   TLS encryption without providing SCRAM-SHA-256-PLUS channel binding
-  (`ci/db-migrate.mjs:110-117,177-198`; pinned in
-  `ci/db-migrate-selftest.mjs:296-332`). This driver cannot satisfy a genuine
+  (the `channel_binding` strip and `migrationClient` in `ci/db-migrate.mjs`;
+  pinned in `ci/db-migrate-selftest.mjs`). This driver cannot satisfy a genuine
   channel-binding requirement. Never weaken or remove a required
   channel-binding policy just to run migrations; stop and route the requirement
   through the authorized security/operator path for a compatible driver, not to
@@ -511,7 +511,7 @@ migration or assume restoring the Worker restores the database.
 **Staging deploy integration:** `deploy.yml` applies the staging web migrations
 itself: `plan`, the exact-SHA CI re-check,
 `apply` and `verify` run in the `deploy-staging` job (Environment `staging`, which
-holds `PLANETSCALE_STAGING_DATABASE_URL`) after `npm run check` and before the first
+holds `PLANETSCALE_STAGING_DATABASE_URL`) before the first
 Cloudflare mutation, so new code never meets the old staging schema and a failed
 or lock-blocked migration leaves the previous Worker serving. It does not call
 `db-migrate.yml`: a reusable-workflow job would check out main's tip instead of the
@@ -1381,8 +1381,7 @@ and the existing queue envelope, invoked as `node bin/smoke.mjs https://next.tog
 HTTP 503 (including pending migrations) fails the deploy. Queue-only `unknown` still
 returns 200 from `/up` itself, but the staging smoke fails closed on a literal `unknown`
 in `queue.status` or `ready_wait_severity` and on a `critical` `ready_wait_severity`;
-flag-less production/rollback smoke only warns on `critical` and passes on `unknown`. The workflow's `Apply test migrations` step affects
-only disposable CI Postgres, **not the staging schema**. A failed readiness smoke
+flag-less production/rollback smoke only warns on `critical` and passes on `unknown`. A failed readiness smoke
 requires a recorded, authorized staging schema/rollback action, not weakening the
 probe or running migrations through `/up`.
 
@@ -1773,7 +1772,6 @@ then free for a newer eligible revision. Attempted requests retain their
 immutable identity even if the event becomes past. Reconciliation selects those
 attempted recovery candidates independently of eligibility to start a new
 request, then checks their deadline and remaining budget before sending.
-The bot HTTP adapter remains unwired; this is not proof of live Discord delivery.
 
 Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
 tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
@@ -1850,7 +1848,8 @@ prove exactly-once remote effects. See [consumer error paths](../src/jobs/consum
 
 [bin/db-backup.sh](../bin/db-backup.sh) supports `backup`, `promote-weekly`,
 `rotate`, `check` — **there is no `restore` subcommand**. `check` downloads
-manifest-listed objects to prove existence, not restorability or row counts.
+each manifest-listed archive and verifies its bytes against its digest receipt;
+it does not prove restorability or row counts.
 The [nightly workflow](../.github/workflows/db-backup.yml) runs at `03:17Z`
 and can skip green when `PLANETSCALE_STAGING_DATABASE_URL` is absent. Green/skipped is
 not a successful backup. Its `branch` input changes the object prefix only:

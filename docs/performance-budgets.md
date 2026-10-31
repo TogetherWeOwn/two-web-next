@@ -93,8 +93,8 @@ npm run build:assets:check    # fail when the output drifted from its source
 
 The binder and stylesheet suites run against the minified bytes, so they prove
 each build equivalent; only whitespace-tolerant assertions survive
-minification. The deploy workflow rebuilds and re-checks drift after `npm run
-check`, so the deployed bytes are the reviewed bytes.
+minification. The deploy workflow re-checks drift with `npm run build:assets:check`
+before deploying, so the deployed bytes are the reviewed bytes.
 
 ## Local verification
 
@@ -539,7 +539,7 @@ The byte ceilings are specific to Next's unbundled assets, based on the measured
 headroom. They are not copied from legacy Vite/Filament bundles that Next does not
 serve. The checker exits **0** if every asset fits, **1** for size breaches or
 missing budgeted assets, **2** for missing/invalid configuration or unenforced
-assets. Its 31-case selftest isolates raw/gzip breaches, exact boundaries,
+assets. Its 34-case selftest isolates raw/gzip breaches, exact boundaries,
 missing files, malformed/empty/invalid budgets and newly unbudgeted assets,
 including imported nested helpers and dot-prefixed files/directories that Workers
 also serves. Hidden paths require explicit ceilings and cannot escape raw/gzip enforcement. Islands that landed after the

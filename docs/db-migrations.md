@@ -129,13 +129,13 @@ hashed by this guard.
    SQL is a separate gated operation; these authoring commands do not authorize
    a database connection or deployment.
 
-The pinned versions are Drizzle Kit `0.31.11` and ORM `0.45.3` in
+The pinned versions are Drizzle Kit `0.31.11` and ORM `0.45.4` in
 `package-lock.json`. See the official [generate/custom migration options](https://orm.drizzle.team/docs/drizzle-kit-generate)
 and [migrate behavior](https://orm.drizzle.team/docs/drizzle-kit-migrate). Current
 upstream docs show a newer timestamp-folder layout; this repo still uses the
 pinned flat SQL + `meta/_journal.json` layout, verified against the published
 [Kit package](https://registry.npmjs.org/drizzle-kit/-/drizzle-kit-0.31.11.tgz)
-and [ORM migrator package](https://registry.npmjs.org/drizzle-orm/-/drizzle-orm-0.45.3.tgz).
+and [ORM migrator package](https://registry.npmjs.org/drizzle-orm/-/drizzle-orm-0.45.4.tgz).
 Do not convert historical migrations to the newer layout in a numbering PR.
 
 CI obtains its base from GitHub's event: `pull_request.base.sha` for PRs, `before`
