@@ -54,5 +54,8 @@ Both shipping oracles keep every earlier allocation and add server raw
 1207552, server gzip 337920 and the client pair 260096/103936. Fixed fixtures accept the
 measured sizes and exact ceilings, and reject one byte over each.
 
-Undo: revert the ErrorShell change, these fragment and oracle edits and
-this decision together.
+Undo: revert the whole PR. The ErrorShell change, these fragment and
+oracle edits, this decision and
+`test/kit-outage-header-404-search-acceptance.test.ts` go together. That
+test expects "Open Discord" on 403, 429, 500 and 503, so it fails
+against the restored sign-in header if it stays behind.
