@@ -22,7 +22,7 @@ const copy = $derived(kitErrorCopy(code));
 // during a store outage or throttle the sign-in round trip is dead, so the
 // header carries Hono's cta-branch contract instead (src/page-shell.tsx:
 // guest caption plus an invite "Open Discord" link on data-testid="signin").
-// 400/404/410 keep the default sign-in header — OAuth is alive there.
+// 400/404/410/422 keep the default sign-in header — OAuth is alive there.
 const OUTAGE_CODES: KitErrorStatus[] = [403, 429, 500, 503];
 const isOutage = $derived(OUTAGE_CODES.includes(code));
 </script>

@@ -14,7 +14,7 @@
 //   same href/label/testid contract as Hono's cta branch; no OAuth start
 //   (/join/discord or /auth/discord) anywhere on those pages.
 // - 400/404/410/422 headers keep the sign-in CTA exactly as today (parity pin).
-// - Kit 400/404/410 gain the event search form, markup-matching the Hono
+// - Kit 400/404/410 keep the event search form, markup-matching the Hono
 //   NotFoundPage and EventMissing twins; other statuses gain no form.
 // - The boundary still reads no session/DB/network; noindex intact;
 //   data-testid="signin" stays on the header CTA for every status.
