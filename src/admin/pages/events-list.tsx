@@ -2,15 +2,17 @@
 
 import type { FC } from "hono/jsx";
 import { raw } from "hono/html";
-import {
-  renderEventStartsInputsHtml,
-  renderEventStartsFeedbackHtml,
-  renderEventFilterFieldsHtml,
-  renderEventFilterActionsHtml,
-} from "../event-starts-inputs";
+import { renderEventStartsInputsHtml, renderEventStartsFeedbackHtml } from "../event-starts-inputs";
 import type { EventListRow } from "../store";
 import { goingCountText } from "../../islands/contracts";
-import { eventEmptyText, eventListUrl, type EventListQuery, type EventSort } from "../event-list";
+import {
+  eventEmptyText,
+  eventListUrl,
+  eventListHasFilters,
+  eventListClearUrl,
+  type EventListQuery,
+  type EventSort,
+} from "../event-list";
 import { RsvpAction, Shell } from "./shell";
 
 const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuery }> = ({
@@ -67,9 +69,80 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
     <section>
       <h1>Events</h1>
       <form method="get" action="/admin/events" class="filters">
-        {raw(renderEventFilterFieldsHtml(query))}
+        <input type="hidden" name="sort" value={query.sort} />
+        <input type="hidden" name="order" value={query.order} />
+        <div class="field">
+          <label for="q">Search titles and games</label>
+          <input id="q" name="q" type="search" value={query.q} aria-describedby="q-help" />
+          <p class="hint" id="q-help">
+            Matches event titles and saved games.
+          </p>
+        </div>
+        <div class="field">
+          <label for="status">Status</label>
+          <select id="status" name="status">
+            {["", "draft", "published", "cancelled", "past"].map((s) => (
+              <option value={s} selected={s === query.status}>
+                {s === "" ? "All" : s}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="rsvp_open">RSVPs</label>
+          <select id="rsvp_open" name="rsvp_open">
+            <option value="" selected={query.rsvp_open === ""}>
+              All
+            </option>
+            <option value="1" selected={query.rsvp_open === "1"}>
+              Open
+            </option>
+            <option value="0" selected={query.rsvp_open === "0"}>
+              Paused
+            </option>
+          </select>
+        </div>
+        <div class="field">
+          <label for="series">Series</label>
+          <select id="series" name="series">
+            {[
+              ["", "All"],
+              ["parent", "Parent"],
+              ["child", "Child"],
+              ["standalone", "Standalone"],
+            ].map(([value, label]) => (
+              <option value={value} selected={value === query.series}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div class="field">
+          <label for="fill">Fill</label>
+          <select id="fill" name="fill">
+            {[
+              ["", "All"],
+              ["full", "Full"],
+              ["has_seats", "Has seats"],
+              ["unlimited", "Unlimited"],
+            ].map(([value, label]) => (
+              <option value={value} selected={value === query.fill}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </div>
         {raw(renderEventStartsInputsHtml(query.startsWindow))}
-        {raw(renderEventFilterActionsHtml(query))}
+        <div class="field">
+          <button type="submit" class="btn">
+            Filter
+          </button>
+        </div>
+        {eventListHasFilters(query) ? (
+          <div class="field">
+            <a href={eventListClearUrl(query)}>Clear filters</a>
+          </div>
+        ) : null}
       </form>
       {raw(renderEventStartsFeedbackHtml(query.startsWindow))}
       <p>

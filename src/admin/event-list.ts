@@ -7,7 +7,13 @@ export type EventSort = "title" | "starts_at" | "status";
  * with an `error` must never reach the store. Absent from the query when
  * neither bound was supplied, so ordinary unfiltered queries are unchanged.
  */
-export type EventStartsWindow = { from?: string; before?: string; error?: string };
+export type EventStartsWindow = {
+  from?: string;
+  before?: string;
+  error?: string;
+  /** Correction-only bitmask: 1 lower, 2 upper. Never a database predicate. */
+  required?: number;
+};
 export type EventListQuery = {
   q: string;
   status: "" | "draft" | "published" | "cancelled" | "past";
@@ -25,6 +31,7 @@ export type EventListParams = Partial<
     page: string;
     starts_from: string | readonly string[];
     starts_before: string | readonly string[];
+    starts_required: string | readonly string[];
   }
 >;
 
@@ -34,7 +41,7 @@ export function eventListParams(search: URLSearchParams): EventListParams {
   for (const [key, value] of search) {
     const seen = raw[key];
     if (seen === undefined) raw[key] = value;
-    else if (key === "starts_from" || key === "starts_before")
+    else if (key === "starts_from" || key === "starts_before" || key === "starts_required")
       raw[key] = Array.isArray(seen) ? [...seen, value] : [seen, value];
   }
   return raw as EventListParams;
@@ -68,21 +75,35 @@ function utcMidnight(value: string): Date | null {
 export function parseEventStartsWindow(
   from: string | readonly string[] | undefined,
   before: string | readonly string[] | undefined,
+  correction?: string | readonly string[],
 ): EventStartsWindow | undefined {
+  // A hidden correction marker survives native GET submission of blank date
+  // controls. Supplying real dates satisfies it; Clear filters removes it.
+  let required =
+    correction === undefined
+      ? 0
+      : typeof correction === "string" && /^[123]$/.test(correction)
+        ? Number(correction)
+        : 3;
   const fields = [from, before].map((v) => (typeof v === "string" ? [v] : (v ?? [])));
-  if (fields.every((f) => f.length === 0 || (f.length === 1 && f[0] === ""))) return undefined;
+  if (!required && fields.every((f) => f.length === 0 || (f.length === 1 && f[0] === "")))
+    return undefined;
   const window: EventStartsWindow = {};
   const [a, b] = fields.map((f) => (f.length === 1 ? f[0] : "")) as [string, string];
   const dates = [a, b].map((v) => (v === "" ? null : utcMidnight(v)));
   if (a !== "" && dates[0]) window.from = a;
   if (b !== "" && dates[1]) window.before = b;
+  fields.forEach((f, i) => {
+    if (f.length > 1 || (f.length === 1 && f[0] !== "" && !dates[i])) required |= 1 << i;
+  });
   if (fields.some((f) => f.length > 1)) {
     window.error = `Starts from and Starts before can each be given only once. ${WINDOW_NOT_APPLIED}`;
-  } else if ((a !== "" && !dates[0]) || (b !== "" && !dates[1])) {
+  } else if ((required & 1 && !window.from) || (required & 2 && !window.before)) {
     window.error = `Starts from and Starts before must be valid calendar dates (YYYY-MM-DD, years 0001 to 9999). ${WINDOW_NOT_APPLIED}`;
   } else if (window.from && window.before && window.from >= window.before) {
     window.error = `Starts from must be a date before Starts before. ${WINDOW_NOT_APPLIED}`;
   }
+  if (window.error && required) window.required = required;
   return window;
 }
 
@@ -119,7 +140,11 @@ export function parseEventListQuery(params: EventListParams): EventListQuery {
   const fill = params.fill;
   const sort = params.sort;
   const page = Number(params.page);
-  const startsWindow = parseEventStartsWindow(params.starts_from, params.starts_before);
+  const startsWindow = parseEventStartsWindow(
+    params.starts_from,
+    params.starts_before,
+    params.starts_required,
+  );
   return {
     // PostgreSQL text cannot contain NUL; retain the rest as literal input.
     q: boundEventFreeText((params.q ?? "").replaceAll("\u0000", "").trim()),

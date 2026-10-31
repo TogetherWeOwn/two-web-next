@@ -82,8 +82,9 @@ A missing test alone is not a runtime bug. These are blocking findings:
   the same gate, not just login.
 - **Ingress and jobs** (`src/agent-events/`, `src/jobs/`, `src/throttle.ts`,
   `src/bot/`): caller/guild validation, idempotency keys, and rate limits on
-  agent-event ingress; queue retries must not double-apply effects; writes
-  must repeat the predicates they read (no read-check-write races).
+  agent-event ingress; queue retries must not double-apply effects; a write
+  must repeat the predicates it read or run under the lock/constraint that
+  serialized them (no unguarded read-check-write).
 - **Shared database** (`drizzle/`, `src/db/`): this Postgres is shared with
   the bot, which owns the `web_v1` views — do not flag missing writes to
   bot-owned objects. Never edit an applied migration; schema changes must be

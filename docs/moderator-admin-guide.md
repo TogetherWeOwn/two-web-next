@@ -221,6 +221,9 @@ start instant.
   once, with Starts from earlier than Starts before. Otherwise the page shows a
   warning that the date window was not applied and lists no events until you
   correct the dates; it never shows an unrestricted list as if it matched.
+  A rejected endpoint can appear blank for correction, but submitting **Filter**
+  unchanged keeps the refusal. Enter a valid date or choose **Clear filters**
+  explicitly; correcting one endpoint keeps an independently valid opposite date.
 - The window is a planning view over scheduled start times only. It does not
   show attendance, does not count events, and is not goal evidence.
 

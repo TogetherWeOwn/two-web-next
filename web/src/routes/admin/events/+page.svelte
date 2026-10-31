@@ -1,7 +1,12 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
 import type { PageProps } from "./$types";
-import { eventListUrl, type EventSort } from "../../../../../src/admin/event-list";
+import {
+  eventListUrl,
+  eventListHasFilters,
+  eventListClearUrl,
+  type EventSort,
+} from "../../../../../src/admin/event-list";
 import { goingCountText } from "../../../../../src/islands/contracts-going-count";
 import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 
@@ -18,17 +23,8 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // inlined literals or a shared component would breach the client gzip and
 // file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
-const {
-  query,
-  rows,
-  hasNext,
-  emptyText,
-  startsFeedbackHtml,
-  startsInputsHtml,
-  filterFieldsHtml,
-  filterActionsHtml,
-  pauseReviews,
-} = $derived(data);
+const { query, rows, hasNext, emptyText, startsFeedbackHtml, startsInputsHtml, pauseReviews } =
+  $derived(data);
 const now = new Date();
 </script>
 
@@ -65,9 +61,54 @@ const now = new Date();
 <section aria-labelledby="events-heading">
   <h1 id="events-heading">Events</h1>
   <form method="get" action="/admin/events" class="filters">
-    {@html filterFieldsHtml}
+    <input type="hidden" name="sort" value={query.sort} />
+    <input type="hidden" name="order" value={query.order} />
+    <div class="field">
+      <label for="q">Search titles and games</label>
+      <input id="q" name="q" type="search" value={query.q} aria-describedby="q-help" />
+      <p class="hint" id="q-help">Matches event titles and saved games.</p>
+    </div>
+    <div class="field">
+      <label for="status">Status</label>
+      <select id="status" name="status">
+        {#each ["", "draft", "published", "cancelled", "past"] as s (s)}
+          <option value={s} selected={s === query.status}>{s === "" ? "All" : s}</option>
+        {/each}
+      </select>
+    </div>
+    <div class="field">
+      <label for="rsvp_open">RSVPs</label>
+      <select id="rsvp_open" name="rsvp_open">
+        <option value="" selected={query.rsvp_open === ""}>All</option>
+        <option value="1" selected={query.rsvp_open === "1"}>Open</option>
+        <option value="0" selected={query.rsvp_open === "0"}>Paused</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="series">Series</label>
+      <select id="series" name="series">
+        {#each [["", "All"], ["parent", "Parent"], ["child", "Child"], ["standalone", "Standalone"]] as [value, label] (value)}
+          <option value={value} selected={value === query.series}>{label}</option>
+        {/each}
+      </select>
+    </div>
+    <div class="field">
+      <label for="fill">Fill</label>
+      <select id="fill" name="fill">
+        {#each [["", "All"], ["full", "Full"], ["has_seats", "Has seats"], ["unlimited", "Unlimited"]] as [value, label] (value)}
+          <option value={value} selected={value === query.fill}>{label}</option>
+        {/each}
+      </select>
+    </div>
     {@html startsInputsHtml}
-    {@html filterActionsHtml}
+    <div class="field">
+      <button type="submit" class="btn">Filter</button>
+    </div>
+    {#if eventListHasFilters(query)}
+      <div class="field">
+        <a href={eventListClearUrl(query)}>Clear filters</a>
+      </div>
+    {/if}
   </form>
   {@html startsFeedbackHtml}
   <p>

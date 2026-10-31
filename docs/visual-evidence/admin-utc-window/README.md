@@ -21,7 +21,41 @@
 - Non-goals: redesign, new framework/island, overlap scheduling, counts,
   attendance inference, writes, route cutover or altered display timezone.
 
-## Captured and opened
+## Narrow scope correction — 2026-10-31
+
+The original design contract above is unchanged. Pre-existing filter fields and
+Filter/Clear actions now remain inline in their native renderers; only UTC date
+controls/feedback use shared server HTML. A hidden correction marker makes an
+unchanged refused GET remain refused, with no JavaScript or visible new control.
+The table, responsive wrapping, labels, palettes and explicit clear stay intact.
+
+Fresh built-root/CSP browser run: **19 passed, zero skips**. Captured and opened
+eight additional images at the same viewports; these are fixture evidence, not
+visual-regression baselines or staging proof:
+
+| Renderer | Ordinary inventory desktop / mobile | Refused desktop / mobile |
+| --- | --- | --- |
+| Hono | [desktop](scope-cut-hono-1280-inventory.png) / [mobile](scope-cut-hono-390-inventory.png) | [desktop](scope-cut-hono-1280-invalid.png) / [mobile](scope-cut-hono-390-invalid.png) |
+| Kit | [desktop](scope-cut-kit-1280-inventory.png) / [mobile](scope-cut-kit-390-inventory.png) | [desktop](scope-cut-kit-1280-invalid.png) / [mobile](scope-cut-kit-390-invalid.png) |
+
+Actual-form serialization and handler resubmission regressions were RED for 14
+malformed/duplicate cases before the correction; the final focused selection is
+**234 passed / five existing opt-in skips**, including the unchanged legacy Kit
+source-contract test. These server round-trip cases are not a claim of a browser
+click reproduction. Browser cases cover the existing native GET/keyboard/CSP
+matrix. The pre-existing dark Kit header-brand contrast is outside this correction;
+notice contrast remains 17.44:1. No palette or masking change was made for it.
+
+This narrower composition needs the small same-feature raw/gzip allocations in
+[the superseding decision](../../../ci/budgets/decisions/kit-perf/2026-10-31-admin-utc-window-scope-cut.md).
+The original no-increase measurements below remain historical, not current
+ceilings. Independent selected-state/retry and allocation-test corrections are
+still pending; no complete-suite, exact-head CI, independent 5/5, staging or
+production claim is made by these screenshots.
+
+## Earlier captures and checks — historical
+
+### Captured and opened
 
 All twelve PNGs in this directory were opened for visual review. They use
 synthetic data only. `before-main-*` renders main `a6b2ee88`; `after-*` renders
