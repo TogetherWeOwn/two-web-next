@@ -1,5 +1,5 @@
 {
-  "$comment": "See ci/budgets/README.md; changing this ceiling needs a decision file in ci/budgets/decisions/bundle/.",
+  "$comment": "See ci/budgets/README.md; use existing headroom first, then add bounded byte admissions under ci/budgets/decisions/<unit>/.",
   "budgets": {
     "public/islands/join-widget.js": {
       "maxRawBytes": 1536,

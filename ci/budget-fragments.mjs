@@ -2,12 +2,10 @@
 // file under ci/budgets/kit/ and ci/budgets/bundle/, and this loader
 // aggregates them into the exact plan objects the checkers always consumed.
 //
-// Why: the old monoliths (ci/kit-perf-budget.json, ci/bundle-budget.json)
-// carried their whole decision history in one single-line $comment, so
-// every feature PR that moved a ceiling rewrote the same line and
-// conflicted with every merge. Now a ceiling change edits only its own
-// fragment and adds one new decision file under ci/budgets/decisions/;
-// see ci/budgets/README.md.
+// Tightening-only fragments establish bases. Each reviewed admission adds its own
+// decision file; effective byte ceilings are base + sum(delta_bytes), with no
+// shared JSON edit. ci/check-budget-admissions.mjs enforces immutable history,
+// aggregate per-PR caps and trusted rolling-window accounting.
 //
 // Semantics are fail-closed, matching the checkers' exit-2 contract:
 // a missing/empty fragment dir with no legacy file, malformed JSON, a
@@ -24,6 +22,13 @@
 import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { KIT_BUDGET_SECTIONS } from "./bundle-inventory.mjs";
+import {
+  applyAdmissions,
+  budgetUnits,
+  readAdmissions,
+  retiredBudgetUnits,
+} from "./budget-ledger.mjs";
+import { DEPLOY_BASE, loadDeployBase } from "./kit-deploy-budget.mjs";
 
 function isObject(value) {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -69,7 +74,7 @@ function fragmentNames(root, relativeDir) {
 // metadata in a fragment is a per-fragment note and is not carried into
 // the aggregate. Shape/ceiling validation stays with validateKitPlan in
 // ci/bundle-inventory.mjs, applied by the checker to the aggregate.
-export function loadKitBudget(root) {
+function loadKitBase(root) {
   const relativeDir = "ci/budgets/kit";
   if (!isDirectory(join(root, relativeDir))) {
     return JSON.parse(readFileSync(join(root, "ci/kit-perf-budget.json"), "utf8"));
@@ -151,7 +156,7 @@ export function loadKitBudget(root) {
 // instead of silently overriding a ceiling. Entry/ceiling validation
 // stays with the checker (check-bundle-budget.mjs) and with
 // ci/minify-assets.mjs failing closed on a read error.
-export function loadBundleBudgets(root) {
+function loadBundleBase(root) {
   const relativeDir = "ci/budgets/bundle";
   if (!isDirectory(join(root, relativeDir))) {
     return JSON.parse(readFileSync(join(root, "ci/bundle-budget.json"), "utf8")).budgets;
@@ -196,4 +201,24 @@ export function loadBundleBudgets(root) {
     }
   }
   return budgets;
+}
+
+// Effective ceiling = immutable fragment + every additive decision.
+export function loadKitBudget(root) {
+  return applyAdmissions(root, "kit", loadKitBase(root));
+}
+
+export function loadBundleBudgets(root) {
+  return applyAdmissions(root, "bundle", loadBundleBase(root));
+}
+
+export function loadBudgetBases(root) {
+  return new Map([
+    ...retiredBudgetUnits(readAdmissions(root)),
+    ...[...budgetUnits("kit", loadKitBase(root))].map(([key, value]) => [key, value.value]),
+    ...[...budgetUnits("bundle", loadBundleBase(root))].map(([key, value]) => [key, value.value]),
+    ...(existsSync(join(root, DEPLOY_BASE))
+      ? [...budgetUnits("deploy", loadDeployBase(root))].map(([key, value]) => [key, value.value])
+      : []),
+  ]);
 }

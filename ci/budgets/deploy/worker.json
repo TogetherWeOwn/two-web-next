@@ -1,0 +1,10 @@
+{
+  "$comment": "Artifact safeguard only. Conservative Kit proxy gates stay hard until representative built-Kit user-metric coverage exists. Base and measured-main evidence are frozen; add bounded decisions under deploy-worker-raw/.",
+  "worker": { "maxRawBytes": 3470040 },
+  "measuredMain": {
+    "sha": "def3274b31fd63de16924252ab4ad3be626e491c",
+    "rawBytesUpperBound": 3402000,
+    "evidence": "https://github.com/TogetherWeOwn/two-web-next/actions/runs/40622951138/job/122611446376",
+    "method": "Both preview and staging Wrangler 4.152.0 dry runs reported Total Upload: 3322.26 KiB. Upper bound ceil((3322.26 + 0.005) * 1024) = 3402000 B accounts for the printed rounding; base is ceil(upper bound * 1.02). This is retained CI evidence, not a newly executed build."
+  }
+}

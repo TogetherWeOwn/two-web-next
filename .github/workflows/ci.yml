@@ -455,6 +455,11 @@ jobs:
           cache-dependency-path: |
             package-lock.json
             web/package-lock.json
+      - name: Budget admission policy (HARD on PR and merge-group composition)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (github.event_name == 'pull_request' || github.event_name == 'merge_group' || github.event_name == 'push')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node ci/check-budget-admissions.mjs
       # The critical-CSS bundles are git-ignored build output (postinstall
       # regenerates them), but the static gates below run before `npm ci`,
       # and the security-pin gate reads the generated module's bytes. Needs
@@ -606,7 +611,7 @@ jobs:
           exit "$tier0_status"
       - name: Kit parity gate selftests
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/budget-fragments.test.mjs ci/bundle-inventory-acceptance.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs
+        run: node --test ci/budget-ledger.test.mjs ci/check-budget-admissions.test.mjs ci/check-kit-deploy-budget.test.mjs ci/budget-policy-wiring.test.mjs ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/budget-fragments.test.mjs ci/bundle-inventory-acceptance.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs
       - name: Web quality gate selftests (standards checks + summary formatter)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run standards:selftest
@@ -660,10 +665,16 @@ jobs:
         run: node ci/check-kit-perf.mjs
       - name: Kit Worker bundle dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
+        run: |
+          rm -rf "$RUNNER_TEMP/kit-worker-dry-run"
+          npx wrangler deploy --config web/wrangler.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-worker-dry-run"
+          node ci/check-kit-deploy-budget.mjs "$RUNNER_TEMP/kit-worker-dry-run"
       - name: Kit staging Worker config dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: npx wrangler deploy --config web/wrangler.staging.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-staging-worker-dry-run"
+        run: |
+          rm -rf "$RUNNER_TEMP/kit-staging-worker-dry-run"
+          npx wrangler deploy --config web/wrangler.staging.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-staging-worker-dry-run"
+          node ci/check-kit-deploy-budget.mjs "$RUNNER_TEMP/kit-staging-worker-dry-run"
       - name: Kit Worker runtime fixture (disposable Postgres, fake Discord)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/kit-worker-e2e.mjs
