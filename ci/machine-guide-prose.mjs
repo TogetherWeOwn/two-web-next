@@ -1,6 +1,6 @@
 // Markdown owns inline/block context; parse5 owns HTML tokenizer states and
 // entity consumption. Neither parser executes code or fetches destinations.
-import { HtmlRenderer, Parser } from "commonmark";
+import { HtmlRenderer, Node, Parser } from "commonmark";
 import { parseFragment } from "parse5";
 
 const BLOCKS = new Set([
@@ -132,6 +132,123 @@ function sourceText(node, lines) {
   return sourceLines.join("\n").trim();
 }
 
+// Section identity follows Markdown structure, not heading-shaped source lines.
+export function guideLimits(markdown) {
+  const tree = new Parser().parse(markdown);
+  const renderer = new HtmlRenderer();
+  const headings = [];
+  const walker = tree.walker();
+  let event;
+  while ((event = walker.next())) {
+    if (!event.entering || event.node.type !== "heading" || event.node.level > 2) continue;
+    const node = event.node;
+    headings.push({
+      node,
+      title: visibleBlocks(renderer.render(node))
+        .map((block) => block.text)
+        .join(" "),
+    });
+  }
+  const limits = headings.filter(({ node, title }) => node.level === 2 && title === "Limits");
+  const first = limits[0];
+  if (!first) return { count: 0, section: "", outside: markdown };
+  const lines = markdown.split("\n");
+  const start = first.node.sourcepos[0][0] - 1;
+  const bodyStart = first.node.sourcepos[1][0];
+  const next = headings
+    .slice(headings.indexOf(first) + 1)
+    .find((heading) => heading.node.parent === first.node.parent);
+  const end = next ? next.node.sourcepos[0][0] - 1 : lines.length;
+  return {
+    count: limits.length,
+    section: lines.slice(bodyStart, end).join("\n").replace(/\s+/g, " ").trim(),
+    outside: [...lines.slice(0, start), ...lines.slice(end)].join("\n"),
+  };
+}
+
+// CommonMark leaves GFM tables in paragraph nodes. Give recognized table
+// cells real DOM boundaries before applying any subject/predicate association.
+// Escaped pipes belong to a cell; code spans do not escape an unescaped pipe.
+function tableCells(line) {
+  const cells = [];
+  let cell = "";
+  for (let i = 0; i < line.length; i++) {
+    if (line[i] === "\\" && line[i + 1] === "|") {
+      cell += "|";
+      i++;
+    } else if (line[i] === "|") {
+      cells.push(cell.trim());
+      cell = "";
+    } else {
+      cell += line[i];
+      if (line[i] === "\\" && i + 1 < line.length) cell += line[++i];
+    }
+  }
+  cells.push(cell.trim());
+  if (line.trimStart().startsWith("|")) cells.shift();
+  if (line.trimEnd().endsWith("|") && cells.at(-1) === "") cells.pop();
+  return cells;
+}
+
+function markdownTree(markdown) {
+  const parser = new Parser();
+  const tree = parser.parse(markdown);
+  const renderer = new HtmlRenderer();
+  const renderInline = (text) => {
+    // The pinned CommonMark inline pass retains the document's reference map
+    // without treating a cell's leading '#' or '-' as block syntax.
+    const document = new Node("document");
+    const inline = new Node("paragraph");
+    document.appendChild(inline);
+    inline._string_content = text;
+    parser.inlineParser.parse(inline);
+    return renderer.render(inline);
+  };
+  const lines = markdown.split("\n");
+  const paragraphs = [];
+  const walker = tree.walker();
+  let event;
+  while ((event = walker.next()))
+    if (event.entering && event.node.type === "paragraph") paragraphs.push(event.node);
+  for (const node of paragraphs) {
+    let quoteDepth = 0;
+    for (let parent = node.parent; parent; parent = parent.parent)
+      if (parent.type === "block_quote") quoteDepth++;
+    const raw = sourceText(node, lines)
+      .split("\n")
+      .map((line, index) => {
+        // sourcepos removes the first line's container prefix; continuation
+        // lines still carry the ancestor blockquotes, not cell content.
+        if (index > 0)
+          for (let depth = 0; depth < quoteDepth; depth++) line = line.replace(/^\s*>\s?/, "");
+        return line;
+      });
+    const delimiter = raw.findIndex((line, index) => {
+      if (index === 0 || !raw[index - 1].includes("|")) return false;
+      const cells = tableCells(line);
+      return (
+        cells.length === tableCells(raw[index - 1]).length &&
+        cells.every((cell) => /^:?-+:?$/.test(cell))
+      );
+    });
+    if (delimiter < 0) continue;
+    const header = tableCells(raw[delimiter - 1]);
+    const renderRow = (cells, tag) =>
+      `<tr>${header
+        .map((_, index) => `<${tag}>${renderInline(cells[index] ?? "")}</${tag}>`)
+        .join("")}</tr>`;
+    const prefix = raw.slice(0, delimiter - 1).join("\n");
+    const table = new Node("html_block", node.sourcepos);
+    table.literal = `${prefix ? renderInline(prefix) : ""}<table>${renderRow(header, "th")}${raw
+      .slice(delimiter + 1)
+      .map((row) => renderRow(tableCells(row), "td"))
+      .join("")}</table>\n`;
+    node.insertBefore(table);
+    node.unlink();
+  }
+  return tree;
+}
+
 function mergeRange(left, right) {
   return left && right
     ? { start: Math.min(left.start, right.start), end: Math.max(left.end, right.end) }
@@ -196,7 +313,7 @@ export function guideStatements(
   awaitsValue = () => false,
   continuesCount = () => false,
 ) {
-  const tree = new Parser().parse(markdown);
+  const tree = markdownTree(markdown);
   const renderer = new HtmlRenderer();
   // One complete DOM preserves template/RAWTEXT ancestors and continuity
   // across CommonMark nodes. Individual fragments cannot establish visibility.

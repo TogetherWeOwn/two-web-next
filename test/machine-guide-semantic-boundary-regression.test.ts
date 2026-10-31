@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { compileMachineContractFixture } from "./machine-contract-fixture";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const guide = readFileSync(join(repo, "docs/machine-interface.md"), "utf8");
@@ -30,6 +31,7 @@ describe("machine guide quantitative complements and local clauses (offline)", (
     for (const file of ["package.json", "tsconfig.json"])
       copyFileSync(join(repo, file), join(root, file));
     symlinkSync(join(repo, "node_modules"), join(root, "node_modules"), "dir");
+    compileMachineContractFixture(root);
   });
   afterAll(() => {
     if (root) rmSync(root, { recursive: true, force: true });
@@ -37,14 +39,35 @@ describe("machine guide quantitative complements and local clauses (offline)", (
 
   function run(prose: string) {
     writeFileSync(join(root, "docs/machine-interface.md"), `${guide}\n${prose}\n`);
-    return spawnSync(
-      process.execPath,
-      ["--import", "tsx", "ci/check-machine-contract.mjs", "--format", "json"],
-      { cwd: root, env, encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024 },
-    );
+    return spawnSync(process.execPath, ["ci/check-machine-contract.mjs", "--format", "json"], {
+      cwd: root,
+      env,
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
   }
 
   it.each([
+    ...["list_events API", "MCP API", "get_event tool"].flatMap((owner) => [
+      `In the ${owner}, there are 30 rows per page.`,
+      `For the ${owner}, there are 30 rows per page.`,
+      `In the ${owner} there are 30 rows per page.`,
+      `For the ${owner} there are 30 rows per page.`,
+    ]),
+    ...["per list_events page", "in each list_events page", "per API page"].map(
+      (scope) =>
+        `Each list_events response contains one row per event and 30 rows returned ${scope}.`,
+    ),
+    ...["30", "thirty", "(30)"].map(
+      (value) =>
+        `<div>Each list_events response contains ${value}</div><div>rows per response.</div>`,
+    ),
+    ...["64", "sixty-four"].map(
+      (value) =>
+        `<div>Each list_events result is ${value}</div><div>${value === "64" ? "KB" : "megabytes"}.</div>`,
+    ),
+    "<div>Each list_events result is one</div><div>megabyte.</div>",
     ...["with all fields", "or more", "including its structuredContent"].flatMap((suffix) => [
       `Every event result is one megabyte ${suffix}.`,
       `Every event CallToolResult is one megabyte ${suffix}.`,
@@ -145,6 +168,11 @@ describe("machine guide quantitative complements and local clauses (offline)", (
   });
 
   it.each([
+    "In the list_events API, there are 30 examples in the guide.",
+    "In the seating chart, there are 30 rows per page.",
+    "Each response contains one row per event and 30 rows returned per seating-chart page.",
+    "<ul><li>Each list_events response contains 30</li><li>rows per response.</li></ul>",
+    "<table><tr><td>Each list_events result is 64</td><td>KB.</td></tr></table>",
     ...[
       "Each response contains one row per event",
       "Collections contain 30 items across two pages",

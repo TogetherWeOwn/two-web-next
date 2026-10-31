@@ -8,10 +8,10 @@
 // the failing assertions on stdout otherwise. `--format json` prints one
 // deterministic receipt instead ({ version, verdict, error_code, next_action,
 // failures }) with the same exit codes, bounded to 32 KiB.
-import { existsSync, readFileSync } from "node:fs";
+import { closeSync, constants, existsSync, fstatSync, openSync, readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { InMemoryTransport } from "@modelcontextprotocol/server";
-import { guideStatements } from "./machine-guide-prose.mjs";
+import { guideLimits, guideStatements } from "./machine-guide-prose.mjs";
 import { llmsTxt } from "../src/ai-friendly/md";
 import {
   communitySnapshotOutputSchema,
@@ -45,6 +45,8 @@ const failures = [];
 const check = (name, ok) => {
   if (!ok) failures.push(name);
 };
+const scalarPrefix = (value, limit) =>
+  Array.from(String(value).toWellFormed()).slice(0, limit).join("");
 
 const sorted = (fields) => [...(fields ?? [])].sort();
 const sameKeys = (a, b) => JSON.stringify(sorted(a)) === JSON.stringify(sorted(b));
@@ -270,8 +272,21 @@ const REALISTIC_COMMUNITY = {
 const NULLISH_COMMUNITY = { member_count: null, online_count: null, ranks: [] };
 
 const guidePath = `${repoRoot}docs/machine-interface.md`;
-check("guide docs/machine-interface.md exists", existsSync(guidePath));
-const guide = existsSync(guidePath) ? readFileSync(guidePath, "utf8") : "";
+const guideExists = existsSync(guidePath);
+check("guide docs/machine-interface.md exists", guideExists);
+let guide = "";
+if (guideExists) {
+  let fd;
+  try {
+    fd = openSync(guidePath, constants.O_RDONLY | constants.O_NONBLOCK);
+    if (!fstatSync(fd).isFile()) throw new Error("not a regular file");
+    guide = readFileSync(fd, "utf8");
+  } catch {
+    check("guide docs/machine-interface.md is readable", false);
+  } finally {
+    if (fd !== undefined) closeSync(fd);
+  }
+}
 check("guide is nonempty", guide.trim().length > 0);
 check("guide stays short (<=120 lines)", guide.split("\n").length <= 120);
 for (const code of ["invalid_request", "not_found", "rate_limited", "unavailable", "internal"]) {
@@ -304,17 +319,14 @@ const CANONICAL_LIMITS = [
   "- Unknown counts read as `null`, never `0` (`going_count`, `going_occupancy`, `member_count`, `online_count`).",
 ].join(" ");
 const normalizedGuide = guide.replace(/\r\n/g, "\n");
-const limitsMatch = /(?:^|\n)## Limits[\t ]*\n([\s\S]*?)(?=\n##[\t ]|$)/.exec(normalizedGuide);
-const limitsSection = (limitsMatch?.[1] ?? "").replace(/\s+/g, " ").trim();
+const limits = guideLimits(normalizedGuide);
+const limitsSection = limits.section;
 check(
   "guide `## Limits` section states the canonical boundary exactly",
   limitsSection === CANONICAL_LIMITS,
 );
-check(
-  "guide has exactly one `## Limits` section",
-  (normalizedGuide.match(/^## Limits[\t ]*$/gm) ?? []).length === 1,
-);
-let outsideLimits = limitsMatch ? normalizedGuide.replace(limitsMatch[0], "\n") : normalizedGuide;
+check("guide has exactly one `## Limits` section", limits.count === 1);
+let outsideLimits = limits.outside;
 // Existing parity prose describes equality, not a size boundary.
 outsideLimits = outsideLimits.replace(/Same DTOs as the MCP\s+tools,\s+byte for byte\./, " ");
 // A number with a byte unit or the bare ceiling is a size claim on its own.
@@ -421,7 +433,13 @@ function existentialResultCount(text, count) {
   const explicitScope = PER_RESULT_SCOPE.exec(scope);
   if (explicitScope && !/\bpage$/i.test(explicitScope[0])) return true;
   if (/per[\s-]+response\b/i.test(count[0])) return true;
-  if (domain) return PER_RESULT_SCOPE.test(` ${domain}`);
+  if (domain) {
+    const apiOwner = new RegExp(
+      String.raw`^(?:in|for)\s+(?:the\s+)?${RESULT_QUALIFIERS}(?:API|tool|endpoint)$`,
+      "i",
+    ).test(domain.trim());
+    return PER_RESULT_SCOPE.test(` ${domain}`) || (apiOwner && perResultCount(count, tail));
+  }
   return perResultCount(count, tail);
 }
 const SINGLE_RESULT_SUBJECT = new RegExp(
@@ -438,6 +456,10 @@ const WORD_SIZE_DECLARATION = new RegExp(
   "i",
 );
 const WORD_SIZE_PENDING = new RegExp(String.raw`${WORD_SIZE_PREFIX}${COUNT_PREFIX}$`, "i");
+const PENDING_SCALAR = new RegExp(
+  String.raw`(?:${RESULT_COUNT_SUBJECT}${COUNT_VERB_PREFIX}|${EXISTENTIAL_PREFIX}|${WORD_SIZE_PREFIX})${COUNT_PREFIX}${COUNT_VALUE}$`,
+  "i",
+);
 const SIZE_PREDICATE =
   /\b(?:siz(?:e|es|ing)|lengths?|budgets?|caps?|capped|limits?|limited|uncapped|unbounded|unlimited|bounds?|bounded|ceilings?|twice|double[sd]?|duplicat\w*|escap\w*|measur(?:e[sd]?|ing|ements?)|estimat\w*)\b|\b\d+\s*[x×](?=\W|$)/i;
 const AGGREGATE_SCOPE_PHRASE = String.raw`(?:(?:\s+in\s+total\s*,?)?\s+across\s+(?:(?:all|both)\s+)?(?:the\s+)?(?:(?:first|last|next|previous)\s+)?(?:(?:multiple|several|many|some|\d+|${COUNT_WORD})\s+)?pages\b|\s+per[\s-]+event\b)`;
@@ -457,7 +479,7 @@ function inheritedCountAdjunct(tail) {
   const modifier = tail.slice(participle[0].length);
   const scope = PER_RESULT_SCOPE.exec(modifier);
   return (
-    (scope && !/\bpage$/i.test(scope[0])) ||
+    (scope && !/^\s+of\b/i.test(modifier.slice(scope[0].length))) ||
     /^\s+(?:in|from)\s+(?:its|the)\s+(?:data\s+)?array\b/i.test(modifier)
   );
 }
@@ -491,6 +513,7 @@ function countObjects(text, count) {
 // explain failures but never decide whether a recognized claim is refused.
 try {
   const completesValue = (candidate) =>
+    SIZE_LITERAL.test(candidate) ||
     WORD_SIZE_DECLARATION.test(candidate) ||
     COUNT_BOUNDARY_COMPLETE.test(candidate) ||
     PAGE_SIZE.test(candidate) ||
@@ -512,7 +535,8 @@ try {
     (RESULT_COUNT_PENDING.test(candidate) && candidate.matchAll(RESULT_COUNT).next().done) ||
     EXISTENTIAL_PENDING.test(candidate) ||
     PAGE_SIZE_PENDING.test(candidate) ||
-    WORD_SIZE_PENDING.test(candidate);
+    WORD_SIZE_PENDING.test(candidate) ||
+    PENDING_SCALAR.test(candidate);
   const continuesCount = (left, right) => {
     if (COUNT_BOUNDARY_SCALAR.test(left) && COUNT_COMPLEMENT.test(right)) return true;
     const count = Array.from(left.matchAll(RESULT_COUNT)).at(-1);
@@ -570,7 +594,7 @@ try {
       (RESULT_SUBJECT.test(sentence.text) && SIZE_PREDICATE.test(sentence.text))
     )
       check(
-        `guide states a size or measurement claim outside the canonical Limits: "${sentence.raw.slice(0, 80)}"${sentence.context ? ` (visible: "${sentence.context.slice(0, 80)}")` : ""}`,
+        `guide states a size or measurement claim outside the canonical Limits: "${scalarPrefix(sentence.raw, 80)}"${sentence.context ? ` (visible: "${scalarPrefix(sentence.context, 80)}")` : ""}`,
         false,
       );
   }
@@ -905,7 +929,7 @@ if (jsonMode) {
   });
   const listed = failures
     .slice(0, MAX_RECEIPT_FAILURES)
-    .map((failure) => String(failure).slice(0, MAX_FAILURE_CHARS));
+    .map((failure) => scalarPrefix(failure, MAX_FAILURE_CHARS));
   // The byte bound is enforced on the exact stdout bytes (the JSON plus the
   // `console.log` newline), so it holds whatever the two caps above are set to.
   while (
@@ -914,14 +938,13 @@ if (jsonMode) {
   )
     listed.pop();
   console.log(JSON.stringify(receipt(listed)));
-  process.exit(failed ? 1 : 0);
-}
-
-if (failures.length > 0) {
+  process.exitCode = failed ? 1 : 0;
+} else if (failures.length > 0) {
   console.log("machine-contract check FAILED:");
   for (const failure of failures) console.log(`- ${failure}`);
-  process.exit(1);
+  process.exitCode = 1;
+} else {
+  console.log(
+    "machine-contract check passed: guide, llms.txt and 4 advertised output schemas match the canonical contract.",
+  );
 }
-console.log(
-  "machine-contract check passed: guide, llms.txt and 4 advertised output schemas match the canonical contract.",
-);

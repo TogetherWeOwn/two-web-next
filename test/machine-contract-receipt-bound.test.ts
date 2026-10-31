@@ -16,6 +16,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
+import { compileMachineContractFixture } from "./machine-contract-fixture";
 import { createReceiptPool } from "./machine-contract-receipt-pool";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
@@ -45,6 +46,7 @@ describe.concurrent("machine contract: paraphrases and receipt bound (offline)",
     for (const file of ["package.json", "tsconfig.json"])
       copyFileSync(join(repo, file), join(root, file));
     symlinkSync(join(repo, "node_modules"), join(root, "node_modules"), "dir");
+    compileMachineContractFixture(root);
   });
   afterAll(async () => {
     try {
@@ -83,7 +85,7 @@ describe.concurrent("machine contract: paraphrases and receipt bound (offline)",
         }>((resolve) => {
           execFile(
             process.execPath,
-            ["--import", "tsx", "ci/check-machine-contract.mjs", "--format", "json"],
+            ["ci/check-machine-contract.mjs", "--format", "json"],
             { cwd: fixture, env, encoding: "utf8", timeout: 30_000, maxBuffer: 16 * 1024 * 1024 },
             (error, stdout, stderr) =>
               resolve({

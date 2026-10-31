@@ -22,7 +22,7 @@ vi.mock("node:child_process", () => ({
     callback: (error: Error & { code: number }, stdout: string, stderr: string) => void,
   ) => {
     expect(executable).toBe(process.execPath);
-    expect(args).toEqual(["--import", "tsx", "ci/check-machine-contract.mjs", "--format", "json"]);
+    expect(args).toEqual(["ci/check-machine-contract.mjs", "--format", "json"]);
     expect(options.timeout).toBe(30_000);
     expect(options.maxBuffer).toBe(16 * 1024 * 1024);
     const text = readFileSync(join(options.cwd, "docs/machine-interface.md"), "utf8");

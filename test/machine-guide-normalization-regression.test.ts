@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { fileURLToPath, URL } from "node:url";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { compileMachineContractFixture } from "./machine-contract-fixture";
 
 const repo = fileURLToPath(new URL("../", import.meta.url));
 const guide = readFileSync(join(repo, "docs/machine-interface.md"), "utf8");
@@ -30,27 +31,91 @@ describe("machine guide Markdown contexts and declarations (offline)", () => {
     for (const file of ["package.json", "tsconfig.json"])
       copyFileSync(join(repo, file), join(root, file));
     symlinkSync(join(repo, "node_modules"), join(root, "node_modules"), "dir");
+    compileMachineContractFixture(root);
   });
   afterAll(() => {
     if (root) rmSync(root, { recursive: true, force: true });
   });
 
-  function run(prose: string) {
-    writeFileSync(join(root, "docs/machine-interface.md"), `${guide}\n${prose}\n`);
-    return spawnSync(
-      process.execPath,
-      ["--import", "tsx", "ci/check-machine-contract.mjs", "--format", "json"],
-      {
-        cwd: root,
-        env,
-        encoding: "utf8",
-        timeout: 30_000,
-        maxBuffer: 16 * 1024 * 1024,
-      },
-    );
+  function run(prose: string, base = guide) {
+    writeFileSync(join(root, "docs/machine-interface.md"), `${base}\n${prose}\n`);
+    return spawnSync(process.execPath, ["ci/check-machine-contract.mjs", "--format", "json"], {
+      cwd: root,
+      env,
+      encoding: "utf8",
+      timeout: 30_000,
+      maxBuffer: 16 * 1024 * 1024,
+    });
   }
 
+  it("does not let a nested heading end the canonical Limits section", () => {
+    const nested = "> ## Notes\n>\n> Events may include drafts and cancelled rows.\n\n";
+    const result = run("", guide.replace("## Errors", `${nested}## Errors`));
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout).failures).toContain(
+      "guide `## Limits` section states the canonical boundary exactly",
+    );
+  });
+
+  it.each(["> ", "> > ", "- "])("keeps nested GFM table scopes for %j", (prefix) => {
+    const lines = ["| Topic | Note |", "| --- | --- |", "| Event results | Limited availability |"];
+    const prose = lines
+      .map((line, index) => `${index === 0 || prefix !== "- " ? prefix : "  "}${line}`)
+      .join("\n");
+    const result = run(prose);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).failures).toEqual([]);
+  });
+
+  it.each([
+    "## Limits ##",
+    "Limits\n------",
+    "## **Limits**",
+    "## [Limits](https://example.test)",
+    "## Li&#109;its",
+  ])("counts the parsed duplicate Limits heading %j", (heading) => {
+    const result = run(`${heading}\n\nEvents may include drafts and cancelled rows.`);
+    expect(result.status, result.stdout + result.stderr).toBe(1);
+    expect(JSON.parse(result.stdout).failures).toContain(
+      "guide has exactly one `## Limits` section",
+    );
+  });
+
+  it.each(["```md\n## Limits\n```", "~~~md\n## Limits\n~~~", "    ## Limits"])(
+    "does not count the literal heading %j",
+    (example) => {
+      const result = run(example);
+      expect(result.status, result.stdout + result.stderr).toBe(0);
+      expect(JSON.parse(result.stdout).failures).toEqual([]);
+    },
+  );
+
+  it.each([
+    "| Topic | Note |\n| --- | --- |\n| Event results | Schema matches |\n| Venues | Limited availability |",
+    "Topic | Note\n--- | ---\nEvent results | Schema matches\nVenues | Limited availability",
+    "| Event results | Limited availability |\n| --- | --- |",
+    "| Topic | Note |\n| :--- | ---: |\n| Event results | Limited availability |",
+    "| Topic | Note |\n| --- | --- |\n| [Event results](https://example.test) | Limited availability |",
+    "| Topic | Note |\n| --- | --- |\n| Event results | Named a\\|b; limited availability |",
+    "| Topic | Note |\n| --- | --- |\n| Each response contains 30 | rows per response |",
+  ])("keeps GFM table cells and rows independent: %j", (table) => {
+    const result = run(table);
+    expect(result.status, result.stdout + result.stderr).toBe(0);
+    expect(JSON.parse(result.stdout).failures).toEqual([]);
+  });
+
   const refused = [
+    ...["[response][ref]", "[response][]", "[response]"].map(
+      (subject) =>
+        `| Info | Note |\n| --- | --- |\n| Stuff | Each ${subject} contains 30 rows per response. |\n\n[ref]: https://example.test/\n[response]: https://example.test/`,
+    ),
+    "Each [response][ref] contains 30 rows per response.\n| Topic | Note |\n| --- | --- |\n| Venue | Schema matches |\n\n[ref]: https://example.test/",
+    "| Topic | Note |\n| --- | --- |\n| Limits | Each response contains 30 rows per response. |",
+    "| Topic | Each response contains 30 rows per response. |\n| --- | --- |",
+    "| Topic | Note |\n| --- | --- |\n| Limits | Responses are unlimited. |",
+    "| Topic | Note |\n| --- | --- |\n| Limits | Responses occupy 64 KB. |",
+    "| Topic | Note |\n| --- | --- |\n| Limits | Responses \\| are unlimited. |",
+    "```\n## Limits\n```\n\nRows are limited to 30.",
     "Link [hint](https://example.test/a`b). [Rows](https://example.test/docs) are limited to 30. See `help`.",
     "Link [hint](https://example.test/a%60b). [Rows](https://example.test/docs) are limited to 30. See `help`.",
     "A hint <!-- a ` marker --> [Rows](https://example.test/docs) are limited to 30. See `help`.",
