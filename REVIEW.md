@@ -28,10 +28,8 @@ Severity is impact times confidence, after the disproof pass below:
   unverified instead of labeling a conjecture a confirmed bug.
 - **Security exception:** never drop or downgrade a plausible security issue
   for lack of full verification; reserve Critical for a traced, verified path.
-  If the vulnerable code is new in this unmerged PR, post a security Warning
-  with the class, location and unverified step, but no exploit steps or
-  payloads. If it affects code already on `main` or deployed, do not describe
-  it publicly: post only a non-sensitive notice that a private report under
+  Do not describe a suspected vulnerability, exposed secret, or sensitive
+  data publicly: post only a non-sensitive notice that a private report under
   `SECURITY.md` is required.
 
 ## Disproof pass (before posting any finding)
@@ -104,8 +102,8 @@ A missing test alone is not a runtime bug. These are blocking findings:
 - **Rendering user/member content** (`src/events/`, `src/pages.tsx`,
   islands): unescaped interpolation into HTML, calendar/feed output, or
   attributes is a Critical security finding only with a traced path from an
-  attacker-controlled value to the unescaped sink; otherwise report the
-  untraced hop privately as a security Warning, per `SECURITY.md`.
+  attacker-controlled value to the unescaped sink; either way it is reported
+  privately per the Security exception above.
 
 ## Skip
 
