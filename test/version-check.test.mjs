@@ -34,7 +34,10 @@ test("versionMismatch names each way the body can fail", () => {
     [{ sha: COMMIT, deployedAt: null }, /deployedAt is not an ISO 8601 UTC timestamp/],
     [{ sha: COMMIT, deployedAt: "soon" }, /deployedAt is not an ISO 8601 UTC timestamp/],
     [{ sha: COMMIT, deployedAt: "2026" }, /deployedAt is not an ISO 8601 UTC timestamp/],
-    [{ sha: COMMIT, deployedAt: "Oct 31 2026 12:00 GMT" }, /deployedAt is not an ISO 8601 UTC timestamp/],
+    [
+      { sha: COMMIT, deployedAt: "Oct 31 2026 12:00 GMT" },
+      /deployedAt is not an ISO 8601 UTC timestamp/,
+    ],
     [{ sha: COMMIT, deployedAt: 1793448000000 }, /deployedAt is not an ISO 8601 UTC timestamp/],
     [{ sha: COMMIT, deployedAt: "2026-10-31T12:10:00.000Z" }, /in the future/],
   ];
