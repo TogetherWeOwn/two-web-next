@@ -1,14 +1,13 @@
-// Acceptance: Kit outage headers point at Discord and the generic 404 restores search.
+// Acceptance: Kit outage headers point at Discord and the generic 404 keeps search.
 //
-// Today web/src/lib/ErrorShell.svelte renders <Shell> with no header override,
-// so every Kit error status falls back to the guest header: "Sign in with
-// Discord" pointing at the ordinary sign-in (/auth/discord, a 302 to Discord;
-// explicit join/RSVP entries use /join/discord instead). On
-// 403/429/500/503 that start is dead or a loop — Hono deliberately renders
-// those headers with an invite "Open Discord" CTA instead
-// (src/error-pages.tsx, src/page-shell.tsx cta branch) — and Kit's generic
-// 404 branch offers links but no search form, while Hono's NotFoundPage and
-// Kit's own EventMissing twin both carry one (GET /events?q=).
+// Without a header override, web/src/lib/ErrorShell.svelte falls back to the
+// guest header on every Kit error status: "Sign in with Discord" pointing at
+// the ordinary sign-in (/auth/discord, a 302 to Discord; explicit join/RSVP
+// entries use /join/discord instead). On 403/429/500/503 that start is dead
+// or a loop — Hono deliberately renders those headers with an invite "Open
+// Discord" CTA instead (src/error-pages.tsx, src/page-shell.tsx cta branch).
+// The 404 search form (GET /events?q=) shipped in #1483; this suite pins it
+// together with the header so the two recovery paths stay consistent.
 //
 // Locked contract (the paired build satisfies without editing this file):
 // - 403/429/500/503 headers render the invite "Open Discord" CTA with the
