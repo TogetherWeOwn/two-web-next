@@ -75,6 +75,7 @@ export const EXCLUSIONS = {
   "/join/discord": "Join OAuth initiation: test/join.test.ts",
   "/join/callback": "Join OAuth callback: test/join.test.ts",
   "/up": "Operational readiness: test/up.test.ts",
+  "/version": "Deploy commit and upload time: test/version.test.ts",
 };
 export const AUXILIARY_GETS = ["/.well-known/security.txt", "/members", "/members/"];
 const GATED_LABELS = new Set([

@@ -11,8 +11,9 @@ export type Env = AgentEventsEnv & {
   // staging and production web Workers and the staging jobs Worker; absent
   // locally, so `/up` carries no revision and log release fields stay null
   // there. `id` is the Version ID that `wrangler rollback` takes; `tag`
-  // carries the deploy commit (src/release-tag.ts parses both tag shapes).
-  CF_VERSION_METADATA?: Partial<Pick<WorkerVersionMetadata, "id" | "tag">>;
+  // carries the deploy commit (src/release-tag.ts parses both tag shapes);
+  // `timestamp` is the Version's upload time, read only by `/version`.
+  CF_VERSION_METADATA?: Partial<Pick<WorkerVersionMetadata, "id" | "tag" | "timestamp">>;
   DISCORD_CLIENT_ID: string;
   DISCORD_GUILD_ID: string;
   DISCORD_INVITE_URL: string;

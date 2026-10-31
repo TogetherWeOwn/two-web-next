@@ -418,8 +418,9 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // merged builds 336673 and 336672; margin 223; lower 336640 rejects by 33),
 // the host/join 337152 ceiling, the ongoing-night 337408 ceiling, and the
 // honest roster/venue 337664 ceiling on current main (two composed builds
-// 337545 and 337547; main's 337408 rejects by 137 and 139).
-// The MCP result-budget composition adds the 337920 ceiling (measured 337750; 337664 rejects by 86).
+// 337545 and 337547; main's 337408 rejects by 137 and 139), and the
+// GET /version 337920 ceiling on current main (two composed builds 337717
+// and 337718; main's 337664 rejects by 53 and 54).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -444,7 +445,7 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   337152: { intervalBytes: 337015, exactBytes: 337152, overBytes: 337153 },
   337408: { intervalBytes: 337286, exactBytes: 337408, overBytes: 337409 },
   337664: { intervalBytes: 337545, exactBytes: 337664, overBytes: 337665 },
-  337920: { intervalBytes: 337750, exactBytes: 337920, overBytes: 337921 },
+  337920: { intervalBytes: 337718, exactBytes: 337920, overBytes: 337921 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
@@ -817,7 +818,7 @@ function shippingServerGzipCases() {
         name: "server gzip newly allowed interval",
         group: "kit.server.js",
         axis: "gzip",
-        bytes: 337750,
+        bytes: 337718,
       },
       { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 337920 },
       {
@@ -999,20 +1000,20 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
   ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   ...shippingClientGzipCases(),
-  // MCP result-budget composition: 1207360 raw; the previous 1207040 cap rejects.
+  // MCP result-budget composition on /version main: 1207640 raw; the previous 1207552 cap rejects.
   {
     name: "server raw newly allowed interval",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1207360,
+    bytes: 1207640,
   },
-  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1207552 },
+  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1207808 },
   {
     name: "server raw one byte over",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1207553,
-    ceiling: 1207552,
+    bytes: 1207809,
+    ceiling: 1207808,
     breach: true,
   },
   {

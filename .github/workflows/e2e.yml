@@ -11,7 +11,7 @@ name: e2e
 # journeys. The pull_request trigger stays unfiltered so this workflow always
 # reports. The required check is the `e2e-ok` aggregator below, not
 # `browser-smoke`: the live required set is `ci-ok`, `gitleaks`, `e2e-ok`,
-# `pr-lint`, plus the Paperclip Review app check. A scope-verdict skip passes
+# `pr-lint`, `CodeRabbit` and `Devin Review`. A scope-verdict skip passes
 # through the aggregator instead of blocking a merge.
 
 on:

@@ -77,6 +77,7 @@ const OTHER_READS = [
   "/robots.txt",
   "/.well-known/security.txt",
   "/up",
+  "/version", // Deploy commit and upload time from version metadata; no DB, no member data.
   "/auth/discord",
   "/auth/discord/callback",
   "/auth/discord/redirect",
