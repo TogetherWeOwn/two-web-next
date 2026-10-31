@@ -47,6 +47,8 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check, no deploy
 
 Run tests only against the disposable test database or local fixtures described in the README, with `DATABASE_URL` set to that URL. Apply migrations with `npm run db:migrate` and validate history with `npm run db:check`. Never point tests, probes, or migrations at a production or staging database. If a credential fails, stop and report it. Do not try another one.
 
+To reproduce CI's Vitest gates with disposable Postgres 17 containers, run `bin/local-ci.sh -- <test files>` for the affected files, then `bin/local-ci.sh -j 8` for the full gate. See "Verify a change before opening a PR" in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## UI changes
 
 A user-visible change to a page, component, CSS, typography, navigation, form, or responsive layout follows this loop. AI contributors apply `frontend-ui-engineering`, then `product-ui-design-loop`, and add `frontend-design` for a new visual direction, whenever those skills are available to them.
