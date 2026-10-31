@@ -68,6 +68,7 @@ describe("versionBody", () => {
     ["an unparseable timestamp", { tag: SHA, timestamp: "yesterday" }, SHA, null],
     ["an empty timestamp", { tag: SHA, timestamp: "" }, SHA, null],
     ["a numeric timestamp", { tag: SHA, timestamp: 1 }, SHA, null],
+    ["the epoch", { tag: SHA, timestamp: "1970-01-01T00:00:00Z" }, SHA, null],
     ["absent metadata", undefined, null, null],
   ])("never echoes %s", (_name, meta, sha, deployedAt) => {
     expect(versionBody(meta)).toEqual({ sha, deployedAt });
