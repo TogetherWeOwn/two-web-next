@@ -1537,7 +1537,9 @@ describe("retention ledger L8b core member tables", () => {
     const erasure = read("src/member-erasure.ts");
     expect(erasure).toContain("delete from users where id = ${discordId} returning 1");
     expect(erasure).toContain("delete from profiles where user_id = ${discordId} returning 1");
-    expect(erasure).toContain("delete from rsvps where user_id = ${discordId} returning 1");
+    expect(erasure).toContain(
+      "delete from rsvps where user_id = ${discordId} returning event_id, status",
+    );
     // The roster write refreshes in place and never deletes.
     const roster = read("src/db/roster.ts");
     expect(roster).toContain("ON CONFLICT (id) DO UPDATE");
