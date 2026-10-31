@@ -277,9 +277,10 @@ npm run check                    # lint + format + typecheck + config drift + te
 ### Verify a change before opening a PR
 
 `bin/local-ci.sh` (also `npm run ci:local --`) reproduces the Vitest gates of
-the CI `check` job on any host with Docker. It needs no `.dev.vars`, no
-credentials and no network access beyond pulling `node:24-bookworm` and
-`postgres:17`. Each shard gets its own disposable Postgres 17 container on its
+the CI `check` job on any host with Docker. It needs no `.dev.vars` and no
+credentials. Network access is needed only to pull `node:24-bookworm` and
+`postgres:17`, and for `npm ci` to reach the npm registry when the local npm
+cache is cold. Each shard gets its own disposable Postgres 17 container on its
 own Docker network, aliased `agent-testdb` so the `testDatabaseUrl` guard
 accepts it. Nothing is published on host ports. Suites run in the CI job image
 as your user. Containers and networks are removed on exit.
@@ -295,10 +296,10 @@ bin/local-ci.sh -j 8 --no-coverage --no-static                  # suite only, qu
   given files or filters. Start with the test files beside the code you changed
   and the files that import it (`git grep -l <module> test/`).
 - A full run does lint, typecheck, migrations, and `vitest run --coverage`
-  split over `-j N` shards (default `nproc / 4`, at most 8). It then merges the
+  split over `-j N` shards (default `nproc / 4` capped at 8; up to 16 explicitly). It then merges the
   shard reports, so pass counts and coverage thresholds cover the whole suite.
   Last, it reruns the hotzone suite under `TZ=America/Los_Angeles` and runs Tier-0.
-  Shard logs are in `.local-ci/logs/`.
+  Shard logs are in `.local-ci/<run>/logs/`, so concurrent runs never share files.
 - `npm ci` (root and `web/`) runs inside the CI image the first time and again
   whenever a lockfile changes. `--install` forces it.
 - Run the full gate before you open a PR that touches `src/`, `test/` or

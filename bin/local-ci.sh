@@ -19,7 +19,8 @@ split over N shards with merged coverage thresholds, the hotzone suite under
 TZ=America/Los_Angeles, and Tier-0. With files: migrations + only those files.
 
 Options:
-  -j, --shards N   Parallel shards, one Postgres each (default: nproc/4, max 8)
+  -j, --shards N   Parallel shards, one Postgres each (default: nproc/4 capped
+                   at 8; explicit values up to 16)
   --no-coverage    Skip coverage collection and thresholds (faster)
   --no-static      Skip lint and typecheck
   --install        Force `npm ci` for root and web/ (default: only when a
@@ -37,7 +38,7 @@ EOF
 
 NODE_IMAGE=node:24-bookworm
 PG_IMAGE=postgres:17
-cpus=$(nproc 2>/dev/null || echo 4)
+cpus=$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)
 shards=$((cpus / 4))
 ((shards < 1)) && shards=1
 ((shards > 8)) && shards=8
@@ -47,18 +48,18 @@ force_install=0
 keep=0
 files=()
 
+set_shards() {
+  if ! [[ $1 =~ ^[1-9][0-9]?$ ]] || (($1 > 16)); then
+    echo "local-ci: --shards needs an integer from 1 to 16" >&2
+    exit 2
+  fi
+  shards=$1
+}
+
 while (($#)); do
   case "$1" in
-    -j | --shards)
-      [[ ${2:-} =~ ^[1-9][0-9]*$ ]] || { echo "local-ci: $1 needs a positive integer" >&2; exit 2; }
-      shards=$2
-      shift 2
-      ;;
-    --shards=*)
-      shards=${1#*=}
-      [[ $shards =~ ^[1-9][0-9]*$ ]] || { echo "local-ci: --shards needs a positive integer" >&2; exit 2; }
-      shift
-      ;;
+    -j | --shards) set_shards "${2:-}"; shift 2 ;;
+    --shards=*) set_shards "${1#*=}"; shift ;;
     --no-coverage) coverage=0; shift ;;
     --no-static) static=0; shift ;;
     --install) force_install=1; shift ;;
@@ -83,25 +84,32 @@ fi
 
 # Focused runs are a single shard without the coverage gate: thresholds only
 # make sense over the whole suite.
-if ((${#files[@]})); then
+if ((${#files[@]} > 0)); then
   shards=1
   coverage=0
 fi
 
 run_id="localci-$$-$(date +%s)"
 db="two_web_next_tog$(date +%s)$$"
-workdir="$repo/.local-ci"
-mkdir -p "$workdir" "$HOME/.npm"
-rm -rf "$workdir/blob" "$workdir/logs"
-mkdir -p "$workdir/blob" "$workdir/logs" "$workdir/home"
+# Per-run scratch, so concurrent runs in one checkout never share reports.
+rel=".local-ci/$run_id"
+workdir="$repo/$rel"
+mkdir -p "$workdir/blob" "$workdir/logs" "$workdir/home" "$HOME/.npm"
 
 cleanup() {
   local status=$?
   if ((keep)); then
     echo "local-ci: kept containers/networks with prefix $run_id"
   else
-    docker ps -aq --filter "label=local-ci=$run_id" | xargs -r docker rm -f >/dev/null 2>&1 || true
-    docker network ls -q --filter "label=local-ci=$run_id" | xargs -r docker network rm >/dev/null 2>&1 || true
+    local ids
+    ids=$(docker ps -aq --filter "label=local-ci=$run_id")
+    # shellcheck disable=SC2086
+    [[ -z $ids ]] || docker rm -f $ids >/dev/null 2>&1 || true
+    ids=$(docker network ls -q --filter "label=local-ci=$run_id")
+    # shellcheck disable=SC2086
+    [[ -z $ids ]] || docker network rm $ids >/dev/null 2>&1 || true
+    # Logs stay for inspection; blob and coverage files are large.
+    rm -rf "${workdir:?}/blob" "${workdir:?}"/coverage-* "${workdir:?}/home"
   fi
   exit "$status"
 }
@@ -121,7 +129,7 @@ in_node() {
     -e DATABASE_URL="$url" -e AUDIT_IMPORT_TEST_DATABASE_URL="$url" \
     -e PGPASSWORD= -e W1_AGENT_TESTDB=0 \
     -e TZ="${LOCAL_CI_TZ:-UTC}" \
-    -v "$repo:$repo" "${git_mounts[@]}" -v "$workdir/home:/tmp/home" -v "$HOME/.npm:/tmp/home/.npm" \
+    -v "$repo:$repo" ${git_mounts[@]+"${git_mounts[@]}"} -v "$workdir/home:/tmp/home" -v "$HOME/.npm:/tmp/home/.npm" \
     -w "$repo" \
     "$NODE_IMAGE" bash -c "$*"
 }
@@ -160,14 +168,17 @@ docker image inspect "$PG_IMAGE" >/dev/null 2>&1 || docker pull -q "$PG_IMAGE"
 step "start $shards disposable Postgres 17 container(s)"
 for i in $(seq 1 "$shards"); do start_postgres "$i"; done
 
-# The stamp records the lockfiles of the last install done inside the CI
-# image, so host-built node_modules are never trusted and a lockfile change
-# always reinstalls.
-stamp="$(cat package-lock.json web/package-lock.json | sha256sum | cut -d' ' -f1)-$NODE_IMAGE"
-if ((force_install)) || [[ ! -f node_modules/.local-ci-stamp || "$(cat node_modules/.local-ci-stamp)" != "$stamp" || ! -d web/node_modules ]]; then
+# Each node_modules gets a stamp of the lockfiles from the last install done
+# inside the CI image. npm ci on the host wipes the stamp, so host-built
+# dependencies are never reused, and a lockfile change always reinstalls.
+if command -v sha256sum >/dev/null; then sha256() { sha256sum; }; else sha256() { shasum -a 256; }; fi
+stamp="$(cat package-lock.json web/package-lock.json | sha256 | cut -d' ' -f1)-$NODE_IMAGE"
+stamp_ok() { [[ -f $1/.local-ci-stamp && "$(cat "$1/.local-ci-stamp")" == "$stamp" ]]; }
+if ((force_install)) || ! stamp_ok node_modules || ! stamp_ok web/node_modules; then
   step "install root and web/ dependencies (npm ci)"
   in_node 1 "npm ci --include=dev --no-audit --no-fund && npm ci --prefix web --include=dev --no-audit --no-fund"
   echo "$stamp" >node_modules/.local-ci-stamp
+  echo "$stamp" >web/node_modules/.local-ci-stamp
 else
   step "dependencies match lockfiles; skipping npm ci (use --install to force)"
 fi
@@ -184,7 +195,7 @@ for i in "${!pids[@]}"; do
   wait "${pids[$i]}" || { cat "$workdir/logs/migrate-$((i + 1)).log" >&2; exit 1; }
 done
 
-if ((${#files[@]})); then
+if ((${#files[@]} > 0)); then
   step "vitest run ${files[*]}"
   quoted=$(printf '%q ' "${files[@]}")
   in_node 1 "npx vitest run $quoted"
@@ -197,15 +208,15 @@ if ((static)); then
   in_node 1 "npm run lint && npm run typecheck && npm run e2e:typecheck"
 fi
 
-cov_args=()
-((coverage)) && cov_args=(--coverage)
-step "vitest suite over $shards shard(s) (logs: .local-ci/logs/shard-*.log)"
+cov=""
+((coverage)) && cov=--coverage
+step "vitest suite over $shards shard(s) (logs: $rel/logs/shard-*.log)"
 # Per-shard exit codes are not the verdict: with --coverage each shard checks
 # the global thresholds against its slice of src/ and fails them. The merged
 # report below is authoritative; a shard only fails here if it left no blob.
 pids=()
 for i in $(seq 1 "$shards"); do
-  in_node "$i" "npx vitest run --pool=threads ${cov_args[*]} --shard=$i/$shards --reporter=blob --outputFile.blob=.local-ci/blob/blob-$i.json --reporter=dot --coverage.reportsDirectory=.local-ci/coverage-$i" \
+  in_node "$i" "npx vitest run --pool=threads $cov --shard=$i/$shards --reporter=blob --outputFile.blob=$rel/blob/blob-$i.json --reporter=dot --coverage.reportsDirectory=$rel/coverage-$i" \
     >"$workdir/logs/shard-$i.log" 2>&1 &
   pids+=($!)
 done
@@ -216,7 +227,7 @@ for i in "${!pids[@]}"; do
     echo "shard $((i + 1))/$shards finished"
   else
     suite_status=1
-    echo "shard $((i + 1))/$shards wrote no report (see .local-ci/logs/shard-$((i + 1)).log)"
+    echo "shard $((i + 1))/$shards wrote no report (see $rel/logs/shard-$((i + 1)).log)"
   fi
 done
 
@@ -224,7 +235,7 @@ done
 # with --coverage, applies the vitest.config.ts thresholds to merged coverage.
 step "merged report"
 merge_status=0
-in_node 1 "npx vitest run --merge-reports=.local-ci/blob ${cov_args[*]} --reporter=dot --silent=passed-only" || merge_status=1
+in_node 1 "npx vitest run --merge-reports=$rel/blob $cov --reporter=dot --silent=passed-only" || merge_status=1
 
 step "hotzone period suite under TZ=America/Los_Angeles"
 LOCAL_CI_TZ=America/Los_Angeles in_node 1 \
