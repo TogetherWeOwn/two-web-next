@@ -907,6 +907,51 @@ test("runtime-administered ledger owner and grantee refuse without INHERIT or SE
   });
 });
 
+test("multi-hop runtime-administered ledger chain refuses without INHERIT or SET", async () => {
+  await fixture(async ({ client, run }) => {
+    const owner = `ledger_owner_${randomUUID().replaceAll("-", "")}`;
+    const hop = `ledger_hop_${randomUUID().replaceAll("-", "")}`;
+    const created = await ensureRuntimeRole(client);
+    await client.unsafe(`CREATE ROLE "${owner}" NOLOGIN`);
+    await client.unsafe(`CREATE ROLE "${hop}" NOLOGIN`);
+    try {
+      await createFixtureLedger(client);
+      await client.unsafe(`ALTER TABLE drizzle.__drizzle_migrations OWNER TO "${owner}"`);
+      assert.equal((await run("plan")).length, journal.entries.length);
+      // Two-hop ADMIN chain: the owner reaches the runtime only through the
+      // hop role, and neither link carries INHERIT or SET. The single-hop
+      // USAGE/SET/ADMIN probes all read false on the owner, yet the runtime
+      // holds bare membership of it and can escalate link by link.
+      await client.unsafe(`GRANT "${owner}" TO "${hop}" WITH INHERIT TRUE`);
+      await client.unsafe(
+        `GRANT "${hop}" TO two_web_app WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`,
+      );
+      const probes = (
+        await client`
+        select pg_has_role('two_web_app', ${owner}, 'USAGE') as inherited,
+               pg_has_role('two_web_app', ${owner}, 'SET') as assumable,
+               pg_has_role('two_web_app', ${owner}, 'MEMBER WITH ADMIN OPTION') as administers,
+               pg_has_role('two_web_app', ${owner}, 'MEMBER') as member`
+      )[0];
+      assert.equal(probes.inherited, false);
+      assert.equal(probes.assumable, false);
+      assert.equal(probes.administers, false);
+      assert.equal(probes.member, true);
+      await assertLedgerRefused(client, run, /runtime rights on migration ledger object/);
+      await client.unsafe(`REVOKE "${hop}" FROM two_web_app`);
+      assert.equal((await run("plan")).length, journal.entries.length);
+    } finally {
+      await client.unsafe(`REVOKE "${hop}" FROM two_web_app`).catch(() => {});
+      await client.unsafe(`REVOKE "${owner}" FROM "${hop}"`).catch(() => {});
+      await client.unsafe(`DROP OWNED BY "${owner}"`).catch(() => {});
+      await client.unsafe(`DROP OWNED BY "${hop}"`).catch(() => {});
+      await client.unsafe(`DROP ROLE IF EXISTS "${hop}"`).catch(() => {});
+      await client.unsafe(`DROP ROLE IF EXISTS "${owner}"`).catch(() => {});
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
 test("sequence post-default matrix for login, group, and runtime roles", async () => {
   await fixture(async ({ client }) => {
     const suffix = randomUUID().replaceAll("-", "");
@@ -1373,9 +1418,7 @@ assert.deepEqual(state.statements, [
          CASE WHEN grantee = 0 THEN true ELSE EXISTS (
            SELECT 1 FROM pg_roles AS runtime
             WHERE runtime.rolname = 'two_web_app'
-              AND (pg_has_role(runtime.oid, rights.grantee, 'USAGE')
-                   OR pg_has_role(runtime.oid, rights.grantee, 'SET')
-                   OR pg_has_role(runtime.oid, rights.grantee, 'MEMBER WITH ADMIN OPTION'))
+              AND pg_has_role(runtime.oid, rights.grantee, 'MEMBER')
          ) END AS runtime_access
     FROM rights
    ORDER BY 1, 2, 3, 4
