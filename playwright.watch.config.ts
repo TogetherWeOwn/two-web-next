@@ -8,6 +8,16 @@ import { requireWatchOrigin } from "./e2e/watch-guard.mjs";
 requireGithubRunner();
 const watchOrigin = requireWatchOrigin(process.env.WATCH_ORIGIN);
 
+// Journey ledger for the promotion regression gate (G1): when
+// PLAYWRIGHT_JSON_OUTPUT_FILE names a path, the JSON reporter writes the
+// journey report there for journeyOutcomes()
+// (ci/production-deploy-gate.mjs --regression). The passive-set steps set it
+// to the ledger directory (staging) or $RUNNER_TEMP (production); the 48h
+// watch leaves it unset and keeps list+html only. The workflows must not
+// pass a CLI --reporter flag: it shadows the config reporters and the file
+// would never be written (pinned by ci/production-regression.test.mjs).
+const journeysLedger = process.env.PLAYWRIGHT_JSON_OUTPUT_FILE?.trim() || "";
+
 export default defineConfig({
   testDir: "./e2e/watch",
   testMatch: "**/*.spec.ts",
@@ -16,7 +26,11 @@ export default defineConfig({
   retries: 0,
   forbidOnly: true,
   timeout: 30_000,
-  reporter: [["list"], ["html", { open: "never" }]],
+  reporter: [
+    ["list"],
+    ["html", { open: "never" }],
+    ...(journeysLedger ? [["json", { outputFile: journeysLedger }] as const] : []),
+  ],
   use: {
     baseURL: watchOrigin,
     serviceWorkers: "block",

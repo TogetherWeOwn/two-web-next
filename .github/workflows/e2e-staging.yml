@@ -135,7 +135,11 @@ jobs:
           set +e
           node bin/smoke.mjs https://next.togetherweown.com --ledger passive/smoke.json
           echo "staging passive smoke exit $?"
-          npx playwright test --config playwright.watch.config.ts --reporter=list,json
+          npx playwright test --config playwright.watch.config.ts
+          # Comment line above the echo: ci/test-inventory.mjs stops expanding
+          # a playwright invocation at a comment or blank line, so this echo
+          # is never read as a spec filter. Keep it: the gate below judges
+          # the ledgers, and this exit line is the log signal.
           echo "staging guest journeys exit $?"
         env:
           DEPLOYED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
