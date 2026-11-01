@@ -940,19 +940,15 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   );
   // Each environment gets only its own credentials: production secrets only
   // when the environment is exactly production, staging (repo-level)
-  // secrets only when it is exactly staging. Staging prefers the declared
-  // call secret and keeps the direct repo secret for manual dispatch.
+  // secrets only when it is exactly staging. Staging passes its repo
+  // secret under its own name via the declared workflow_call secret.
   // Credential check before the mutation.
-  for (const [key, declared] of [
-    ["CLOUDFLARE_API_TOKEN", "staging_cloudflare_api_token"],
-    ["CLOUDFLARE_ACCOUNT_ID", "staging_cloudflare_account_id"],
-  ]) {
+  for (const key of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]) {
     // Credentials check, live-version guard, rollback target-version secrets
     // preflight and the rollback itself.
-    const selector = `\${{ inputs.environment == 'production' && secrets.PRODUCTION_${key} || inputs.environment == 'staging' && (secrets.${declared} || secrets.${key}) || '' }}`;
+    const selector = `\${{ inputs.environment == 'production' && secrets.PRODUCTION_${key} || inputs.environment == 'staging' && secrets.${key} || '' }}`;
     assert.equal(workflow.split(selector).length - 1, 4);
     assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 4);
-    assert.equal((workflow.match(new RegExp(`secrets\\.${declared}`, "g")) ?? []).length, 4);
     assert.equal((workflow.match(new RegExp(`secrets\\.${key}\\b`, "g")) ?? []).length, 4);
   }
   const versionCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --version-id");
