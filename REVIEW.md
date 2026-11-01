@@ -19,9 +19,8 @@ that follows, and evidence from the actual code at the reviewed commit.
 
 Severity is impact times confidence, after the disproof pass below:
 
-- **Severe (red):** production-reachable member-data exposure, auth or
-  moderator-authorization bypass, data loss/corruption, or a broken deploy —
-  and the mechanism is verified, not plausible-sounding.
+- **Severe (red):** only an outcome listed under "What counts as Severe"
+  below, and the mechanism is verified, not plausible-sounding.
 - **Non-severe:** a real defect with limited blast radius or a narrow trigger.
 - **Investigate/flag, not a bug:** the mechanism depends on an assumption you
   could not verify in this repo or its pinned dependencies. Say what is
@@ -31,6 +30,36 @@ Severity is impact times confidence, after the disproof pass below:
   as directed by `SECURITY.md`, including the unverified step; reserve Critical
   for a traced, verified path. Any public note must be non-sensitive and
   non-exploitative.
+
+## What counts as Severe
+
+Severe only when merging the change would cause one of these:
+
+- **Data loss or corruption:** a queue retry in `src/jobs/` that applies the
+  same RSVP sync twice, or an edit to an applied migration in `drizzle/`.
+- **Security or auth/authz weakness:** `src/roles.ts` treating a blank
+  moderator allowlist as "everyone", or a new member-data route in
+  `src/profiles/` that skips `routes-gate.ts`.
+- **Production breakage or a broken deploy/rollback gate:**
+  `deploy-production.yml` promoting a commit without its passing staging
+  journeys, or `rollback-production.yml` unable to restore the prior version.
+- **Wrong user-visible behavior with no workaround:** `src/join/` sending
+  every member back to the Discord login, so nobody can sign in.
+- **A test or gate that can no longer fail:** `ci/floor-guard.mjs` exiting 0
+  when it could not run.
+
+Not Severe (use Non-severe): missing edge-case tests (no empty-query case
+for event search), naming (a helper name in `src/throttle.ts`), docs drift
+(`docs/throttling.md` lagging a throttle change), refactor suggestions
+(splitting `src/profiles/routes.tsx`), performance without a measured
+regression ("this `src/member-reads.ts` query may be slow"), and defensive
+checks for states the callers already prevent (a null-session check in a
+handler `routes-gate.ts` already guards).
+
+These labels only grade a finding that already qualifies under "What
+merits a finding", "Test rigor" and "Skip"; they never make an item
+reportable. Most of the Not Severe items are skipped outright, and any
+that is still reported is Non-severe.
 
 ## Disproof pass (before posting any finding)
 
