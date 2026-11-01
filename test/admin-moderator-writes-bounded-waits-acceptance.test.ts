@@ -1002,6 +1002,59 @@ describe.skipIf(!raw)("moderator writes bounded waits (test database)", () => {
     expect(await audits()).toHaveLength(1);
   });
 
+  it("admin featured unpublish behind a held row answers 503, then unpublishes", async () => {
+    const seeded = await seedFeatured({ isPublished: true });
+    const holder = holderClient();
+    let pending: Promise<Response> | undefined;
+    try {
+      await holder.unsafe("BEGIN");
+      const [holderPid] = await holder<{ pid: number }[]>`select pg_backend_pid() as pid`;
+      await holder`select id from featured_contents where id = ${seeded.id} for update`;
+      pending = Promise.resolve(
+        testApp.request(
+          `/admin/featured/${seeded.id}/unpublish`,
+          { method: "POST", headers: { cookie, origin: baseEnv.APP_URL } },
+          liveEnv(),
+        ),
+      );
+      await waitForBlocked(holderPid!.pid);
+      const outcome = await raceBounded(pending!);
+      expect(outcome.settled, "held featured unpublish must answer bounded").toBe(true);
+      if (!outcome.settled || "error" in outcome)
+        throw new Error("unbounded featured unpublish wait");
+      const res = (outcome as { value: Response }).value;
+      expect(res.status).toBe(503);
+      expect(res.headers.get("location")).toBeNull();
+      const body = await res.text();
+      expect(body).not.toMatch(/private query details|55P03|57014/);
+      const [after] = await db
+        .select()
+        .from(featuredContents)
+        .where(eq(featuredContents.id, seeded.id));
+      expect(after!.isPublished).toBe(true);
+      expect(await audits()).toHaveLength(0);
+    } finally {
+      await holder.unsafe("ROLLBACK").catch(() => {});
+      await holder.end({ timeout: 1 }).catch(() => {});
+      await pending?.then(
+        () => {},
+        () => {},
+      );
+    }
+    const retry = await testApp.request(
+      `/admin/featured/${seeded.id}/unpublish`,
+      { method: "POST", headers: { cookie, origin: baseEnv.APP_URL } },
+      liveEnv(),
+    );
+    expect(retry.status).toBe(303);
+    const [unpublished] = await db
+      .select()
+      .from(featuredContents)
+      .where(eq(featuredContents.id, seeded.id));
+    expect(unpublished!.isPublished).toBe(false);
+    expect(await audits()).toHaveLength(1);
+  });
+
   it("live missing-key writes keep the not-found contract, never the outage", async () => {
     await expect(
       updateEvent(db, MOD, "01J00000000000000000000999", eventInput()),

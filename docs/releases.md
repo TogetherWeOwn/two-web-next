@@ -18,7 +18,7 @@ review to land.
 Nothing to do by hand: a successful `deploy-production` promote is the cut. The
 cutover promote cuts `v1.0.0` (see `release-as` below). The release vehicle is
 the promoted commit itself. Every commit on `main` already has exact-head green
-required checks and a Paperclip Review 5/5 (rulesets). The promote gate
+required checks, including `CodeRabbit` and `Devin Review` (rulesets). The promote gate
 (`ci/production-deploy-gate.mjs`) requires a green main `ci` on that exact SHA,
 plus staging evidence under auto-approve. There is no release PR and no
 release freeze.

@@ -30,7 +30,9 @@ export const TableSortHeader: FC<{
   );
 };
 
-export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, children }) => (
+export const Shell: FC<
+  PropsWithChildren<{ title: string; audience?: string; stylesheet?: string }>
+> = ({ title, audience = "moderators only", stylesheet, children }) => (
   <>
     {raw("<!doctype html>")}
     <html lang="en">
@@ -40,6 +42,7 @@ export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, childre
         <title>{title} — TWO admin</title>
         <link rel="stylesheet" href="/styles.css" />
         <link rel="stylesheet" href="/admin-rsvp-review.css" />
+        {stylesheet ? <link rel="stylesheet" href={stylesheet} /> : null}
       </head>
       <body>
         <SkipLink />
@@ -56,18 +59,30 @@ export const Shell: FC<PropsWithChildren<{ title: string }>> = ({ title, childre
         <main id="main" tabindex={-1}>
           {children}
         </main>
-        <footer>Together We Own · moderators only</footer>
+        <footer>Together We Own · {audience}</footer>
       </body>
     </html>
   </>
 );
 
-export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, detail }) => (
+export type RecoveryLink = { href: string; label: string };
+
+export const ErrorPage: FC<{ heading: string; detail?: string; recovery?: RecoveryLink[] }> = ({
+  heading,
+  detail,
+  recovery = [],
+}) => (
   <Shell title={heading}>
     <section>
       <h1>{heading}</h1>
       {detail ? <p data-testid="error-detail">{detail}</p> : null}
       <p>
+        {recovery.map((link) => (
+          <>
+            <a href={link.href}>{link.label}</a>
+            {" · "}
+          </>
+        ))}
         <a href="/admin">Back to the dashboard</a>
       </p>
     </section>
@@ -75,7 +90,14 @@ export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, d
 );
 
 export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
-  if (row.status !== "published" || row.endsAt <= new Date()) return null;
+  // An unrenderable end (Invalid Date) is not a live event: every comparison
+  // with it is false, so without the finite check it would look unended.
+  if (
+    row.status !== "published" ||
+    !Number.isFinite(row.endsAt.getTime()) ||
+    row.endsAt <= new Date()
+  )
+    return null;
   if (!row.rsvpOpen) {
     return (
       <form method="post" action={`/admin/events/${row.eventKey}/rsvp-reopen`}>

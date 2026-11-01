@@ -47,6 +47,14 @@ Subscribe link, the `.ics` download and the copyable feed URL all carry the
 committed game, and the calendar label names it. Blank means every game; a valid
 unknown game yields an empty scoped calendar, never all games.
 
+Published nights show **Happening now** from their start instant until, but not
+including, their end instant. The schedule cards, current-month grid cells and
+event detail use a server snapshot, not a live clock; existing page caching
+still applies. The label sits beside RSVP availability, so a night can still
+be full or paused. Drafts, cancelled and
+ended nights never carry it; Discord-managed rows use Discord's active status
+and any announced end. The label is not proof of attendance.
+
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
 the ordinary archive. See the [archive search contract](docs/past-archive-search.md)
@@ -143,9 +151,15 @@ For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-Always supply the test URL for full-suite runs. Live suites skip when
-`DATABASE_URL` is unset; `test/review-p1-verify.test.ts` gates its live-DB
-proofs behind the same skip and keeps its P1-3 refusal proofs offline.
+Always supply the test URL for full-suite SQL coverage. The DB-free lane
+(`env -u DATABASE_URL npm run check`) runs fixture-only checks; existing live
+suites skip when `DATABASE_URL` is unset. `test/review-p1-verify.test.ts` keeps
+its P1-3 refusal proofs offline. Featured-unpublish SQL proofs run under the
+pre-existing integration gate in `test/admin.test.ts`; the six registration
+and rendering proofs in `test/admin-featured-unpublish-acceptance.test.ts`
+and `test/admin-featured-unpublish-invariants.test.ts` remain ungated. This
+preserves the DB-free lane without adding a conditional skip. It does not
+replace disposable-DB verification or browser evidence.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
@@ -269,7 +283,7 @@ npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands
 ### Browser regressions
 
 Except for the unconditional suites (Kit member-auth, Kit admin contrast,
-native event share and the three `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
+native event share and the four `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
@@ -341,7 +355,9 @@ Do not use `npm run deploy` as a test or build command.
 ## Deploy
 
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
-gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
+gate): `wrangler deploy` of the tail Worker (`tail/wrangler.jsonc`), the Kit
+staging Worker (`web/wrangler.staging.jsonc`) and the jobs Worker
+(`wrangler.jobs.jsonc`) with the repo secrets `CLOUDFLARE_API_TOKEN` /
 `CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
 The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,
 Discord and guest auth redirects, and a branded 404. It checks CSP and nosniff
@@ -458,7 +474,7 @@ the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`
 requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting
 degraded queue states; unlike staging it omits `--fail-on-ready-wait-critical`,
-so `critical` queue readiness only warns and `unknown` passes, and the remaining 15 routes assert
+so `critical` queue readiness only warns and `unknown` passes, and the remaining 23 routes assert
 status/body/CSP/nosniff/content-type/redirect plus the apex indexing posture
 (indexable HTML omits the staging noindex). No auth, no writes, no PII.
 After the promotion reaches 100%, the workflow probes the apex again with the
@@ -492,8 +508,9 @@ Worker. Never deploy it outside the gated workflow:
 - Queues: `two-web-next-production-sync-event` and
   `two-web-next-production-internal-action` are the production queue names,
   kept separate from staging; complete provisioning before a deployment is
-  authorized. Producers and consumers
-  use these names; crons match staging (every ten minutes, midnight UTC).
+  authorized. This block only produces to them; the production consumers and
+  crons live on `two-web-jobs-production` (`wrangler.jobs.jsonc`
+  `env.production`).
 - Vars are explicit because environment bindings/vars do not inherit. Register
   the production Discord callback; provision secrets for the production Worker
   separately. Never set `QA_AUTH_TOKEN` or a staging `DATABASE_URL` in production.
@@ -584,6 +601,9 @@ network-free (it checks resolved config) and the smoke requires a valid
 root dot, and rejects redirects. Both URLs must be HTTP(S), without credentials,
 query strings or fragments. A distinct hostname alone does not prove staging
 isolation: the runtime/receiver/custody holds still apply.
+The smoke and drill examples below are **preview-only**: they perform no bot
+actions. Real execution requires `--apply` and the prerequisites in the
+[bot probe staging procedure](docs/bot-probe-staging.md).
 
 ```sh
 npm run check:worker-moderators                   # source deployment preflight
@@ -654,8 +674,9 @@ These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 
 Squash-merge only; PR titles follow Conventional Commits and the body follows the
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
-`ci-ok`, `gitleaks`, `e2e-ok` and `pr-lint` are required, plus Paperclip Review 5/5
-on the exact green head. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
+`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review` are required
+on the exact head, with no approving review. A merge to `main` deploys production, so
+it also needs the owner's approval. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
 
 ## License
 

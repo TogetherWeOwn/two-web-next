@@ -8,6 +8,7 @@ import {
   changedMigrationFiles,
   checkChangedMigrations,
   validateDefaultAclRows,
+  validateLedgerAclRows,
   validateMigrationSql,
 } from "./migration-runtime-rights.mjs";
 
@@ -680,7 +681,55 @@ test("allows only the reviewed per-role sequence default ACL", () => {
     { ...identity, privilege_type: "UPDATE" },
     { ...identity, is_grantable: true, privilege_type: "SELECT" },
     { ...identity, grantor: "other_role", privilege_type: "SELECT" },
+    // A global sequence default fires in the drizzle schema too, so it
+    // would grant the runtime role the migration ledger sequence; only
+    // the public-scoped shape above stays reviewed.
+    { ...identity, schema_name: "(global)", privilege_type: "USAGE" },
+    { ...identity, schema_name: "(global)", privilege_type: "SELECT" },
+    { ...identity, schema_name: "drizzle", privilege_type: "SELECT" },
   ]) {
     assert.match(validateDefaultAclRows([row]).join("\n"), /unreviewed default ACL/i);
+  }
+});
+
+test("allows no runtime or PUBLIC rights on the migration ledger objects", () => {
+  assert.deepEqual(validateLedgerAclRows([]), []);
+  // Owner rows are the creating role's own implicit rights materialized
+  // in relacl, not runtime exposure.
+  assert.deepEqual(
+    validateLedgerAclRows([
+      {
+        object_name: "__drizzle_migrations",
+        grantee: "migration_login",
+        privilege_type: "SELECT",
+        is_grantable: false,
+      },
+    ]),
+    [],
+  );
+  for (const row of [
+    {
+      object_name: "__drizzle_migrations_id_seq",
+      grantee: "two_web_app",
+      privilege_type: "USAGE",
+      is_grantable: false,
+    },
+    {
+      object_name: "__drizzle_migrations",
+      grantee: "two_web_app",
+      privilege_type: "SELECT",
+      is_grantable: false,
+    },
+    {
+      object_name: "__drizzle_migrations_id_seq",
+      grantee: "PUBLIC",
+      privilege_type: "SELECT",
+      is_grantable: false,
+    },
+  ]) {
+    assert.match(
+      validateLedgerAclRows([row]).join("\n"),
+      /runtime rights on migration ledger object/i,
+    );
   }
 });

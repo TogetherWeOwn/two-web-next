@@ -22,6 +22,9 @@
 //      quality-summary.md) vs an unclassified step failure (full evidence but
 //      no assertion verdict: the tails below name it).
 // ci/quality-budget.json floors are never touched here.
+// The mobile performance step (`npm run lighthouse`, ci/lighthouse-perf-run.mjs)
+// runs this same flow with PROFILES.mobile: its own config, report dir, log and
+// diagnosis, and the same rule that only short evidence ever retries.
 // Usage: npm run lighthouse:quality [-- <extra lhci args>]
 // Selftest: node ci/lighthouse-quality-run.mjs --selftest (hermetic: injected
 // lhci stub and temp dirs, no network or browser).
@@ -50,10 +53,37 @@ const {
   invalidArgumentsResult,
 } = require("./lighthouse-samples.cjs");
 
-const QUALITY_DIR = ".lighthouseci/quality";
 const LHCI_DIR = ".lighthouseci";
-const LOG_FILE = ".lighthouseci/quality-collect.log";
-const DIAGNOSIS_FILE = ".lighthouseci/quality-collect-diagnosis.md";
+// One entry per gated collect. `budget` names the floors a diagnosis tells the
+// reader not to lower; `breachEvidence` is where an evaluated miss is listed.
+export const PROFILES = {
+  desktop: {
+    name: "desktop",
+    label: "quality",
+    config: "ci/lighthouserc.quality.cjs",
+    configModule: require.resolve("./lighthouserc.quality.cjs"),
+    loadConfig: () => require("./lighthouserc.quality.cjs"),
+    reportsDir: ".lighthouseci/quality",
+    logFile: ".lighthouseci/quality-collect.log",
+    diagnosisFile: ".lighthouseci/quality-collect-diagnosis.md",
+    budget: "ci/quality-budget.json",
+    breachEvidence: "quality-summary.md",
+    deployable: true,
+  },
+  mobile: {
+    name: "mobile",
+    label: "perf",
+    config: "ci/lighthouserc.cjs",
+    configModule: require.resolve("./lighthouserc.cjs"),
+    loadConfig: () => require("./lighthouserc.cjs"),
+    reportsDir: ".lighthouseci/reports",
+    logFile: ".lighthouseci/perf-collect.log",
+    diagnosisFile: ".lighthouseci/perf-collect-diagnosis.md",
+    budget: "ci/lighthouserc.cjs",
+    breachEvidence: "assertion-results.json",
+    deployable: false,
+  },
+};
 // Mirrors @lhci/utils saved-reports.js: collect saves every run as
 // `.lighthouseci/lhr-<timestamp>.json` and clears those files at the start of
 // each (non-additive) collect. The filesystem upload instead writes ONE file
@@ -85,11 +115,15 @@ function lhciCli() {
 // One `lhci autorun` attempt. Streams combined output to the parent's stdout
 // (the CI job log) and returns the exit code plus the captured text for the
 // artifact log, so a collect error is visible in both places.
-export function runAutorun({ env = process.env, extraArgs = [] } = {}) {
+export function runAutorun({
+  env = process.env,
+  extraArgs = [],
+  config = PROFILES.desktop.config,
+} = {}) {
   return new Promise((resolve, reject) => {
     const child = spawn(
       process.execPath,
-      [lhciCli(), "autorun", "--config=ci/lighthouserc.quality.cjs", ...extraArgs],
+      [lhciCli(), "autorun", `--config=${config}`, ...extraArgs],
       { env },
     );
     let text = "";
@@ -107,23 +141,25 @@ export function runAutorun({ env = process.env, extraArgs = [] } = {}) {
 // Expected LHRs, read from the same config lhci runs: every configured URL
 // measured numberOfRuns times. Requiring the config also fails closed on an
 // unallowlisted QUALITY_ORIGIN, exactly as the bare `lhci autorun` would.
-export function expectedLhrs({ env = process.env } = {}) {
+// The mobile config is fixture-only and ignores QUALITY_ORIGIN.
+export function expectedLhrs({ env = process.env, profile = PROFILES.desktop } = {}) {
   const saved = process.env.QUALITY_ORIGIN;
   try {
     if (env.QUALITY_ORIGIN !== undefined) process.env.QUALITY_ORIGIN = env.QUALITY_ORIGIN;
     else delete process.env.QUALITY_ORIGIN;
-    delete require.cache[require.resolve("./lighthouserc.quality.cjs")];
-    const { ci } = require("./lighthouserc.quality.cjs");
+    delete require.cache[profile.configModule];
+    const { ci } = profile.loadConfig();
+    const deployed = profile.deployable && process.env.QUALITY_ORIGIN;
     return {
       collect: structuredClone(ci.collect),
       expected: ci.collect.url.length * ci.collect.numberOfRuns,
       runsPerRoute: ci.collect.numberOfRuns,
-      mode: process.env.QUALITY_ORIGIN ? `deployed (${process.env.QUALITY_ORIGIN})` : "fixture",
+      mode: deployed ? `deployed (${process.env.QUALITY_ORIGIN})` : "fixture",
     };
   } finally {
     if (saved !== undefined) process.env.QUALITY_ORIGIN = saved;
     else delete process.env.QUALITY_ORIGIN;
-    delete require.cache[require.resolve("./lighthouserc.quality.cjs")];
+    delete require.cache[profile.configModule];
   }
 }
 
@@ -194,7 +230,10 @@ export function loadAssertions(dir = LHCI_DIR) {
 // invocation) must never count toward the new attempt. Mirrors lhci's own
 // clearSavedReportsAndLHRs. The collect log and any earlier diagnosis live
 // outside both dirs and survive.
-export function clearAttemptEvidence({ qualityDir = QUALITY_DIR, lhciDir = LHCI_DIR } = {}) {
+export function clearAttemptEvidence({
+  qualityDir = PROFILES.desktop.reportsDir,
+  lhciDir = LHCI_DIR,
+} = {}) {
   rmSync(qualityDir, { recursive: true, force: true });
   let names;
   try {
@@ -223,11 +262,11 @@ export function shortfalls(lhrs, collect) {
     .map((row) => [row.url, row.runs.length]);
 }
 
-export function buildDiagnosis({ mode, expected, attempts }) {
+export function buildDiagnosis({ mode, expected, attempts, profile = PROFILES.desktop }) {
   const last = attempts[attempts.length - 1];
   const collected = last.lhrs;
   const lines = [
-    "## Lighthouse quality collection diagnosis",
+    `## Lighthouse ${profile.label} collection diagnosis`,
     "",
     `- mode: ${mode}`,
     `- expected LHRs: ${expected}`,
@@ -237,19 +276,19 @@ export function buildDiagnosis({ mode, expected, attempts }) {
   if (last.matrix.complete && last.assertFailed) {
     verdict =
       "BUDGET BREACH: full evidence collected and an assertion vs " +
-      "ci/quality-budget.json missed. See quality-summary.md for the route and " +
+      `${profile.budget} missed. See ${profile.breachEvidence} for the route and ` +
       "the failing audits. Fix the cause; do not lower the floors.";
   } else if (last.matrix.complete) {
     verdict =
       "UNCLASSIFIED STEP FAILURE: full evidence collected but process or assertion evidence " +
       "did not establish success. No evaluated assertion failure, so no floor breach " +
       "was evidenced. The failure came from a collect, upload or config step — " +
-      "read the tails below. Do not lower ci/quality-budget.json.";
+      `read the tails below. Do not lower ${profile.budget}.`;
   } else {
     verdict =
       `COLLECT FAILURE (transient/infra suspected): ${collected}/${expected} LHR files, ` +
       "but the planned per-URL sample quotas were not met. Re-run the failed step; do not " +
-      "lower ci/quality-budget.json. If this recurs, the tail below names the " +
+      `lower ${profile.budget}. If this recurs, the tail below names the ` +
       "collect error (Chrome crash, NO_NAVSTART, timeout) to chase next.";
   }
   lines.push(`- verdict: ${verdict}`, "");
@@ -264,12 +303,13 @@ export function buildDiagnosis({ mode, expected, attempts }) {
 export async function main(
   argv,
   {
+    profile = PROFILES.desktop,
     env = process.env,
     run = runAutorun,
-    qualityDir = QUALITY_DIR,
+    qualityDir = profile.reportsDir,
     lhciDir = LHCI_DIR,
-    logFile = LOG_FILE,
-    diagnosisFile = DIAGNOSIS_FILE,
+    logFile = profile.logFile,
+    diagnosisFile = profile.diagnosisFile,
     log = console.log,
   } = {},
 ) {
@@ -282,15 +322,15 @@ export async function main(
   if (wantsCheck) {
     const parsed = parseCheckFixtureArgs(argv.filter((a) => a !== "--selftest"));
     if (!parsed.ok) {
-      log(JSON.stringify(invalidArgumentsResult("desktop")));
+      log(JSON.stringify(invalidArgumentsResult(profile.name)));
       return 2;
     }
-    const { collect } = expectedLhrs({ env });
-    const result = checkFixtureDirectory(parsed.dir, collect, "desktop");
+    const { collect } = expectedLhrs({ env, profile });
+    const result = checkFixtureDirectory(parsed.dir, collect, profile.name);
     log(JSON.stringify(result));
     return result.code === "collection_complete" ? 0 : 1;
   }
-  const { collect, expected, runsPerRoute, mode } = expectedLhrs({ env });
+  const { collect, expected, runsPerRoute, mode } = expectedLhrs({ env, profile });
   const extraArgs = argv.filter((a) => a !== "--selftest");
   mkdirSync(join(logFile, ".."), { recursive: true });
   writeFileSync(logFile, "");
@@ -308,7 +348,7 @@ export async function main(
     // outside both evidence dirs).
     clearAttemptEvidence({ qualityDir, lhciDir });
     log(
-      `Lighthouse quality collect: attempt ${n}/${MAX_ATTEMPTS} (${mode}, expecting ${expected} LHRs).`,
+      `Lighthouse ${profile.label} collect: attempt ${n}/${MAX_ATTEMPTS} (${mode}, expecting ${expected} LHRs).`,
     );
     const started = Date.now();
     // Sequential by design: attempt 2 runs only when attempt 1 came up short.
@@ -316,7 +356,7 @@ export async function main(
     // its error text, so the retry and diagnosis flow still handles it.
     let result;
     try {
-      result = await run({ env, extraArgs });
+      result = await run({ env, extraArgs, config: profile.config });
     } catch (error) {
       const detail = error instanceof Error ? (error.stack ?? error.message) : String(error);
       result = { exitCode: 1, output: `lhci autorun failed to start: ${detail}\n` };
@@ -352,13 +392,13 @@ export async function main(
       return 0;
     }
     if (matrix.complete) {
-      const { text, verdict } = buildDiagnosis({ mode, expected, attempts });
+      const { text, verdict } = buildDiagnosis({ mode, expected, attempts, profile });
       writeFileSync(diagnosisFile, text);
       log(verdict);
       return exitCode === 0 ? 1 : exitCode;
     }
     if (n === MAX_ATTEMPTS) {
-      const { text, verdict } = buildDiagnosis({ mode, expected, attempts });
+      const { text, verdict } = buildDiagnosis({ mode, expected, attempts, profile });
       writeFileSync(diagnosisFile, text);
       log(verdict);
       log(`Diagnosis written to ${diagnosisFile}; full output in ${logFile}.`);

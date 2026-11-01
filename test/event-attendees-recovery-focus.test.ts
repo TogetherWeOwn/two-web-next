@@ -24,7 +24,10 @@ function fixture(populated = false) {
     attributes = new Map<string, string>();
     listeners = new Map<string, Listener>();
     textContent = "";
-    constructor(public selector = "") {}
+    constructor(
+      public selector = "",
+      public tagName = "",
+    ) {}
     setAttribute(name: string, value: string) {
       this.attributes.set(name, value);
     }
@@ -37,7 +40,11 @@ function fixture(populated = false) {
     querySelector(selector: string): Node | null {
       for (const child of this.children) {
         const marker = /^\[data-testid="([^"]+)"\]$/.exec(selector)?.[1];
-        if (child.selector === selector || (marker && child.getAttribute("data-testid") === marker))
+        if (
+          child.selector === selector ||
+          child.tagName.toLowerCase() === selector.toLowerCase() ||
+          (marker && child.getAttribute("data-testid") === marker)
+        )
           return child;
         const found = child.querySelector(selector);
         if (found) return found;
@@ -81,7 +88,7 @@ function fixture(populated = false) {
   const outside = main.appendChild(new Node("a"));
   function roster() {
     const section = new Node(sectionSelector);
-    section.appendChild(new Node("#event-attendees-heading"));
+    section.appendChild(new Node("#event-attendees-heading", "H2"));
     section.appendChild(new Node("a"));
     return section;
   }

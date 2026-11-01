@@ -99,7 +99,7 @@ are not incident entries; read those sections directly when that work is authori
   to an issue. Follow [SECURITY.md](../SECURITY.md) for private disclosure.
 
 All commands run from this repository root in Bash, with Node 24 and the
-lockfile-installed Wrangler (4.143.1 at this revision). Database drill commands
+lockfile-installed Wrangler. Database drill commands
 also need PostgreSQL client tools compatible with the server, Python 3 and `psql`.
 Remote batches use fail-fast subshells: a failed command stops that batch without
 changing the caller's shell options. Stop the incident workflow on failure;
@@ -240,8 +240,8 @@ real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
 4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test, the
    smoke suite, and the link check below; record the results and verify the two
    dates above against the source pin and `expiry - 90 × 24 hours` in UTC.
-   Required checks under that contract and independent Paperclip Review 5/5 must
-   pass on the exact head before the existing merge automation proceeds. No
+   The required checks under that contract, including `CodeRabbit` and
+   `Devin Review`, must pass on the exact head before the PR merges. No
    database is needed:
 
    ```sh
@@ -295,9 +295,12 @@ environment. There is no `[env.staging]` configuration. Do not add `--env
 staging` or invent a different Worker target. Verify the approved account and
 binding isolation before any remote mutation.
 
-1. Require independent Code Reviewer approval on the exact head SHA and green
-   `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`; the approving reviewer squash-merges,
-   not the author. Record the merged SHA and intended target.
+1. Require green `ci-ok`, `e2e-ok`, `gitleaks`, `pr-lint`, `CodeRabbit` and
+   `Devin Review` on the exact head SHA, with every review finding fixed or
+   answered with evidence, and the owner's approval through
+   `request_confirmation` on the card (this merge deploys production). The
+   agent that did the work then squash-merges. Record the merged SHA and
+   intended target.
 2. Before release, capture the current deployment and its **version ID** (not
    its deployment ID) as the known-good rollback pointer. The following are
    remote metadata reads, not database probes; approved Cloudflare credentials
@@ -328,6 +331,18 @@ binding isolation before any remote mutation.
    it. If `/up` and `wrangler deployments` ever disagree, `wrangler
    deployments` wins. Record the production app `revision.version_id` and
    `revision.commit` separately from the Tail Worker version.
+
+   `GET /version` answers what is live without the readiness envelope:
+   `{ "sha": "<commit>", "deployedAt": "<ISO 8601 UTC>" }`, uncached, with no
+   database read ([src/version.ts](../src/version.ts)). `sha` is the same
+   tag-derived commit as `revision.commit`; `deployedAt` is the time
+   Cloudflare recorded for the Version's upload, which the deploy jobs do
+   right before serving it. After a rollback both fields describe the older
+   Version. A Version without the binding answers nulls; one that predates
+   the route answers 404. The staging deploy fails closed when `/version`
+   disagrees with the deployed SHA (`Verify /version reports the deployed
+   commit`); after a production promotion, check the apex the same way with
+   `node bin/version-check.mjs https://togetherweown.com <sha>`.
 
 3. Normal path: successful full CI on `main` invokes
    [.github/workflows/deploy.yml](../.github/workflows/deploy.yml), with the exact CI-verified SHA. The `staging` Environment supplies scoped
@@ -445,8 +460,8 @@ migration is performed by its selftest.
   before connecting: postgres.js does not implement SCRAM channel binding and
   would forward the libpq-only flag as a startup setting, so stripping it keeps
   TLS encryption without providing SCRAM-SHA-256-PLUS channel binding
-  (`ci/db-migrate.mjs:110-117,177-198`; pinned in
-  `ci/db-migrate-selftest.mjs:296-332`). This driver cannot satisfy a genuine
+  (the `channel_binding` strip and `migrationClient` in `ci/db-migrate.mjs`;
+  pinned in `ci/db-migrate-selftest.mjs`). This driver cannot satisfy a genuine
   channel-binding requirement. Never weaken or remove a required
   channel-binding policy just to run migrations; stop and route the requirement
   through the authorized security/operator path for a compatible driver, not to
@@ -508,7 +523,7 @@ migration or assume restoring the Worker restores the database.
 **Staging deploy integration:** `deploy.yml` applies the staging web migrations
 itself: `plan`, the exact-SHA CI re-check,
 `apply` and `verify` run in the `deploy-staging` job (Environment `staging`, which
-holds `PLANETSCALE_STAGING_DATABASE_URL`) after `npm run check` and before the first
+holds `PLANETSCALE_STAGING_DATABASE_URL`) before the first
 Cloudflare mutation, so new code never meets the old staging schema and a failed
 or lock-blocked migration leaves the previous Worker serving. It does not call
 `db-migrate.yml`: a reusable-workflow job would check out main's tip instead of the
@@ -1378,8 +1393,7 @@ and the existing queue envelope, invoked as `node bin/smoke.mjs https://next.tog
 HTTP 503 (including pending migrations) fails the deploy. Queue-only `unknown` still
 returns 200 from `/up` itself, but the staging smoke fails closed on a literal `unknown`
 in `queue.status` or `ready_wait_severity` and on a `critical` `ready_wait_severity`;
-flag-less production/rollback smoke only warns on `critical` and passes on `unknown`. The workflow's `Apply test migrations` step affects
-only disposable CI Postgres, **not the staging schema**. A failed readiness smoke
+flag-less production/rollback smoke only warns on `critical` and passes on `unknown`. A failed readiness smoke
 requires a recorded, authorized staging schema/rollback action, not weakening the
 probe or running migrations through `/up`.
 
@@ -1770,7 +1784,6 @@ then free for a newer eligible revision. Attempted requests retain their
 immutable identity even if the event becomes past. Reconciliation selects those
 attempted recovery candidates independently of eligibility to start a new
 request, then checks their deadline and remaining budget before sending.
-The bot HTTP adapter remains unwired; this is not proof of live Discord delivery.
 
 Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
 tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
@@ -1847,7 +1860,10 @@ prove exactly-once remote effects. See [consumer error paths](../src/jobs/consum
 
 [bin/db-backup.sh](../bin/db-backup.sh) supports `backup`, `promote-weekly`,
 `rotate`, `check` — **there is no `restore` subcommand**. `check` downloads
-manifest-listed objects to prove existence, not restorability or row counts.
+each manifest-listed archive and verifies its bytes against its digest receipt.
+A legacy archive with no receipt in the manifest is reported `unverified` and
+still exits zero; add `--require-verified` to fail on it. `check` does not
+prove restorability or row counts.
 The [nightly workflow](../.github/workflows/db-backup.yml) runs at `03:17Z`
 and can skip green when `PLANETSCALE_STAGING_DATABASE_URL` is absent. Green/skipped is
 not a successful backup. Its `branch` input changes the object prefix only:

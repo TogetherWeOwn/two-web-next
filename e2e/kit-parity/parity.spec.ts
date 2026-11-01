@@ -1739,7 +1739,7 @@ test.describe("archive page turns prove successful paging and history", () => {
 test("Kit worker answers traffic within the liveness bound", async ({ playwright }) => {
   // Liveness only: true startup (spawn-to-first-200) is enforced by this
   // project's Kit webServer readiness timeout, which derives from
-  // startup.maxMs in ci/kit-perf-budget.json — a worker that never becomes
+  // startup.maxMs in ci/budgets/kit/startup.json — a worker that never becomes
   // ready fails the run before any journey executes. This probe records warm
   // latency in the report without gating on it.
   const started = Date.now();

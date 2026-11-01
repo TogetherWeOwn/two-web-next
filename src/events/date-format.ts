@@ -1,4 +1,17 @@
-/** Server-side event date formatting shared by page models and renderers. */
+/** Dependency-free event date formatting shared by page models and renderers. */
+
+/** Full card wall time shared by Hono and Kit; ISO on a bad zone. */
+export const fmt = (d: Date, tz: string): string => {
+  try {
+    return new Intl.DateTimeFormat("en-GB", {
+      dateStyle: "full",
+      timeStyle: "short",
+      timeZone: tz,
+    }).format(d);
+  } catch {
+    return d.toISOString();
+  }
+};
 
 /** Detail wall time shared by HTML, Kit and Markdown; ISO on a bad zone. */
 export function formatEventWhen(instant: Date, timezone: string): string {

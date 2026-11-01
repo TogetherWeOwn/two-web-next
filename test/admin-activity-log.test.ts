@@ -4,7 +4,12 @@
 import { sql } from "drizzle-orm";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
-import { ACTIVITY_LOG_PAGE_SIZE, parseActivityLogQuery } from "../src/admin/table-list";
+import {
+  ACTIVITY_LOG_PAGE_SIZE,
+  activityLogEmptyText,
+  activityLogRecovery,
+  parseActivityLogQuery,
+} from "../src/admin/table-list";
 import { activityLog, memberDataAccessLogs } from "../src/db/admin-schema";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, MEMBER, MODERATOR, SUBJECT } from "./helpers/member-data";
@@ -46,6 +51,41 @@ describe("activity-log guard pins (local fixtures)", () => {
       subject: "Event",
       causer: "123",
       page: 2,
+    });
+  });
+});
+
+describe("activity-log empty-page recovery (pure)", () => {
+  const q = (over: Partial<{ subject: string; causer: string; page: number }> = {}) => ({
+    subject: "",
+    causer: "",
+    page: 1,
+    ...over,
+  });
+
+  it("offers nothing on an empty first page without filters", () => {
+    expect(activityLogEmptyText(q())).toBe("No activity yet.");
+    expect(activityLogRecovery(q(), 0)).toEqual({ clearUrl: null, firstUrl: null });
+  });
+
+  it("clears both filters, and returns a later page to page 1 of the same filters", () => {
+    expect(activityLogEmptyText(q({ causer: "42" }))).toBe("No activity matches these filters.");
+    expect(activityLogRecovery(q({ causer: "42" }), 0)).toEqual({
+      clearUrl: "/admin/activity-log?page=1",
+      firstUrl: null,
+    });
+    const later = q({ subject: "A & B", causer: "42", page: 7 });
+    expect(activityLogEmptyText(later)).toBe("No activity on this page.");
+    expect(activityLogRecovery(later, 0)).toEqual({
+      clearUrl: "/admin/activity-log?page=1",
+      firstUrl: "/admin/activity-log?page=1&subject=A+%26+B&causer=42",
+    });
+  });
+
+  it("offers nothing while rows render", () => {
+    expect(activityLogRecovery(q({ subject: "x", page: 3 }), 1)).toEqual({
+      clearUrl: null,
+      firstUrl: null,
     });
   });
 });
@@ -186,6 +226,21 @@ describe.skipIf(!process.env.DATABASE_URL)("activity-log viewer (isolated agent-
     expect(empty.status).toBe(200);
     expect(await empty.text()).toContain("No activity yet.");
     expect(await logs()).toHaveLength(0);
+  });
+
+  it("links an empty filtered or out-of-range page back to results", async () => {
+    await seedRow({ subjectId: "alpha-key" });
+    const filtered = await (await read("?subject=zz-no-matches")).text();
+    expect(filtered).toContain("No activity matches these filters.");
+    expect(filtered).toContain('<a href="/admin/activity-log?page=1">Clear filters</a>');
+    expect(filtered).not.toContain("First page of these results");
+    const beyond = await (await read("?subject=alpha&page=9")).text();
+    expect(beyond).toContain("No activity on this page.");
+    expect(beyond).toContain(
+      '<a href="/admin/activity-log?page=1&amp;subject=alpha">First page of these results</a>',
+    );
+    const populated = await (await read("?subject=alpha")).text();
+    expect(populated).not.toContain('data-testid="activity-log-recovery"');
   });
 
   it("labels imported legacy causer IDs without inventing access-log subjects", async () => {

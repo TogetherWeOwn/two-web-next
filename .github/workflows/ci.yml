@@ -991,8 +991,9 @@ jobs:
     # A private namespace keeps Wrangler's fixed audit port off the shared host.
     container:
       image: node:24-bookworm
-    # 45 covers one desktop-collect retry (ci/lighthouse-quality-run.mjs makes a
-    # second whole-run attempt when the first comes up short of LHRs).
+    # 45 covers one collect retry on each step (ci/lighthouse-perf-run.mjs and
+    # ci/lighthouse-quality-run.mjs each make a second whole-run attempt when
+    # the first comes up short of LHRs).
     timeout-minutes: 45
     env:
       WRANGLER_SEND_METRICS: "false"

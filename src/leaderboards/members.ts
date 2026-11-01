@@ -1,6 +1,6 @@
 // Member leaderboard: query grammar, ranking read and relative window.
 //
-// Rank key: count of `going` RSVPs for published events inside the season
+// Rank key: count of `going` RSVPs for published or past events inside the season
 // window (optionally one normalized game), grouped by member, descending;
 // ties break by user id ascending so a relative window is deterministic. Joins
 // are never counted. Opted-out and erased members never appear: the inner join
@@ -11,9 +11,11 @@ import type { Db } from "../db/index";
 import { containsControlCharacters } from "../admin/validation-shared";
 import { keyedMemberRead } from "../member-reads";
 import { pgSeasonBound, type SeasonWindow } from "../hotzones/season";
+import { OVERALL_CAP, RELATIVE_NEIGHBORS } from "./captions";
 
-/** Neighbors shown above and below the viewer in the relative scope. */
-export const RELATIVE_NEIGHBORS = 5;
+// The window constants live in ./captions (the pure caption module both
+// twins import); re-exported here so ranking readers keep one import.
+export { OVERALL_CAP, RELATIVE_NEIGHBORS };
 /**
  * Longest accepted `?activity=` game name (after trimming, in code points,
  * counted before lowercasing — exactly as the event form counts).
@@ -69,9 +71,6 @@ export function parseActivityParam(raw: string | null | undefined): ActivityPars
 export type RankedMember = { userId: string; username: string; count: number };
 export type BoardRow = RankedMember & { rank: number };
 
-/** Members shown on the overall board: ranks 1..100. */
-export const OVERALL_CAP = 100;
-
 type AggregateRow = { user_id: string; username: string; count: number | string };
 type RankRow = { user_id: string; rank: number | string };
 type WindowRow = AggregateRow & { rank: number | string };
@@ -110,7 +109,7 @@ async function loadRelativeWindow(
           inner join users on users.id = rsvps.user_id
           left join profiles on profiles.user_id = rsvps.user_id
           where rsvps.status = 'going'
-            and events.status = 'published'
+            and events.status in ('published', 'past')
             and users.member = true
             and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false)
             ${dateFilter}
@@ -136,7 +135,7 @@ async function loadRelativeWindow(
           inner join users on users.id = rsvps.user_id
           left join profiles on profiles.user_id = rsvps.user_id
           where rsvps.status = 'going'
-            and events.status = 'published'
+            and events.status in ('published', 'past')
             and users.member = true
             and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false)
             ${dateFilter}
@@ -163,7 +162,7 @@ async function loadRelativeWindow(
  * `count DESC, userId ASC` order. The overall scope caps at OVERALL_CAP via
  * LIMIT; the relative scope answers from a bounded rank lookup plus window
  * read (see loadRelativeWindow) and needs the viewer's id. Counting matches
- * the old per-RSVP fold exactly: only `going` RSVPs for published events
+ * the old per-RSVP fold exactly: only `going` RSVPs for published or past events
  * inside the season window count, with the same `?activity=` game filter,
  * opt-out and member filters. `db = null` (no database configured) yields
  * no rows.
@@ -207,7 +206,7 @@ export async function loadMemberRanking(
       inner join users on users.id = rsvps.user_id
       left join profiles on profiles.user_id = rsvps.user_id
       where rsvps.status = 'going'
-        and events.status = 'published'
+        and events.status in ('published', 'past')
         and users.member = true
         and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false)
         ${dateFilter}

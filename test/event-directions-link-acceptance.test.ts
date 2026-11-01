@@ -417,11 +417,12 @@ describe("Hono/Kit directions parity (RED: byte-identical hrefs)", () => {
   );
 });
 
-describe("absent venue (CONTROL: byte-identical to today, green before and after)", () => {
-  it("renders no Where block and no directions artifacts when the venue is null (Hono)", async () => {
+describe("absent venue (CONTROL: Where TBD block, no directions artifacts)", () => {
+  it("renders the Where TBD block and no directions artifacts when the venue is null (Hono)", async () => {
     const { status, html } = await honoHtml(eventRow({ location: null }));
     expect(status).toBe(200);
-    expect(html).not.toContain("<dt>Where</dt>");
+    expect(html).toContain("<dt>Where</dt>");
+    expect(html).toContain('data-testid="event-venue-tbd"');
     expect(html).not.toContain(PLAIN_VENUE);
     expectNoDirectionsArtifacts(html);
   });
@@ -429,13 +430,15 @@ describe("absent venue (CONTROL: byte-identical to today, green before and after
   it("treats an empty venue like no venue (Hono)", async () => {
     const { status, html } = await honoHtml(eventRow({ location: "" }));
     expect(status).toBe(200);
-    expect(html).not.toContain("<dt>Where</dt>");
+    expect(html).toContain("<dt>Where</dt>");
+    expect(html).toContain('data-testid="event-venue-tbd"');
     expectNoDirectionsArtifacts(html);
   });
 
-  it("renders no Where block and no directions artifacts when the venue is null (Kit)", async () => {
+  it("renders the Where TBD block and no directions artifacts when the venue is null (Kit)", async () => {
     const html = await kitHtml(eventRow({ location: null }));
-    expect(html).not.toContain("<dt>Where</dt>");
+    expect(html).toContain("<dt>Where</dt>");
+    expect(html).toContain('data-testid="event-venue-tbd"');
     expect(html).not.toContain(PLAIN_VENUE);
     expectNoDirectionsArtifacts(html);
   });
@@ -455,7 +458,8 @@ describe("absent venue (CONTROL: byte-identical to today, green before and after
     expect(html).toContain("How to join");
     const kit = await kitHtml(row);
     expectNoDirectionsArtifacts(kit);
-    expect(kit).not.toContain("<dt>Where</dt>");
+    expect(kit).toContain("<dt>Where</dt>");
+    expect(kit).toContain('data-testid="event-venue-tbd"');
   });
 
   it("keeps the venue text byte-identical on both renderers", async () => {

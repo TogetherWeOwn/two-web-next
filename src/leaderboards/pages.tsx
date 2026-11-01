@@ -7,6 +7,7 @@ import type { Session } from "../env";
 import { utcPeriodShortcuts } from "../hotzones/season";
 import { Layout, SiteFooter, SiteHeader } from "../pages";
 import { canonicalUrl } from "../seo";
+import { boardCaption } from "./captions";
 import type { BoardRow, MemberScope } from "./members";
 
 export type BoardQuery = { season: string; scope: MemberScope; activity: string | null };
@@ -108,16 +109,26 @@ export const MemberLeaderboardPage: FC<{
         {!available ? (
           <p role="status">Rankings are temporarily unavailable.</p>
         ) : rows.length === 0 ? (
-          <p role="status">
-            {query.scope === "relative"
-              ? "You are not ranked for this season and game yet."
-              : "Nobody is ranked for this season and game yet."}
-          </p>
+          query.scope === "relative" ? (
+            <p role="status">
+              You are not ranked for this season and game yet. See the{" "}
+              <a href={boardPath({ ...query, scope: "overall" })}>overall board</a>, or answer going
+              to get ranked at an upcoming <a href="/events">event</a>.
+            </p>
+          ) : query.activity === null ? (
+            <p role="status">
+              Nobody is ranked for this season and game yet. Browse <a href="/events">events</a> to
+              get ranked.
+            </p>
+          ) : (
+            <p role="status">
+              Nobody is ranked for this season and game yet. Browse <a href="/events">events</a> to
+              get ranked, or <a href={boardPath({ ...query, activity: null })}>show every game</a>.
+            </p>
+          )
         ) : (
           <table class="member-board-table">
-            <caption>
-              Going counts, season {query.season}, {label}
-            </caption>
+            <caption>{boardCaption(query)}</caption>
             <thead>
               <tr>
                 <th scope="col">Rank</th>

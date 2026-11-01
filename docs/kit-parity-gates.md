@@ -86,21 +86,19 @@ is set. The only authenticated Kit-parity journey in CI is `e2e:kit-parity` in
 `browser-smoke` (member board, one shared QA login); the critical `npm run e2e`
 journeys in the same job log in separately. The parity suite's raw
 no-JavaScript API checks fetch all four hot-zone paths on both targets
-(`e2e/kit-parity/parity.spec.ts:351-431`). Its rendered browser journey currently
-loads `/hotzones`, follows `/hotzones/joins`, and directly loads `/hotzones/voice`
-and `/hotzones/games` at desktop (1280×800) and mobile (390×844) widths
-(`parity.spec.ts:858-936`). That proves each page responds and contains a
-heading/grid region, but voice and games still need the content-specific
-assertions in the acceptance contract below. CI also covers shared helper
+(`e2e/kit-parity/parity.spec.ts`, "index and signals serve aggregate grids").
+Its rendered browser journey loads `/hotzones`, follows `/hotzones/joins`, and
+loads `/hotzones/voice` and `/hotzones/games` at desktop (1280×800) and
+mobile (390×844) widths ("hotzones … shows the grids and follows signal nav"),
+asserting the acceptance contract below. CI also covers shared helper
 branches through the canonical `/hotzones` fixture in the step-3 unit contract
 and the hot-zone Vitest suites. Preview fetches are operator-run evidence, not
 CI evidence.
 
 ### Voice and games rendered acceptance contract
 
-The next implementation slice is limited to strengthening the existing public,
-read-only browser journey in `e2e/kit-parity/parity.spec.ts`; it does not add a
-new fixture, credential, staging/production data dependency, login, screenshot
+The public, read-only browser journey in `e2e/kit-parity/parity.spec.ts` pins
+this contract; it adds no new fixture, credential, staging/production data dependency, login, screenshot
 baseline, or route. Run it on both the local Hono worker and built Kit Worker,
 for each viewport above. Assertions are observable rendered-page behavior:
 
@@ -109,7 +107,7 @@ for each viewport above. Assertions are observable rendered-page behavior:
   season-independent seeded estimate pending bot event-store calibration and
   shows a numeric total estimate. The one rendered grid is a labelled, focusable
   scroll region containing a table with weekday rows and hour columns; its
-  caption is `Season-independent seeded estimate of voice activity` for the fixture URL.
+  caption is `Season-independent seeded estimate of voice activity (hours in UTC)`.
 - **Games page:** same contract for `/hotzones/games`, with `games` substituted
   for `voice` in the heading, estimate copy and caption.
 - **Navigation:** from `/hotzones`, each Voice heatmap and Games heatmap link
@@ -139,8 +137,7 @@ GET pages; the browser context blocks external requests. The current journey
 needs no QA login (the single shared login belongs to the member-board tests).
 Keep data assertions fixture-stable: pin semantic labels, grid dimensions and
 nonnegative numeric totals rather than the seeded WhatPulse cells or a live
-join-count value. Do not claim the new content contract is executed until the
-assertions are merged and the parity browser job is green on that head.
+join-count value.
 
 In `browser-smoke`, after the seed and before any browser journey mutates
 shared state, the dedicated `events-index.visual.spec.ts` captures the Kit
@@ -419,10 +416,9 @@ preview; the served detail is pinned by the unit fixtures and the hermetic
 Kit suites because no seeded attempt id is stable on staging). Hot-zone coverage is distinct: the suite performs raw
 no-JavaScript API checks for all four paths and the two-width browser journey
 renders `/hotzones`, `/hotzones/joins`, `/hotzones/voice` and
-`/hotzones/games`. The latter two currently have only shared heading/grid/layout
-assertions; see [Voice and games rendered acceptance contract](#voice-and-games-rendered-acceptance-contract)
-for the content-specific browser assertions that remain the next implementation
-slice. The unit contract exercises shared contract branches on canonical
+`/hotzones/games`, with the voice and games content assertions in
+[Voice and games rendered acceptance contract](#voice-and-games-rendered-acceptance-contract).
+The unit contract exercises shared contract branches on canonical
 fixtures (one synthetic `/hotzones` shell, one member-board fixture, the
 `/about` and `/faq` leaves); per-path coverage of all four hot-zone signals
 also comes from API checks (and preview mode when an operator runs it).

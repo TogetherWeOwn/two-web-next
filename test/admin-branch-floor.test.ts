@@ -492,6 +492,34 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
     expect(await res.text()).toContain("Only a draft can be published.");
   });
 
+  it.each([
+    ["publish", { status: "cancelled" as const }, "stays cancelled"],
+    ["cancel", { status: "past" as const }, "can be cancelled"],
+    ["rsvp-pause", {}, "Only published events"],
+    ["rsvp-reopen", {}, "Only published events"],
+  ])(
+    "returns a refused %s to the event with links, not a retry form",
+    async (action, over, why) => {
+      const row = await seedEvent({ eventKey: "01K00000000000000000000009", ...over });
+      const res = await post(`/events/${row.eventKey}/${action}`, {});
+      expect(res.status).toBe(422);
+      const page = (await res.text()).split("<h1>")[1]!;
+      expect(page).toContain(why);
+      expect(
+        [...page.matchAll(/<a href="([^"]+)">([^<]+)<\/a>/g)].map((m) => [m[1], m[2]]),
+      ).toEqual([
+        [`/admin/events/${row.eventKey}`, "Back to the event"],
+        ["/admin/events", "Back to events"],
+        ["/admin", "Back to the dashboard"],
+      ]);
+      expect(page).not.toContain("<form");
+      const [after] = await db.select().from(events).where(eq(events.eventKey, row.eventKey));
+      expect(after?.status).toBe(row.status);
+      expect(after?.rsvpOpen).toBe(row.rsvpOpen);
+      expect(await auditDescriptions(db)).toEqual([]);
+    },
+  );
+
   it("refuses RSVP pause on a draft and reopen on an ended event", async () => {
     const draft = await seedEvent({ eventKey: "01K00000000000000000000005" });
     const paused = await post(`/events/${draft.eventKey}/rsvp-pause`, {});
@@ -870,6 +898,17 @@ describe("admin error and empty page states (pure render, no DB)", () => {
     );
     expect(detailed).toContain('data-testid="error-detail"');
     expect(detailed).toContain("Only a draft.");
+  });
+
+  it("lists recovery links before the dashboard link and escapes them", () => {
+    const html = String(
+      jsx(ErrorPage, {
+        heading: "That transition is not allowed",
+        recovery: [{ href: '/admin/events/"x"', label: "<b>Back</b>" }],
+      }),
+    );
+    expect(html).toContain('<a href="/admin/events/&quot;x&quot;">&lt;b&gt;Back&lt;/b&gt;</a> · ');
+    expect(html.indexOf("&lt;b&gt;Back")).toBeLessThan(html.indexOf("Back to the dashboard"));
   });
 
   it("omits optional dashboard widgets when the database is absent", () => {

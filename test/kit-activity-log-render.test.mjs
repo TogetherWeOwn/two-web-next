@@ -155,6 +155,16 @@ describe("Kit activity-log rendered output", () => {
     expect(html).not.toContain("causer=");
   });
 
+  it("links an empty later filtered page to page 1 and to cleared filters, like Hono", () => {
+    const html = renderPage(pageData({ rows: [], hasNext: false }));
+    expect(html).toContain("No activity on this page.");
+    expect(html).toContain(
+      '<a href="/admin/activity-log?page=1&amp;subject=Event+Alpha&amp;causer=100000000000000111">First page of these results</a>',
+    );
+    expect(html).toContain('<a href="/admin/activity-log?page=1">Clear filters</a>');
+    expect(renderPage(pageData())).not.toContain('data-testid="activity-log-recovery"');
+  });
+
   it("URL-encodes special characters in filters before rendering paging links", () => {
     const html = renderPage(
       pageData({ query: { subject: 'Alpha & "Beta"', causer: "42/legacy", page: 2 } }),

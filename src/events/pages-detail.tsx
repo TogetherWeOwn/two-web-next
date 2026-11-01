@@ -1,7 +1,8 @@
 // Event detail screen: hero, RSVP, share, attendees, discovery.
 import type { FC } from "hono/jsx";
+import { isPublicJoinUrl } from "./public-join-url";
 import { canonicalUrl } from "../seo";
-import { isValidZone, renderGoingCount } from "../islands/contracts";
+import { EVENT_ONGOING_TESTID, isValidZone, renderGoingCount } from "../islands/contracts";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
@@ -9,6 +10,7 @@ import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
 import { eventLinkAvailability } from "./link-availability";
+import { ONGOING_COPY, isOngoing } from "./ongoing";
 import type {
   EventAttendee,
   EventLink,
@@ -112,9 +114,10 @@ export const EventPage: FC<{
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
-  const accessibilityNotes = e.accessibilityNotes?.trim();
   const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
+  // Share one render instant with the lineup and RSVP control.
   const now = new Date();
+  const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -146,6 +149,11 @@ export const EventPage: FC<{
         {e.status === "cancelled" ? (
           <p class="notice" role="status" data-testid="event-cancelled">
             Cancelled
+          </p>
+        ) : null}
+        {isOngoing(e, now) ? (
+          <p class="notice" data-testid={EVENT_ONGOING_TESTID}>
+            {ONGOING_COPY}
           </p>
         ) : null}
         <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
@@ -207,19 +215,25 @@ export const EventPage: FC<{
             <dd>{duration}</dd>
           </div>
         ) : null}
-        {e.location ? (
-          <div>
-            <dt>Where</dt>
-            <dd>
-              <p data-testid="event-venue">{e.location}</p>
-              <p>
-                <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
-                  Get directions
-                </a>
+        <div>
+          <dt>Where</dt>
+          <dd>
+            {e.location ? (
+              <>
+                <p data-testid="event-venue">{e.location}</p>
+                <p>
+                  <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
+                    Get directions
+                  </a>
+                </p>
+              </>
+            ) : (
+              <p data-testid="event-venue-tbd">
+                Venue TBD — check <a href="/discord">Discord</a> for updates.
               </p>
-            </dd>
-          </div>
-        ) : null}
+            )}
+          </dd>
+        </div>
         {e.organizer_name ? (
           <div>
             <dt>Hosted by</dt>
@@ -319,7 +333,7 @@ export const EventPage: FC<{
             >
               <h2 id="event-join-details-heading">How to join</h2>
               {e.join_url ? (
-                e.status === "published" ? (
+                e.status === "published" && isPublicJoinUrl(e.join_url) ? (
                   <p>
                     <a href={e.join_url} data-testid="event-public-join-link">
                       Open the public joining link
@@ -456,7 +470,41 @@ export const EventPage: FC<{
             .
           </p>
         </section>
-      ) : null}
+      ) : (
+        // One accessible shell for guest, non-member and empty member states.
+        // Later attendee pages retain the populated/stale-page branch above.
+        <section
+          aria-labelledby="event-roster-heading"
+          data-testid={
+            member
+              ? "event-roster-empty"
+              : session
+                ? "event-roster-members-only"
+                : "event-roster-guest-nudge"
+          }
+        >
+          <h2 id="event-roster-heading">Who's going{member ? " (0)" : ""}</h2>
+          <p>
+            {member ? (
+              "No one is listed as going yet."
+            ) : session ? (
+              <>
+                Members only —{" "}
+                <a href={`/join?next=${encodeURIComponent(returnTo ?? path)}`}>join the Discord</a>{" "}
+                to see who's in.
+              </>
+            ) : (
+              <>
+                {e.goingCount > 0 ? `${e.goingCount} going —` : "No one is listed as going yet."}{" "}
+                <a href={`/join/discord?next=${encodeURIComponent(returnTo ?? path)}`}>
+                  sign in to see who's in
+                </a>
+                .
+              </>
+            )}
+          </p>
+        </section>
+      )}
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/event-share.js" defer />
       <script src="/islands/going-count.js" defer />
