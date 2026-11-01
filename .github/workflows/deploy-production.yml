@@ -449,17 +449,20 @@ jobs:
       version_id: ${{ needs.preflight.outputs.rollback_version_id }}
       ref: ${{ needs.preflight.outputs.sha }}
       expected_current_version_id: ${{ needs.deploy-production.outputs.promoted_version_id }}
-    # Blanket inherit is load-bearing here, not convenience: the production
-    # Environment secrets this leg needs cannot be passed by name, because a
-    # caller job cannot bind an environment and an unpassed environment
-    # secret resolves to an empty string without an error
+    # Explicit least-privilege map: the two production Environment secrets
+    # this leg needs are passed by name, and the called job's own
+    # `environment: production` binding receives their values even though
+    # this caller binds no environment
     # (https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows#passing-secrets-to-a-reusable-workflow).
-    # The called job's own `environment: production` binding receives their
-    # values, and its exact-match selectors plus the --credentials fail-closed
-    # check confine them to the production leg. If the binding ever stopped
+    # The webhook key travels too because the production rollback notifies.
+    # The exact-match selectors plus the --credentials fail-closed check
+    # confine them to the production leg. If the binding ever stopped
     # resolving, that check fails the rollback closed and the runbook's manual
     # rollback path (same recorded target) takes over.
-    secrets: inherit
+    secrets:
+      PRODUCTION_CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+      PRODUCTION_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      PAPERCLIP_DEPLOY_WEBHOOK_SECRET: ${{ secrets.PAPERCLIP_DEPLOY_WEBHOOK_SECRET }}
 
   release:
     name: release
