@@ -40,6 +40,11 @@ on:
         required: false
         type: string
         default: ""
+      reason:
+        description: "What triggered the rollback, for the deploy-notify record"
+        required: false
+        type: string
+        default: ""
     # Callers pass every secret by name. Production Environment secrets are
     # passed by name too: the called job's own `environment:` binding receives
     # their values, even though the caller job itself binds no environment
@@ -286,3 +291,38 @@ jobs:
           done
           echo "::error::public-route smoke failed after rollback"
           exit 1
+
+  notify:
+    name: rollback-notify
+    # Final step of every production rollback, manual or automatic: POST the
+    # outcome to the Paperclip deploy-verification routine
+    # (ci/deploy-notify.mjs). Never decides the rollback: the step is
+    # continue-on-error. Staging drills do not notify.
+    needs: [preflight, rollback-production]
+    if: ${{ always() && inputs.environment == 'production' }}
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            /ci/
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Notify the Paperclip deploy-verification routine
+        continue-on-error: true
+        run: node ci/deploy-notify.mjs
+        env:
+          NOTIFY_EVENT: rollback
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+          EXPECTED_CURRENT_VERSION_ID: ${{ inputs.expected_current_version_id }}
+          ROLLBACK_RESULT: ${{ needs.rollback-production.result }}
+          ROLLBACK_ACTION: ${{ needs.rollback-production.outputs.action }}
+          ROLLBACK_REASON: ${{ inputs.reason }}
+          PAPERCLIP_DEPLOY_WEBHOOK_URL: ${{ vars.PAPERCLIP_DEPLOY_WEBHOOK_URL }}
+          PAPERCLIP_DEPLOY_WEBHOOK_SECRET: ${{ secrets.PAPERCLIP_DEPLOY_WEBHOOK_SECRET }}

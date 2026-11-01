@@ -702,6 +702,22 @@ when a staging pass for the candidate exists, it must still have soaked 30
 minutes; a promotion with no staging evidence yet rides on the reviewer's
 approval alone.
 
+#### Deploy notify
+
+The last job of every attempted promotion (`deploy-notify`) and of every
+production rollback (`rollback-notify`) runs `ci/deploy-notify.mjs`. It POSTs
+`{repo, event, outcome, sha, versionId, previousVersionId, runUrl, startedAt,
+finishedAt, reason}` to the Paperclip deploy-verification routine at the repo
+variable `PAPERCLIP_DEPLOY_WEBHOOK_URL`, signed with HMAC-SHA256 over
+`<unix seconds>.<body>` using the repo secret
+`PAPERCLIP_DEPLOY_WEBHOOK_SECRET` (`X-Paperclip-Timestamp`,
+`X-Paperclip-Signature: sha256=<hex>`). The step is `continue-on-error`: a
+Paperclip outage never fails or blocks a deploy or rollback, and an
+unconfigured webhook only warns. Staging drills do not notify. A superseded
+watch reports success with a superseded reason (the promotion went out
+unwatched); a deploy that fails after the verified 100% promotion reports
+failed with the promoted version live and unwatched.
+
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group
 (non-cancelling). The lock covers only the two mutating jobs, never
