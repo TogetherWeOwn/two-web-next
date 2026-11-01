@@ -17,8 +17,8 @@ import { SMOKE_PROBE_KEY, SMOKE_SECURITY_TXT_EXPIRES } from "../bin/smoke.mjs";
 // --expected-version-id on every attempt, with no version-override routing
 // header, and must reject an absent/malformed promoted id before probing.
 // A failed verification blocks the release tag while leaving the promoted
-// candidate live and naming the recorded restoration target; it never adds an
-// automatic rollback.
+// candidate live and naming the recorded restoration target; the
+// auto-rollback job, not this step, restores it.
 //
 // Hermetic only: every probe below talks to a loopback stub. No live host,
 // no workflow dispatch.
@@ -345,5 +345,8 @@ test("promotion runbook distinguishes target identity from healthy content", asy
   assert.match(section, /absent or malformed|missing or malformed/i, section);
   assert.match(section, /restoration target|PREV_VERSION/i, section);
   assert.match(section, /healthy/i, section);
-  assert.match(section, /never adds an automatic rollback/i, section);
+  // The restore after a failed verification is the auto-rollback job,
+  // through the rollback workflow, never an inline rollback in this step.
+  assert.match(section, /auto-rollback/, section);
+  assert.match(section, /rollback-production|this workflow/, section);
 });
