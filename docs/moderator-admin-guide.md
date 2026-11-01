@@ -474,8 +474,11 @@ not cancel the whole series. Moving the parent's start/end times also shifts
 not-yet-started children by the differences between their old and new weekly
 schedules in the host's timezone, including clock changes. Individual adjustments
 relative to the schedule are retained; started instances retain their times.
-If the same edit also changes the timezone, children follow the new timezone's
-weekly schedule for both start and end. Shifted published/cancelled children attempt asynchronous
+Changing the parent's timezone, with or without new times, moves those children
+to the new timezone's weekly schedule for both start and end and sets their
+timezone to the new one. A child whose times and timezone already match is left
+untouched. A child whose only change is its timezone is saved without a Discord
+update, because Discord stores instants only. Shifted published/cancelled children attempt asynchronous
 Discord write-back even when the edited parent is draft or past. For example,
 saving new times on a draft parent can move a published future child and enqueue
 its Discord update. This does not change the children's statuses or confirm
