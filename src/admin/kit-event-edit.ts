@@ -59,13 +59,15 @@ export type KitEventEditValues = {
   capacity: string;
 };
 
-/** One roster row as the Hono table renders it: display name, status and the
+/** One roster row as the Hono table renders it: display name, status, the
+ * global waitlist position (`#n` for waitlisted rows, null otherwise) and the
  * ISO instant. The member identifier stays out of the view: Hono uses it only
  * as a vnode key, never as rendered text, so the Svelte page keys rows by
  * their instant and index instead. */
 export type KitEventEditRosterEntry = {
   member: string;
   status: string;
+  waitlistPosition: number | null;
   answeredAt: string;
 };
 
@@ -159,6 +161,7 @@ export type KitEventEditRosterRow = {
   username: string | null;
   status: string;
   answeredAt: Date;
+  waitlistPosition?: number | null;
 };
 
 export type KitEventEditDeps = {
@@ -231,6 +234,9 @@ export async function resolveKitEventEdit(
   const entries = roster.rows.map((r) => ({
     member: r.username?.trim() || "Unknown member",
     status: r.status,
+    // Rendered only for waitlisted rows: the window rank is global, but a
+    // non-waitlisted row must never show a queue number.
+    waitlistPosition: r.status === "waitlisted" ? (r.waitlistPosition ?? null) : null,
     answeredAt: r.answeredAt.toISOString(),
   }));
   const rangeStart = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + 1 : 0;
@@ -303,6 +309,7 @@ export async function resolveKitEventEdit(
             : null,
         sortHeaders: [
           sortHeader(row.eventKey, query, "status", "Status"),
+          sortHeader(row.eventKey, query, "waitlist", "Waitlist"),
           sortHeader(row.eventKey, query, "answered", "Answered"),
         ],
         // The Hono edit action, unencoded like the Hono page's own form target.

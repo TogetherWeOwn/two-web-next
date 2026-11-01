@@ -285,13 +285,16 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         <tbody>
           {#if roster.entries.length === 0}
             <tr>
-              <td colspan={3} data-testid="roster-empty">{roster.emptyText}</td>
+              <td colspan={4} data-testid="roster-empty">{roster.emptyText}</td>
             </tr>
           {:else}
             {#each roster.entries as r, i (`${r.answeredAt}-${i}`)}
               <tr>
                 <td>{r.member}</td>
                 <td>{r.status}</td>
+                <td>
+                  {#if r.status === "waitlisted" && r.waitlistPosition != null}#{r.waitlistPosition}{:else}—{/if}
+                </td>
                 <td>{r.answeredAt}</td>
               </tr>
             {/each}

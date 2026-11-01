@@ -221,13 +221,46 @@ describe("resolveKitEventEdit: bounded roster paging", () => {
     const outcome = await resolveKitEventEdit("EVTPAST01", {}, depsFor());
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(outcome.view.roster.entries).toEqual([
-      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
-      { member: "Unknown member", status: "waitlisted", answeredAt: "2026-06-01T12:00:00.000Z" },
+      {
+        member: "mod",
+        status: "going",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
+      {
+        member: "Unknown member",
+        status: "waitlisted",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
     ]);
     for (const entry of outcome.view.roster.entries) {
       expect(entry).not.toHaveProperty("userId");
       expect(entry).not.toHaveProperty("username");
     }
+  });
+
+  it("carries the global waitlist rank only on waitlisted rows", async () => {
+    const outcome = await resolveKitEventEdit(
+      "EVTPAST01",
+      {},
+      depsFor({
+        list: async () => ({
+          total: 2,
+          rows: [
+            { username: "early", status: "waitlisted", answeredAt, waitlistPosition: 7 },
+            // A stale rank on a non-waitlisted row must never reach the view.
+            { username: "seated", status: "going", answeredAt, waitlistPosition: 3 },
+          ],
+        }),
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.roster.entries.map((e) => e.waitlistPosition)).toEqual([7, null]);
+    const waitlist = outcome.view.roster.sortHeaders.find((h) => h.key === "waitlist")!;
+    expect(waitlist.label).toBe("Waitlist");
+    expect(waitlist.active).toBe(false);
+    expect(waitlist.linkLabel).toBe("Sort by waitlist ascending");
   });
 
   it("computes the Hono range line and next-page flag from the filtered total", async () => {

@@ -83,6 +83,14 @@ export const EventRosterSection: FC<{
                 }
               />
               <TableSortHeader
+                label="Waitlist"
+                active={rosterQuery.sort === "waitlist"}
+                order={rosterQuery.order}
+                url={(order) =>
+                  rosterUrl(eventKey, rosterQuery, { sort: "waitlist", order, page: 1 })
+                }
+              />
+              <TableSortHeader
                 label="Answered"
                 active={rosterQuery.sort === "answered"}
                 order={rosterQuery.order}
@@ -95,7 +103,7 @@ export const EventRosterSection: FC<{
           <tbody>
             {roster.length === 0 ? (
               <tr>
-                <td colspan={3} data-testid="roster-empty">
+                <td colspan={4} data-testid="roster-empty">
                   {total > 0 ? "No RSVPs on this page." : rosterEmptyText(rosterQuery)}
                 </td>
               </tr>
@@ -104,6 +112,11 @@ export const EventRosterSection: FC<{
                 <tr key={r.userId}>
                   <td>{r.username?.trim() || "Unknown member"}</td>
                   <td>{r.status}</td>
+                  <td>
+                    {r.status === "waitlisted" && r.waitlistPosition != null
+                      ? `#${r.waitlistPosition}`
+                      : "—"}
+                  </td>
                   <td>{r.answeredAt.toISOString()}</td>
                 </tr>
               ))
