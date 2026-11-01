@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   classifyActivityRow,
   computeReeditShare,
+  failureLine,
   parseArgs,
   renderReport,
 } from "../bin/event-reedit-baseline.mjs";
@@ -148,6 +149,19 @@ describe("computeReeditShare", () => {
     expect(report.sharePercent).toBeNull();
     expect(renderReport(report, false)).toContain("n/a (nothing published)");
     expect(JSON.parse(renderReport(report, true)).sharePercent).toBeNull();
+  });
+});
+
+describe("failureLine", () => {
+  it("prints the SQLSTATE code and nothing else", () => {
+    expect(
+      failureLine(Object.assign(new Error("relation does not exist"), { code: "42P01" })),
+    ).toBe("REEDIT_BASELINE_FAILED sqlstate=42P01");
+    expect(failureLine(new Error("boom"))).toBe("REEDIT_BASELINE_FAILED sqlstate=UNKNOWN");
+    // A crafted code never leaks into stderr verbatim.
+    expect(failureLine({ code: "42P01\nhost=db.internal" })).toBe(
+      "REEDIT_BASELINE_FAILED sqlstate=UNKNOWN",
+    );
   });
 });
 

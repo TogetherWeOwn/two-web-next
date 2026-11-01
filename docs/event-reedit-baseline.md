@@ -74,6 +74,14 @@ DATABASE_URL='<production read URL with sslmode=verify-full>' \
   node bin/event-reedit-baseline.mjs --target=production --json
 ```
 
+Production is the PlanetScale `two-web-next-production` database reached
+through Hyperdrive; run with the read-only backup role after confirming
+the session is read-only (`transaction_read_only=on`). The Neon `main`
+branch database has no `activity_log` table, so a run pointed there fails
+with `REEDIT_BASELINE_FAILED sqlstate=42P01` — that code names the error
+class only and is safe to paste back. Delete any local copy of the
+production URL after the run.
+
 Pin a historical window with `--end=<ISO timestamp>` and
 `--window-days=<1-366>`. Exit 0 prints the report; exit 2 is a
 usage/configuration refusal (for example a production-looking URL without
@@ -84,8 +92,19 @@ code only, never driver details.
 
 | Label | Publish window (UTC) | Published | Re-edited ≤60 min | Share | Method |
 | --- | --- | ---: | ---: | ---: | --- |
-| Baseline (pre–Goal 4) | pending owner run | — | — | — | v1 |
+| Baseline (pre–Goal 4) | 2026-10-04T07:23:27.601Z – 2026-11-01T07:23:27.601Z | 0 | 0 | n/a (nothing published) | v1 |
 | Follow-up (4 weeks after first Goal 4 release) | not yet due | — | — | — | v1 |
+
+Baseline run 2026-11-01 (operator, read-only backup role, head
+`3aa37080`): `{"metric":"event-reedit-within-1h","methodVersion":1,
+"published":0,"reedited":0,"underObserved":0,"sharePercent":null}`.
+Production `activity_log` holds **0 rows in total**, not just 0 event
+rows, so there is no share to record yet: either production has had no
+moderator event publishes, or the app does not write `activity_log` in
+production. The app code does write the table on moderator event
+transitions and edits (`src/admin/store-event-writes.ts`), which points
+at missing production writes rather than missing publishes — tracked as
+a follow-up card before Goal 4 relies on this metric.
 
 Record a measurement by replacing the pending cells with the runner's
 `windowStart`/`windowEnd`, `published`, `reedited` and `sharePercent`

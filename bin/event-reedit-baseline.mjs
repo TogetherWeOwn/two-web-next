@@ -144,6 +144,16 @@ export function parseArgs(args) {
   return out;
 }
 
+// Failure lines carry the driver SQLSTATE code (for example 42P01 for a
+// missing table) so a misconfigured target is diagnosable without a second
+// run. The code names the error class only; it carries no secrets, hosts or
+// query text, so it is safe to print next to the stable refusal token.
+export function failureLine(err) {
+  const raw = err && typeof err.code === "string" ? err.code : "";
+  const code = /^[0-9A-Z]{5}$/.test(raw) ? raw : "UNKNOWN";
+  return `REEDIT_BASELINE_FAILED sqlstate=${code}`;
+}
+
 export function renderReport(report, json) {
   if (json) return `${JSON.stringify(report)}\n`;
   const share =
@@ -225,8 +235,8 @@ async function main() {
       process.stdout.write(renderReport(report, opts.json));
       code = 0;
     }
-  } catch {
-    process.stderr.write("REEDIT_BASELINE_FAILED\n");
+  } catch (err) {
+    process.stderr.write(`${failureLine(err)}\n`);
     code = 1;
   }
   if (sql) {
