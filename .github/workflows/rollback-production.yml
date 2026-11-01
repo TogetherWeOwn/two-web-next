@@ -61,15 +61,9 @@ on:
         description: "Production Cloudflare account id (production Environment secret), for environment production only"
         required: false
       CLOUDFLARE_API_TOKEN:
-        description: "Staging Cloudflare API token fallback (repo secret), for environment staging only"
-        required: false
-      CLOUDFLARE_ACCOUNT_ID:
-        description: "Staging Cloudflare account id fallback (repo secret), for environment staging only"
-        required: false
-      staging_cloudflare_api_token:
         description: "Staging Cloudflare API token (repo secret), for environment staging only"
         required: false
-      staging_cloudflare_account_id:
+      CLOUDFLARE_ACCOUNT_ID:
         description: "Staging Cloudflare account id (repo secret), for environment staging only"
         required: false
       PAPERCLIP_DEPLOY_WEBHOOK_SECRET:
@@ -184,9 +178,9 @@ jobs:
         run: node ci/production-deploy-gate.mjs --credentials
         env:
           # Prod via declared call secret + this job's environment binding;
-          # staging via declared call secrets, direct repo secret on manual dispatch.
-          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && (secrets.staging_cloudflare_api_token || secrets.CLOUDFLARE_API_TOKEN) || '' }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && (secrets.staging_cloudflare_account_id || secrets.CLOUDFLARE_ACCOUNT_ID) || '' }}
+          # staging via declared call secret, direct repo secret on manual dispatch.
+          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
       - name: Refuse when an unexpected version is live
         # Automation passes expected_current_version_id: roll back only while
         # that version serves, report skip when version_id already serves,
@@ -206,9 +200,9 @@ jobs:
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
           ROLLBACK_WORKER_NAME: ${{ steps.target.outputs.worker }}
           # Prod via declared call secret + this job's environment binding;
-          # staging via declared call secrets, direct repo secret on manual dispatch.
-          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && (secrets.staging_cloudflare_api_token || secrets.CLOUDFLARE_API_TOKEN) || '' }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && (secrets.staging_cloudflare_account_id || secrets.CLOUDFLARE_ACCOUNT_ID) || '' }}
+          # staging via declared call secret, direct repo secret on manual dispatch.
+          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
       - name: Require rollback target version secrets (names only, before rollback)
         # Reads the recorded target version's secret_text bindings via
         # wrangler versions view and refuses on any missing required name.
@@ -224,9 +218,9 @@ jobs:
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
           ROLLBACK_WORKER_NAME: ${{ steps.target.outputs.worker }}
           # Prod via declared call secret + this job's environment binding;
-          # staging via declared call secrets, direct repo secret on manual dispatch.
-          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && (secrets.staging_cloudflare_api_token || secrets.CLOUDFLARE_API_TOKEN) || '' }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && (secrets.staging_cloudflare_account_id || secrets.CLOUDFLARE_ACCOUNT_ID) || '' }}
+          # staging via declared call secret, direct repo secret on manual dispatch.
+          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
       - name: Capture pre-rollback dead-letter baseline
         id: dead-letter-baseline
         # Read-only GET before the rollback: the post-rollback smoke fails only
@@ -256,9 +250,9 @@ jobs:
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
           ROLLBACK_WORKER_NAME: ${{ steps.target.outputs.worker }}
           # Prod via declared call secret + this job's environment binding;
-          # staging via declared call secrets, direct repo secret on manual dispatch.
-          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && (secrets.staging_cloudflare_api_token || secrets.CLOUDFLARE_API_TOKEN) || '' }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && (secrets.staging_cloudflare_account_id || secrets.CLOUDFLARE_ACCOUNT_ID) || '' }}
+          # staging via declared call secret, direct repo secret on manual dispatch.
+          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
       - name: Smoke test public routes on the rolled-back version
         # Same GET-only public-route set as staging (bin/smoke.mjs), so the two
         # gates cannot drift. Manual redirects keep the checks unauthenticated
