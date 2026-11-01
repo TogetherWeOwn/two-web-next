@@ -16,12 +16,15 @@ Canonical builds are `npm run build --prefix web`, then
 `node ci/check-kit-perf.mjs`, on Node v24.21.0. The pristine merge-base
 (`3e718f5f`) was built once; the composed stack (roster PR plus stacked
 activity PR) was built twice — once locally and once by exact-head CI —
-agreeing within 2 bytes on every axis.
+agreeing within 2 bytes on every axis. Merging current main (which adds
+the MCP result-budget and truncation-notice growth) moved the stack to two
+new local builds, 1212373/339026 and 1212371/339026, agreeing within 2 bytes
+on raw and exactly on gzip.
 
 | Metric | Pristine build | Stack local / CI | Pristine ceiling | Stack ceiling |
 | --- | ---: | ---: | ---: | ---: |
-| Server JS raw | 1209284 | 1210708 / 1210710 | 1209344 | 1210880 |
-| Server JS gzip | 338063 | 338447 / 338448 | 338176 | 338688 |
+| Server JS raw | 1209284 | 1210708 / 1210710 | 1209344 | 1212416 |
+| Server JS gzip | 338063 | 338447 / 338448 | 338176 | 339200 |
 | Client JS raw | 260397 | 261380 / 261380 | 260608 | 261632 |
 | Client JS gzip | 103901 | 104463 / 104463 | 103936 | 104704 |
 
@@ -41,12 +44,23 @@ breaches all four axes at once.
 
 ## Sizing
 
+Main's MCP admissions landed while this branch was open (server raw 1211392
+and server gzip 338688; see `2026-11-01-mcp-result-budget-server.md`,
+`2026-11-01-mcp-result-budget-rebase.md`,
+`2026-11-01-mcp-truncation-notice-server.md` and
+`2026-11-01-mcp-truncation-notice-restack-main.md`), and the merge took this
+branch's server fragment to exactly those ceilings. The merged stack measures
+1212373 raw and 339026 gzip, so this admission raises the server axes one
+further least-cover step on top of main's, plus the client pair.
+
 Least-cover aligned steps on each breached axis, not 25% headroom:
 
-- Server raw 1209344 -> 1210880: +1536 bytes (0.127%); margin 170 bytes.
-  The lower 512-byte step 1210368 rejects the worst build by 342.
-- Server gzip 338176 -> 338688: +512 bytes (0.151%); margin 240 bytes.
-  The lower 256-byte step 338432 rejects the worst build by 16.
+- Server raw 1211392 -> 1212416: +1024 bytes (0.085%); margin 43 bytes.
+  The lower 512-byte step 1211904 rejects the worst build by 469. The
+  margin is thin but has precedent (the 1203932 composition shipped with
+  margin 36), and the two merged builds agree within 2 bytes.
+- Server gzip 338688 -> 339200: +512 bytes (0.151%); margin 174 bytes.
+  The lower 256-byte step 338944 rejects the worst build by 82.
 - Client raw 260608 -> 261632: +1024 bytes (0.393%); margin 252 bytes.
   The lower 512-byte step 261120 rejects the worst build by 260.
 - Client gzip 103936 -> 104704: +768 bytes (0.739%); margin 241 bytes.
@@ -59,11 +73,13 @@ later features.
 
 ## Enforcement
 
-Both shipping oracles keep every earlier allocation and add server raw
-1210880, server gzip 338688 and the client pair 261632/104704. Fixed
-fixtures accept the measured sizes and exact ceilings, and reject one
-byte over each.
+Both shipping oracles keep every earlier allocation (including main's
+1209856/338432 and 1211392/338688 server steps) and add server raw 1212416,
+server gzip 339200 and the client pair 261632/104704. The shipping oracle
+admits the stack as server 1212416/339200 with client 261632/104704. Fixed
+fixtures accept the measured sizes and exact ceilings, and reject one byte
+over each.
 
-Undo: revert the roster PR's admission commit. The fragments, this
-decision and the oracle additions go together; the stacked activity PR
-then re-measures against the restored ceilings.
+Undo: revert the roster PR's admission commit. The server and client
+fragments, this decision and the oracle additions go together; the stacked
+activity PR then re-measures against the restored ceilings.
