@@ -511,6 +511,13 @@ jobs:
     # mutation lock: a manual rollback or redeploy meanwhile makes the watch
     # stand down instead of judging another version.
     needs: [preflight, deploy-production]
+    # The candidate stays live at 100% even when a later deploy step fails
+    # (for example the proof upload), so the watch must still start: gate on
+    # the verification outcome, not on the deploy job's success. !cancelled()
+    # lets this run after a failed deploy; verify_outcome == 'success' means
+    # the promoted version serves and needs watching.
+    if: >-
+      !cancelled() && needs.deploy-production.outputs.verify_outcome == 'success'
     # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
