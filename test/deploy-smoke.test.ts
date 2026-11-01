@@ -668,10 +668,10 @@ describe("production deploy smoke (offline)", () => {
 // promotion reaches 100%, so a promotion serving broken public content fails
 // the deploy-production job before the release job can tag. A failed run
 // leaves the promoted candidate live at 100% with the tag withheld and prints
-// PREV_VERSION as the recorded restoration target for the rollback-production
-// workflow; there is no automatic restore (the gradual action's rollback only
-// covers in-action failures, and an inline wrangler rollback would bypass the
-// rollback target-version secrets preflight).
+// PREV_VERSION as the recorded restoration target; the auto-rollback job
+// restores it through the rollback-production workflow (the gradual action's
+// rollback only covers in-action failures, and an inline wrangler rollback
+// would bypass the rollback target-version secrets preflight).
 function postPromotionSmoke(
   succeedOnAttempt: number,
   prevVersion = "pre-promote-version-for-test",
@@ -809,7 +809,7 @@ describe("production post-promotion verification (offline)", () => {
     expect(result.output).not.toContain("still live at 100%");
   });
 
-  it("wires the gradual rollback target into the step and documents the manual restore", () => {
+  it("wires the gradual rollback target into the step and documents the automatic restore", () => {
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
     const stepAt = workflow.indexOf("- name: Verify public routes on the promoted version");
     expect(stepAt).toBeGreaterThan(-1);
@@ -847,7 +847,7 @@ describe("production post-promotion verification (offline)", () => {
       workflow.indexOf("- name: Gradual promotion 5-50-100 with automatic rollback"),
     );
     // Still inside the deploy-production job: the release job keeps its
-    // `needs: [preflight, deploy-production]`, so a failed verification fails
+    // `needs: [preflight, deploy-production, post-deploy-watch]`, so a failed verification fails
     // this job and the tag never publishes (pinned in release-workflow.test.ts).
     expect(stepAt).toBeLessThan(workflow.indexOf("\n  release:\n"));
     const block = workflow.match(

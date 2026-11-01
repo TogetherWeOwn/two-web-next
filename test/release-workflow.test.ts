@@ -100,9 +100,9 @@ describe("release on promote", () => {
     expect(tag).toContain("run: node ci/release-on-promote.cjs");
   });
 
-  it("is called after a successful production deploy with the deployed SHA", () => {
+  it("is called after a successful production deploy and post-deploy watch with the deployed SHA", () => {
     const call = job(deploy, "release");
-    expect(call).toContain("needs: [preflight, deploy-production]");
+    expect(call).toContain("needs: [preflight, deploy-production, post-deploy-watch]");
     expect(call).toContain("uses: ./.github/workflows/release.yml");
     // The promoted commit (DEPLOY_SHA from ci/resolve-promotion-sha.mjs), never main's tip.
     expect(call).toContain("sha: ${{ needs.preflight.outputs.sha }}");
