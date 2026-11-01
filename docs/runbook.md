@@ -713,7 +713,10 @@ variable `PAPERCLIP_DEPLOY_WEBHOOK_URL`, signed with HMAC-SHA256 over
 `PAPERCLIP_DEPLOY_WEBHOOK_SECRET` (`X-Paperclip-Timestamp`,
 `X-Paperclip-Signature: sha256=<hex>`). The step is `continue-on-error`: a
 Paperclip outage never fails or blocks a deploy or rollback, and an
-unconfigured webhook only warns. Staging drills do not notify.
+unconfigured webhook only warns. Staging drills do not notify. A superseded
+watch reports success with a superseded reason (the promotion went out
+unwatched); a deploy that fails after the verified 100% promotion reports
+failed with the promoted version live and unwatched.
 
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group

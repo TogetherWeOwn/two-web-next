@@ -35,6 +35,7 @@ const deployEnv = (overrides = {}) => ({
 });
 
 test("a clean promotion reports success with its commit, versions and run", () => {
+  assert.deepEqual(deployOutcome(deployEnv()), { outcome: "success", reason: null });
   assert.deepEqual(buildPayload(deployEnv(), { now: NOW }), {
     repo: "two-web-next",
     event: "deploy",
@@ -74,7 +75,7 @@ test("deploy outcomes name what fired", () => {
     [{ PREFLIGHT_RESULT: "failure", DEPLOY_RESULT: "skipped" }, "failed", /preflight refused/],
     [{ REGRESSION_RESULT: "failure", DEPLOY_RESULT: "skipped" }, "failed", /regression check/],
     [
-      { DEPLOY_RESULT: "failure", PROMOTED_VERSION_ID: "" },
+      { DEPLOY_RESULT: "failure", PROMOTED_VERSION_ID: "", VERIFY_OUTCOME: "skipped" },
       "failed",
       /before promotion; production unchanged/,
     ],
@@ -83,7 +84,20 @@ test("deploy outcomes name what fired", () => {
       "failed",
       /gradual action's own rollback ran/,
     ],
-    [{ DEPLOY_RESULT: "cancelled" }, "failed", /deploy cancelled/],
+    // A failure after the verified 100% promotion leaves the version live
+    // with the watch skipped: it must not claim the gradual rollback ran.
+    [
+      { DEPLOY_RESULT: "failure", VERIFY_OUTCOME: "success", WATCH_RESULT: "skipped" },
+      "failed",
+      /live and unwatched/,
+    ],
+    // A superseded watch stood down without judging: clean but unwatched.
+    [{ WATCH_VERDICT: "superseded" }, "success", /superseded by a newer deploy/],
+    [
+      { DEPLOY_RESULT: "cancelled", WATCH_RESULT: "skipped", ROLLBACK_RESULT: "skipped" },
+      "failed",
+      /deploy cancelled, watch skipped, rollback skipped/,
+    ],
   ];
   for (const [overrides, outcome, reason] of cases) {
     const result = deployOutcome(deployEnv(overrides));
@@ -215,10 +229,14 @@ test("deploy and rollback workflows end with a non-blocking notify", () => {
     assert.ok(at > 0, `${file} has a notify job`);
     const job = workflow.slice(at);
     assert.ok(!/\n  [\w-]+:\n/.test(job.slice(1)), `${file} notify is the last job`);
-    assert.ok(job.includes(needs), file);
+    const flat = (s) => s.replace(/\s+/g, "").replace(/,\]/g, "]");
+    assert.ok(flat(job).includes(flat(needs)), `${file} notify needs ${needs}`);
     assert.match(job, /if: \$\{\{ always\(\) && /);
     assert.match(job, /continue-on-error: true\n {8}run: node ci\/deploy-notify\.mjs\n/);
     assert.match(job, new RegExp(`NOTIFY_EVENT: ${event}\\n`));
+    if (event === "deploy") {
+      assert.match(job, /WATCH_VERDICT: \$\{\{ needs\.post-deploy-watch\.outputs\.verdict \}\}/);
+    }
     assert.match(
       job,
       /PAPERCLIP_DEPLOY_WEBHOOK_URL: \$\{\{ vars\.PAPERCLIP_DEPLOY_WEBHOOK_URL \}\}/,

@@ -34,6 +34,12 @@ export function deployOutcome(env) {
     return { outcome: "rolled_back", reason };
   }
   if (env.DEPLOY_RESULT === "success" && env.WATCH_RESULT === "success") {
+    // A superseded watch stood down successfully without judging the
+    // candidate (a newer deploy displaced it), so the promotion is clean but
+    // the record must say it went out unwatched.
+    if (env.WATCH_VERDICT === "superseded") {
+      return { outcome: "success", reason: "post-deploy watch superseded by a newer deploy" };
+    }
     return { outcome: "success", reason: null };
   }
   if (env.ROLLBACK_RESULT === "failure") {
@@ -52,6 +58,16 @@ export function deployOutcome(env) {
     return { outcome: "failed", reason: "regression check against production refused promotion" };
   }
   if (env.DEPLOY_RESULT === "failure") {
+    // A failure after the verified 100% promotion leaves the promoted version
+    // live with the watch skipped: it is not a mid-promotion failure, so the
+    // gradual action's own rollback did not run for it.
+    if (env.VERIFY_OUTCOME === "success") {
+      return {
+        outcome: "failed",
+        reason:
+          "deploy job failed after the verified 100% promotion; the promoted version is live and unwatched",
+      };
+    }
     return {
       outcome: "failed",
       reason: promoted
@@ -59,7 +75,10 @@ export function deployOutcome(env) {
         : "deploy job failed before promotion; production unchanged",
     };
   }
-  return { outcome: "failed", reason: `run ended with deploy ${env.DEPLOY_RESULT || "unknown"}` };
+  return {
+    outcome: "failed",
+    reason: `run ended with deploy ${env.DEPLOY_RESULT || "unknown"}, watch ${env.WATCH_RESULT || "unknown"}, rollback ${env.ROLLBACK_RESULT || "unknown"}`,
+  };
 }
 
 export function buildPayload(env, { now = () => new Date() } = {}) {

@@ -296,8 +296,7 @@ jobs:
     # continue-on-error. Staging drills do not notify.
     needs: [preflight, rollback-production]
     if: ${{ always() && inputs.environment == 'production' }}
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:

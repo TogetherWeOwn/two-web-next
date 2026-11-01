@@ -606,10 +606,18 @@ jobs:
     # outcome and run URL to the Paperclip deploy-verification routine
     # (ci/deploy-notify.mjs). Never decides the deploy: the step is
     # continue-on-error, and an unconfigured webhook only warns.
-    needs: [preflight, staging-soak, regression, deploy-production, post-deploy-watch, auto-rollback, release]
+    needs:
+      [
+        preflight,
+        staging-soak,
+        regression,
+        deploy-production,
+        post-deploy-watch,
+        auto-rollback,
+        release,
+      ]
     if: ${{ always() && needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true' }}
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
@@ -641,6 +649,7 @@ jobs:
           VERIFY_OUTCOME: ${{ needs.deploy-production.outputs.verify_outcome }}
           WATCH_RESULT: ${{ needs.post-deploy-watch.result }}
           WATCH_BREACH: ${{ needs.post-deploy-watch.outputs.breach }}
+          WATCH_VERDICT: ${{ needs.post-deploy-watch.outputs.verdict }}
           ROLLBACK_RESULT: ${{ needs.auto-rollback.result }}
           PAPERCLIP_DEPLOY_WEBHOOK_URL: ${{ vars.PAPERCLIP_DEPLOY_WEBHOOK_URL }}
           PAPERCLIP_DEPLOY_WEBHOOK_SECRET: ${{ secrets.PAPERCLIP_DEPLOY_WEBHOOK_SECRET }}

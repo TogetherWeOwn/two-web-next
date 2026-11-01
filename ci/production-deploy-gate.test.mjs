@@ -957,8 +957,8 @@ test("rollback workflow reuses the production gate with no wider permissions", (
     (workflow.match(/run: node ci\/production-deploy-gate\.mjs --version-id\n/g) ?? []).length,
     2,
   );
-  // Same visibility-aware runners as the production deploy workflow
-  // (TOG-12326): preflight, rollback-production and notify.
+  // Same visibility-aware runners as the production deploy workflow:
+  // preflight, rollback-production and notify.
   const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
   assert.equal(workflow.split(runsOn).length - 1, 3);
   assert.equal(
