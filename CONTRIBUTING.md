@@ -257,10 +257,12 @@ workflow or change repository scanning settings as part of the dependency gate.
 
 ## Releases
 
-Each successful production promote tags the deployed commit `vX.Y.Z` and
+Each successful production promote tags the deployed commit `vYYYY.MDD.P` and
 publishes a GitHub Release from the Conventional Commit subjects since the
-previous tag (`release.yml`, called by `deploy-production`). There is no release
-PR. See [`docs/releases.md`](docs/releases.md). Never tag or release by hand.
+previous stable tag (`release.yml`, called by `deploy-production`, through the
+shared CalVer releaser in `TogetherWeOwn/.github`). There is no release PR and
+no release commit. See [`docs/releases.md`](docs/releases.md). Never tag or
+release by hand.
 
 Release notes use the [Common Changelog](https://common-changelog.org/)
 categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
@@ -268,8 +270,12 @@ categories, in its order: **Changed** (`perf`, `revert`), **Added** (`feat`),
 stay out of the notes. Each squash-merged PR title becomes one entry, so
 write it for a reader of the release notes: imperative mood, one user-facing change.
 
-Versioning is SemVer. `v1.0.0` marked the production cutover (2026-10-18);
-`feat!` / `BREAKING CHANGE` now bumps the major version.
+Versioning is calendar-based (CalVer, upstream Paperclip syntax): `YYYY.MDD.P`
+is the UTC promote date plus a counter from 0, so the second release on
+2026-11-04 is `v2026.1104.1`. The commit type no longer changes the version;
+`feat!` / `BREAKING CHANGE` only lists the change first in the notes. Earlier
+releases used SemVer, from `v1.0.0` at the production cutover (2026-10-18) to
+`v1.21.2`; those tags stay.
 
 ## Local development
 

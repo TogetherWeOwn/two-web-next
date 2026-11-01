@@ -2,9 +2,6 @@
   "$schema": "https://raw.githubusercontent.com/googleapis/release-please/main/schemas/config.json",
   "packages": {
     ".": {
-      "release-type": "node",
-      "include-component-in-tag": false,
-      "bump-minor-pre-major": true,
       "changelog-sections": [
         {
           "type": "perf",
@@ -66,8 +63,7 @@
           "section": "Style",
           "hidden": true
         }
-      ],
-      "release-as": "1.0.0"
+      ]
     }
   }
 }
