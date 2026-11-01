@@ -28,8 +28,13 @@ import { pgEventStore } from "../src/jobs/events";
 import { handleSyncEvent } from "../src/jobs/sync-event";
 import type { BotClient, EventStore } from "../src/jobs/types";
 
-const starts = wallToUtc("2026-11-01 20:00", "Europe/London");
-const ends = wallToUtc("2026-11-01 21:00", "Europe/London");
+// The DB cases publish these occurrences, and publishing refuses an event
+// that has already ended, so seed them two weeks ahead of whenever the suite
+// runs. A fixed calendar date here expired and turned that refusal into two
+// red cases. 20:00 Europe/London is never inside a DST gap or fold.
+const seriesDay = new Date(Date.now() + 14 * 86_400_000).toISOString().slice(0, 10);
+const starts = wallToUtc(`${seriesDay} 20:00`, "Europe/London");
+const ends = wallToUtc(`${seriesDay} 21:00`, "Europe/London");
 
 /** Sync payload, if any, a row in this status would queue. */
 const payloadFor = (eventKey: string, status: string) =>
