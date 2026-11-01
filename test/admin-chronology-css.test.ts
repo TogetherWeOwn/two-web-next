@@ -3,6 +3,7 @@
 // homepage LCP ratchets forbid regrowing the shared inlined bytes, and both
 // admin shells (Hono and Kit) link the admin sheet externally.
 import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 
