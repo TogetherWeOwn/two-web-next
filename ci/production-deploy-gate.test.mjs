@@ -679,7 +679,7 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
   // checkout-behavior changes, not an observed ENOENT.
   const preflight = workflow.slice(
     workflow.indexOf("\n  preflight:\n"),
-    workflow.indexOf("\n  deploy-production:\n"),
+    workflow.indexOf("\n  staging-soak:\n"),
   );
   assert.ok(preflight.includes("preflight"), "preflight job missing");
   const checkouts = preflight.split("- uses: actions/checkout@").slice(1);
@@ -708,20 +708,33 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
   const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
-  // preflight, deploy-production and post-deploy-watch.
-  assert.equal(workflow.split(runsOn).length - 1, 3);
+  // preflight, staging-soak, regression, deploy-production and
+  // post-deploy-watch.
+  assert.equal(workflow.split(runsOn).length - 1, 5);
   assert.equal(
     workflow.split("ubuntu-latest").length - 1,
-    3,
+    5,
     "ubuntu-latest only as the public-repo branch",
   );
-  assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
-  assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
+  // Staging credentials appear only in the read-only staging-soak job: no
+  // Environment, no wrangler, one gate call.
+  const soak = workflow.slice(
+    workflow.indexOf("\n  staging-soak:\n"),
+    workflow.indexOf("\n  regression:\n"),
+  );
+  const outsideSoak = workflow.replace(soak, "");
+  assert.ok(!outsideSoak.includes("secrets.CLOUDFLARE_API_TOKEN"));
+  assert.ok(!outsideSoak.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
+  assert.equal(soak.split("secrets.CLOUDFLARE_API_TOKEN").length - 1, 1);
+  assert.ok(!/\n {4}environment:/.test(soak), "staging-soak binds no Environment");
+  assert.ok(!soak.includes("wrangler "), "staging-soak never runs wrangler");
+  assert.ok(!/secrets\.PRODUCTION_/.test(soak), "staging-soak never sees production secrets");
+  assert.match(soak, /run: node ci\/production-deploy-gate\.mjs --staging-soak\n/);
   for (const key of Object.keys(credentials)) {
     // Credentials check, required-secrets preflight, rollback-target check,
-    // production Tail deploy, version upload, promotion and the post-deploy
-    // watch: all production-only.
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 7);
+    // production Tail deploy, version upload, promotion, the regression
+    // check and the post-deploy watch: all production-only.
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 8);
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
   const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
@@ -1166,6 +1179,8 @@ function stagingRun(file, id, overrides = {}) {
     head_repository: { full_name: "fixture/repo" },
     status: "completed",
     conclusion: "success",
+    // Long past the 30-minute soak floor unless a test overrides it.
+    updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
   };
 }
@@ -2306,4 +2321,33 @@ test("rollback gate refuses an unknown environment before any API call", async (
       /ROLLBACK_ENVIRONMENT must be production or staging/,
     );
   }
+});
+
+test("auto-approve refuses an e2e-staging pass younger than the 30-minute soak, on every trigger", async () => {
+  for (const [label, updated_at] of [
+    ["10 minutes old", new Date(Date.now() - 10 * 60 * 1000).toISOString()],
+    ["missing", undefined],
+    ["unparsable", "yesterday"],
+  ]) {
+    const staging = stagingEvidence();
+    staging["e2e-staging.yml"] = [stagingRun("e2e-staging.yml", 200, { updated_at })];
+    for (const event of ["workflow_dispatch", "workflow_run", "schedule"]) {
+      await assert.rejects(
+        checkProductionGate(
+          { ...autoEnv, GITHUB_EVENT_NAME: event },
+          stubAutoApi(staging, autoEnvironment),
+          { checkoutSha: dispatchSha },
+        ),
+        /has not soaked 30 minutes since it passed/,
+        label,
+      );
+    }
+  }
+  const soaked = stagingEvidence();
+  soaked["e2e-staging.yml"] = [
+    stagingRun("e2e-staging.yml", 200, {
+      updated_at: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+    }),
+  ];
+  assert.equal((await checkAuto(soaked, autoEnvironment)).autoApprove, true);
 });
