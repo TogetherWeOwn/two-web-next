@@ -4,8 +4,9 @@
 // root test process, so the serializable view decision lives here where unit
 // tests can drive it.
 //
-// Framework-free by construction, like src/admin/kit-featured-edit.ts: it
-// shapes already-fetched rows, performs no session or audit work itself, and
+// Like src/admin/kit-featured-edit.ts, the read decision shapes already-fetched
+// rows and performs no session or audit work itself. Its saved-review HTML
+// reuses the escaped Hono server leaf. It
 // never touches cookies. The layout guard owns the guest bounce and the
 // moderator 403; the hook's member-read boundary owns classification and the
 // audit; the roster rows below flow through the shared listRoster keyed read,
@@ -45,6 +46,8 @@ import {
   type SortOrder,
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
+import { savedEventReview } from "./event-saved-review";
+import { renderSavedEventReviewHtml } from "./pages/event-form-review";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 
 /** The edit-form values the Hono eventValues() helper renders. */
@@ -125,6 +128,8 @@ export type KitEventEditView = {
   /** The Hono series-move hint for series parents; null for one-offs. */
   seriesNote: string | null;
   endsAt: string;
+  /** Shared escaped presentation, rendered only on the server. */
+  savedReviewHtml: string;
   roster: KitEventEditRosterView;
   /** Pre-rendered pause-review HTML when rsvpAction is rsvp-pause, else null;
    * the page injects it via {@html} so the client bundle carries no review
@@ -153,6 +158,8 @@ export type KitEventEditRow = {
   status: string;
   rsvpOpen: boolean;
   recurrenceFrequency: string | null;
+  /** Already present on the real store row; absent only in narrower fixtures. */
+  updatedAt?: Date;
 };
 
 export type KitEventEditRosterRow = {
@@ -277,6 +284,7 @@ export async function resolveKitEventEdit(
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
       endsAt: endFinite ? row.endsAt.toISOString() : "",
+      savedReviewHtml: renderSavedEventReviewHtml(savedEventReview(row, now)),
       roster: {
         total: roster.total,
         query,
