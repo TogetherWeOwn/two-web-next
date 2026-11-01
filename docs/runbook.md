@@ -627,11 +627,20 @@ normal routing, not pinned canary routing. An absent or malformed promoted id
 fails closed before any probe, never by silently omitting verification.
 
 A failed post-promotion public-route verification in `deploy-production`
-blocks the release tag but leaves the promoted version live at 100%: the
-gradual action's automatic rollback only covers failures inside the promotion
-itself, and this step never adds an automatic rollback. The failed step's logs
-print the live promoted candidate plus the recorded pre-promote version ID as
-the restoration target; restore it with this workflow using that ID.
+blocks the release tag. The gradual action's automatic rollback only covers
+failures inside the promotion itself, so the `auto-rollback` job then calls
+this workflow with the recorded pre-promote version ID (the rollback target
+the preflight recorded), `expected_current_version_id` set to the promoted
+version, and the promoted commit as the scripts `ref`. After a passed
+verification, the `post-deploy-watch` job (`ci/post-deploy-watch.mjs`) probes
+`/up` every minute for 30 minutes and judges the promoted version's error rate
+every five minutes with the gradual gate's thresholds (5%, 20-request floor).
+Three consecutive readiness misses or a failed error-rate verdict set
+`breach=true`, and `auto-rollback` restores the target the same way. An
+analytics query error only warns; a different live version makes the watch
+stand down. The `release` job tags only after the watch passes. If
+`auto-rollback` itself fails, restore manually with this workflow using the
+version ID in the failed step's logs.
 
 #### Daily staging rollback drill and the promotion rollback target
 

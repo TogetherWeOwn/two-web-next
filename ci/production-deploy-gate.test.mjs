@@ -708,19 +708,20 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
   const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
-  assert.equal(workflow.split(runsOn).length - 1, 2);
+  // preflight, deploy-production and post-deploy-watch.
+  assert.equal(workflow.split(runsOn).length - 1, 3);
   assert.equal(
     workflow.split("ubuntu-latest").length - 1,
-    2,
+    3,
     "ubuntu-latest only as the public-repo branch",
   );
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
     // Credentials check, required-secrets preflight, rollback-target check,
-    // production Tail deploy, version upload and promotion: all
-    // production-only.
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 6);
+    // production Tail deploy, version upload, promotion and the post-deploy
+    // watch: all production-only.
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 7);
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
   const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");

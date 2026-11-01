@@ -161,6 +161,12 @@ jobs:
     # succeeds with an empty sha or already_live=true, and this job stands
     # down so the run stays green without deploying.
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
+    # Read by auto-rollback below: the promoted version id is set as soon as
+    # the gradual action resolves the upload, and verify_outcome says whether
+    # the post-100% smoke failed.
+    outputs:
+      promoted_version_id: ${{ steps.gradual.outputs.promoted-version-id }}
+      verify_outcome: ${{ steps.verify.outcome }}
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
@@ -301,6 +307,7 @@ jobs:
           api-token: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           account-id: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Verify public routes on the promoted version
+        id: verify
         # Post-promotion verification: after the gradual promotion reaches
         # 100%, probe the same GET-only public-route set as the gradual live
         # gate and the rollback smoke (bin/smoke.mjs) against the production
@@ -316,18 +323,16 @@ jobs:
         # recorded target serves normal traffic, so identity is the gate: a
         # missing, malformed or different revision.version_id fails even when
         # health is green. An absent or malformed promoted id fails closed
-        # before any probe, never by silently omitting verification. No
-        # automatic restore here: the gradual action's rollback steps only
-        # fire on failures inside the promotion, so a failed verification
-        # leaves the promoted candidate live at 100% and prints the live
-        # candidate plus PREV_VERSION as the recorded restoration target; the
-        # operator restores it through the rollback-production workflow with
-        # that id. An inline wrangler rollback must stay out of this workflow:
-        # the rollback path checks the target version's secrets first (see
-        # rollback-production.yml).
+        # before any probe, never by silently omitting verification. The
+        # gradual action's rollback steps only fire on failures inside the
+        # promotion, so a failed verification leaves the promoted candidate
+        # live at 100% until the auto-rollback job below restores the
+        # recorded pre-promote version through rollback-production.yml. An
+        # inline wrangler rollback must stay out of this workflow: the
+        # rollback path checks the target version's secrets first.
         run: |
           if ! node -e 'const v = process.env.PROMOTED_VERSION_ID ?? ""; if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(v)) { console.error("::error::promoted-version-id missing or malformed; refusing to verify without a target identity"); process.exit(1); }'; then
-            echo "::error::post-promotion public-route smoke failed; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - restore it with the rollback-production workflow using that version id"
+            echo "::error::post-promotion public-route smoke failed; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - auto-rollback restores it with the rollback-production workflow"
             exit 1
           fi
           for i in 1 2 3 4 5 6; do
@@ -340,7 +345,7 @@ jobs:
               sleep 10
             fi
           done
-          echo "::error::post-promotion public-route smoke failed; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - restore it with the rollback-production workflow using that version id"
+          echo "::error::post-promotion public-route smoke failed; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - auto-rollback restores it with the rollback-production workflow"
           exit 1
         env:
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
@@ -381,11 +386,69 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  post-deploy-watch:
+    name: post-deploy-watch
+    # For 30 minutes after 100%, probe readiness every minute and judge the
+    # promoted version's error rate every five (ci/post-deploy-watch.mjs). A
+    # breach sets breach=true and auto-rollback restores the pre-promote
+    # version. This is a CI job, not anyone waiting by hand. It holds no
+    # mutation lock: a manual rollback or redeploy meanwhile makes the watch
+    # stand down instead of judging another version.
+    needs: [preflight, deploy-production]
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 45
+    # Production analytics credentials live in the production Environment.
+    environment:
+      name: production
+      url: https://togetherweown.com
+    outputs:
+      breach: ${{ steps.watch.outputs.breach }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Watch readiness and error rate for 30 minutes after 100%
+        id: watch
+        run: node ci/post-deploy-watch.mjs
+        env:
+          PROMOTED_VERSION_ID: ${{ needs.deploy-production.outputs.promoted_version_id }}
+          WORKER_NAME: two-web-next-production
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+
+  auto-rollback:
+    name: auto-rollback
+    # After 100%, a failed public-route verification or a watch breach rolls
+    # back to the rollback target the preflight recorded and the deploy job
+    # confirmed. The guard rolls back only while the promoted version is
+    # live: it skips when the gradual action already restored the target and
+    # refuses when someone else deployed meanwhile. The scripts run from the
+    # promoted commit, whose exact-SHA CI the gate already proved green.
+    needs: [preflight, deploy-production, post-deploy-watch]
+    if: >-
+      !cancelled() && needs.deploy-production.outputs.promoted_version_id != '' &&
+      (needs.deploy-production.outputs.verify_outcome == 'failure' ||
+       needs.post-deploy-watch.outputs.breach == 'true')
+    uses: ./.github/workflows/rollback-production.yml
+    with:
+      environment: production
+      version_id: ${{ needs.preflight.outputs.rollback_version_id }}
+      ref: ${{ needs.preflight.outputs.sha }}
+      expected_current_version_id: ${{ needs.deploy-production.outputs.promoted_version_id }}
+    secrets: inherit
+
   release:
     name: release
-    # Tag the commit that is now live and publish its notes (release.yml).
+    # Tag the commit that is now live and publish its notes (release.yml),
+    # only after the post-deploy watch passed.
     # preflight.outputs.sha is the promoted commit (DEPLOY_SHA), never main's tip.
-    needs: [preflight, deploy-production]
+    needs: [preflight, deploy-production, post-deploy-watch]
     permissions:
       actions: read # Read only this repository's promotion evidence.
       contents: write # Create the tag and its GitHub Release.

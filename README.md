@@ -482,12 +482,14 @@ same checker and retry contract (six attempts): verification gates release
 publication, so six failed attempts fail the deploy job before the `release`
 job can tag. A failed verification leaves the promoted candidate live at 100%
 with the tag withheld; the gradual action's automatic rollback covers only
-failures inside the promotion itself, so there is no automatic restore here.
-The failed step prints `PREV_VERSION` as the recorded restoration target, and
-the operator restores it manually through
-`.github/workflows/rollback-production.yml` with that version id. An inline
-rollback stays out of the deploy workflow: the rollback path checks the target
-version's secrets first.
+failures inside the promotion itself. The failed step prints `PREV_VERSION` as
+the recorded restoration target, and the `auto-rollback` job restores it
+through `.github/workflows/rollback-production.yml`. After a passed
+verification, the `post-deploy-watch` job probes readiness every minute and
+the promoted version's error rate every five minutes for 30 minutes; a breach
+triggers the same `auto-rollback`, and the `release` job tags only after the
+watch passes. An inline rollback stays out of the deploy workflow: the
+rollback path checks the target version's secrets first.
 The smoke runs only inside an authorized production deployment run. Routine
 tests and probes stay staging-only; production live checks run only inside the
 authorized cutover (`docs/cutover-check.md`) or incident (`docs/runbook.md`)
