@@ -200,6 +200,11 @@ test("deploy-production watches for 30 minutes and rolls back on a breach or fai
   assert.match(deploy, /- name: Verify public routes on the promoted version\n {8}id: verify\n/);
   const watch = job("post-deploy-watch", "auto-rollback");
   assert.match(watch, /needs: \[preflight, deploy-production\]/);
+  // The candidate stays live at 100% even when a later deploy step fails
+  // (for example the proof upload), so the watch still starts: it gates on
+  // the verification outcome, not on the deploy job's success.
+  assert.match(watch, /!cancelled\(\)/);
+  assert.match(watch, /needs\.deploy-production\.outputs\.verify_outcome == 'success'/);
   // No Environment binding: the watch must start with no second approval
   // and performs no mutation, so it reads only repo-level credentials.
   assert.ok(!/environment:\n/.test(watch), "the watch binds no Environment");
@@ -224,7 +229,22 @@ test("deploy-production watches for 30 minutes and rolls back on a breach or fai
   assert.match(rollback, /needs\.deploy-production\.outputs\.verify_outcome == 'failure'/);
   assert.match(rollback, /needs\.post-deploy-watch\.outputs\.breach == 'true'/);
   assert.match(rollback, /!cancelled\(\)/);
-  assert.match(rollback, /secrets: inherit/);
+  // Explicit least-privilege map, never `secrets: inherit`: the two
+  // production Environment secrets this leg needs, plus the webhook key
+  // for the production rollback notify step.
+  assert.ok(!/secrets: inherit/.test(rollback), "auto-rollback must not inherit every secret");
+  assert.match(
+    rollback,
+    /PRODUCTION_CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_API_TOKEN \}\}/,
+  );
+  assert.match(
+    rollback,
+    /PRODUCTION_CLOUDFLARE_ACCOUNT_ID: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_ACCOUNT_ID \}\}/,
+  );
+  assert.match(
+    rollback,
+    /PAPERCLIP_DEPLOY_WEBHOOK_SECRET: \$\{\{ secrets\.PAPERCLIP_DEPLOY_WEBHOOK_SECRET \}\}/,
+  );
   // The release tags only after the watch passed: a superseded watch stands
   // down successfully without judging the candidate, so it is never tagged.
   assert.match(workflow, /needs: \[preflight, deploy-production, post-deploy-watch\]\n/);
