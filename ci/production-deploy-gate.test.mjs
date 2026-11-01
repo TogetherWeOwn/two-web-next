@@ -736,13 +736,14 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.ok(!/secrets\.PRODUCTION_/.test(soak), "staging-soak never sees production secrets");
   assert.match(soak, /run: node ci\/production-deploy-gate\.mjs --staging-soak\n/);
   // Credentials check, required-secrets preflight, rollback-target check,
-  // production Tail deploy, version upload and promotion: all
-  // production-only. The regression check keeps the production account id
-  // for its baseline query but reads analytics with the repo-level
-  // read-only token, so only the account id appears there.
+  // production Tail deploy, version upload, promotion and the auto-rollback
+  // explicit secret map: all production-only. The regression check keeps
+  // the production account id for its baseline query but reads analytics
+  // with the repo-level read-only token, so only the account id appears
+  // there.
   for (const [key, count] of Object.entries({
-    CLOUDFLARE_API_TOKEN: 6,
-    CLOUDFLARE_ACCOUNT_ID: 7,
+    CLOUDFLARE_API_TOKEN: 7,
+    CLOUDFLARE_ACCOUNT_ID: 8,
   })) {
     assert.equal(
       (workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length,
