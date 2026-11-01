@@ -11,19 +11,20 @@ const ISO_ZONED = /T.*(?:Z|[+-]\d{2}:?\d{2})$/;
 // is not enough: validate the written components before constructing the Date
 // and refuse impossible dates instead of fabricating a different instant.
 const WRITTEN_COMPONENTS =
-  /^([+-]?\d{4,})-(\d{2})-(\d{2})T(\d{2}):(\d{2}):(\d{2})(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})$/;
+  /^([+-]?\d{4,})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
 
 function writtenCalendarIsValid(value: string): boolean {
   const match = WRITTEN_COMPONENTS.exec(value);
-  // Not a full calendar shape (missing seconds, odd offset, …): nothing to
-  // round-trip, so let Date decide — garbage still parses to NaN below.
+  // Not a calendar shape at all (odd offset, …): nothing to round-trip,
+  // so let Date decide — garbage still parses to NaN below.
   if (!match) return true;
   const year = Number(match[1]);
   const month = Number(match[2]);
   const day = Number(match[3]);
   const hour = Number(match[4]);
   const minute = Number(match[5]);
-  const second = Number(match[6]);
+  // Absent at minute precision: Date renders :00, so validate as zero.
+  const second = Number(match[6] ?? 0);
   if (!Number.isSafeInteger(year)) return false;
   if (month < 1 || month > 12) return false;
   const leap = year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0);
