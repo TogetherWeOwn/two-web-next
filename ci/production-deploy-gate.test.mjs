@@ -156,6 +156,11 @@ function stubProductionApi(evidence, seen = {}) {
       seen.environment = (seen.environment ?? 0) + 1;
       return { ok: true, json: async () => protectedEnvironment };
     }
+    if (parsed.pathname.endsWith("/workflows/e2e-staging.yml/runs")) {
+      // Reviewer mode ages a staging pass when one names the SHA; this stub
+      // models a reviewer-approved promotion with no staging evidence yet.
+      return { ok: true, json: async () => ({ total_count: 0, workflow_runs: [] }) };
+    }
     seen.ci = (seen.ci ?? 0) + 1;
     if (parsed.pathname.endsWith("/workflows/ci.yml/runs")) {
       assert.equal(parsed.searchParams.get("head_sha"), dispatchSha);
@@ -716,8 +721,8 @@ test("manual production workflow routes runners by repo visibility and uses prod
     5,
     "ubuntu-latest only as the public-repo branch",
   );
-  // Staging credentials appear only in the read-only staging-soak job: no
-  // Environment, no wrangler, one gate call.
+  // Staging credentials appear only in the staging-soak job, which binds
+  // no Environment, runs no wrangler and makes one gate call.
   const soak = workflow.slice(
     workflow.indexOf("\n  staging-soak:\n"),
     workflow.indexOf("\n  regression:\n"),
@@ -730,11 +735,19 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.ok(!soak.includes("wrangler "), "staging-soak never runs wrangler");
   assert.ok(!/secrets\.PRODUCTION_/.test(soak), "staging-soak never sees production secrets");
   assert.match(soak, /run: node ci\/production-deploy-gate\.mjs --staging-soak\n/);
-  for (const key of Object.keys(credentials)) {
-    // Credentials check, required-secrets preflight, rollback-target check,
-    // production Tail deploy, version upload, promotion, the regression
-    // check and the post-deploy watch: all production-only.
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 8);
+  // Credentials check, required-secrets preflight, rollback-target check,
+  // production Tail deploy, version upload and promotion: all
+  // production-only. The regression check keeps the production account id
+  // for its baseline query but reads analytics with the repo-level
+  // read-only token, so only the account id appears there.
+  for (const [key, count] of Object.entries({
+    CLOUDFLARE_API_TOKEN: 6,
+    CLOUDFLARE_ACCOUNT_ID: 7,
+  })) {
+    assert.equal(
+      (workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length,
+      count,
+    );
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
   const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");

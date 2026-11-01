@@ -155,15 +155,17 @@ jobs:
 
   staging-soak:
     name: staging-soak
-    # Read-only: the candidate's staging Worker version (tagged with its
-    # commit) and its invocation errors since it deployed, from the staging
-    # account's Workers API and analytics. Staging credentials only, no
-    # Environment and no mutation; the production comparison runs in
-    # regression below.
+    # Least privilege with no approval wait: the candidate's staging Worker
+    # versions (tagged with its commit; every tagged version counts) and
+    # their invocation errors since the oldest deployed, from the staging
+    # account's Workers API and analytics. Staging credentials only and no
+    # Environment binding, so this starts at once in reviewer mode too. The
+    # job only reads (versions list, analytics query) and never mutates, but
+    # the token is the staging deploy token, not a read-only credential; the
+    # production comparison runs in regression below.
     needs: preflight
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
@@ -202,11 +204,13 @@ jobs:
     # (1% floor). GET-only, no auth, no writes.
     needs: [preflight, staging-soak]
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 25
-    # Production analytics credentials live in the production Environment.
+    # The production Environment binding stays as the reviewer checkpoint
+    # before the deploy job (and still supplies the production account id),
+    # but analytics reads use the repo-level read-only token, so this job
+    # never holds the production deployment token.
     environment:
       name: production
       url: https://togetherweown.com
@@ -262,7 +266,7 @@ jobs:
           STAGING_JOURNEYS: ${{ runner.temp }}/staging/journeys.json
           STAGING_SOAK_REQUESTS: ${{ needs.staging-soak.outputs.requests }}
           STAGING_SOAK_ERRORS: ${{ needs.staging-soak.outputs.errors }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_ANALYTICS_READ_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
 
   deploy-production:

@@ -677,10 +677,14 @@ still carries its required secrets before any production mutation.
 Before the deploy job, `deploy-production` runs two more gates
 (`ci/production-deploy-gate.mjs`):
 
-- `staging-soak` (staging credentials, read-only) finds the candidate's
-  staging Worker version by its commit tag and sums its Workers invocation
-  errors since it deployed (at most 24 hours).
-- `production-regression` (production Environment) downloads the
+- `staging-soak` (staging credentials, no Environment binding) finds the
+  candidate's staging Worker versions by commit tag — every tagged version
+  counts, since a deploy retry tags twice — and sums their Workers
+  invocation errors since the oldest deployed (at most 24 hours). The job
+  only reads (versions list, analytics query) and never mutates, but its
+  token is the staging deploy token, not a read-only credential.
+- `production-regression` (production Environment as the reviewer
+  checkpoint, analytics via the repo-level read-only token) downloads the
   `staging-passive-ledger-<run>` artifact that `e2e-staging` recorded for the
   candidate (`bin/smoke.mjs --ledger` and the GET-only guest journeys in
   `e2e/watch` against staging), runs the same set against the apex with the
@@ -691,8 +695,12 @@ Before the deploy job, `deploy-production` runs two more gates
   artifact (an `e2e-staging` run that predates it, or an expired artifact)
   is refused; roll back with `rollback-production` instead of redeploying it.
 
-Every promotion path, including an explicit-SHA dispatch, also requires the
-candidate's `e2e-staging` pass to be at least 30 minutes old.
+Automatic promotion, including an explicit-SHA dispatch, also requires the
+candidate's `e2e-staging` pass to be at least 30 minutes old. In reviewer
+mode the approval stands in for the resolver but not for the soak floor:
+when a staging pass for the candidate exists, it must still have soaked 30
+minutes; a promotion with no staging evidence yet rides on the reviewer's
+approval alone.
 
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group
