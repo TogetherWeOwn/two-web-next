@@ -206,7 +206,7 @@ it("keeps event detail on its own theme, outside the schedule-only sheet", async
 
 it("keeps schedule layout in its own self-contained sheet", () => {
   const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
-  // Tracks the authoritative raw ceiling in ci/bundle-budget.json (6144): the
+  // Tracks the authoritative raw ceiling in ci/budgets/bundle/schedule-theme.css.json (6144): the
   // 6000 pin dated from #222 while approved slices grew the sheet (main alone
   // is 5953). The budget gate still enforces raw+gzip independently.
   expect(css.length).toBeLessThan(6144);

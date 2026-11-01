@@ -5,6 +5,7 @@ import type { ActivityLogViewerRow } from "../reads";
 import {
   formatActivityCauser,
   activityLogEmptyText,
+  activityLogRecovery,
   activityLogUrl,
   type ActivityLogQuery,
 } from "../table-list";
@@ -87,6 +88,7 @@ export const ActivityLogPage: FC<{
           </tbody>
         </table>
       </div>
+      <ActivityLogRecoveryLinks query={query} rowCount={rows.length} />
       <nav aria-label="Activity pages" class="actions">
         {query.page > 1 ? (
           <a rel="prev" href={activityLogUrl(query, query.page - 1)}>
@@ -103,3 +105,17 @@ export const ActivityLogPage: FC<{
     </section>
   </Shell>
 );
+
+const ActivityLogRecoveryLinks: FC<{ query: ActivityLogQuery; rowCount: number }> = ({
+  query,
+  rowCount,
+}) => {
+  const recovery = activityLogRecovery(query, rowCount);
+  if (!recovery.clearUrl && !recovery.firstUrl) return null;
+  return (
+    <p class="actions" data-testid="activity-log-recovery">
+      {recovery.firstUrl ? <a href={recovery.firstUrl}>First page of these results</a> : null}
+      {recovery.clearUrl ? <a href={recovery.clearUrl}>Clear filters</a> : null}
+    </p>
+  );
+};

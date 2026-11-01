@@ -283,7 +283,7 @@ npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands
 ### Browser regressions
 
 Except for the unconditional suites (Kit member-auth, Kit admin contrast,
-native event share and the three `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
+native event share and the four `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
@@ -355,7 +355,9 @@ Do not use `npm run deploy` as a test or build command.
 ## Deploy
 
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
-gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
+gate): `wrangler deploy` of the tail Worker (`tail/wrangler.jsonc`), the Kit
+staging Worker (`web/wrangler.staging.jsonc`) and the jobs Worker
+(`wrangler.jobs.jsonc`) with the repo secrets `CLOUDFLARE_API_TOKEN` /
 `CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
 The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,
 Discord and guest auth redirects, and a branded 404. It checks CSP and nosniff
@@ -472,7 +474,7 @@ the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`
 requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting
 degraded queue states; unlike staging it omits `--fail-on-ready-wait-critical`,
-so `critical` queue readiness only warns and `unknown` passes, and the remaining 15 routes assert
+so `critical` queue readiness only warns and `unknown` passes, and the remaining 23 routes assert
 status/body/CSP/nosniff/content-type/redirect plus the apex indexing posture
 (indexable HTML omits the staging noindex). No auth, no writes, no PII.
 After the promotion reaches 100%, the workflow probes the apex again with the
@@ -506,8 +508,9 @@ Worker. Never deploy it outside the gated workflow:
 - Queues: `two-web-next-production-sync-event` and
   `two-web-next-production-internal-action` are the production queue names,
   kept separate from staging; complete provisioning before a deployment is
-  authorized. Producers and consumers
-  use these names; crons match staging (every ten minutes, midnight UTC).
+  authorized. This block only produces to them; the production consumers and
+  crons live on `two-web-jobs-production` (`wrangler.jobs.jsonc`
+  `env.production`).
 - Vars are explicit because environment bindings/vars do not inherit. Register
   the production Discord callback; provision secrets for the production Worker
   separately. Never set `QA_AUTH_TOKEN` or a staging `DATABASE_URL` in production.

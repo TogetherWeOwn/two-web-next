@@ -1,7 +1,7 @@
 // Hot-zone 7x24 aggregates.
 //
 // - Joins cells aggregate real web data: `join_attempts.createdAt` in the
-//   season window plus published `events.startsAt` in the window (aggregate
+//   season window plus published or past `events.startsAt` in the window (aggregate
 //   counts only, never per-user rows, timestamps, or identities). Attempts
 //   whose `discord_id` links to an opted-out profile
 //   (`profiles.leaderboard_opt_out`) never count, mirroring the member
@@ -107,7 +107,7 @@ export async function loadJoinsGrid(
       .from(events)
       .where(
         and(
-          eq(events.status, "published"),
+          inArray(events.status, ["published", "past"]),
           inWindow ? gte(events.startsAt, inWindow.start) : undefined,
           inWindow ? lt(events.startsAt, inWindow.end) : undefined,
         ),

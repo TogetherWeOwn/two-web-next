@@ -154,7 +154,7 @@ marks incomplete still need human/manual assessment; that is outside this slice.
 Empty/minimum states: no-results search/admin filters and unfilled admin create
 forms. Boundary copy: synthetic Unicode featured content. Error states: branded
 errors, cancelled/missing records and profile validation. Concurrency: cases are
-serial with separate sessions; no concurrency change ships. Performance: 15-minute
+serial with separate sessions; no concurrency change ships. Performance: 25-minute
 CI timeout bounds the audit, not a production performance budget. Compatibility:
 existing production routes/guards and plain-form fallback stay intact. Telemetry:
 local response log + JSON/table/screenshots. Screen-reader assessment: N/A here.

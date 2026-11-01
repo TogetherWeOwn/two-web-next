@@ -3,7 +3,7 @@
 // This file re-exports the historic public names so existing importers keep
 // working untouched.
 
-export { ErrorPage, Field } from "./pages/shell";
+export { ErrorPage, Field, type RecoveryLink } from "./pages/shell";
 export { AdminDashboard } from "./pages/dashboard";
 export { JoinAttemptPage, JoinAttemptsPage } from "./pages/join-attempts";
 export { ActivityLogPage } from "./pages/activity-log";
