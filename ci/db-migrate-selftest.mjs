@@ -21,7 +21,13 @@ import {
   runMigration,
   safeMigrationError,
 } from "./db-migrate.mjs";
-import { DefaultAclRefusal, assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
+import {
+  DefaultAclRefusal,
+  SEQUENCE_RIGHTS,
+  TABLE_RIGHTS,
+  assertRuntimeDefaultAcl,
+  validateMigrationSql,
+} from "./migration-runtime-rights.mjs";
 
 const mainEnv = {
   GITHUB_REF: "refs/heads/main",
@@ -102,6 +108,52 @@ async function fixture(callback) {
       await admin.end();
     }
   }
+}
+
+// Canonical ACL readout for the default-ACL fixtures: sorted privilege set
+// for grantee two_web_app only, relacl NULL reads as the empty set
+// (aclexplode(NULL) returns no rows), and PUBLIC entries always fail.
+async function runtimeAcl(client, qualifiedName) {
+  const rows = await client`
+    select case when acl.grantee = 0 then 'PUBLIC' else pg_get_userbyid(acl.grantee) end as grantee,
+           acl.privilege_type
+      from pg_class as c
+      cross join lateral aclexplode(c.relacl) as acl
+     where c.oid = to_regclass(${qualifiedName})`;
+  assert.ok(
+    rows.every((row) => row.grantee !== "PUBLIC"),
+    `${qualifiedName} must not grant PUBLIC`,
+  );
+  return rows
+    .filter((row) => row.grantee === "two_web_app")
+    .map((row) => row.privilege_type)
+    .sort();
+}
+
+// Roles are cluster-global while fixture databases are disposable: reuse an
+// existing two_web_app (another suite may own it) and only drop a role this
+// fixture created itself.
+async function ensureRuntimeRole(client) {
+  const [existing] = await client`select 1 from pg_roles where rolname = 'two_web_app'`;
+  if (!existing) await client.unsafe("CREATE ROLE two_web_app NOLOGIN");
+  return !existing;
+}
+
+async function dropRuntimeRoleIfCreated(client, created) {
+  if (!created) return;
+  await client.unsafe("DROP OWNED BY two_web_app");
+  await client.unsafe("DROP ROLE two_web_app");
+}
+
+// A global default-ACL entry materializes the hard-wired owner ACL
+// (creating role = SELECT/UPDATE/USAGE on sequences), whose UPDATE row
+// the guard refuses for an unrelated reason. Removing that owner entry
+// leaves exactly the reviewed two_web_app USAGE/SELECT row set, which is
+// the shape the bootstrap fixtures must discriminate on.
+async function setExactGlobalSequenceDefault(client) {
+  await client.unsafe("ALTER DEFAULT PRIVILEGES GRANT USAGE ON SEQUENCES TO two_web_app");
+  await client.unsafe("ALTER DEFAULT PRIVILEGES GRANT SELECT ON SEQUENCES TO two_web_app");
+  await client.unsafe("ALTER DEFAULT PRIVILEGES REVOKE ALL ON SEQUENCES FROM CURRENT_USER");
 }
 
 test("the workflow's actual shell gate denies disabled production and non-main refs", () => {
@@ -534,6 +586,269 @@ test("runtime-role connection is refused while the reviewed sequence default pas
   });
 });
 
+test("fresh bootstrap under a global sequence default refuses and leaves no ledger", async () => {
+  await fixture(async ({ client, run }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      // A global (no IN SCHEMA) sequence default fires in every schema,
+      // including drizzle, so the reviewed public-scoped shape must not
+      // cover it: apply must fail closed before the ledger exists.
+      await setExactGlobalSequenceDefault(client);
+      let failure;
+      try {
+        await run("apply");
+      } catch (error) {
+        failure = error;
+      }
+      assert.ok(failure, "a global sequence default must refuse apply");
+      assert.match(safeMigrationError(failure), /default-ACL guard refused/);
+      assert.equal(
+        (await client`select to_regclass('drizzle.__drizzle_migrations') as ledger`)[0].ledger,
+        null,
+        "rollback must leave no ledger after the refused bootstrap",
+      );
+    } finally {
+      await client
+        .unsafe("ALTER DEFAULT PRIVILEGES REVOKE ALL ON SEQUENCES FROM two_web_app")
+        .catch(() => {});
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+test("a sequence default appearing after preflight still rolls back the bootstrap ledger", async () => {
+  await fixture(async ({ client, env, output }) => {
+    const created = await ensureRuntimeRole(client);
+    let armed = false;
+    try {
+      let failure;
+      try {
+        // Arm the global default from a second connection after the
+        // in-transaction preflight has passed (its PITR receipt is the
+        // last summary before bootstrap DDL), so only the post-bootstrap
+        // ledger readout can refuse this apply.
+        await runMigration("apply", env, {
+          testDatabase: true,
+          report: async (line) => {
+            output.push(line);
+            if (!armed && line.startsWith("Pre-migration PITR timestamp")) {
+              armed = true;
+              await setExactGlobalSequenceDefault(client);
+            }
+          },
+        });
+      } catch (error) {
+        failure = error;
+      }
+      assert.ok(armed, "the runner must reach its PITR receipt before bootstrap");
+      assert.ok(failure, "a default that fires on the bootstrap ledger must refuse apply");
+      assert.match(safeMigrationError(failure), /default-ACL guard refused/);
+      assert.equal(
+        (await client`select to_regclass('drizzle.__drizzle_migrations') as ledger`)[0].ledger,
+        null,
+        "rollback must leave no ledger after the refused bootstrap",
+      );
+    } finally {
+      await client
+        .unsafe("ALTER DEFAULT PRIVILEGES REVOKE ALL ON SEQUENCES FROM two_web_app")
+        .catch(() => {});
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+test("already-bootstrapped database: global default and exposed ledger both refuse", async () => {
+  await fixture(async ({ client, run }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      await run("apply");
+      const [ledger] =
+        await client`select pg_get_serial_sequence('drizzle.__drizzle_migrations', 'id') as sequence_name`;
+      assert.ok(ledger.sequence_name, "ledger must keep its serial sequence");
+      assert.deepEqual(await runtimeAcl(client, "drizzle.__drizzle_migrations"), []);
+      assert.deepEqual(await runtimeAcl(client, ledger.sequence_name), []);
+      // A global default added after bootstrap refuses further runs even
+      // though it has not granted the existing ledger anything yet.
+      await setExactGlobalSequenceDefault(client);
+      let failure;
+      try {
+        await run("plan");
+      } catch (error) {
+        failure = error;
+      }
+      assert.ok(failure, "a global sequence default must refuse an already-bootstrapped plan");
+      assert.match(safeMigrationError(failure), /default-ACL guard refused/);
+      await client.unsafe("ALTER DEFAULT PRIVILEGES REVOKE ALL ON SEQUENCES FROM two_web_app");
+      assert.equal((await run("plan")).length, 0);
+      // A legacy exposure granted before the guard existed stays refused
+      // after the default is removed: the ledger readout itself is the
+      // invariant, and the runner never revokes it away.
+      await client.unsafe(`GRANT USAGE ON SEQUENCE ${ledger.sequence_name} TO two_web_app`);
+      assert.deepEqual(await runtimeAcl(client, ledger.sequence_name), ["USAGE"]);
+      failure = undefined;
+      try {
+        await run("apply");
+      } catch (error) {
+        failure = error;
+      }
+      assert.ok(failure, "an exposed ledger sequence must refuse apply");
+      assert.match(safeMigrationError(failure), /default-ACL guard refused/);
+      await client.unsafe(`REVOKE ALL ON SEQUENCE ${ledger.sequence_name} FROM two_web_app`);
+      assert.deepEqual(await runtimeAcl(client, ledger.sequence_name), []);
+      assert.equal((await run("plan")).length, 0);
+    } finally {
+      await client
+        .unsafe("ALTER DEFAULT PRIVILEGES REVOKE ALL ON SEQUENCES FROM two_web_app")
+        .catch(() => {});
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+test("sequence post-default matrix for login, group, and runtime roles", async () => {
+  await fixture(async ({ client }) => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const group = `mig_group_${suffix}`;
+    const login = `mig_login_${suffix}`;
+    const created = await ensureRuntimeRole(client);
+    try {
+      await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+      await client.unsafe(`CREATE ROLE "${login}" LOGIN`);
+      await client.unsafe(`GRANT "${group}" TO "${login}"`);
+      for (const privilege of ["SELECT", "INSERT", "UPDATE", "DELETE"]) {
+        await client.unsafe(
+          `ALTER DEFAULT PRIVILEGES FOR ROLE "${group}" GRANT ${privilege} ON TABLES TO two_web_app`,
+        );
+      }
+      await client.unsafe(
+        `ALTER DEFAULT PRIVILEGES FOR ROLE "${group}" GRANT UPDATE ON SEQUENCES TO two_web_app`,
+      );
+      // Cell (i): as the login role without SET ROLE to the group, the
+      // preflight scopes to current_user, so the group's defaults are
+      // invisible — and correctly so, because they fire only for objects
+      // created while current_user is the group role.
+      await client.unsafe(`SET ROLE "${login}"`);
+      try {
+        await assertRuntimeDefaultAcl(client);
+      } finally {
+        await client.unsafe("RESET ROLE");
+      }
+      // Cell (ii): after assuming the group role (legal through the login
+      // role's membership), its table and sequence defaults refuse.
+      await client.unsafe(`SET ROLE "${login}"`);
+      await client.unsafe(`SET ROLE "${group}"`);
+      try {
+        await assert.rejects(assertRuntimeDefaultAcl(client), (error) => {
+          assert.ok(error instanceof DefaultAclRefusal);
+          assert.match(error.message, /unreviewed default ACL/);
+          return true;
+        });
+      } finally {
+        await client.unsafe("RESET ROLE");
+      }
+      // Cell (iii): as the runtime role, the identity refusal fires; it is
+      // not default-ACL evidence.
+      await client.unsafe("SET ROLE two_web_app");
+      try {
+        await assert.rejects(assertRuntimeDefaultAcl(client), (error) => {
+          assert.ok(error instanceof DefaultAclRefusal);
+          assert.match(error.message, /must not run as the runtime role/);
+          return true;
+        });
+      } finally {
+        await client.unsafe("RESET ROLE");
+      }
+    } finally {
+      await client.unsafe("RESET ROLE").catch(() => {});
+      await client
+        .unsafe(
+          `ALTER DEFAULT PRIVILEGES FOR ROLE "${group}" REVOKE ALL ON TABLES FROM two_web_app`,
+        )
+        .catch(() => {});
+      await client
+        .unsafe(
+          `ALTER DEFAULT PRIVILEGES FOR ROLE "${group}" REVOKE ALL ON SEQUENCES FROM two_web_app`,
+        )
+        .catch(() => {});
+      await client.unsafe(`REVOKE "${group}" FROM "${login}"`).catch(() => {});
+      await client.unsafe(`DROP ROLE IF EXISTS "${login}"`).catch(() => {});
+      await client.unsafe(`DROP ROLE IF EXISTS "${group}"`).catch(() => {});
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+test("schema-scoped drizzle default refuses instead of staying invisible", async () => {
+  await fixture(async ({ client, run }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      await client`create schema drizzle`;
+      await client.unsafe(
+        "ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle GRANT UPDATE ON SEQUENCES TO two_web_app",
+      );
+      await assert.rejects(assertRuntimeDefaultAcl(client), (error) => {
+        assert.ok(error instanceof DefaultAclRefusal);
+        assert.match(error.message, /unreviewed default ACL: S\/drizzle\/two_web_app\/UPDATE/);
+        return true;
+      });
+      let failure;
+      try {
+        await run("plan");
+      } catch (error) {
+        failure = error;
+      }
+      assert.ok(failure, "a drizzle-scoped sequence default must refuse plan");
+      assert.match(safeMigrationError(failure), /default-ACL guard refused/);
+    } finally {
+      await client
+        .unsafe(
+          "ALTER DEFAULT PRIVILEGES IN SCHEMA drizzle REVOKE ALL ON SEQUENCES FROM two_web_app",
+        )
+        .catch(() => {});
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+test("post-apply readout equals the stated grants for a censused pair", async () => {
+  await fixture(async ({ client }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      await assertRuntimeDefaultAcl(client);
+      // Reuse an existing censused table/sequence pair in a synthetic SQL
+      // string: no file under drizzle/ and no new ceiling entry.
+      const sql = `
+        CREATE TABLE public.board_view_logs (id serial primary key);
+        GRANT DELETE ON TABLE public.board_view_logs TO two_web_app;
+        GRANT INSERT ON TABLE public.board_view_logs TO two_web_app;
+        GRANT SELECT ON TABLE public.board_view_logs TO two_web_app;
+        GRANT USAGE ON SEQUENCE public.board_view_logs_id_seq TO two_web_app;
+        GRANT SELECT ON SEQUENCE public.board_view_logs_id_seq TO two_web_app;`;
+      assert.deepEqual(validateMigrationSql("1999_fixture.sql", sql), []);
+      const statements = sql
+        .split(";")
+        .map((statement) => statement.trim())
+        .filter(Boolean);
+      await client.begin(async (transaction) => {
+        for (const statement of statements) await transaction.unsafe(statement);
+      });
+      const [serial] =
+        await client`select pg_get_serial_sequence('public.board_view_logs', 'id') as sequence_name`;
+      assert.equal(serial.sequence_name, "public.board_view_logs_id_seq");
+      assert.deepEqual(
+        await runtimeAcl(client, "public.board_view_logs"),
+        [...TABLE_RIGHTS["public.board_view_logs"]].sort(),
+      );
+      assert.deepEqual(
+        await runtimeAcl(client, serial.sequence_name),
+        [...SEQUENCE_RIGHTS["public.board_view_logs_id_seq"]].sort(),
+      );
+    } finally {
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
 test("preflight driver failures propagate for masking instead of surfacing driver text", async () => {
   await fixture(async ({ client, run }) => {
     const [db] = await client`select current_database() as name`;
@@ -706,6 +1021,7 @@ function controlledDriver(_url, options) {
     if (text.includes("pg_try_advisory_xact_lock")) return [{ acquired: true }];
     if (text === "select current_user as current_user") return [{ current_user: "agent_test" }];
     if (text.includes("FROM pg_default_acl AS d")) return [];
+    if (text.includes("pg_get_serial_sequence")) return [];
     if (text.includes("to_regclass")) return [{ ledger: null }];
     if (text.includes("clock_timestamp")) return [{ timestamp: "2026-10-21T00:00:00.000000Z" }];
     throw new Error(`unexpected fixture statement: ${text}`);
@@ -825,8 +1141,25 @@ assert.deepEqual(state.statements, [
     CROSS JOIN LATERAL aclexplode(d.defaclacl) AS acl
    WHERE d.defaclrole = (SELECT oid FROM pg_roles WHERE rolname = current_user)
      AND d.defaclobjtype IN ('r', 'S')
-     AND (d.defaclnamespace = 0 OR n.nspname = 'public')
+     AND (d.defaclnamespace = 0 OR n.nspname IN ('public', 'drizzle'))
    ORDER BY 1, 2, 3, 4, 5, 6
+`)},
+  ${JSON.stringify(`
+  WITH targets(oid) AS (
+    SELECT to_regclass('drizzle.__drizzle_migrations')
+    UNION ALL
+    SELECT CASE WHEN to_regclass('drizzle.__drizzle_migrations') IS NULL THEN NULL
+                ELSE pg_get_serial_sequence('drizzle.__drizzle_migrations', 'id')::regclass END
+  )
+  SELECT c.relname AS object_name,
+         CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END AS grantee,
+         acl.privilege_type,
+         acl.is_grantable
+    FROM targets
+    JOIN pg_class AS c ON c.oid = targets.oid
+    CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+   WHERE targets.oid IS NOT NULL
+   ORDER BY 1, 2, 3, 4
 `)},
   "select to_regclass(?) as ledger",
   ${JSON.stringify("select to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') as timestamp")},

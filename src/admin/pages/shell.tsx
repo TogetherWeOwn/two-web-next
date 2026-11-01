@@ -65,12 +65,24 @@ export const Shell: FC<
   </>
 );
 
-export const ErrorPage: FC<{ heading: string; detail?: string }> = ({ heading, detail }) => (
+export type RecoveryLink = { href: string; label: string };
+
+export const ErrorPage: FC<{ heading: string; detail?: string; recovery?: RecoveryLink[] }> = ({
+  heading,
+  detail,
+  recovery = [],
+}) => (
   <Shell title={heading}>
     <section>
       <h1>{heading}</h1>
       {detail ? <p data-testid="error-detail">{detail}</p> : null}
       <p>
+        {recovery.map((link) => (
+          <>
+            <a href={link.href}>{link.label}</a>
+            {" · "}
+          </>
+        ))}
         <a href="/admin">Back to the dashboard</a>
       </p>
     </section>

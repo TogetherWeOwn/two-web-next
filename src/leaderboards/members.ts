@@ -1,6 +1,6 @@
 // Member leaderboard: query grammar, ranking read and relative window.
 //
-// Rank key: count of `going` RSVPs for published events inside the season
+// Rank key: count of `going` RSVPs for published or past events inside the season
 // window (optionally one normalized game), grouped by member, descending;
 // ties break by user id ascending so a relative window is deterministic. Joins
 // are never counted. Opted-out and erased members never appear: the inner join
@@ -109,7 +109,7 @@ async function loadRelativeWindow(
           inner join users on users.id = rsvps.user_id
           left join profiles on profiles.user_id = rsvps.user_id
           where rsvps.status = 'going'
-            and events.status = 'published'
+            and events.status in ('published', 'past')
             and users.member = true
             and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false)
             ${dateFilter}
@@ -135,7 +135,7 @@ async function loadRelativeWindow(
           inner join users on users.id = rsvps.user_id
           left join profiles on profiles.user_id = rsvps.user_id
           where rsvps.status = 'going'
-            and events.status = 'published'
+            and events.status in ('published', 'past')
             and users.member = true
             and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false)
             ${dateFilter}
@@ -162,7 +162,7 @@ async function loadRelativeWindow(
  * `count DESC, userId ASC` order. The overall scope caps at OVERALL_CAP via
  * LIMIT; the relative scope answers from a bounded rank lookup plus window
  * read (see loadRelativeWindow) and needs the viewer's id. Counting matches
- * the old per-RSVP fold exactly: only `going` RSVPs for published events
+ * the old per-RSVP fold exactly: only `going` RSVPs for published or past events
  * inside the season window count, with the same `?activity=` game filter,
  * opt-out and member filters. `db = null` (no database configured) yields
  * no rows.
@@ -206,7 +206,7 @@ export async function loadMemberRanking(
       inner join users on users.id = rsvps.user_id
       left join profiles on profiles.user_id = rsvps.user_id
       where rsvps.status = 'going'
-        and events.status = 'published'
+        and events.status in ('published', 'past')
         and users.member = true
         and (profiles.leaderboard_opt_out is null or profiles.leaderboard_opt_out = false)
         ${dateFilter}

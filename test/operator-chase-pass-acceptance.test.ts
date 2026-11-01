@@ -94,6 +94,8 @@ function makeEraseDouble(opts: {
         throw opts.failWith ?? new Error("synthetic chase failure");
       return rows(opts.sessionDeletes?.[pass] ?? 0);
     }
+    // No RSVP rows in this double, so no event locks and no promotion pass.
+    if (text.startsWith("select id from events")) return [];
     if (text.startsWith("delete from users")) return rows(opts.users ?? 0);
     if (text.startsWith("delete from profiles")) return rows(opts.profiles ?? 0);
     if (text.startsWith("delete from rsvps")) return rows(opts.rsvps ?? 0);

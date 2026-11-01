@@ -270,8 +270,11 @@ jobs:
       # The owner-facing marker (src/version.ts) must agree once the step above
       # proved the new Version serves. Kept out of bin/smoke.mjs on purpose: a
       # rollback to a Version that predates /version must still pass the
-      # post-rollback smoke.
+      # post-rollback smoke. The workflow file comes from main but the tree is
+      # DEPLOY_SHA, so a deploy of a commit older than the checker skips it:
+      # that commit has no /version to verify.
       - name: Verify /version reports the deployed commit
+        if: hashFiles('bin/version-check.mjs') != ''
         run: node bin/version-check.mjs https://next.togetherweown.com "$DEPLOY_SHA"
         env:
           DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
