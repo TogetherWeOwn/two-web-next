@@ -708,12 +708,12 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
   const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
-  // preflight, staging-soak, regression, deploy-production and
-  // post-deploy-watch.
-  assert.equal(workflow.split(runsOn).length - 1, 5);
+  // preflight, staging-soak, regression, deploy-production,
+  // post-deploy-watch and notify.
+  assert.equal(workflow.split(runsOn).length - 1, 6);
   assert.equal(
     workflow.split("ubuntu-latest").length - 1,
-    5,
+    6,
     "ubuntu-latest only as the public-repo branch",
   );
   // Staging credentials appear only in the read-only staging-soak job: no
@@ -944,12 +944,13 @@ test("rollback workflow reuses the production gate with no wider permissions", (
     (workflow.match(/run: node ci\/production-deploy-gate\.mjs --version-id\n/g) ?? []).length,
     2,
   );
-  // Same visibility-aware runners as the production deploy workflow (TOG-12326).
+  // Same visibility-aware runners as the production deploy workflow
+  // (TOG-12326): preflight, rollback-production and notify.
   const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
-  assert.equal(workflow.split(runsOn).length - 1, 2);
+  assert.equal(workflow.split(runsOn).length - 1, 3);
   assert.equal(
     workflow.split("ubuntu-latest").length - 1,
-    2,
+    3,
     "ubuntu-latest only as the public-repo branch",
   );
   // Each environment gets only its own credentials: production secrets only

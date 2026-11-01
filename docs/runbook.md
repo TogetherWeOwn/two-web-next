@@ -686,6 +686,19 @@ Before the deploy job, `deploy-production` runs two more gates
 Every promotion path, including an explicit-SHA dispatch, also requires the
 candidate's `e2e-staging` pass to be at least 30 minutes old.
 
+#### Deploy notify
+
+The last job of every attempted promotion (`deploy-notify`) and of every
+production rollback (`rollback-notify`) runs `ci/deploy-notify.mjs`. It POSTs
+`{repo, event, outcome, sha, versionId, previousVersionId, runUrl, startedAt,
+finishedAt, reason}` to the Paperclip deploy-verification routine at the repo
+variable `PAPERCLIP_DEPLOY_WEBHOOK_URL`, signed with HMAC-SHA256 over
+`<unix seconds>.<body>` using the repo secret
+`PAPERCLIP_DEPLOY_WEBHOOK_SECRET` (`X-Paperclip-Timestamp`,
+`X-Paperclip-Signature: sha256=<hex>`). The step is `continue-on-error`: a
+Paperclip outage never fails or blocks a deploy or rollback, and an
+unconfigured webhook only warns. Staging drills do not notify.
+
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group
 (non-cancelling). The lock covers only the two mutating jobs, never

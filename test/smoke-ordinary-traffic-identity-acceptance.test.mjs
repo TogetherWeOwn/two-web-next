@@ -389,10 +389,11 @@ async function rollbackSmokeStep() {
   const step = workflow.slice(start);
   const runAt = step.indexOf("run: |");
   assert.notEqual(runAt, -1, "rollback smoke run block not found");
-  const script = step
-    .slice(runAt + "run: |".length)
-    .split("\n")
-    .slice(1)
+  // The run block ends at the first line outside its indentation, so later
+  // jobs (rollback-notify) never leak into the extracted script.
+  const lines = step.slice(runAt + "run: |".length).split("\n").slice(1);
+  const end = lines.findIndex((line) => line !== "" && !line.startsWith("          "));
+  const script = (end === -1 ? lines : lines.slice(0, end))
     .filter((line) => line.startsWith("          "))
     .map((line) => line.slice(10))
     .join("\n");

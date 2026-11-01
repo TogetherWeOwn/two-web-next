@@ -49,11 +49,15 @@ jobs:
       live_sha: ${{ steps.live.outputs.live_sha }}
       rollback_version_id: ${{ steps.rollback-target.outputs.version_id }}
       rollback_commit: ${{ steps.rollback-target.outputs.commit }}
+      started_at: ${{ steps.start.outputs.started_at }}
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
     steps:
+      - name: Record when this promotion attempt started
+        id: start
+        run: echo "started_at=$(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$GITHUB_OUTPUT"
       # Promote what staging last verified: merges keep landing on main, so the
       # newest main SHA is rarely staged yet. The gate below still requires the
       # exact SHA's green main ci.yml (and staging evidence under auto-approve).
@@ -553,6 +557,7 @@ jobs:
       version_id: ${{ needs.preflight.outputs.rollback_version_id }}
       ref: ${{ needs.preflight.outputs.sha }}
       expected_current_version_id: ${{ needs.deploy-production.outputs.promoted_version_id }}
+      reason: ${{ needs.deploy-production.outputs.verify_outcome == 'failure' && 'post-promotion public-route smoke failed after 100%' || 'post-deploy watch breach (readiness or error rate)' }}
     secrets: inherit
 
   release:
@@ -569,3 +574,48 @@ jobs:
       sha: ${{ needs.preflight.outputs.sha }}
       promotion_run_id: ${{ github.run_id }}
       promotion_run_attempt: ${{ github.run_attempt }}
+
+  notify:
+    name: deploy-notify
+    # Final step of every attempted promotion: POST the commit, version,
+    # outcome and run URL to the Paperclip deploy-verification routine
+    # (ci/deploy-notify.mjs). Never decides the deploy: the step is
+    # continue-on-error, and an unconfigured webhook only warns.
+    needs: [preflight, staging-soak, regression, deploy-production, post-deploy-watch, auto-rollback, release]
+    if: ${{ always() && needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true' }}
+    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
+    # GitHub-hosted while public, the self-hosted fleet while private.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      # Tip checkout, like the preflight checks.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            /ci/
+            /wrangler.jsonc
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Notify the Paperclip deploy-verification routine
+        continue-on-error: true
+        run: node ci/deploy-notify.mjs
+        env:
+          NOTIFY_EVENT: deploy
+          NOTIFY_SHA: ${{ needs.preflight.outputs.sha }}
+          NOTIFY_STARTED_AT: ${{ needs.preflight.outputs.started_at }}
+          PROMOTED_VERSION_ID: ${{ needs.deploy-production.outputs.promoted_version_id }}
+          ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
+          PREFLIGHT_RESULT: ${{ needs.preflight.result }}
+          SOAK_RESULT: ${{ needs.staging-soak.result }}
+          REGRESSION_RESULT: ${{ needs.regression.result }}
+          DEPLOY_RESULT: ${{ needs.deploy-production.result }}
+          VERIFY_OUTCOME: ${{ needs.deploy-production.outputs.verify_outcome }}
+          WATCH_RESULT: ${{ needs.post-deploy-watch.result }}
+          WATCH_BREACH: ${{ needs.post-deploy-watch.outputs.breach }}
+          ROLLBACK_RESULT: ${{ needs.auto-rollback.result }}
+          PAPERCLIP_DEPLOY_WEBHOOK_URL: ${{ vars.PAPERCLIP_DEPLOY_WEBHOOK_URL }}
+          PAPERCLIP_DEPLOY_WEBHOOK_SECRET: ${{ secrets.PAPERCLIP_DEPLOY_WEBHOOK_SECRET }}
