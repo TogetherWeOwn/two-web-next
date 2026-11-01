@@ -99,8 +99,8 @@ export function validateDefaultAclRows(rows) {
 // sequence lookup stays behind the to_regclass guard. Ownership is authority
 // even with NULL/revoked ACLs; column grants live separately in attacl.
 // Membership is transitive authority even without INHERIT or SET today:
-// its holder can re-grant itself the role WITH INHERIT/SET, or escalate
-// through a longer ADMIN chain link by link. pg_has_role(..., 'MEMBER')
+// where some link carries ADMIN its holder can re-grant itself the role
+// WITH INHERIT/SET, or escalate through a longer ADMIN chain link by link. pg_has_role(..., 'MEMBER')
 // reports bare membership through any number of hops, so it covers the
 // inherited, assumable, and administered shapes alike; a guard that only
 // refuses over-approximates safely here.

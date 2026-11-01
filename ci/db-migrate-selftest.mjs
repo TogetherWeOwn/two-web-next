@@ -907,7 +907,7 @@ test("runtime-administered ledger owner and grantee refuse without INHERIT or SE
   });
 });
 
-test("multi-hop runtime-administered ledger chain refuses without INHERIT or SET", async () => {
+test("multi-hop runtime-administered ledger chain refuses on an ADMIN-only runtime link", async () => {
   await fixture(async ({ client, run }) => {
     const owner = `ledger_owner_${randomUUID().replaceAll("-", "")}`;
     const hop = `ledger_hop_${randomUUID().replaceAll("-", "")}`;
@@ -919,9 +919,11 @@ test("multi-hop runtime-administered ledger chain refuses without INHERIT or SET
       await client.unsafe(`ALTER TABLE drizzle.__drizzle_migrations OWNER TO "${owner}"`);
       assert.equal((await run("plan")).length, journal.entries.length);
       // Two-hop ADMIN chain: the owner reaches the runtime only through the
-      // hop role, and neither link carries INHERIT or SET. The single-hop
-      // USAGE/SET/ADMIN probes all read false on the owner, yet the runtime
-      // holds bare membership of it and can escalate link by link.
+      // hop role. The owner-to-hop link carries INHERIT; only the runtime's
+      // own hop-to-runtime link lacks INHERIT and SET, and that link carries
+      // ADMIN. The single-hop USAGE/SET/ADMIN probes all read false on the
+      // owner, yet the runtime holds bare membership of it and can escalate
+      // link by link.
       await client.unsafe(`GRANT "${owner}" TO "${hop}" WITH INHERIT TRUE`);
       await client.unsafe(
         `GRANT "${hop}" TO two_web_app WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`,

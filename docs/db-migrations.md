@@ -207,8 +207,9 @@ carries any `two_web_app` or `PUBLIC` right. That includes ownership even
 with NULL or explicitly revoked relation ACLs, non-dropped-column grants,
 and rights the runtime can reach through any role it is a member of
 (`pg_has_role` with `MEMBER`, which follows multi-hop chains; bare
-membership without `INHERIT`/`SET` still counts because its holder can
-re-grant itself `INHERIT`/`SET` link by link).
+membership without `INHERIT`/`SET` still counts because a holder on an
+`ADMIN`-carrying link can re-grant itself `INHERIT`/`SET` link by link,
+and the guard over-approximates a plain membership the same way).
 Unrelated owners and grantees stay allowed. The runner
 never revokes such a right itself, so an already-exposed ledger stays refused
 until the right is removed outside the runner. The refusal names the offending
