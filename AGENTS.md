@@ -20,6 +20,7 @@ Guidance for human and AI contributors.
 - Squash-merge only. One PR is one logical change.
 - Title the PR with a Conventional Commits header: `type(scope): summary`, at most 100 characters, no trailing period. Release automation reads it.
 - Use the PR template, in short, active sentences. Linked Issues and Verification are required; the rest is optional.
+- PRs follow the org contract in `TogetherWeOwn/.github` CONTRIBUTING + this repo's overrides; the PR template's Attestation is mandatory.
 - Keep references public-safe. No internal card IDs (`TOG-`, `PAP-`), private URLs, tokens, or secrets in any title, body, commit, comment, or branch name. Link public GitHub issues with `Closes #123`.
 - Report the tests you ran. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
