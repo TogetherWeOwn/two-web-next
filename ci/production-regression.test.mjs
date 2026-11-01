@@ -617,6 +617,18 @@ test("an oversized passive ledger zip is refused before it touches disk", async 
   );
 });
 
+test("a passive ledger zip exactly at the size limit is accepted", async () => {
+  // The inclusive boundary: the guard rejects over the limit, not at it.
+  // Trailing spaces survive the stub unzip and trim away, so the payload is
+  // exactly the limit while still naming the candidate.
+  const result = await fetchLedgers({
+    runs: [e2eRun(9)],
+    artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+    commit: `${SHA}${" ".repeat(PASSIVE_LEDGER_MAX_BYTES - SHA.length)}`,
+  });
+  assert.deepEqual(result, { runId: 9, artifactId: 77 });
+});
+
 test("staging soak sample sums every tagged version over one window", async () => {
   const older = "00000000-0000-4000-8000-000000000000";
   const seen = [];
