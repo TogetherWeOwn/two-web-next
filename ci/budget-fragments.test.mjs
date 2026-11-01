@@ -148,9 +148,11 @@ function kitFixture(t, fragments) {
 // 338013 and 338012; 337920 rejects by 93 and 92).
 // 338432 admits the MCP result budget on main 004ce006 (two builds 338213
 // and 338213; 338176 rejects by 37).
+// 338688 admits the MCP truncation notice on top of it (two builds 338619;
+// 338432 rejects by 187).
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
   335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176,
-  338432,
+  338432, 338688,
 ];
 // Admitted server.js maxRawBytes allocations. The SHIPPING_KIT_BUDGET pin
 // above (1203200) is the historical baseline; 1203968 admits the
@@ -167,8 +169,10 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // (two builds 1209132 and 1209130; main 1208064 rejects by 1068 and 1066).
 // 1209856 admits the MCP result budget on main 004ce006 (two builds 1209740
 // and 1209742; 1209344 rejects by 396 and 398).
+// 1211392 admits the MCP truncation notice on top of it (two builds 1210976;
+// 1209856 rejects by 1120).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
-  1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856,
+  1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -197,12 +201,12 @@ function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688`,
   );
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -342,6 +346,19 @@ test("shipping oracle admits the measured MCP result-budget server allocations t
   });
 });
 
+test("shipping oracle admits the measured MCP truncation-notice server allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1211392, maxGzipBytes: 338688 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 260608, maxGzipBytes: 103936 },
+    },
+  });
+});
+
 test("shipping oracle admits the measured 1203968 server raw allocation", () => {
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
@@ -361,7 +378,7 @@ test("shipping oracle admits the measured ongoing-night server allocations", () 
 test("shipping oracle rejects an unsupported server raw allocation", () => {
   for (const maxRawBytes of [
     1203201, 1203712, 1203967, 1203969, 1205248, 1205503, 1205505, 1207551, 1207553, 1209343,
-    1209345, 1209855, 1209857,
+    1209345, 1209855, 1209857, 1211391, 1211393,
   ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
@@ -377,7 +394,7 @@ test("shipping oracle rejects an unsupported server raw allocation", () => {
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
   for (const maxGzipBytes of [
     335105, 335359, 335616, 336385, 336641, 336897, 337153, 337407, 337409, 337919, 337921, 338175,
-    338177, 338431, 338433,
+    338177, 338431, 338433, 338687, 338689,
   ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
