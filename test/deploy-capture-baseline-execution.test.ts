@@ -20,6 +20,7 @@ interface CaptureTarget {
   host: string;
   sink: "output" | "env";
   outputKey: string;
+  env?: Record<string, string>;
 }
 
 const TARGETS: CaptureTarget[] = [
@@ -40,9 +41,11 @@ const TARGETS: CaptureTarget[] = [
   {
     workflow: ".github/workflows/rollback-production.yml",
     stepName: "Capture pre-rollback dead-letter baseline",
-    host: "togetherweown.com/up",
+    // The rollback reads the environment's origin from ci/rollback-target.mjs.
+    host: 'new URL("/up", process.env.ROLLBACK_ORIGIN)',
     sink: "output",
     outputKey: "failed",
+    env: { ROLLBACK_ORIGIN: "https://togetherweown.com" },
   },
 ];
 
@@ -75,7 +78,7 @@ function runCaptureBlock(
       `#!${process.execPath}
 import { appendFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-if (process.argv.length !== 4 || process.argv[2] !== "-e" || !process.argv[3].includes("${target.host}")) {
+if (process.argv.length !== 4 || process.argv[2] !== "-e" || !process.argv[3].includes(${JSON.stringify(target.host)})) {
   console.error("unexpected node invocation");
   process.exit(2);
 }
@@ -148,6 +151,7 @@ await new Promise((resolve) => setImmediate(resolve));
           CAPTURE_SUCCEED_ON_ATTEMPT: String(succeedOnAttempt),
           CAPTURE_FAILED_COUNT: String(failedCount),
           CAPTURE_NODE_EXIT_ON_ATTEMPT: String(opts.nodeExitOnAttempt ?? -1),
+          ...target.env,
         },
       },
     );

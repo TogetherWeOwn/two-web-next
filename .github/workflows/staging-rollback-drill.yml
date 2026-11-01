@@ -1,0 +1,147 @@
+name: staging-rollback-drill
+
+# Daily proof that the rollback path works before production needs it.
+# Rolls the staging Worker back to the version that served before the live
+# one, then forward again, both times through rollback-production.yml with
+# environment staging: the same jobs, gates, secret check and identity smoke
+# that a production rollback runs. A red drill holds production promotion
+# (ci/rollback-target.mjs --check-drill in deploy-production.yml) until the
+# next drill is green. Staging only; production is never touched.
+on:
+  schedule:
+    - cron: "41 3 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: staging-rollback-drill
+  cancel-in-progress: false
+
+jobs:
+  plan:
+    name: plan staging rollback drill
+    if: github.ref == 'refs/heads/main'
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 40
+    outputs:
+      live: ${{ steps.versions.outputs.live }}
+      previous: ${{ steps.versions.outputs.previous }}
+      ref: ${{ steps.versions.outputs.ref }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev
+      - name: Wait until no staging deploy or journey run is active
+        # Bounded: 30 checks a minute apart, then the drill fails instead of
+        # moving staging under a deploy or an e2e-staging journey run.
+        run: |
+          for i in $(seq 1 30); do
+            if node ci/rollback-target.mjs --staging-busy | tee /dev/stderr | grep -qx 'Staging lane idle'; then exit 0; fi
+            sleep 60
+          done
+          echo "::error::staging lane stayed busy for 30 minutes; rerun the drill when staging is idle"
+          exit 1
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Record the live and previous staging versions
+        id: versions
+        # The previous version is the newest earlier single-version 100%
+        # deployment. /up must name the live version, and its commit (green
+        # main CI by construction: deploy.yml requires it) supplies the
+        # rollback scripts both legs run. A live commit that predates the
+        # rollback scripts (staging behind the drill) falls back to the
+        # drill revision's scripts instead of failing the drill: the
+        # rollback preflight still demands green exact-SHA CI for them, so
+        # the fallback fails closed, never silently. The helper exits 3 on
+        # that fallback and nonzero otherwise; only exit 3 swaps the ref, so
+        # an unreadable /up or an unchecked script set fails the drill.
+        run: |
+          set -euo pipefail
+          npx wrangler deployments list --name two-web-next --json > "$RUNNER_TEMP/deployments.json"
+          live="$(node ci/rollback-target.mjs --live-version < "$RUNNER_TEMP/deployments.json")"
+          previous="$(node ci/rollback-target.mjs --previous-version < "$RUNNER_TEMP/deployments.json")"
+          set +e
+          ref="$(LIVE="$live" node ci/drill-scripts-ref.mjs)"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 3 ]; then
+            : # fallback: the helper logged the notice and printed the drill revision
+          elif [ "$rc" -ne 0 ]; then
+            exit "$rc"
+          fi
+          {
+            echo "live=$live"
+            echo "previous=$previous"
+            echo "ref=$ref"
+          } >> "$GITHUB_OUTPUT"
+          echo "drill: live $live ($ref), rolling back to $previous and forward again"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  rollback:
+    name: roll staging back
+    needs: plan
+    # Staging legs need only the two repo-level staging Cloudflare values,
+    # passed by declared name: production Environment secrets stay out of
+    # this run entirely.
+    uses: ./.github/workflows/rollback-production.yml
+    with:
+      environment: staging
+      version_id: ${{ needs.plan.outputs.previous }}
+      ref: ${{ needs.plan.outputs.ref }}
+      expected_current_version_id: ${{ needs.plan.outputs.live }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  restore:
+    name: roll staging forward
+    # Always restore once the plan recorded the live version, even when the
+    # rollback leg failed: the guard skips when the live version still serves
+    # and refuses when a newer deploy landed in between.
+    needs: [plan, rollback]
+    if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    uses: ./.github/workflows/rollback-production.yml
+    with:
+      environment: staging
+      version_id: ${{ needs.plan.outputs.live }}
+      ref: ${{ needs.plan.outputs.ref }}
+      expected_current_version_id: ${{ needs.plan.outputs.previous }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  verdict:
+    name: staging-rollback-drill
+    # One verdict for the run: green only when the rollback moved traffic to
+    # the previous version and the restore brought the live version back.
+    needs: [plan, rollback, restore]
+    if: ${{ always() }}
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - name: Require both legs
+        run: |
+          echo "plan=$PLAN rollback=$ROLLBACK ($ROLLBACK_ACTION) restore=$RESTORE ($RESTORE_ACTION)"
+          if [ "$PLAN" != success ] || [ "$ROLLBACK" != success ] || [ "$RESTORE" != success ] || [ "$ROLLBACK_ACTION" != rollback ] || [ "$RESTORE_ACTION" != rollback ]; then
+            echo "::error::staging rollback drill failed; production promotion is held until a drill is green"
+            exit 1
+          fi
+          echo "staging rollback drill green"
+        env:
+          PLAN: ${{ needs.plan.result }}
+          ROLLBACK: ${{ needs.rollback.result }}
+          RESTORE: ${{ needs.restore.result }}
+          ROLLBACK_ACTION: ${{ needs.rollback.outputs.action }}
+          RESTORE_ACTION: ${{ needs.restore.outputs.action }}

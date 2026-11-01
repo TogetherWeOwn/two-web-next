@@ -252,7 +252,7 @@ describe("deploy public-route smoke (offline)", () => {
     }
     const rollback = readFileSync(".github/workflows/rollback-production.yml", "utf8");
     const rollbackBlock = rollback.match(
-      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+      /      - name: Smoke test public routes on the rolled-back version\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
     )?.[1];
     expect(rollbackBlock).toBeDefined();
     expect(rollbackBlock).not.toContain("--fail-on-ready-wait-critical");
@@ -316,10 +316,8 @@ describe("deploy public-route smoke (offline)", () => {
     // the pre-rollback baseline fails, an unreadable capture skips the gate.
     const workflow = readFileSync(".github/workflows/rollback-production.yml", "utf8");
     const captureAt = workflow.indexOf("- name: Capture pre-rollback dead-letter baseline");
-    const smokeAt = workflow.indexOf("- name: Smoke test production public routes");
-    const rollbackAt = workflow.indexOf(
-      "- name: Roll back to the recorded production Worker Version",
-    );
+    const smokeAt = workflow.indexOf("- name: Smoke test public routes on the rolled-back version");
+    const rollbackAt = workflow.indexOf("- name: Roll back to the recorded Worker Version");
     expect(captureAt).toBeGreaterThan(-1);
     expect(rollbackAt).toBeGreaterThan(captureAt);
     expect(smokeAt).toBeGreaterThan(rollbackAt);
@@ -328,9 +326,12 @@ describe("deploy public-route smoke (offline)", () => {
     )?.[1];
     expect(captureBlock).toBeDefined();
     expect(captureBlock).toContain("for i in 1 2 3 4 5");
-    expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
+    expect(captureBlock).toContain('fetch(new URL("/up", process.env.ROLLBACK_ORIGIN)');
     expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
     expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    expect(workflow.slice(captureAt, rollbackAt)).toContain(
+      "ROLLBACK_ORIGIN: ${{ steps.target.outputs.origin }}",
+    );
     const smokeSection = workflow.slice(smokeAt, smokeAt + 2000);
     expect(smokeSection).toContain(
       "SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}",

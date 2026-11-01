@@ -384,7 +384,7 @@ async function rollbackSmokeStep() {
     new URL("../.github/workflows/rollback-production.yml", import.meta.url),
     "utf8",
   );
-  const start = workflow.indexOf("- name: Smoke test production public routes");
+  const start = workflow.indexOf("- name: Smoke test public routes on the rolled-back version");
   assert.notEqual(start, -1, "rollback smoke step not found");
   const step = workflow.slice(start);
   const runAt = step.indexOf("run: |");
@@ -402,8 +402,9 @@ async function rollbackSmokeStep() {
 test("rollback workflow passes the recorded version to the smoke verifier inside the bounded retry loop, with no version override", async () => {
   const { step, script } = await rollbackSmokeStep();
   assert.match(script, /for i in 1 2 3 4 5 6; do/, script);
-  assert.match(script, /node bin\/smoke\.mjs https:\/\/togetherweown\.com/, script);
-  assert.match(script, /--allow-indexable/, script);
+  assert.match(script, /node bin\/smoke\.mjs "\$ROLLBACK_ORIGIN" "\$\{indexable\[@\]\}"/, script);
+  assert.match(script, /indexable=\(--allow-indexable\)/, script);
+  assert.match(step, /ROLLBACK_ORIGIN: \$\{\{ steps\.target\.outputs\.origin \}\}/, step);
   assert.match(script, /--expected-version-id "\$ROLLBACK_VERSION_ID"/, script);
   assert.doesNotMatch(script, /--version-override/, script);
   assert.doesNotMatch(step, /Cloudflare-Workers-Version-Overrides/, step);
@@ -417,14 +418,14 @@ async function runRollbackScript(t, serve) {
   const { url, requests } = await stub(t, serve, { indexable: true });
   const { script } = await rollbackSmokeStep();
   // Hermetic extraction: same shell, loopback target, no real retry delay.
-  const hermetic = script
-    .replaceAll("https://togetherweown.com", url)
-    .replaceAll("sleep 10", "sleep 0");
+  const hermetic = script.replaceAll("sleep 10", "sleep 0");
   const result = await spawnCollect("bash", ["-c", hermetic], {
     cwd: repoRoot,
     env: {
       ...process.env,
       ROLLBACK_VERSION_ID: EXPECTED,
+      ROLLBACK_ORIGIN: url,
+      ROLLBACK_INDEXABLE: "true",
       SMOKE_FAILED_BASELINE: "",
       SMOKE_ALLOW_MISSING_BASELINE: "1",
     },
@@ -435,7 +436,7 @@ async function runRollbackScript(t, serve) {
 test("extracted rollback smoke step fails after its bounded retries while a healthy wrong version serves ordinary traffic", async (t) => {
   const result = await runRollbackScript(t, serveUp(healthyUp(WRONG)));
   assert.equal(result.code, 1, result.output);
-  assert.match(result.output, /production public-route smoke failed after rollback/);
+  assert.match(result.output, /public-route smoke failed after rollback/);
   assert.match(result.output, /FAIL \/up: expected revision\.version_id/);
   // The bounded loop retried instead of accepting the first healthy answer.
   assert.ok(result.requests.length >= 36, `requests=${result.requests.length}`);
@@ -451,7 +452,7 @@ test("extracted rollback smoke step passes once propagation serves the recorded 
     }
   });
   assert.equal(result.code, 0, result.output);
-  assert.match(result.output, /production smoke ok \(attempt 2\)/);
+  assert.match(result.output, /rollback smoke ok \(attempt 2\)/);
   assert.ok(result.requests.every((r) => r.override === undefined));
 });
 

@@ -322,6 +322,10 @@ nor a data rollback target. Use the reviewed procedures:
   recorded known-good version ID; production uses the `rollback-production`
   workflow. It does not undo migrations, data writes, Discord side effects,
   queue messages or external-resource changes.
+  Promotion therefore refuses a candidate whose new migrations drop, rename,
+  retype or tighten (`SET NOT NULL`) schema the live Worker may use, unless
+  the migration carries a reviewed `-- rollback-safe: <reason>` line
+  ([rollback target](runbook.md#daily-staging-rollback-drill-and-the-promotion-rollback-target)).
 - **Schema and data:** the **Rollback** rules under
   [web schema migrations](runbook.md#neon-web-schema-migrations-separate-operator-action).
   Prefer a reviewed forward repair. An authorized PITR or backup restore
