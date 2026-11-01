@@ -1,13 +1,16 @@
 name: release
 
-# Release on production promote (replaces the release-please release PR).
+# Release on production promote, with calendar versions (vYYYY.MDD.P).
 # deploy-production calls this after a successful production deploy with the
-# exact deployed SHA. It tags that commit vX.Y.Z and publishes a GitHub Release
-# whose notes come from the Conventional Commit subjects since the previous
-# tag (ci/release-on-promote.cjs). Bump rules and note sections stay in
-# release-please-config.json, so versions continue the existing tag line.
-# No release PR: nothing new needs CI or review, nothing goes stale, and main
-# never needs a freeze. Manual dispatch repairs a missed tag for a deployed SHA.
+# exact deployed SHA. ci/release-request.cjs proves the promotion from its
+# receipt, then the shared releaser (TogetherWeOwn/.github actions/calver,
+# policy production-promotion) allocates the version from tag history, tags
+# that commit and publishes a GitHub Release, Latest, whose notes group the
+# Conventional Commit subjects since the previous stable tag by
+# release-please-config.json changelog-sections. No release commit or PR.
+# A re-promote of a tagged commit or a rollback skips green without a tag.
+# Manual dispatch dry-runs a release or repairs a missing one for a deployed
+# SHA; it needs the same promotion evidence.
 
 on:
   workflow_call:
@@ -39,7 +42,11 @@ on:
         type: string
         required: false
       dry_run:
-        description: Print the version and notes without publishing
+        description: Run every check and print the version without publishing
+        type: boolean
+        default: false
+      repair:
+        description: Create the missing GitHub Release for a tag this run attempt already published
         type: boolean
         default: false
 
@@ -55,7 +62,7 @@ jobs:
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
-    timeout-minutes: 5
+    timeout-minutes: 10
     # One release at a time; a queued promote waits instead of racing the tag.
     concurrency:
       group: release
@@ -64,17 +71,45 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
-          # Full history and tags: the version and notes come from the commits
-          # since the previous vX.Y.Z tag.
+          # Full history: the receipt check proves the run's head and the
+          # deployed SHA are on main.
           fetch-depth: 0
-          fetch-tags: true
           persist-credentials: false
-      - name: Tag the deployed commit and publish its release
-        run: node ci/release-on-promote.cjs
+      - name: Prove the production promotion
+        id: request
+        run: node ci/release-request.cjs
         env:
           RELEASE_SHA: ${{ inputs.sha }}
           PROMOTION_RUN_ID: ${{ inputs.promotion_run_id }}
           PROMOTION_RUN_ATTEMPT: ${{ inputs.promotion_run_attempt }}
-          DRY_RUN: ${{ inputs.dry_run == true }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           GH_REPO: ${{ github.repository }}
+      # Plan and publish run in this one serialized job, pinned to the same
+      # reviewed TogetherWeOwn/.github commit. Plan is read-only.
+      - name: Plan the CalVer release
+        id: plan
+        uses: TogetherWeOwn/.github/actions/calver@838b93131c4bac8224eed66b5e27a183c302d69c # shared CalVer releaser
+        with:
+          request: ${{ steps.request.outputs.request }}
+          runs-on-json: ${{ github.event.repository.private && vars.CI_OVERFLOW_RUNNER || '"ubuntu-latest"' }}
+          private-runner-json: ${{ vars.CI_OVERFLOW_RUNNER }}
+      - name: Build the publish request
+        id: publish-request
+        if: steps.plan.outputs.skipped != 'true'
+        run: |
+          node -e '
+            const request = { phase: "publish", plan: JSON.parse(process.env.PLAN),
+              dryRun: process.env.DRY_RUN === "true", repair: process.env.REPAIR === "true" };
+            require("node:fs").appendFileSync(process.env.GITHUB_OUTPUT, `request=${JSON.stringify(request)}\n`);
+          '
+        env:
+          PLAN: ${{ steps.plan.outputs.plan }}
+          DRY_RUN: ${{ inputs.dry_run == true }}
+          REPAIR: ${{ inputs.repair == true }}
+      - name: Tag the deployed commit and publish its release
+        if: steps.plan.outputs.skipped != 'true'
+        uses: TogetherWeOwn/.github/actions/calver@838b93131c4bac8224eed66b5e27a183c302d69c # shared CalVer releaser
+        with:
+          request: ${{ steps.publish-request.outputs.request }}
+          runs-on-json: ${{ github.event.repository.private && vars.CI_OVERFLOW_RUNNER || '"ubuntu-latest"' }}
+          private-runner-json: ${{ vars.CI_OVERFLOW_RUNNER }}
