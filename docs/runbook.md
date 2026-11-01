@@ -629,8 +629,9 @@ fails closed before any probe, never by silently omitting verification.
 A failed post-promotion public-route verification in `deploy-production`
 blocks the release tag. The gradual action's automatic rollback only covers
 failures inside the promotion itself, so the `auto-rollback` job then calls
-this workflow with the recorded pre-promote version ID (the rollback target
-the preflight recorded), `expected_current_version_id` set to the promoted
+this workflow with the recorded pre-promote version ID as the restoration
+target (the rollback target the preflight recorded; the failed step's logs
+print it as `PREV_VERSION`), `expected_current_version_id` set to the promoted
 version, and the promoted commit as the scripts `ref`. After a passed
 verification, the `post-deploy-watch` job (`ci/post-deploy-watch.mjs`) probes
 `/up` every minute for 30 minutes and judges the promoted version's error rate
