@@ -47,6 +47,8 @@ jobs:
       sha: ${{ steps.target.outputs.sha }}
       already_live: ${{ steps.live.outputs.already_live }}
       live_sha: ${{ steps.live.outputs.live_sha }}
+      rollback_version_id: ${{ steps.rollback-target.outputs.version_id }}
+      rollback_commit: ${{ steps.rollback-target.outputs.commit }}
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
@@ -105,6 +107,29 @@ jobs:
           DEPLOY_SHA: ${{ steps.target.outputs.sha }}
           LIVE_SHA: ${{ steps.live.outputs.live_sha }}
           MIGRATIONS_APPLIED: ${{ inputs.migrations_applied }}
+      - name: Hold promotion while the staging rollback drill is red
+        # A red staging-rollback-drill.yml means the rollback path is not
+        # proven; promotion waits until the next drill is green. Runs from the
+        # tip checkout, like the migration check above, so an older target
+        # cannot skip it.
+        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
+        run: node ci/rollback-target.mjs --check-drill
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+      - name: Record and verify the production rollback target
+        # Refuses promotion without a valid rollback target: /up must name the
+        # live version and its commit, and no migration the target adds since
+        # that commit may break it (destructive statements need a reviewed
+        # "-- rollback-safe:" note). The deploy job then confirms that version
+        # is the single 100% deployment and still has its secrets. Tip
+        # checkout, like the checks above.
+        id: rollback-target
+        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
+        run: node ci/rollback-target.mjs --check-target
+        env:
+          ROLLBACK_ENVIRONMENT: production
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
         with:
@@ -200,6 +225,26 @@ jobs:
         # vars into named environments. Fails closed when the production env
         # declares no moderators.
         run: npm run check:worker-moderators-production
+      - name: Confirm the recorded rollback target still exists with its secrets
+        # The preflight recorded the live version from /up. It must still be
+        # the single 100% production deployment, and the version must still
+        # carry every required secret, or a failed promotion would have
+        # nothing safe to return to. Before any production mutation.
+        run: |
+          set -euo pipefail
+          live="$(npx wrangler deployments list --name two-web-next-production --json \
+            | node .github/actions/gradual-promote/gradual-promote.mjs --capture-rollback-target)"
+          if [ "$live" != "$ROLLBACK_VERSION_ID" ]; then
+            echo "::error::production serves $live, not the recorded rollback target $ROLLBACK_VERSION_ID; refusing promotion"
+            exit 1
+          fi
+          node ci/check-production-secrets.mjs --rollback-version
+          echo "rollback target $ROLLBACK_VERSION_ID ($ROLLBACK_COMMIT) recorded and verified"
+        env:
+          ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
+          ROLLBACK_COMMIT: ${{ needs.preflight.outputs.rollback_commit }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Deploy production alert Tail Worker first
         # The app's env.production.tail_consumers binding needs the consumer to exist first.
         run: npx wrangler deploy --config tail/wrangler.jsonc --env production

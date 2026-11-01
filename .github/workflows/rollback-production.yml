@@ -1,15 +1,49 @@
 name: rollback-production
 
-# Cutover only. Never runs on a push, PR, release, or completion of another workflow.
-# Manual one-click rollback of the production Worker to a recorded known-good
-# Worker Version ID, behind the same request and protection gates as a deploy.
+# Never runs on a push, PR or release. One rollback path for every
+# environment: a manual one-click rollback of the production Worker to a
+# recorded known-good Worker Version ID, behind the same request and
+# protection gates as a deploy, and a workflow_call for automation. The daily
+# staging-rollback-drill.yml calls this same workflow with environment
+# staging, so the production rollback is code that runs every day.
+# ci/rollback-target.mjs maps each environment to its Worker and origin.
 on:
   workflow_dispatch:
     inputs:
+      environment:
+        description: "Environment to roll back"
+        required: true
+        type: choice
+        options: [production, staging]
+        default: production
       version_id:
         description: "Recorded known-good Worker Version ID (lowercase UUID from `wrangler versions list`)"
         required: true
         type: string
+  workflow_call:
+    inputs:
+      environment:
+        description: "production or staging"
+        required: true
+        type: string
+      version_id:
+        description: "Recorded known-good Worker Version ID to restore"
+        required: true
+        type: string
+      ref:
+        description: "Main commit with green CI whose rollback scripts run; empty uses github.sha"
+        required: false
+        type: string
+        default: ""
+      expected_current_version_id:
+        description: "Roll back only while this version is live; skip when version_id already serves; refuse otherwise"
+        required: false
+        type: string
+        default: ""
+    outputs:
+      action:
+        description: "rollback when traffic moved, skip when version_id already served"
+        value: ${{ jobs.rollback-production.outputs.action }}
 
 # Both gate jobs need Actions read to GET the private repository's Environment.
 permissions:
@@ -17,12 +51,12 @@ permissions:
   actions: read
 
 concurrency:
-  group: rollback-production
+  group: rollback-${{ inputs.environment }}
   cancel-in-progress: false
 
 jobs:
   preflight:
-    name: production-rollback-preflight
+    name: rollback-preflight
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
@@ -30,19 +64,26 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-      - name: Refuse disabled, non-main, unprotected or placeholder deployment
-        run: node ci/production-deploy-gate.mjs
+      - name: Refuse an unknown environment
+        # Before the rollback job names it as its GitHub Environment, so a
+        # typo can never auto-create an unprotected Environment.
+        run: node ci/rollback-target.mjs --environment
         env:
+          ROLLBACK_ENVIRONMENT: ${{ inputs.environment }}
+      - name: Refuse disabled, non-main, unprotected or untested rollback
+        run: node ci/production-deploy-gate.mjs --rollback
+        env:
+          ROLLBACK_ENVIRONMENT: ${{ inputs.environment }}
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           PRODUCTION_AUTO_APPROVE: ${{ vars.PRODUCTION_AUTO_APPROVE }}
           GITHUB_TOKEN: ${{ github.token }}
-          # Rollback checks out github.sha; the gate verifies DEPLOY_SHA.
-          DEPLOY_SHA: ${{ github.sha }}
+          # Rollback checks out the scripts commit; the gate verifies DEPLOY_SHA.
+          DEPLOY_SHA: ${{ inputs.ref || github.sha }}
       - name: Refuse an empty, malformed or injectable version_id
         # The input travels inputs -> env -> quoted shell variable, never
         # through expression interpolation in a run: block.
@@ -53,40 +94,50 @@ jobs:
   rollback-production:
     name: rollback-production
     needs: preflight
+    outputs:
+      action: ${{ steps.guard.outputs.action }}
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 15
-    # Shared production Worker mutation lock with the promotion job: the same
-    # static non-cancelling group serializes rollback and promotion mutations
-    # to the same Worker. Workflow-level groups stay distinct so the run never
-    # nests this group.
+    # Shared Worker mutation lock per environment: production shares the
+    # static non-cancelling group with the promotion job, staging shares the
+    # deploy-staging group with deploy.yml, so a rollback never interleaves
+    # with a deploy to the same Worker. Workflow-level groups stay distinct
+    # so the run never nests this group.
     concurrency:
-      group: production-worker-mutation
+      group: ${{ inputs.environment == 'staging' && 'deploy-staging' || 'production-worker-mutation' }}
       cancel-in-progress: false
-    # Preflight verifies the configured automated-evidence or reviewer mode
-    # before GitHub can auto-create a missing/unprotected Environment.
+    # Preflight verifies the environment name and the configured
+    # automated-evidence or reviewer mode before GitHub can auto-create a
+    # missing/unprotected Environment.
     environment:
-      name: production
-      url: https://togetherweown.com
+      name: ${{ inputs.environment }}
+      url: ${{ inputs.environment == 'staging' && 'https://next.togetherweown.com' || 'https://togetherweown.com' }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Roll back from the dispatch SHA that passed preflight, not a newer main head.
-          ref: ${{ github.sha }}
+          # Roll back from the scripts commit that passed preflight, not a newer main head.
+          ref: ${{ inputs.ref || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
           cache: npm
-      - name: Recheck production gate after Environment approval
-        run: node ci/production-deploy-gate.mjs
+      - name: Resolve the environment's Worker and origin
+        id: target
+        run: node ci/rollback-target.mjs --environment
         env:
+          ROLLBACK_ENVIRONMENT: ${{ inputs.environment }}
+      - name: Recheck rollback gate after Environment approval
+        run: node ci/production-deploy-gate.mjs --rollback
+        env:
+          ROLLBACK_ENVIRONMENT: ${{ inputs.environment }}
           PRODUCTION_DEPLOY_ENABLED: ${{ vars.PRODUCTION_DEPLOY_ENABLED }}
           PRODUCTION_AUTO_APPROVE: ${{ vars.PRODUCTION_AUTO_APPROVE }}
           GITHUB_TOKEN: ${{ github.token }}
-          # Rollback checks out github.sha; the gate verifies DEPLOY_SHA.
-          DEPLOY_SHA: ${{ github.sha }}
+          # Rollback checks out the scripts commit; the gate verifies DEPLOY_SHA.
+          DEPLOY_SHA: ${{ inputs.ref || github.sha }}
       - name: Recheck version_id after Environment approval
         run: node ci/production-deploy-gate.mjs --version-id
         env:
@@ -94,11 +145,31 @@ jobs:
       - run: npm ci --include=dev
       # No migrations, queue creation or SQL tests here: provisioning and W16
       # rehearsal are separate operator work. CI uses disposable SQL services.
-      - name: Require production-only Cloudflare credentials
+      - name: Require the environment's Cloudflare credentials
         run: node ci/production-deploy-gate.mjs --credentials
         env:
-          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
+      - name: Refuse when an unexpected version is live
+        # Automation passes expected_current_version_id: roll back only while
+        # that version serves, report skip when version_id already serves,
+        # and refuse when anything else is live (a deploy landed in between).
+        # Manual dispatch leaves it empty and always rolls back.
+        id: guard
+        run: |
+          set -euo pipefail
+          if [ -z "$EXPECTED_CURRENT_VERSION_ID" ]; then
+            echo "action=rollback" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          npx wrangler deployments list --name "$ROLLBACK_WORKER_NAME" --json > "$RUNNER_TEMP/deployments.json"
+          node ci/rollback-target.mjs --action < "$RUNNER_TEMP/deployments.json"
+        env:
+          EXPECTED_CURRENT_VERSION_ID: ${{ inputs.expected_current_version_id }}
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+          ROLLBACK_WORKER_NAME: ${{ steps.target.outputs.worker }}
+          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
       - name: Require rollback target version secrets (names only, before rollback)
         # Reads the recorded target version's secret_text bindings via
         # wrangler versions view and refuses on any missing required name.
@@ -112,8 +183,9 @@ jobs:
         run: node ci/check-production-secrets.mjs --rollback-version
         env:
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+          ROLLBACK_WORKER_NAME: ${{ steps.target.outputs.worker }}
+          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
       - name: Capture pre-rollback dead-letter baseline
         id: dead-letter-baseline
         # Read-only GET before the rollback: the post-rollback smoke fails only
@@ -125,28 +197,32 @@ jobs:
         run: |
           baseline=""
           for i in 1 2 3 4 5; do
-            candidate="$(node -e 'fetch("https://togetherweown.com/up", { signal: AbortSignal.timeout(10000) }).then((r) => r.json()).then((d) => { const f = d && d.queue ? d.queue.failed : undefined; if (typeof f === "number" && Number.isInteger(f) && f >= 0) process.stdout.write(String(f)); }).catch(() => {})' || true)"
+            candidate="$(node -e 'fetch(new URL("/up", process.env.ROLLBACK_ORIGIN), { signal: AbortSignal.timeout(10000) }).then((r) => r.json()).then((d) => { const f = d && d.queue ? d.queue.failed : undefined; if (typeof f === "number" && Number.isInteger(f) && f >= 0) process.stdout.write(String(f)); }).catch(() => {})' || true)"
             if [ -n "$candidate" ]; then baseline="$candidate"; break; fi
             if [ "$i" -lt 5 ]; then sleep 5; fi
           done
           if [ -z "$baseline" ]; then echo "::warning::dead-letter baseline unreadable after 5 attempts; rollback smoke will skip the dead-letter gate on history"; fi
           echo "failed=$baseline" >> "$GITHUB_OUTPUT"
           echo "dead-letter baseline: ${baseline:-unknown}"
-      - name: Roll back to the recorded production Worker Version
+        env:
+          ROLLBACK_ORIGIN: ${{ steps.target.outputs.origin }}
+      - name: Roll back to the recorded Worker Version
+        if: steps.guard.outputs.action == 'rollback'
         # Non-interactive CI auto-accepts wrangler's confirmation prompt with the
         # default answer. The version id was gate-validated above and is quoted.
-        run: npx wrangler rollback "$ROLLBACK_VERSION_ID" --name two-web-next-production
+        run: npx wrangler rollback "$ROLLBACK_VERSION_ID" --name "$ROLLBACK_WORKER_NAME"
         env:
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
-      - name: Smoke test production public routes
+          ROLLBACK_WORKER_NAME: ${{ steps.target.outputs.worker }}
+          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment == 'staging' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment == 'staging' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
+      - name: Smoke test public routes on the rolled-back version
         # Same GET-only public-route set as staging (bin/smoke.mjs), so the two
         # gates cannot drift. Manual redirects keep the checks unauthenticated
         # and never visit Discord: no auth, no writes, no PII. Indexable apex
-        # HTML omits the staging noindex (src/headers.ts); the archive and the
-        # branded 404 stay meta-noindex and skip the header assertion inside
-        # the checker. DB/schema readiness is mandatory via the /up envelope;
+        # HTML omits the staging noindex (src/headers.ts), so only production
+        # passes --allow-indexable; the archive and the branded 404 stay
+        # meta-noindex and skip the header assertion inside the checker. DB/schema readiness is mandatory via the /up envelope;
         # queue-only degraded/unknown is allowed. Dead letters fail only on
         # growth past the pre-rollback baseline, never on retained history;
         # when the baseline capture could not read /up the gate is skipped
@@ -159,12 +235,16 @@ jobs:
         # unpinned routing (no version-override header).
         env:
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+          ROLLBACK_ORIGIN: ${{ steps.target.outputs.origin }}
+          ROLLBACK_INDEXABLE: ${{ steps.target.outputs.indexable }}
           SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
           SMOKE_ALLOW_MISSING_BASELINE: "1"
         run: |
+          indexable=()
+          if [ "$ROLLBACK_INDEXABLE" = "true" ]; then indexable=(--allow-indexable); fi
           for i in 1 2 3 4 5 6; do
-            if node bin/smoke.mjs https://togetherweown.com --allow-indexable --expected-version-id "$ROLLBACK_VERSION_ID"; then
-              echo "production smoke ok (attempt $i)"
+            if node bin/smoke.mjs "$ROLLBACK_ORIGIN" "${indexable[@]}" --expected-version-id "$ROLLBACK_VERSION_ID"; then
+              echo "rollback smoke ok (attempt $i)"
               exit 0
             fi
             if [ "$i" -lt 6 ]; then
@@ -172,5 +252,5 @@ jobs:
               sleep 10
             fi
           done
-          echo "::error::production public-route smoke failed after rollback"
+          echo "::error::public-route smoke failed after rollback"
           exit 1

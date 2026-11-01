@@ -18,6 +18,9 @@
 //
 //   wrangler versions view "$ROLLBACK_VERSION_ID" --name two-web-next-production --json
 //
+// ROLLBACK_WORKER_NAME selects the Worker for the staging rollback drill
+// (two-web-next); empty means production, and any other name refuses.
+//
 // and compares the target version's `resources.bindings` entries with
 // `type === "secret_text"` against the same required set. The rollback
 // deploys the target version's own code and bindings, never the checked-out
@@ -179,23 +182,28 @@ function listProductionSecretJson() {
   }
 }
 
+export const ROLLBACK_WORKERS = ["two-web-next-production", "two-web-next"];
+
+export function rollbackWorkerName(value) {
+  const name = (value ?? "").trim() || "two-web-next-production";
+  if (!ROLLBACK_WORKERS.includes(name)) {
+    throw new Error(
+      `Could not verify rollback target version secrets: ROLLBACK_WORKER_NAME must be one of ${ROLLBACK_WORKERS.join(", ")}`,
+    );
+  }
+  return name;
+}
+
 function listRollbackVersionJson() {
   // Reads the recorded target version's bindings, never the latest version's
   // listing. The id is gate-validated upstream and re-validated here; it
   // travels as a single exec argument, never through a shell.
   assertRollbackVersionIdFormat(process.env.ROLLBACK_VERSION_ID);
+  const worker = rollbackWorkerName(process.env.ROLLBACK_WORKER_NAME);
   try {
     return execFileSync(
       "npx",
-      [
-        "wrangler",
-        "versions",
-        "view",
-        process.env.ROLLBACK_VERSION_ID,
-        "--name",
-        "two-web-next-production",
-        "--json",
-      ],
+      ["wrangler", "versions", "view", process.env.ROLLBACK_VERSION_ID, "--name", worker, "--json"],
       {
         encoding: "utf8",
         timeout: 60_000,

@@ -274,7 +274,7 @@ const ROLLBACK_VERSION_ID = "11111111-2222-4333-8444-555555555555";
 
 function cliWithStubbedVersionsView(
   stubStdout,
-  { exitCode = 0, versionId = ROLLBACK_VERSION_ID, stubStderr = "" } = {},
+  { exitCode = 0, versionId = ROLLBACK_VERSION_ID, stubStderr = "", worker } = {},
 ) {
   const scratch = mkdtempSync(
     join(
@@ -287,7 +287,7 @@ function cliWithStubbedVersionsView(
       join(scratch, "npx"),
       `#!${process.execPath}
 import { writeSync } from "node:fs";
-const expected = ["wrangler", "versions", "view", process.env.EXPECTED_VERSION, "--name", "two-web-next-production", "--json"];
+const expected = ["wrangler", "versions", "view", process.env.EXPECTED_VERSION, "--name", process.env.EXPECTED_WORKER, "--json"];
 if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
   console.error("unexpected wrangler invocation: " + process.argv.slice(2).join(" "));
   process.exit(2);
@@ -311,7 +311,9 @@ process.exit(Number(process.env.STUB_EXIT));
           STUB_STDERR: stubStderr,
           STUB_EXIT: String(exitCode),
           EXPECTED_VERSION: versionId,
+          EXPECTED_WORKER: worker || "two-web-next-production",
           ROLLBACK_VERSION_ID: versionId,
+          ROLLBACK_WORKER_NAME: worker ?? "",
         },
       },
     );
@@ -329,6 +331,21 @@ test("rollback-version CLI passes on the target version and prints names only", 
     assert.ok(result.stdout.includes(name), `stdout must list ${name}`);
   }
   assert.equal(result.stderr, "");
+});
+
+test("rollback-version CLI reads the staging Worker only when asked, and refuses other names", () => {
+  const staging = cliWithStubbedVersionsView(versionAllPresent, { worker: "two-web-next" });
+  assert.equal(staging.status, 0);
+  const production = cliWithStubbedVersionsView(versionAllPresent, {
+    worker: "two-web-next-production",
+  });
+  assert.equal(production.status, 0);
+  for (const worker of ["two-web-next-jobs", "two-web-next;id", "Two-Web-Next"]) {
+    const refused = cliWithStubbedVersionsView(versionAllPresent, { worker });
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /ROLLBACK_WORKER_NAME must be one of/);
+    assert.equal(refused.stdout, "");
+  }
 });
 
 test("rollback-version CLI fails closed on a missing target secret and on bad input", () => {
@@ -562,13 +579,15 @@ test("required-secrets preflight uses production-only credentials", () => {
 // ---------------------------------------------------------------------------
 
 const PRODUCTION_SECRET = /\bsecrets\s*(?:\.\s*|\[\s*['"])PRODUCTION_/i;
-// `inputs.target` selects the Environment; the secret is mapped only when it
-// is exactly `production`, so a staging or scheduled run never receives it.
+// `inputs.target` (or `inputs.environment`) selects the Environment; the
+// secret is mapped only when it is exactly `production`, so a staging or
+// scheduled run never receives it.
 const GUARDED_PRODUCTION_SECRET =
-  /\binputs\.target\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_/i;
-// `inputs.target` alone, or with a literal fallback for scheduled runs.
+  /\binputs\.(?:target|environment)\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_/i;
+// `inputs.target` or `inputs.environment` alone, or with a literal fallback
+// for scheduled runs.
 const TARGET_ENVIRONMENT =
-  /^\$\{\{\s*\(?\s*inputs\.target\s*(?:\|\|\s*'[A-Za-z-]+'\s*)?\)?\s*\}\}$/;
+  /^\$\{\{\s*\(?\s*inputs\.(?:target|environment)\s*(?:\|\|\s*'[A-Za-z-]+'\s*)?\)?\s*\}\}$/;
 
 function stripQuotes(value) {
   return value

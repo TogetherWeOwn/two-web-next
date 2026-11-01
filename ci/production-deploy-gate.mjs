@@ -443,12 +443,13 @@ function currentCheckoutSha() {
 export async function checkProductionGate(env, fetchEnvironment = fetch, options = {}) {
   // checkoutSha stays lazy so disabled/unprotected requests refuse before any
   // subprocess or CI lookup. Tests pass it explicitly; the CLI resolves it.
-  let { checkoutSha, fetchCi = fetchEnvironment } = options;
+  let { checkoutSha, fetchCi = fetchEnvironment, rollback = false } = options;
   // Refuse before any API request, and before the protected deploy job can start.
   assertProductionRequest(env);
-  // Hold applies to every trigger (manual and automatic) and fails before any
-  // API request, so a held production never starts a deploy.
-  assertProductionHold(env);
+  // Hold applies to every promotion trigger (manual and automatic) and fails
+  // before any API request, so a held production never starts a deploy. A
+  // rollback is the way out of a bad release and never waits on a hold.
+  if (!rollback) assertProductionHold(env);
   // The runner resets step-level GITHUB_* overrides to github.sha (the dispatch
   // tip), so the promoted commit arrives as DEPLOY_SHA.
   if (!/^[0-9a-f]{40}$/.test(env.DEPLOY_SHA ?? "")) {
@@ -491,7 +492,11 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
     },
     { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
   );
-  if (!autoApprove) return ci;
+  // A rollback serves a version production already served, never the
+  // checked-out commit, so staging evidence for that commit proves nothing:
+  // the checkout only supplies the rollback scripts, and green main CI
+  // vouches for them.
+  if (!autoApprove || rollback) return ci;
   const staging = await requireStagingEvidence(
     { repository: env.GITHUB_REPOSITORY, sha: ci.sha },
     { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
@@ -499,12 +504,52 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   return { ...ci, autoApprove: true, staging };
 }
 
+// Rollback gate for rollback-production.yml, per environment. Production
+// keeps the enable flag, main-only request, Environment protection and
+// green exact-SHA CI of the checked-out scripts; staging keeps the main-only
+// request and green CI. Neither checks a hold or staging evidence.
+export async function checkRollbackGate(env, fetchImpl = fetch, options = {}) {
+  const environment = env.ROLLBACK_ENVIRONMENT;
+  if (environment === "production") {
+    return checkProductionGate(env, fetchImpl, { ...options, rollback: true });
+  }
+  if (environment !== "staging") {
+    throw new Error("ROLLBACK_ENVIRONMENT must be production or staging");
+  }
+  if (
+    !AUTOMATIC_PROMOTION_EVENTS.has(env.GITHUB_EVENT_NAME) ||
+    env.GITHUB_REF !== "refs/heads/main"
+  ) {
+    throw new Error(
+      "Staging rollback requires workflow_dispatch, workflow_run or schedule on main",
+    );
+  }
+  if (!/^[0-9a-f]{40}$/.test(env.DEPLOY_SHA ?? "")) {
+    throw new Error("DEPLOY_SHA must be a full 40-hex commit (the checked-out rollback scripts)");
+  }
+  if (!env.GITHUB_TOKEN || !/^[\w.-]+\/[\w.-]+$/.test(env.GITHUB_REPOSITORY ?? "")) {
+    throw new Error("Staging rollback CI evidence cannot be verified");
+  }
+  const checkoutSha = options.checkoutSha ?? currentCheckoutSha();
+  return requireSuccessfulCi(
+    {
+      eventName: "workflow_dispatch",
+      event: { repository: { full_name: env.GITHUB_REPOSITORY } },
+      repository: env.GITHUB_REPOSITORY,
+      ref: "refs/heads/main",
+      sha: env.DEPLOY_SHA,
+      checkoutSha,
+    },
+    { token: env.GITHUB_TOKEN, fetchImpl },
+  );
+}
+
 // The single flag reference for this tool: --help prints it to stdout,
 // unknown dash-flags print it to stderr with exit 2 instead of running the
 // gate. A bare invocation (or a non-flag positional, as before) runs the
 // full gate.
 export const PRODUCTION_DEPLOY_GATE_USAGE =
-  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --already-live | --check-migrations | --help]\nWith no flag, runs the full production gate.";
+  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --already-live | --check-migrations | --help]\nWith no flag, runs the full production gate.";
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
@@ -518,6 +563,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
     } else if (process.argv[2] === "--version-id") {
       assertRollbackVersionId(process.env.ROLLBACK_VERSION_ID);
       console.log("Rollback version_id is a valid Worker Version ID");
+    } else if (process.argv[2] === "--rollback") {
+      const evidence = await checkRollbackGate(process.env);
+      console.log(
+        `${process.env.ROLLBACK_ENVIRONMENT} rollback request and exact-SHA CI checks passed: scripts ${evidence.sha}, full CI run ${evidence.runId}, attempt ${evidence.runAttempt}`,
+      );
     } else if (process.argv[2] === "--already-live") {
       // Clean skip when production already serves the target: exits 0 in
       // both cases and reports via GITHUB_OUTPUT so the workflow can skip
