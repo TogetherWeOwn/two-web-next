@@ -360,7 +360,11 @@ test("the staging drill rolls back and forward through rollback-production.yml",
   for (const leg of [rollback, restore]) {
     assert.match(leg, /environment: staging\n/);
     assert.match(leg, /ref: \$\{\{ needs\.plan\.outputs\.ref \}\}\n/);
-    assert.match(leg, /secrets: inherit\n/);
+    // Least privilege: the drill passes only the two repo-level staging
+    // Cloudflare values by declared name, never a blanket inherit.
+    assert.ok(!/secrets: inherit/.test(leg), "no blanket secret inherit on a staging leg");
+    assert.match(leg, /staging_cloudflare_api_token: \$\{\{ secrets\.CLOUDFLARE_API_TOKEN \}\}/);
+    assert.match(leg, /staging_cloudflare_account_id: \$\{\{ secrets\.CLOUDFLARE_ACCOUNT_ID \}\}/);
     assert.ok(!/environment: production/.test(leg), "the drill never targets production");
   }
   assert.match(rollback, /version_id: \$\{\{ needs\.plan\.outputs\.previous \}\}/);
@@ -389,6 +393,16 @@ test("rollback-production exposes the guard inputs and reports whether traffic m
   );
   for (const input of ["environment", "version_id", "ref", "expected_current_version_id"]) {
     assert.match(call, new RegExp(`\\n      ${input}:\\n`));
+  }
+  // Least privilege: repo-level caller secrets arrive by declared name.
+  // Production Environment secrets are deliberately NOT declared: a caller
+  // job cannot bind an environment, so it cannot pass them by name.
+  for (const secret of [
+    "staging_cloudflare_api_token",
+    "staging_cloudflare_account_id",
+    "paperclip_deploy_webhook_secret",
+  ]) {
+    assert.match(call, new RegExp(`\\n      ${secret}:\\n`));
   }
   assert.match(call, /value: \$\{\{ jobs\.rollback-production\.outputs\.action \}\}/);
   const guardAt = workflow.indexOf("- name: Refuse when an unexpected version is live");

@@ -24,8 +24,7 @@ jobs:
   plan:
     name: plan staging rollback drill
     if: github.ref == 'refs/heads/main'
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 40
     outputs:
@@ -58,13 +57,21 @@ jobs:
         # The previous version is the newest earlier single-version 100%
         # deployment. /up must name the live version, and its commit (green
         # main CI by construction: deploy.yml requires it) supplies the
-        # rollback scripts both legs run.
+        # rollback scripts both legs run. A live commit that predates the
+        # rollback scripts (staging behind the drill) falls back to the
+        # drill revision's scripts instead of failing the drill: the
+        # rollback preflight still demands green exact-SHA CI for them, so
+        # the fallback fails closed, never silently.
         run: |
           set -euo pipefail
           npx wrangler deployments list --name two-web-next --json > "$RUNNER_TEMP/deployments.json"
           live="$(node ci/rollback-target.mjs --live-version < "$RUNNER_TEMP/deployments.json")"
           previous="$(node ci/rollback-target.mjs --previous-version < "$RUNNER_TEMP/deployments.json")"
           ref="$(LIVE="$live" node -e 'fetch("https://next.togetherweown.com/up", { headers: { "cache-control": "no-cache" }, signal: AbortSignal.timeout(10000) }).then((r) => r.json()).then((d) => { const r = d && d.revision; if (!r || r.version_id !== process.env.LIVE || !/^[0-9a-f]{40}$/.test(r.commit ?? "")) { console.error("::error::staging /up does not name the live version with a known commit"); process.exit(1); } process.stdout.write(r.commit); })')"
+          if ! REF="$ref" node -e 'fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/contents/ci/rollback-target.mjs?ref=${process.env.REF}`, { headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" }, signal: AbortSignal.timeout(10000) }).then((r) => { if (r.status === 404) process.exit(1); if (!r.ok) throw new Error(`rollback script check failed (HTTP ${r.status})`); })'; then
+            echo "::notice::staging serves $ref, which predates the rollback scripts; both legs run the drill revision ($GITHUB_SHA) instead"
+            ref="$GITHUB_SHA"
+          fi
           {
             echo "live=$live"
             echo "previous=$previous"
@@ -72,19 +79,25 @@ jobs:
           } >> "$GITHUB_OUTPUT"
           echo "drill: live $live ($ref), rolling back to $previous and forward again"
         env:
+          GITHUB_TOKEN: ${{ github.token }}
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   rollback:
     name: roll staging back
     needs: plan
+    # Staging legs need only the two repo-level staging Cloudflare values,
+    # passed by declared name: production Environment secrets stay out of
+    # this run entirely.
     uses: ./.github/workflows/rollback-production.yml
     with:
       environment: staging
       version_id: ${{ needs.plan.outputs.previous }}
       ref: ${{ needs.plan.outputs.ref }}
       expected_current_version_id: ${{ needs.plan.outputs.live }}
-    secrets: inherit
+    secrets:
+      staging_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      staging_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   restore:
     name: roll staging forward
@@ -99,7 +112,9 @@ jobs:
       version_id: ${{ needs.plan.outputs.live }}
       ref: ${{ needs.plan.outputs.ref }}
       expected_current_version_id: ${{ needs.plan.outputs.previous }}
-    secrets: inherit
+    secrets:
+      staging_cloudflare_api_token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      staging_cloudflare_account_id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
 
   verdict:
     name: staging-rollback-drill
