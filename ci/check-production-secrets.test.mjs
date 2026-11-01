@@ -946,16 +946,22 @@ test("target-selected environment requires every mapping to be guarded on inputs
 // through to repository scope and skips the Environment's main-only branch
 // policy, so every reference must come from a job bound to `staging` — or,
 // for a target-selected Environment, from a mapping that hands production
-// runs the PRODUCTION_* pair behind the inputs.target guard and only then
-// falls back to the staging name. Comments count as written, as above.
+// runs the PRODUCTION_* pair behind the inputs.target guard and hands the
+// staging name only to non-production runs. The staging branch must carry
+// its own `inputs.target != 'production'` guard: in a bare
+// `prod && secret || staging-secret` chain an empty production secret is
+// falsy, so a production run would silently fall back to the staging name.
+// Comments count as written, as above.
 // ---------------------------------------------------------------------------
 
 const STAGING_CLOUDFLARE_SECRET =
   /\bsecrets\s*(?:\.\s*|\[\s*['"])CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\b/i;
 // The production name is taken only under the same input that selects the
-// production Environment; the staging name is the fallback branch.
+// production Environment, and the staging name only under the inverse
+// guard, so an empty production secret resolves to '' (a loud downstream
+// auth failure), never to the staging credential.
 const TARGET_GUARDED_STAGING_CLOUDFLARE =
-  /\binputs\.target\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\s*\|\|\s*secrets\s*\.\s*CLOUDFLARE_\1\b/i;
+  /\binputs\.target\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\s*\|\|\s*inputs\.target\s*!=\s*'production'\s*&&\s*secrets\s*\.\s*CLOUDFLARE_\1\s*\|\|\s*''/i;
 
 export function stagingCloudflareEnvironmentViolations(text, file) {
   const { outside, jobs } = splitWorkflow(text);
@@ -1118,8 +1124,8 @@ test("target-selected environment requires the PRODUCTION_* guard for staging Cl
     environment: \${{ inputs.target || 'staging' }}
     steps:
       - env:
-          CLOUDFLARE_API_TOKEN: \${{ inputs.target == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: \${{ inputs.target == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: \${{ inputs.target == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.target != 'production' && secrets.CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ inputs.target == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.target != 'production' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
         run: true
 `;
   assert.deepEqual(stagingCloudflareEnvironmentViolations(guarded, "fixture.yml"), []);
@@ -1128,10 +1134,18 @@ test("target-selected environment requires the PRODUCTION_* guard for staging Cl
     "",
   );
   assert.equal(stagingCloudflareEnvironmentViolations(unguarded, "fixture.yml").length, 1);
+  // A bare `prod && secret || staging-secret` chain is a violation: an empty
+  // production secret is falsy, so a production run would fall back to the
+  // staging credential instead of resolving to ''.
+  const bareFallback = guarded.replace(
+    "|| inputs.target != 'production' && secrets.CLOUDFLARE_API_TOKEN || ''",
+    "|| secrets.CLOUDFLARE_API_TOKEN",
+  );
+  assert.equal(stagingCloudflareEnvironmentViolations(bareFallback, "fixture.yml").length, 1);
   // The guard must pair each staging name with its own PRODUCTION_* twin.
   const mismatched = guarded.replace(
-    "secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN",
-    "secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_API_TOKEN",
+    "secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.target != 'production' && secrets.CLOUDFLARE_API_TOKEN",
+    "secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.target != 'production' && secrets.CLOUDFLARE_API_TOKEN",
   );
   assert.equal(stagingCloudflareEnvironmentViolations(mismatched, "fixture.yml").length, 1);
   // An expression that cannot be shown to select staging is rejected.
