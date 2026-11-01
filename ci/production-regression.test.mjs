@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import {
+  PASSIVE_LEDGER_MAX_BYTES,
   SOAK_ERROR_RATE_FLOOR,
   SOAK_ERROR_RATE_MARGIN,
   buildScriptErrorQuery,
@@ -12,8 +13,11 @@ import {
   fetchPassiveLedgers,
   journeyOutcomes,
   regressionsAgainstProduction,
+  requireStagingSoakIfEvident,
   smokeOutcomes,
   stagingCandidateVersion,
+  stagingCandidateVersions,
+  stagingSoakSample,
   sumScriptErrors,
 } from "./production-deploy-gate.mjs";
 
@@ -145,6 +149,7 @@ test("analytics query validates identifiers and sums every row", () => {
     sinceIso: "2026-11-01T00:00:00.000Z",
     untilIso: "2026-11-01T01:00:00.000Z",
   });
+  assert.match(query.query, /query \(\$accountTag: String!,/);
   assert.deepEqual(query.variables.filter, {
     scriptName: "two-web-next",
     datetime_geq: "2026-11-01T00:00:00.000Z",
@@ -302,21 +307,47 @@ test("the candidate's staging version is the one tagged with its commit", async 
     ),
     { versionId: VERSION, createdOn: "2026-11-01T10:00:00Z" },
   );
-  for (const pages of [[[]], [[version(VERSION, SHA), version(VERSION, SHA)]]]) {
-    await assert.rejects(
-      stagingCandidateVersion(
-        { accountId: ACCOUNT, token: "fixture-only", sha: SHA },
-        { fetchImpl: versionsApi(pages) },
-      ),
-      /Expected one staging version tagged/,
-    );
-  }
+  await assert.rejects(
+    stagingCandidateVersion(
+      { accountId: ACCOUNT, token: "fixture-only", sha: SHA },
+      { fetchImpl: versionsApi([[]]) },
+    ),
+    /No staging version tagged/,
+  );
   await assert.rejects(
     stagingCandidateVersion(
       { accountId: ACCOUNT, token: "fixture-only", sha: SHA },
       { fetchImpl: versionsApi([[version(VERSION, SHA, "never")]]) },
     ),
     /no creation time/,
+  );
+});
+
+test("a redeployed candidate sums every tagged version, oldest first", async () => {
+  const older = "00000000-0000-4000-8000-000000000000";
+  const versions = await stagingCandidateVersions(
+    { accountId: ACCOUNT, token: "fixture-only", sha: SHA },
+    {
+      fetchImpl: versionsApi([
+        [version(VERSION, SHA, "2026-11-01T11:00:00Z"), version(older, SHA)],
+      ]),
+    },
+  );
+  assert.deepEqual(versions, [
+    { versionId: older, createdOn: "2026-11-01T10:00:00Z" },
+    { versionId: VERSION, createdOn: "2026-11-01T11:00:00Z" },
+  ]);
+  // The singular still names the serving (newest) version.
+  assert.deepEqual(
+    await stagingCandidateVersion(
+      { accountId: ACCOUNT, token: "fixture-only", sha: SHA },
+      {
+        fetchImpl: versionsApi([
+          [version(VERSION, SHA, "2026-11-01T11:00:00Z"), version(older, SHA)],
+        ]),
+      },
+    ),
+    { versionId: VERSION, createdOn: "2026-11-01T11:00:00Z" },
   );
 });
 
@@ -433,6 +464,18 @@ test("deploy-production runs the regression check before the deploy job", () => 
   const regression = job("regression", "deploy-production");
   assert.match(regression, /needs: \[preflight, staging-soak\]/);
   assert.match(regression, /environment:\n {6}name: production\n/);
+  // Least privilege: analytics reads use the repo-level read-only token, so
+  // the regression check never holds the production deployment token. The
+  // Environment binding stays as the reviewer checkpoint before the deploy.
+  assert.match(regression, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CF_ANALYTICS_READ_TOKEN \}\}/);
+  assert.match(
+    regression,
+    /CLOUDFLARE_ACCOUNT_ID: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_ACCOUNT_ID \}\}/,
+  );
+  assert.ok(
+    !regression.includes("secrets.PRODUCTION_CLOUDFLARE_API_TOKEN"),
+    "the regression check never sees the deployment token",
+  );
   assert.match(
     regression,
     /run: node gate-tip\/ci\/production-deploy-gate\.mjs --fetch-passive-ledgers/,
@@ -472,7 +515,7 @@ test("staging soak sample spans the candidate version's life, at most 24 hours",
         nowMs: Date.parse("2026-11-01T12:00:00Z"),
       },
     );
-    assert.deepEqual(sample, { versionId: VERSION, createdOn, requests: 500, errors: 2 });
+    assert.deepEqual(sample, { versionIds: [VERSION], createdOn, requests: 500, errors: 2 });
     assert.deepEqual(seen, [
       {
         scriptName: "two-web-next",
@@ -482,4 +525,123 @@ test("staging soak sample spans the candidate version's life, at most 24 hours",
       },
     ]);
   }
+});
+
+function stagingRunsApi(runs, { status = 200 } = {}) {
+  return async (url) => {
+    const parsed = new URL(url);
+    assert.ok(parsed.pathname.endsWith("/actions/workflows/e2e-staging.yml/runs"));
+    if (status !== 200) return { ok: false, status };
+    return { ok: true, json: async () => ({ workflow_runs: runs }) };
+  };
+}
+const stagingPass = (id, updated_at) => ({
+  id,
+  display_title: `e2e-staging deploy ${SHA}`,
+  head_branch: "main",
+  path: ".github/workflows/e2e-staging.yml",
+  head_repository: { full_name: "fixture/repo" },
+  status: "completed",
+  conclusion: "success",
+  updated_at,
+});
+const soakArgs = { repository: "fixture/repo", sha: SHA };
+const soakOpts = (fetchImpl, nowMs = Date.parse("2026-11-01T12:00:00Z")) => ({
+  token: "fixture-only",
+  fetchImpl,
+  nowMs,
+});
+
+test("reviewer mode ages a staging pass approved early, and only when one exists", async () => {
+  const young = "2026-11-01T11:50:00.000Z";
+  await assert.rejects(
+    requireStagingSoakIfEvident(soakArgs, soakOpts(stagingRunsApi([stagingPass(7, young)]))),
+    /e2e-staging\.yml run 7 has not soaked 30 minutes since it passed/,
+  );
+  for (const updated_at of [undefined, "yesterday"]) {
+    await assert.rejects(
+      requireStagingSoakIfEvident(soakArgs, soakOpts(stagingRunsApi([stagingPass(7, updated_at)]))),
+      /has not soaked 30 minutes since it passed/,
+    );
+  }
+  assert.deepEqual(
+    await requireStagingSoakIfEvident(
+      soakArgs,
+      soakOpts(stagingRunsApi([stagingPass(7, "2026-11-01T11:29:00.000Z")])),
+    ),
+    { runId: 7 },
+  );
+  // No run names the SHA, or none passed: the reviewer's approval is the gate.
+  assert.equal(await requireStagingSoakIfEvident(soakArgs, soakOpts(stagingRunsApi([]))), null);
+  assert.equal(
+    await requireStagingSoakIfEvident(
+      soakArgs,
+      soakOpts(stagingRunsApi([{ ...stagingPass(7, young), conclusion: "failure" }])),
+    ),
+    null,
+  );
+  // A pass from another branch or workflow is not evidence for this SHA.
+  await assert.rejects(
+    requireStagingSoakIfEvident(
+      soakArgs,
+      soakOpts(stagingRunsApi([{ ...stagingPass(7, young), head_branch: "feature" }])),
+    ),
+    /revision\/branch\/workflow mismatch/,
+  );
+  // An unreadable lookup fails closed, never as silent no-evidence.
+  await assert.rejects(
+    requireStagingSoakIfEvident(soakArgs, soakOpts(stagingRunsApi([], { status: 403 }))),
+    /Staging soak lookup failed \(HTTP 403\)/,
+  );
+});
+
+test("a passive ledger run without an integer id is refused", async () => {
+  await assert.rejects(
+    fetchLedgers({
+      runs: [{ id: "9", display_title: `e2e-staging deploy ${SHA}` }],
+      artifacts: [],
+    }),
+    /invalid run id/,
+  );
+});
+
+test("an oversized passive ledger zip is refused before it touches disk", async () => {
+  assert.equal(PASSIVE_LEDGER_MAX_BYTES, 8 * 1024 * 1024);
+  await assert.rejects(
+    fetchLedgers({
+      runs: [e2eRun(9)],
+      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+      commit: "x".repeat(PASSIVE_LEDGER_MAX_BYTES + 1),
+    }),
+    /over the 8388608-byte limit/,
+  );
+});
+
+test("staging soak sample sums every tagged version over one window", async () => {
+  const older = "00000000-0000-4000-8000-000000000000";
+  const seen = [];
+  const versions = versionsApi([
+    [version(VERSION, SHA, "2026-11-01T11:00:00Z"), version(older, SHA, "2026-11-01T10:00:00Z")],
+  ]);
+  const sums = analytics(500, 2, seen);
+  const sample = await stagingSoakSample(
+    { CLOUDFLARE_ACCOUNT_ID: ACCOUNT, CLOUDFLARE_API_TOKEN: "fixture-only", DEPLOY_SHA: SHA },
+    {
+      fetchImpl: (url, init) => (url.includes("/graphql") ? sums(url, init) : versions(url, init)),
+      nowMs: Date.parse("2026-11-01T12:00:00Z"),
+    },
+  );
+  // Each invocation belongs to exactly one version, so one window per version
+  // never double-counts: 500 requests and 2 errors on each of the two.
+  assert.deepEqual(sample, {
+    versionIds: [older, VERSION],
+    createdOn: "2026-11-01T10:00:00Z",
+    requests: 1000,
+    errors: 4,
+  });
+  assert.deepEqual(
+    seen.map((filter) => filter.scriptVersion),
+    [older, VERSION],
+  );
+  assert.equal(seen[0].datetime_geq, "2026-11-01T10:00:00.000Z");
 });

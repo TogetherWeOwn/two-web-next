@@ -639,9 +639,16 @@ every five minutes with the gradual gate's thresholds (5%, 20-request floor).
 Three consecutive readiness misses or a failed error-rate verdict set
 `breach=true`, and `auto-rollback` restores the target the same way. An
 analytics query error only warns; a different live version makes the watch
-stand down. The `release` job tags only after the watch passes. If
-`auto-rollback` itself fails, restore manually with this workflow using the
-version ID in the failed step's logs.
+stand down. The `release` job tags only after the watch passes with an
+explicit `pass` verdict, so a superseded watch never tags the displaced
+commit. The watch reads only the repo-level read-only analytics token, binds
+no Environment, and needs no approval in either mode. The `auto-rollback`
+call restores through the production Environment binding, so in reviewer
+mode it waits for a reviewer like any other production mutation; in
+auto-approve mode it runs on its own. If `auto-rollback` itself fails (or
+waits on an approval nobody gives), the failure mode is a live promoted
+version, never a silent rollback: restore manually with this workflow using
+the version ID in the failed step's logs.
 
 #### Daily staging rollback drill and the promotion rollback target
 
@@ -670,10 +677,14 @@ still carries its required secrets before any production mutation.
 Before the deploy job, `deploy-production` runs two more gates
 (`ci/production-deploy-gate.mjs`):
 
-- `staging-soak` (staging credentials, read-only) finds the candidate's
-  staging Worker version by its commit tag and sums its Workers invocation
-  errors since it deployed (at most 24 hours).
-- `production-regression` (production Environment) downloads the
+- `staging-soak` (staging credentials, no Environment binding) finds the
+  candidate's staging Worker versions by commit tag — every tagged version
+  counts, since a deploy retry tags twice — and sums their Workers
+  invocation errors since the oldest deployed (at most 24 hours). The job
+  only reads (versions list, analytics query) and never mutates, but its
+  token is the staging deploy token, not a read-only credential.
+- `production-regression` (production Environment as the reviewer
+  checkpoint, analytics via the repo-level read-only token) downloads the
   `staging-passive-ledger-<run>` artifact that `e2e-staging` recorded for the
   candidate (`bin/smoke.mjs --ledger` and the GET-only guest journeys in
   `e2e/watch` against staging), runs the same set against the apex with the
@@ -684,8 +695,12 @@ Before the deploy job, `deploy-production` runs two more gates
   artifact (an `e2e-staging` run that predates it, or an expired artifact)
   is refused; roll back with `rollback-production` instead of redeploying it.
 
-Every promotion path, including an explicit-SHA dispatch, also requires the
-candidate's `e2e-staging` pass to be at least 30 minutes old.
+Automatic promotion, including an explicit-SHA dispatch, also requires the
+candidate's `e2e-staging` pass to be at least 30 minutes old. In reviewer
+mode the approval stands in for the resolver but not for the soak floor:
+when a staging pass for the candidate exists, it must still have soaked 30
+minutes; a promotion with no staging evidence yet rides on the reviewer's
+approval alone.
 
 #### Deploy notify
 

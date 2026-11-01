@@ -321,10 +321,12 @@ function requireExecutedStagingQuality(jobs, runId) {
 // main's tip when they triggered, not the deployed commit. Their run-names carry
 // the deployed SHA (deploy <sha>, e2e-staging deploy <sha>); evidence joins on
 // that. The newest run per title decides, and the e2e run must have actually
-// passed staging-journeys (it concludes success with the job skipped). Every
-// promotion path, including an explicit-SHA dispatch, also requires the
+// passed staging-journeys (it concludes success with the job skipped).
+// Automatic promotion, including an explicit-SHA dispatch, also requires the
 // e2e-staging pass to have soaked for PROMOTION_SOAK_MS (30 minutes), the same
-// floor the automatic resolver applies.
+// floor the automatic resolver applies. A reviewer approval stands in for the
+// resolver but not for the soak floor: requireStagingSoakIfEvident below still
+// ages a staging pass the reviewer approved early.
 export async function requireStagingEvidence(
   { repository, sha },
   {
@@ -395,6 +397,63 @@ export async function requireStagingEvidence(
   }
   return evidence;
 }
+
+// Reviewer-mode soak floor: a reviewer approval stands in for the automatic
+// resolver, but it must not shortcut the 30-minute soak when staging already
+// passed the candidate. When no e2e-staging run names the SHA yet (a
+// reviewer-approved promotion without staging evidence), there is nothing to
+// age and the reviewer's approval is the gate.
+export async function requireStagingSoakIfEvident(
+  { repository, sha },
+  { token, fetchImpl = fetch, nowMs = Date.now() } = {},
+) {
+  const title = e2eTitle(sha);
+  const passed = [];
+  for (let page = 1; page <= 3; page += 1) {
+    const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
+    const response = await fetchImpl(
+      `https://api.github.com/repos/${repository}/actions/workflows/e2e-staging.yml/runs?${query}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Staging soak lookup failed (HTTP ${response.status})`);
+    }
+    const batch = (await response.json()).workflow_runs ?? [];
+    for (const run of batch.filter((run) => run.display_title === title)) {
+      if (
+        !Number.isSafeInteger(run.id) ||
+        run.head_branch !== "main" ||
+        run.path !== ".github/workflows/e2e-staging.yml" ||
+        run.head_repository?.full_name !== repository
+      ) {
+        throw new Error("e2e-staging.yml evidence revision/branch/workflow mismatch");
+      }
+      if (run.status === "completed" && run.conclusion === "success") passed.push(run);
+    }
+    if (batch.length < 100) break;
+  }
+  if (!passed.length) return null;
+  const latest = passed.reduce((a, b) => (b.id > a.id ? b : a));
+  const completedAt = Date.parse(latest.updated_at ?? "");
+  if (!Number.isFinite(completedAt) || nowMs - completedAt < PROMOTION_SOAK_MS) {
+    throw new Error(
+      `e2e-staging.yml run ${latest.id} has not soaked ${PROMOTION_SOAK_MS / 60_000} minutes since it passed`,
+    );
+  }
+  return { runId: latest.id };
+}
+
+// The ledgers are two small JSON files; anything larger is not the passive
+// set and is refused before it touches disk.
+export const PASSIVE_LEDGER_MAX_BYTES = 8 * 1024 * 1024;
 
 // Regression check against production (promotion gate G1). Before
 // promotion, deploy-production.yml runs the passive set (bin/smoke.mjs routes
@@ -509,7 +568,7 @@ export function buildScriptErrorQuery({ accountId, scriptName, versionId, sinceI
     ...(versionId === undefined ? {} : { scriptVersion: versionId }),
   };
   return {
-    query: `query ($accountTag: string!, $filter: AccountWorkersInvocationsAdaptiveFilter_InputObject!) {
+    query: `query ($accountTag: String!, $filter: AccountWorkersInvocationsAdaptiveFilter_InputObject!) {
   viewer { accounts(filter: { accountTag: $accountTag }) {
     workersInvocationsAdaptive(limit: 10000, filter: $filter) { sum { requests errors } }
   } }
@@ -554,10 +613,12 @@ export async function scriptErrorSample(
   return sumScriptErrors(await response.json());
 }
 
-// The candidate's staging Worker version: staging deploys tag each version
+// The candidate's staging Worker versions: staging deploys tag each version
 // with the deployed commit (deploy.yml `wrangler deploy --tag <sha>`). Read
-// from the Workers versions API so the job needs no wrangler install.
-export async function stagingCandidateVersion(
+// from the Workers versions API so the job needs no wrangler install. A
+// deploy retry tags twice, and every tagged version served the candidate, so
+// all matches count, oldest first; no tagged version fails closed.
+export async function stagingCandidateVersions(
   { accountId, token, sha },
   { fetchImpl = fetch, pages = 5 } = {},
 ) {
@@ -579,38 +640,56 @@ export async function stagingCandidateVersion(
     matches.push(...items.filter((item) => item?.annotations?.["workers/tag"] === sha));
     if (items.length < 100) break;
   }
-  if (matches.length !== 1) {
-    throw new Error(`Expected one staging version tagged ${sha}, found ${matches.length}`);
+  if (!matches.length) {
+    throw new Error(`No staging version tagged ${sha}`);
   }
-  const [version] = matches;
-  assertRollbackVersionId(version.id);
-  const createdOn = version?.metadata?.created_on;
-  if (!Number.isFinite(Date.parse(createdOn ?? ""))) {
-    throw new Error("Staging candidate version has no creation time");
-  }
-  return { versionId: version.id, createdOn };
+  const versions = matches.map((version) => {
+    assertRollbackVersionId(version.id);
+    const createdOn = version?.metadata?.created_on;
+    if (!Number.isFinite(Date.parse(createdOn ?? ""))) {
+      throw new Error("Staging candidate version has no creation time");
+    }
+    return { versionId: version.id, createdOn };
+  });
+  versions.sort((a, b) => (a.createdOn < b.createdOn ? -1 : a.createdOn > b.createdOn ? 1 : 0));
+  return versions;
+}
+
+// The newest version carrying the candidate's tag: the one staging serves.
+export async function stagingCandidateVersion(args, opts) {
+  const versions = await stagingCandidateVersions(args, opts);
+  return versions[versions.length - 1];
 }
 
 // Staging soak sample for the candidate: its staging version's invocations
 // and errors from deploy until now (at most the last 24 hours).
 export async function stagingSoakSample(env, { fetchImpl = fetch, nowMs = Date.now() } = {}) {
-  const { versionId, createdOn } = await stagingCandidateVersion(
+  const versions = await stagingCandidateVersions(
     { accountId: env.CLOUDFLARE_ACCOUNT_ID, token: env.CLOUDFLARE_API_TOKEN, sha: env.DEPLOY_SHA },
     { fetchImpl },
   );
+  const createdOn = versions[0].createdOn;
   const sinceMs = Math.max(Date.parse(createdOn), nowMs - PRODUCTION_BASELINE_MS);
-  const sample = await scriptErrorSample(
-    {
-      accountId: env.CLOUDFLARE_ACCOUNT_ID,
-      scriptName: "two-web-next",
-      versionId,
-      sinceIso: new Date(Math.min(sinceMs, nowMs)).toISOString(),
-      untilIso: new Date(nowMs).toISOString(),
-      token: env.CLOUDFLARE_API_TOKEN,
-    },
-    { fetchImpl },
-  );
-  return { versionId, createdOn, ...sample };
+  const sinceIso = new Date(Math.min(sinceMs, nowMs)).toISOString();
+  const untilIso = new Date(nowMs).toISOString();
+  let requests = 0;
+  let errors = 0;
+  for (const { versionId } of versions) {
+    const sample = await scriptErrorSample(
+      {
+        accountId: env.CLOUDFLARE_ACCOUNT_ID,
+        scriptName: "two-web-next",
+        versionId,
+        sinceIso,
+        untilIso,
+        token: env.CLOUDFLARE_API_TOKEN,
+      },
+      { fetchImpl },
+    );
+    requests += sample.requests;
+    errors += sample.errors;
+  }
+  return { versionIds: versions.map((version) => version.versionId), createdOn, requests, errors };
 }
 
 // The candidate's staging passive ledgers: the artifact of the newest
@@ -647,6 +726,9 @@ export async function fetchPassiveLedgers(
   }
   if (!runs.length) throw new Error(`No e2e-staging run for ${sha}`);
   const latest = runs.reduce((a, b) => (b.id > a.id ? b : a));
+  if (!Number.isSafeInteger(latest.id)) {
+    throw new Error(`e2e-staging run for ${sha} has an invalid run id`);
+  }
   const name = REGRESSION_LEDGER_ARTIFACT(latest.id);
   const { artifacts = [] } = await get(`/actions/runs/${latest.id}/artifacts?name=${name}`);
   const artifact = artifacts.find((entry) => entry?.name === name && entry.expired === false);
@@ -667,9 +749,15 @@ export async function fetchPassiveLedgers(
   }
   const zip = await fetchImpl(location, { redirect: "error", signal: AbortSignal.timeout(60_000) });
   if (!zip.ok) throw new Error(`Passive ledger download failed (HTTP ${zip.status})`);
+  const bytes = Buffer.from(await zip.arrayBuffer());
+  if (bytes.byteLength > PASSIVE_LEDGER_MAX_BYTES) {
+    throw new Error(
+      `Passive ledger zip is ${bytes.byteLength} bytes, over the ${PASSIVE_LEDGER_MAX_BYTES}-byte limit`,
+    );
+  }
   mkdirSync(dir, { recursive: true });
   const zipPath = join(dir, "ledger.zip");
-  writeFileSync(zipPath, Buffer.from(await zip.arrayBuffer()));
+  writeFileSync(zipPath, bytes);
   unzip(zipPath, dir);
   const commit = readFileSync(join(dir, "commit"), "utf8").trim();
   if (commit !== sha) {
@@ -848,7 +936,16 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   // checked-out commit, so staging evidence for that commit proves nothing:
   // the checkout only supplies the rollback scripts, and green main CI
   // vouches for them.
-  if (!autoApprove || rollback) return ci;
+  if (rollback) return ci;
+  if (!autoApprove) {
+    // Reviewer mode: the approval replaces the automatic resolver, but a
+    // staging pass approved early must still reach the 30-minute soak floor.
+    await requireStagingSoakIfEvident(
+      { repository: env.GITHUB_REPOSITORY, sha: ci.sha },
+      { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
+    );
+    return ci;
+  }
   const staging = await requireStagingEvidence(
     { repository: env.GITHUB_REPOSITORY, sha: ci.sha },
     { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
@@ -922,13 +1019,14 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       );
     } else if (process.argv[2] === "--staging-soak") {
       const sample = await stagingSoakSample(process.env);
+      const serving = sample.versionIds[sample.versionIds.length - 1];
       console.log(
-        `Staging candidate ${sample.versionId} since ${sample.createdOn}: ${sample.errors} errors over ${sample.requests} requests`,
+        `Staging candidate ${serving} (+${sample.versionIds.length - 1} earlier tagged) since ${sample.createdOn}: ${sample.errors} errors over ${sample.requests} requests`,
       );
       if (process.env.GITHUB_OUTPUT) {
         appendFileSync(
           process.env.GITHUB_OUTPUT,
-          `requests=${sample.requests}\nerrors=${sample.errors}\nversion_id=${sample.versionId}\n`,
+          `requests=${sample.requests}\nerrors=${sample.errors}\nversion_id=${serving}\n`,
         );
       }
     } else if (process.argv[2] === "--fetch-passive-ledgers") {

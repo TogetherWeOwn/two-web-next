@@ -200,10 +200,18 @@ test("deploy-production watches for 30 minutes and rolls back on a breach or fai
   assert.match(deploy, /- name: Verify public routes on the promoted version\n {8}id: verify\n/);
   const watch = job("post-deploy-watch", "auto-rollback");
   assert.match(watch, /needs: \[preflight, deploy-production\]/);
-  assert.match(watch, /environment:\n {6}name: production\n/);
+  // No Environment binding: the watch must start with no second approval
+  // and performs no mutation, so it reads only repo-level credentials.
+  assert.ok(!/environment:\n/.test(watch), "the watch binds no Environment");
+  assert.match(watch, /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.CF_ANALYTICS_READ_TOKEN \}\}/);
+  assert.match(watch, /CLOUDFLARE_ACCOUNT_ID: \$\{\{ vars\.CF_RUM_ACCOUNT_ID \}\}/);
+  assert.ok(!/PRODUCTION_CLOUDFLARE/.test(watch), "the watch never sees the deployment token");
   assert.match(watch, /run: node ci\/post-deploy-watch\.mjs\n/);
   assert.match(watch, /breach: \$\{\{ steps\.watch\.outputs\.breach \}\}/);
-  assert.match(watch, /ref: \$\{\{ needs\.preflight\.outputs\.sha \}\}/);
+  assert.match(watch, /verdict: \$\{\{ steps\.watch\.outputs\.verdict \}\}/);
+  // Tip checkout: an older candidate cannot skip the watch with a script
+  // that lacks this mode.
+  assert.match(watch, /ref: \$\{\{ github\.sha \}\}/);
   const rollback = job("auto-rollback", "release");
   assert.match(rollback, /uses: \.\/\.github\/workflows\/rollback-production\.yml\n/);
   assert.match(rollback, /environment: production\n/);
@@ -217,7 +225,9 @@ test("deploy-production watches for 30 minutes and rolls back on a breach or fai
   assert.match(rollback, /needs\.post-deploy-watch\.outputs\.breach == 'true'/);
   assert.match(rollback, /!cancelled\(\)/);
   assert.match(rollback, /secrets: inherit/);
-  // The release tags only after the watch passed.
+  // The release tags only after the watch passed: a superseded watch stands
+  // down successfully without judging the candidate, so it is never tagged.
   assert.match(workflow, /needs: \[preflight, deploy-production, post-deploy-watch\]\n/);
+  assert.match(workflow, /needs\.post-deploy-watch\.outputs\.verdict == 'pass'/);
   assert.equal(WATCH_DEFAULTS.durationSeconds, 1800);
 });

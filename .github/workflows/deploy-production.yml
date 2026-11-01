@@ -159,15 +159,17 @@ jobs:
 
   staging-soak:
     name: staging-soak
-    # Read-only: the candidate's staging Worker version (tagged with its
-    # commit) and its invocation errors since it deployed, from the staging
-    # account's Workers API and analytics. Staging credentials only, no
-    # Environment and no mutation; the production comparison runs in
-    # regression below.
+    # Least privilege with no approval wait: the candidate's staging Worker
+    # versions (tagged with its commit; every tagged version counts) and
+    # their invocation errors since the oldest deployed, from the staging
+    # account's Workers API and analytics. Staging credentials only and no
+    # Environment binding, so this starts at once in reviewer mode too. The
+    # job only reads (versions list, analytics query) and never mutates, but
+    # the token is the staging deploy token, not a read-only credential; the
+    # production comparison runs in regression below.
     needs: preflight
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
@@ -206,11 +208,13 @@ jobs:
     # (1% floor). GET-only, no auth, no writes.
     needs: [preflight, staging-soak]
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 25
-    # Production analytics credentials live in the production Environment.
+    # The production Environment binding stays as the reviewer checkpoint
+    # before the deploy job (and still supplies the production account id),
+    # but analytics reads use the repo-level read-only token, so this job
+    # never holds the production deployment token.
     environment:
       name: production
       url: https://togetherweown.com
@@ -266,7 +270,7 @@ jobs:
           STAGING_JOURNEYS: ${{ runner.temp }}/staging/journeys.json
           STAGING_SOAK_REQUESTS: ${{ needs.staging-soak.outputs.requests }}
           STAGING_SOAK_ERRORS: ${{ needs.staging-soak.outputs.errors }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_ANALYTICS_READ_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
 
   deploy-production:
@@ -511,21 +515,29 @@ jobs:
     # mutation lock: a manual rollback or redeploy meanwhile makes the watch
     # stand down instead of judging another version.
     needs: [preflight, deploy-production]
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 45
-    # Production analytics credentials live in the production Environment.
-    environment:
-      name: production
-      url: https://togetherweown.com
+    # No Environment binding, deliberately: this job must start watching the
+    # moment promotion reaches 100%, with no second approval in reviewer
+    # mode, and it performs no mutation. It reads only the repo-level
+    # read-only analytics token (Account Analytics: Read, the same token the
+    # RUM check uses) and the repo variable with the production account id,
+    # never the production deployment token.
     outputs:
       breach: ${{ steps.watch.outputs.breach }}
+      verdict: ${{ steps.watch.outputs.verdict }}
     steps:
+      # Tip checkout, like the preflight checks: an older candidate cannot
+      # skip the watch with a script that lacks this mode.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ needs.preflight.outputs.sha }}
+          ref: ${{ github.sha }}
           persist-credentials: false
+          sparse-checkout: |
+            /ci/
+            /.github/actions/gradual-promote/
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -535,8 +547,8 @@ jobs:
         env:
           PROMOTED_VERSION_ID: ${{ needs.deploy-production.outputs.promoted_version_id }}
           WORKER_NAME: two-web-next-production
-          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_ANALYTICS_READ_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ vars.CF_RUM_ACCOUNT_ID }}
 
   auto-rollback:
     name: auto-rollback
@@ -558,14 +570,27 @@ jobs:
       ref: ${{ needs.preflight.outputs.sha }}
       expected_current_version_id: ${{ needs.deploy-production.outputs.promoted_version_id }}
       reason: ${{ needs.deploy-production.outputs.verify_outcome == 'failure' && 'post-promotion public-route smoke failed after 100%' || 'post-deploy watch breach (readiness or error rate)' }}
+    # Blanket inherit is load-bearing here, not convenience: the production
+    # Environment secrets this leg needs cannot be passed by name, because a
+    # caller job cannot bind an environment and an unpassed environment
+    # secret resolves to an empty string without an error
+    # (https://docs.github.com/en/actions/how-tos/reuse-automations/reuse-workflows#passing-secrets-to-a-reusable-workflow).
+    # The called job's own `environment: production` binding receives their
+    # values, and its exact-match selectors plus the --credentials fail-closed
+    # check confine them to the production leg. If the binding ever stopped
+    # resolving, that check fails the rollback closed and the runbook's manual
+    # rollback path (same recorded target) takes over.
     secrets: inherit
 
   release:
     name: release
     # Tag the commit that is now live and publish its notes (release.yml),
-    # only after the post-deploy watch passed.
+    # only after the post-deploy watch passed. A superseded watch stands
+    # down successfully without judging the candidate, so the verdict must be
+    # an explicit pass: a displaced commit is never tagged.
     # preflight.outputs.sha is the promoted commit (DEPLOY_SHA), never main's tip.
     needs: [preflight, deploy-production, post-deploy-watch]
+    if: ${{ needs.post-deploy-watch.outputs.verdict == 'pass' }}
     permissions:
       actions: read # Read only this repository's promotion evidence.
       contents: write # Create the tag and its GitHub Release.
