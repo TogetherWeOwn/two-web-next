@@ -26,6 +26,8 @@ machine surface only.
   REST serves the same DTO bytes, so its body is smaller. Long
   descriptions trim with a `…` marker, rows are never dropped. The
   JSON-RPC envelope and HTTP framing are not counted.
+- A trimmed MCP event result adds a second text block that says so and
+  how to read more: a smaller `per_page`, `get_event`, or the event page.
 - Events are published-only: drafts and cancelled rows read as not found.
 - Unknown counts read as `null`, never `0` (`going_count`,
   `going_occupancy`, `member_count`, `online_count`).
