@@ -99,10 +99,13 @@ gh workflow run release.yml --ref main -f sha=<deployed-40-hex-SHA> \
 ```
 
 One production run attempt is one release operation
-(`production-<run_id>-<attempt>`). A dispatch for the same attempt recovers that
-operation's frozen plan, including its date, even after midnight. If the tag
-exists but its GitHub Release does not, add `-f repair=true`; repair never
-retags. A historical repair never moves Latest backwards.
+(`production-<run_id>-<attempt>`). The plan is frozen into the tag's
+annotation, so once the tag exists a dispatch for the same attempt recovers
+that plan, including its date, even after midnight. If the tag exists but its
+GitHub Release does not, add `-f repair=true`; repair never retags. If the
+failed run never created the tag, nothing was frozen: the dispatch plans again
+with the current UTC date and counter. A historical repair never moves Latest
+backwards.
 
 Do not use **Re-run failed jobs** to repair publication: it starts a new
 attempt without repeating the deploy, and that attempt has no receipt, so it
