@@ -246,11 +246,11 @@ export function eventResultBytes(body: string, notice?: string): number {
 
 /**
  * MCP notices for a trimmed event result: they say the text was shortened
- * and where to read more. REST fits with the same notice reserved, so the
- * REST and MCP bytes stay equal.
+ * (possibly to empty when little room remains) and where to read more. REST
+ * fits with the same notice reserved, so the REST and MCP bytes stay equal.
  */
 export const LIST_EVENTS_TRIMMED_NOTICE =
-  'Some descriptions were shortened to fit the 32 KiB result limit and end in "…". No rows were dropped. For longer descriptions, call list_events with a smaller per_page and step page up to meta.last_page, or call get_event with an event_key.';
+  'Some descriptions were shortened to fit the 32 KiB result limit: most end in "…", and one may be empty when little room remains. No rows were dropped. For longer descriptions, call list_events with a smaller per_page and step page up to meta.last_page to refetch the full text. For a single uppercase-ULID event, call get_event with its event_key.';
 
 export function getEventTrimmedNotice(eventKey: string): string {
   return `This description was shortened to fit the 32 KiB result limit and ends in "…". The full text is on the public event page at /e/${eventKey}.`;
