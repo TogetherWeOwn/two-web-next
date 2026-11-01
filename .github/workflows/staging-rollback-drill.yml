@@ -61,16 +61,22 @@ jobs:
         # rollback scripts (staging behind the drill) falls back to the
         # drill revision's scripts instead of failing the drill: the
         # rollback preflight still demands green exact-SHA CI for them, so
-        # the fallback fails closed, never silently.
+        # the fallback fails closed, never silently. The helper exits 3 on
+        # that fallback and nonzero otherwise; only exit 3 swaps the ref, so
+        # an unreadable /up or an unchecked script set fails the drill.
         run: |
           set -euo pipefail
           npx wrangler deployments list --name two-web-next --json > "$RUNNER_TEMP/deployments.json"
           live="$(node ci/rollback-target.mjs --live-version < "$RUNNER_TEMP/deployments.json")"
           previous="$(node ci/rollback-target.mjs --previous-version < "$RUNNER_TEMP/deployments.json")"
-          ref="$(LIVE="$live" node -e 'fetch("https://next.togetherweown.com/up", { headers: { "cache-control": "no-cache" }, signal: AbortSignal.timeout(10000) }).then((r) => r.json()).then((d) => { const r = d && d.revision; if (!r || r.version_id !== process.env.LIVE || !/^[0-9a-f]{40}$/.test(r.commit ?? "")) { console.error("::error::staging /up does not name the live version with a known commit"); process.exit(1); } process.stdout.write(r.commit); })')"
-          if ! REF="$ref" node -e 'fetch(`https://api.github.com/repos/${process.env.GITHUB_REPOSITORY}/contents/ci/rollback-target.mjs?ref=${process.env.REF}`, { headers: { authorization: `Bearer ${process.env.GITHUB_TOKEN}`, accept: "application/vnd.github+json", "x-github-api-version": "2022-11-28" }, signal: AbortSignal.timeout(10000) }).then((r) => { if (r.status === 404) process.exit(1); if (!r.ok) throw new Error(`rollback script check failed (HTTP ${r.status})`); })'; then
-            echo "::notice::staging serves $ref, which predates the rollback scripts; both legs run the drill revision ($GITHUB_SHA) instead"
-            ref="$GITHUB_SHA"
+          set +e
+          ref="$(LIVE="$live" node ci/drill-scripts-ref.mjs)"
+          rc=$?
+          set -e
+          if [ "$rc" -eq 3 ]; then
+            : # fallback: the helper logged the notice and printed the drill revision
+          elif [ "$rc" -ne 0 ]; then
+            exit "$rc"
           fi
           {
             echo "live=$live"
