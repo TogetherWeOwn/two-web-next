@@ -146,8 +146,11 @@ function kitFixture(t, fragments) {
 // and the Kit outage-header CTA composed with it (two builds 337793 and 337795).
 // 338176 admits the activity-log recovery links on current main (two builds
 // 338013 and 338012; 337920 rejects by 93 and 92).
+// 338432 admits series timezone-only edits composed with main 004ce006 (two
+// builds 338193 and 338189; 338176 rejects by 17 and 13).
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
   335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176,
+  338432,
 ];
 // Admitted server.js maxRawBytes allocations. The SHIPPING_KIT_BUDGET pin
 // above (1203200) is the historical baseline; 1203968 admits the
@@ -162,8 +165,10 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // (two builds 1207650 and 1207652; main 1207552 rejects by 98 and 100).
 // 1209344 admits the activity-log recovery links on current main
 // (two builds 1209132 and 1209130; main 1208064 rejects by 1068 and 1066).
+// 1209856 admits main 004ce006 (1209420; 1209344 rejects by 76) and series
+// timezone-only edits composed with it (two builds 1209656 and 1209658).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
-  1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344,
+  1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -192,12 +197,12 @@ function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432`,
   );
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -324,6 +329,19 @@ test("shipping oracle admits the measured activity-log recovery allocations toge
   });
 });
 
+test("shipping oracle admits the measured series timezone-only server allocation", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1209856, maxGzipBytes: 338432 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 260608, maxGzipBytes: 103936 },
+    },
+  });
+});
+
 test("shipping oracle admits the measured 1203968 server raw allocation", () => {
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
@@ -343,7 +361,7 @@ test("shipping oracle admits the measured ongoing-night server allocations", () 
 test("shipping oracle rejects an unsupported server raw allocation", () => {
   for (const maxRawBytes of [
     1203201, 1203712, 1203967, 1203969, 1205248, 1205503, 1205505, 1207551, 1207553, 1209343,
-    1209345,
+    1209345, 1209855, 1209857,
   ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
@@ -359,7 +377,7 @@ test("shipping oracle rejects an unsupported server raw allocation", () => {
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
   for (const maxGzipBytes of [
     335105, 335359, 335616, 336385, 336641, 336897, 337153, 337407, 337409, 337919, 337921, 338175,
-    338177,
+    338177, 338431, 338433,
   ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
