@@ -32,6 +32,11 @@ jobs:
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 10
+    # Bind the staging Environment: the job reads the Environment-scoped
+    # staging Cloudflare credentials and inherits its main-only branch
+    # policy, matching gradual-promote-proof.yml and deploy.yml.
+    environment:
+      name: staging
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

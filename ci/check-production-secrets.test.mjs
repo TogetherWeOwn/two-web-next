@@ -938,6 +938,208 @@ test("target-selected environment requires every mapping to be guarded on inputs
 });
 
 // ---------------------------------------------------------------------------
+// Staging Cloudflare secrets are Environment-scoped too.
+//
+// The unprefixed CLOUDFLARE_API_TOKEN / CLOUDFLARE_ACCOUNT_ID names belong to
+// the `staging` Environment, the same way the PRODUCTION_* names belong to
+// `production`. A job that reads them without binding an Environment falls
+// through to repository scope and skips the Environment's main-only branch
+// policy, so every reference must come from a job bound to `staging` — or,
+// for a target-selected Environment, from a mapping that hands production
+// runs the PRODUCTION_* pair behind the inputs.target guard and only then
+// falls back to the staging name. Comments count as written, as above.
+// ---------------------------------------------------------------------------
+
+const STAGING_CLOUDFLARE_SECRET =
+  /\bsecrets\s*(?:\.\s*|\[\s*['"])CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\b/i;
+// The production name is taken only under the same input that selects the
+// production Environment; the staging name is the fallback branch.
+const TARGET_GUARDED_STAGING_CLOUDFLARE =
+  /\binputs\.target\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\s*\|\|\s*secrets\s*\.\s*CLOUDFLARE_\1\b/i;
+
+export function stagingCloudflareEnvironmentViolations(text, file) {
+  const { outside, jobs } = splitWorkflow(text);
+  const violations = [];
+  if (outside.some((line) => STAGING_CLOUDFLARE_SECRET.test(line))) {
+    violations.push(
+      `${file}: staging Cloudflare secret referenced outside a job, where no environment can be bound`,
+    );
+  }
+  for (const { id, lines } of jobs) {
+    const referencing = lines.filter((line) => STAGING_CLOUDFLARE_SECRET.test(line));
+    if (referencing.length === 0) continue;
+    const environment = jobEnvironment(lines);
+    if (environment === undefined) {
+      violations.push(
+        `${file}: job ${id} reads a staging Cloudflare secret without an environment`,
+      );
+    } else if (/^staging$/i.test(environment)) {
+      // Bound to the staging Environment on every run.
+    } else if (TARGET_ENVIRONMENT.test(environment)) {
+      for (const line of referencing) {
+        if (!TARGET_GUARDED_STAGING_CLOUDFLARE.test(line)) {
+          violations.push(
+            `${file}: job ${id} maps a staging Cloudflare secret without the inputs.target == 'production' guard to its PRODUCTION_* pair`,
+          );
+          break;
+        }
+      }
+    } else {
+      violations.push(
+        `${file}: job ${id} reads a staging Cloudflare secret but binds environment ${environment}, not staging`,
+      );
+    }
+  }
+  return violations;
+}
+
+test("every job that reads a staging Cloudflare secret binds the staging environment", () => {
+  const files = readdirSync(WORKFLOWS).filter((name) => /\.ya?ml$/.test(name));
+  assert.ok(files.length > 0, "expected workflows under .github/workflows");
+  const referencing = [];
+  const violations = [];
+  for (const file of files) {
+    const text = readFileSync(new URL(file, WORKFLOWS), "utf8");
+    if (STAGING_CLOUDFLARE_SECRET.test(text)) referencing.push(file);
+    violations.push(...stagingCloudflareEnvironmentViolations(text, file));
+  }
+  // Composite actions cannot bind an Environment: the environment-bound
+  // caller passes the credentials in as inputs, never a direct read.
+  const ACTIONS = new URL("../.github/actions/", import.meta.url);
+  for (const entry of readdirSync(ACTIONS, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue;
+    const file = `${entry.name}/action.yml`;
+    const text = readFileSync(new URL(file, ACTIONS), "utf8");
+    if (STAGING_CLOUDFLARE_SECRET.test(text)) {
+      violations.push(
+        `${file}: staging Cloudflare secret referenced in a composite action, which cannot bind an environment`,
+      );
+    }
+  }
+  // The scan is only meaningful if it sees the workflows that carry the secrets.
+  for (const expected of [
+    "deploy.yml",
+    "gradual-promote-proof.yml",
+    "error-rate-gate-rehearsal.yml",
+    "db-backup.yml",
+  ]) {
+    assert.ok(
+      referencing.includes(expected),
+      `expected ${expected} to reference a staging Cloudflare secret`,
+    );
+  }
+  assert.deepEqual(violations, []);
+});
+
+test("staging Cloudflare secret in a job with no environment is a violation", () => {
+  const text = `${FIXTURE_HEAD}jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: true
+`;
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(text, "fixture.yml"), [
+    "fixture.yml: job rehearsal reads a staging Cloudflare secret without an environment",
+  ]);
+});
+
+test("staging Cloudflare secret under a non-staging environment is a violation", () => {
+  for (const environment of ["production", "name: production", "{ name: qa, url: https://x }"]) {
+    const block = environment.startsWith("name:")
+      ? `    environment:\n      ${environment}`
+      : `    environment: ${environment}`;
+    const text = `${FIXTURE_HEAD}jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+${block}
+    steps:
+      - env:
+          CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: true
+`;
+    const violations = stagingCloudflareEnvironmentViolations(text, "fixture.yml");
+    assert.equal(violations.length, 1, environment);
+    assert.match(violations[0], /not staging/);
+  }
+});
+
+test("staging environment forms (name, block, flow mapping, quoted) all pass", () => {
+  for (const block of [
+    "    environment: staging",
+    "    environment: 'staging'",
+    '    environment: "staging"',
+    "    environment:\n      name: staging\n      url: https://next.togetherweown.com",
+    "    environment: { name: staging, url: https://next.togetherweown.com }",
+  ]) {
+    const text = `${FIXTURE_HEAD}jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+${block}
+    steps:
+      - env:
+          CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: true
+`;
+    assert.deepEqual(stagingCloudflareEnvironmentViolations(text, "fixture.yml"), [], block);
+  }
+});
+
+test("staging Cloudflare secret outside any job, or via bracket syntax, is a violation", () => {
+  const outside = `${FIXTURE_HEAD}env:
+  X: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+    environment: staging
+    steps:
+      - run: true
+`;
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(outside, "fixture.yml"), [
+    "fixture.yml: staging Cloudflare secret referenced outside a job, where no environment can be bound",
+  ]);
+  const bracket = `${FIXTURE_HEAD}jobs:
+  rehearsal:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          X: \${{ secrets['cloudflare_api_token'] }}
+        run: true
+`;
+  // Secret names are case-insensitive, so a lowercase spelling is still a read.
+  assert.equal(stagingCloudflareEnvironmentViolations(bracket, "fixture.yml").length, 1);
+});
+
+test("target-selected environment requires the PRODUCTION_* guard for staging Cloudflare names", () => {
+  const guarded = `${FIXTURE_HEAD}jobs:
+  backup:
+    runs-on: ubuntu-latest
+    environment: \${{ inputs.target || 'staging' }}
+    steps:
+      - env:
+          CLOUDFLARE_API_TOKEN: \${{ inputs.target == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: \${{ inputs.target == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_ACCOUNT_ID }}
+        run: true
+`;
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(guarded, "fixture.yml"), []);
+  const unguarded = guarded.replace(
+    "inputs.target == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || ",
+    "",
+  );
+  assert.equal(stagingCloudflareEnvironmentViolations(unguarded, "fixture.yml").length, 1);
+  // The guard must pair each staging name with its own PRODUCTION_* twin.
+  const mismatched = guarded.replace(
+    "secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || secrets.CLOUDFLARE_API_TOKEN",
+    "secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || secrets.CLOUDFLARE_API_TOKEN",
+  );
+  assert.equal(stagingCloudflareEnvironmentViolations(mismatched, "fixture.yml").length, 1);
+  // An expression that cannot be shown to select staging is rejected.
+  const opaque = guarded.replace("inputs.target || 'staging'", "vars.ENVIRONMENT_NAME");
+  assert.equal(stagingCloudflareEnvironmentViolations(opaque, "fixture.yml").length, 1);
+});
+
+// ---------------------------------------------------------------------------
 // Production secret set pins to Env.
 //
 // REQUIRED_PRODUCTION_SECRETS must equal the required (non-optional) secret
