@@ -632,21 +632,35 @@ test("the sweep runs on failure, before the upload, with the token in its own en
   );
   const steps = workflow.split(/\n {6}- /).slice(1);
   const scrub = steps.findIndex((step) => step.includes("ci/scrub-qa-token.py"));
-  const upload = steps.findIndex((step) => step.includes("actions/upload-artifact"));
-  assert.ok(scrub >= 0 && upload >= 0 && scrub < upload, "sweep must precede the upload");
+  // The promotion passive set ships its ledger directory in its own upload,
+  // ungated by the sweep: only the two journey-ledger uploads wait on it.
+  const uploads = steps.filter((step) => step.includes("actions/upload-artifact"));
+  const gated = uploads.filter((step) => step.includes("steps.scrub.outputs.swept"));
+  assert.equal(gated.length, 2, "both ledger uploads must wait on the sweep");
+  assert.ok(scrub >= 0, "sweep step exists");
+  for (const uploadStep of gated) {
+    assert.ok(steps.indexOf(uploadStep) > scrub, "sweep must precede the upload it gates");
+  }
   assert.match(steps[scrub], /\n\s+id: scrub\n/);
   assert.match(steps[scrub], /\n\s+if: failure\(\)\n/);
   assert.match(steps[scrub], /python3 ci\/scrub-qa-token\.py test-results playwright-report\n/);
   assert.match(steps[scrub], /env:\n\s+QA_AUTH_TOKEN: \$\{\{ secrets\.QA_AUTH_TOKEN \}\}/);
   // A sweep that crashed or could not delete a file leaves no `swept` output,
-  // and then nothing is uploaded.
-  assert.match(steps[upload], /\n\s+if: failure\(\) && steps\.scrub\.outputs\.swept == 'true'\n/);
+  // and then nothing is uploaded. The failure upload waits for a swept tree;
+  // the ledger upload also runs on green runs, where the sweep was skipped.
+  const failure = gated.find((step) => step.startsWith("name: Failure traces and report"));
+  assert.ok(failure, "failure upload exists");
+  assert.match(failure, /\n\s+if: failure\(\) && steps\.scrub\.outputs\.swept == 'true'\n/);
+  const ledger = gated.find((step) => step.startsWith("name: Journey ledger artifact"));
+  assert.ok(ledger, "ledger upload exists");
+  assert.match(
+    ledger,
+    /\n\s+if: \$\{\{ !cancelled\(\) && \(steps\.scrub\.outcome == 'skipped' \|\| steps\.scrub\.outputs\.swept == 'true'\) \}\}\n/,
+  );
   // Sweep both source trees, but publish only the derived ledger: raw reports,
   // HTML reports and traces may contain cookies or member data.
   assert.match(steps[scrub], /test-results playwright-report/);
-  const uploads = steps.filter((step) => step.includes("actions/upload-artifact"));
-  assert.equal(uploads.length, 2, "both ledger artifact paths must be checked");
-  for (const uploadStep of uploads) {
+  for (const uploadStep of gated) {
     assert.match(uploadStep, /staging-journey-ledger\.json/);
     assert.match(uploadStep, /staging-journey-ledger\.md/);
     assert.doesNotMatch(uploadStep, /staging-journeys\.json|playwright-report\/|trace\.zip|\.html/);
@@ -661,4 +675,10 @@ test("the sweep runs on failure, before the upload, with the token in its own en
       "both uploads must exclude every raw directory, extra file and glob",
     );
   }
+  const passive = uploads.filter((step) => !step.includes("steps.scrub.outputs.swept"));
+  assert.equal(passive.length, 1, "only the passive ledger upload stands outside the sweep");
+  assert.match(passive[0], /^name: Staging passive ledger artifact\n/);
+  assert.match(passive[0], /\n {10}path: passive\/\n/);
+  assert.match(passive[0], /\n {10}if-no-files-found: warn\n/);
+  assert.doesNotMatch(passive[0], /secrets\./);
 });
