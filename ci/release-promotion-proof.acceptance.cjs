@@ -2,12 +2,12 @@
 
 // Independent acceptance contract: a main ancestor is not promotion proof.
 // Run: node --test ci/release-promotion-proof.acceptance.cjs
-// RELEASE_ON_PROMOTE selects an alternate publisher without editing these tests.
+// RELEASE_REQUEST selects an alternate request builder without editing these tests.
 //
 // Fixture protocol for the smallest post-smoke receipt option in the spec:
 // PROMOTION_RUN_ID / PROMOTION_RUN_ATTEMPT are untrusted selector hints. Read
 // GitHub's repository/workflow/run/attempt/jobs/artifact metadata before trusting
-// promotion.json in production-promotion-<run>-<attempt>. Its schema-1 fields
+// promotion.json in production-promotion-<sha>-<run>-<attempt>. Its schema-1 fields
 // are illustrated in release-promotion-proof.fixture.cjs. The producing run may
 // be globally failed because publication failed, or still running its release
 // job. The producing deploy job and identity-aware post-smoke must be successful.
@@ -15,50 +15,57 @@
 // insufficient. Equivalent verifiable evidence can be coordinated with the
 // test author; do not weaken assertions or edit acceptance-owned files to pass.
 //
-// Expected breaks: removing exact-SHA/producer/attempt/smoke checks publishes in
-// a refusal case; refusing all repairs breaks the healthy controls; requiring
-// overall workflow success breaks failed-publication recovery; moving proof
-// after create leaves a tag behind. Every refusal checks both creates and tags.
+// Expected breaks: removing exact-SHA/producer/attempt/smoke checks emits a
+// release request in a refusal case; refusing all repairs breaks the healthy
+// controls; requiring overall workflow success breaks failed-publication
+// recovery. Every refusal checks that no request is emitted and no tag moved.
+// Tagging, Release repair, Latest and dry run belong to the shared CalVer
+// releaser (TogetherWeOwn/.github actions/calver), which has its own offline
+// acceptance suite and re-reads this evidence from GitHub before any write.
 const assert = require("node:assert/strict");
 const { spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const path = require("node:path");
 const { test } = require("node:test");
-const { fixture, REPO, RUN, ATTEMPT } = require("./release-promotion-proof.fixture.cjs");
+const {
+  fixture,
+  REPO,
+  RUN,
+  ATTEMPT,
+  DIGEST,
+  artifactName,
+} = require("./release-promotion-proof.fixture.cjs");
 
-function published(result, sha, tag = "v0.10.1", latest = "--latest") {
+function published(result, sha) {
   assert.equal(result.error, undefined, String(result.error));
   assert.equal(result.signal, null, result.stderr);
   assert.equal(result.status, 0, result.stderr);
-  assert.equal(
-    result.creates.length,
-    1,
-    `expected one publication: ${JSON.stringify(result.calls)}`,
-  );
-  const argv = result.creates[0];
-  assert.equal(argv[2], tag);
-  assert.equal(
-    argv[argv.indexOf("--target") + 1],
-    sha,
-    "publication targets the exact promoted commit",
-  );
-  assert.ok(argv.includes(latest), `expected ${latest}: ${JSON.stringify(argv)}`);
-  assert.equal(result.output, `tag_name=${tag}\nreleased=true\n`);
+  assert.ok(result.request, `expected a release request: ${result.output}`);
+  const { phase, input } = result.request;
+  assert.equal(phase, "plan");
+  assert.equal(input.sha, sha, "the request targets the exact promoted commit");
+  assert.equal(input.channel, "stable");
+  assert.equal(input.policy, "production-promotion");
+  assert.equal(input.operation, `production-${RUN}-${ATTEMPT}`);
+  assert.deepEqual(input.evidence, {
+    runId: RUN,
+    attempt: ATTEMPT,
+    workflow: ".github/workflows/deploy-production.yml",
+    jobs: ["deploy-production"],
+    artifactId: 800,
+    artifactName: artifactName(sha),
+    artifactDigest: DIGEST,
+  });
 }
 
 function refused(f, result, before) {
   // Check side effects first: a failed unknown provider call is not an adequate
-  // refusal if the script has already asked GitHub to create the tag/release.
-  assert.equal(
-    result.creates.length,
-    0,
-    `untrusted proof caused publication: ${JSON.stringify(result.creates)}`,
-  );
+  // refusal if the script has already handed the releaser a request.
+  assert.equal(result.request, null, `untrusted proof produced a request: ${result.output}`);
   assert.equal(f.git("show-ref", "--tags"), before, "refusal leaves every tag unchanged");
   assert.equal(result.error, undefined, String(result.error));
   assert.equal(result.signal, null, result.stderr);
   assert.notEqual(result.status, 0, "untrusted or inconclusive provenance must fail closed");
-  assert.doesNotMatch(result.output, /released=true/, "refusal cannot report a release");
   assert.doesNotMatch(
     result.stderr,
     /fixture: unexpected|acceptance forbids network/,
@@ -203,7 +210,7 @@ const denials = [
   [
     "artifact name selects a stale attempt",
     (f) => {
-      f.state.artifacts[0].name = "production-promotion-700-1";
+      f.state.artifacts[0].name = artifactName(f.sha).replace(/-2$/, "-1");
     },
   ],
   [
@@ -325,14 +332,10 @@ test("discovers trusted evidence without requiring a caller assertion", (t) => {
   const f = fixture(t);
   const result = f.run({ hints: false });
   published(result, f.sha);
-  const createAt = result.calls.findIndex((argv) => argv[0] === "release");
-  const prior = result.calls
-    .slice(0, createAt)
-    .map((argv) => argv.join(" "))
-    .join("\n");
-  assert.match(prior, /actions\/.*runs/, "provider run identity is checked before publication");
-  assert.match(prior, /jobs/, "successful promotion and smoke are checked before publication");
-  assert.match(prior, /artifacts/, "receipt producer metadata is checked before publication");
+  const prior = result.calls.map((argv) => argv.join(" ")).join("\n");
+  assert.match(prior, /actions\/.*runs/, "provider run identity is checked before the request");
+  assert.match(prior, /jobs/, "successful promotion and smoke are checked before the request");
+  assert.match(prior, /artifacts/, "receipt producer metadata is checked before the request");
 });
 
 test("successful promotion permits repair when downstream publication made the workflow red", (t) => {
@@ -364,80 +367,17 @@ test("a selected older deployed SHA need not equal the producer workflow checkou
   published(f.run(), f.sha);
 });
 
-test("partial release creation failure retries the same SHA and tag without an extra version bump", (t) => {
+test("discovery skips promotions of other commits and finds this SHA's receipt", (t) => {
   const f = fixture(t);
-  f.state.createError = true;
-  const failed = f.run();
-  assert.notEqual(failed.status, 0);
-  assert.equal(failed.creates.length, 1);
-  assert.equal(failed.creates[0][2], "v0.10.1");
-  assert.equal(failed.output, "");
-  assert.equal(f.git("rev-parse", "v0.10.1^{commit}"), f.sha);
-  f.state.createError = false;
-  published(f.run(), f.sha);
-  assert.equal(f.git("tag", "--list", "v0.10.2"), "");
+  const other = { ...f.state.artifacts[0], id: 801, name: artifactName(f.historical) };
+  f.state.artifacts.unshift(other);
+  published(f.run({ hints: false }), f.sha);
 });
 
-test("already-tagged missing-release repair does not demand new-tag provenance", (t) => {
+test("an artifact without a digest is not usable releaser evidence", (t) => {
   const f = fixture(t);
-  f.git("tag", "v0.10.1", f.sha);
-  f.state.runs = [];
-  f.state.jobs = [];
-  f.state.artifacts = [];
-  published(f.run(), f.sha);
-  assert.equal(f.git("tag", "--list", "v0.10.2"), "");
-});
-
-test("existing release is a no-op without promotion proof", (t) => {
-  const f = fixture(t);
-  f.git("tag", "v0.10.1", f.sha);
-  f.state.releases = ["v0.10.1"];
-  f.state.runs = [];
-  f.state.jobs = [];
-  f.state.artifacts = [];
-  const before = f.git("show-ref", "--tags");
-  const result = f.run();
-  assert.equal(result.status, 0, result.stderr);
-  assert.equal(result.creates.length, 0);
-  assert.equal(result.output, "tag_name=v0.10.1\nreleased=true\n");
-  assert.equal(f.git("show-ref", "--tags"), before);
-});
-
-test("historical tagged repair remains explicitly non-Latest", (t) => {
-  const f = fixture(t);
-  f.state.runs = [];
-  f.state.jobs = [];
-  f.state.artifacts = [];
-  const before = f.git("show-ref", "--tags");
-  published(
-    f.run({ extraEnv: { RELEASE_SHA: f.historical } }),
-    f.historical,
-    "v0.9.0",
-    "--latest=false",
-  );
-  assert.equal(f.git("show-ref", "--tags"), before);
-});
-
-test("dry-run previews an unproven main SHA without publishing or authorizing the next real run", (t) => {
-  const f = fixture(t);
-  f.state.runs = [];
-  f.state.jobs = [];
-  f.state.artifacts = [];
-  const tags = f.git("show-ref", "--tags");
-  const dry = f.run({ dryRun: true });
-  assert.equal(dry.status, 0, dry.stderr);
-  assert.equal(dry.creates.length, 0);
-  assert.equal(dry.output, "tag_name=\nreleased=false\n");
-  assert.match(dry.stdout, /0\.10\.1/);
-  assert.equal(f.git("show-ref", "--tags"), tags);
-  refused(f, f.run(), tags);
-});
-
-test("release lookup outage remains fail-closed even with healthy promotion evidence", (t) => {
-  const f = fixture(t);
-  f.state.releaseError = true;
-  const tags = f.git("show-ref", "--tags");
-  refused(f, f.run(), tags);
+  delete f.state.artifacts[0].digest;
+  refused(f, f.run(), f.git("show-ref", "--tags"));
 });
 
 // A receipt is not trusted merely because JSON claims it came from this job.
@@ -458,7 +398,8 @@ test("workflow publishes the attempt-bound receipt only after successful identit
   const proofAt = deploy.steps.findIndex(
     (step) =>
       step.uses?.startsWith("actions/upload-artifact@") &&
-      step.with?.name === "production-promotion-${{ github.run_id }}-${{ github.run_attempt }}",
+      step.with?.name ===
+        "production-promotion-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
   );
   assert.ok(proofAt > smokeAt, "trusted receipt must be uploaded after post-promotion smoke");
   assert.notEqual(deploy.steps[smokeAt]["continue-on-error"], true);
@@ -509,7 +450,8 @@ test("workflow proof API names identify the unique semantic producers in order",
       "Upload production promotion proof",
       (step) =>
         step.uses?.startsWith("actions/upload-artifact@") &&
-        step.with?.name === "production-promotion-${{ github.run_id }}-${{ github.run_attempt }}",
+        step.with?.name ===
+          "production-promotion-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
     ],
   ];
   let previousAt = -1;
@@ -543,7 +485,8 @@ test("workflow receipt binds the selected SHA, version and producing attempt at 
   const uploadAt = steps.findIndex(
     (step) =>
       step.uses?.startsWith("actions/upload-artifact@") &&
-      step.with?.name === "production-promotion-${{ github.run_id }}-${{ github.run_attempt }}",
+      step.with?.name ===
+        "production-promotion-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}",
   );
   assert.ok(uploadAt > smokeAt && smokeAt >= 0, "post-smoke receipt producer is required");
   const f = fixture(t);
@@ -631,7 +574,9 @@ test("repair workflow does not expose a caller-controlled trust bypass", () => {
       !/verified|trusted|success|skip.*proof|bypass/i.test(name),
       `${name} cannot grant promotion trust`,
     );
-    if (input.type === "boolean") assert.equal(name, "dry_run", "only dry-run is a caller boolean");
+    // repair only re-runs the same proven operation; it cannot replace evidence.
+    if (input.type === "boolean")
+      assert.ok(["dry_run", "repair"].includes(name), `${name} is not a trusted boolean`);
   }
   assert.deepEqual(workflow.permissions, {});
   const permissions = workflow.jobs.tag.permissions;

@@ -2,138 +2,139 @@
 
 A release is cut by the production promote itself. When `deploy-production`
 succeeds, its `release` job calls `.github/workflows/release.yml` with the exact
-deployed SHA. `ci/release-on-promote.cjs` then tags that commit `vX.Y.Z` and
-publishes a GitHub Release whose notes list the Conventional Commit subjects
-(squash-merged PR titles) since the previous `vX.Y.Z` tag. Never tag or release
+deployed SHA. `ci/release-request.cjs` proves that promotion from its receipt.
+Then the shared CalVer releaser (`TogetherWeOwn/.github` `actions/calver`,
+policy `production-promotion`) tags that commit `vYYYY.MDD.P` and publishes a
+GitHub Release, marked Latest. Its notes list the Conventional Commit subjects
+(squash-merged PR titles) since the previous stable tag. Never tag or release
 by hand.
 
-There is no release PR, so there is nothing to regenerate, re-check, review or
-freeze `main` for: the version and notes are derived from commits that already
-passed CI and review on `main`. The release-please release PR it replaces went
-stale on every merge and needed a freeze, dispatched checks and a separate
-review to land.
+There is no release PR and no release commit, so there is nothing to
+regenerate, re-check, review or freeze `main` for. The version comes from the
+tag history and the notes come from commits that already passed CI and review
+on `main`.
 
 ## Cutting a release
 
 Nothing to do by hand: a successful `deploy-production` promote is the cut. The
-cutover promote cuts `v1.0.0` (see `release-as` below). The release vehicle is
-the promoted commit itself. Every commit on `main` already has exact-head green
-required checks, including `CodeRabbit` and `Devin Review` (rulesets). The promote gate
-(`ci/production-deploy-gate.mjs`) requires a green main `ci` on that exact SHA,
-plus staging evidence under auto-approve. There is no release PR and no
-release freeze.
+release vehicle is the promoted commit itself. Every commit on `main` already
+has exact-head green required checks, including `CodeRabbit` and `Devin Review`
+(rulesets). The promote gate (`ci/production-deploy-gate.mjs`) requires a green
+main `ci` on that exact SHA, plus staging evidence under auto-approve. The tag
+is written only after the deploy job's promotion and identity-aware smoke
+succeed.
 
 ## Versions and notes
 
-- Bump rules and note sections are read from `release-please-config.json`
-  (`bump-minor-pre-major`, `bump-patch-for-minor-pre-major`,
-  `changelog-sections`), so versions continue the existing tag line.
-- `release-as` in `release-please-config.json` forces the next version while it
-  is above the previous tag. It is set to `1.0.0`, so the production cutover
-  promote (the first production deploy) cuts `v1.0.0`; once `v1.0.0` exists it
-  is ignored and normal bumps resume (remove it in any later PR).
-- Note sections are the `changelog-sections` entries: `perf` and `revert` go
-  under Changed, `feat` under Added, and `fix` and `security` under Fixed.
-  `security` is a patch bump, like `fix`.
-- Before `1.0.0`: `feat!` / `BREAKING CHANGE` and `feat` bump the minor version;
-  everything else bumps the patch version. From `1.0.0` onward: breaking bumps
-  major, `feat` bumps minor, anything else bumps patch.
-- Every promote of new commits gets a tag, even one with only hidden types
-  (`chore`, `ci`, ...); its notes say there are no user-facing changes.
-- Promoting a commit that already has a tag reuses that tag and only repairs a
-  missing GitHub Release. Promoting a commit older than the newest release (a
-  rollback) creates no tag.
-- `CHANGELOG.md` keeps the history up to `v0.4.0`; later notes live on the
+- Versions are calendar versions in the upstream Paperclip syntax:
+  `vYYYY.MDD.P`. The month has no leading zero and the day has two digits, so
+  2026-11-01 is `v2026.1101.0` and 2026-03-05 is `v2026.305.0`.
+- The date is the UTC date of the promote. `P` starts at 0 and counts the
+  stable releases already tagged that day, read from the tag history when the
+  release is planned.
+- `package.json` keeps its own version; the tag is the release version.
+- Before the switch the repository used SemVer, up to `v1.21.2`. Those tags are
+  never moved or deleted. CalVer versions sort above them (major `2026` > `1`),
+  and the first CalVer release ranges its notes from `v1.21.2`.
+- Note sections are the `changelog-sections` entries in
+  `release-please-config.json` (that is all the file holds now): `perf` and
+  `revert` go under Changed, `feat` under Added, and `fix` and `security` under
+  Fixed. `BREAKING CHANGE` footers and `!` headers are listed first. Hidden
+  types (`chore`, `ci`, ...) are left out; a promote with only hidden types
+  still gets a tag, and its notes say there are no user-facing changes.
+- Promoting a commit that already has a stable tag (from an earlier promote,
+  legacy or CalVer) skips green, with no new tag. Promoting a commit older than
+  the newest stable release (a rollback) also skips green, so Latest never
+  moves backwards.
+- There are no canary tags for staging deploys.
+- `CHANGELOG.md` is frozen history up to `v0.4.0`; later notes live on the
   GitHub Releases page.
+
+## Promotion evidence
+
+The release job proves the promotion twice before any write:
+
+1. `ci/release-promotion-proof.cjs` (called by `ci/release-request.cjs`) checks:
+   - the repository and head repository are this one, the workflow is the
+     active `.github/workflows/deploy-production.yml`, the producer runs on
+     `main` on local `origin/main`, and the trigger is `workflow_dispatch`,
+     `workflow_run` or `schedule`;
+   - the exact producing run **and attempt** has a successful
+     `deploy-production` job whose gradual-promotion, identity-aware smoke,
+     receipt-write and receipt-upload steps succeeded in that order;
+   - exactly one unexpired `production-promotion-<sha>-<run_id>-<run_attempt>`
+     artifact with a digest belongs to that run. Its only member is the bounded
+     `promotion.json` receipt (schema 1: `repository`, `workflow`,
+     `job: deploy-production`, exact `sha`, UUID `promoted_version_id`, string
+     `run_id` / `run_attempt`). The selected SHA comes from preflight and can
+     differ from the producer workflow's checkout SHA.
+2. The shared releaser re-reads that run attempt, the named `deploy-production`
+   job and the artifact (ID, name, digest, producer) from GitHub. The artifact
+   name must carry the deployed SHA, and that SHA must be on `main` and in the
+   run's history.
+
+The production job writes and uploads the receipt **only after** its
+identity-aware smoke succeeds. `PROMOTION_RUN_ID` / `PROMOTION_RUN_ATTEMPT` are
+untrusted selectors, never assertions of success. Supply both or neither.
+Without them, discovery reads one page of at most 100 main runs of the canonical
+workflow and at most 20 candidates with a receipt for this SHA. An exhausted
+list, unreadable or malformed evidence, or an ambiguous artifact refuses. API
+responses are capped at 1 MiB, archives at 64 KiB, receipts at 4 KiB, each
+subprocess at 15 seconds and the proof at two minutes. No second credential is
+tried.
+
+The producing run may be globally **failed** because its release job failed, or
+still **in progress** inside its release call. Both still count: the successful
+deploy job and its receipt are the evidence, not the run's overall conclusion.
 
 ## Repairing a missed release
 
-If a promote deployed but its downstream `release` job failed, dispatch the
-release workflow on `main` for the **exact deployed SHA**, with the producing
-production run and attempt as optional selectors:
+If a promote deployed but its `release` job failed, dispatch the release
+workflow on `main` for the **exact deployed SHA** and the producing run and
+attempt:
 
 ```sh
 gh workflow run release.yml --ref main -f sha=<deployed-40-hex-SHA> \
   -f promotion_run_id=<production-run-id> -f promotion_run_attempt=<attempt>
 ```
 
-A main ancestor is not proof of promotion: newer unpromoted main B cannot be
-published using deployed A's evidence. A **new tag** requires all of:
+One production run attempt is one release operation
+(`production-<run_id>-<attempt>`). The plan is frozen into the tag's
+annotation, so once the tag exists a dispatch for the same attempt recovers
+that plan, including its date, even after midnight. If the tag exists but its
+GitHub Release does not, add `-f repair=true`; repair never retags. If the
+failed run never created the tag, nothing was frozen: the dispatch plans again
+with the current UTC date and counter. A historical repair never moves Latest
+backwards.
 
-- GitHub-authenticated repository and head-repository identities matching this
-  repository, the active canonical `.github/workflows/deploy-production.yml`
-  workflow ID/path, a main-branch producer on local `origin/main`, and a supported
-  production trigger (`workflow_dispatch`, `workflow_run` or `schedule`).
-- The exact producing run **and attempt**, a completed successful
-  `deploy-production` job, and successful ordered gradual-promotion,
-  identity-aware post-promotion smoke, receipt-write and receipt-upload steps.
-  Workflow display names or a globally green conclusion alone do not suffice.
-- Exactly one unexpired `production-promotion-<run_id>-<run_attempt>` artifact
-  belonging to that repository/run/main head. Its only member is the bounded
-  `promotion.json` receipt, never an extracted archive tree. Schema 1 binds
-  `repository`, `workflow: .github/workflows/deploy-production.yml`,
-  `job: deploy-production`, exact selected `sha`, UUID `promoted_version_id`, and
-  string `run_id` / `run_attempt`. The selected SHA comes from preflight and can
-  differ from the producer workflow's checkout SHA.
+Do not use **Re-run failed jobs** to repair publication: it starts a new
+attempt without repeating the deploy, and that attempt has no receipt, so it
+refuses. Dispatch `release.yml` as above with the original attempt instead.
+**Re-run all jobs** is not release repair: it may redeploy production and must
+follow the normal deployment gates.
 
-The production job records/uploads this receipt **only after** its existing
-identity-aware smoke succeeds. Its ordinary reusable release call passes the
-producing run/attempt; manual selectors become `PROMOTION_RUN_ID` and
-`PROMOTION_RUN_ATTEMPT`. These are untrusted hints, never caller assertions of
-success. Supply both or neither. Without hints, discovery reads the canonical
-workflow's main runs; it never falls back to publishing unchecked. Discovery is
-bounded to one complete page of at most 100 runs and 20 eligible candidates;
-selected-run jobs and artifacts each require a complete page of at most 100.
-An exhausted list, unreadable/malformed evidence, an ambiguous artifact or an
-inconclusive candidate refuses. Select the exact known run/attempt to avoid
-exhausted discovery; it must pass the same checks. API responses are capped at
-1 MiB, archives at 64 KiB, receipts at 4 KiB, each subprocess at 15 seconds and
-the proof operation at two minutes. No second credential is tried.
+Receipts are kept for **30 days**. Runs from before the CalVer switch name
+their receipt without the SHA, so they cannot be repaired through this
+workflow. Expired, deleted or missing proof refuses; the workflow never
+redeploys, rolls back or invents proof.
 
-The producer workflow may be globally **failed** because downstream publication
-failed, or still **in progress** inside its release call. Repair still works:
-only its completed successful deploy job and post-smoke proof authorize the new
-tag, not global workflow success. Failed/skipped/in-progress smoke never does.
+`-f dry_run=true` runs every check above and prints the planned version without
+writing anything (the releaser's client refuses every non-GET request). It is
+not authorization for a later real run, which checks everything again.
 
-Do not use **Re-run failed jobs** to repair publication: it increments the current
-`github.run_attempt` without repeating the successful deploy, while that deploy's
-job, artifact and receipt remain bound to the original producing attempt. The
-ordinary release caller supplies the current attempt, so that rerun deliberately
-refuses new-tag proof rather than combining attempts. Instead, dispatch
-`release.yml` on `main` using the command above with the exact deployed SHA and
-original producing run/attempt. **Re-run all jobs** is not release repair: it may
-redeploy production and must follow the independent deployment gates.
+The Actions token gets job-local `actions: read` and `contents: write` in the
+release job, and the caller grants no more. Workflow-wide `permissions: {}`
+stays in place.
 
-Receipts are retained for **30 days** (subject to repository retention limits).
-Runs from before this protocol have no receipt. Expired, deleted or missing proof
-refuses new-tag repair; the workflow never redeploys, rolls back or manufactures
-replacement proof. Retry the same SHA/run/attempt only after an API outage is
-resolved or the correct retained evidence is identified. If no valid evidence
-exists, stop; any future deployment follows the normal independent deployment
-gates, not an automatic release-repair workaround.
+## Tests
 
-Already-tagged missing-release repair reuses that tag without demanding new-tag
-proof. Historical repairs explicitly keep `--latest=false`; an existing release
-is a no-op and rollback promotes create no new tag. Before creating anything,
-release lookup still treats **only HTTP 404** as absence. An outage, rate limit,
-auth failure or no network is inconclusive and fails closed. A partial
-publication that created the tag but not its release retries the same tag/SHA,
-never an extra version bump.
-
-`-f dry_run=true` prints version/notes without publishing or checking promotion
-proof. It is a nonmutating preview, **not authorization** for a later real run;
-the real run must independently verify evidence. Release repair does not change
-production traffic. The ephemeral Actions token gains only job-local
-`actions: read` in the reusable publisher and its caller; workflow-wide
-`permissions: {}` and scoped `contents: write` stay intact. Revert those two read
-declarations through normal review to revoke this capability; missing access
-then refuses new-tag publication, never bypasses proof.
-
-`ci/release-on-promote.selftest.cjs` and
-`ci/release-on-promote-latest.acceptance.cjs` pin versioning, reuse, historical
-Latest and release-lookup failure behavior. The independently paired
-`ci/release-promotion-proof.acceptance.cjs`, wired through
-`test/release-promotion-proof.test.ts`, pins trusted/untrusted evidence, exact
-SHA/attempt binding, workflow receipt production, failed-publication recovery,
-dry-run and zero publication on refusal. All publication tests use fake `gh`
-and throwaway git repositories; no real tags/releases or deployments.
+- `test/release-workflow.test.ts`: the release workflow shape, the shared
+  releaser pin and the plan request (`ci/release-request.cjs`).
+- `ci/release-promotion-proof.acceptance.cjs`, wired through
+  `test/release-promotion-proof.test.ts`: trusted and untrusted evidence, exact
+  SHA and attempt binding, the workflow's receipt producer, failed-publication
+  recovery, and no request on refusal. It uses fake `gh` and throwaway git
+  repositories.
+- Version allocation, tagging, notes, Latest, dry run, repair and the skips are
+  covered by the shared releaser's own offline suite in `TogetherWeOwn/.github`
+  (`ci/calver-acceptance.test.mjs`).

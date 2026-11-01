@@ -19,7 +19,8 @@ Guidance for human and AI contributors.
 - The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
 - Squash-merge only. One PR is one logical change.
 - Title the PR with a Conventional Commits header: `type(scope): summary`, at most 100 characters, no trailing period. Release automation reads it.
-- Use the PR template, in short, active sentences. Linked Issues and Verification are required; the rest is optional.
+- Use the PR template, in short, active sentences. Fill in Linked Issues, Verification and Attestation; the rest is optional.
+- PRs follow the org contract in `TogetherWeOwn/.github` CONTRIBUTING + this repo's overrides; use this repo's PR template, which replaces the org template; its Attestation section is mandatory.
 - Keep references public-safe. No internal card IDs (`TOG-`, `PAP-`), private URLs, tokens, or secrets in any title, body, commit, comment, or branch name. Link public GitHub issues with `Closes #123`.
 - Report the tests you ran. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
