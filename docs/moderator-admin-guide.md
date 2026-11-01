@@ -484,19 +484,29 @@ series cancel or repeat-rule editor.
 
 ### Read the RSVP roster
 
-The event edit screen shows **RSVPs (count)** with **Member**, **Status**, and
-**Answered** (UTC), newest responses first by default. **Search members** with
-**Search** matches username text case-insensitively; **Status** and **Answered**
-column links toggle sorting while retaining the search. The count is the number
-of matching answers (all statuses, not just going seats), so searching can
-reduce it. The roster shows 100 answers per page with a "Showing a-b of N"
-line; **Previous** and **Next** keep the search and sort and return to the
-roster section. Sorting or searching again starts back on page 1. Save event
+The event edit screen shows **RSVPs (count)** with **Member**, **Status**,
+**Answered** (UTC), and **Waitlist position**, newest responses first by default.
+**Search members** with **Search** matches username text case-insensitively;
+**Answer status** limits the list to one response status. The **Status**,
+**Answered**, and **Waitlist position** column links toggle sorting while retaining
+both filters. The count is the number of matching answers (all statuses, not just
+going seats), so filtering can reduce it. The roster shows 100 answers per page
+with a "Showing a-b of N" line; **Previous** and **Next** keep the filters and sort
+and return to the roster section. Sorting or searching again starts back on page 1. Save event
 edits before these controls reload the page. This is a read-only roster: no adding/removing answers,
 changing seats or exporting members. Read it only for authorized moderation.
 Reads of other members are access-logged; empty rosters and self-only reads create
 no access row. Audit-write failures always refuse protected contents; no setting
 changes that. Stop and escalate any reported audit failure; do not look for another access path.
+
+**Waitlist position** is global queue order, not a promised seat or attendance.
+Search, status filters and paging never renumber it: a searched middle member
+can still be number 57. **Answered** is the latest answer update, not priority.
+Sort **Waitlist position** ascending to see the front of the queue first;
+descending reverses the numbers without changing them. Other answer statuses
+show **—** and sort after the queue. Missing or blank names show **Unknown member**
+without exposing their identifiers. Paused or closed queues remain visible but
+do not advance; showing their order does not promote anyone.
 
 ### RSVP is not attendance
 

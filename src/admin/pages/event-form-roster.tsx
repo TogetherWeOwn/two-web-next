@@ -37,6 +37,11 @@ export const EventRosterSection: FC<{
     <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
       <h2>RSVPs ({total})</h2>
       <p class="hint">Save event changes before searching or sorting the roster.</p>
+      <p class="hint">
+        Waitlist position is global queue order, not a promised seat or attendance. Searching and
+        filtering do not renumber it; Answered shows the latest update, not priority. Paused or
+        closed queues do not advance.
+      </p>
       <p data-testid="roster-range">{rosterRangeText(rangeStart, rangeEnd, total)}</p>
       <form method="get" action={`${action}#rsvp-roster`} class="filters">
         <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
@@ -90,12 +95,20 @@ export const EventRosterSection: FC<{
                   rosterUrl(eventKey, rosterQuery, { sort: "answered", order, page: 1 })
                 }
               />
+              <TableSortHeader
+                label="Waitlist position"
+                active={rosterQuery.sort === "waitlist"}
+                order={rosterQuery.order}
+                url={(order) =>
+                  rosterUrl(eventKey, rosterQuery, { sort: "waitlist", order, page: 1 })
+                }
+              />
             </tr>
           </thead>
           <tbody>
             {roster.length === 0 ? (
               <tr>
-                <td colspan={3} data-testid="roster-empty">
+                <td colspan={4} data-testid="roster-empty">
                   {total > 0 ? "No RSVPs on this page." : rosterEmptyText(rosterQuery)}
                 </td>
               </tr>
@@ -105,6 +118,7 @@ export const EventRosterSection: FC<{
                   <td>{r.username?.trim() || "Unknown member"}</td>
                   <td>{r.status}</td>
                   <td>{r.answeredAt.toISOString()}</td>
+                  <td>{r.status === "waitlisted" ? (r.waitlistPosition ?? "—") : "—"}</td>
                 </tr>
               ))
             )}

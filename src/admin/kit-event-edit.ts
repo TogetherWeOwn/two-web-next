@@ -67,6 +67,7 @@ export type KitEventEditRosterEntry = {
   member: string;
   status: string;
   answeredAt: string;
+  waitlistPosition: number | null;
 };
 
 /** One roster sort header, mirroring the Hono TableSortHeader copy exactly. */
@@ -159,6 +160,7 @@ export type KitEventEditRosterRow = {
   username: string | null;
   status: string;
   answeredAt: Date;
+  waitlistPosition?: number | null;
 };
 
 export type KitEventEditDeps = {
@@ -232,6 +234,7 @@ export async function resolveKitEventEdit(
     member: r.username?.trim() || "Unknown member",
     status: r.status,
     answeredAt: r.answeredAt.toISOString(),
+    waitlistPosition: r.status === "waitlisted" ? (r.waitlistPosition ?? null) : null,
   }));
   const rangeStart = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + 1 : 0;
   const rangeEnd = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + entries.length : 0;
@@ -304,6 +307,7 @@ export async function resolveKitEventEdit(
         sortHeaders: [
           sortHeader(row.eventKey, query, "status", "Status"),
           sortHeader(row.eventKey, query, "answered", "Answered"),
+          sortHeader(row.eventKey, query, "waitlist", "Waitlist position"),
         ],
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,

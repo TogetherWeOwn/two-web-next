@@ -324,9 +324,24 @@ describe("acceptance: duplicate submits, rows and params", () => {
     );
     expect(view.roster.total).toBe(3);
     expect(view.roster.entries).toEqual([
-      { member: "sam", status: "going", answeredAt: answeredAt.toISOString() },
-      { member: "sam", status: "going", answeredAt: answeredAt.toISOString() },
-      { member: "sam", status: "going", answeredAt: answeredAt.toISOString() },
+      {
+        member: "sam",
+        status: "going",
+        answeredAt: answeredAt.toISOString(),
+        waitlistPosition: null,
+      },
+      {
+        member: "sam",
+        status: "going",
+        answeredAt: answeredAt.toISOString(),
+        waitlistPosition: null,
+      },
+      {
+        member: "sam",
+        status: "going",
+        answeredAt: answeredAt.toISOString(),
+        waitlistPosition: null,
+      },
     ]);
     expect(view.roster.rangeStart).toBe(1);
     expect(view.roster.rangeEnd).toBe(3);

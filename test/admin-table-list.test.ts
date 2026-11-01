@@ -199,7 +199,7 @@ describe("admin table query state (no DB)", () => {
     await listRoster(db, "roster", parseRosterQuery({ roster_page: "3" }));
     expect(statements).toHaveLength(2);
     expect(statements[0]).toMatch(/^select count\(\*\)/);
-    expect(statements[1]).toMatch(/limit \$\d+ offset \$\d+/);
+    expect(statements[1]).toMatch(/limit 100 offset \$\d+/);
   });
 
   it("keeps filtered/sorted/paged views behind the existing moderator guard", async () => {
