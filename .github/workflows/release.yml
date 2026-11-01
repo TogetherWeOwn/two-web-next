@@ -88,7 +88,7 @@ jobs:
       # reviewed TogetherWeOwn/.github commit. Plan is read-only.
       - name: Plan the CalVer release
         id: plan
-        uses: TogetherWeOwn/.github/actions/calver@27d1baf5d85e87a60ef814de34fbca88b71e7633 # shared CalVer releaser
+        uses: TogetherWeOwn/.github/actions/calver@cf983076f568407ce2dceb6eeabd1beb2e1e28c6 # shared CalVer releaser
         with:
           request: ${{ steps.request.outputs.request }}
           runs-on-json: ${{ github.event.repository.private && vars.CI_OVERFLOW_RUNNER || '"ubuntu-latest"' }}
@@ -108,7 +108,7 @@ jobs:
           REPAIR: ${{ inputs.repair == true }}
       - name: Tag the deployed commit and publish its release
         if: steps.plan.outputs.skipped != 'true'
-        uses: TogetherWeOwn/.github/actions/calver@27d1baf5d85e87a60ef814de34fbca88b71e7633 # shared CalVer releaser
+        uses: TogetherWeOwn/.github/actions/calver@cf983076f568407ce2dceb6eeabd1beb2e1e28c6 # shared CalVer releaser
         with:
           request: ${{ steps.publish-request.outputs.request }}
           runs-on-json: ${{ github.event.repository.private && vars.CI_OVERFLOW_RUNNER || '"ubuntu-latest"' }}
