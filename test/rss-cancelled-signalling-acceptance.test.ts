@@ -27,14 +27,13 @@
 // (the item is absent, so the prefix/note/order/statuses checks cannot
 // hold). GREEN controls: the eight "preserved" tests pass before and after.
 import { createHash } from "node:crypto";
-import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import app from "./app";
 import { APP_URL, type CalendarRow, calendarRow } from "./helpers/ics-wire-fixture";
+import { projectEventRowValues } from "./helpers/pg-proxy-event-projection";
 
 const CANCELLED_TITLE_PREFIX = "Cancelled: ";
 const CANCELLED_NOTE = "This event has been cancelled.";
@@ -48,8 +47,6 @@ const NODESC_CAN_KEY = "01J0000000000000000000ND01";
 
 const TRICKY_TITLE = `A & "B" <c> 🎮 東京`;
 const TRICKY_DESCRIPTION = `it's <b>bold</b> & "quoted"`;
-
-const columns = Object.keys(getTableColumns(events)) as (keyof CalendarRow)[];
 
 function pubRow(): CalendarRow {
   return calendarRow({
@@ -267,16 +264,7 @@ function feedSource(rows: CalendarRow[]) {
       rows: rows
         .filter((row) => seenStatuses.includes(row.status) && row.endsAt >= now)
         .sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime() || a.id - b.id)
-        .map((row) =>
-          columns.map((key) => {
-            const value = row[key];
-            return value instanceof Date
-              ? Number.isFinite(value.getTime())
-                ? value.toISOString()
-                : "infinity"
-              : value;
-          }),
-        ),
+        .map((row) => projectEventRowValues(sql, params, row)),
     };
   });
   const env = { APP_URL, ADMIN_DB: drizzle(query) as unknown as Db } as unknown as Env;
