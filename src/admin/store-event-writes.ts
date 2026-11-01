@@ -451,7 +451,7 @@ async function commitLockedUpdate(
       join_instructions: input.join_instructions ?? null,
       capacity: input.capacity,
       // A moderator edit must invalidate an agent's full-field stale write.
-      agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
+      agentVersion: locked.agentVersion + (locked.agentGrantId === null ? 0 : 1),
       updatedAt: new Date(),
     })
     .where(eq(events.eventKey, eventKey))
@@ -463,8 +463,7 @@ async function commitLockedUpdate(
     row as unknown as Record<string, unknown>,
   );
   if (Object.keys(changes).length > 0) {
-    await tx.insert(activityLog).values({
-      logName: "default",
+    await audit(tx, {
       description: `updated event ${row.title}`,
       subjectType: "Event",
       subjectId: row.eventKey,
@@ -556,8 +555,13 @@ async function shiftFutureChildren(
         startsAt,
         endsAt,
         timezone,
-        agentVersion: child.agentGrantId === null ? child.agentVersion : child.agentVersion + 1,
+        agentVersion: child.agentVersion + (child.agentGrantId === null ? 0 : 1),
         updatedAt: new Date(),
+        // Discord stores instants only, but the revision trigger counts a zone
+        // change. A synced child acknowledges it under its row lock; an
+        // unrelated unsynced change stays due for reconciliation.
+        syncedRevision:
+          child.syncedRevision + (retimed || child.syncedRevision !== child.syncRevision ? 0 : 1),
       })
       .where(eq(events.id, child.id))
       .returning();
@@ -567,8 +571,7 @@ async function shiftFutureChildren(
       moved as unknown as Record<string, unknown>,
     );
     if (Object.keys(changes).length > 0) {
-      await tx.insert(activityLog).values({
-        logName: "default",
+      await audit(tx, {
         description: `updated event ${moved.title}`,
         subjectType: "Event",
         subjectId: moved.eventKey,
@@ -576,7 +579,6 @@ async function shiftFutureChildren(
         properties: changes,
       });
     }
-    // Discord stores instants only, so a zone-only change owes no write-back.
     const status = toEventStatus(child.status);
     if (retimed && isMirrored(status)) owed.push({ eventKey: child.eventKey, status });
   }
@@ -626,7 +628,7 @@ export async function transitionEvent(
       .update(events)
       .set({
         status: target,
-        agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
+        agentVersion: locked.agentVersion + (locked.agentGrantId === null ? 0 : 1),
         updatedAt: new Date(),
       })
       .where(eq(events.eventKey, eventKey))

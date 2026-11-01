@@ -14,7 +14,7 @@
 // Live suite on the owned disposable-Postgres fixture, skipped without
 // DATABASE_URL like test/admin-branch-floor.test.ts. November in
 // Europe/London is GMT, so wall text and UTC coincide exactly.
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
@@ -23,6 +23,7 @@ import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import { agentEventGrants } from "../src/db/schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
+import { pgEventStore } from "../src/jobs/events";
 import type { QueueMessage } from "../src/jobs/types";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env as baseEnv, MODERATOR } from "./helpers/member-data";
@@ -307,6 +308,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
           retimedEnd: "2099-10-25T21:00:00.000Z",
           laterZone: "Europe/Paris",
           dispatched: [] as string[],
+          stale: ["series-tz-dirty"],
         },
         {
           zone: "America/New_York",
@@ -315,9 +317,10 @@ describe.skipIf(!process.env.DATABASE_URL)(
           retimedEnd: "2099-10-25T20:00:00.000Z",
           laterZone: "Europe/London",
           dispatched: ["series-tz-near"],
+          stale: ["series-tz-near", "series-tz-dirty"],
         },
       ])(`${surface}: a London to $zone timezone-only edit across the clock change`, async (c) => {
-        const [parent, near, later] = await seedSeries([
+        const [parent, near, later, dirtyChild] = await seedSeries([
           {
             eventKey: "series-tz-near",
             startsAt: "2099-10-25T19:00:00Z",
@@ -327,6 +330,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
             eventKey: "series-tz-later",
             startsAt: "2099-11-01T19:00:00Z",
             endsAt: "2099-11-01T21:00:00Z",
+          },
+          {
+            eventKey: "series-tz-dirty",
+            startsAt: "2099-11-08T19:00:00Z",
+            endsAt: "2099-11-08T21:00:00Z",
           },
         ]);
         await db
@@ -346,13 +354,17 @@ describe.skipIf(!process.env.DATABASE_URL)(
             verifierHash: `series-tz-${surface}-${c.zone}`,
           })
           .returning();
-        for (const child of [near!, later!]) {
+        // Every child is mirrored and synced, except one that still owes
+        // Discord an unrelated change.
+        for (const child of [near!, later!, dirtyChild!]) {
           await db
             .update(events)
             .set({
               agentGrantId: child === near ? grant!.id : null,
               agentVersion: 7,
               updatedAt: new Date("2026-01-01T00:00:00Z"),
+              discordEventId: `discord-${child.eventKey}`,
+              syncedRevision: sql`sync_revision - ${child === dirtyChild ? 1 : 0}`,
             })
             .where(eq(events.id, child.id));
         }
@@ -391,6 +403,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
           .mock.calls.map(([, writeBack]) => writeBack?.eventKey)
           .filter((key) => key !== parent!.eventKey);
         expect(childDispatches).toEqual(c.dispatched);
+
+        // Reconciliation must not resend a zone-only change, but it still owes
+        // the unrelated change it had before the edit.
+        const stale = (await pgEventStore(fixture.client).staleEventKeys()) as string[];
+        expect(stale.filter((key) => key !== parent!.eventKey).sort()).toEqual(c.stale.sort());
+        expect((await stored("series-tz-dirty")).timezone).toBe(c.zone);
       });
     }
 
