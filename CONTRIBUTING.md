@@ -252,6 +252,21 @@ Use real UTC dates; the expiry day itself is blocking, even if the exception is
 unused. Unknown severity cannot be exempted. Remove expired exceptions rather
 than silently extending them. Fixture examples are synthetic, not accepted risks.
 
+Some advisories have no fixed upstream release to upgrade to. Where a patched
+transitive release exists but the direct dependency has not adopted it, pin it
+with an exact `overrides` entry in `package.json` and verify the consumer's
+actual API use before merging. Remove the pin once the direct dependency
+ships the fix itself.
+
+One monitored low-severity exception is open (reviewed 2026-11-01):
+`deepmerge` GHSA-gcqx-w48m-w2h4 in `web/`, pulled in by
+`@sveltejs/vite-plugin-svelte`. No patched `deepmerge` release exists yet.
+It runs only at build time, merging this repository's own plugin and Vite
+configuration objects; it takes no untrusted input and ships in no Worker
+bundle. Low findings do not block the audit gate, so this note is the record;
+delete it when a patched `deepmerge` ships or the plugin drops the
+dependency.
+
 CodeQL uses the repository's existing default setup for JavaScript/TypeScript,
 Actions and Python. Keep that coverage intact; do not add a competing advanced
 workflow or change repository scanning settings as part of the dependency gate.
