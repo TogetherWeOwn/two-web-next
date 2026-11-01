@@ -855,8 +855,11 @@ test("both artifact uploads have exactly the two derived ledger paths", () => {
   const uploads = workflow
     .split(/\n {6}- name: /)
     .filter((step) => step.includes("uses: actions/upload-artifact@"));
-  assert.equal(uploads.length, 2);
-  for (const step of uploads) {
+  // The promotion passive set ships a third upload (the staging passive
+  // ledger directory) beside the two scrub-gated journey-ledger uploads.
+  const ledgers = uploads.filter((step) => step.includes("staging-journey-ledger.json"));
+  assert.equal(ledgers.length, 2);
+  for (const step of ledgers) {
     const pathBlock = step.match(/\n {10}path: \|\n([\s\S]*?)(?=\n {0,10}\S|$)/)?.[1];
     assert.ok(pathBlock, "upload must use an explicit path list");
     assert.deepEqual(
@@ -868,6 +871,12 @@ test("both artifact uploads have exactly the two derived ledger paths", () => {
       "no raw directories, extra files or globs may be uploaded",
     );
   }
+  const passive = uploads.filter((step) => !step.includes("staging-journey-ledger.json"));
+  assert.equal(passive.length, 1, "only the passive ledger upload stands beside the pair");
+  assert.match(passive[0], /^Staging passive ledger artifact\n/);
+  assert.match(passive[0], /\n {10}path: passive\/\n/);
+  assert.match(passive[0], /\n {10}if-no-files-found: warn\n/);
+  assert.doesNotMatch(passive[0], /secrets\./);
 });
 
 test("flaky evidence uploads only via the scrubbed failure path, never raw before scrub", () => {
