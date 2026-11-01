@@ -42,6 +42,13 @@ describe("admin chronology adapter", () => {
     });
   });
 
+  it("renders valid minute-precision instants with zero seconds", () => {
+    expect(formatAdminTime("2026-10-01T12:34Z")).toEqual({
+      iso: "2026-10-01T12:34:00.000Z",
+      label: "2026-10-01 12:34:00 UTC",
+    });
+  });
+
   it("keeps epoch zero instead of treating it as absent", () => {
     expect(formatAdminTime(0)).toEqual({
       iso: "1970-01-01T00:00:00.000Z",
@@ -66,6 +73,8 @@ describe("admin chronology adapter", () => {
     "2026-02-29T00:00:00Z",
     "2026-04-31T00:00:00Z",
     "2026-02-30T12:34:56+02:00",
+    "2026-02-30T12:34Z",
+    "2026-02-30T12:34+02:00",
     "2026-10-01T25:00:00Z",
     "1",
     true,
