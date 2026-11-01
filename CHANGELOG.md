@@ -1,7 +1,9 @@
 # Changelog
 
-Releases after v0.4.0 are published on the GitHub Releases page by each
-production promote (see docs/releases.md); this file keeps the earlier history.
+This file is frozen history up to v0.4.0. Every later release is on the
+[GitHub Releases](https://github.com/TogetherWeOwn/two-web-next/releases) page,
+published by each production promote (see docs/releases.md): SemVer from v1.0.0
+to v1.21.2, then calendar versions (vYYYY.MDD.P) from November 2026.
 
 ## [0.4.0](https://github.com/TogetherWeOwn/two-web-next/compare/v0.3.0...v0.4.0) (2026-10-09)
 

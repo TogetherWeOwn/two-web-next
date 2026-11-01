@@ -1,19 +1,28 @@
-import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
 // Releases are cut by the production promote (docs/releases.md): no release PR,
 // no schedule, no dispatched checks. deploy-production calls release.yml with
-// the deployed SHA and ci/release-on-promote.cjs tags it.
+// the deployed SHA; ci/release-request.cjs proves the promotion and the shared
+// CalVer releaser tags it vYYYY.MDD.P.
+const require = createRequire(import.meta.url);
+const { buildRequest, loadSections } = require("../ci/release-request.cjs") as {
+  buildRequest: (args: {
+    sha: string;
+    receipt: { run_id: string; run_attempt: string };
+    artifact: { id: number; name: string; digest: string };
+    sections: ChangelogSection[];
+  }) => { phase: string; input: Record<string, unknown> };
+  loadSections: (file: string) => ChangelogSection[];
+};
 const release = readFileSync(".github/workflows/release.yml", "utf8");
 const deploy = readFileSync(".github/workflows/deploy-production.yml", "utf8");
 type ChangelogSection = { type: string; section?: string; hidden?: boolean };
 const releasePleaseConfig = JSON.parse(readFileSync("release-please-config.json", "utf8")) as {
   packages: Record<
     string,
-    {
-      "bump-minor-pre-major"?: boolean;
-      "release-as"?: string;
+    Record<string, unknown> & {
       "changelog-sections"?: ChangelogSection[];
     }
   >;
@@ -50,12 +59,9 @@ function jobPermissions(text: string) {
 }
 
 describe("release on promote", () => {
-  it("keeps breaking changes on minor bumps before 1.0.0", () => {
-    expect(releasePleaseConfig.packages["."]?.["bump-minor-pre-major"]).toBe(true);
-  });
-
-  it("cuts v1.0.0 at the production cutover promote", () => {
-    expect(releasePleaseConfig.packages["."]?.["release-as"]).toBe("1.0.0");
+  it("keeps only the notes sections from the release-please config", () => {
+    // CalVer comes from tag history: no release-as, bump rules or release type.
+    expect(Object.keys(releasePleaseConfig.packages["."] ?? {})).toEqual(["changelog-sections"]);
   });
 
   it("gives every allowed PR-title type a visible changelog section or hides it", () => {
@@ -97,7 +103,64 @@ describe("release on promote", () => {
     expect(tag).toMatch(/^ {4}concurrency:\n {6}group: release\n {6}cancel-in-progress: false\n/m);
     expect(tag).toContain("fetch-depth: 0");
     expect(tag).toContain("RELEASE_SHA: ${{ inputs.sha }}");
-    expect(tag).toContain("run: node ci/release-on-promote.cjs");
+    expect(tag).toContain("run: node ci/release-request.cjs");
+  });
+
+  it("plans and publishes with the shared releaser pinned to one full SHA", () => {
+    const tag = job(release, "tag");
+    const pins = [...tag.matchAll(/uses: TogetherWeOwn\/\.github\/actions\/calver@(\S+)/g)].map(
+      (m) => m[1],
+    );
+    expect(pins).toHaveLength(2);
+    expect(pins[0]).toMatch(/^[0-9a-f]{40}$/);
+    expect(pins[1]).toBe(pins[0]);
+    // Plan before publish, and a classified skip (re-promote, rollback) never publishes.
+    expect(tag.indexOf("id: plan")).toBeGreaterThan(
+      tag.indexOf("run: node ci/release-request.cjs"),
+    );
+    const publish = tag.slice(tag.indexOf("- name: Tag the deployed commit"));
+    expect(publish).toContain("if: steps.plan.outputs.skipped != 'true'");
+    expect(tag).toContain("'\"ubuntu-latest\"'");
+  });
+
+  it("asks the releaser for a canary-free production-promotion stable with the notes sections", () => {
+    const sha = "a".repeat(40);
+    const artifact = {
+      id: 800,
+      name: `production-promotion-${sha}-700-2`,
+      digest: `sha256:${"d".repeat(64)}`,
+    };
+    const sections = loadSections("release-please-config.json");
+    expect(sections).toEqual(
+      changelogSections.map(({ type, section, hidden }) =>
+        hidden ? { type, section, hidden: true } : { type, section },
+      ),
+    );
+    const request = buildRequest({
+      sha,
+      receipt: { run_id: "700", run_attempt: "2" },
+      artifact,
+      sections,
+    });
+    expect(request).toEqual({
+      phase: "plan",
+      input: {
+        channel: "stable",
+        sha,
+        operation: "production-700-2",
+        policy: "production-promotion",
+        evidence: {
+          runId: 700,
+          attempt: 2,
+          workflow: ".github/workflows/deploy-production.yml",
+          jobs: ["deploy-production"],
+          artifactId: 800,
+          artifactName: artifact.name,
+          artifactDigest: artifact.digest,
+        },
+        sections,
+      },
+    });
   });
 
   it("is called after a successful production deploy with the deployed SHA", () => {
@@ -109,17 +172,5 @@ describe("release on promote", () => {
     expect(call).not.toContain("github.sha");
     expect(deploy).toMatch(/^ {6}sha: \$\{\{ steps\.target\.outputs\.sha \}\}$/m);
     expect(jobPermissions(call)).toEqual(["actions: read", "contents: write"]);
-  });
-
-  it("passes the release-on-promote selftest", () => {
-    const out = execFileSync("node", ["ci/release-on-promote.selftest.cjs"], { encoding: "utf8" });
-    expect(out).toContain("all tests passed");
-  });
-
-  it("repairs a historical release without moving Latest backwards", () => {
-    const out = execFileSync("node", ["ci/release-on-promote-latest.acceptance.cjs"], {
-      encoding: "utf8",
-    });
-    expect(out).toContain("all tests passed");
   });
 });

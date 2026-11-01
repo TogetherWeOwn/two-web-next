@@ -48,6 +48,12 @@ function validateReceipt(receipt, { repo, sha, runId, attempt }) {
   return receipt;
 }
 
+// deploy-production uploads the receipt under this name. The SHA in it is the
+// shared releaser's binding between the run and the deployed commit.
+function artifactName(sha, runId, attempt) {
+  return `production-promotion-${sha}-${runId}-${attempt}`;
+}
+
 function verifyPromotion({ repo, sha }) {
   requireProof(
     /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(repo) &&
@@ -161,7 +167,7 @@ function verifyPromotion({ repo, sha }) {
       );
       previous = step.number;
     }
-    const name = `production-promotion-${runId}-${attempt}`;
+    const name = artifactName(sha, runId, attempt);
     const artifacts = list(`runs/${runId}/artifacts`, "artifacts").filter(
       (artifact) => artifact.name === name,
     );
@@ -175,6 +181,8 @@ function verifyPromotion({ repo, sha }) {
         artifact.size_in_bytes > 0 &&
         artifact.size_in_bytes <= MAX_ARCHIVE &&
         (!artifact.expires_at || Date.parse(artifact.expires_at) > Date.now()) &&
+        typeof artifact.digest === "string" &&
+        /^sha256:[0-9a-f]{64}$/.test(artifact.digest) &&
         id(producer?.id) === runId &&
         id(producer?.repository_id) === repositoryId &&
         id(producer?.head_repository_id) === repositoryId &&
@@ -201,7 +209,12 @@ function verifyPromotion({ repo, sha }) {
     } catch {
       throw new Error("production promotion proof refused: malformed receipt JSON");
     }
-    return validateReceipt(receipt, { repo, sha, runId, attempt });
+    validateReceipt(receipt, { repo, sha, runId, attempt });
+    // The shared CalVer releaser re-reads this exact artifact by ID and digest.
+    return {
+      receipt,
+      artifact: { id: Number(artifact.id), name: artifact.name, digest: artifact.digest },
+    };
   }
 
   const hint = process.env.PROMOTION_RUN_ID || "";
@@ -230,16 +243,16 @@ function verifyPromotion({ repo, sha }) {
     // Many successful automatic runs deliberately skip deployment. Only a run
     // with an attempt-bound artifact is a candidate; absence is not authority.
     const artifacts = list(`runs/${runId}/artifacts`, "artifacts");
-    if (!artifacts.some((artifact) => artifact.name === `production-promotion-${runId}-${attempt}`))
+    // The artifact name carries the deployed SHA, so a promotion of another
+    // commit is skipped here rather than refused.
+    if (!artifacts.some((artifact) => artifact.name === artifactName(sha, runId, attempt)))
       continue;
-    const receipt = fromRun(runId, attempt);
-    // A genuine receipt for a different selected SHA is not repair evidence.
-    // fromRun fails closed rather than authorizing any fallback publication.
-    return receipt;
+    // fromRun still fails closed if the receipt inside disagrees with the name.
+    return fromRun(runId, attempt);
   }
   throw new Error(
     "production promotion proof refused: no trusted promotion receipt found; not publishing",
   );
 }
 
-module.exports = { verifyPromotion, validateReceipt };
+module.exports = { verifyPromotion, validateReceipt, artifactName };

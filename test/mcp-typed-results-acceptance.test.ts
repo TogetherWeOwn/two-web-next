@@ -556,7 +556,7 @@ describe.skipIf(!process.env.DATABASE_URL)("C4 typed results: advertised output 
     expect(structured).toEqual(await rest.json());
   });
 
-  it("list_events truncation keeps rows, fits 32 KiB and validates", async () => {
+  it("list_events truncation keeps rows, fits the whole result in 32 KiB and validates", async () => {
     await seed(7, { description: "D".repeat(40_000) });
     const schema = outputSchemaFor(await listTools(), "list_events");
     const result = toolResult(await callTool("list_events", { per_page: 20, page: 1 }));
@@ -564,7 +564,8 @@ describe.skipIf(!process.env.DATABASE_URL)("C4 typed results: advertised output 
     const structured = result["structuredContent"] as PublicApiEventCollectionDto;
     expect(structured.data).toHaveLength(1);
     expect(structured.data[0]!.description!.endsWith("…")).toBe(true);
-    expect(new TextEncoder().encode(JSON.stringify(structured)).length).toBeLessThanOrEqual(
+    // The whole tool result (both copies), not one DTO copy, fits the cap.
+    expect(new TextEncoder().encode(JSON.stringify(result)).length).toBeLessThanOrEqual(
       API_PUBLIC_BOUNDS.maxBodyBytes,
     );
     expect(validateAdvertised(structured, schema)).toEqual([]);
