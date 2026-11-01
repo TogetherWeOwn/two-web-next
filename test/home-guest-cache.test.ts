@@ -420,10 +420,9 @@ describe("homepage guest cache retire", () => {
     await expect(cachedFeatured(env, async () => db, NOW, undefined)).resolves.toEqual([]);
   });
 
-  it("does not cache an empty featured base, so a later row shows without a retire", async () => {
-    // An empty read (genuinely empty table, or a deadline fallback under
-    // load) must not seed the cache: the next read re-queries and picks up a
-    // row that appeared meanwhile.
+  it("retires a successfully cached empty featured base after a write", async () => {
+    // A successful empty base can be cached; a committed featured write
+    // retires it so the next request sees the newly published row.
     let rows: unknown[][] = [];
     const db = drizzle(async (sql: string) => {
       if (sql.includes('from "featured_contents"')) return { rows };
@@ -434,6 +433,7 @@ describe("homepage guest cache retire", () => {
     const env = { ...baseEnv, ADMIN_DB: db } as Env;
     await expect(cachedFeatured(env, async () => db, NOW, undefined)).resolves.toEqual([]);
     rows = [[2, "Late slot", "Appeared after the empty read", null, null, null, null, null]];
+    await retireHomeGuestCache();
     const seen = await cachedFeatured(env, async () => db, NOW, undefined);
     expect(seen).toHaveLength(1);
     expect(seen[0]?.title).toBe("Late slot");

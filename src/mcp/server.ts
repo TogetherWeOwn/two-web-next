@@ -15,6 +15,7 @@ import {
   API_PUBLIC_BOUNDS,
   PUBLIC_DATA_INTERNAL_MESSAGE,
   parsePublicEventId,
+  type CommunitySnapshotDto,
   type PublicApiEventCollectionDto,
   type PublicDataErrorCode,
 } from "../public-data/contracts";
@@ -68,6 +69,23 @@ function toolJson(value: object) {
     content: [{ type: "text" as const, text: JSON.stringify(value) }],
     structuredContent,
   };
+}
+
+// The complete envelope reserves 1 KiB: routes.ts bounds the serialized,
+// echoed JSON-RPC ID to half of it, leaving 512 bytes for JSON-RPC and SSE
+// framing (under a hundred bytes in the pinned transport). Measure escaped
+// tool-result bytes separately; even a maximum admitted ID must still fit.
+const MCP_TOOL_RESULT_SLACK_BYTES = 1024;
+export const MCP_REQUEST_ID_MAX_BYTES = MCP_TOOL_RESULT_SLACK_BYTES / 2;
+
+/**
+ * Serialized bytes of the get_community tool result as the SDK embeds it:
+ * the DTO rides twice (text plus structuredContent), and JSON escaping
+ * expands control characters, so this is measured on the serialized result,
+ * not estimated from the DTO's character counts.
+ */
+export function communityToolResultBytes(dto: CommunitySnapshotDto): number {
+  return new TextEncoder().encode(JSON.stringify(toolJson(dto))).length;
 }
 
 const UNAVAILABLE = "Event data is temporarily unavailable.";
@@ -191,7 +209,23 @@ export function createPublicMcpServer(deps: PublicMcpDeps): McpServer {
       // readCounts never throws: missing collectors degrade to nulls, never 0.
       // Defensive: a throw still alerts with the static message, never err.message.
       try {
-        return toolJson(serializeCommunity(await readCounts(env)));
+        const counts = await readCounts(env);
+        const dto = serializeCommunity(counts);
+        const bytes = communityToolResultBytes(dto);
+        if (bytes + MCP_TOOL_RESULT_SLACK_BYTES <= API_PUBLIC_BOUNDS.maxBodyBytes) {
+          return toolJson(dto);
+        }
+        // A pathological ladder admitted by the SQL caps — 64 characters can
+        // escape to far more bytes, and the tool result carries the DTO twice
+        // — still overflows the MCP envelope. Degrade the whole rank read to
+        // [] (the existing fallback shape, never a partial ladder) with one
+        // counts-only diagnostic. REST needs no such guard: the same DTO
+        // served once stays under the promise.
+        console.warn("Community MCP snapshot exceeded the byte budget; serving without ranks.", {
+          ranks: counts.ranks.length,
+          bytes,
+        });
+        return toolJson(serializeCommunity({ ...counts, ranks: [] }));
       } catch (err) {
         return internalError(err);
       }

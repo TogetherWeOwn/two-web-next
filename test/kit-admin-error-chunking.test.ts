@@ -112,6 +112,17 @@ describe("native admin error server chunking", () => {
     expect(groupPattern("admin").test("/checkout/src/admin/reads.ts")).toBe(true);
   });
 
+  it("co-compresses bounded homepage readers with their shared admin dependencies", () => {
+    const pattern = groupPattern("admin");
+    for (const module of ["counts.ts", "featured.ts", "home-cache.ts", "index.tsx"]) {
+      expect(pattern.test(`/checkout/src/${module}`), module).toBe(true);
+    }
+    for (const module of ["counts.ts.backup", "screens/home.tsx", "mcp/server.ts"]) {
+      expect(pattern.test(`/checkout/src/${module}`), module).toBe(false);
+    }
+    expect(pattern.test("/checkout/web/src/routes/+page.server.ts")).toBe(false);
+  });
+
   it("keeps grouping on SSR and preserves conservative minification", () => {
     const { environments, output } = serverOutput();
     assert.ok(environments.type === "ObjectExpression");

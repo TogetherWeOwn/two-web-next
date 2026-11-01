@@ -20,7 +20,7 @@ import type { Env } from "../env";
 import { MCP_TRANSPORT_ERROR_CODE } from "../errors";
 import { safeRequestId } from "../request-log";
 import { admissionRetryAfter } from "../public-data/routes";
-import { createPublicMcpServer } from "./server";
+import { createPublicMcpServer, MCP_REQUEST_ID_MAX_BYTES } from "./server";
 
 type Ctx = Context<{ Bindings: Env }>;
 
@@ -28,11 +28,13 @@ type Ctx = Context<{ Bindings: Env }>;
  * JSON-RPC batches (an array at the top level) would let one admitted POST
  * run hundreds of DB-backed tool calls for a single budget hit. The
  * 2025-06-18 protocol removed batching, so refuse arrays with -32600/400.
+ * String IDs must also fit the response-envelope allowance before dispatch;
+ * oversized IDs are refused with id:null rather than echoed.
  * Takes the already-materialized body text: the caller reads the stream once
  * and reuses it for the handler, so there is exactly one materialization and
  * no clone().text().
  */
-function refuseMcpBatchText(text: string, c: Ctx): Response | null {
+function refuseMcpMessageText(text: string, c: Ctx): Response | null {
   if (!text) return null;
   let parsed: unknown;
   try {
@@ -40,15 +42,33 @@ function refuseMcpBatchText(text: string, c: Ctx): Response | null {
   } catch {
     return null;
   }
-  if (!Array.isArray(parsed)) return null;
+  let message: string;
+  let next: string;
+  if (Array.isArray(parsed)) {
+    message = "Invalid Request: batched requests are not supported.";
+    next = "Send one request per POST and retry.";
+  } else if (
+    parsed !== null &&
+    typeof parsed === "object" &&
+    "id" in parsed &&
+    typeof parsed.id === "string" &&
+    new TextEncoder().encode(JSON.stringify(parsed.id)).length > MCP_REQUEST_ID_MAX_BYTES
+  ) {
+    // JSON-RPC echoes IDs. Count UTF-8 bytes AFTER JSON escaping, including
+    // quotes, before dispatch so an ID cannot consume the response budget.
+    message = "Invalid Request: request ID exceeds the 512-byte JSON limit.";
+    next = "Use a shorter request ID and retry.";
+  } else {
+    return null;
+  }
   return c.json(
     {
       jsonrpc: "2.0",
       id: null,
       error: {
         code: MCP_TRANSPORT_ERROR_CODE,
-        message: "Invalid Request: batched requests are not supported.",
-        data: { next: "Send one request per POST and retry.", request_id: c.get("requestId") },
+        message,
+        data: { next, request_id: c.get("requestId") },
       },
     },
     400,
@@ -91,7 +111,7 @@ async function mcpRefused(c: Ctx): Promise<Response | null> {
  * through a shared server. The factory still builds an isolated McpServer
  * per call, exactly as the Agents SDK requires for concurrent requests.
  */
-async function serveMcp(c: Ctx): Promise<Response> {
+async function serveMcp(c: Ctx, request = c.req.raw): Promise<Response> {
   // The database resolves inside the factory so OPTIONS preflights never
   // open one; event tools report unavailable when it resolves to null.
   // No onerror hook: the SDK calls it for ordinary client protocol
@@ -126,7 +146,7 @@ async function serveMcp(c: Ctx): Promise<Response> {
   } catch {
     executionCtx = undefined;
   }
-  return handler(c.req.raw, c.env, executionCtx as unknown as ExecutionContext);
+  return handler(request, c.env, executionCtx as unknown as ExecutionContext);
 }
 
 export function registerMcpRoutes(app: Hono<{ Bindings: Env }>): void {
@@ -148,8 +168,20 @@ export function registerMcpRoutes(app: Hono<{ Bindings: Env }>): void {
     } catch {
       return serveMcp(c);
     }
-    const batch = refuseMcpBatchText(text, c);
-    if (batch) return batch;
+    const invalid = refuseMcpMessageText(text, c);
+    if (invalid) {
+      // Reuse the SDK's no-factory preflight for origin validation and CORS,
+      // rather than duplicating its policy or opening a database for bad input.
+      const preflight = await serveMcp(
+        c,
+        new Request(c.req.url, { method: "OPTIONS", headers: c.req.raw.headers }),
+      );
+      if (!preflight.ok) return preflight;
+      for (const [name, value] of preflight.headers) {
+        if (name.startsWith("access-control-")) invalid.headers.set(name, value);
+      }
+      return invalid;
+    }
     c.req.raw = new Request(c.req.raw, { body: text, duplex: "half" } as RequestInit);
     return serveMcp(c);
   });

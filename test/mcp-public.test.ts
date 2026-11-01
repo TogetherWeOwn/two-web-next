@@ -1,3 +1,7 @@
+import {
+  registerHomepageBoundedReadTests,
+  registerMcpCommunityBudgetTests,
+} from "./helpers/homepage-bounded-reads";
 // route-inventory: POST /mcp
 // route-inventory: OPTIONS /mcp
 // Stateless public read-only MCP at /mcp (B2): exact tool allowlist over the
@@ -46,6 +50,9 @@ type RpcResponse = {
 };
 
 describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
+  registerHomepageBoundedReadTests();
+  registerMcpCommunityBudgetTests();
+
   let fixture: MemberDataFixture;
   let db: MemberDataFixture["db"];
   let store: SessionStore;
@@ -341,6 +348,29 @@ describe.skipIf(!process.env.DATABASE_URL)("public MCP: /mcp", () => {
     expect(local.status).toBeLessThan(300);
     const bare = await post({ jsonrpc: "2.0", id: 22, method: "tools/list", params: {} });
     expect(bare.status).toBeLessThan(300);
+  });
+
+  it("preserves SDK CORS and origin rejection on an oversized request ID", async () => {
+    const localHeaders = { headers: { origin: "http://localhost:6274" } };
+    const allowed = await post({ jsonrpc: "2.0", id: 24, method: "ping" }, localHeaders);
+    expect(allowed.status).toBe(200);
+    const body = { jsonrpc: "2.0", id: "x".repeat(511), method: "ping" };
+    const refused = await post(body, localHeaders);
+    expect(refused.status).toBe(400);
+    expect(refused.messages[0]).toMatchObject({ id: null, error: { code: -32600 } });
+    for (const name of [
+      "access-control-allow-origin",
+      "access-control-allow-methods",
+      "access-control-allow-headers",
+      "access-control-expose-headers",
+      "access-control-max-age",
+    ]) {
+      expect(allowed.headers.get(name), name).not.toBeNull();
+      expect(refused.headers.get(name), name).toBe(allowed.headers.get(name));
+    }
+    const foreign = await post(body, { headers: { origin: "https://evil.test" } });
+    expect(foreign.status).toBe(403);
+    expect(foreign.messages[0]).not.toHaveProperty("result");
   });
 
   it("refuses a foreign Host before routing", async () => {

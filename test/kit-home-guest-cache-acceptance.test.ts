@@ -507,7 +507,7 @@ describe("Kit home guest cache: never-store rules", () => {
     expect(f.counts()).toEqual(afterUp);
   });
 
-  it("never stores an empty featured base, so a late row shows without a retire", async () => {
+  it("retires a cached empty featured base after a write", async () => {
     const f = fixture({ featured: [] });
     f.use();
     const empty = await load(loadArgs().args);
@@ -516,10 +516,11 @@ describe("Kit home guest cache: never-store rules", () => {
     const afterEmpty = f.counts();
 
     f.setFeatured([featuredRow(9, "Late slot")]);
+    await retireHomeGuestCache();
     const seen = await load(loadArgs().args);
     expect(seen.featured.map((row) => row.title)).toEqual(["Late slot"]);
-    // The healthy upcoming entry still hits: only the featured leg re-reads.
-    expect(f.counts().eventQueries).toBe(afterEmpty.eventQueries);
+    // The shared retire invalidates both the featured and upcoming entries.
+    expect(f.counts().eventQueries).toBeGreaterThan(afterEmpty.eventQueries);
     expect(f.counts().featuredQueries).toBeGreaterThan(afterEmpty.featuredQueries);
 
     const afterSeen = f.counts();

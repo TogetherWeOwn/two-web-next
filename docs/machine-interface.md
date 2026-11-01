@@ -14,7 +14,8 @@ machine surface only.
 - `GET /openapi.json` — OpenAPI 3.1 for the REST mirrors:
   `/api/public/events`, `/api/public/events/{key}`,
   `/api/public/community`, `/api/public/join`. Same DTOs as the MCP
-  tools, byte for byte.
+  tools, byte for byte, except for the MCP-only rank-envelope degradation
+  described below.
 - `GET /llms.txt` — page index plus the links above.
 
 ## Limits
@@ -22,7 +23,15 @@ machine surface only.
 - Collections cap at 20 rows per response (`per_page` clamps to 20);
   past-the-end pages clamp to the last page.
 - Every JSON body fits 32 KiB: long descriptions trim with a `…`
-  marker, rows are never dropped.
+  marker, rows are never dropped. A stored rank ladder that breaches
+  the rank bounds (or still overflows the MCP envelope once escaped
+  and duplicated) degrades the whole `ranks` read to `[]`, never a
+  partial ladder. For an MCP-envelope overflow only, REST retains the admitted
+  ladder while MCP returns empty ranks; the other DTO fields are unchanged.
+- MCP string request IDs cap at 512 UTF-8 bytes after JSON encoding
+  (including quotes and escapes). Larger IDs are refused before dispatch
+  with HTTP 400, JSON-RPC `-32600`, and `id: null`; use a shorter ID. This
+  keeps the echoed ID inside the 1 KiB response-envelope allowance.
 - Events are published-only: drafts and cancelled rows read as not found.
 - Unknown counts read as `null`, never `0` (`going_count`,
   `going_occupancy`, `member_count`, `online_count`).

@@ -28,7 +28,13 @@
 import { databaseUrl } from "./db/connection";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
-import { listPublishedFeatured, type PublishedFeatured, type VisibleFeatured } from "./featured";
+import {
+  FEATURED_READ_DEADLINE_MS,
+  listPublishedFeatured,
+  listVisibleFeatured,
+  type PublishedFeatured,
+  type VisibleFeatured,
+} from "./featured";
 import { currentlyVisible } from "./featured-status";
 import { loadHomeUpcomingMerged, type HomeUpcomingMerged } from "./events/reads";
 import type { DiscordEventsSource } from "./events/discord-transients-types";
@@ -39,7 +45,7 @@ export const HOME_GUEST_CACHE_TTL_MS = 60_000;
 type WaitUntilCtx = { waitUntil?: (promise: Promise<unknown>) => void };
 
 type UpcomingEntry = { value: HomeUpcomingMerged; expiresAt: number; gen: number };
-type FeaturedEntry = { value: PublishedFeatured[]; expiresAt: number; gen: number };
+type FeaturedEntry = { value: PublishedFeatured[]; expiresAt: number; gen: number; asOf: number };
 
 // Cross-request sharing in staging is keyed by the web-DB URL (one Hyperdrive
 // binding, stable per environment). Test/dev fixtures inject ADMIN_DB instead:
@@ -120,10 +126,12 @@ function storeUpcomingMemory(
 function readFeaturedMemory(
   key: string,
   injected: Db | undefined,
+  asOf: number,
 ): PublishedFeatured[] | undefined {
   const now = Date.now();
   const memory = injected ? featuredByDb.get(injected) : featuredByUrl.get(key);
-  if (memory && memory.gen === generation && now < memory.expiresAt) return memory.value;
+  if (memory && memory.gen === generation && now < memory.expiresAt && asOf >= memory.asOf)
+    return memory.value;
   return undefined;
 }
 
@@ -131,19 +139,15 @@ function storeFeaturedMemory(
   key: string,
   injected: Db | undefined,
   value: PublishedFeatured[],
+  asOf: number,
   genAtStart?: number,
 ): void {
-  // An empty base is never stored: a deadline fallback reads as [] exactly
-  // like a genuinely empty table, and a stored outage would hide recovery
-  // behind the TTL (same principle as the upcoming `unavailable` guard; the
-  // browser suite caught a created slot invisible to the guest under load).
-  // A genuinely empty table simply re-reads until a retire-then-write adds
-  // the first row.
-  if (value.length === 0) return;
   // Same in-flight retire guard as the upcoming store: a value read before
   // the write committed must never overwrite the retire.
   if (genAtStart !== undefined && genAtStart !== generation) return;
-  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: generation };
+  const previous = injected ? featuredByDb.get(injected) : featuredByUrl.get(key);
+  if (previous && previous.gen === generation && previous.asOf > asOf) return;
+  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: generation, asOf };
   if (injected) featuredByDb.set(injected, entry);
   else featuredByUrl.set(key, entry);
 }
@@ -187,9 +191,9 @@ export async function cachedHomeUpcoming(
 
 /**
  * Guest-invariant featured list with the same short-TTL isolate-local layer.
- * The cached base is the published list; the window is evaluated per request,
- * so consecutive reads at different instants each see their own visibility.
- * Never throws.
+ * The cached base is the published list; the window is evaluated per request.
+ * A saturated base falls back to a current-window read without caching, and
+ * successful empty bases are cached while failed reads are not. Never throws.
  */
 export async function cachedFeatured(
   env: Env,
@@ -219,7 +223,7 @@ export async function cachedFeatured(
   const injected = injectedDb(env);
   const key = urlKey(env);
   try {
-    const hit = readFeaturedMemory(key, injected);
+    const hit = readFeaturedMemory(key, injected, now.getTime());
     if (hit) return visibleAt(hit);
   } catch {
     // Fall through to the direct read.
@@ -228,7 +232,29 @@ export async function cachedFeatured(
   let value: PublishedFeatured[];
   try {
     const db = await openDb();
-    value = db ? await listPublishedFeatured(db) : [];
+    // The fill passes the request time so already-ended published rows are
+    // excluded before the row cap instead of crowding live rows out of the
+    // base; the per-request window below still judges every cached row, so
+    // boundary instants stay exact.
+    if (!db) return [];
+    const status = { saturated: false };
+    const started = Date.now();
+    value = await listPublishedFeatured(db, now, status);
+    if (status.saturated) {
+      // A partial base cannot answer later window changes. Read the live
+      // window without caching, using only the original budget's remainder.
+      const remaining = FEATURED_READ_DEADLINE_MS - (Date.now() - started);
+      if (remaining <= 0) throw new Error("FeaturedReadDeadline");
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error("FeaturedReadDeadline")), remaining);
+      });
+      try {
+        return await Promise.race([listVisibleFeatured(db, now, true), deadline]);
+      } finally {
+        clearTimeout(timer);
+      }
+    }
   } catch {
     // Mirror warnHomeFallback (src/events/reads.ts): the bounded exception
     // class plus the validated request id, never driver text, SQL or
@@ -241,7 +267,7 @@ export async function cachedFeatured(
     return [];
   }
   try {
-    storeFeaturedMemory(key, injected, value, genAtStart);
+    storeFeaturedMemory(key, injected, value, now.getTime(), genAtStart);
   } catch {
     // Cache failures never fail the request.
   }

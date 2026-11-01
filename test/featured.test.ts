@@ -1,5 +1,7 @@
+import { registerExpiredFeaturedCapTests } from "./helpers/home-featured-expired-cap";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { drizzle } from "drizzle-orm/postgres-js";
+import type { Db } from "../src/db/index";
 import app from "./app";
 import { featuredContents } from "../src/db/admin-schema";
 import { FEATURED_READ_DEADLINE_MS, listVisibleFeatured } from "../src/featured";
@@ -13,7 +15,7 @@ import { waitForNoLockWaiters } from "./helpers/wait-for-no-lock-waiters";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import type { Env } from "../src/env";
 import type { EnvWithAdminDb } from "../src/admin/db";
-import { __resetHomeGuestCacheForTests } from "../src/home-cache";
+import { __resetHomeGuestCacheForTests, cachedFeatured } from "../src/home-cache";
 
 const now = new Date("2026-09-30T12:00:00Z");
 const before = new Date(now.getTime() - 1000);
@@ -95,6 +97,55 @@ describe("featured homepage fallback (local fixtures)", () => {
     }
   });
 
+  it("bounds both stages of a saturated featured read by the same deadline", async () => {
+    vi.useFakeTimers();
+    try {
+      const db = drizzle.mock() as unknown as Db;
+      vi.spyOn(featuredReads, "listPublishedFeatured").mockImplementation(
+        async (_db, _now, status) => {
+          await new Promise((resolve) => setTimeout(resolve, 300));
+          if (status) status.saturated = true;
+          return [];
+        },
+      );
+      vi.spyOn(featuredReads, "listVisibleFeatured").mockImplementation(async () => {
+        await new Promise((resolve) => setTimeout(resolve, 300));
+        return [];
+      });
+      let settled = false;
+      const response = cachedFeatured({ ...env, ADMIN_DB: db } as Env, async () => db, now).then(
+        (rows) => {
+          settled = true;
+          return rows;
+        },
+      );
+      await vi.advanceTimersByTimeAsync(FEATURED_READ_DEADLINE_MS);
+      expect(settled).toBe(true);
+      expect(await response).toEqual([]);
+      await vi.advanceTimersByTimeAsync(100);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("warns if the saturated visible-row read fails", async () => {
+    const db = drizzle.mock() as unknown as Db;
+    vi.spyOn(featuredReads, "listPublishedFeatured").mockImplementation(
+      async (_db, _now, status) => {
+        if (status) status.saturated = true;
+        return [];
+      },
+    );
+    const session = Reflect.get(db, "session") as { transaction: () => Promise<unknown> };
+    vi.spyOn(session, "transaction").mockRejectedValue(new Error("test database failure"));
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await cachedFeatured({ ...env, ADMIN_DB: db } as Env, async () => db, now)).toEqual([]);
+    expect(warn).toHaveBeenCalledWith(
+      "Home featured unavailable; serving the fallback.",
+      expect.any(Object),
+    );
+  });
+
   it("uses the configured allowlist for remote image rendering and CSP on the homepage", async () => {
     const imageUrl = "https://images.unsplash.com/photo.jpg";
     expect(featuredImageAllowed(imageUrl, env.APP_URL, "images.unsplash.com")).toBe(true);
@@ -168,6 +219,8 @@ describe("featured homepage fallback (local fixtures)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Postgres)", () => {
+  registerExpiredFeaturedCapTests();
+
   let fixture: MemberDataFixture;
   beforeAll(async () => {
     fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 2 });
