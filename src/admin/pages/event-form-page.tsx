@@ -6,7 +6,9 @@ import type { FC } from "hono/jsx";
 import type { EventRow } from "../store";
 import type { RosterEntry } from "../reads";
 import type { RosterQuery } from "../table-list";
+import { savedEventReview } from "../event-saved-review";
 import { EventFormFields } from "./event-form-fields";
+import { EventReviewSection } from "./event-form-review";
 import { EventRosterSection } from "./event-form-roster";
 import { EventStatusSection } from "./event-form-status";
 import { Shell } from "./shell";
@@ -24,13 +26,19 @@ export const EventFormPage: FC<{
   // section silently. Carries no roster data of any kind.
   rosterHiddenNotice?: boolean;
 }> = ({ mode, row, values, errors, roster, rosterTotal, rosterQuery, rosterHiddenNotice }) => {
+  const now = new Date();
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
     <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
       <section>
         <h1>{mode === "new" ? "New event" : `Edit ${row!.title}`}</h1>
         <EventFormFields mode={mode} row={row} values={values} errors={errors} action={action} />
-        {mode === "edit" && row ? <EventStatusSection row={row} /> : null}
+        {mode === "edit" && row ? (
+          <>
+            <EventReviewSection review={savedEventReview(row, now)} />
+            <EventStatusSection row={row} now={now} />
+          </>
+        ) : null}
         {mode === "edit" && roster ? (
           <EventRosterSection
             eventKey={row!.eventKey}

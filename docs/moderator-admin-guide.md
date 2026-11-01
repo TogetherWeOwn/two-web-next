@@ -374,6 +374,33 @@ or other navigation: with JavaScript enabled, the edit screen requests a browser
 leave-page warning for unsaved changes (including after a rejected Save).
 **Save** itself is exempt; the warning is not a substitute for saving.
 
+### Save → review → publish
+
+1. **Save** edits first. If Save is rejected, the fields retain your attempted edits,
+   but the stored event has not changed. Correct the errors and save successfully.
+2. On an existing event, use **Review saved event** above Status. It opens the
+   existing `/events/<key>` detail route with only the persisted event key. New,
+   unsaved forms have no review link. Draft detail access remains moderator-only;
+   the link is not a sharing token or permission grant.
+3. Compare the saved detail with your intent. **Saved record last updated** is the
+   record's update timestamp in UTC, not an immutable revision or a preview check
+   time. The link reads the saved record when opened; another moderator may have
+   changed it since the editor loaded. Unsaved edits are not included in review
+   **or in the separate Publish operation**. Save and review again after editing.
+4. Read the advisory guidance. A saved location must be nonblank. An end time
+   strictly before the page's rendering time is already ended; exact equality
+   is allowed by publication validation (unlike the live-RSVP boundary). Use the
+   correction links, then Save. Published events are already public under their
+   existing visibility rules; cancelled events cannot be republished. Past
+   events have ended and cannot be published as-is.
+5. For a saved draft, use **Publish** only after review. Advice is a snapshot, not
+   authorization: it does not disable or submit Publish. The server still locks
+   and rechecks the current saved status, end time and location. If it refuses,
+   read the error and correct the saved record rather than trusting earlier advice.
+
+The same review guidance appears in the Hono and Kit edit presentations. The
+separate status forms remain owned by the shared server mutation routes.
+
 ### Cancel, past events and unsupported controls
 
 - **Cancel** on the list / **Cancel event** on edit is available for drafts and
