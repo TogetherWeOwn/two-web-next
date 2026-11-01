@@ -89,14 +89,10 @@ export const ErrorPage: FC<{ heading: string; detail?: string; recovery?: Recove
   </Shell>
 );
 
-export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
+export const RsvpAction: FC<{ row: EventRow; now?: Date }> = ({ row, now = new Date() }) => {
   // An unrenderable end (Invalid Date) is not a live event: every comparison
   // with it is false, so without the finite check it would look unended.
-  if (
-    row.status !== "published" ||
-    !Number.isFinite(row.endsAt.getTime()) ||
-    row.endsAt <= new Date()
-  )
+  if (row.status !== "published" || !Number.isFinite(row.endsAt.getTime()) || row.endsAt <= now)
     return null;
   if (!row.rsvpOpen) {
     return (
