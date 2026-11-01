@@ -639,9 +639,16 @@ every five minutes with the gradual gate's thresholds (5%, 20-request floor).
 Three consecutive readiness misses or a failed error-rate verdict set
 `breach=true`, and `auto-rollback` restores the target the same way. An
 analytics query error only warns; a different live version makes the watch
-stand down. The `release` job tags only after the watch passes. If
-`auto-rollback` itself fails, restore manually with this workflow using the
-version ID in the failed step's logs.
+stand down. The `release` job tags only after the watch passes with an
+explicit `pass` verdict, so a superseded watch never tags the displaced
+commit. The watch reads only the repo-level read-only analytics token, binds
+no Environment, and needs no approval in either mode. The `auto-rollback`
+call restores through the production Environment binding, so in reviewer
+mode it waits for a reviewer like any other production mutation; in
+auto-approve mode it runs on its own. If `auto-rollback` itself fails (or
+waits on an approval nobody gives), the failure mode is a live promoted
+version, never a silent rollback: restore manually with this workflow using
+the version ID in the failed step's logs.
 
 #### Daily staging rollback drill and the promotion rollback target
 

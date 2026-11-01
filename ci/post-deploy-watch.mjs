@@ -85,7 +85,7 @@ export async function watchProduction(config, deps = {}) {
   let misses = 0;
   let judged = 0;
   let lastErrorRateAt = started.getTime();
-  for (let tick = 1; ; tick += 1) {
+  for (;;) {
     const result = await probe({ origin: settings.origin, versionId: settings.versionId });
     if (result.state === "superseded") {
       log(`::notice::watch stands down: ${result.reason}`);
