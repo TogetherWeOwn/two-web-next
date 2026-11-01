@@ -226,6 +226,22 @@ export async function execute(
       ek,
     );
   const next = op === "publish" ? "published" : "cancelled";
+  // Publishing refuses an already-ended draft, judged on the locked row here
+  // at publication time: strict end-before-now, mirroring transitionEvent.
+  // Cancellation is exempt.
+  if (op === "publish" && new Date(event.ends_at).getTime() < Date.now()) {
+    return denyOutcome(
+      422,
+      "validation_failed",
+      "The event fields did not validate.",
+      {
+        errors: {
+          ends_at: ["An event that has already ended cannot be published. Update its dates first."],
+        },
+      },
+      ek,
+    );
+  }
   // Publishing needs a non-blank location (bot upsert contract): drafts may
   // stay blank, and a moderator can clear an agent-owned draft's location, so
   // judge the stored row here under the lock, mirroring transitionEvent.
