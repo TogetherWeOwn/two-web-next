@@ -4,6 +4,11 @@ This is the bounded offline CI lane authorized by [TOG-11003](/TOG/issues/TOG-11
 
 Both capture jobs run on `[self-hosted, two-selfhosted]` while the repository is private and on GitHub-hosted `ubuntu-latest` while it is public, because the org runner group refuses public repositories ([TOG-12326](/TOG/issues/TOG-12326)). Both retain their digest-pinned browser job container, isolating browser execution from the runner host. No additional capacity is requested.
 
+Runner routing update: `pull_request` runs of this workflow (the
+`current-source` job included) now always use GitHub-hosted
+`ubuntu-latest`, in both visibilities. The visibility routing above now
+applies to manual dispatches only. See `docs/private-flip-checklist.md`.
+
 ## Current-source PR proof
 
 [TOG-10827](/TOG/issues/TOG-10827) adds a separate `current-source` PR job in the same pinned browser container. It generates fictional saved edit/list/scheduled pages plus a long-content edit from the exact checked-out PR head with `current-fixtures.ts`, then `capture-current.cjs` captures all four at 1280×900 and 390×844. The list stays inside a named keyboard-focusable scroll region rather than squeezing five columns into the mobile viewport. Browser regressions require intact title words, single-line headers and complete UTC timestamps, keyboard scrolling, and reachable Window/Last changed columns. Four supplemental `list-window-*` / `list-last-changed-*` screenshots expose those columns at both viewport sizes; all twelve PNGs require independent inspection. The long-content fixture has a 255-character unbroken headline and `https://example.test/` followed by 400 `a`s in the saved body. Checks require the complete text to remain present, wrap to multiple lines and stay inside the card. The generated manifest pins source SHA, clock and HTML hashes; `report.json` records browser version, CI run, image pin, state checks, element bounds and document overflow. Any horizontal overflow, failed state, missing stylesheet or attempted network request fails the job. QA still independently inspects all twelve PNGs on [TOG-10954](/TOG/issues/TOG-10954).
