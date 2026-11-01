@@ -76,6 +76,16 @@ describe("admin chronology adapter", () => {
     "2026-02-30T12:34Z",
     "2026-02-30T12:34+02:00",
     "2026-10-01T25:00:00Z",
+    // Midnight written as 24:00 names the next day, so rendering it would
+    // move the written date. It stays unrenderable at every precision,
+    // matching the second-precision refusal that predates minute-precision
+    // validation. No admin read emits it: rows arrive as Date objects or
+    // toISOString output, which always write 00:00.
+    "2026-10-01T24:00Z",
+    "2026-10-01T24:00:00Z",
+    "2026-10-01T24:00:00.000Z",
+    "2026-10-01T24:00+02:00",
+    "2026-10-01T24:01Z",
     "1",
     true,
     {},

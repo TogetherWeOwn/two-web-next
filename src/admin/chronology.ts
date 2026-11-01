@@ -10,6 +10,8 @@ const ISO_ZONED = /T.*(?:Z|[+-]\d{2}:?\d{2})$/;
 // out-of-range components (Feb 30 becomes Mar 2), so the suffix check above
 // is not enough: validate the written components before constructing the Date
 // and refuse impossible dates instead of fabricating a different instant.
+// Hour 24 is refused on the same basis: it names midnight on the next day,
+// so accepting it would render a different date than the one written.
 const WRITTEN_COMPONENTS =
   /^([+-]?\d{4,})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2})(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})$/;
 
