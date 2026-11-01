@@ -101,8 +101,21 @@ describe("Kit activity-log rendered output", () => {
     expect(systemRow).toBeDefined();
     expect(systemRow).toContain("<td>—</td><td>system sweep</td>");
     expect(systemRow).toContain(
-      '<time datetime="2026-10-01T10:00:00.000Z">2026-10-01T10:00:00.000Z</time></td><td>—</td>',
+      '<time datetime="2026-10-01T10:00:00.000Z">2026-10-01 10:00:00 UTC</time>',
     );
+  });
+
+  it("labels valid instants in UTC and keeps a null instant visible", () => {
+    const html = renderPage(
+      pageData({
+        rows: [...rows, { ...rows[0], id: 4, description: "broken instant", createdAt: null }],
+      }),
+    );
+    expect(html).toContain(
+      '<time datetime="2026-10-01T12:00:00.000Z">2026-10-01 12:00:00 UTC</time>',
+    );
+    expect(html).toContain("broken instant");
+    expect(html).toContain("Unrenderable time");
   });
 
   it("never renders activity properties values supplied on a row", () => {
