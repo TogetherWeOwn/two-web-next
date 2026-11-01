@@ -65,6 +65,7 @@ type Answer = {
   username: string | null;
   status: string;
   answeredAt: Date;
+  position: number | null;
 };
 export type Statement = { sql: string; params: unknown[]; fields: string[] };
 
@@ -99,6 +100,8 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
           username: orphan ? null : `${needle} ${i}`,
           status: statuses[s]!,
           answeredAt: new Date("2026-10-01T12:00:00Z"),
+          // Synthetic display ranks only; the separate PostgreSQL suite proves FIFO.
+          position: s === 1 ? i + 1 : null,
         });
       }
     // Same names and statuses on a different event must never affect totals/subjects.
@@ -110,6 +113,7 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
         username: needle,
         status: statuses[s]!,
         answeredAt: new Date("2026-10-02T12:00:00Z"),
+        position: s === 1 ? 1 : null,
       });
   }
   const statements: Statement[] = [];
@@ -162,16 +166,19 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
         mutations++;
         throw new Error(`unexpected fixture mutation: ${sql}`);
       }
-      if (sql.includes('from "events"') && !sql.includes('from "rsvps"')) return [{ ...row }];
-      if (!sql.includes('from "rsvps"')) throw new Error(`unsupported fixture read: ${sql}`);
-      const where = sql.split(" where ")[1]?.split(/ order by | limit /)[0] ?? "";
+      const unquoted = sql.replaceAll('"', "");
+      if (unquoted.includes("from events") && !unquoted.includes("from rsvps")) return [{ ...row }];
+      if (!unquoted.includes("from rsvps")) throw new Error(`unsupported fixture read: ${sql}`);
+      const ranked = unquoted.startsWith(
+        "select line.user_id, users.username, line.status, line.updated_at, line.position from (",
+      );
       const param = (re: RegExp) => {
-        const m = where.match(re);
+        const m = unquoted.match(re);
         return m ? params[Number(m[1]) - 1] : undefined;
       };
-      const event = param(/"events"\."event_key" = \$(\d+)/);
-      const status = param(/"rsvps"\."status" = \$(\d+)/);
-      const search = param(/"users"\."username" ilike \$(\d+)/i);
+      const event = param(/events\.event_key = \$(\d+)/);
+      const status = param(ranked ? /line\.status = \$(\d+)/ : /rsvps\.status = \$(\d+)/);
+      const search = param(/users\.username ilike \$(\d+)/i);
       if (event === undefined) throw new Error("fixture requires bound event predicate");
       let selected = answers.filter(
         (a) =>
@@ -180,8 +187,10 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
           (search === undefined || (a.username !== null && like(String(search), a.username))),
       );
       if (sql.startsWith("select count(*)")) return [{ n: selected.length }];
-      const order = sql.match(
-        /order by "rsvps"\."(status|updated_at)" (asc|desc), "rsvps"\."user_id"(?: asc)? limit/,
+      const order = unquoted.match(
+        ranked
+          ? /order by line\.(status|updated_at) (asc|desc)\s*, line\.user_id asc limit/
+          : /order by rsvps\.(status|updated_at) (asc|desc), rsvps\.user_id(?: asc)? limit/,
       );
       if (!order) throw new Error("fixture requires deterministic roster order");
       selected = selected.sort((a, b) => {
@@ -192,11 +201,21 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
       });
       const limit = sql.match(/ limit \$(\d+)/);
       const offset = sql.match(/ offset \$(\d+)/);
-      if (!limit) throw new Error("fixture refuses an unbounded roster page");
+      if (ranked ? !/ limit 100 offset \$\d+$/.test(sql) : !limit)
+        throw new Error("fixture refuses an unbounded roster page");
+      const size = ranked ? 100 : Number(params[Number(limit![1]) - 1]);
       const start = offset ? Number(params[Number(offset[1]) - 1]) : 0;
-      return selected
-        .slice(start, start + Number(params[Number(limit[1]) - 1]))
-        .map(({ eventKey: _eventKey, ...a }) => a);
+      return selected.slice(start, start + size).map(({ eventKey: _eventKey, position, ...a }) =>
+        ranked
+          ? {
+              user_id: a.userId,
+              username: a.username,
+              status: a.status,
+              updated_at: a.answeredAt,
+              position,
+            }
+          : a,
+      );
     },
   });
   return {
