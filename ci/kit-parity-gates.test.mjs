@@ -1188,7 +1188,7 @@ test("join contract proves every widget state, the flash view and hostile next",
     facade;
   const fallback =
     `<p class="strap" data-testid="join-widget-fallback">Live server preview is ` +
-    `unavailable — the join button above still works.</p>`;
+    `unavailable — Join with Discord still works.</p>`;
   const goodCases = [
     ["cold facade", shell(facade), "public, max-age=3600"],
     ["warm presence", shell(presence), "public, max-age=60"],

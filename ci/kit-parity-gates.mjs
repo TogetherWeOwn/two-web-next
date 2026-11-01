@@ -1307,7 +1307,7 @@ export function runUnitMode({ stdout = process.stdout, manifestSource: manifestO
     joinFacade;
   const joinFallback =
     `<p class="strap" data-testid="join-widget-fallback">Live server preview is ` +
-    `unavailable — the join button above still works.</p>`;
+    `unavailable — Join with Discord still works.</p>`;
   const joinCases = [
     ["unit/join cold facade", joinShell(joinFacade), "public, max-age=3600"],
     ["unit/join warm presence", joinShell(joinPresence), "public, max-age=60"],
