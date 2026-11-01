@@ -159,7 +159,9 @@ export function activityLogUrl(query: ActivityLogQuery, page: number): string {
  * Empty activity-log page links, mirroring rosterRecovery: clear drops the
  * subject and causer filters, and a later page offers page 1 of the same
  * filters. There is no count query, so an empty later page always offers
- * page 1. Both stay null while rows render.
+ * page 1. Both stay null while rows render. The cleared target is the
+ * constant activityLogUrl renders for empty filters on page 1, inlined so
+ * the Kit server chunk does not pay for a second URL builder call.
  */
 export function activityLogRecovery(
   query: ActivityLogQuery,
@@ -167,10 +169,7 @@ export function activityLogRecovery(
 ): { clearUrl: string | null; firstUrl: string | null } {
   if (rowCount > 0) return { clearUrl: null, firstUrl: null };
   return {
-    clearUrl:
-      query.subject || query.causer
-        ? activityLogUrl({ subject: "", causer: "", page: 1 }, 1)
-        : null,
+    clearUrl: query.subject || query.causer ? "/admin/activity-log?page=1" : null,
     firstUrl: query.page > 1 ? activityLogUrl(query, 1) : null,
   };
 }
