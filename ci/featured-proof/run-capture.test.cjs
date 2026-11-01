@@ -160,12 +160,12 @@ const FEATURED_WORKFLOW_PATH = path.join(
 );
 
 function extractScopeGlobs(workflowText) {
-  const marker = 'bash ci/path-scope.sh "$RUNNER_TEMP';
+  const marker = 'bash "$RUNNER_TEMP/trusted-scope/path-scope.sh" "$RUNNER_TEMP';
   const begin = workflowText.indexOf(marker);
   assert.ok(begin >= 0, 'featured scope invocation exists');
   const separator = workflowText.indexOf('--', begin);
   assert.ok(separator >= 0, 'featured scope glob separator exists');
-  const redirect = workflowText.indexOf('>>', separator);
+  const redirect = workflowText.indexOf('>', separator);
   const section = workflowText.slice(separator, redirect >= 0 ? redirect : undefined);
   const globs = [];
   for (const match of section.matchAll(/"([^"]+)"|'([^']+)'/g)) {

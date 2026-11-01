@@ -87,6 +87,12 @@ requests per size; the labels are the durable record behind it.
 ### Change-gated CI and `ci-ok`
 
 Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
+`scope` jobs (in `ci.yml` and the workflows that mirror it) fetch the
+changed-file list and the base commit's scope scripts in the only step that
+holds a token, then run those base-branch scripts in a token-free step and
+publish only validated verdicts: every expected key exactly once, `true` or
+`false`. Fast-pass claims (`docs_only`, `skip_e2e`, `full`) are re-derived
+from the file list and only ever downgraded toward running more. The
 `scope` job in `ci.yml` classifies every pull request into areas — `app`
 (served code, assets, tests, journeys), `worker` (dispatch configs, the Tail
 worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,

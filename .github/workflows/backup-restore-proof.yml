@@ -58,12 +58,34 @@ jobs:
         if: github.event_name == 'pull_request'
         with:
           persist-credentials: false
-      - id: scope
+      # Token boundary (mirrors ci.yml): this is the only step that holds
+      # GH_TOKEN, and it runs no repository code. It fetches the changed-file
+      # list and the scope scripts as of the PR's base commit, so
+      # classification below executes trusted code instead of the PR tree's
+      # copy of the script.
+      - name: Fetch changed-file list and base scope scripts
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
+          mkdir -p "$RUNNER_TEMP/trusted-scope"
+          for script in ci/change-scope.sh ci/e2e-test-helpers.mjs; do
+            gh api "repos/$REPO/contents/$script?ref=$BASE_SHA" \
+              -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/trusted-scope/${script##*/}"
+          done
+      # No token in this step. It runs the base-branch scope script and
+      # publishes only validated verdicts: each expected key exactly once,
+      # true or false, nothing else. Fast-pass claims are re-derived from the
+      # changed-file list and only ever downgraded toward running more.
+      - id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
           CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
           DRAFT: ${{ github.event.pull_request.draft }}
         run: |
@@ -80,9 +102,53 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
-            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
-          bash ci/change-scope.sh "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" >> "$GITHUB_OUTPUT"
+          bash "$RUNNER_TEMP/trusted-scope/change-scope.sh" "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" > "$RUNNER_TEMP/scope-verdict.txt"
+          keys="docs_only skip_e2e app worker db full draft"
+          for key in $keys; do
+            count=$(grep -c "^$key=" "$RUNNER_TEMP/scope-verdict.txt") || count=0
+            if [ "$count" != 1 ]; then
+              echo "::error::scope verdict for $key is missing or duplicated; failing closed."
+              exit 1
+            fi
+            value=$(sed -n "s/^$key=//p" "$RUNNER_TEMP/scope-verdict.txt")
+            case "$value" in
+              true|false) ;;
+              *) echo "::error::scope verdict for $key is not true or false; failing closed."; exit 1 ;;
+            esac
+            printf -v "verdict_$key" '%s' "$value"
+          done
+          lines=$(wc -l < "$RUNNER_TEMP/scope-verdict.txt")
+          if [ "$lines" != 7 ]; then
+            echo "::error::unexpected scope verdict output; failing closed."
+            exit 1
+          fi
+          docs_only=$verdict_docs_only
+          full=$verdict_full
+          while IFS=$'\t' read -r name previous || [ -n "$name" ]; do
+            for path in "$name" ${previous:+"$previous"}; do
+              case "$path" in
+                .github/*|ci/change-scope.sh|ci/e2e-test-helpers.mjs) full=true ;;
+              esac
+              case "$path" in
+                docs/*) ;;
+                */*) docs_only=false ;;
+                *.md) ;;
+                *) docs_only=false ;;
+              esac
+            done
+          done < "$RUNNER_TEMP/pr-files.tsv"
+          if [ "$docs_only" != "$verdict_docs_only" ] || [ "$full" != "$verdict_full" ]; then
+            echo "::warning::scope verdict disagreed with the changed-file list; publishing the conservative verdict."
+          fi
+          {
+            echo "docs_only=$docs_only"
+            echo "skip_e2e=$verdict_skip_e2e"
+            echo "app=$verdict_app"
+            echo "worker=$verdict_worker"
+            echo "db=$verdict_db"
+            echo "full=$full"
+            echo "draft=$verdict_draft"
+          } >> "$GITHUB_OUTPUT"
 
   proof:
     name: backup-restore-proof
