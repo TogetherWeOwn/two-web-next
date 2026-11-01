@@ -484,12 +484,18 @@ series cancel or repeat-rule editor.
 
 ### Read the RSVP roster
 
-The event edit screen shows **RSVPs (count)** with **Member**, **Status**, and
-**Answered** (UTC), newest responses first by default. **Search members** with
-**Search** matches username text case-insensitively; **Status** and **Answered**
-column links toggle sorting while retaining the search. The count is the number
+The event edit screen shows **RSVPs (count)** with **Member**, **Status**,
+**Waitlist**, and **Answered** (UTC), newest responses first by default.
+**Search members** with **Search** matches username text case-insensitively;
+**Status**, **Waitlist**, and **Answered** column links toggle sorting while
+retaining the search. The count is the number
 of matching answers (all statuses, not just going seats), so searching can
-reduce it. The roster shows 100 answers per page with a "Showing a-b of N"
+reduce it. The **Waitlist** column shows each waitlisted member's global
+position in line (`#1` is next to be promoted); other answers show a dash.
+Positions are stable: searching, filtering, paging, or sorting never renumbers
+the queue, so a position quoted to a member stays valid while you work the
+roster. Sorting by **Waitlist** lists the queue head first (last in descending
+order); unranked answers always sort last. The roster shows 100 answers per page with a "Showing a-b of N"
 line; **Previous** and **Next** keep the search and sort and return to the
 roster section. Sorting or searching again starts back on page 1. Save event
 edits before these controls reload the page. This is a read-only roster: no adding/removing answers,

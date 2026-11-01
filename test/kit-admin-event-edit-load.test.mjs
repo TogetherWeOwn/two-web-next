@@ -352,7 +352,12 @@ describe("Kit admin event-edit load: guard and failure wiring", () => {
     expect(data.view.showPublish).toBe(true);
     expect(data.view.roster.total).toBe(1);
     expect(data.view.roster.entries).toEqual([
-      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
+      {
+        member: "mod",
+        status: "going",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
     ]);
     for (const entry of data.view.roster.entries) {
       expect(entry).not.toHaveProperty("userId");

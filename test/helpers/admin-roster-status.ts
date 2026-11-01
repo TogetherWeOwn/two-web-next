@@ -189,11 +189,24 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
       if (sql.startsWith("select count(*)")) return [{ n: selected.length }];
       const order = unquoted.match(
         ranked
-          ? /order by line\.(status|updated_at) (asc|desc)\s*, line\.user_id asc limit/
+          ? /order by line\.(status|updated_at|position) (asc|desc)( nulls last)?\s*, line\.user_id asc limit/
           : /order by rsvps\.(status|updated_at) (asc|desc), rsvps\.user_id(?: asc)? limit/,
       );
       if (!order) throw new Error("fixture requires deterministic roster order");
       selected = selected.sort((a, b) => {
+        // The waitlist sort is nulls-last in both directions, like the SQL.
+        if (order[1]!.startsWith("position")) {
+          if (a.position === null || b.position === null)
+            return (
+              (a.position === null ? 1 : 0) - (b.position === null ? 1 : 0) ||
+              a.userId.localeCompare(b.userId)
+            );
+          const flip = unquoted.includes("line.position desc") ? -1 : 1;
+          return (
+            (a.position < b.position ? -1 : a.position > b.position ? 1 : 0) * flip ||
+            a.userId.localeCompare(b.userId)
+          );
+        }
         const left = order[1] === "status" ? a.status : a.answeredAt.toISOString();
         const right = order[1] === "status" ? b.status : b.answeredAt.toISOString();
         const primary = left < right ? -1 : left > right ? 1 : 0;

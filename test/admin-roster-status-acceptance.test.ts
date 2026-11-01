@@ -51,7 +51,7 @@ function displayedRows(html: string) {
   const body = rosterHtml(html).match(/<tbody>([\s\S]*?)<\/tbody>/)![1]!;
   return [...body.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)]
     .map((r) => [...r[1]!.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map((c) => text(c[1]!)))
-    .filter((r) => r.length === 3);
+    .filter((r) => r.length === 4);
 }
 function normalizedLink(href: string) {
   const url = new URL(href, "https://next.example.test");
@@ -71,7 +71,7 @@ function assertBounded(fixture: ReturnType<typeof rosterDb>) {
   );
   expect(reads[1]!.sql).toMatch(/ limit 100 offset \$\d+$/);
   expect(reads[1]!.sql).toMatch(
-    /order by line\.(?:updated_at|status) (?:asc|desc)\s*, line\.user_id asc limit/,
+    /order by line\.(?:updated_at|status) (?:asc|desc)\s*, line\.user_id asc limit|order by line\.position (?:asc|desc) nulls last, line\.user_id asc limit/,
   );
   expect(
     fixture.statements.filter(
@@ -410,6 +410,100 @@ for (const renderer of ["Hono", "Kit"] as const) {
       expect(normalizedLink(clear!.href).has("roster_status")).toBe(false);
       expect(fixture.audits).toEqual([]);
       assertBounded(fixture);
+    });
+
+    it("WQ-R01 waitlisted rows show their global queue rank on the first facet page", async () => {
+      const fixture = rosterDb();
+      const response = await readRoster(
+        renderer,
+        fixture,
+        qs({ roster_status: "waitlisted" }),
+        kit,
+      );
+      expect(response.status).toBe(200);
+      const rows = displayedRows(await response.text());
+      expect(rows).toHaveLength(100);
+      expect(rows.map((r) => r[2])).toEqual(Array.from({ length: 100 }, (_, i) => `#${i + 1}`));
+      assertBounded(fixture);
+    });
+
+    it("WQ-R02 a member search never renumbers the queue it narrows", async () => {
+      const fixture = rosterDb();
+      const facet = displayedRows(
+        await (
+          await readRoster(renderer, fixture, qs({ roster_status: "waitlisted" }), kit)
+        ).text(),
+      );
+      const searched = displayedRows(
+        await (
+          await readRoster(
+            renderer,
+            fixture,
+            qs({ roster_status: "waitlisted", roster_q: "Team" }),
+            kit,
+          )
+        ).text(),
+      );
+      expect(searched).toHaveLength(100);
+      expect(searched.map((r) => r[2])).toEqual(facet.map((r) => r[2]));
+    });
+
+    it("WQ-R03 non-waitlisted rows show a dash, never a queue number", async () => {
+      const fixture = rosterDb();
+      const response = await readRoster(renderer, fixture, "", kit);
+      expect(response.status).toBe(200);
+      const rows = displayedRows(await response.text());
+      expect(rows).toHaveLength(100);
+      for (const row of rows) {
+        if (row[1] === "waitlisted") expect(row[2]).toMatch(/^#\d+$/);
+        else expect(row[2]).toBe("—");
+      }
+      // The nameless legacy import sits on the last page, labeled and unranked.
+      const last = await readRoster(renderer, rosterDb(), qs({ roster_page: "5" }), kit);
+      const orphans = displayedRows(await last.text()).filter((r) => r[0] === "Unknown member");
+      expect(orphans).toHaveLength(1);
+      expect(orphans[0]![2]).toBe("—");
+      assertBounded(fixture);
+    });
+
+    it("WQ-R04 the waitlist sort header orders by queue rank with nulls last", async () => {
+      const fixture = rosterDb();
+      const desc = await readRoster(
+        renderer,
+        fixture,
+        qs({ roster_status: "waitlisted", roster_sort: "waitlist", roster_order: "desc" }),
+        kit,
+      );
+      expect(desc.status).toBe(200);
+      const descHtml = await desc.text();
+      const descRows = displayedRows(descHtml);
+      expect(descRows.map((r) => r[2])[0]).toBe("#105");
+      const ascFixture = rosterDb();
+      const asc = await readRoster(
+        renderer,
+        ascFixture,
+        qs({ roster_status: "waitlisted", roster_sort: "waitlist", roster_order: "asc" }),
+        kit,
+      );
+      expect(displayedRows(await asc.text()).map((r) => r[2])[0]).toBe("#1");
+      assertBounded(ascFixture);
+      const section = rosterHtml(await (await readRoster(renderer, rosterDb(), "", kit)).text());
+      const header = links(section).find(
+        (l) => normalizedLink(l.href).get("roster_sort") === "waitlist",
+      );
+      expect(header?.label).toMatch(/waitlist/i);
+      const active = links(rosterHtml(descHtml)).find(
+        (l) => normalizedLink(l.href).get("roster_sort") === "waitlist",
+      );
+      expect(normalizedLink(active!.href).get("roster_order")).toBe("asc");
+      assertBounded(fixture);
+    });
+
+    it("WQ-R05 the empty roster spans all four columns", async () => {
+      const fixture = rosterDb({ noAnswers: true });
+      const response = await readRoster(renderer, fixture, "roster_status=going", kit);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('colspan="4"');
     });
 
     it("RAF-C02 CONTROL all answers and bounded literal member search still work", async () => {
