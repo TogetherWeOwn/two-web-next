@@ -28,9 +28,17 @@ describe("admin chronology adapter", () => {
     "2028-02-29T00:01:00.123Z",
   ])("keeps the exact UTC instant across the DST boundary for %s", (value) => {
     const iso = new Date(value).toISOString();
+    const [day, time = ""] = iso.split("T");
     expect(formatAdminTime(value)).toEqual({
       iso,
-      label: `${iso.slice(0, 19).replace("T", " ")} UTC`,
+      label: `${day} ${time.slice(0, 8)} UTC`,
+    });
+  });
+
+  it("keeps the seconds on expanded-year instants", () => {
+    expect(formatAdminTime("+010000-01-01T12:34:56.789Z")).toEqual({
+      iso: "+010000-01-01T12:34:56.789Z",
+      label: "+010000-01-01 12:34:56 UTC",
     });
   });
 
@@ -53,6 +61,12 @@ describe("admin chronology adapter", () => {
     " ",
     "not-a-timestamp",
     "2026-10-01T12:34:56",
+    // Impossible calendar dates V8 would normalize into a different instant.
+    "2026-02-30T12:34:56Z",
+    "2026-02-29T00:00:00Z",
+    "2026-04-31T00:00:00Z",
+    "2026-02-30T12:34:56+02:00",
+    "2026-10-01T25:00:00Z",
     "1",
     true,
     {},
