@@ -726,6 +726,15 @@ test("allows no runtime or PUBLIC rights on the migration ledger objects", () =>
       privilege_type: "SELECT",
       is_grantable: false,
     },
+    // The catalog query flags effective runtime access (inherited, assumable,
+    // or runtime-administered membership); the validator refuses the flag.
+    {
+      object_name: "__drizzle_migrations",
+      grantee: "ledger_group",
+      privilege_type: "OWNER",
+      is_grantable: true,
+      runtime_access: true,
+    },
   ]) {
     assert.match(
       validateLedgerAclRows([row]).join("\n"),
