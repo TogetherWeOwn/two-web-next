@@ -672,6 +672,36 @@ line: `-- rollback-safe: <reason>`; reviewers check that note. The deploy job
 then confirms the recorded version is still the single 100% deployment and
 still carries its required secrets before any production mutation.
 
+#### Regression check against production
+
+Before the deploy job, `deploy-production` runs two more gates
+(`ci/production-deploy-gate.mjs`):
+
+- `staging-soak` (staging credentials, no Environment binding) finds the
+  candidate's staging Worker versions by commit tag — every tagged version
+  counts, since a deploy retry tags twice — and sums their Workers
+  invocation errors since the oldest deployed (at most 24 hours). The job
+  only reads (versions list, analytics query) and never mutates, but its
+  token is the staging deploy token, not a read-only credential.
+- `production-regression` (production Environment as the reviewer
+  checkpoint, analytics via the repo-level read-only token) downloads the
+  `staging-passive-ledger-<run>` artifact that `e2e-staging` recorded for the
+  candidate (`bin/smoke.mjs --ledger` and the GET-only guest journeys in
+  `e2e/watch` against staging), runs the same set against the apex with the
+  candidate's checkers, and refuses promotion when a check that passes on
+  production did not pass on staging, or when the staging soak error rate is
+  above 1.5× production's last 24 hours (floor 1%; under 20 staging requests
+  the rate cannot be judged and passes). A candidate without the ledger
+  artifact (an `e2e-staging` run that predates it, or an expired artifact)
+  is refused; roll back with `rollback-production` instead of redeploying it.
+
+Automatic promotion, including an explicit-SHA dispatch, also requires the
+candidate's `e2e-staging` pass to be at least 30 minutes old. In reviewer
+mode the approval stands in for the resolver but not for the soak floor:
+when a staging pass for the candidate exists, it must still have soaked 30
+minutes; a promotion with no staging evidence yet rides on the reviewer's
+approval alone.
+
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group
 (non-cancelling). The lock covers only the two mutating jobs, never

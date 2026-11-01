@@ -153,9 +153,129 @@ jobs:
           GITHUB_TOKEN: ${{ github.token }}
           DEPLOY_SHA: ${{ steps.target.outputs.sha }}
 
+  staging-soak:
+    name: staging-soak
+    # Least privilege with no approval wait: the candidate's staging Worker
+    # versions (tagged with its commit; every tagged version counts) and
+    # their invocation errors since the oldest deployed, from the staging
+    # account's Workers API and analytics. Staging credentials only and no
+    # Environment binding, so this starts at once in reviewer mode too. The
+    # job only reads (versions list, analytics query) and never mutates, but
+    # the token is the staging deploy token, not a read-only credential; the
+    # production comparison runs in regression below.
+    needs: preflight
+    if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    outputs:
+      requests: ${{ steps.soak.outputs.requests }}
+      errors: ${{ steps.soak.outputs.errors }}
+    steps:
+      # Tip checkout, like the preflight checks: an older candidate cannot
+      # skip the gate with a script that lacks this mode.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout: |
+            /ci/
+            /wrangler.jsonc
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Measure the candidate's staging soak error rate
+        id: soak
+        run: node ci/production-deploy-gate.mjs --staging-soak
+        env:
+          DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+
+  regression:
+    name: production-regression
+    # Regression check against production (ci/production-deploy-gate.mjs
+    # --regression): run the passive set (bin/smoke.mjs routes and the GET-only
+    # guest journeys) against production with the candidate's own checkers,
+    # and refuse when a check that passes on production did not pass on
+    # staging for the candidate (its e2e-staging staging-passive ledgers), or
+    # when the staging soak error rate exceeds 1.5x production's last 24 hours
+    # (1% floor). GET-only, no auth, no writes.
+    needs: [preflight, staging-soak]
+    if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
+    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 25
+    # The production Environment binding stays as the reviewer checkpoint
+    # before the deploy job (and still supplies the production account id),
+    # but analytics reads use the repo-level read-only token, so this job
+    # never holds the production deployment token.
+    environment:
+      name: production
+      url: https://togetherweown.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ needs.preflight.outputs.sha }}
+          persist-credentials: false
+      # The gate itself runs from the tip, like the preflight checks.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: gate-tip
+          persist-credentials: false
+          sparse-checkout: |
+            /ci/
+            /wrangler.jsonc
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Fetch the candidate's staging passive ledgers
+        run: node gate-tip/ci/production-deploy-gate.mjs --fetch-passive-ledgers "$RUNNER_TEMP/staging"
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+      - name: Passive set against production (ledgers only)
+        # Exit codes are reported in the log; the gate below judges the
+        # ledgers against the candidate's staging outcomes.
+        run: |
+          mkdir -p "$RUNNER_TEMP/production"
+          set +e
+          node bin/smoke.mjs https://togetherweown.com --allow-indexable --ledger "$RUNNER_TEMP/production/smoke.json"
+          echo "production passive smoke exit $?"
+          npx playwright test --config playwright.watch.config.ts
+          # Comment line above the echo: ci/test-inventory.mjs stops expanding
+          # a playwright invocation at a comment or blank line, so this echo
+          # is never read as a spec filter. Keep it: the gate below judges
+          # the ledgers, and this exit line is the log signal.
+          echo "production guest journeys exit $?"
+        env:
+          WATCH_ORIGIN: https://togetherweown.com
+          PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ runner.temp }}/production/journeys.json
+          # Both sides skip the dead-letter gate: retained queue_failed_jobs
+          # rows are database history, not a property of either version.
+          SMOKE_ALLOW_MISSING_BASELINE: "1"
+      - name: Refuse a regression against production
+        run: node gate-tip/ci/production-deploy-gate.mjs --regression
+        env:
+          PRODUCTION_SMOKE_LEDGER: ${{ runner.temp }}/production/smoke.json
+          PRODUCTION_JOURNEYS: ${{ runner.temp }}/production/journeys.json
+          STAGING_SMOKE_LEDGER: ${{ runner.temp }}/staging/smoke.json
+          STAGING_JOURNEYS: ${{ runner.temp }}/staging/journeys.json
+          STAGING_SOAK_REQUESTS: ${{ needs.staging-soak.outputs.requests }}
+          STAGING_SOAK_ERRORS: ${{ needs.staging-soak.outputs.errors }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_ANALYTICS_READ_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+
   deploy-production:
     name: deploy-production
-    needs: preflight
+    needs: [preflight, regression]
     # Clean skip when there is nothing to promote (automatic run with no
     # soaked green) or production already serves the target: preflight
     # succeeds with an empty sha or already_live=true, and this job stands

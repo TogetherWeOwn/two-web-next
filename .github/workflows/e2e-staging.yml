@@ -89,6 +89,75 @@ jobs:
        github.event.workflow_run.head_repository.full_name == github.repository)
     uses: ./.github/workflows/zap-staging.yml
 
+  # Passive set for the promotion regression check (G1): bin/smoke.mjs and
+  # the GET-only guest journeys (e2e/watch) against staging, with the deployed
+  # commit's own checkers, recorded as ledgers. deploy-production.yml runs the
+  # same set against production before it promotes this commit and refuses
+  # when a check that passes on production did not pass here. The outcome is
+  # evidence, not a verdict: a failing check here fails promotion only when it
+  # passes on production, so the job stays green and always uploads.
+  staging-passive:
+    name: staging-passive
+    needs: scope
+    if: >-
+      needs.scope.outputs.skip_e2e != 'true' && (github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository))
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci --include=dev --no-audit --no-fund
+      - name: Cache Playwright Chromium
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+      - name: Passive set against staging (ledgers only)
+        # Records the deployed commit with the ledgers so the promotion can
+        # match them to its candidate. Exit codes are reported in the log; the
+        # promotion judges the ledgers against production.
+        run: |
+          mkdir -p passive
+          printf '%s\n' "$DEPLOYED_SHA" > passive/commit
+          set +e
+          node bin/smoke.mjs https://next.togetherweown.com --ledger passive/smoke.json
+          echo "staging passive smoke exit $?"
+          npx playwright test --config playwright.watch.config.ts
+          # Comment line above the echo: ci/test-inventory.mjs stops expanding
+          # a playwright invocation at a comment or blank line, so this echo
+          # is never read as a spec filter. Keep it: the gate below judges
+          # the ledgers, and this exit line is the log signal.
+          echo "staging guest journeys exit $?"
+        env:
+          DEPLOYED_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          WATCH_ORIGIN: https://next.togetherweown.com
+          PLAYWRIGHT_JSON_OUTPUT_FILE: passive/journeys.json
+          # Both sides skip the dead-letter gate: retained queue_failed_jobs
+          # rows are database history, not a property of either version.
+          SMOKE_ALLOW_MISSING_BASELINE: "1"
+      - name: Staging passive ledger artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: staging-passive-ledger-${{ github.run_id }}
+          path: passive/
+          # A missing ledger refuses promotion of this commit there, not here:
+          # a red e2e-staging run would also block every older candidate.
+          if-no-files-found: warn
+          retention-days: 30
+
   staging-journeys:
     name: staging-journeys
     needs: scope

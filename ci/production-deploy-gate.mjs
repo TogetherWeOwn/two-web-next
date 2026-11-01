@@ -1,9 +1,9 @@
 import { execFileSync } from "node:child_process";
-import { appendFileSync, readFileSync } from "node:fs";
-import { resolve } from "node:path";
+import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { APEX_ORIGIN } from "./operator-constants.mjs";
-import { deployTitle, e2eTitle } from "./resolve-promotion-sha.mjs";
+import { deployTitle, e2eTitle, PROMOTION_SOAK_MS } from "./resolve-promotion-sha.mjs";
 import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
@@ -322,9 +322,20 @@ function requireExecutedStagingQuality(jobs, runId) {
 // the deployed SHA (deploy <sha>, e2e-staging deploy <sha>); evidence joins on
 // that. The newest run per title decides, and the e2e run must have actually
 // passed staging-journeys (it concludes success with the job skipped).
+// Automatic promotion, including an explicit-SHA dispatch, also requires the
+// e2e-staging pass to have soaked for PROMOTION_SOAK_MS (30 minutes), the same
+// floor the automatic resolver applies. A reviewer approval stands in for the
+// resolver but not for the soak floor: requireStagingSoakIfEvident below still
+// ages a staging pass the reviewer approved early.
 export async function requireStagingEvidence(
   { repository, sha },
-  { token, fetchImpl = fetch, workflows = stagingEvidenceWorkflows, pages = 3 } = {},
+  {
+    token,
+    fetchImpl = fetch,
+    workflows = stagingEvidenceWorkflows,
+    pages = 3,
+    nowMs = Date.now(),
+  } = {},
 ) {
   async function get(path) {
     const response = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
@@ -370,6 +381,12 @@ export async function requireStagingEvidence(
       throw new Error(`Latest ${file} run on the deployment SHA is not successful`);
     }
     if (file === "e2e-staging.yml") {
+      const completedAt = Date.parse(latest.updated_at ?? "");
+      if (!Number.isFinite(completedAt) || nowMs - completedAt < PROMOTION_SOAK_MS) {
+        throw new Error(
+          `e2e-staging.yml run ${latest.id} has not soaked ${PROMOTION_SOAK_MS / 60_000} minutes since it passed`,
+        );
+      }
       const { jobs = [] } = await get(`/actions/runs/${latest.id}/jobs?per_page=100`);
       if (jobs.find((job) => job.name === "staging-journeys")?.conclusion !== "success") {
         throw new Error(`e2e-staging.yml run ${latest.id} did not pass staging-journeys`);
@@ -379,6 +396,429 @@ export async function requireStagingEvidence(
     evidence.push({ workflow: file, runId: latest.id });
   }
   return evidence;
+}
+
+// Reviewer-mode soak floor: a reviewer approval stands in for the automatic
+// resolver, but it must not shortcut the 30-minute soak when staging already
+// passed the candidate. When no e2e-staging run names the SHA yet (a
+// reviewer-approved promotion without staging evidence), there is nothing to
+// age and the reviewer's approval is the gate.
+export async function requireStagingSoakIfEvident(
+  { repository, sha },
+  { token, fetchImpl = fetch, nowMs = Date.now() } = {},
+) {
+  const title = e2eTitle(sha);
+  const passed = [];
+  for (let page = 1; page <= 3; page += 1) {
+    const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
+    const response = await fetchImpl(
+      `https://api.github.com/repos/${repository}/actions/workflows/e2e-staging.yml/runs?${query}`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+          Accept: "application/vnd.github+json",
+          "X-GitHub-Api-Version": "2022-11-28",
+        },
+        redirect: "error",
+        signal: AbortSignal.timeout(10_000),
+      },
+    );
+    if (!response.ok) {
+      throw new Error(`Staging soak lookup failed (HTTP ${response.status})`);
+    }
+    const batch = (await response.json()).workflow_runs ?? [];
+    for (const run of batch.filter((run) => run.display_title === title)) {
+      if (
+        !Number.isSafeInteger(run.id) ||
+        run.head_branch !== "main" ||
+        run.path !== ".github/workflows/e2e-staging.yml" ||
+        run.head_repository?.full_name !== repository
+      ) {
+        throw new Error("e2e-staging.yml evidence revision/branch/workflow mismatch");
+      }
+      if (run.status === "completed" && run.conclusion === "success") passed.push(run);
+    }
+    if (batch.length < 100) break;
+  }
+  if (!passed.length) return null;
+  const latest = passed.reduce((a, b) => (b.id > a.id ? b : a));
+  const completedAt = Date.parse(latest.updated_at ?? "");
+  if (!Number.isFinite(completedAt) || nowMs - completedAt < PROMOTION_SOAK_MS) {
+    throw new Error(
+      `e2e-staging.yml run ${latest.id} has not soaked ${PROMOTION_SOAK_MS / 60_000} minutes since it passed`,
+    );
+  }
+  return { runId: latest.id };
+}
+
+// The ledgers are two small JSON files; anything larger is not the passive
+// set and is refused before it touches disk.
+export const PASSIVE_LEDGER_MAX_BYTES = 8 * 1024 * 1024;
+
+// Regression check against production (promotion gate G1). Before
+// promotion, deploy-production.yml runs the passive set (bin/smoke.mjs routes
+// and the GET-only guest journeys in e2e/watch) against production with the
+// candidate's own checkers. e2e-staging.yml ran the same set against staging
+// for the candidate and kept the ledgers. Every check that passes on
+// production must have passed on staging: a check that production passes and
+// the candidate failed or skipped is a regression.
+export const REGRESSION_LEDGER_ARTIFACT = (runId) => `staging-passive-ledger-${runId}`;
+
+// bin/smoke.mjs --ledger output: { ledger: "smoke/1", checks: [{ check, status }] }.
+export function smokeOutcomes(ledger) {
+  if (ledger?.ledger !== "smoke/1" || !Array.isArray(ledger.checks)) {
+    throw new Error("Smoke ledger is missing or not smoke/1");
+  }
+  const outcomes = new Map();
+  for (const entry of ledger.checks) {
+    if (typeof entry?.check !== "string") throw new Error("Smoke ledger entry has no check name");
+    const status = { pass: "passed", fail: "failed", skip: "skipped" }[entry.status];
+    if (!status) throw new Error(`Smoke ledger entry ${entry.check} has an unknown status`);
+    // A route probed twice keeps its worst outcome.
+    if (outcomes.get(`smoke ${entry.check}`) !== "failed") {
+      outcomes.set(`smoke ${entry.check}`, status);
+    }
+  }
+  return outcomes;
+}
+
+// Playwright JSON reporter output: nested suites of specs, each with tests
+// carrying a final status (expected, unexpected, flaky, skipped).
+export function journeyOutcomes(report) {
+  if (!Array.isArray(report?.suites)) throw new Error("Journey report has no suites");
+  const outcomes = new Map();
+  const walk = (suite, path) => {
+    const here =
+      suite.title && !/\.spec\.[cm]?[jt]s$/.test(suite.title) ? [...path, suite.title] : path;
+    for (const spec of suite.specs ?? []) {
+      for (const test of spec.tests ?? []) {
+        const name = ["journey", ...here, spec.title, test.projectName].filter(Boolean).join(" › ");
+        const status =
+          test.status === "expected" || test.status === "flaky"
+            ? "passed"
+            : test.status === "skipped"
+              ? "skipped"
+              : "failed";
+        outcomes.set(name, status);
+      }
+    }
+    for (const child of suite.suites ?? []) walk(child, here);
+  };
+  for (const suite of report.suites) walk(suite, []);
+  return outcomes;
+}
+
+export function regressionsAgainstProduction(production, staging) {
+  const regressions = [];
+  for (const [name, outcome] of production) {
+    if (outcome === "passed" && staging.get(name) !== "passed") {
+      regressions.push(`${name} (staging ${staging.get(name) ?? "missing"})`);
+    }
+  }
+  return regressions;
+}
+
+// Soak error rate: the candidate's staging version since it deployed, against
+// production's last 24 hours. Workers invocation errors, the same signal the
+// gradual-promote and post-deploy watch gates judge. Refuse when the staging
+// rate exceeds 1.5x production's, or the absolute floor when that is higher;
+// a staging sample under the request floor cannot be judged and passes.
+export const SOAK_ERROR_RATE_MARGIN = 1.5;
+export const SOAK_ERROR_RATE_FLOOR = 0.01;
+export const SOAK_ERROR_RATE_MIN_REQUESTS = 20;
+export const PRODUCTION_BASELINE_MS = 24 * 60 * 60 * 1000;
+
+export function evaluateSoakErrorRate({ staging, production }) {
+  for (const sample of [staging, production]) {
+    if (
+      !Number.isSafeInteger(sample?.requests) ||
+      !Number.isSafeInteger(sample?.errors) ||
+      sample.requests < 0 ||
+      sample.errors < 0 ||
+      sample.errors > sample.requests
+    ) {
+      throw new Error("Error-rate samples need non-negative integer requests and errors");
+    }
+  }
+  const productionRate = production.requests ? production.errors / production.requests : 0;
+  const limit =
+    production.requests >= SOAK_ERROR_RATE_MIN_REQUESTS
+      ? Math.max(productionRate * SOAK_ERROR_RATE_MARGIN, SOAK_ERROR_RATE_FLOOR)
+      : SOAK_ERROR_RATE_FLOOR;
+  const stagingRate = staging.requests ? staging.errors / staging.requests : 0;
+  const verdict =
+    staging.requests < SOAK_ERROR_RATE_MIN_REQUESTS
+      ? "insufficient"
+      : stagingRate > limit
+        ? "fail"
+        : "pass";
+  return { verdict, stagingRate, productionRate, limit };
+}
+
+const SCRIPT_NAME_PATTERN = /^[a-z0-9][a-z0-9-]{0,62}$/;
+
+export function buildScriptErrorQuery({ accountId, scriptName, versionId, sinceIso, untilIso }) {
+  if (!/^[0-9a-f]{32}$/.test(accountId ?? "")) throw new Error("Invalid Cloudflare account id");
+  if (!SCRIPT_NAME_PATTERN.test(scriptName ?? "")) throw new Error("Invalid Worker name");
+  if (versionId !== undefined) assertRollbackVersionId(versionId);
+  const filter = {
+    scriptName,
+    datetime_geq: sinceIso,
+    datetime_leq: untilIso,
+    ...(versionId === undefined ? {} : { scriptVersion: versionId }),
+  };
+  return {
+    query: `query ($accountTag: String!, $filter: AccountWorkersInvocationsAdaptiveFilter_InputObject!) {
+  viewer { accounts(filter: { accountTag: $accountTag }) {
+    workersInvocationsAdaptive(limit: 10000, filter: $filter) { sum { requests errors } }
+  } }
+}`,
+    variables: { accountTag: accountId, filter },
+  };
+}
+
+export function sumScriptErrors(payload) {
+  if (Array.isArray(payload?.errors) && payload.errors.length) {
+    throw new Error("Workers analytics query returned errors");
+  }
+  const rows = payload?.data?.viewer?.accounts?.[0]?.workersInvocationsAdaptive;
+  if (!Array.isArray(rows)) throw new Error("Workers analytics response has no invocation rows");
+  let requests = 0;
+  let errors = 0;
+  for (const row of rows) {
+    const r = row?.sum?.requests;
+    const e = row?.sum?.errors;
+    if (!Number.isSafeInteger(r) || !Number.isSafeInteger(e) || r < 0 || e < 0) {
+      throw new Error("Workers analytics row has invalid sums");
+    }
+    requests += r;
+    errors += e;
+  }
+  return { requests, errors };
+}
+
+export async function scriptErrorSample(
+  { accountId, scriptName, versionId, sinceIso, untilIso, token },
+  { fetchImpl = fetch } = {},
+) {
+  const response = await fetchImpl("https://api.cloudflare.com/client/v4/graphql", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${token}` },
+    body: JSON.stringify(
+      buildScriptErrorQuery({ accountId, scriptName, versionId, sinceIso, untilIso }),
+    ),
+    signal: AbortSignal.timeout(30_000),
+  });
+  if (!response.ok) throw new Error(`Workers analytics query failed (HTTP ${response.status})`);
+  return sumScriptErrors(await response.json());
+}
+
+// The candidate's staging Worker versions: staging deploys tag each version
+// with the deployed commit (deploy.yml `wrangler deploy --tag <sha>`). Read
+// from the Workers versions API so the job needs no wrangler install. A
+// deploy retry tags twice, and every tagged version served the candidate, so
+// all matches count, oldest first; no tagged version fails closed.
+export async function stagingCandidateVersions(
+  { accountId, token, sha },
+  { fetchImpl = fetch, pages = 5 } = {},
+) {
+  if (!/^[0-9a-f]{32}$/.test(accountId ?? "")) throw new Error("Invalid Cloudflare account id");
+  if (!/^[0-9a-f]{40}$/.test(sha ?? "")) throw new Error("DEPLOY_SHA must be a full 40-hex commit");
+  const matches = [];
+  for (let page = 1; page <= pages; page += 1) {
+    const response = await fetchImpl(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/scripts/two-web-next/versions?page=${page}&per_page=100`,
+      {
+        headers: { authorization: `Bearer ${token}` },
+        redirect: "error",
+        signal: AbortSignal.timeout(15_000),
+      },
+    );
+    if (!response.ok) throw new Error(`Staging versions lookup failed (HTTP ${response.status})`);
+    const items = (await response.json())?.result?.items;
+    if (!Array.isArray(items)) throw new Error("Staging versions response has no items");
+    matches.push(...items.filter((item) => item?.annotations?.["workers/tag"] === sha));
+    if (items.length < 100) break;
+  }
+  if (!matches.length) {
+    throw new Error(`No staging version tagged ${sha}`);
+  }
+  const versions = matches.map((version) => {
+    assertRollbackVersionId(version.id);
+    const createdOn = version?.metadata?.created_on;
+    if (!Number.isFinite(Date.parse(createdOn ?? ""))) {
+      throw new Error("Staging candidate version has no creation time");
+    }
+    return { versionId: version.id, createdOn };
+  });
+  versions.sort((a, b) => (a.createdOn < b.createdOn ? -1 : a.createdOn > b.createdOn ? 1 : 0));
+  return versions;
+}
+
+// The newest version carrying the candidate's tag: the one staging serves.
+export async function stagingCandidateVersion(args, opts) {
+  const versions = await stagingCandidateVersions(args, opts);
+  return versions[versions.length - 1];
+}
+
+// Staging soak sample for the candidate: its staging version's invocations
+// and errors from deploy until now (at most the last 24 hours).
+export async function stagingSoakSample(env, { fetchImpl = fetch, nowMs = Date.now() } = {}) {
+  const versions = await stagingCandidateVersions(
+    { accountId: env.CLOUDFLARE_ACCOUNT_ID, token: env.CLOUDFLARE_API_TOKEN, sha: env.DEPLOY_SHA },
+    { fetchImpl },
+  );
+  const createdOn = versions[0].createdOn;
+  const sinceMs = Math.max(Date.parse(createdOn), nowMs - PRODUCTION_BASELINE_MS);
+  const sinceIso = new Date(Math.min(sinceMs, nowMs)).toISOString();
+  const untilIso = new Date(nowMs).toISOString();
+  let requests = 0;
+  let errors = 0;
+  for (const { versionId } of versions) {
+    const sample = await scriptErrorSample(
+      {
+        accountId: env.CLOUDFLARE_ACCOUNT_ID,
+        scriptName: "two-web-next",
+        versionId,
+        sinceIso,
+        untilIso,
+        token: env.CLOUDFLARE_API_TOKEN,
+      },
+      { fetchImpl },
+    );
+    requests += sample.requests;
+    errors += sample.errors;
+  }
+  return { versionIds: versions.map((version) => version.versionId), createdOn, requests, errors };
+}
+
+// The candidate's staging passive ledgers: the artifact of the newest
+// e2e-staging run titled for the candidate, which must name the candidate.
+export async function fetchPassiveLedgers(
+  { repository, sha, token, dir },
+  {
+    fetchImpl = fetch,
+    unzip = (zip, out) => execFileSync("python3", ["-I", "-m", "zipfile", "-e", zip, out]),
+  } = {},
+) {
+  if (!/^[0-9a-f]{40}$/.test(sha ?? "")) throw new Error("DEPLOY_SHA must be a full 40-hex commit");
+  const headers = {
+    Authorization: `Bearer ${token}`,
+    Accept: "application/vnd.github+json",
+    "X-GitHub-Api-Version": "2022-11-28",
+  };
+  async function get(path) {
+    const response = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
+      headers,
+      redirect: "error",
+      signal: AbortSignal.timeout(15_000),
+    });
+    if (!response.ok) throw new Error(`Passive ledger lookup failed (HTTP ${response.status})`);
+    return response.json();
+  }
+  const runs = [];
+  for (let page = 1; page <= 3; page += 1) {
+    const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
+    const batch =
+      (await get(`/actions/workflows/e2e-staging.yml/runs?${query}`)).workflow_runs ?? [];
+    runs.push(...batch.filter((run) => run.display_title === e2eTitle(sha)));
+    if (batch.length < 100) break;
+  }
+  if (!runs.length) throw new Error(`No e2e-staging run for ${sha}`);
+  const latest = runs.reduce((a, b) => (b.id > a.id ? b : a));
+  if (!Number.isSafeInteger(latest.id)) {
+    throw new Error(`e2e-staging run for ${sha} has an invalid run id`);
+  }
+  const name = REGRESSION_LEDGER_ARTIFACT(latest.id);
+  const { artifacts = [] } = await get(`/actions/runs/${latest.id}/artifacts?name=${name}`);
+  const artifact = artifacts.find((entry) => entry?.name === name && entry.expired === false);
+  if (!artifact || !Number.isSafeInteger(artifact.id)) {
+    throw new Error(
+      `e2e-staging run ${latest.id} has no ${name} artifact; the candidate's staging passive set was not recorded`,
+    );
+  }
+  // The download answers with a redirect to signed storage: follow it
+  // without the GitHub token.
+  const redirect = await fetchImpl(
+    `https://api.github.com/repos/${repository}/actions/artifacts/${artifact.id}/zip`,
+    { headers, redirect: "manual", signal: AbortSignal.timeout(15_000) },
+  );
+  const location = redirect.headers.get("location");
+  if (redirect.status !== 302 || !location?.startsWith("https://")) {
+    throw new Error(`Passive ledger download failed (HTTP ${redirect.status})`);
+  }
+  const zip = await fetchImpl(location, { redirect: "error", signal: AbortSignal.timeout(60_000) });
+  if (!zip.ok) throw new Error(`Passive ledger download failed (HTTP ${zip.status})`);
+  const bytes = Buffer.from(await zip.arrayBuffer());
+  if (bytes.byteLength > PASSIVE_LEDGER_MAX_BYTES) {
+    throw new Error(
+      `Passive ledger zip is ${bytes.byteLength} bytes, over the ${PASSIVE_LEDGER_MAX_BYTES}-byte limit`,
+    );
+  }
+  mkdirSync(dir, { recursive: true });
+  const zipPath = join(dir, "ledger.zip");
+  writeFileSync(zipPath, bytes);
+  unzip(zipPath, dir);
+  const commit = readFileSync(join(dir, "commit"), "utf8").trim();
+  if (commit !== sha) {
+    throw new Error(
+      `Staging passive ledger names ${commit || "no commit"}, not the candidate ${sha}`,
+    );
+  }
+  return { runId: latest.id, artifactId: artifact.id };
+}
+
+export async function checkRegression(
+  env,
+  {
+    readJson = (path) => JSON.parse(readFileSync(path, "utf8")),
+    fetchImpl = fetch,
+    nowMs = Date.now(),
+  } = {},
+) {
+  const production = new Map([
+    ...smokeOutcomes(readJson(env.PRODUCTION_SMOKE_LEDGER)),
+    ...journeyOutcomes(readJson(env.PRODUCTION_JOURNEYS)),
+  ]);
+  const staging = new Map([
+    ...smokeOutcomes(readJson(env.STAGING_SMOKE_LEDGER)),
+    ...journeyOutcomes(readJson(env.STAGING_JOURNEYS)),
+  ]);
+  const regressions = regressionsAgainstProduction(production, staging);
+  if (regressions.length) {
+    throw new Error(
+      `Candidate regresses ${regressions.length} check(s) that pass on production: ${regressions.join("; ")}`,
+    );
+  }
+  // An empty or missing staging-soak output must never read as zero traffic.
+  const count = (raw) => (/^\d+$/.test(raw ?? "") ? Number(raw) : Number.NaN);
+  const stagingSample = {
+    requests: count(env.STAGING_SOAK_REQUESTS),
+    errors: count(env.STAGING_SOAK_ERRORS),
+  };
+  const productionSample = await scriptErrorSample(
+    {
+      accountId: env.CLOUDFLARE_ACCOUNT_ID,
+      scriptName: "two-web-next-production",
+      sinceIso: new Date(nowMs - PRODUCTION_BASELINE_MS).toISOString(),
+      untilIso: new Date(nowMs).toISOString(),
+      token: env.CLOUDFLARE_API_TOKEN,
+    },
+    { fetchImpl },
+  );
+  const rate = evaluateSoakErrorRate({ staging: stagingSample, production: productionSample });
+  if (rate.verdict === "fail") {
+    throw new Error(
+      `Candidate staging error rate ${rate.stagingRate.toFixed(4)} exceeds the limit ${rate.limit.toFixed(4)} (production 24 h ${rate.productionRate.toFixed(4)} x ${SOAK_ERROR_RATE_MARGIN}, floor ${SOAK_ERROR_RATE_FLOOR})`,
+    );
+  }
+  return {
+    checks: production.size,
+    passedOnProduction: [...production.values()].filter((outcome) => outcome === "passed").length,
+    staging: stagingSample,
+    production: productionSample,
+    ...rate,
+  };
 }
 
 export function assertRollbackVersionId(versionId) {
@@ -496,7 +936,16 @@ export async function checkProductionGate(env, fetchEnvironment = fetch, options
   // checked-out commit, so staging evidence for that commit proves nothing:
   // the checkout only supplies the rollback scripts, and green main CI
   // vouches for them.
-  if (!autoApprove || rollback) return ci;
+  if (rollback) return ci;
+  if (!autoApprove) {
+    // Reviewer mode: the approval replaces the automatic resolver, but a
+    // staging pass approved early must still reach the 30-minute soak floor.
+    await requireStagingSoakIfEvident(
+      { repository: env.GITHUB_REPOSITORY, sha: ci.sha },
+      { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
+    );
+    return ci;
+  }
   const staging = await requireStagingEvidence(
     { repository: env.GITHUB_REPOSITORY, sha: ci.sha },
     { token: env.GITHUB_TOKEN, fetchImpl: fetchCi },
@@ -549,7 +998,7 @@ export async function checkRollbackGate(env, fetchImpl = fetch, options = {}) {
 // gate. A bare invocation (or a non-flag positional, as before) runs the
 // full gate.
 export const PRODUCTION_DEPLOY_GATE_USAGE =
-  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --already-live | --check-migrations | --help]\nWith no flag, runs the full production gate.";
+  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-migrations | --help]\nWith no flag, runs the full production gate.";
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
@@ -567,6 +1016,35 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const evidence = await checkRollbackGate(process.env);
       console.log(
         `${process.env.ROLLBACK_ENVIRONMENT} rollback request and exact-SHA CI checks passed: scripts ${evidence.sha}, full CI run ${evidence.runId}, attempt ${evidence.runAttempt}`,
+      );
+    } else if (process.argv[2] === "--staging-soak") {
+      const sample = await stagingSoakSample(process.env);
+      const serving = sample.versionIds[sample.versionIds.length - 1];
+      console.log(
+        `Staging candidate ${serving} (+${sample.versionIds.length - 1} earlier tagged) since ${sample.createdOn}: ${sample.errors} errors over ${sample.requests} requests`,
+      );
+      if (process.env.GITHUB_OUTPUT) {
+        appendFileSync(
+          process.env.GITHUB_OUTPUT,
+          `requests=${sample.requests}\nerrors=${sample.errors}\nversion_id=${serving}\n`,
+        );
+      }
+    } else if (process.argv[2] === "--fetch-passive-ledgers") {
+      const dir = process.argv[3];
+      if (!dir) throw new Error("--fetch-passive-ledgers needs a target directory");
+      const result = await fetchPassiveLedgers({
+        repository: process.env.GITHUB_REPOSITORY,
+        sha: (process.env.DEPLOY_SHA ?? "").trim(),
+        token: process.env.GITHUB_TOKEN,
+        dir,
+      });
+      console.log(
+        `Fetched the candidate's staging passive ledgers from e2e-staging run ${result.runId} (artifact ${result.artifactId})`,
+      );
+    } else if (process.argv[2] === "--regression") {
+      const result = await checkRegression(process.env);
+      console.log(
+        `No regression against production: ${result.passedOnProduction}/${result.checks} checks pass on production and all pass on the candidate; staging error rate ${result.stagingRate.toFixed(4)} over ${result.staging.requests} requests (${result.verdict}), limit ${result.limit.toFixed(4)} from production ${result.productionRate.toFixed(4)} over ${result.production.requests}`,
       );
     } else if (process.argv[2] === "--already-live") {
       // Clean skip when production already serves the target: exits 0 in
