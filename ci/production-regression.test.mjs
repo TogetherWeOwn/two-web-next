@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -446,15 +447,49 @@ test("e2e-staging records the passive set for every promotable deploy", () => {
     job,
     /node bin\/smoke\.mjs https:\/\/next\.togetherweown\.com --ledger passive\/smoke\.json/,
   );
-  assert.match(
-    job,
-    /npx playwright test --config playwright\.watch\.config\.ts --reporter=list,json/,
-  );
+  // Bare --config: a CLI --reporter flag would shadow the config reporters
+  // and the journey ledger below would never be written. The config adds
+  // the JSON reporter with this output file when the env var is set.
+  assert.match(job, /npx playwright test --config playwright\.watch\.config\.ts\n/);
+  assert.ok(!/--reporter/.test(job), "the passive set must not shadow the config reporters");
   assert.match(job, /PLAYWRIGHT_JSON_OUTPUT_FILE: passive\/journeys\.json/);
   assert.match(job, /WATCH_ORIGIN: https:\/\/next\.togetherweown\.com/);
   assert.match(job, /SMOKE_ALLOW_MISSING_BASELINE: "1"/);
   assert.match(job, /name: staging-passive-ledger-\$\{\{ github\.run_id \}\}/);
   assert.ok(!/secrets\./.test(job), "the passive set needs no secrets");
+});
+
+test("watch config writes the journey ledger only when asked", () => {
+  const reporters = (ledger) => {
+    const env = {
+      PATH: process.env.PATH,
+      GITHUB_ACTIONS: "true",
+      RUNNER_OS: "Linux",
+      WATCH_ORIGIN: "https://next.togetherweown.com",
+    };
+    if (ledger !== undefined) env.PLAYWRIGHT_JSON_OUTPUT_FILE = ledger;
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--import",
+        "tsx",
+        "-e",
+        "import('./playwright.watch.config.ts').then((m) => console.log(JSON.stringify(m.default.reporter)))",
+      ],
+      { encoding: "utf8", cwd: new URL("..", import.meta.url), env },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    return JSON.parse(result.stdout.trim().split("\n").pop());
+  };
+  // The passive-set steps set PLAYWRIGHT_JSON_OUTPUT_FILE, so the JSON
+  // reporter writes the report journeyOutcomes() reads.
+  assert.deepEqual(reporters("passive/journeys.json"), [
+    ["list"],
+    ["html", { open: "never" }],
+    ["json", { outputFile: "passive/journeys.json" }],
+  ]);
+  // The 48h watch leaves it unset and keeps list+html only.
+  assert.deepEqual(reporters(undefined), [["list"], ["html", { open: "never" }]]);
 });
 
 test("deploy-production runs the regression check before the deploy job", () => {
@@ -483,6 +518,18 @@ test("deploy-production runs the regression check before the deploy job", () => 
   assert.match(
     regression,
     /node bin\/smoke\.mjs https:\/\/togetherweown\.com --allow-indexable --ledger "\$RUNNER_TEMP\/production\/smoke\.json"/,
+  );
+  // Bare --config, like the staging side: a CLI --reporter flag would
+  // shadow the config reporters and the journey ledger would never be
+  // written, so --regression would refuse every promotion on a missing file.
+  assert.match(regression, /npx playwright test --config playwright\.watch\.config\.ts\n/);
+  assert.ok(
+    !/--reporter/.test(regression),
+    "the production passive set must not shadow the config reporters",
+  );
+  assert.match(
+    regression,
+    /PLAYWRIGHT_JSON_OUTPUT_FILE: \$\{\{ runner\.temp \}\}\/production\/journeys\.json/,
   );
   assert.match(regression, /WATCH_ORIGIN: https:\/\/togetherweown\.com/);
   assert.match(regression, /SMOKE_ALLOW_MISSING_BASELINE: "1"/);

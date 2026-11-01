@@ -249,7 +249,11 @@ jobs:
           set +e
           node bin/smoke.mjs https://togetherweown.com --allow-indexable --ledger "$RUNNER_TEMP/production/smoke.json"
           echo "production passive smoke exit $?"
-          npx playwright test --config playwright.watch.config.ts --reporter=list,json
+          npx playwright test --config playwright.watch.config.ts
+          # Comment line above the echo: ci/test-inventory.mjs stops expanding
+          # a playwright invocation at a comment or blank line, so this echo
+          # is never read as a spec filter. Keep it: the gate below judges
+          # the ledgers, and this exit line is the log signal.
           echo "production guest journeys exit $?"
         env:
           WATCH_ORIGIN: https://togetherweown.com
