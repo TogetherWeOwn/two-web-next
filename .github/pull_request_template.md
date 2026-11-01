@@ -6,8 +6,8 @@ addresses in the title, the body, a commit message or the branch name. Name the 
 for example `fix/sudo-window`. Link only public GitHub issues (`Fixes #123`).
 Write short, plain sentences. In the current warn mode `pr-lint` warns (does not fail) on a missing or
 thin linked issue (feat/fix/perf/refactor/security) or Verification, and fails once `PR_STANDARDS_MODE`
-is `"error"`; the title and an empty body always fail. The other sections are optional context
-for the reviewer.
+is `"error"`; the title and an empty body always fail. Always fill in Attestation as well; `pr-lint`
+does not check it yet. The other sections are optional context for the reviewer.
 Full rules: CONTRIBUTING.md, "Pull request contract".
 -->
 

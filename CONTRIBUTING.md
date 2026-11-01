@@ -18,8 +18,9 @@ version.
   reads these headers.
 - Use the [PR template](.github/pull_request_template.md), in short, active
   sentences. In the current warn mode `pr-lint` warns (does not fail) on a
-  missing or thin Linked Issues or Issue Description and Verification; the
-  other sections are optional. See "What fails `pr-lint` today vs what only
+  missing or thin Linked Issues or Issue Description and Verification. Always
+  fill in Attestation too; `pr-lint` does not check it yet. The other sections
+  are optional. See "What fails `pr-lint` today vs what only
   warns" below for the full fail/warn split.
 - Link a public GitHub issue with `Closes #123`, or describe the problem in the PR.
   No card reference is required. `docs`, `chore`, `build`, `ci`, `style`, `test` and
