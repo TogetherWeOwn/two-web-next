@@ -795,7 +795,7 @@ describe("e2e scope gate", () => {
   const smoke = e2e.split("\n  browser-smoke:\n")[1] ?? "";
 
   it("mirrors the ci.yml docs-only gate instead of running unscoped", () => {
-    expect(scopeJob).toContain("bash ci/change-scope.sh");
+    expect(scopeJob).toContain('bash "$RUNNER_TEMP/trusted-scope/change-scope.sh"');
     expect(scopeJob).toContain("docs_only:");
     expect(scopeJob).toContain("skip_e2e:");
     expect(scopeJob).toContain("repos/$REPO/pulls/$PR_NUMBER/files");
@@ -1095,4 +1095,236 @@ describe("scrub selftest wiring", () => {
       expect(result.draft).toBe("false");
     },
   );
+});
+
+describe("scope token boundary and verdict validation", () => {
+  // The five PR workflows that classify a pull request before gating on the
+  // verdict. In each one the token may only fetch inputs (the changed-file
+  // list plus the scope scripts at the PR's base commit); the step that runs
+  // a script holds no token and publishes only validated verdicts.
+  const workflows = [
+    { file: "ci.yml", scriptName: "change-scope.sh" },
+    { file: "e2e.yml", scriptName: "change-scope.sh" },
+    { file: "backup-restore-proof.yml", scriptName: "change-scope.sh" },
+    { file: "backup-bootstrap-selftest.yml", scriptName: "path-scope.sh" },
+    { file: "featured-offline-proof.yml", scriptName: "path-scope.sh" },
+  ] as const;
+
+  const scopeJob = (file: string) => {
+    const text = readFileSync(`.github/workflows/${file}`, "utf8");
+    return text.split("\n  scope:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
+  };
+  const stepsOf = (job: string) => job.split("\n    steps:\n")[1]?.split(/\n      - /) ?? [];
+  const classifyStep = (file: string) =>
+    stepsOf(scopeJob(file)).find((step) => step.includes("id: scope")) ?? "";
+
+  it.each(workflows)(
+    "$file holds the token only in a fetch step that runs no code",
+    ({ file, scriptName }) => {
+      const steps = stepsOf(scopeJob(file));
+      const tokenSteps = steps.filter((step) => /^\s*(GH_TOKEN|GITHUB_TOKEN):/m.test(step));
+      expect(tokenSteps).toHaveLength(1);
+      const fetch = tokenSteps[0] ?? "";
+      expect(fetch).toContain("pull_request.base.sha");
+      expect(fetch).toContain(`ci/${scriptName}`);
+      expect(fetch).toMatch(/contents\/[^\s"]+\?ref=\$BASE_SHA/);
+      expect(fetch).toContain("pulls/$PR_NUMBER/files");
+      expect(fetch).not.toMatch(/\b(bash|node|python3?)\s/);
+      expect(fetch).not.toContain("GITHUB_OUTPUT");
+    },
+  );
+
+  it.each(workflows)(
+    "$file classifies token-free with the base-branch script",
+    ({ file, scriptName }) => {
+      const classify = classifyStep(file);
+      expect(classify, "classify step exists").not.toBe("");
+      expect(classify).toContain(`bash "$RUNNER_TEMP/trusted-scope/${scriptName}"`);
+      expect(classify).not.toContain(`bash ci/${scriptName}`);
+      expect(classify).not.toMatch(/^\s*(GH_TOKEN|GITHUB_TOKEN):/m);
+      expect(classify).not.toContain("secrets.");
+      // The script's stdout lands in a verdict file first; only lines the step
+      // validated are re-emitted into $GITHUB_OUTPUT.
+      expect(classify).toContain('> "$RUNNER_TEMP/scope-verdict.txt"');
+      expect(classify).toMatch(/failing closed/);
+    },
+  );
+
+  it.each(workflows)(
+    "$file runs no PR-tree script at or before classification",
+    ({ file, scriptName }) => {
+      const steps = stepsOf(scopeJob(file));
+      const fetchIndex = steps.findIndex((step) => /^\s*(GH_TOKEN|GITHUB_TOKEN):/m.test(step));
+      const classifyIndex = steps.findIndex((step) => step.includes("id: scope"));
+      expect(fetchIndex, "fetch step exists").toBeGreaterThanOrEqual(0);
+      expect(classifyIndex, "fetch precedes classify").toBeGreaterThan(fetchIndex);
+      // Anything that executes the checked-out tree (for example the
+      // path-scope selftest of the PR copy) must sit after classification,
+      // so it cannot reach the token step's environment or the verdict.
+      for (const step of steps.slice(0, classifyIndex + 1)) {
+        expect(step).not.toContain(`bash ci/${scriptName}`);
+        expect(step).not.toMatch(/\bnode\s+ci\//);
+      }
+    },
+  );
+
+  const classifyScript = (file: string) => {
+    const body = classifyStep(file).split("        run: |\n")[1] ?? "";
+    return body
+      .split("\n")
+      .map((line) => line.replace(/^ {10}/, ""))
+      .join("\n");
+  };
+
+  function runClassify(opts: {
+    file: string;
+    scriptName: string;
+    rows: string[][];
+    stub?: string;
+    eventName?: string;
+  }) {
+    const root = dirname(repo);
+    const runnerTemp = join(root, "runner-temp");
+    const trusted = join(runnerTemp, "trusted-scope");
+    mkdirSync(trusted, { recursive: true });
+    writeFileSync(
+      join(trusted, opts.scriptName),
+      opts.stub ?? readFileSync(resolve(`ci/${opts.scriptName}`)),
+    );
+    writeFileSync(
+      join(trusted, "e2e-test-helpers.mjs"),
+      readFileSync(resolve("ci/e2e-test-helpers.mjs")),
+    );
+    writeFileSync(
+      join(runnerTemp, "pr-files.tsv"),
+      opts.rows.map((row) => `${row.join("\t")}\n`).join(""),
+    );
+    const output = join(root, "github-output.txt");
+    writeFileSync(output, "");
+    // No GH_TOKEN on purpose: classification must work token-free.
+    const env = {
+      PATH: process.env.PATH ?? "",
+      HOME: process.env.HOME ?? "",
+      GIT_CEILING_DIRECTORIES: root,
+      EVENT_NAME: opts.eventName ?? "pull_request",
+      CHANGED_FILES: String(opts.rows.length),
+      DRAFT: "false",
+      RUNNER_TEMP: runnerTemp,
+      GITHUB_OUTPUT: output,
+    };
+    const result = spawnSync("bash", ["-c", classifyScript(opts.file)], {
+      cwd: repo,
+      env,
+      encoding: "utf8",
+    });
+    return { status: result.status, stderr: result.stderr, outputs: readFileSync(output, "utf8") };
+  }
+
+  const wellFormedAllSkipping = [
+    "#!/usr/bin/env bash",
+    "printf 'docs_only=true\\nskip_e2e=true\\napp=false\\nworker=false\\ndb=false\\nfull=false\\ndraft=false\\n'",
+    "",
+  ].join("\n");
+
+  it("publishes the real verdicts for a docs-only PR, token-free", () => {
+    const result = runClassify({
+      file: "ci.yml",
+      scriptName: "change-scope.sh",
+      rows: [
+        ["docs/guide.md", ""],
+        ["README.md", ""],
+      ],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    const lines = result.outputs.trim().split("\n");
+    expect(lines).toHaveLength(7);
+    for (const line of lines) expect(line).toMatch(/^[a-z0-9_]+=(true|false)$/);
+    expect(lines).toContain("docs_only=true");
+  });
+
+  it("publishes run-everything verdicts for a code PR", () => {
+    const result = runClassify({
+      file: "ci.yml",
+      scriptName: "change-scope.sh",
+      rows: [["src/app.ts", ""]],
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.outputs).toContain("docs_only=false");
+    expect(result.outputs).toContain("app=true");
+  });
+
+  it("fails closed and publishes nothing on extra or malformed verdict lines", () => {
+    for (const stub of [
+      `${wellFormedAllSkipping}printf 'extra=true\\n'\n`,
+      "#!/usr/bin/env bash\nprintf 'docs_only=maybe\\nskip_e2e=true\\napp=false\\nworker=false\\ndb=false\\nfull=false\\ndraft=false\\n'\n",
+      "#!/usr/bin/env bash\nprintf 'docs_only=true\\ndocs_only=false\\n'\n",
+    ]) {
+      const result = runClassify({
+        file: "ci.yml",
+        scriptName: "change-scope.sh",
+        rows: [["docs/guide.md", ""]],
+        stub,
+      });
+      expect(result.status).not.toBe(0);
+      expect(result.outputs).toBe("");
+    }
+  });
+
+  it("downgrades a well-formed fast-pass claim that the file list contradicts", () => {
+    const result = runClassify({
+      file: "ci.yml",
+      scriptName: "change-scope.sh",
+      rows: [
+        ["src/app.ts", ""],
+        [".github/workflows/ci.yml", ""],
+      ],
+      stub: wellFormedAllSkipping,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.outputs).toContain("docs_only=false");
+    expect(result.outputs).toContain("full=true");
+  });
+
+  it("downgrades a skip_e2e claim for a browser-observable path", () => {
+    const result = runClassify({
+      file: "e2e.yml",
+      scriptName: "change-scope.sh",
+      rows: [["src/app.ts", ""]],
+      stub: wellFormedAllSkipping,
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.outputs).toContain("skip_e2e=false");
+    expect(result.outputs).toContain("docs_only=false");
+  });
+
+  it("publishes path-scope verdicts only when they are a single boolean line", () => {
+    const ok = runClassify({
+      file: "backup-bootstrap-selftest.yml",
+      scriptName: "path-scope.sh",
+      rows: [["docs/guide.md", ""]],
+    });
+    expect(ok.status, ok.stderr).toBe(0);
+    expect(ok.outputs).toBe("relevant=false\n");
+
+    const bad = runClassify({
+      file: "backup-bootstrap-selftest.yml",
+      scriptName: "path-scope.sh",
+      rows: [["docs/guide.md", ""]],
+      stub: "#!/usr/bin/env bash\nprintf 'relevant=maybe\\n'\n",
+    });
+    expect(bad.status).not.toBe(0);
+    expect(bad.outputs).toBe("");
+  });
+
+  it("keeps non-PR events on the constant run-everything verdicts", () => {
+    const result = runClassify({
+      file: "ci.yml",
+      scriptName: "change-scope.sh",
+      rows: [],
+      eventName: "push",
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.outputs).toContain("docs_only=false");
+    expect(result.outputs).toContain("full=true");
+  });
 });
