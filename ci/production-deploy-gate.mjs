@@ -499,7 +499,11 @@ export function journeyOutcomes(report) {
             : test.status === "skipped"
               ? "skipped"
               : "failed";
-        outcomes.set(name, status);
+        // A journey recorded twice keeps its worst outcome, like smoke
+        // above: a later passed entry must not hide an earlier failed one.
+        const rank = { failed: 0, skipped: 1, passed: 2 };
+        const prior = outcomes.get(name);
+        if (prior === undefined || rank[status] < rank[prior]) outcomes.set(name, status);
       }
     }
     for (const child of suite.suites ?? []) walk(child, here);
@@ -726,10 +730,23 @@ export async function fetchPassiveLedgers(
   }
   if (!runs.length) throw new Error(`No e2e-staging run for ${sha}`);
   const latest = runs.reduce((a, b) => (b.id > a.id ? b : a));
-  if (!Number.isSafeInteger(latest.id)) {
+  if (!runs.every((run) => Number.isSafeInteger(run.id))) {
     throw new Error(`e2e-staging run for ${sha} has an invalid run id`);
   }
+  if (
+    !runs.every(
+      (run) =>
+        run.head_branch === "main" &&
+        run.path === ".github/workflows/e2e-staging.yml" &&
+        run.head_repository?.full_name === repository,
+    )
+  ) {
+    throw new Error("e2e-staging.yml evidence revision/branch/workflow mismatch");
+  }
   const name = REGRESSION_LEDGER_ARTIFACT(latest.id);
+  if (latest.status !== "completed") {
+    throw new Error(`Latest e2e-staging run ${latest.id} is not completed`);
+  }
   const { artifacts = [] } = await get(`/actions/runs/${latest.id}/artifacts?name=${name}`);
   const artifact = artifacts.find((entry) => entry?.name === name && entry.expired === false);
   if (!artifact || !Number.isSafeInteger(artifact.id)) {
