@@ -634,6 +634,23 @@ function jobEnvironment(lines) {
   return undefined;
 }
 
+// A reusable-workflow caller (`uses:`) binds no Environment itself: the
+// called workflow's job does. The caller passes the secrets by name and the
+// called job's own `environment:` binding receives their values even though
+// the caller binds none. Such a caller is fine when it delegates to the
+// production leg of the rollback workflow, i.e. its `uses:` calls
+// rollback-production.yml and its `with:` block passes
+// `environment: production` (pinned by the rollback-workflow test).
+// Anything else — another callee, no environment input, or a non-production
+// one — still fails closed. Never exempted by job name.
+function delegatesToProduction(lines) {
+  const uses = lines.some((line) =>
+    /^\s*uses:\s*\.\/\.github\/workflows\/rollback-production\.yml\s*$/.test(line),
+  );
+  if (!uses) return false;
+  return lines.some((line) => /^\s+environment:\s*production\s*$/.test(line));
+}
+
 export function productionSecretEnvironmentViolations(text, file) {
   const { outside, jobs } = splitWorkflow(text);
   const violations = [];
@@ -647,6 +664,7 @@ export function productionSecretEnvironmentViolations(text, file) {
     if (referencing.length === 0) continue;
     const environment = jobEnvironment(lines);
     if (environment === undefined) {
+      if (delegatesToProduction(lines)) continue;
       violations.push(`${file}: job ${id} reads a PRODUCTION_* secret without an environment`);
     } else if (/^production$/i.test(environment)) {
       // Bound to the protected Environment on every run.
@@ -954,6 +972,31 @@ test("target-selected environment requires every mapping to be guarded on inputs
   // An expression that cannot be shown to select production is rejected.
   const opaque = guarded.replace("inputs.target || 'staging'", "vars.ENVIRONMENT_NAME");
   assert.equal(productionSecretEnvironmentViolations(opaque, "fixture.yml").length, 1);
+});
+
+test("a uses: caller passing secrets to the production leg is fine; staging or no leg is not", () => {
+  const caller = (withBlock) => `${FIXTURE_HEAD}jobs:
+  rollback-caller:
+    needs: [deploy]
+    if: \${{ !cancelled() }}
+    uses: ./.github/workflows/rollback-production.yml
+    with:
+${withBlock}
+    secrets:
+      PRODUCTION_CLOUDFLARE_API_TOKEN: \${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+`;
+  const production = caller("      environment: production\n      version_id: abc");
+  assert.deepEqual(productionSecretEnvironmentViolations(production, "fixture.yml"), []);
+  // The exemption is pinned to the rollback callee: the same shape against
+  // any other local workflow still fails closed.
+  const otherCallee = production.replace("rollback-production.yml", "release.yml");
+  assert.equal(productionSecretEnvironmentViolations(otherCallee, "fixture.yml").length, 1);
+  const staging = caller("      environment: staging\n      version_id: abc");
+  assert.equal(productionSecretEnvironmentViolations(staging, "fixture.yml").length, 1);
+  const noLeg = caller("      version_id: abc");
+  assert.deepEqual(productionSecretEnvironmentViolations(noLeg, "fixture.yml"), [
+    "fixture.yml: job rollback-caller reads a PRODUCTION_* secret without an environment",
+  ]);
 });
 
 // ---------------------------------------------------------------------------
