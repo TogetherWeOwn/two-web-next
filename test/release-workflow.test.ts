@@ -111,16 +111,57 @@ describe("release on promote", () => {
     const pins = [...tag.matchAll(/uses: TogetherWeOwn\/\.github\/actions\/calver@(\S+)/g)].map(
       (m) => m[1],
     );
-    expect(pins).toHaveLength(2);
+    // Plan, publish, and their one in-job retry each: every invocation pins
+    // the same reviewed releaser commit.
+    expect(pins).toHaveLength(4);
     expect(pins[0]).toMatch(/^[0-9a-f]{40}$/);
-    expect(pins[1]).toBe(pins[0]);
+    for (const pin of pins) expect(pin).toBe(pins[0]);
     // Plan before publish, and a classified skip (re-promote, rollback) never publishes.
     expect(tag.indexOf("id: plan")).toBeGreaterThan(
       tag.indexOf("run: node ci/release-request.cjs"),
     );
-    const publish = tag.slice(tag.indexOf("- name: Tag the deployed commit"));
-    expect(publish).toContain("if: steps.plan.outputs.skipped != 'true'");
+    const build = tag.slice(tag.indexOf("- name: Build the publish request"));
+    expect(build).toContain("steps.planned.outputs.skipped != 'true'");
     expect(tag).toContain("'\"ubuntu-latest\"'");
+  });
+
+  it("retries a failed plan or publish once inside the same job attempt", () => {
+    const tag = job(release, "tag");
+    // The proof binds the producing attempt, so a rerun can never recover a
+    // transient releaser failure; the retry has to live in this attempt and
+    // fire only on the first attempt's failure, never on a skip or a success.
+    const planRetry = tag.slice(tag.indexOf("- name: Plan the CalVer release (retry)"));
+    expect(planRetry).toContain("if: ${{ !cancelled() && steps.plan.outcome == 'failure' }}");
+    expect(planRetry).toContain("request: ${{ steps.request.outputs.request }}");
+    // Downstream steps select whichever plan succeeded and must not fall back
+    // to the implicit success() gate a failed first attempt would trip.
+    const planned = tag.slice(tag.indexOf("- name: Select the planned release"));
+    expect(planned).toContain("!cancelled()");
+    expect(planned).toContain("steps.plan-retry.outputs.plan");
+    const retryBuild = tag.slice(tag.indexOf("- name: Build the publish retry request"));
+    expect(retryBuild).toContain("if: ${{ !cancelled() && steps.publish.outcome == 'failure' }}");
+    // The publish retry completes its own frozen plan in repair mode so a
+    // tag created before the failure still gets its Release; a dry run never
+    // wrote, so it keeps the caller's repair flag instead.
+    expect(retryBuild).toContain('repair: process.env.REPAIR === "true" || !dryRun');
+    const publishRetry = tag.slice(
+      tag.indexOf("- name: Tag the deployed commit and publish its release (retry)"),
+    );
+    expect(publishRetry).toContain("steps.publish-retry-request.outcome == 'success'");
+    expect(publishRetry).toContain("request: ${{ steps.publish-retry-request.outputs.request }}");
+    // First attempts are continue-on-error so a successful retry keeps the
+    // job green; the gate step fails the job when both plan attempts failed,
+    // and the publish retry carries no continue-on-error, so its own failure
+    // still fails the job.
+    expect(tag.match(/continue-on-error: true/g)).toHaveLength(2);
+    const gate = tag.slice(tag.indexOf("- name: Refuse when no CalVer plan succeeded"));
+    expect(gate).toContain("steps.plan-retry.outcome != 'success'");
+    expect(publishRetry).not.toContain("continue-on-error");
+    // A classified skip is a successful plan with skipped=true: publish and
+    // its retry stay off because only an outcome failure arms the retry.
+    const publish = tag.slice(tag.indexOf("- name: Tag the deployed commit"));
+    expect(publish).toContain("id: publish");
+    expect(publish).toContain("steps.publish-request.outcome == 'success'");
   });
 
   it("asks the releaser for a canary-free production-promotion stable with the notes sections", () => {
