@@ -719,8 +719,8 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   for (const key of Object.keys(credentials)) {
     // Credentials check, required-secrets preflight, rollback-target check,
-    // production Tail deploy, version upload, promotion and the post-deploy
-    // watch: all production-only.
+    // production Tail deploy, version upload, promotion and the auto-rollback
+    // caller: all production-only.
     assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 7);
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
