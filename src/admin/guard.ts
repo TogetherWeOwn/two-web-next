@@ -2,11 +2,14 @@
 // - Gate: no panel login page — guests fall into site Discord OAuth; a
 //   signed-in non-moderator gets 403, never a login loop (TOG-54).
 //   Moderator = the session row's `moderator` bit, recomputed from Discord
-//   role snowflakes at every login (src/roles.ts) and read live per request,
-//   so a mid-session revocation 403s on the next *login* — not the next
-//   click. Per-click Discord lookups were deliberately not ported: main's
-//   settled design recomputes at login, and an extra Discord round-trip on
-//   every admin click would gate the panel on Discord availability.
+//   role snowflakes at every login (src/roles.ts) and read live per request.
+//   The bits also re-derive mid-session: once they are older than
+//   SESSION_ROLE_RECHECK_SECONDS, the shared refresh
+//   (src/session-role-refresh.ts) re-reads the guild member before this
+//   guard decides, so a Discord demotion lands within the cadence instead
+//   of at the next login or the 24h lineage cap. Not per-click: a fresh
+//   stamp serves from the row, and an inconclusive lookup keeps the stored
+//   bits, so Discord availability never gates the panel.
 // - Access log: every admin GET/HEAD runs inside the keyed read boundary. Stable
 //   route metadata does not authorize SQL or supply subjects. One row per
 //   request (CISO condition TOG-355); failed attribution or audit always
@@ -44,6 +47,7 @@ import {
   type SessionStore,
   type Sql,
 } from "../sessions";
+import { refreshSessionRoles, roleRecheckConfigFor } from "../session-role-refresh";
 import { dbFor } from "./db";
 import { recordAccess } from "./store";
 import { memberReadBoundary } from "../member-reads";
@@ -135,7 +139,13 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       const resolved = sessionOverride ?? (await sessionStoreFor(c));
       if (!resolved) throw new Error("admin needs a session store; refusing to decide without one");
       const tokenHash = await hashToken(token);
-      const row = await resolved.get(tokenHash);
+      const storedRow = await resolved.get(tokenHash);
+      // Mid-session role recheck before the moderator decision (see the
+      // header): refreshed bits, a signed-in non-moderator, or — when the
+      // row stopped being live during the refresh — an expired guest.
+      const row = storedRow
+        ? await refreshSessionRoles(resolved, tokenHash, storedRow, roleRecheckConfigFor(c.env))
+        : null;
       // Signed in, not a moderator: 403, not a login loop (TOG-54).
       if (row?.moderator) {
         actor = { id: row.userId, username: row.username };

@@ -29,16 +29,22 @@ do not bypass it with direct database queries or another endpoint.
 
 ## A moderator lost their role
 
-Moderator status is copied into the session at sign-in, so removing a Discord
-role does not update existing sessions. First confirm the Discord moderator
+Moderator status is copied into the session at sign-in. A live session also
+re-checks its Discord roles during use: when the stored flags are at least
+five minutes old, the next page that relies on them refreshes them from
+Discord first, so removing the Discord role takes effect on its own within
+minutes while the moderator keeps browsing. If Discord cannot answer, the
+stored flags stand until a later recheck or the session's 24-hour limit.
+First confirm the Discord moderator
 role has been removed. If the moderator stops visiting pages, the idle session
 expires within two hours (120 minutes after its last session-refreshing page view);
 normal browsing can rotate and extend that idle window, but never beyond
 24 hours from the login that started the session lineage. Rotation preserves
 that start time; reaching the absolute cap requires a fresh sign-in and role
 lookup. Kit-served admin pages rotate the session exactly like the Hono
-panel, under the same absolute cap. For immediate invalidation,
-an authorized operator should run the command below. It does not depend on the
+panel, under the same absolute cap, and run the same mid-session recheck.
+For immediate invalidation — during an incident, or while Discord is
+unavailable — an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply
 revocation for the moderator's Discord snowflake:
 
@@ -96,10 +102,11 @@ IDs. Exit codes:
 | 1 | Drift: the sets differ | Record `discord-only` as information; clear app-only access with the revoke procedure above, then re-run until `app-only` is 0 |
 | 2 | Usage or malformed input (missing side, both sources for one side, unknown flag, bad file, non-snowflake ID) | Fix the invocation or input, then re-run |
 
-`discord-only` means the person has the Discord role but no live app session;
-they gain the panel at next sign-in, so this is not a denial to troubleshoot.
+`discord-only` means the person has the Discord role but no live app session
+carrying it; they gain the panel at next sign-in, or at the next five-minute
+role recheck of a live member session, so this is not a denial to troubleshoot.
 `app-only` means a live app session without the Discord role: excess privilege
-until the session expires or is revoked.
+until the session's next five-minute role recheck, its expiry, or revocation.
 
 Keep evidence counts-only: the text report prints exact counts plus at most 20
 IDs per side (`…and N more` beyond that), and `--json` reports exact

@@ -4,6 +4,7 @@ import { countActiveMemberSessions, revokeMemberSessions } from "../src/session-
 import {
   createPostgresSessionStore,
   SESSION_ABSOLUTE_MAX_AGE_SECONDS,
+  SESSION_ROLE_RECHECK_SECONDS,
   type Sql,
 } from "../src/sessions";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
@@ -126,6 +127,145 @@ describe.skipIf(!process.env.DATABASE_URL)(
         web_sessions: 0,
         passes: 1,
         stampsPerPass: [0],
+      });
+    });
+
+    // Mid-session role recheck (SESSION_ROLE_RECHECK_SECONDS): the DB clock
+    // judges its own stamps, a null stamp dates the bits from lineage start,
+    // and an applied recheck rewrites the bits and the stamp together.
+    describe("mid-session role recheck", () => {
+      const CADENCE = SESSION_ROLE_RECHECK_SECONDS * SECOND;
+      const store = () => createPostgresSessionStore(fixture.client as unknown as Sql);
+
+      async function seedRecheck(
+        tokenHash: string,
+        opts: {
+          createdOffset: number;
+          checkedOffset?: number | null;
+          member?: boolean;
+          moderator?: boolean;
+          expiresOffset?: number;
+        },
+      ) {
+        await fixture.client`insert into web_sessions
+        (token_hash, user_id, username, member, moderator, created_at, expires_at, roles_checked_at)
+        values (${tokenHash}, ${MEMBER}, 'fixture', ${opts.member ?? true},
+          ${opts.moderator ?? true}, ${at(opts.createdOffset)},
+          ${at(opts.expiresOffset ?? 3600 * SECOND)},
+          ${opts.checkedOffset == null ? null : at(opts.checkedOffset)})`;
+      }
+
+      it("marks due only live privileged rows past the cadence, dating null stamps from lineage start", async () => {
+        await seedRecheck("fresh-login", { createdOffset: -60 * SECOND });
+        await seedRecheck("legacy-stale", { createdOffset: -3600 * SECOND });
+        await seedRecheck("stamped-fresh", {
+          createdOffset: -3600 * SECOND,
+          checkedOffset: -60 * SECOND,
+        });
+        await seedRecheck("stamped-stale", {
+          createdOffset: -3600 * SECOND,
+          checkedOffset: -CADENCE - 60 * SECOND,
+        });
+        await seedRecheck("unprivileged-stale", {
+          createdOffset: -3600 * SECOND,
+          member: false,
+          moderator: false,
+        });
+        await seedRecheck("expired-stale", {
+          createdOffset: -3600 * SECOND,
+          expiresOffset: -60 * SECOND,
+        });
+
+        const s = store();
+        expect(await s.roleRecheckDue!("fresh-login")).toBe(false);
+        expect(await s.roleRecheckDue!("legacy-stale")).toBe(true);
+        expect(await s.roleRecheckDue!("stamped-fresh")).toBe(false);
+        expect(await s.roleRecheckDue!("stamped-stale")).toBe(true);
+        expect(await s.roleRecheckDue!("unprivileged-stale")).toBe(false);
+        expect(await s.roleRecheckDue!("expired-stale")).toBe(false);
+        expect(await s.roleRecheckDue!("missing")).toBe(false);
+      });
+
+      it("apply with bits rewrites them and restamps; apply with null only restamps", async () => {
+        await seedRecheck("demoted", { createdOffset: -3600 * SECOND });
+        await seedRecheck("outage", { createdOffset: -3600 * SECOND });
+        const s = store();
+
+        expect(await s.applyRoleRecheck!("demoted", { member: true, moderator: false })).toBe(true);
+        expect(await s.get("demoted")).toMatchObject({ member: true, moderator: false });
+        expect(await s.roleRecheckDue!("demoted")).toBe(false);
+
+        expect(await s.applyRoleRecheck!("outage", null)).toBe(true);
+        expect(await s.get("outage")).toMatchObject({ member: true, moderator: true });
+        expect(await s.roleRecheckDue!("outage")).toBe(false);
+
+        expect(await s.applyRoleRecheck!("missing", { member: false, moderator: false })).toBe(
+          false,
+        );
+        expect(await s.applyRoleRecheck!("missing", null)).toBe(false);
+      });
+
+      it("rotation carries the recheck stamp to the successor and apply rewrites grace bits", async () => {
+        const s = store();
+        const row = {
+          userId: MEMBER,
+          username: "fixture",
+          avatar: null,
+          member: true,
+          moderator: true,
+        };
+        await s.create({ ...row, tokenHash: "rotate-old", expiresAt: at(3600 * SECOND) });
+        await fixture.client`update web_sessions
+          set roles_checked_at = ${at(-3600 * SECOND)} where token_hash = 'rotate-old'`;
+        expect(await s.roleRecheckDue!("rotate-old")).toBe(true);
+
+        expect(
+          await s.rotate("rotate-old", {
+            ...row,
+            tokenHash: "rotate-new",
+            expiresAt: at(3600 * SECOND),
+          }),
+        ).toBe(true);
+        // Stamp carried, not freshened: the successor is immediately due.
+        expect(await s.roleRecheckDue!("rotate-new")).toBe(true);
+
+        expect(await s.applyRoleRecheck!("rotate-new", { member: false, moderator: false })).toBe(
+          true,
+        );
+        expect(await s.get("rotate-new")).toMatchObject({ member: false, moderator: false });
+        // The predecessor grace authorizes with the same re-derived bits.
+        expect(await s.get("rotate-old")).toMatchObject({ member: false, moderator: false });
+      });
+
+      it("rotation with bits a recheck already changed leaves the successor immediately due", async () => {
+        // The caller read the privileged row, a concurrent recheck demoted
+        // it (fresh stamp), then the caller rotates with its stale snapshot.
+        // The successor carries the caller's bits but a null stamp, so its
+        // next authorizing read re-derives instead of trusting them for a
+        // fresh cadence.
+        const s = store();
+        const row = {
+          userId: MEMBER,
+          username: "fixture",
+          avatar: null,
+          member: true,
+          moderator: true,
+        };
+        await seedRecheck("race-old", { createdOffset: -3600 * SECOND });
+        expect(await s.applyRoleRecheck!("race-old", { member: true, moderator: false })).toBe(
+          true,
+        );
+        expect(await s.roleRecheckDue!("race-old")).toBe(false);
+
+        expect(
+          await s.rotate("race-old", {
+            ...row,
+            tokenHash: "race-new",
+            expiresAt: at(3600 * SECOND),
+          }),
+        ).toBe(true);
+        expect(await s.get("race-new")).toMatchObject({ member: true, moderator: true });
+        expect(await s.roleRecheckDue!("race-new")).toBe(true);
       });
     });
   },

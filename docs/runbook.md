@@ -145,7 +145,7 @@ the complete suite on its disposable Postgres service.
 
 ## A moderator lost their role
 
-Moderator status is stored on each session at sign-in and read live from that row; role removal does not update existing sessions. First confirm the Discord moderator role has been removed. If the moderator stops visiting pages, the idle session expires within two hours (120 minutes after its last session-refreshing page view); normal browsing can rotate and extend that window. Run this command for immediate invalidation; it does not depend on the member signing out. Use a dry-run first, verify the active-session count, then apply. It revokes only unexpired, not-yet-revoked sessions for that member.
+Moderator status is stored on each session at sign-in and read live from that row. A live session also re-derives its member/moderator flags from Discord: once the stored flags are five minutes old, the next authorizing request refreshes them first, so a removed role stops working on its own within minutes (an inconclusive Discord lookup keeps the stored flags until a later refresh or the session's 24-hour lineage cap). First confirm the Discord moderator role has been removed. If the moderator stops visiting pages, the idle session expires within two hours (120 minutes after its last session-refreshing page view); normal browsing can rotate and extend that window. Run this command for immediate invalidation — during an incident, or while Discord lookups are unavailable; it does not depend on the member signing out. Use a dry-run first, verify the active-session count, then apply. It revokes only unexpired, not-yet-revoked sessions for that member.
 
 ```sh
 node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging
@@ -180,7 +180,7 @@ Bounded waits: the command sets its own session `statement_timeout` (10s) and `l
      ```
 
      Each side needs exactly one source (`--*-file` or `--*-ids`, not both). Files hold a JSON array of Discord user IDs or newline/comma separated IDs. Exit 0 = sets match (empty-safe: no moderators on either side is a clean pass), 1 = drift, 2 = usage or malformed input. The report shows at most 20 IDs per side with exact counts; the rest is `…and N more`.
-  2. On drift: `discord-only` IDs hold the Discord role but have no live app session. They carry no excess privilege; they gain the panel at next login (login recomputes the flag). Record the count as information. `app-only` IDs carry the flag in a live session without the Discord role, so revoke each with the command below (dry-run first, verify the active-session count, then apply).
+  2. On drift: `discord-only` IDs hold the Discord role but have no live app session. They carry no excess privilege; they gain the panel at next login (login recomputes the flag, and a live member session re-derives it within five minutes). Record the count as information. `app-only` IDs carry the flag in a live session without the Discord role. An active session drops the flag at its next five-minute role recheck; revoke each with the command below anyway for immediate effect and to cover idle sessions (dry-run first, verify the active-session count, then apply).
   3. For each such Discord snowflake, dry-run first, verify the active-session count, then apply:
 
      ```sh

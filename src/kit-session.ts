@@ -7,7 +7,11 @@
 // request, shared with Kit loads through locals (createRequestSessionCache
 // shares one decision across concurrent readers of the same Request where
 // several readers are wired). The bridge never rotates, revokes, or issues
-// a session; the one cookie this module writes is the signed auth-status
+// a session; its one store write is the shared mid-session role recheck
+// (src/session-role-refresh.ts), which restamps the row and, on a
+// definitive Discord answer, re-derives its member/moderator bits — the
+// bearer, expiry and lineage are untouched. The one cookie this module
+// writes is the signed auth-status
 // probe below, attached by the hook only to successful moderator admin
 // responses or audited full member documents. Renewal stays route-specific:
 // Hono's readSession rotates its page views (no blanket rotating layout load;
@@ -41,6 +45,11 @@ import {
   type JoinResult,
 } from "./return-journey";
 import type { HookEventLike } from "./route-ownership";
+import {
+  refreshSessionRoles,
+  roleRecheckConfigFor,
+  type RoleRecheckConfig,
+} from "./session-role-refresh";
 import { SESSION_COOKIE } from "./session-cookie";
 import {
   hashToken,
@@ -78,6 +87,10 @@ export type KitLocals = KitRequestSession & KitReturnJourney;
 export type RequestSessionDeps = {
   sessionSecret: string;
   store: SessionStore;
+  /** Mid-session role recheck inputs (src/session-role-refresh.ts). The
+   * production bridges always pass them; direct test deps may omit them and
+   * keep the login-only bits. */
+  roleRecheck?: RoleRecheckConfig;
 };
 
 const GUEST: KitRequestSession = { status: "guest", session: null };
@@ -110,9 +123,10 @@ export async function resolveRequestSession(
   if (!cookies) return UNKNOWN;
   const raw = cookies[SESSION_COOKIE];
   if (!isValidSessionToken(raw)) return GUEST;
+  const tokenHash = await hashToken(raw);
   let row;
   try {
-    row = await deps.store.get(await hashToken(raw));
+    row = await deps.store.get(tokenHash);
   } catch (err) {
     // Fail closed to "unknown", never to a false logout: callers render the
     // session state as indeterminate (like Hono's sessionUnavailable guest
@@ -122,6 +136,15 @@ export async function resolveRequestSession(
     return UNKNOWN;
   }
   if (!row) return GUEST;
+  // Mid-session role recheck before the bits reach Kit locals
+  // (src/session-role-refresh.ts): the refresh absorbs its own failures, so
+  // it runs outside the store-outage classification above; only a row that
+  // stopped being live during the refresh changes the decision, to guest.
+  if (deps.roleRecheck) {
+    const refreshed = await refreshSessionRoles(deps.store, tokenHash, row, deps.roleRecheck);
+    if (!refreshed) return GUEST;
+    row = refreshed;
+  }
   return {
     status: "authenticated",
     session: {
@@ -222,6 +245,7 @@ export function kitEventsSessionFor(
       const decision = await resolveRequestSession(request, {
         sessionSecret: env.SESSION_SECRET,
         store: await storeForEnv(env),
+        roleRecheck: roleRecheckConfigFor(env),
       });
       return decision.status === "authenticated" && decision.session
         ? {
@@ -259,6 +283,7 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
           return await resolveRequestSession(event.request, {
             sessionSecret: env.SESSION_SECRET,
             store: await storeForEnv(env),
+            roleRecheck: roleRecheckConfigFor(env),
           });
         } catch (err) {
           // The store never materialized, so no read ran: one class-only
@@ -371,7 +396,12 @@ export function kitAdminRenewalFor(env: Env): (event: HookEventLike) => Promise<
     // The live row, not locals, authorizes the successor: a load between the
     // bridge read and this post-release call could have mutated locals, so
     // re-read the row, re-gate on its moderator bit, and carry its bits.
-    const row = await store.get(tokenHash);
+    // The re-read runs the same mid-session role recheck as the bridge, so
+    // the successor can never carry bits staler than the cadence.
+    const storedRow = await store.get(tokenHash);
+    const row = storedRow
+      ? await refreshSessionRoles(store, tokenHash, storedRow, roleRecheckConfigFor(env))
+      : null;
     if (!row?.moderator) return null;
     const replacement = newSessionToken();
     const rotated = await store.rotate(tokenHash, {
