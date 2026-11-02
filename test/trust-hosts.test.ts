@@ -123,9 +123,9 @@ describe("middleware: foreign Host refused before routing", () => {
       `${staging().APP_URL}/auth/qa/qa-member`,
       {
         method: "POST",
-        headers: { ...evilHeaders, "X-TWO-QA-Auth": "qa-secret" },
+        headers: { ...evilHeaders, "X-TWO-QA-Auth": "qa-secret-".padEnd(32, "x") },
       },
-      staging("qa-secret"),
+      staging("qa-secret-".padEnd(32, "x")),
     );
     expect(res.status).toBe(404);
     expect(await res.text()).not.toContain(EVIL);

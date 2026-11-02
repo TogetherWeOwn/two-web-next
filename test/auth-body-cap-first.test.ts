@@ -22,7 +22,7 @@ import {
 import { createMemorySessionStore, newSessionToken, type Sql } from "../src/sessions";
 
 const SESSION_SECRET = "test-session-secret-at-least-32-bytes-long";
-const QA_TOKEN = "test-only-auth-cap-first-token";
+const QA_TOKEN = "test-only-auth-cap-first-token-32-plus";
 // One Ray ID gives every compared response the same echoed x-request-id, so
 // the full header comparison still proves byte-identical refusals (same
 // pattern as test/qa-identity-admission.test.ts).
