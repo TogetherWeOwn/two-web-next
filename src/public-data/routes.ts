@@ -20,6 +20,7 @@ import { getPublicApiEvent, listPublicApiEvents, type PublicApiEvent } from "../
 import { etagFor, matchesIfNoneMatch, publicReadGuard } from "../events/routes-shared";
 import { inviteDestination } from "../invite";
 import { wallDateIso, wallTimeHm } from "../islands/contracts";
+import { MCP_SERVER_NAME, MCP_SERVER_VERSION } from "../mcp/identity";
 import { requestRoute } from "../request-log";
 import { JOIN_INTRO } from "../screens/join";
 import {
@@ -222,22 +223,61 @@ export class EventByteCapExceededError extends Error {
   }
 }
 
+// The serverInfo stamp the MCP SDK adds to result `_meta` on newer protocols.
+const MCP_SERVER_INFO_META = JSON.stringify({
+  "io.modelcontextprotocol/serverInfo": { name: MCP_SERVER_NAME, version: MCP_SERVER_VERSION },
+});
+
+/**
+ * Bytes of the largest serialized MCP tool result that carries this event
+ * body: the text copy (string-escaped), the structuredContent copy, the
+ * optional trimmed-result notice block, and the `resultType` and serverInfo
+ * `_meta` the SDK adds on newer protocols. Older protocols omit those stamps,
+ * so their results are smaller. The JSON-RPC envelope (the client-chosen id)
+ * and SSE/HTTP framing are not counted.
+ */
+export function eventResultBytes(body: string, notice?: string): number {
+  const noticeBlock =
+    notice === undefined ? "" : `,${JSON.stringify({ type: "text", text: notice })}`;
+  return TEXT.encode(
+    `{"content":[{"type":"text","text":${JSON.stringify(body)}}${noticeBlock}],"structuredContent":${body},"resultType":"complete","_meta":${MCP_SERVER_INFO_META}}`,
+  ).length;
+}
+
+/**
+ * MCP notices for a trimmed event result: they say the text was shortened
+ * (possibly to empty when little room remains) and where to read more. REST
+ * fits with the same notice reserved, so the REST and MCP bytes stay equal.
+ */
+export const LIST_EVENTS_TRIMMED_NOTICE =
+  'Some descriptions were shortened to fit the 32 KiB result limit: most end in "…", and one may be empty when little room remains. No rows were dropped. For longer descriptions, call list_events with a smaller per_page and step page up to meta.last_page to refetch the full text. For a single uppercase-ULID event, call get_event with its event_key.';
+
+export function getEventTrimmedNotice(eventKey: string): string {
+  return `This description was shortened to fit the 32 KiB result limit and ends in "…". The full text is on the public event page at /e/${eventKey}.`;
+}
+
+export type FittedEventBody = { body: string; trimmed: boolean };
+
 /**
  * Fits a collection inside the byte cap by halving the longest description
- * until the wrapped body fits. Shortened descriptions end in …; rows are
- * never dropped, so paging stays stable. Always terminates: a one-character
- * description collapses to empty. Throws EventByteCapExceededError when no
- * description remains but the body still exceeds the cap — irreducible
- * metadata (title/game/location) must refuse, never return oversized.
+ * until the MCP tool result for the wrapped body, plus the trimmed notice,
+ * fits (see eventResultBytes). REST serves the same fitted bytes, so the REST
+ * body is always smaller and the two surfaces never drift. Shortened
+ * descriptions end in …; rows are never dropped, so paging stays stable.
+ * Always terminates: a one-character description collapses to empty. Throws
+ * EventByteCapExceededError when no description remains but the body still
+ * exceeds the cap — irreducible metadata (title/game/location) must refuse,
+ * never return oversized.
  */
 export function fitByteBudget(
   rows: PublicApiEventDto[],
   maxBytes: number,
   wrap: (rows: PublicApiEventDto[]) => unknown,
-): string {
+  notice: string,
+): FittedEventBody {
   let body = JSON.stringify(wrap(rows));
+  if (eventResultBytes(body) <= maxBytes) return { body, trimmed: false };
   for (;;) {
-    if (TEXT.encode(body).length <= maxBytes) return body;
     let longest: PublicApiEventDto | null = null;
     for (const row of rows) {
       if (
@@ -256,6 +296,7 @@ export function fitByteBudget(
         ? ""
         : `${codePoints.slice(0, Math.ceil(codePoints.length / 2) - 1).join("")}…`;
     body = JSON.stringify(wrap(rows));
+    if (eventResultBytes(body, notice) <= maxBytes) return { body, trimmed: true };
   }
 }
 
@@ -430,10 +471,12 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       if (game !== null && total === 0) return await emptyEventCollection(c, generation);
       const payload = serializeEventCollection(rows.map(serializeEvent), total, clamped, limit);
       try {
-        body = fitByteBudget(payload.data, API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => ({
-          ...payload,
-          data: trimmed,
-        }));
+        ({ body } = fitByteBudget(
+          payload.data,
+          API_PUBLIC_BOUNDS.maxBodyBytes,
+          (trimmed) => ({ ...payload, data: trimmed }),
+          LIST_EVENTS_TRIMMED_NOTICE,
+        ));
       } catch (err) {
         if (err instanceof EventByteCapExceededError) return unavailable(c);
         throw err;
@@ -477,7 +520,12 @@ export function registerPublicApiRoutes(app: Hono<{ Bindings: Env }>): void {
       if (!row) return apiError(c, "not_found", "No published event with that key.", 404);
       const [dto] = [serializeEvent(row)];
       try {
-        body = fitByteBudget([dto!], API_PUBLIC_BOUNDS.maxBodyBytes, (trimmed) => trimmed[0]);
+        ({ body } = fitByteBudget(
+          [dto!],
+          API_PUBLIC_BOUNDS.maxBodyBytes,
+          (trimmed) => trimmed[0],
+          getEventTrimmedNotice(dto!.event_key),
+        ));
       } catch (err) {
         if (err instanceof EventByteCapExceededError) return unavailable(c);
         throw err;

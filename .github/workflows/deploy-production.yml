@@ -319,6 +319,25 @@ jobs:
           # Deploy the dispatch SHA that passed preflight, not a newer main head.
           ref: ${{ needs.preflight.outputs.sha }}
           persist-credentials: false
+      # Policy scripts for the live-state checks below come from the workflow
+      # tip, not the target checkout: a rescue redeploy of a commit older
+      # than --rollback-version/--capture-rollback-target would otherwise run
+      # scripts that predate those flags (the old secrets script falls
+      # through to the production check, silently skipping the rollback
+      # verification) and fail before any mutation. These checks inspect
+      # live production only — secret names, deployed versions — never
+      # target files, so the tip scripts are the correct ones. The gate
+      # recheck below stays on the target checkout: it asserts the target's
+      # wrangler.jsonc, the artifact being deployed.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          path: workflow-tip
+          persist-credentials: false
+          sparse-checkout: |
+            /ci/
+            /.github/actions/gradual-promote/
+          sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
@@ -363,12 +382,12 @@ jobs:
         run: |
           set -euo pipefail
           live="$(npx wrangler deployments list --name two-web-next-production --json \
-            | node .github/actions/gradual-promote/gradual-promote.mjs --capture-rollback-target)"
+            | node workflow-tip/.github/actions/gradual-promote/gradual-promote.mjs --capture-rollback-target)"
           if [ "$live" != "$ROLLBACK_VERSION_ID" ]; then
             echo "::error::production serves $live, not the recorded rollback target $ROLLBACK_VERSION_ID; refusing promotion"
             exit 1
           fi
-          node ci/check-production-secrets.mjs --rollback-version
+          node workflow-tip/ci/check-production-secrets.mjs --rollback-version
           echo "rollback target $ROLLBACK_VERSION_ID ($ROLLBACK_COMMIT) recorded and verified"
         env:
           ROLLBACK_VERSION_ID: ${{ needs.preflight.outputs.rollback_version_id }}
@@ -505,7 +524,7 @@ jobs:
       - name: Upload production promotion proof
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: production-promotion-${{ github.run_id }}-${{ github.run_attempt }}
+          name: production-promotion-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/promotion.json
           if-no-files-found: error
           retention-days: 30

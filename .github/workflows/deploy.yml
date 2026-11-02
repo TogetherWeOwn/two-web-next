@@ -52,7 +52,13 @@ jobs:
     # collide across concurrent jobs. A job container has its own network
     # namespace.
     container:
-      image: node:24-bookworm
+      # Pinned by digest, like the action SHAs in this file: the image changes
+      # only through a reviewed PR, never by the tag moving upstream. This is
+      # node:24-bookworm as of 2026-11-01 (Node 24.22.2). Refresh monthly and
+      # on Node security releases: resolve the new digest with
+      # `docker buildx imagetools inspect node:24-bookworm`, then update the
+      # image line and this note together.
+      image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

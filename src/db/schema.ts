@@ -265,6 +265,9 @@ export const webSessions = pgTable(
     expiresAt: timestamp("expires_at", { withTimezone: true }).notNull(),
     revokedAt: timestamp("revoked_at", { withTimezone: true }),
     statusHash: text("status_hash"),
+    // Last mid-session role recheck attempt (src/sessions.ts). Null means the
+    // member/moderator bits still date from lineage start (`created_at`).
+    rolesCheckedAt: timestamp("roles_checked_at", { withTimezone: true }),
   },
   (t) => [
     index("web_sessions_status_hash_idx").on(t.statusHash),

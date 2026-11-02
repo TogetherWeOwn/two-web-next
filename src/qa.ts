@@ -21,6 +21,16 @@ export function qaIdentity(name: string): QaIdentity | undefined {
   return Object.hasOwn(QA_IDENTITIES, name) ? QA_IDENTITIES[name] : undefined;
 }
 
+/** True for the synthetic QA fixture snowflakes above. Their session bits are
+ * fixtures by construction — the identities are not Discord guild members —
+ * so the mid-session role recheck (src/session-role-refresh.ts) leaves them
+ * as issued. A session can only carry one of these ids where the QA route
+ * itself exists (the staging env gate above); everywhere else no sign-in
+ * path can mint one. */
+export function isQaFixtureId(userId: string): boolean {
+  return Object.values(QA_IDENTITIES).some((identity) => identity.discordId === userId);
+}
+
 export const STAGING_APP_URL = "https://next.togetherweown.com";
 
 // The longest presented QA token the gate will hash, in characters. Anything
