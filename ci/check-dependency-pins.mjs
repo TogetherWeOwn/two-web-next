@@ -193,6 +193,9 @@ function listTestFiles(root) {
 export function collectPins(root = ROOT) {
   const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
   const lockfile = JSON.parse(readFileSync(join(root, "package-lock.json"), "utf8"));
+  if (!isObject(lockfile.packages)) {
+    throw new Error("package-lock.json has no `packages` map (requires lockfileVersion 2 or 3)");
+  }
   const { exact, overrides } = parseManifestPins(manifest);
   const installed = [];
   const manifestPins = [];
