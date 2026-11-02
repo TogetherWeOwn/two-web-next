@@ -7,6 +7,11 @@ name: pr-gates
 # Required-check names are the JOB names, not the workflow name, and are pinned
 # equal to the ids: `pr-lint` (ruleset pr-conventions) and `gitleaks` (ruleset
 # protect-main). Keep both names byte-identical or merges block.
+#
+# Runner separation: pull_request and merge_group runs always use
+# GitHub-hosted runners (see the CI_OVERFLOW_* note in the main CI workflow
+# and docs/private-flip-checklist.md); only main pushes and manual dispatches
+# may reach the self-hosted fleet while the repository is private.
 
 on:
   pull_request:
@@ -69,7 +74,7 @@ jobs:
   pr-lint:
     name: pr-lint
     # Overflow switch: see CI_OVERFLOW_* note in the main CI workflow.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'pr-lint') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'pr-lint') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     timeout-minutes: 5
     env:
       # Metadata lint needs the immutable PR head, not a regenerated merge ref
@@ -289,7 +294,7 @@ jobs:
     needs: pr-lint
     if: ${{ !cancelled() }}
     # Overflow switch: see CI_OVERFLOW_* note in the main CI workflow.
-    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'gitleaks') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
+    runs-on: ${{ fromJSON((!github.event.repository.private && '["ubuntu-latest"]') || ((github.event_name == 'pull_request' || github.event_name == 'merge_group') && '["ubuntu-latest"]') || (contains(fromJSON(vars.CI_OVERFLOW_JOBS || '[]'), 'gitleaks') && contains(fromJSON(vars.CI_OVERFLOW_EVENTS || '[]'), github.event_name) && vars.CI_OVERFLOW_RUNNER) || '["self-hosted","two-selfhosted"]') }}
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

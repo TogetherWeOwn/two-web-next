@@ -7,7 +7,8 @@
 //   web_sessions(token_hash TEXT PRIMARY KEY, user_id TEXT NOT NULL,
 //     username TEXT NOT NULL, avatar TEXT, member BOOLEAN NOT NULL,
 //     moderator BOOLEAN NOT NULL DEFAULT FALSE, created_at TIMESTAMPTZ NOT NULL,
-//     expires_at TIMESTAMPTZ NOT NULL, revoked_at TIMESTAMPTZ)
+//     expires_at TIMESTAMPTZ NOT NULL, revoked_at TIMESTAMPTZ,
+//     status_hash TEXT, roles_checked_at TIMESTAMPTZ)
 // The cookie carries a random token (`two_` + 32 bytes, base64url); the DB
 // stores only its SHA-256 hex. Nothing session-shaped lives in KV.
 
@@ -31,6 +32,17 @@ export const SESSION_TTL_SECONDS = 60 * 120;
  * lineage start + cap. Fresh login (`replace`) mints a new lineage. */
 export const SESSION_ABSOLUTE_MAX_AGE_SECONDS = 24 * 3600;
 
+/** Mid-session role recheck cadence: a privileged row (member or moderator)
+ * whose Discord-derived bits were last derived — at login (`created_at`) or
+ * at the last recheck attempt (`roles_checked_at`) — at least this long ago
+ * is due for re-derivation (src/session-role-refresh.ts) before its bits
+ * authorize another request. This bounds how long a Discord role or guild
+ * membership change can lag behind the stored bits while a session stays
+ * active: the cadence plus the 10s predecessor grace, instead of the 24h
+ * lineage cap above. The cap stays the hard bound when Discord cannot
+ * answer (an inconclusive attempt restamps the cadence, never the bits). */
+export const SESSION_ROLE_RECHECK_SECONDS = 5 * 60;
+
 /** Immediate-predecessor grace: 10s from winning rotation, bounded also by the
  * predecessor's original expiry. Exact deadline is guest. Lets two overlapping
  * tab requests both authenticate; logout and revoke kill it inside the window. */
@@ -53,12 +65,34 @@ export type SessionStore = {
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
   ) => Promise<void>;
   get: (tokenHash: string) => Promise<DbSessionRow | null>;
+  /** Mid-session role recheck (SESSION_ROLE_RECHECK_SECONDS): true when the
+   * live row carries privilege (member or moderator) and its bits were last
+   * derived — login or last recheck attempt — at least the cadence ago, on
+   * the store's own clock. Optional so injected test doubles keep the
+   * login-only behavior; both real stores implement it. */
+  roleRecheckDue?: (tokenHash: string) => Promise<boolean>;
+  /** Record a role recheck attempt on a live row: always restamps the
+   * cadence; with non-null bits (a definitive Discord answer) also replaces
+   * the member/moderator bits on the row and on any live predecessor grace
+   * pointing at it. Null bits means the lookup was inconclusive and the
+   * stored bits stand. Resolves false when no live row was updated — the
+   * row died or rotated, or a parallel recheck already landed (the stamp
+   * is fresh), in which case this older-read verdict is discarded and the
+   * caller re-reads. */
+  applyRoleRecheck?: (
+    tokenHash: string,
+    bits: { member: boolean; moderator: boolean } | null,
+  ) => Promise<boolean>;
   /** Extend a live row without rotating its bearer or changing identity/roles. */
   renew: (tokenHash: string, expiresAt: Date) => Promise<boolean>;
   /** Non-authenticating probe key, stable across rotation of a live session. */
   statusHash: (tokenHash: string) => Promise<string | null>;
   isActive: (statusHash: string) => Promise<boolean>;
-  /** Rotation: atomically replace an unrevoked, unexpired source; otherwise return false. */
+  /** Rotation: atomically replace an unrevoked, unexpired source; otherwise
+   * return false. The successor's member/moderator bits are the
+   * least-privileged combination of the caller's and the source row's:
+   * rotation never grants privilege, so a caller holding a pre-demotion
+   * snapshot cannot resurrect a bit a recheck already cleared. */
   rotate: (
     oldTokenHash: string,
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
@@ -111,6 +145,10 @@ const MIGRATION = [
   )`,
   // Additive rollout: existing login cookies acquire a probe on their next page.
   `alter table web_sessions add column if not exists status_hash text`,
+  // Mid-session role recheck stamp (drizzle/1033): nullable, null = the bits
+  // still date from lineage start (created_at), so existing rows recheck on
+  // their next privileged request once past the cadence.
+  `alter table web_sessions add column if not exists roles_checked_at timestamptz`,
   `update web_sessions set status_hash = token_hash where status_hash is null`,
   `create index if not exists web_sessions_status_hash_idx on web_sessions (status_hash)`,
   `create index if not exists web_sessions_user_id_idx on web_sessions (user_id)`,
@@ -183,7 +221,8 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
           status_hash = excluded.status_hash,
           user_id = excluded.user_id, username = excluded.username, avatar = excluded.avatar,
           member = excluded.member, moderator = excluded.moderator,
-          expires_at = excluded.expires_at, revoked_at = null`;
+          expires_at = excluded.expires_at, revoked_at = null,
+          roles_checked_at = clock_timestamp()`;
     },
     async get(tokenHash) {
       const rows = await sql<
@@ -217,6 +256,54 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
           )`;
       const g = grace[0];
       return g ? toRow(g) : null;
+    },
+    async roleRecheckDue(tokenHash) {
+      // Store-clock staleness: the DB clock judges its own stamps. A null
+      // stamp dates the bits from lineage start, so a pre-1033 row is due
+      // once its lineage passes the cadence. Only privileged rows are due:
+      // an unprivileged row has no access for a Discord change to revoke.
+      const rows = await sql<{ due: boolean }[]>`select exists (
+        select 1 from web_sessions where token_hash = ${tokenHash}
+          and revoked_at is null and expires_at > clock_timestamp()
+          and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
+          and (member or moderator)
+          and coalesce(roles_checked_at, created_at) <= clock_timestamp() - make_interval(secs => ${SESSION_ROLE_RECHECK_SECONDS})
+      ) as due`;
+      return rows[0]?.due === true;
+    },
+    async applyRoleRecheck(tokenHash, bits) {
+      // One statement: the stamp and (on a definitive answer) the new bits
+      // land together, and a live predecessor grace serving this successor
+      // gets the same bits so its remaining seconds authorize identically.
+      // A row that died or rotated since the read updates nothing. The
+      // still-stale clause is the concurrency guard: if a parallel recheck
+      // already landed (fresh stamp), this older-read verdict must not
+      // overwrite it — first applier wins, and the caller re-reads.
+      if (!bits) {
+        const rows = await sql<Record<string, unknown>[]>`update web_sessions
+          set roles_checked_at = clock_timestamp()
+          where token_hash = ${tokenHash} and revoked_at is null
+            and expires_at > clock_timestamp()
+            and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
+            and coalesce(roles_checked_at, created_at) <= clock_timestamp() - make_interval(secs => ${SESSION_ROLE_RECHECK_SECONDS})
+          returning 1`;
+        return rows.length > 0;
+      }
+      const rows = await sql<Record<string, unknown>[]>`with updated as (
+          update web_sessions
+          set member = ${bits.member}, moderator = ${bits.moderator},
+            roles_checked_at = clock_timestamp()
+          where token_hash = ${tokenHash} and revoked_at is null
+            and expires_at > clock_timestamp()
+            and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
+            and coalesce(roles_checked_at, created_at) <= clock_timestamp() - make_interval(secs => ${SESSION_ROLE_RECHECK_SECONDS})
+          returning 1
+        ), grace as (
+          update web_session_grace set member = ${bits.member}, moderator = ${bits.moderator}
+          where successor_hash = ${tokenHash} and exists (select 1 from updated) returning 1
+        )
+        select (select count(*)::int from updated) as updated`;
+      return Number(rows[0]?.updated ?? 0) > 0;
     },
     async renew(tokenHash, expiresAt) {
       // Check wall-clock liveness after the lock wait, just like rotation. Never
@@ -272,7 +359,18 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       // stored successor while it is live.
       // The successor carries the source's created_at: rotation preserves the
       // lineage clock instead of restarting it, so the lineage dies with the
-      // cap. Past the cap the source refuses rotation and plants nothing.
+      // cap. It likewise carries roles_checked_at, but only when the caller's
+      // bits still match the source row: a fresh bearer never freshens the
+      // bits' derivation stamp, and if a recheck changed the row after the
+      // caller's read, the successor's bits must not inherit the new stamp —
+      // a null stamp dates them from lineage start, so they re-derive on the
+      // successor's next authorizing read. The successor's bits themselves
+      // are the least-privileged combination of the caller's and the deleted
+      // row's, so that same race cannot resurrect a cleared bit even while
+      // Discord is unavailable to re-derive it; the grace row carries that
+      // same combination, so the old bearer cannot outrank its successor
+      // during the 10s overlap either. Past the cap the source
+      // refuses rotation and plants nothing.
       const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
           select token_hash, revoked_at, expires_at, created_at, user_id, username, avatar, member, moderator,
             coalesce(status_hash, token_hash) as status_hash
@@ -286,30 +384,35 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
             coalesce(web_sessions.status_hash, web_sessions.token_hash) as status_hash,
             web_sessions.user_id, web_sessions.username, web_sessions.avatar,
             web_sessions.member, web_sessions.moderator, web_sessions.expires_at,
-            web_sessions.created_at
+            web_sessions.created_at, web_sessions.roles_checked_at
         ), pruned as (
           delete from web_session_grace using deleted
           where web_session_grace.successor_hash = deleted.old_hash
           returning 1
         ), inserted as (
-          insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at, created_at)
+          insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at, created_at, roles_checked_at)
           select ${replacement.tokenHash}, deleted.status_hash, ${replacement.userId}, ${replacement.username},
-            ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt},
-            deleted.created_at
+            ${replacement.avatar}, ${replacement.member} and deleted.member,
+            ${replacement.moderator} and deleted.moderator, ${replacement.expiresAt},
+            deleted.created_at,
+            case when deleted.member = ${replacement.member}
+              and deleted.moderator = ${replacement.moderator}
+              then deleted.roles_checked_at end
           from deleted
           on conflict (token_hash) do update set
             status_hash = excluded.status_hash,
             user_id = excluded.user_id, username = excluded.username, avatar = excluded.avatar,
             member = excluded.member, moderator = excluded.moderator,
             expires_at = excluded.expires_at, revoked_at = null,
-            created_at = excluded.created_at
+            created_at = excluded.created_at, roles_checked_at = excluded.roles_checked_at
           returning 1
         ), grace as (
           insert into web_session_grace
             (predecessor_hash, successor_hash, status_hash, user_id, username, avatar, member, moderator, expires_at, grace_expires_at)
           select deleted.old_hash, ${replacement.tokenHash}, deleted.status_hash,
             deleted.user_id, deleted.username, deleted.avatar,
-            deleted.member, deleted.moderator, deleted.expires_at,
+            ${replacement.member} and deleted.member,
+            ${replacement.moderator} and deleted.moderator, deleted.expires_at,
             clock_timestamp() + make_interval(secs => ${SESSION_PREDECESSOR_GRACE_SECONDS})
           from deleted
           on conflict (predecessor_hash) do update set
@@ -386,7 +489,12 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
 export function createMemorySessionStore(clock: () => number = Date.now): SessionStore {
   const rows = new Map<
     string,
-    DbSessionRow & { expiresAt: number; statusHash: string; createdAt: number }
+    DbSessionRow & {
+      expiresAt: number;
+      statusHash: string;
+      createdAt: number;
+      rolesCheckedAt: number;
+    }
   >();
   const grace = new Map<
     string,
@@ -433,6 +541,7 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         expiresAt: replacement.expiresAt.getTime(),
         statusHash: replacement.tokenHash,
         createdAt: clock(),
+        rolesCheckedAt: clock(),
       });
     },
     async create(s) {
@@ -445,6 +554,9 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         expiresAt: s.expiresAt.getTime(),
         statusHash: s.tokenHash,
         createdAt: prior?.createdAt ?? clock(),
+        // The bits a create installs were just derived by its caller (fresh
+        // login), mirroring the Postgres on-conflict restamp.
+        rolesCheckedAt: clock(),
       });
     },
     async get(hash) {
@@ -476,6 +588,32 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         moderator: g.moderator,
       };
     },
+    async roleRecheckDue(hash) {
+      const r = live(hash);
+      if (!r || (!r.member && !r.moderator)) return false;
+      return r.rolesCheckedAt <= clock() - SESSION_ROLE_RECHECK_SECONDS * 1000;
+    },
+    async applyRoleRecheck(hash, bits) {
+      const r = live(hash);
+      if (!r) return false;
+      // Still-stale guard, mirroring the PG store: a parallel recheck that
+      // already landed freshens the stamp, and this older-read verdict must
+      // not overwrite it. (Unprivileged rows are never due, so a
+      // privilege-clearing apply also closes the door behind it.)
+      if (r.rolesCheckedAt > clock() - SESSION_ROLE_RECHECK_SECONDS * 1000) return false;
+      r.rolesCheckedAt = clock();
+      if (bits) {
+        r.member = bits.member;
+        r.moderator = bits.moderator;
+        for (const g of grace.values()) {
+          if (g.successorHash === hash) {
+            g.member = bits.member;
+            g.moderator = bits.moderator;
+          }
+        }
+      }
+      return true;
+    },
     async renew(hash, expiresAt) {
       const r = live(hash);
       if (!r) return false;
@@ -504,8 +642,8 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         userId: source.userId,
         username: source.username,
         avatar: source.avatar,
-        member: source.member,
-        moderator: source.moderator,
+        member: replacement.member && source.member,
+        moderator: replacement.moderator && source.moderator,
         successorHash: replacement.tokenHash,
         statusHash: source.statusHash,
         expiresAt: source.expiresAt,
@@ -513,12 +651,26 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
       });
       rows.delete(oldHash);
       // The successor inherits the lineage start: rotation never restarts the
-      // absolute clock, so it dies with the lineage at the cap.
+      // absolute clock, so it dies with the lineage at the cap. It also
+      // inherits the role-recheck stamp, but only when the caller's bits
+      // still match the source row: a fresh bearer never freshens the bits'
+      // derivation time, and bits a recheck changed after the caller's read
+      // date from lineage start instead, so the successor re-derives them on
+      // its next authorizing read (the PG store's null stamp). Its bits are
+      // the least-privileged combination of the caller's and the source's,
+      // mirroring the PG store, so that race cannot resurrect a cleared bit;
+      // the grace row above carries that same combination.
       rows.set(replacement.tokenHash, {
         ...replacement,
+        member: replacement.member && source.member,
+        moderator: replacement.moderator && source.moderator,
         expiresAt: replacement.expiresAt.getTime(),
         statusHash: source.statusHash,
         createdAt: source.createdAt,
+        rolesCheckedAt:
+          replacement.member === source.member && replacement.moderator === source.moderator
+            ? source.rolesCheckedAt
+            : source.createdAt,
       });
       return true;
     },
