@@ -398,22 +398,35 @@ export function verifyPins({
     }
     const spec = manifest.overrides[pin.key];
     if (typeof spec === "string") {
+      // `$name` references resolve through the direct dependency range. Only
+      // exact specs are compared literally: npm resolves ranges, tags and
+      // aliases itself, so a literal comparison would false-fail on those.
+      const effective = spec.startsWith("$") ? direct[spec.slice(1)] : spec;
+      if (!isExactRange(effective)) {
+        checks.push({
+          id,
+          status: "info",
+          detail: `overrides["${pin.key}"] is ${JSON.stringify(spec)} (not an exact version); checked by npm, not by this guard`,
+        });
+        continue;
+      }
+      const exactSpec = effective.trim();
       const copies = lockEntriesFor(lockfile, pin.key);
       if (copies.length === 0) {
         checks.push({
           id,
           status: "info",
-          detail: `overrides["${pin.key}"] pins ${spec} but no copy is installed in this tree`,
+          detail: `overrides["${pin.key}"] pins ${exactSpec} but no copy is installed in this tree`,
         });
-      } else if (copies.every((copy) => copy.version === spec)) {
+      } else if (copies.every((copy) => copy.version === exactSpec)) {
         checks.push({
           id,
           status: "pass",
-          detail: `overrides["${pin.key}"] pins ${spec}; ${copies.length} installed ${copies.length === 1 ? "copy agrees" : "copies agree"}`,
+          detail: `overrides["${pin.key}"] pins ${exactSpec}; ${copies.length} installed ${copies.length === 1 ? "copy agrees" : "copies agree"}`,
         });
       } else {
         const offenders = copies
-          .filter((copy) => copy.version !== spec)
+          .filter((copy) => copy.version !== exactSpec)
           .map((copy) => `${copy.path}@${copy.version}`)
           .join(", ");
         // Installing a transitive override key by name would promote it to
@@ -421,12 +434,12 @@ export function verifyPins({
         // transitive drift re-resolves (the override reapplies) with no
         // package argument.
         const restore = Object.hasOwn(direct, pin.key)
-          ? `restore with \`npm install --package-lock-only ${pin.key}@${spec}\` and file a follow-up`
+          ? `restore with \`npm install --package-lock-only ${pin.key}@${exactSpec}\` and file a follow-up`
           : `re-resolve with \`npm install --package-lock-only\` (no package argument; naming ${pin.key} would promote it to a direct dependency) and file a follow-up`;
         checks.push({
           id,
           status: "fail",
-          detail: `overrides["${pin.key}"] pins ${spec} but ${offenders} drifted; ${restore}`,
+          detail: `overrides["${pin.key}"] pins ${exactSpec} but ${offenders} drifted; ${restore}`,
         });
       }
       continue;
@@ -910,6 +923,86 @@ function selftest() {
     },
   };
   assert(verifyPins(overrideFixed).ok === true, "agreeing copies pass the string override");
+  // A range override is resolved by npm, not by this guard: informational,
+  // never drift, even when the installed copy differs from the range floor.
+  const rangeOverride = {
+    ...base,
+    manifest: {
+      ...base.manifest,
+      overrides: { ...base.manifest.overrides, "some-range": "^1.0.0" },
+    },
+    overrides: [...base.overrides, { key: "some-range" }],
+    exact: [],
+    installed: [],
+    manifestPins: [],
+    lockfile: {
+      packages: {
+        ...base.lockfile.packages,
+        "node_modules/some-range": { version: "1.9.9" },
+      },
+    },
+  };
+  const rangeResult = verifyPins(rangeOverride);
+  assert(
+    rangeResult.ok === true &&
+      rangeResult.checks.some((c) => c.id === "override:some-range" && c.status === "info"),
+    "range overrides are informational, never drift",
+  );
+  // A `$name` override reference resolves through the direct dependency range:
+  // agreement passes, drift fails against the resolved version.
+  const refOverride = {
+    ...base,
+    manifest: {
+      dependencies: { ...base.manifest.dependencies, tmp: "0.2.7" },
+      devDependencies: { ...base.manifest.devDependencies },
+      overrides: { ...base.manifest.overrides, tmp: "$tmp" },
+    },
+    overrides: [...base.overrides, { key: "tmp" }],
+    exact: [],
+    installed: [],
+    manifestPins: [],
+    lockfile: {
+      packages: { ...base.lockfile.packages, "node_modules/tmp": { version: "0.2.7" } },
+    },
+  };
+  const refResult = verifyPins(refOverride);
+  assert(
+    refResult.ok === true &&
+      refResult.checks.some((c) => c.id === "override:tmp" && c.status === "pass"),
+    "$name overrides resolve through the direct range",
+  );
+  const refDrifted = {
+    ...refOverride,
+    lockfile: {
+      packages: { ...refOverride.lockfile.packages, "node_modules/tmp": { version: "9.9.9" } },
+    },
+  };
+  const refDriftResult = verifyPins(refDrifted);
+  assert(
+    refDriftResult.ok === false &&
+      refDriftResult.checks.some(
+        (c) =>
+          c.id === "override:tmp" &&
+          c.status === "fail" &&
+          c.detail.includes("npm install --package-lock-only tmp@0.2.7"),
+      ),
+    "$name drift fails against the resolved version",
+  );
+  // A `$name` reference with no direct edge cannot resolve: informational.
+  const danglingRef = {
+    ...refOverride,
+    manifest: {
+      ...refOverride.manifest,
+      dependencies: { zod: "4.6.7" },
+      overrides: { ...refOverride.manifest.overrides, tmp: "$missing" },
+    },
+  };
+  const danglingResult = verifyPins(danglingRef);
+  assert(
+    danglingResult.ok === true &&
+      danglingResult.checks.some((c) => c.id === "override:tmp" && c.status === "info"),
+    "unresolvable $name references are informational",
+  );
   // Nested overrides follow the scope package; a missing edge is vacuous, not a pass.
   const nestedBase = {
     ...base,
@@ -995,20 +1088,24 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       process.exitCode = 2;
     }
   } catch (err) {
-    console.log(
-      JSON.stringify(
-        {
-          check: "dependency-pins",
-          version: 1,
-          ok: false,
-          error_code: "check_error",
-          retryable: false,
-          next_action: `The gate itself failed: ${err instanceof Error ? err.message : err}. Fix the gate or the files it reads, then rerun.`,
-        },
-        null,
-        2,
-      ),
+    // In the listing modes stdout carries only package names (the sweep
+    // captures it into `UPDATE`), so the error report goes to stderr there
+    // and stdout stays empty. Other modes keep the JSON report on stdout.
+    const listing = args.length === 1 && (args[0] === "--names" || args[0] === "--updatable");
+    const report = JSON.stringify(
+      {
+        check: "dependency-pins",
+        version: 1,
+        ok: false,
+        error_code: "check_error",
+        retryable: false,
+        next_action: `The gate itself failed: ${err instanceof Error ? err.message : err}. Fix the gate or the files it reads, then rerun.`,
+      },
+      null,
+      2,
     );
+    if (listing) console.error(report);
+    else console.log(report);
     console.error(`dependency-pins: error: ${err instanceof Error ? err.message : err}`);
     process.exitCode = 1;
   }

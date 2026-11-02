@@ -2,8 +2,12 @@
 // inventory assertion over the real checkout. No network, no registry, no
 // node_modules install: everything runs with node --test on a bare checkout.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import { copyFileSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import {
   collectPins,
   holdBackNames,
@@ -164,6 +168,70 @@ test("transitive override drift re-resolves without an install-by-name hint", ()
       !row.detail.includes(`${key}@${spec}`),
     "the failure re-resolves instead of naming the transitive package",
   );
+});
+
+test("non-exact string overrides are informational, $refs resolve through direct ranges", () => {
+  const pins = collectPins();
+  const withRange = {
+    ...pins,
+    manifest: {
+      ...pins.manifest,
+      overrides: { ...pins.manifest.overrides, "some-range": "^1.0.0" },
+    },
+    overrides: [...pins.overrides, { key: "some-range" }],
+    lockfile: {
+      packages: {
+        ...pins.lockfile.packages,
+        "node_modules/some-range": { version: "1.9.9" },
+      },
+    },
+  };
+  const rangeResult = verifyPins(withRange);
+  assert.equal(rangeResult.ok, true);
+  assert.equal(
+    rangeResult.checks.find((c) => c.id === "override:some-range")?.status,
+    "info",
+    "a range override never drifts, even when the installed copy moved",
+  );
+  const withRef = {
+    ...pins,
+    manifest: {
+      ...pins.manifest,
+      dependencies: { ...pins.manifest.dependencies, tmp: "0.2.7" },
+      overrides: { ...pins.manifest.overrides, tmp: "$tmp" },
+    },
+    overrides: [...pins.overrides, { key: "tmp" }],
+    lockfile: {
+      packages: { ...pins.lockfile.packages, "node_modules/tmp": { version: "0.2.7" } },
+    },
+  };
+  const refResult = verifyPins(withRef);
+  assert.equal(refResult.ok, true);
+  assert.equal(
+    refResult.checks.find((c) => c.id === "override:tmp")?.status,
+    "pass",
+    "a $ref override resolves through the direct range",
+  );
+});
+
+test("listing modes report gate errors on stderr with empty stdout", () => {
+  // The gate resolves its tree from its own location, so stage a copy in an
+  // empty dir: the copy finds no package.json and must take the error path.
+  // The script uses node builtins only, so the staged copy runs standalone.
+  const script = fileURLToPath(new URL("./check-dependency-pins.mjs", import.meta.url));
+  const empty = mkdtempSync(join(tmpdir(), "pins-gate-"));
+  const staged = join(empty, "check-dependency-pins.mjs");
+  copyFileSync(script, staged);
+  try {
+    for (const flag of ["--updatable", "--names"]) {
+      const run = spawnSync(process.execPath, [staged, flag], { cwd: empty, encoding: "utf8" });
+      assert.equal(run.status, 1, `${flag} exits 1 when the gate cannot read the tree`);
+      assert.equal(run.stdout, "", `${flag} keeps stdout empty on gate errors`);
+      assert.match(run.stderr, /package\.json/, `${flag} reports the gate error on stderr`);
+    }
+  } finally {
+    rmSync(empty, { recursive: true, force: true });
+  }
 });
 
 test("root-resolved transitive pins verify instead of passing blindly", () => {
