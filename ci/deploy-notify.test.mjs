@@ -128,7 +128,19 @@ test("rollback events report the target and the version they replaced", () => {
   );
   assert.equal(manual.outcome, "failed");
   assert.equal(manual.previousVersionId, null);
-  assert.equal(manual.reason, "manual rollback-production dispatch");
+  assert.match(
+    manual.reason,
+    /rollback did not complete \(rollback failure\); production may be unchanged/,
+  );
+  const manualSkipped = buildPayload(
+    { ...env, ROLLBACK_RESULT: "skipped", ROLLBACK_REASON: "", EXPECTED_CURRENT_VERSION_ID: "" },
+    { now: NOW },
+  );
+  assert.equal(manualSkipped.outcome, "failed");
+  assert.match(
+    manualSkipped.reason,
+    /rollback did not complete \(rollback skipped\); production may be unchanged/,
+  );
   assert.throws(() => buildPayload({ ...env, NOTIFY_EVENT: "push" }), /deploy or rollback/);
 });
 
@@ -233,7 +245,17 @@ test("deploy and rollback workflows end with a non-blocking notify", () => {
     assert.ok(flat(job).includes(flat(needs)), `${file} notify needs ${needs}`);
     assert.match(job, /if: \$\{\{ always\(\) && /);
     assert.match(job, /continue-on-error: true\n {8}run: node ci\/deploy-notify\.mjs\n/);
+    // Setup steps stay non-fatal: a checkout or Node setup failure after a
+    // successful deploy or rollback must not fail the notify job.
+    assert.match(job, /uses: actions\/checkout@[\da-f]+ # v[\d.]+\n {8}continue-on-error: true\n/);
+    assert.match(
+      job,
+      /uses: actions\/setup-node@[\da-f]+ # v[\d.]+\n {8}continue-on-error: true\n/,
+    );
     assert.match(job, new RegExp(`NOTIFY_EVENT: ${event}\\n`));
+    if (event === "rollback") {
+      assert.match(job, /NOTIFY_SHA: \$\{\{ inputs\.rollback_commit \}\}\n/);
+    }
     if (event === "deploy") {
       assert.match(job, /WATCH_VERDICT: \$\{\{ needs\.post-deploy-watch\.outputs\.verdict \}\}/);
     }

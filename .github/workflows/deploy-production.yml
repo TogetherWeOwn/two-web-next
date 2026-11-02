@@ -606,6 +606,7 @@ jobs:
       ref: ${{ needs.preflight.outputs.sha }}
       expected_current_version_id: ${{ needs.deploy-production.outputs.promoted_version_id }}
       reason: ${{ needs.deploy-production.outputs.verify_outcome == 'failure' && 'post-promotion public-route smoke failed after 100%' || 'post-deploy watch breach (readiness or error rate)' }}
+      rollback_commit: ${{ needs.preflight.outputs.rollback_commit }}
     # Explicit least-privilege map: the two production Environment secrets
     # this leg needs are passed by name, and the called job's own
     # `environment: production` binding receives their values even though
@@ -660,8 +661,13 @@ jobs:
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
-      # Tip checkout, like the preflight checks.
+      # Tip checkout, like the preflight checks. Setup steps stay non-fatal:
+      # a checkout or Node setup failure after a successful promotion must
+      # not fail the notify job and contradict the "never fails a deploy"
+      # claim. The script step below is continue-on-error, so the job stays
+      # green with a warning when setup fails.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -670,6 +676,7 @@ jobs:
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        continue-on-error: true
         with:
           node-version: 24
       - name: Notify the Paperclip deploy-verification routine

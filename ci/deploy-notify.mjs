@@ -91,9 +91,14 @@ export function buildPayload(env, { now = () => new Date() } = {}) {
       ? deployOutcome(env)
       : {
           // A rollback that completed (traffic moved, or the target already
-          // served) is a success; anything else failed.
+          // served) is a success; anything else failed. A non-success must
+          // name the rollback result, not the trigger: ROLLBACK_REASON says
+          // how the run started, not why it failed.
           outcome: env.ROLLBACK_RESULT === "success" ? "success" : "failed",
-          reason: env.ROLLBACK_REASON || "manual rollback-production dispatch",
+          reason:
+            env.ROLLBACK_RESULT === "success"
+              ? env.ROLLBACK_REASON || "manual rollback-production dispatch"
+              : `rollback did not complete (rollback ${env.ROLLBACK_RESULT || "unknown"}); production may be unchanged`,
         };
   const sha = /^[0-9a-f]{40}$/.test(env.NOTIFY_SHA ?? "") ? env.NOTIFY_SHA : null;
   return {

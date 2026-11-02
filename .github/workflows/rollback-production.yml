@@ -45,6 +45,11 @@ on:
         required: false
         type: string
         default: ""
+      rollback_commit:
+        description: "Commit associated with the Worker Version being restored; empty sends sha null"
+        required: false
+        type: string
+        default: ""
     # Callers pass every secret by name. Production Environment secrets are
     # passed by name too: the called job's own `environment:` binding receives
     # their values, even though the caller job itself binds no environment
@@ -304,7 +309,12 @@ jobs:
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
+      # Setup steps stay non-fatal: a checkout or Node setup failure after a
+      # successful rollback must not fail the notify job and misreport the
+      # rollback to the caller. The script step below is continue-on-error,
+      # so the job stays green with a warning when setup fails.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        continue-on-error: true
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
@@ -312,6 +322,7 @@ jobs:
             /ci/
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        continue-on-error: true
         with:
           node-version: 24
       - name: Notify the Paperclip deploy-verification routine
@@ -319,6 +330,7 @@ jobs:
         run: node ci/deploy-notify.mjs
         env:
           NOTIFY_EVENT: rollback
+          NOTIFY_SHA: ${{ inputs.rollback_commit }}
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
           EXPECTED_CURRENT_VERSION_ID: ${{ inputs.expected_current_version_id }}
           ROLLBACK_RESULT: ${{ needs.rollback-production.result }}
