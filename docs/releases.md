@@ -89,7 +89,14 @@ deploy job and its receipt are the evidence, not the run's overall conclusion.
 
 ## Repairing a missed release
 
-If a promote deployed but its `release` job failed, dispatch the release
+The release job first repairs itself: a failed CalVer plan or publish is
+retried once, after a short wait, inside the same job attempt, because the
+releaser makes each GitHub API call only once and a transient fetch failure
+must not leave a deployed commit untagged. The publish retry runs in repair
+mode for its own frozen plan (never on a dry run), so a first attempt that
+created the tag but died before its Release still completes that Release.
+
+If a promote deployed but its `release` job still failed, dispatch the release
 workflow on `main` for the **exact deployed SHA** and the producing run and
 attempt:
 
