@@ -677,7 +677,8 @@ still carries its required secrets before any production mutation.
 Before the deploy job, `deploy-production` runs two more gates
 (`ci/production-deploy-gate.mjs`):
 
-- `staging-soak` (staging credentials, no Environment binding) finds the
+- `staging-soak` (staging credentials, under the staging Environment —
+  branch policy only, no reviewers, so it still starts at once) finds the
   candidate's staging Worker versions by commit tag — every tagged version
   counts, since a deploy retry tags twice — and sums their Workers
   invocation errors since the oldest deployed (at most 24 hours). The job
