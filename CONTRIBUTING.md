@@ -254,9 +254,11 @@ than silently extending them. Fixture examples are synthetic, not accepted risks
 
 Some advisories have no fixed upstream release to upgrade to. Where a patched
 transitive release exists but the direct dependency has not adopted it, pin it
-with an exact `overrides` entry in `package.json` and verify the consumer's
-actual API use before merging. Remove the pin once the direct dependency
-ships the fix itself.
+with an exact `overrides` entry in `package.json`, scoped under the affected
+consumer rather than at the top level, and verify the consumer's actual API
+use before merging. A top-level pin rewrites every copy in the tree,
+including toolchain copies another tool pins for itself. Remove the pin once
+the direct dependency ships the fix itself.
 
 One monitored low-severity exception is open (reviewed 2026-11-01):
 `deepmerge` GHSA-gcqx-w48m-w2h4 in `web/`, pulled in by

@@ -134,7 +134,9 @@
       "chrome-launcher": "1.2.2",
       "uuid": "11.1.1"
     },
-    "esbuild": "0.28.2",
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.28.2"
+    },
     "basic-ftp": "6.2.1",
     "sharp": "0.35.5",
     "lighthouse": {

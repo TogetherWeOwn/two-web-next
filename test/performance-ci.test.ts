@@ -748,6 +748,11 @@ describe("performance CI", () => {
     // dependency or force Zod 4 into the older BiDi parser's Zod 3 contract.
     expect(pkg.overrides).not.toHaveProperty("puppeteer-core");
     expect(pkg.overrides).not.toHaveProperty("zod");
+    // GHSA-67mh-4wv8-2f99: patch only the vulnerable @esbuild-kit copy.
+    // A top-level esbuild pin would also replace the esbuild wrangler
+    // bundles the production Worker with, so keep it scoped.
+    expect(pkg.overrides["@esbuild-kit/core-utils"]).toEqual({ esbuild: "0.28.2" });
+    expect(pkg.overrides).not.toHaveProperty("esbuild");
   });
 
   it("loads the pinned Lighthouse toolchain with patched transitive dependencies", () => {
