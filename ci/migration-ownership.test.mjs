@@ -105,6 +105,21 @@ test("the migrate runner wires the ownership guard into plan with refusal surfac
   assert.match(runner, /error instanceof OwnershipRefusal\) refuse\(error\.message\)/);
 });
 
+test("drizzle scope is the ledger table and its actual serial sequence", () => {
+  // Unrelated relations in the drizzle schema are not censused: the query
+  // takes the ledger table plus the sequence that depends on its column,
+  // instead of every table and sequence in the schema. Resolution goes
+  // through the catalogs, never pg_get_serial_sequence/regclass name
+  // lookup, which needs USAGE on the drizzle schema and would mask the
+  // refusal behind a driver error when that schema is foreign-owned.
+  const guard = readFileSync(new URL("./migration-ownership.mjs", import.meta.url), "utf8");
+  assert.match(guard, /c\.relname = '__drizzle_migrations'/);
+  assert.match(guard, /FROM pg_depend AS d/);
+  assert.doesNotMatch(guard, /pg_get_serial_sequence\(/);
+  assert.doesNotMatch(guard, /to_regclass\(/);
+  assert.doesNotMatch(guard, /n\.nspname = 'drizzle' AND c\.relkind/);
+});
+
 test("the guard judges USAGE equivalence, never bare membership", () => {
   const guard = readFileSync(new URL("./migration-ownership.mjs", import.meta.url), "utf8");
   assert.match(guard, /pg_has_role\(current_user, pg_get_userbyid\(c\.relowner\), 'USAGE'\)/);

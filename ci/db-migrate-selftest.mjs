@@ -801,7 +801,8 @@ test("ownership guard: inherited group ownership passes, foreign and non-inherit
       // unreviewed table under the same foreign owner stays out of scope.
       // The migration ledger under the foreign owner is in scope too: it is
       // runner infrastructure, and its implicit owner rights never appear
-      // in relacl for the ledger ACL guard to see.
+      // in relacl for the ledger ACL guard to see. An unrelated table in the
+      // drizzle schema is not the ledger and stays out of scope.
       await client.unsafe(`SET ROLE "${group}"`);
       await client.unsafe("CREATE TABLE public.web_sessions (id bigint)");
       await client.unsafe("RESET ROLE");
@@ -811,6 +812,7 @@ test("ownership guard: inherited group ownership passes, foreign and non-inherit
       await client.unsafe(
         "CREATE TABLE drizzle.__drizzle_migrations (id serial primary key, hash text not null, created_at bigint)",
       );
+      await client.unsafe("CREATE TABLE drizzle.ownership_unrelated (id bigint)");
       await client.unsafe("RESET ROLE");
       // As the inheriting migrator: the foreign-owned reviewed table refuses
       // by name; the group-owned reviewed table and the unreviewed table do
@@ -825,8 +827,13 @@ test("ownership guard: inherited group ownership passes, foreign and non-inherit
             error.message,
             new RegExp(`drizzle\\.__drizzle_migrations \\(owner ${foreign}\\)`),
           );
+          assert.match(
+            error.message,
+            new RegExp(`drizzle\\.__drizzle_migrations_id_seq \\(owner ${foreign}\\)`),
+          );
           assert.doesNotMatch(error.message, /web_sessions/);
           assert.doesNotMatch(error.message, /ownership_unreviewed/);
+          assert.doesNotMatch(error.message, /ownership_unrelated/);
           return true;
         });
       } finally {
@@ -851,7 +858,8 @@ test("ownership guard: inherited group ownership passes, foreign and non-inherit
       }
       // With the foreign-owned reviewed table and ledger gone, the
       // inheriting migrator passes on group ownership alone (USAGE, not
-      // literal equality).
+      // literal equality) — while the unrelated foreign-owned drizzle
+      // table still exists and does not block.
       await client.unsafe(`SET ROLE "${foreign}"`);
       await client.unsafe("DROP TABLE public.join_attempts");
       await client.unsafe("DROP TABLE drizzle.__drizzle_migrations");
@@ -880,6 +888,7 @@ test("ownership guard: inherited group ownership passes, foreign and non-inherit
       await client.unsafe("DROP TABLE IF EXISTS public.ownership_unreviewed").catch(() => {});
       await client.unsafe("DROP TABLE IF EXISTS public.join_attempts").catch(() => {});
       await client.unsafe("DROP TABLE IF EXISTS drizzle.__drizzle_migrations").catch(() => {});
+      await client.unsafe("DROP TABLE IF EXISTS drizzle.ownership_unrelated").catch(() => {});
       await client.unsafe("RESET ROLE").catch(() => {});
       await client.unsafe(`SET ROLE "${group}"`).catch(() => {});
       await client.unsafe("DROP TABLE IF EXISTS public.web_sessions").catch(() => {});
@@ -1298,7 +1307,17 @@ assert.deepEqual(state.statements, [
     FROM pg_class AS c
     JOIN pg_namespace AS n ON n.oid = c.relnamespace
    WHERE (n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S'))
-      OR (n.nspname = 'drizzle' AND c.relkind IN ('r', 'S'))
+      OR (n.nspname = 'drizzle' AND (
+        c.relname = '__drizzle_migrations'
+        OR c.oid IN (
+          SELECT d.objid FROM pg_depend AS d
+            JOIN pg_class AS t ON t.oid = d.refobjid
+            JOIN pg_namespace AS tn ON tn.oid = t.relnamespace
+           WHERE tn.nspname = 'drizzle' AND t.relname = '__drizzle_migrations'
+             AND d.classid = 'pg_class'::regclass::oid
+             AND d.deptype IN ('a', 'i') AND d.refobjsubid > 0
+        )
+      ))
    ORDER BY 1
 `)},
   "select to_regclass(?) as ledger",
