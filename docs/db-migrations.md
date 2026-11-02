@@ -217,6 +217,17 @@ runner selftests use disposable Postgres only; this check does not authorize a
 staging or production connection or any live grant, revoke, role, or
 default-ACL change.
 
+The runner also refuses at plan time while any reviewed object (the
+runtime-rights table/sequence census, plus the `drizzle` migration ledger and
+its sequence) is owned by a role the migrator cannot
+act as: an `ALTER` needs ownership in PostgreSQL's sense, so equivalence is
+`pg_has_role(current_user, owner, 'USAGE')` — an inherited group owner passes,
+a non-inherited membership or a foreign owner does not — with a superuser
+migrator exempt. The refusal names the object and its owner before any DDL is
+attempted, instead of surfacing as a masked mid-transaction failure; repairing
+the ownership is an operator action outside the runner, which never changes
+owners or role memberships itself.
+
 ## Audit tables are append-only (deployed-role prerequisite)
 
 `drizzle/1018_audit-immutability.sql` guards `agent_event_audits`,

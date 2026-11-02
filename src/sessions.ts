@@ -38,9 +38,12 @@ export const SESSION_ABSOLUTE_MAX_AGE_SECONDS = 24 * 3600;
  * is due for re-derivation (src/session-role-refresh.ts) before its bits
  * authorize another request. This bounds how long a Discord role or guild
  * membership change can lag behind the stored bits while a session stays
- * active: the cadence plus the 10s predecessor grace, instead of the 24h
- * lineage cap above. The cap stays the hard bound when Discord cannot
- * answer (an inconclusive attempt restamps the cadence, never the bits). */
+ * active: normally the cadence plus the 10s predecessor grace, and in the
+ * worst case close to two cadences plus grace when a lookup already in
+ * flight read the pre-change state and restamped the cadence — instead of
+ * the 24h lineage cap above. The cap stays the hard bound when Discord
+ * cannot answer (an inconclusive attempt restamps the cadence, never the
+ * bits). */
 export const SESSION_ROLE_RECHECK_SECONDS = 5 * 60;
 
 /** Immediate-predecessor grace: 10s from winning rotation, bounded also by the

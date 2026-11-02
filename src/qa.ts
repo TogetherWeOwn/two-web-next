@@ -24,9 +24,10 @@ export function qaIdentity(name: string): QaIdentity | undefined {
 /** True for the synthetic QA fixture snowflakes above. Their session bits are
  * fixtures by construction — the identities are not Discord guild members —
  * so the mid-session role recheck (src/session-role-refresh.ts) leaves them
- * as issued. A session can only carry one of these ids where the QA route
- * itself exists (the staging env gate above); everywhere else no sign-in
- * path can mint one. */
+ * as issued. This predicate is the identity half only: callers must also
+ * require `qaEnabled(APP_URL, QA_AUTH_TOKEN)` before treating a fixture id
+ * as exempt, so an environment where the QA route does not exist (everywhere
+ * but staging) never exempts any identity on the snowflake alone. */
 export function isQaFixtureId(userId: string): boolean {
   return Object.values(QA_IDENTITIES).some((identity) => identity.discordId === userId);
 }

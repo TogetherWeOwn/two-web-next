@@ -145,7 +145,7 @@ the complete suite on its disposable Postgres service.
 
 ## A moderator lost their role
 
-Moderator status is stored on each session at sign-in and read live from that row. A live session also re-derives its member/moderator flags from Discord: once the stored flags are five minutes old, the next authorizing request refreshes them first, so a removed role stops working on its own within minutes (an inconclusive Discord lookup keeps the stored flags until a later refresh or the session's 24-hour lineage cap). First confirm the Discord moderator role has been removed. If the moderator stops visiting pages, the idle session expires within two hours (120 minutes after its last session-refreshing page view); normal browsing can rotate and extend that window. Run this command for immediate invalidation — during an incident, or while Discord lookups are unavailable; it does not depend on the member signing out. Use a dry-run first, verify the active-session count, then apply. It revokes only unexpired, not-yet-revoked sessions for that member.
+Moderator status is stored on each session at sign-in and read live from that row. A live session also re-derives its member/moderator flags from Discord: once the stored flags are five minutes old, the next authorizing request refreshes them first, so a removed role stops working on its own within minutes (a failed recheck — an inconclusive Discord lookup, or a session-store failure before the lookup — keeps the stored flags until a later refresh or the session's 24-hour lineage cap). When rechecks are succeeding, worst case the demotion can take close to two five-minute cadences plus the short predecessor grace: a refresh already in flight when the role was removed can read the pre-demotion state, restamp the cadence, and leave the removed role working until the next refresh. When revoking access mid-incident, do not wait for the cadence — use `bin/revoke-sessions.mjs` below for immediacy. First confirm the Discord moderator role has been removed. If the moderator stops visiting pages, the idle session expires within two hours (120 minutes after its last session-refreshing page view); normal browsing can rotate and extend that window. Run this command for immediate invalidation — during an incident, or while Discord lookups are unavailable; it does not depend on the member signing out. Use a dry-run first, verify the active-session count, then apply. It revokes only unexpired, not-yet-revoked sessions for that member.
 
 ```sh
 node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging
@@ -649,6 +649,28 @@ auto-approve mode it runs on its own. If `auto-rollback` itself fails (or
 waits on an approval nobody gives), the failure mode is a live promoted
 version, never a silent rollback: restore manually with this workflow using
 the version ID in the failed step's logs.
+
+#### Daily staging rollback drill and the promotion rollback target
+
+[.github/workflows/staging-rollback-drill.yml](../.github/workflows/staging-rollback-drill.yml)
+runs daily at 03:41 UTC (and on dispatch). It waits until no `deploy` or
+`e2e-staging` run is active, records the live staging version and the version
+that served before it, then calls `rollback-production.yml` twice with
+`environment: staging`: back to the previous version, then forward to the
+live one. Each leg passes `expected_current_version_id`, so it moves traffic
+only while the expected version serves, skips when the target already serves,
+and refuses when a newer deploy landed in between. The drill is green only
+when both legs moved traffic and passed the identity smoke.
+
+`deploy-production` refuses to promote while the newest completed drill is
+red (`node ci/rollback-target.mjs --check-drill`), and without a valid
+rollback target (`--check-target`): `/up` must name the live production
+version and its commit, and no migration the candidate adds since that commit
+may drop, rename, retype or tighten (`SET NOT NULL`) anything the live code
+uses. A contract migration that is safe for the live code says why on its own
+line: `-- rollback-safe: <reason>`; reviewers check that note. The deploy job
+then confirms the recorded version is still the single 100% deployment and
+still carries its required secrets before any production mutation.
 
 #### Daily staging rollback drill and the promotion rollback target
 

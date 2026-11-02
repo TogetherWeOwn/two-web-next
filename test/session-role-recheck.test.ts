@@ -17,9 +17,14 @@ import type { Env } from "../src/env";
 import { bufferedMemberHtml } from "../src/member-reads";
 import { memberGate } from "../src/profiles/routes-gate";
 import type { ProfileApp } from "../src/profiles/routes-shared";
+import { STAGING_APP_URL } from "../src/qa";
 import { recheckGuildRoles } from "../src/roles";
 import { SESSION_COOKIE } from "../src/session-cookie";
-import { refreshSessionRoles, type RoleRecheckConfig } from "../src/session-role-refresh";
+import {
+  refreshSessionRoles,
+  roleRecheckConfigFor,
+  type RoleRecheckConfig,
+} from "../src/session-role-refresh";
 import {
   createMemorySessionStore,
   hashToken,
@@ -50,6 +55,8 @@ const CONFIG: RoleRecheckConfig = {
   guildId: GUILD,
   botToken: "bot-token",
   moderatorRoleIds: [MOD_ROLE],
+  // Production-shaped default: the QA seam is off, so no identity is exempt.
+  qaFixturesExempt: false,
 };
 
 const env: Env = {
@@ -326,6 +333,27 @@ describe("memory store recheck stamping (manual clock, no timers)", () => {
   });
 });
 
+describe("roleRecheckConfigFor", () => {
+  it("exempts QA fixtures only on the staging host with a configured QA token", () => {
+    expect(
+      roleRecheckConfigFor({ ...env, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: "qa-token" })
+        .qaFixturesExempt,
+    ).toBe(true);
+    expect(
+      roleRecheckConfigFor({
+        ...env,
+        APP_URL: "https://togetherweown.com",
+        QA_AUTH_TOKEN: "qa-token",
+      }).qaFixturesExempt,
+    ).toBe(false);
+    expect(
+      roleRecheckConfigFor({ ...env, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: undefined })
+        .qaFixturesExempt,
+    ).toBe(false);
+    expect(roleRecheckConfigFor(env).qaFixturesExempt).toBe(false);
+  });
+});
+
 describe("refreshSessionRoles", () => {
   let now = LOGIN_AT;
   let store: SessionStore;
@@ -415,6 +443,7 @@ describe("refreshSessionRoles", () => {
       guildId: undefined,
       botToken: undefined,
       moderatorRoleIds: undefined,
+      qaFixturesExempt: undefined,
     } as unknown as RoleRecheckConfig;
     expect(await refreshSessionRoles(store, tokenHash, row, absent)).toEqual(MODERATOR);
     expect(calls).toHaveLength(0);
@@ -452,19 +481,34 @@ describe("refreshSessionRoles", () => {
     expect(calls).toHaveLength(0);
   });
 
-  it("never re-derives QA fixture sessions (staging synthetic identities)", async () => {
+  it("never re-derives QA fixture sessions where the QA seam is enabled (staging)", async () => {
     const calls = stubDiscord(() => unknownMember404());
     const qaModerator: DbSessionRow = { ...MODERATOR, userId: "900000000000001397" };
     const tokenHash = await seed(qaModerator);
     now = LOGIN_AT + CADENCE_MS * 3;
+    const refreshed = await refreshSessionRoles(store, tokenHash, (await store.get(tokenHash))!, {
+      ...CONFIG,
+      qaFixturesExempt: true,
+    });
+    expect(refreshed).toEqual(qaModerator);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("re-derives a QA fixture-shaped id where the QA seam is off (production)", async () => {
+    const calls = stubDiscord(() => unknownMember404());
+    const qaModerator: DbSessionRow = { ...MODERATOR, userId: "900000000000001397" };
+    const tokenHash = await seed(qaModerator);
+    now = LOGIN_AT + CADENCE_MS * 3;
+    // CONFIG carries qaFixturesExempt: false — the snowflake alone must not
+    // exempt the row, so the definitive 404 strips both bits like any member.
     const refreshed = await refreshSessionRoles(
       store,
       tokenHash,
       (await store.get(tokenHash))!,
       CONFIG,
     );
-    expect(refreshed).toEqual(qaModerator);
-    expect(calls).toHaveLength(0);
+    expect(refreshed).toEqual({ ...qaModerator, member: false, moderator: false });
+    expect(calls).toHaveLength(1);
   });
 
   it("serves stored bits without a Discord call when only grace remains (no status key)", async () => {
