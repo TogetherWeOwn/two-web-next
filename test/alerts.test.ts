@@ -43,6 +43,20 @@ describe("exceptionClass", () => {
     expect(fingerprintOf(new ForgedError(), "/join")).toBe(`${cls}@/join`);
   });
 
+  it("bounds class names at exactly 100 characters and never returns empty", () => {
+    const named = (name: string) => {
+      class NamedError extends Error {}
+      Object.defineProperty(NamedError, "name", { value: name });
+      return new NamedError();
+    };
+    // An empty class name falls back to the instance name, so the result
+    // is still a non-empty, safe class label.
+    expect(exceptionClass(named(""))).toBe("Error");
+    const atLimit = "E".repeat(100);
+    expect(exceptionClass(named(atLimit))).toBe(atLimit);
+    expect(exceptionClass(named(`${atLimit}X`))).toBe(atLimit);
+  });
+
   it("degrades a non-string class name to unknown instead of throwing", () => {
     class OddError extends Error {}
     Object.defineProperty(OddError, "name", { value: 42 });
