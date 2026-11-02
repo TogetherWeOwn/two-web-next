@@ -215,7 +215,12 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {/if}
       {#if view.showCancel}
         <form method="post" action={`/admin/events/${view.key}/cancel`}>
-          <button type="submit" class="link" data-testid="cancel-event">Cancel event</button>
+          <button
+            type="submit"
+            class="link"
+            data-testid="cancel-event"
+            aria-label={`Cancel event ${view.title}`}>Cancel event</button
+          >
         </form>
       {/if}
       {#if view.status === "draft" || view.status === "published" || view.status === "cancelled"}
@@ -227,7 +232,12 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
         {@html view.pauseReviewHtml ?? ""}
       {:else if view.rsvpAction === "rsvp-reopen"}
         <form method="post" action={`/admin/events/${view.key}/rsvp-reopen`}>
-          <button type="submit" class="link" data-testid="rsvp-reopen">Reopen RSVPs</button>
+          <button
+            type="submit"
+            class="link"
+            data-testid="rsvp-reopen"
+            aria-label={`Reopen RSVPs for ${view.title}`}>Reopen RSVPs</button
+          >
         </form>
       {/if}
     </div>
