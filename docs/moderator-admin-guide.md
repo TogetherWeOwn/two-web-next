@@ -17,8 +17,10 @@ migration, but its older pending labels are not a substitute for current screens
 2. Approve using the Discord account that has the authorized moderator role.
    Successful Next sign-in and one-click join both recompute moderator status
    through a bot role lookup, matching configured role **IDs**, not role names.
-3. After a role change, sign out using the homepage's **Sign out** button and
-   sign in again, then open `/admin` explicitly.
+3. After a role change, a live session re-checks its Discord roles within
+   five minutes, so the change lands on its own while you keep browsing.
+   Sign out using the homepage's **Sign out** button and sign in again only
+   when you need the change immediately, then open `/admin` explicitly.
 4. A signed-in non-moderator gets 403. A failed role lookup or blank allowed-role
    configuration also fails closed; 403 does not prove the Discord role is
    missing. Ask the maintainers to check after one fresh sign-in.

@@ -150,17 +150,19 @@ describe("moderator recompute contains malformed successful Discord responses", 
       const fetch = stubResponse(response);
       await expect(recomputeModerator(opts)).resolves.toBe(false);
       expectLookup(fetch);
+      // discordFetch rebuilds the response from raw bytes, so the fixture's
+      // json() is never the read path; a 404's rebuilt body is read only to
+      // classify its Discord error code (10007 Unknown Member is the one
+      // definitive verdict) and this body carries no code, so it fails like
+      // every other non-OK status. Either way the claimed roles and the
+      // diagnostic payload reach neither the flag nor the logs.
       expect(json).not.toHaveBeenCalled();
-      expect(diagnostics).toEqual(
-        status === 404
-          ? []
-          : [
-              {
-                level: "warn",
-                args: ["moderator recompute lookup failed", { status, guild_id: opts.guildId }],
-              },
-            ],
-      );
+      expect(diagnostics).toEqual([
+        {
+          level: "warn",
+          args: ["moderator recompute lookup failed", { status, guild_id: opts.guildId }],
+        },
+      ]);
     },
   );
 });

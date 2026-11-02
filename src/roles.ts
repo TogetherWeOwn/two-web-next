@@ -28,7 +28,7 @@ export type GuildMemberRoles = { roles: string[]; joinedAt: string | null };
 /**
  * One guild-member lookup, keeping the three outcomes apart that
  * `fetchMemberRoles` collapses to null: Discord answered for a member, the
- * user is not in the guild (404), or the lookup failed (admission, config,
+ * user is not in the guild (404, code 10007), or the lookup failed (admission, config,
  * HTTP failure, non-JSON). A transport rejection still propagates, exactly
  * as before, so each caller classifies it at its own boundary.
  * `rolesKnown` is false when a 200 body carries no roles array, or any
@@ -57,7 +57,15 @@ async function lookupGuildMember(
       headers: { authorization: `Bot ${botToken}` },
     },
   );
-  if (res.status === 404) return { kind: "not_member" };
+  if (res.status === 404) {
+    // Only Discord code 10007 (Unknown Member) proves the user is not in
+    // the guild. Any other 404 — an unknown guild from a misconfigured
+    // guild id, an edge HTML page — falls through to the failed branch
+    // below, so the mid-session recheck reads it as inconclusive instead
+    // of stripping every privileged session within one cadence.
+    const errBody = (await res.json().catch(() => null)) as { code?: unknown } | null;
+    if (errBody?.code === 10007) return { kind: "not_member" };
+  }
   if (!res.ok) {
     console.warn("moderator recompute lookup failed", { status: res.status, guild_id: guildId });
     return { kind: "failed" };
@@ -168,8 +176,8 @@ export async function recomputeModerator(opts: {
  * `recomputeModerator` at login — which fails closed to non-moderator
  * because nothing is granted yet — a live session already holds bits, so
  * only a definitive Discord answer may replace them: a guild-member body
- * whose roles array is well-formed (every entry a snowflake), or a 404
- * proving the user left the guild. Transport
+ * whose roles array is well-formed (every entry a snowflake), or a
+ * 404 with code 10007 proving the user left the guild. Transport
  * failures, HTTP errors, missing configuration and shape misses resolve
  * to null ("inconclusive: keep the stored bits"), so a Discord outage
  * never strips privilege mid-session; the session's absolute age cap

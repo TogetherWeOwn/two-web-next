@@ -248,12 +248,13 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await s.get("rotate-old")).toMatchObject({ member: false, moderator: false });
       });
 
-      it("rotation with bits a recheck already changed leaves the successor immediately due", async () => {
+      it("rotation with bits a recheck already changed keeps the demotion and is immediately due", async () => {
         // The caller read the privileged row, a concurrent recheck demoted
         // it (fresh stamp), then the caller rotates with its stale snapshot.
-        // The successor carries the caller's bits but a null stamp, so its
-        // next authorizing read re-derives instead of trusting them for a
-        // fresh cadence.
+        // Rotation never grants privilege: the successor carries the
+        // least-privileged combination, so the cleared bit stays cleared,
+        // and its stamp is null, so the next authorizing read re-derives
+        // instead of trusting the bits for a fresh cadence.
         const s = store();
         const row = {
           userId: MEMBER,
@@ -275,7 +276,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
             expiresAt: at(3600 * SECOND),
           }),
         ).toBe(true);
-        expect(await s.get("race-new")).toMatchObject({ member: true, moderator: true });
+        expect(await s.get("race-new")).toMatchObject({ member: true, moderator: false });
         expect(await s.roleRecheckDue!("race-new")).toBe(true);
       });
     });

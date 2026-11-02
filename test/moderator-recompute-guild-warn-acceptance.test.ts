@@ -135,8 +135,10 @@ describe("moderator recompute lookup warnings carry the guild under test", () =>
 });
 
 describe("positive controls: unchanged behaviour around the warnings", () => {
-  it("404 still returns null with no warning at all", async () => {
-    stubResponse(new Response("{}", { status: 404 }));
+  it("404 (Unknown Member, code 10007) still returns null with no warning at all", async () => {
+    stubResponse(
+      new Response(JSON.stringify({ message: "Unknown Member", code: 10007 }), { status: 404 }),
+    );
     await expect(fetchMemberRoles(GUILD_A, USER_ID, BOT_TOKEN)).resolves.toBeNull();
     expect(diagnostics).toEqual([]);
   });

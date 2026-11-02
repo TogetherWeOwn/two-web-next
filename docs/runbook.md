@@ -180,7 +180,7 @@ Bounded waits: the command sets its own session `statement_timeout` (10s) and `l
      ```
 
      Each side needs exactly one source (`--*-file` or `--*-ids`, not both). Files hold a JSON array of Discord user IDs or newline/comma separated IDs. Exit 0 = sets match (empty-safe: no moderators on either side is a clean pass), 1 = drift, 2 = usage or malformed input. The report shows at most 20 IDs per side with exact counts; the rest is `…and N more`.
-  2. On drift: `discord-only` IDs hold the Discord role but have no live app session. They carry no excess privilege; they gain the panel at next login (login recomputes the flag, and a live member session re-derives it within five minutes). Record the count as information. `app-only` IDs carry the flag in a live session without the Discord role. An active session drops the flag at its next five-minute role recheck; revoke each with the command below anyway for immediate effect and to cover idle sessions (dry-run first, verify the active-session count, then apply).
+  2. On drift: `discord-only` IDs hold the Discord role but have no live app session carrying the moderator flag. They carry no excess privilege; they gain the panel at next login (login recomputes the flag, and a live member session re-derives it within five minutes). Record the count as information. `app-only` IDs carry the flag in a live session without the Discord role. An active session drops the flag at its next five-minute role recheck; revoke each with the command below anyway for immediate effect and to cover idle sessions (dry-run first, verify the active-session count, then apply).
   3. For each such Discord snowflake, dry-run first, verify the active-session count, then apply:
 
      ```sh

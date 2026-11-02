@@ -15,7 +15,8 @@
 //   recheck rewrites the grace row's bits too, so the grace seconds
 //   authorize with the same bits as the successor.
 // - Only a definitive Discord answer replaces the bits (a guild-member
-//   body, or a 404 for a user who left the guild). An inconclusive lookup
+//   body, or a 404 with code 10007 for a user who left the guild). An
+//   inconclusive lookup
 //   keeps the stored bits and only restamps the cadence, so Discord
 //   availability never gates a signed-in member or the admin panel; the
 //   24h lineage cap remains the hard bound while Discord cannot answer.

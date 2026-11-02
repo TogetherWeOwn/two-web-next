@@ -88,7 +88,11 @@ export type SessionStore = {
   /** Non-authenticating probe key, stable across rotation of a live session. */
   statusHash: (tokenHash: string) => Promise<string | null>;
   isActive: (statusHash: string) => Promise<boolean>;
-  /** Rotation: atomically replace an unrevoked, unexpired source; otherwise return false. */
+  /** Rotation: atomically replace an unrevoked, unexpired source; otherwise
+   * return false. The successor's member/moderator bits are the
+   * least-privileged combination of the caller's and the source row's:
+   * rotation never grants privilege, so a caller holding a pre-demotion
+   * snapshot cannot resurrect a bit a recheck already cleared. */
   rotate: (
     oldTokenHash: string,
     replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
@@ -358,10 +362,13 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       // cap. It likewise carries roles_checked_at, but only when the caller's
       // bits still match the source row: a fresh bearer never freshens the
       // bits' derivation stamp, and if a recheck changed the row after the
-      // caller's read, the successor's (stale) bits must not inherit the new
-      // stamp — a null stamp dates them from lineage start, so they
-      // re-derive on the successor's next authorizing read. Past the cap the
-      // source refuses rotation and plants nothing.
+      // caller's read, the successor's bits must not inherit the new stamp —
+      // a null stamp dates them from lineage start, so they re-derive on the
+      // successor's next authorizing read. The successor's bits themselves
+      // are the least-privileged combination of the caller's and the deleted
+      // row's, so that same race cannot resurrect a cleared bit even while
+      // Discord is unavailable to re-derive it. Past the cap the source
+      // refuses rotation and plants nothing.
       const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
           select token_hash, revoked_at, expires_at, created_at, user_id, username, avatar, member, moderator,
             coalesce(status_hash, token_hash) as status_hash
@@ -383,7 +390,8 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
         ), inserted as (
           insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at, created_at, roles_checked_at)
           select ${replacement.tokenHash}, deleted.status_hash, ${replacement.userId}, ${replacement.username},
-            ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt},
+            ${replacement.avatar}, ${replacement.member} and deleted.member,
+            ${replacement.moderator} and deleted.moderator, ${replacement.expiresAt},
             deleted.created_at,
             case when deleted.member = ${replacement.member}
               and deleted.moderator = ${replacement.moderator}
@@ -645,9 +653,13 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
       // still match the source row: a fresh bearer never freshens the bits'
       // derivation time, and bits a recheck changed after the caller's read
       // date from lineage start instead, so the successor re-derives them on
-      // its next authorizing read (the PG store's null stamp).
+      // its next authorizing read (the PG store's null stamp). Its bits are
+      // the least-privileged combination of the caller's and the source's,
+      // mirroring the PG store, so that race cannot resurrect a cleared bit.
       rows.set(replacement.tokenHash, {
         ...replacement,
+        member: replacement.member && source.member,
+        moderator: replacement.moderator && source.moderator,
         expiresAt: replacement.expiresAt.getTime(),
         statusHash: source.statusHash,
         createdAt: source.createdAt,

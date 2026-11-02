@@ -52,11 +52,13 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
     });
 
     it("preserves the status key across repeated and no-op rotation without reviving old login tokens", async () => {
-      const original = row();
+      // Moderator steps down across the chain, never up: rotation carries
+      // the least-privileged combination of caller and source bits.
+      const original = { ...row(), moderator: true };
       await store.create(original);
       const statusHash = (await store.statusHash(original.tokenHash))!;
-      const first = row();
-      const second = { ...row(), moderator: true };
+      const first = { ...row(), moderator: true };
+      const second = row();
       for (const [source, replacement] of [
         [original, first],
         [first, second],
@@ -159,7 +161,7 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
     );
 
     it("rotation deletes the old row and inserts the replacement; replay misses", async () => {
-      const s = row();
+      const s = { ...row(), moderator: true };
       await store.create(s);
       const replacement = { ...row(), moderator: true };
       expect(await store.rotate(s.tokenHash, replacement)).toBe(true);

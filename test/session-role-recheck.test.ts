@@ -86,6 +86,14 @@ function memberBody(roles: string[]): Response {
   });
 }
 
+/** Discord's real unknown-member shape: only code 10007 is definitive. */
+function unknownMember404(): Response {
+  return new Response(JSON.stringify({ message: "Unknown Member", code: 10007 }), {
+    status: 404,
+    headers: { "content-type": "application/json" },
+  });
+}
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
@@ -115,9 +123,29 @@ describe("recheckGuildRoles verdicts", () => {
     await expect(recheckGuildRoles(opts())).resolves.toEqual({ member: true, moderator: false });
   });
 
-  it("reports a user who left the guild (404) with both bits cleared", async () => {
-    stubDiscord(() => new Response("Unknown Member", { status: 404 }));
+  it("reports a user who left the guild (404 code 10007) with both bits cleared", async () => {
+    stubDiscord(() => unknownMember404());
     await expect(recheckGuildRoles(opts())).resolves.toEqual({ member: false, moderator: false });
+  });
+
+  it("keeps the verdict inconclusive on a 404 that is not Unknown Member", async () => {
+    // An unknown-guild 404 (code 10004, e.g. a misconfigured guild id), a
+    // code-less JSON 404 and a non-JSON edge 404 must not strip every
+    // privileged session within one cadence.
+    stubDiscord(
+      () =>
+        new Response(JSON.stringify({ message: "Unknown Guild", code: 10004 }), {
+          status: 404,
+          headers: { "content-type": "application/json" },
+        }),
+    );
+    await expect(recheckGuildRoles(opts())).resolves.toBeNull();
+
+    stubDiscord(() => new Response(JSON.stringify({ message: "404: Not Found" }), { status: 404 }));
+    await expect(recheckGuildRoles(opts())).resolves.toBeNull();
+
+    stubDiscord(() => new Response("Unknown Member", { status: 404 }));
+    await expect(recheckGuildRoles(opts())).resolves.toBeNull();
   });
 
   it("keeps the verdict inconclusive on HTTP failure, transport failure and shape misses", async () => {
@@ -232,11 +260,13 @@ describe("memory store recheck stamping (manual clock, no timers)", () => {
     expect(await store.get(newHash)).toEqual({ ...MODERATOR, member: false, moderator: false });
   });
 
-  it("rotation with bits a recheck already changed resets the stamp to lineage start", async () => {
+  it("rotation with bits a recheck already changed keeps the demotion and is immediately due", async () => {
     // A request read the privileged row, a concurrent recheck demoted it
     // (fresh stamp), then the first request rotates with its stale snapshot.
-    // The successor carries the caller's bits (store contract) but must not
-    // inherit the demotion's fresh stamp: it is immediately due again.
+    // Rotation never grants privilege: the successor carries the
+    // least-privileged combination, so the cleared bit stays cleared even
+    // before any re-derivation, and the stamp resets to lineage start so
+    // the successor is immediately due again.
     const oldHash = await seed();
     now = LOGIN_AT + CADENCE_MS;
     expect(await store.applyRoleRecheck!(oldHash, { member: true, moderator: false })).toBe(true);
@@ -249,7 +279,7 @@ describe("memory store recheck stamping (manual clock, no timers)", () => {
         expiresAt: new Date(now + TTL_MS),
       }),
     ).toBe(true);
-    expect(await store.get(newHash)).toEqual(MODERATOR);
+    expect(await store.get(newHash)).toEqual({ ...MODERATOR, moderator: false });
     expect(await store.roleRecheckDue!(newHash)).toBe(true);
   });
 
@@ -306,7 +336,7 @@ describe("refreshSessionRoles", () => {
   });
 
   it("clears both bits when the member left the guild", async () => {
-    stubDiscord(() => new Response("Unknown Member", { status: 404 }));
+    stubDiscord(() => unknownMember404());
     const tokenHash = await seed(MEMBER);
     now = LOGIN_AT + CADENCE_MS;
     const refreshed = await refreshSessionRoles(
@@ -402,7 +432,7 @@ describe("refreshSessionRoles", () => {
   });
 
   it("never re-derives QA fixture sessions (staging synthetic identities)", async () => {
-    const calls = stubDiscord(() => new Response("Unknown Member", { status: 404 }));
+    const calls = stubDiscord(() => unknownMember404());
     const qaModerator: DbSessionRow = { ...MODERATOR, userId: "900000000000001397" };
     const tokenHash = await seed(qaModerator);
     now = LOGIN_AT + CADENCE_MS * 3;
@@ -583,7 +613,7 @@ describe("gates enforce the refreshed bits", () => {
   });
 
   it("member gate 403s a member who left the guild once the cadence passes", async () => {
-    stubDiscord(() => new Response("Unknown Member", { status: 404 }));
+    stubDiscord(() => unknownMember404());
     const store = createMemorySessionStore(() => Date.now());
     const cookie = await sessionFor(store, MEMBER);
     vi.setSystemTime(LOGIN_AT + CADENCE_MS);
