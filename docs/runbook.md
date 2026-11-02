@@ -573,20 +573,25 @@ Keep required resources/bindings in place; never delete a queue to roll back.
 
 [.github/workflows/rollback-production.yml](../.github/workflows/rollback-production.yml)
 is the one-click production rollback: Actions → `rollback-production` → Run
-workflow, branch `main`, `version_id` set to the recorded known-good Worker
-Version ID. It reuses the same request gate
-(`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED` exactly `true`)
-and the same `production` Environment gate as a deploy. Both preflight and
-the mutation job receive the repository variable `PRODUCTION_AUTO_APPROVE`:
+workflow, branch `main`, `environment` `production` (the default),
+`version_id` set to the recorded known-good Worker Version ID. It reuses the
+same request gate (`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED`
+exactly `true`) and the same `production` Environment gate as a deploy
+(`node ci/production-deploy-gate.mjs --rollback`). Both preflight and the
+mutation job receive the repository variable `PRODUCTION_AUTO_APPROVE`:
 exactly `true` selects automated approval, requiring the main-only Environment
-branch policy, green exact-SHA CI, and successful exact-SHA staging deploy and
-e2e-staging evidence with executed journeys and staging quality checks.
-An absent, false or otherwise non-`true` value selects reviewer mode, which
-requires reviewers with self-review prevented; a reviewer-less Environment is
-refused. Exact-SHA CI remains required in either mode. The workflow uses the
-same production-only Cloudflare credentials as a deploy, then runs
-`wrangler rollback <version_id> --name two-web-next-production` followed by
-the same `/up` smoke. This approval-mode selection applies only to the Worker
+branch policy and green exact-SHA CI of the checked-out rollback scripts.
+A rollback serves a version production already served, so it never needs
+staging evidence for the checked-out commit and never waits on
+`PRODUCTION_HOLD_UNTIL`. An absent, false or otherwise non-`true` value
+selects reviewer mode, which requires reviewers with self-review prevented; a
+reviewer-less Environment is refused. Exact-SHA CI remains required in either
+mode. The workflow uses the same production-only Cloudflare credentials as a
+deploy, then runs `wrangler rollback <version_id> --name two-web-next-production`
+followed by the same `/up` smoke. The same workflow takes `environment`
+`staging` (Worker `two-web-next`, staging credentials, the `deploy-staging`
+lock); `ci/rollback-target.mjs` is the one map from environment to Worker and
+origin. This approval-mode selection applies only to the Worker
 rollback; it does not change database migration or backup policy. The
 `version_id` input must be a lowercase Worker Version UUID and travels
 inputs → `env:` only, never through
@@ -627,6 +632,28 @@ gradual action's automatic rollback only covers failures inside the promotion
 itself, and this step never adds an automatic rollback. The failed step's logs
 print the live promoted candidate plus the recorded pre-promote version ID as
 the restoration target; restore it with this workflow using that ID.
+
+#### Daily staging rollback drill and the promotion rollback target
+
+[.github/workflows/staging-rollback-drill.yml](../.github/workflows/staging-rollback-drill.yml)
+runs daily at 03:41 UTC (and on dispatch). It waits until no `deploy` or
+`e2e-staging` run is active, records the live staging version and the version
+that served before it, then calls `rollback-production.yml` twice with
+`environment: staging`: back to the previous version, then forward to the
+live one. Each leg passes `expected_current_version_id`, so it moves traffic
+only while the expected version serves, skips when the target already serves,
+and refuses when a newer deploy landed in between. The drill is green only
+when both legs moved traffic and passed the identity smoke.
+
+`deploy-production` refuses to promote while the newest completed drill is
+red (`node ci/rollback-target.mjs --check-drill`), and without a valid
+rollback target (`--check-target`): `/up` must name the live production
+version and its commit, and no migration the candidate adds since that commit
+may drop, rename, retype or tighten (`SET NOT NULL`) anything the live code
+uses. A contract migration that is safe for the live code says why on its own
+line: `-- rollback-safe: <reason>`; reviewers check that note. The deploy job
+then confirms the recorded version is still the single 100% deployment and
+still carries its required secrets before any production mutation.
 
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group

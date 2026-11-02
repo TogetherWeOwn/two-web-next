@@ -274,7 +274,7 @@ const ROLLBACK_VERSION_ID = "11111111-2222-4333-8444-555555555555";
 
 function cliWithStubbedVersionsView(
   stubStdout,
-  { exitCode = 0, versionId = ROLLBACK_VERSION_ID, stubStderr = "" } = {},
+  { exitCode = 0, versionId = ROLLBACK_VERSION_ID, stubStderr = "", worker } = {},
 ) {
   const scratch = mkdtempSync(
     join(
@@ -287,7 +287,7 @@ function cliWithStubbedVersionsView(
       join(scratch, "npx"),
       `#!${process.execPath}
 import { writeSync } from "node:fs";
-const expected = ["wrangler", "versions", "view", process.env.EXPECTED_VERSION, "--name", "two-web-next-production", "--json"];
+const expected = ["wrangler", "versions", "view", process.env.EXPECTED_VERSION, "--name", process.env.EXPECTED_WORKER, "--json"];
 if (JSON.stringify(process.argv.slice(2)) !== JSON.stringify(expected)) {
   console.error("unexpected wrangler invocation: " + process.argv.slice(2).join(" "));
   process.exit(2);
@@ -311,7 +311,9 @@ process.exit(Number(process.env.STUB_EXIT));
           STUB_STDERR: stubStderr,
           STUB_EXIT: String(exitCode),
           EXPECTED_VERSION: versionId,
+          EXPECTED_WORKER: worker || "two-web-next-production",
           ROLLBACK_VERSION_ID: versionId,
+          ROLLBACK_WORKER_NAME: worker ?? "",
         },
       },
     );
@@ -329,6 +331,21 @@ test("rollback-version CLI passes on the target version and prints names only", 
     assert.ok(result.stdout.includes(name), `stdout must list ${name}`);
   }
   assert.equal(result.stderr, "");
+});
+
+test("rollback-version CLI reads the staging Worker only when asked, and refuses other names", () => {
+  const staging = cliWithStubbedVersionsView(versionAllPresent, { worker: "two-web-next" });
+  assert.equal(staging.status, 0);
+  const production = cliWithStubbedVersionsView(versionAllPresent, {
+    worker: "two-web-next-production",
+  });
+  assert.equal(production.status, 0);
+  for (const worker of ["two-web-next-jobs", "two-web-next;id", "Two-Web-Next"]) {
+    const refused = cliWithStubbedVersionsView(versionAllPresent, { worker });
+    assert.equal(refused.status, 1);
+    assert.match(refused.stderr, /ROLLBACK_WORKER_NAME must be one of/);
+    assert.equal(refused.stdout, "");
+  }
 });
 
 test("rollback-version CLI fails closed on a missing target secret and on bad input", () => {
@@ -562,13 +579,15 @@ test("required-secrets preflight uses production-only credentials", () => {
 // ---------------------------------------------------------------------------
 
 const PRODUCTION_SECRET = /\bsecrets\s*(?:\.\s*|\[\s*['"])PRODUCTION_/i;
-// `inputs.target` selects the Environment; the secret is mapped only when it
-// is exactly `production`, so a staging or scheduled run never receives it.
+// `inputs.target` (or `inputs.environment`) selects the Environment; the
+// secret is mapped only when it is exactly `production`, so a staging or
+// scheduled run never receives it.
 const GUARDED_PRODUCTION_SECRET =
-  /\binputs\.target\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_/i;
-// `inputs.target` alone, or with a literal fallback for scheduled runs.
+  /\binputs\.(?:target|environment)\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_/i;
+// `inputs.target` or `inputs.environment` alone, or with a literal fallback
+// for scheduled runs.
 const TARGET_ENVIRONMENT =
-  /^\$\{\{\s*\(?\s*inputs\.target\s*(?:\|\|\s*'[A-Za-z-]+'\s*)?\)?\s*\}\}$/;
+  /^\$\{\{\s*\(?\s*inputs\.(?:target|environment)\s*(?:\|\|\s*'[A-Za-z-]+'\s*)?\)?\s*\}\}$/;
 
 function stripQuotes(value) {
   return value
@@ -959,9 +978,33 @@ const STAGING_CLOUDFLARE_SECRET =
 // The production name is taken only under the same input that selects the
 // production Environment, and the staging name only under the inverse
 // guard, so an empty production secret resolves to '' (a loud downstream
-// auth failure), never to the staging credential.
+// auth failure), never to the staging credential. Both `inputs.target`
+// (db-backup, deploy) and `inputs.environment` (rollback-production)
+// select the Environment.
 const TARGET_GUARDED_STAGING_CLOUDFLARE =
-  /\binputs\.target\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\s*\|\|\s*inputs\.target\s*!=\s*'production'\s*&&\s*secrets\s*\.\s*CLOUDFLARE_\1\s*\|\|\s*''/i;
+  /\binputs\.(?:target|environment)\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\s*\|\|\s*inputs\.(?:target|environment)\s*!=\s*'production'\s*&&\s*secrets\s*\.\s*CLOUDFLARE_\1\s*\|\|\s*''/i;
+
+// Job-level `environment:` is forbidden on reusable-workflow caller jobs
+// (`uses:`): GitHub only allows name/uses/with/secrets/needs/if/permissions
+// there. A caller job runs no code of its own, so every staging secret it
+// names travels by declared name into the called workflow via its `secrets:`
+// block. It counts as staging-bound when it calls a workflow in this repo
+// (`uses: ./...`) with the callee's environment pinned to the literal
+// `staging` in `with:`: the pin fixes the callee's target-selected
+// Environment to staging on every run, and the callee's own secret reads are
+// gated independently. A remote callee, or a missing or expression-driven
+// pin, fails closed: the pin must be auditable as the literal staging leg.
+function isStagingPinnedCall(lines) {
+  if (!lines.some((line) => /^ {4}uses:\s*\.\//.test(line))) return false;
+  const at = lines.findIndex((line) => /^ {4}with:\s*$/.test(line));
+  if (at < 0) return false;
+  for (const line of lines.slice(at + 1)) {
+    if (/^ {4}\S/.test(line)) break;
+    const pin = /^ {6}environment:\s*(.+)$/.exec(line);
+    if (pin) return /^staging$/i.test(stripQuotes(pin[1]));
+  }
+  return false;
+}
 
 export function stagingCloudflareEnvironmentViolations(text, file) {
   const { outside, jobs } = splitWorkflow(text);
@@ -975,17 +1018,20 @@ export function stagingCloudflareEnvironmentViolations(text, file) {
     const referencing = lines.filter((line) => STAGING_CLOUDFLARE_SECRET.test(line));
     if (referencing.length === 0) continue;
     const environment = jobEnvironment(lines);
-    if (environment === undefined) {
+    if (environment === undefined && !isStagingPinnedCall(lines)) {
       violations.push(
         `${file}: job ${id} reads a staging Cloudflare secret without an environment`,
       );
+    } else if (environment === undefined) {
+      // Staging-pinned local reusable call: pass-through only, the callee's
+      // own jobs are gated independently.
     } else if (/^staging$/i.test(environment)) {
       // Bound to the staging Environment on every run.
     } else if (TARGET_ENVIRONMENT.test(environment)) {
       for (const line of referencing) {
         if (!TARGET_GUARDED_STAGING_CLOUDFLARE.test(line)) {
           violations.push(
-            `${file}: job ${id} maps a staging Cloudflare secret without the inputs.target == 'production' guard to its PRODUCTION_* pair`,
+            `${file}: job ${id} maps a staging Cloudflare secret without the inputs.target/environment == 'production' guard to its PRODUCTION_* pair`,
           );
           break;
         }
@@ -1092,6 +1138,53 @@ ${block}
   }
 });
 
+test("staging-pinned reusable caller passes staging secrets through without a job environment", () => {
+  // `environment:` is forbidden on caller jobs, so the drill's rollback and
+  // restore legs cannot bind staging the way the plan job does. The literal
+  // `with:` pin fixes the local callee on its staging leg, whose own jobs
+  // are gated independently.
+  const pinned = `${FIXTURE_HEAD}jobs:
+  rollback:
+    needs: plan
+    uses: ./.github/workflows/rollback-production.yml
+    with:
+      environment: staging
+      version_id: \${{ needs.plan.outputs.previous }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+`;
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(pinned, "fixture.yml"), []);
+  const quoted = pinned.replace("environment: staging", "environment: 'staging'");
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(quoted, "fixture.yml"), [], "quoted pin");
+  // A remote callee's `environment` input has unknown semantics: fail closed.
+  const remote = pinned.replace(
+    "uses: ./.github/workflows/rollback-production.yml",
+    "uses: octo-org/octo-repo/.github/workflows/rollback.yml@main",
+  );
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(remote, "fixture.yml"), [
+    "fixture.yml: job rollback reads a staging Cloudflare secret without an environment",
+  ]);
+  // An expression-driven pin cannot be shown to select staging: fail closed.
+  const expression = pinned.replace(
+    "environment: staging",
+    "environment: ${{ inputs.environment }}",
+  );
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(expression, "fixture.yml"), [
+    "fixture.yml: job rollback reads a staging Cloudflare secret without an environment",
+  ]);
+  // A production pin is not a staging leg: fail closed.
+  const production = pinned.replace("environment: staging", "environment: production");
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(production, "fixture.yml"), [
+    "fixture.yml: job rollback reads a staging Cloudflare secret without an environment",
+  ]);
+  // No pin at all: fail closed.
+  const unpinned = pinned.replace("      environment: staging\n", "");
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(unpinned, "fixture.yml"), [
+    "fixture.yml: job rollback reads a staging Cloudflare secret without an environment",
+  ]);
+});
+
 test("staging Cloudflare secret outside any job, or via bracket syntax, is a violation", () => {
   const outside = `${FIXTURE_HEAD}env:
   X: \${{ secrets.CLOUDFLARE_API_TOKEN }}
@@ -1151,6 +1244,21 @@ test("target-selected environment requires the PRODUCTION_* guard for staging Cl
   // An expression that cannot be shown to select staging is rejected.
   const opaque = guarded.replace("inputs.target || 'staging'", "vars.ENVIRONMENT_NAME");
   assert.equal(stagingCloudflareEnvironmentViolations(opaque, "fixture.yml").length, 1);
+  // `inputs.environment` selects the Environment the same way `inputs.target`
+  // does (rollback-production.yml names its input `environment`), so its
+  // guarded mapping passes and its unguarded mapping fails.
+  const envGuarded = guarded
+    .replaceAll("inputs.target", "inputs.environment")
+    .replace(
+      "environment: ${{ inputs.environment || 'staging' }}",
+      "environment: ${{ inputs.environment }}",
+    );
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(envGuarded, "fixture.yml"), []);
+  const envUnguarded = envGuarded.replace(
+    "inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || ",
+    "",
+  );
+  assert.equal(stagingCloudflareEnvironmentViolations(envUnguarded, "fixture.yml").length, 1);
 });
 
 // ---------------------------------------------------------------------------
