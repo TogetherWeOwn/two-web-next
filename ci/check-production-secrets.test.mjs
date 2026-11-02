@@ -1249,7 +1249,10 @@ test("target-selected environment requires the PRODUCTION_* guard for staging Cl
   // guarded mapping passes and its unguarded mapping fails.
   const envGuarded = guarded
     .replaceAll("inputs.target", "inputs.environment")
-    .replace("environment: ${{ inputs.environment || 'staging' }}", "environment: ${{ inputs.environment }}");
+    .replace(
+      "environment: ${{ inputs.environment || 'staging' }}",
+      "environment: ${{ inputs.environment }}",
+    );
   assert.deepEqual(stagingCloudflareEnvironmentViolations(envGuarded, "fixture.yml"), []);
   const envUnguarded = envGuarded.replace(
     "inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || ",
