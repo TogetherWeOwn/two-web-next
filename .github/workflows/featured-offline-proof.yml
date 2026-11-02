@@ -8,6 +8,12 @@ name: featured-offline-proof
 # the current-source proof is gated on that verdict, and the always-run
 # `featured-proof` aggregator below reports the conclusion. No ruleset change
 # here: requiring the aggregator is a human-admin step.
+#
+# Runner separation: pull_request runs always use GitHub-hosted runners, so
+# code that has not landed on main never runs on the self-hosted fleet. The
+# `runs-on` expressions below reach that fleet only for non-PR events (here:
+# manual dispatches) while the repository is private; see
+# docs/private-flip-checklist.md.
 on:
   pull_request:
   workflow_dispatch:
@@ -28,7 +34,7 @@ jobs:
     name: scope
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.scope.outputs.relevant }}
@@ -87,7 +93,7 @@ jobs:
     name: featured-offline-proof
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 8
     # Browser + system libraries are already present; only the matching JS
     # module is installed, inside this CI container. No app/DB service or secrets.
@@ -152,7 +158,7 @@ jobs:
     name: featured-current-source-proof
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 8
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
@@ -211,7 +217,7 @@ jobs:
     if: always()
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Report the required-check conclusion

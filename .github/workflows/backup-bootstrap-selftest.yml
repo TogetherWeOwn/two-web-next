@@ -8,6 +8,12 @@ name: backup-bootstrap-selftest
 # fails closed), the heavy job is gated on that verdict, and the always-run
 # `backup-bootstrap` aggregator below reports the conclusion. No ruleset
 # change here: requiring the aggregator is a human-admin step.
+#
+# Runner separation: pull_request runs always use GitHub-hosted runners, so
+# code that has not landed on main never runs on the self-hosted fleet. The
+# `runs-on` expressions below reach that fleet only for non-PR events (here:
+# main pushes) while the repository is private; see
+# docs/private-flip-checklist.md.
 on:
   pull_request:
   push:
@@ -29,7 +35,7 @@ jobs:
     name: scope
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.scope.outputs.relevant }}
@@ -66,7 +72,7 @@ jobs:
     if: needs.scope.outputs.relevant == 'true'
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     container: python:3.13-bookworm
     timeout-minutes: 5
     steps:
@@ -87,7 +93,7 @@ jobs:
     if: always()
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Report the required-check conclusion
