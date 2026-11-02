@@ -49,6 +49,26 @@ test("reviewed objects the migrator cannot act as owner refuse, named with their
   ]);
 });
 
+test("the migration ledger and its sequence refuse under a foreign owner", () => {
+  // The ledger is runner-owned infrastructure outside the runtime-rights
+  // census; a foreign-owned ledger would otherwise fail masked inside the
+  // apply transaction, and owner rights are implicit so the ledger ACL
+  // guard cannot see it in relacl.
+  const errors = validateOwnershipRows([
+    { object_name: "drizzle.__drizzle_migrations", owner: "two_web_app", owner_equivalent: false },
+    {
+      object_name: "drizzle.__drizzle_migrations_id_seq",
+      owner: "two_web_app",
+      owner_equivalent: false,
+    },
+    { object_name: "drizzle.__drizzle_migrations", owner: "migrator", owner_equivalent: true },
+  ]);
+  assert.deepEqual(errors, [
+    "reviewed object not alterable by the migrator: drizzle.__drizzle_migrations (owner two_web_app)",
+    "reviewed object not alterable by the migrator: drizzle.__drizzle_migrations_id_seq (owner two_web_app)",
+  ]);
+});
+
 test("objects outside the reviewed census are not this guard's business", () => {
   assert.deepEqual(
     validateOwnershipRows([

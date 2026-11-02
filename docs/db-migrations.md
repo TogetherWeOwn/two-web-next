@@ -218,7 +218,8 @@ staging or production connection or any live grant, revoke, role, or
 default-ACL change.
 
 The runner also refuses at plan time while any reviewed object (the
-runtime-rights table/sequence census) is owned by a role the migrator cannot
+runtime-rights table/sequence census, plus the `drizzle` migration ledger and
+its sequence) is owned by a role the migrator cannot
 act as: an `ALTER` needs ownership in PostgreSQL's sense, so equivalence is
 `pg_has_role(current_user, owner, 'USAGE')` — an inherited group owner passes,
 a non-inherited membership or a foreign owner does not — with a superuser

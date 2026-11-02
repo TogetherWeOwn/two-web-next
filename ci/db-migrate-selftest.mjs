@@ -794,15 +794,23 @@ test("ownership guard: inherited group ownership passes, foreign and non-inherit
       await client.unsafe(`GRANT "${group}" TO "${migrator}" WITH INHERIT TRUE`);
       await client.unsafe(`GRANT "${group}" TO "${noninherited}" WITH INHERIT FALSE`);
       await client.unsafe(`GRANT CREATE ON SCHEMA public TO "${group}", "${foreign}"`);
+      await client.unsafe("CREATE SCHEMA drizzle");
+      await client.unsafe(`GRANT USAGE, CREATE ON SCHEMA drizzle TO "${foreign}"`);
       // web_sessions owned by a group the migrator inherits (the repaired
       // production shape); join_attempts owned by an unrelated role; an
       // unreviewed table under the same foreign owner stays out of scope.
+      // The migration ledger under the foreign owner is in scope too: it is
+      // runner infrastructure, and its implicit owner rights never appear
+      // in relacl for the ledger ACL guard to see.
       await client.unsafe(`SET ROLE "${group}"`);
       await client.unsafe("CREATE TABLE public.web_sessions (id bigint)");
       await client.unsafe("RESET ROLE");
       await client.unsafe(`SET ROLE "${foreign}"`);
       await client.unsafe("CREATE TABLE public.join_attempts (id bigint)");
       await client.unsafe("CREATE TABLE public.ownership_unreviewed (id bigint)");
+      await client.unsafe(
+        "CREATE TABLE drizzle.__drizzle_migrations (id serial primary key, hash text not null, created_at bigint)",
+      );
       await client.unsafe("RESET ROLE");
       // As the inheriting migrator: the foreign-owned reviewed table refuses
       // by name; the group-owned reviewed table and the unreviewed table do
@@ -813,6 +821,10 @@ test("ownership guard: inherited group ownership passes, foreign and non-inherit
           assert.ok(error instanceof OwnershipRefusal);
           assert.match(error.message, /Migration ownership guard refused/);
           assert.match(error.message, new RegExp(`public\\.join_attempts \\(owner ${foreign}\\)`));
+          assert.match(
+            error.message,
+            new RegExp(`drizzle\\.__drizzle_migrations \\(owner ${foreign}\\)`),
+          );
           assert.doesNotMatch(error.message, /web_sessions/);
           assert.doesNotMatch(error.message, /ownership_unreviewed/);
           return true;
@@ -837,10 +849,12 @@ test("ownership guard: inherited group ownership passes, foreign and non-inherit
         assert.match(safeMigrationError(failure), /Migration ownership guard refused/);
         assert.match(safeMigrationError(failure), /public\.join_attempts/);
       }
-      // With the foreign-owned reviewed table gone, the inheriting migrator
-      // passes on group ownership alone (USAGE, not literal equality).
+      // With the foreign-owned reviewed table and ledger gone, the
+      // inheriting migrator passes on group ownership alone (USAGE, not
+      // literal equality).
       await client.unsafe(`SET ROLE "${foreign}"`);
       await client.unsafe("DROP TABLE public.join_attempts");
+      await client.unsafe("DROP TABLE drizzle.__drizzle_migrations");
       await client.unsafe("RESET ROLE");
       await client.unsafe(`SET ROLE "${migrator}"`);
       try {
@@ -865,6 +879,7 @@ test("ownership guard: inherited group ownership passes, foreign and non-inherit
       await client.unsafe(`SET ROLE "${foreign}"`).catch(() => {});
       await client.unsafe("DROP TABLE IF EXISTS public.ownership_unreviewed").catch(() => {});
       await client.unsafe("DROP TABLE IF EXISTS public.join_attempts").catch(() => {});
+      await client.unsafe("DROP TABLE IF EXISTS drizzle.__drizzle_migrations").catch(() => {});
       await client.unsafe("RESET ROLE").catch(() => {});
       await client.unsafe(`SET ROLE "${group}"`).catch(() => {});
       await client.unsafe("DROP TABLE IF EXISTS public.web_sessions").catch(() => {});
@@ -876,6 +891,9 @@ test("ownership guard: inherited group ownership passes, foreign and non-inherit
       // here or every run leaks two roles onto the shared test cluster.
       await client
         .unsafe(`REVOKE CREATE ON SCHEMA public FROM "${group}", "${foreign}"`)
+        .catch(() => {});
+      await client
+        .unsafe(`REVOKE USAGE, CREATE ON SCHEMA drizzle FROM "${foreign}"`)
         .catch(() => {});
       for (const role of [migrator, noninherited, foreign, group]) {
         await client.unsafe(`DROP OWNED BY "${role}"`).catch(() => {});
@@ -1274,13 +1292,13 @@ assert.deepEqual(state.statements, [
 `)},
   "select coalesce((select rolsuper from pg_roles where rolname = current_user), false) as is_superuser",
   ${JSON.stringify(`
-  SELECT 'public.' || c.relname AS object_name,
+  SELECT n.nspname || '.' || c.relname AS object_name,
          pg_get_userbyid(c.relowner) AS owner,
          pg_has_role(current_user, pg_get_userbyid(c.relowner), 'USAGE') AS owner_equivalent
     FROM pg_class AS c
     JOIN pg_namespace AS n ON n.oid = c.relnamespace
-   WHERE n.nspname = 'public'
-     AND c.relkind IN ('r', 'p', 'S')
+   WHERE (n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S'))
+      OR (n.nspname = 'drizzle' AND c.relkind IN ('r', 'S'))
    ORDER BY 1
 `)},
   "select to_regclass(?) as ledger",
