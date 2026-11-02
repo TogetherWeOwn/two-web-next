@@ -278,7 +278,10 @@ with `target: production`, behind the `production` Environment:
   that inherits `pg_read_all_data` and no write, DDL or admin role, on the
   PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
   the pooled `6432` port).
-  Also needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+  Also needs Cloudflare credentials from the bound Environment:
+  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` (staging Environment), or
+  `PRODUCTION_CLOUDFLARE_API_TOKEN` / `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`
+  (production Environment) behind the same `inputs.target` guard.
 - Branch/target correspondence: `branch` must be empty (defaults to `target`),
   equal to `target`, or `test-*`; staging↔production swaps and other overrides
   refuse before provisioning or I/O. Local operators must declare

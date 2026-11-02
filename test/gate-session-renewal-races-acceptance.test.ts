@@ -23,7 +23,10 @@ const env: Env = {
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
   DISCORD_CLIENT_ID: "client-id",
   DISCORD_CLIENT_SECRET: "client-secret",
-  DISCORD_BOT_TOKEN: "bot-token",
+  // No bot token: renewal races exercise the gates hermetically, and the
+  // mid-session role recheck treats a missing token as incomplete config
+  // (no Discord lookup, stored bits stand).
+  DISCORD_BOT_TOKEN: "",
   DISCORD_GUILD_ID: "326474832151838730",
   DISCORD_INVITE_URL: "https://discord.gg/invite",
 };

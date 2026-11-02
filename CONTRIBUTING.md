@@ -87,6 +87,12 @@ requests per size; the labels are the durable record behind it.
 ### Change-gated CI and `ci-ok`
 
 Heavy CI jobs run only when their inputs changed (TOG-14877 CI standard). The
+`scope` jobs (in `ci.yml` and the workflows that mirror it) fetch the
+changed-file list and the base commit's scope scripts in the only step that
+holds a token, then run those base-branch scripts in a token-free step and
+publish only validated verdicts: every expected key exactly once, `true` or
+`false`. Fast-pass claims (`docs_only`, `skip_e2e`, `full`) are re-derived
+from the file list and only ever downgraded toward running more. The
 `scope` job in `ci.yml` classifies every pull request into areas — `app`
 (served code, assets, tests, journeys), `worker` (dispatch configs, the Tail
 worker, the Kit spike), `db` (migrations) — plus `full` (lockfiles,
@@ -251,6 +257,23 @@ range, severity and complete numeric advisory ID set (including transitive
 Use real UTC dates; the expiry day itself is blocking, even if the exception is
 unused. Unknown severity cannot be exempted. Remove expired exceptions rather
 than silently extending them. Fixture examples are synthetic, not accepted risks.
+
+Some advisories have no fixed upstream release to upgrade to. Where a patched
+transitive release exists but the direct dependency has not adopted it, pin it
+with an exact `overrides` entry in `package.json`, scoped under the affected
+consumer rather than at the top level, and verify the consumer's actual API
+use before merging. A top-level pin rewrites every copy in the tree,
+including toolchain copies another tool pins for itself. Remove the pin once
+the direct dependency ships the fix itself.
+
+One monitored low-severity exception is open (reviewed 2026-11-01):
+`deepmerge` GHSA-gcqx-w48m-w2h4 in `web/`, pulled in by
+`@sveltejs/vite-plugin-svelte`. No patched `deepmerge` release exists yet.
+It runs only at build time, merging this repository's own plugin and Vite
+configuration objects; it takes no untrusted input and ships in no Worker
+bundle. Low findings do not block the audit gate, so this note is the record;
+delete it when a patched `deepmerge` ships or the plugin drops the
+dependency.
 
 CodeQL uses the repository's existing default setup for JavaScript/TypeScript,
 Actions and Python. Keep that coverage intact; do not add a competing advanced
