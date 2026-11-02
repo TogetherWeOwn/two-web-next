@@ -56,7 +56,7 @@ const baseEnv: Env & { DISCORD_EVENTS: DiscordEventsSource } = {
   DISCORD_BOT_TOKEN: "test-bot-token",
   DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
-  QA_AUTH_TOKEN: "test-only-qa-token",
+  QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
 };
 const cookieFrom = (res: Response) => {
   // Status liveness is not authentication; never rely on Set-Cookie ordering.

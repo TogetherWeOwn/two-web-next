@@ -104,11 +104,17 @@ describe.skipIf(!url)("login/logout/rotation against Postgres", () => {
     const qaEnv = {
       ...env,
       APP_URL: "https://next.togetherweown.com",
-      QA_AUTH_TOKEN: "test-only-qa-token",
+      QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
     };
     const res = await app.request(
       "/auth/qa/qa-member",
-      { method: "POST", headers: { origin: qaEnv.APP_URL, "X-TWO-QA-Auth": "test-only-qa-token" } },
+      {
+        method: "POST",
+        headers: {
+          origin: qaEnv.APP_URL,
+          "X-TWO-QA-Auth": "test-only-qa-token-with-32-plus-chars",
+        },
+      },
       qaEnv,
     );
     expect(res.status).toBe(204);

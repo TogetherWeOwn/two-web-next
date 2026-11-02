@@ -17,7 +17,7 @@ const env: Env = {
   DISCORD_INVITE_URL: "https://discord.gg/test-invite",
   SESSION_SECRET: "test-session-signing-key-at-least-32-bytes",
   DISCORD_MODERATOR_ROLE_IDS: "",
-  QA_AUTH_TOKEN: "test-only-qa-token",
+  QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
 };
 const TTL = 120 * 60;
 const SESSION_COOKIE = "__Host-two_session";

@@ -11,8 +11,12 @@ afterEach(() => vi.restoreAllMocks());
 
 describe("deployed queue wrapper's probe gate (mocked SQL, no network)", () => {
   it.each([
-    { APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: "fixture-qa", pages: true },
-    { APP_URL: "https://togetherweown.com", QA_AUTH_TOKEN: "fixture-qa", pages: false },
+    { APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: "fixture-qa-token-with-32-plus-chars", pages: true },
+    {
+      APP_URL: "https://togetherweown.com",
+      QA_AUTH_TOKEN: "fixture-qa-token-with-32-plus-chars",
+      pages: false,
+    },
     { APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: undefined, pages: false },
   ])("uses qaEnabled for $APP_URL / token $QA_AUTH_TOKEN", async ({ pages, ...gate }) => {
     const errors = vi.spyOn(console, "error").mockImplementation(() => {});

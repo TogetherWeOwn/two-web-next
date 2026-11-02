@@ -4,7 +4,7 @@ import type { Env } from "../src/env";
 import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
 import { createMemorySessionStore, hashToken } from "../src/sessions";
 
-const TOKEN = "test-only-qa-identity-token";
+const TOKEN = "test-only-qa-identity-token-32-plus";
 const NOW = Date.UTC(2026, 9, 1);
 // One Ray ID gives every compared response the same echoed x-request-id, so
 // the full header comparison still proves wrong-method misses match unknown

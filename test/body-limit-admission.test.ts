@@ -124,7 +124,7 @@ async function sessionEnv(sql: Sql) {
   // its dedicated principal here; other routes ignore these flags.
   const env = {
     APP_URL: STAGING_APP_URL,
-    QA_AUTH_TOKEN: "test-only-qa-token",
+    QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
     SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
     SESSION_STORE: store,
     THROTTLE_STORE: async () => withThrottleTx(sql),
@@ -153,11 +153,11 @@ function upload(
   );
   const body = new ReadableStream({ pull }, { highWaterMark: 0 });
   const headers: Record<string, string> = { cookie, origin: appUrl, accept: "application/json" };
-  if (path === "/__probe/alert") headers[QA_HEADER] = "test-only-qa-token";
+  if (path === "/__probe/alert") headers[QA_HEADER] = "test-only-qa-token-with-32-plus-chars";
   // Gated QA logins exercise cap-after-gate, throttle-after-cap: the seam's
   // identity/token gate admits this fixture identity, then the body cap runs
   // before the throttle (S4 gate-first ordering is unchanged).
-  if (path.startsWith("/auth/qa/")) headers[QA_HEADER] = "test-only-qa-token";
+  if (path.startsWith("/auth/qa/")) headers[QA_HEADER] = "test-only-qa-token-with-32-plus-chars";
   if (advertised) headers["content-length"] = String(max + 1);
   const request = new Request(new URL(path, appUrl), {
     method,
@@ -298,7 +298,10 @@ describe.each(["/auth/qa/qa-member", "/__probe/alert"])(
   "%s disabled QA seam rejects before admission or buffering",
   (path) => {
     it.each([
-      { APP_URL: "https://next.example.test", QA_AUTH_TOKEN: "test-only-qa-token" },
+      {
+        APP_URL: "https://next.example.test",
+        QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
+      },
       { APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: undefined },
     ])("returns 404 for advertised and chunked overflow with %j", async (config) => {
       const store = vi.fn(async () => null);

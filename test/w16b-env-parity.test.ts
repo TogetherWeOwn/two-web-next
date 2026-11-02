@@ -250,9 +250,12 @@ describe("row 18: trusted-host slice pins", () => {
       "/auth/qa/qa-member",
       {
         method: "POST",
-        headers: { origin: STAGING_APP_URL, "X-TWO-QA-Auth": "test-only-qa-token" },
+        headers: {
+          origin: STAGING_APP_URL,
+          "X-TWO-QA-Auth": "test-only-qa-token-with-32-plus-chars",
+        },
       },
-      { ...staging, QA_AUTH_TOKEN: "test-only-qa-token" },
+      { ...staging, QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars" },
     );
     expect(login.status).toBe(204);
     const cookie = login.headers.getSetCookie().find((c) => c.startsWith("__Host-two_session="))!;

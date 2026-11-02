@@ -132,7 +132,7 @@ describe("W15 auth/join in Miniflare", () => {
           DISCORD_INVITE_URL: "https://discord.gg/test-invite",
           DISCORD_MODERATOR_ROLE_IDS: "",
           SESSION_SECRET: "test-session-signing-key-at-least-32-bytes",
-          QA_AUTH_TOKEN: "test-only-qa-token",
+          QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
         },
       }),
     );
@@ -419,7 +419,10 @@ describe("W15 auth/join in Miniflare", () => {
   });
 
   it("uses POST-only QA fixtures and byte-identical failure responses in the runtime", async () => {
-    const headers = { origin: STAGING_APP_URL, [QA_HEADER]: "test-only-qa-token" };
+    const headers = {
+      origin: STAGING_APP_URL,
+      [QA_HEADER]: "test-only-qa-token-with-32-plus-chars",
+    };
     const get = await request("/auth/qa/qa-member", { headers });
     expect(get.status).toBe(404);
     expect(get.headers.getSetCookie()).toHaveLength(0);
