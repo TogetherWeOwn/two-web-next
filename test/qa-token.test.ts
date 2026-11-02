@@ -116,6 +116,12 @@ describe("qaEnabled", () => {
   it("is enabled for a configured token at exactly the minimum length", () => {
     expect(qaEnabled(STAGING_APP_URL, "x".repeat(MIN_QA_TOKEN_LENGTH))).toBe(true);
   });
+
+  it("is disabled when whitespace padding is what reaches the minimum length", () => {
+    expect(qaEnabled(STAGING_APP_URL, "short".padEnd(MIN_QA_TOKEN_LENGTH, " "))).toBe(false);
+    expect(qaEnabled(STAGING_APP_URL, ` ${"x".repeat(MIN_QA_TOKEN_LENGTH)}`)).toBe(false);
+    expect(qaEnabled(STAGING_APP_URL, `${"x".repeat(MIN_QA_TOKEN_LENGTH)}\n`)).toBe(false);
+  });
 });
 
 describe("QA attempt budget", () => {

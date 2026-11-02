@@ -392,7 +392,10 @@ approve a production deploy, credential change or production test.
 ## Probe parity: request error + self-failing queued job
 
 `POST /__probe/alert` exists only when `qaEnabled(APP_URL, QA_AUTH_TOKEN)` is true:
-exact `https://next.togetherweown.com` and a nonempty configured QA token. It
+exact `https://next.togetherweown.com` and a configured QA token of at least 32
+characters (a shorter value, or one padded with surrounding whitespace, leaves
+the probe at 404). Failed token presentations drain the per-client QA attempt
+budget (see [throttling](throttling.md)); an exhausted budget is the same 404. It
 requires `X-TWO-QA-Auth` (constant-time comparison) and the existing global
 same-origin/host guards. It has **no same-origin exemption**. Valid same-origin
 requests with QA disabled (including production configuration), wrong/missing
