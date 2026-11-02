@@ -357,7 +357,7 @@ Do not use `npm run deploy` as a test or build command.
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
 gate): `wrangler deploy` of the tail Worker (`tail/wrangler.jsonc`), the Kit
 staging Worker (`web/wrangler.staging.jsonc`) and the jobs Worker
-(`wrangler.jobs.jsonc`) with the repo secrets `CLOUDFLARE_API_TOKEN` /
+(`wrangler.jobs.jsonc`) with the `staging` Environment secrets `CLOUDFLARE_API_TOKEN` /
 `CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
 The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,
 Discord and guest auth redirects, and a branded 404. It checks CSP and nosniff

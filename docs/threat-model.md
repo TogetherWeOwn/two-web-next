@@ -23,7 +23,7 @@ The application is a public Cloudflare Worker serving member and moderator route
 | Actor | Trust posture |
 | --- | --- |
 | Guest / member | External browser user; member access depends on a valid server-side session and member status. |
-| Moderator | Member whose Discord role matched the configured role-ID allowlist at sign-in; session-held authority persists until session ends or is replaced. |
+| Moderator | Member whose Discord role matched the configured role-ID allowlist at sign-in; the session re-derives that match at most every five minutes, so session-held authority persists until a recheck drops it or the session ends or is replaced. |
 | Agent grant holder | External machine caller holding an enabled, scoped bearer grant; not a browser identity. |
 | Discord | External OAuth, guild-role and bot API provider; responses and availability are not controlled by this Worker. |
 | Operator | Authorized person configuring bindings, credentials, database roles and deployments; outside application authorization. |
@@ -75,7 +75,7 @@ Each case names the repository control and at least one existing test or documen
 | --- | --- |
 | A guest, non-member or ordinary member attempts to access moderator routes by guessing URLs or changing client-side state. | Server-side session authorization rejects guests and non-moderators; see `src/admin/guard.ts`, `test/admin-guard-matrix.test.ts`, `test/admin-authwall-probe.test.ts`. |
 | A similarly named or malformed role grants elevated rights. | Role checks use configured numeric snowflake IDs, not names; blank allowlists and failed lookups fail closed. See `src/roles.ts`, `test/moderator-malformed-success.test.ts`. |
-| A moderator's Discord role is removed but their existing session remains privileged. | Role membership is recomputed at login, not on every admin request; rotation preserves the session's moderator flag. Operators can invalidate active sessions using `bin/revoke-sessions.mjs`, backed by `src/session-revocation.ts` and `test/revoke-sessions.test.ts`. `docs/runbook.md` documents immediate invalidation and quarterly `audit:moderator-roles` drift checks; see also `docs/moderator-admin-guide.md`. Removal does not automatically trigger revocation: detection and operator action are still required. |
+| A moderator's Discord role is removed but their existing session remains privileged. | Role membership is derived at login and re-derived during the session: a privileged session whose stored flags are at least five minutes old refreshes them from Discord before they authorize another request, and only a definitive Discord answer replaces them (`src/session-role-refresh.ts`, `src/roles.ts`, `test/session-role-recheck.test.ts`). An inconclusive lookup keeps the stored flags, bounded by the session's 24-hour lineage cap. Operators can still invalidate active sessions immediately using `bin/revoke-sessions.mjs`, backed by `src/session-revocation.ts` and `test/revoke-sessions.test.ts`. `docs/runbook.md` documents immediate invalidation and quarterly `audit:moderator-roles` drift checks; see also `docs/moderator-admin-guide.md`. |
 
 ### Bot internal actions and Discord credentials
 
