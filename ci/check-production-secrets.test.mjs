@@ -638,12 +638,15 @@ function jobEnvironment(lines) {
 // called workflow's job does. The caller passes the secrets by name and the
 // called job's own `environment:` binding receives their values even though
 // the caller binds none. Such a caller is fine when it delegates to the
-// production leg, i.e. its `with:` block passes `environment: production`
-// to a called workflow that binds inputs.environment (pinned by the
-// rollback-workflow test). Anything else — no environment input, or a
-// non-production one — still fails closed. Never exempted by job name.
+// production leg of the rollback workflow, i.e. its `uses:` calls
+// rollback-production.yml and its `with:` block passes
+// `environment: production` (pinned by the rollback-workflow test).
+// Anything else — another callee, no environment input, or a non-production
+// one — still fails closed. Never exempted by job name.
 function delegatesToProduction(lines) {
-  const uses = lines.some((line) => /^\s*uses:\s*\S+\.ya?ml\s*$/.test(line));
+  const uses = lines.some((line) =>
+    /^\s*uses:\s*\.\/\.github\/workflows\/rollback-production\.yml\s*$/.test(line),
+  );
   if (!uses) return false;
   return lines.some((line) => /^\s+environment:\s*production\s*$/.test(line));
 }
@@ -984,6 +987,10 @@ ${withBlock}
 `;
   const production = caller("      environment: production\n      version_id: abc");
   assert.deepEqual(productionSecretEnvironmentViolations(production, "fixture.yml"), []);
+  // The exemption is pinned to the rollback callee: the same shape against
+  // any other local workflow still fails closed.
+  const otherCallee = production.replace("rollback-production.yml", "release.yml");
+  assert.equal(productionSecretEnvironmentViolations(otherCallee, "fixture.yml").length, 1);
   const staging = caller("      environment: staging\n      version_id: abc");
   assert.equal(productionSecretEnvironmentViolations(staging, "fixture.yml").length, 1);
   const noLeg = caller("      version_id: abc");
