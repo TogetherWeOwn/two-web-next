@@ -28,11 +28,17 @@ one-liner goes to stderr. Exit 0 is pass, 1 is pin drift, 2 is usage.
 | --- | --- | --- |
 | Installed-version test assertion | wrangler pinned to 4.152.0 by `test/remote-runner-isolation.test.ts` while the range is `^4.152.0` | Floats: hold back with `--updatable` |
 | `package.json` range / overrides assertion | `test/performance-ci.test.ts` asserts `devDependencies["@lhci/cli"]`, `overrides["basic-ftp"]`, and the absence of `overrides["zod"]` | Never rewrites the manifest: verify-only |
-| Exact range or `overrides` key in `package.json` | `esbuild` 0.28.2, `undici` override | Cannot float: verify-only |
+| Exact range in `package.json` | `zod` 4.6.7, `esbuild` 0.28.2 | Cannot float, but the lockfile copy is still checked against the exact version |
+| String `overrides` entry | `undici` 7.30.1 | Every installed copy must agree with the override |
+| Nested `overrides` entry | `overrides["@lhci/cli"]["tmp"]` 0.2.7 | The copy the scope package resolves must agree; reported as informational when the scope declares no such dependency edge |
 
-Transitive pins (for example `tmp` 0.2.7 under `@lhci/cli`) are reported as
-informational: the manifest overrides enforce them and the owning test verifies
-them, so they never enter the hold-back set.
+Transitive pins (for example `tmp` 0.2.7 read through a consumer's resolver)
+are reported as informational: the manifest overrides enforce them and the
+owning test verifies them, so they never enter the hold-back set. Pins read
+through a consumer resolver (`lhciRequire`, `req`, …) rather than a bare
+`require()` or an explicit `node_modules/` path stay held back but likewise
+verify in the owning test: the guard only vouches for copies it can resolve
+(the root entry).
 
 ## Sweep procedure
 

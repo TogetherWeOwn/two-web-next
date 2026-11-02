@@ -52,6 +52,59 @@ test("live inventory verifies clean on the current tree", () => {
   assert.equal(result.ok, true, JSON.stringify(result.checks.filter((c) => c.status !== "pass")));
 });
 
+test("exact ranges are verified against the lockfile", () => {
+  const pins = collectPins();
+  const zod = pins.exact.find((pin) => pin.name === "zod");
+  assert.ok(zod, "the zod exact range is discovered");
+  assert.equal(verifyPins(pins).ok, true);
+  const drifted = {
+    ...pins,
+    lockfile: {
+      packages: { ...pins.lockfile.packages, "node_modules/zod": { version: "9.9.9" } },
+    },
+  };
+  const result = verifyPins(drifted);
+  assert.equal(result.ok, false);
+  assert.match(
+    JSON.stringify(result.checks),
+    /npm install zod@4\.6\.7/,
+    "exact-range drift names the lockfile-only restore",
+  );
+});
+
+test("consumer-resolved pins stay held back but verify as informational", () => {
+  const pins = collectPins();
+  const viaConsumer = {
+    ...pins,
+    installed: pins.installed.map((pin) =>
+      pin.name === "wrangler" ? { ...pin, root: false, via: "lhciRequire" } : pin,
+    ),
+  };
+  const result = verifyPins(viaConsumer);
+  assert.equal(result.ok, true);
+  assert.ok(
+    result.checks.some((c) => c.id === "installed:wrangler" && c.status === "info"),
+    "the owning test verifies the consumer copy",
+  );
+  assert.deepEqual(holdBackNames(viaConsumer), ["wrangler"]);
+});
+
+test("nested overrides verify the copy their scope resolves", () => {
+  const pins = collectPins();
+  const result = verifyPins(pins);
+  assert.equal(result.ok, true);
+  assert.ok(
+    result.checks.some((c) => c.id === "override:@lhci/cli[tmp]" && c.status === "pass"),
+    "the tmp nested override verifies the copy @lhci/cli resolves",
+  );
+  assert.ok(
+    result.checks.some(
+      (c) => c.id === "override:@lhci/cli[@puppeteer/browsers]" && c.status === "info",
+    ),
+    "a nested override with no dependency edge stays informational instead of passing blindly",
+  );
+});
+
 test("drifted lockfile entries fail with a restore hint", () => {
   const pins = collectPins();
   const drifted = {

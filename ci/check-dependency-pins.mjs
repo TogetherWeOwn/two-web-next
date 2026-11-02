@@ -6,12 +6,18 @@
 //      (or require("<pkg>/package.json")) and asserts `.version` equals an exact
 //      semver, e.g. test/remote-runner-isolation.test.ts pins wrangler 4.152.0
 //      while package.json allows ^4.152.0. A bare `npm update` floats these.
+//      Pins read through a consumer's resolver (lhciRequire, req, ...) stay
+//      held back but verify in the owning test: the guard only vouches for
+//      copies it can resolve (the root entry).
 //   2. Manifest pins — test/performance-ci.test.ts asserts package.json ranges
 //      and overrides entries verbatim (e.g. devDependencies["@lhci/cli"],
 //      overrides["basic-ftp"], and the absence of overrides["zod"]). `npm
 //      update` never rewrites the manifest, so these are verify-only.
-//   3. Exact ranges and overrides keys in package.json — inherently safe under
-//      `npm update`, listed for visibility and verified against the lockfile.
+//   3. Exact ranges and overrides in package.json — checked against the
+//      lockfile's resolved copies: exact direct deps must resolve to the exact
+//      version, string overrides must hold for every installed copy, and nested
+//      overrides must hold for the copy their scope package resolves (skipped
+//      with a note when the scope declares no such dependency edge).
 //
 // Sweep usage (holds back floatable pins, then verifies the lockfile kept them):
 //
@@ -85,27 +91,64 @@ export function parseManifestPins(manifest) {
   return { exact, overrides };
 }
 
+/** Merge physical lines continued by a trailing `(` or `,` into logical lines. */
+export function joinContinuations(lines) {
+  const logical = [];
+  let current = null;
+  lines.forEach((line, index) => {
+    if (current === null) current = { text: line, line: index };
+    else current.text += `\n${line}`;
+    if (/[,(]\s*$/.test(line) && index + 1 < lines.length) return;
+    logical.push(current);
+    current = null;
+  });
+  if (current !== null) logical.push(current);
+  return logical;
+}
+
+const RECEIVER_PATTERN = /([A-Za-z_$][\w$]*)\.version\b/;
+const BARE_REQUIRE_TAIL = /(?<![A-Za-z0-9_$])require\s*\(\s*$/;
+const CALL_TAIL = /([A-Za-z_$][\w$]*)\(\s*$/;
+const ALIAS_TAIL = /([A-Za-z_$][\w$]*)\s*=\s*[^;]*$/;
+
 /** Version assertions in one test source tied to package.json references. */
 export function scanTestSource(source, relpath) {
-  const lines = source.split("\n");
+  const logical = joinContinuations(source.split("\n"));
   const refs = [];
-  lines.forEach((line, index) => {
+  for (const { text, line } of logical) {
     REF_PATTERN.lastIndex = 0;
-    for (const match of line.matchAll(REF_PATTERN)) {
-      refs.push({ name: match[1], line: index, versionOnLine: /\.version\b/.test(line) });
+    for (const match of text.matchAll(REF_PATTERN)) {
+      const before = text.slice(0, match.index);
+      const via = CALL_TAIL.exec(before)?.[1] ?? null;
+      refs.push({
+        name: match[1],
+        line,
+        versionOnLine: /\.version\b/.test(text),
+        // A bare require() from the test file, or an explicit node_modules/
+        // path, reads the root copy. Any other resolver (lhciRequire, req, ...)
+        // reads a consumer's copy, which the owning test verifies.
+        root: match[0].includes("node_modules/") || BARE_REQUIRE_TAIL.test(before),
+        via,
+        alias: ALIAS_TAIL.exec(before)?.[1] ?? null,
+      });
     }
-  });
+  }
+  const aliasTargets = new Map();
+  for (const ref of refs) {
+    if (ref.alias !== null) aliasTargets.set(ref.alias, ref.name);
+  }
   const assertions = [];
-  lines.forEach((line, index) => {
-    const match = VERSION_ASSERT_PATTERN.exec(line);
+  for (const { text, line } of logical) {
+    const match = VERSION_ASSERT_PATTERN.exec(text);
     if (match) {
       assertions.push({
         version: match[1] ?? match[2],
-        line: index,
-        versionOnLine: /\.version\b/.test(line),
+        line,
+        versionOnLine: /\.version\b/.test(text),
+        receiver: RECEIVER_PATTERN.exec(text)?.[1] ?? null,
       });
     }
-  });
+  }
   const installed = [];
   for (const assertion of assertions) {
     // The `.version` read must sit on the reference line or the assertion
@@ -113,14 +156,25 @@ export function scanTestSource(source, relpath) {
     // dependencies-table assertion such as
     // `assert.equal(puppeteer.dependencies["chromium-bidi"], "157.0.8090-0")`
     // carries a semver but pins no installed package, so it must not attach
-    // to a reference in a neighboring statement.
+    // to a reference in a neighboring statement. When the asserted receiver
+    // is a known alias (`const wrangler = require("wrangler/package.json")`
+    // then `expect(wrangler.version)`), only that alias's package may attach,
+    // even when an unrelated reference sits nearer.
     const nearby = refs.filter((ref) => {
       if (Math.abs(ref.line - assertion.line) > REF_ASSERT_WINDOW) return false;
       if (!assertion.versionOnLine && !ref.versionOnLine) return false;
-      const between = lines.slice(
-        Math.min(ref.line, assertion.line) + 1,
-        Math.max(ref.line, assertion.line),
-      );
+      // An asserted alias names its package explicitly (`expect(a.version)` for
+      // `const a = require("foo/package.json")`), so it binds across finished
+      // statements; proximity-only matches still respect statement boundaries.
+      if (assertion.receiver !== null && aliasTargets.has(assertion.receiver)) {
+        return ref.name === aliasTargets.get(assertion.receiver);
+      }
+      const between = logical
+        .slice(
+          logical.findIndex((entry) => entry.line === Math.min(ref.line, assertion.line)) + 1,
+          logical.findIndex((entry) => entry.line === Math.max(ref.line, assertion.line)),
+        )
+        .map((entry) => entry.text);
       return !between.some((line) => /;\s*$/.test(line) || /^\s*$/.test(line));
     });
     if (nearby.length === 0) continue;
@@ -135,6 +189,8 @@ export function scanTestSource(source, relpath) {
       version: assertion.version,
       file: relpath,
       line: nearest.line + 1,
+      root: nearest.root,
+      via: nearest.via,
     });
   }
   const manifest = [];
@@ -214,6 +270,35 @@ function lockVersion(lockfile, name) {
   return typeof entry?.version === "string" ? entry.version : null;
 }
 
+/** The trailing package name of a lockfile `packages` key. */
+function packageBasename(key) {
+  const tail = key
+    .split("node_modules/")
+    .at(-1)
+    ?.split("/")
+    .filter((segment) => segment.length > 0);
+  if (!tail || tail.length === 0) return null;
+  if (tail[0].startsWith("@")) return tail.length >= 2 ? `${tail[0]}/${tail[1]}` : null;
+  return tail[0];
+}
+
+/** Every lockfile copy of a package, at any depth. */
+function lockEntriesFor(lockfile, name) {
+  return Object.entries(lockfile.packages ?? {})
+    .filter(([key, entry]) => packageBasename(key) === name && typeof entry?.version === "string")
+    .map(([key, entry]) => ({ path: key, version: entry.version }));
+}
+
+/** Node-style resolution of `sub` from inside the `scope` package. */
+function resolveFromScope(lockfile, scope, sub) {
+  const roots = [`node_modules/${scope}/node_modules/${sub}`, `node_modules/${sub}`];
+  for (const path of roots) {
+    const version = lockfile.packages?.[path]?.version;
+    if (typeof version === "string") return { path, version };
+  }
+  return null;
+}
+
 /** Verify every pin against the manifest and lockfile. */
 export function verifyPins({
   manifest,
@@ -233,6 +318,14 @@ export function verifyPins({
         id,
         status: "info",
         detail: `transitive pin ${pin.name}@${pin.version} (${pin.file}:${pin.line}); enforced by overrides, verified by the owning test`,
+      });
+      continue;
+    }
+    if (pin.root === false) {
+      checks.push({
+        id,
+        status: "info",
+        detail: `consumer-resolved pin ${pin.name}@${pin.version} (${pin.file}:${pin.line}${pin.via ? ` via ${pin.via}` : ""}); the owning test reads a consumer copy, not the root entry, so it stays held back but verifies there`,
       });
       continue;
     }
@@ -260,23 +353,110 @@ export function verifyPins({
   for (const pin of exact) {
     const id = `exact:${pin.name}`;
     const actual = manifest[pin.section]?.[pin.name];
+    if (actual !== pin.version) {
+      checks.push({
+        id,
+        status: "fail",
+        detail: `${pin.section}["${pin.name}"] is ${JSON.stringify(actual)} (expected exact ${pin.version})`,
+      });
+      continue;
+    }
+    const resolved = lockVersion(lockfile, pin.name);
     checks.push(
-      actual === pin.version
-        ? { id, status: "pass", detail: `${pin.section}["${pin.name}"] is exact ${pin.version}` }
+      resolved === pin.version
+        ? {
+            id,
+            status: "pass",
+            detail: `${pin.section}["${pin.name}"] is exact ${pin.version}, lockfile agrees`,
+          }
         : {
             id,
             status: "fail",
-            detail: `${pin.section}["${pin.name}"] is ${JSON.stringify(actual)} (expected exact ${pin.version})`,
+            detail: `${pin.name} lockfile is ${resolved ?? "missing"} (manifest pins exact ${pin.version}); restore with \`npm install ${pin.name}@${pin.version}\` and file a follow-up`,
           },
     );
   }
   for (const pin of overrides) {
     const id = `override:${pin.key}`;
-    checks.push(
-      isObject(manifest.overrides) && Object.hasOwn(manifest.overrides, pin.key)
-        ? { id, status: "pass", detail: `overrides["${pin.key}"] present` }
-        : { id, status: "fail", detail: `overrides["${pin.key}"] was removed` },
-    );
+    if (!isObject(manifest.overrides) || !Object.hasOwn(manifest.overrides, pin.key)) {
+      checks.push({ id, status: "fail", detail: `overrides["${pin.key}"] was removed` });
+      continue;
+    }
+    const spec = manifest.overrides[pin.key];
+    if (typeof spec === "string") {
+      const copies = lockEntriesFor(lockfile, pin.key);
+      if (copies.length === 0) {
+        checks.push({
+          id,
+          status: "info",
+          detail: `overrides["${pin.key}"] pins ${spec} but no copy is installed in this tree`,
+        });
+      } else if (copies.every((copy) => copy.version === spec)) {
+        checks.push({
+          id,
+          status: "pass",
+          detail: `overrides["${pin.key}"] pins ${spec}; ${copies.length} installed ${copies.length === 1 ? "copy agrees" : "copies agree"}`,
+        });
+      } else {
+        const offenders = copies
+          .filter((copy) => copy.version !== spec)
+          .map((copy) => `${copy.path}@${copy.version}`)
+          .join(", ");
+        checks.push({
+          id,
+          status: "fail",
+          detail: `overrides["${pin.key}"] pins ${spec} but ${offenders} drifted; restore with \`npm install ${pin.key}@${spec}\` and file a follow-up`,
+        });
+      }
+      continue;
+    }
+    if (!isObject(spec)) {
+      checks.push({
+        id,
+        status: "fail",
+        detail: `overrides["${pin.key}"] is not a version or map`,
+      });
+      continue;
+    }
+    for (const [sub, subSpec] of Object.entries(spec)) {
+      const subId = `override:${pin.key}[${sub}]`;
+      if (typeof subSpec !== "string") {
+        checks.push({
+          id: subId,
+          status: "info",
+          detail: `overrides["${pin.key}"]["${sub}"] uses a nested selector; verified by the owning test`,
+        });
+        continue;
+      }
+      const edge = lockfile.packages?.[`node_modules/${pin.key}`]?.dependencies?.[sub];
+      if (edge === undefined) {
+        checks.push({
+          id: subId,
+          status: "info",
+          detail: `overrides["${pin.key}"]["${sub}"] is vacuous (${pin.key} declares no ${sub} edge); verified by the owning test`,
+        });
+        continue;
+      }
+      const resolved = resolveFromScope(lockfile, pin.key, sub);
+      checks.push(
+        resolved?.version === subSpec
+          ? {
+              id: subId,
+              status: "pass",
+              detail: `overrides["${pin.key}"]["${sub}"] pins ${subSpec} (${resolved.path} agrees)`,
+            }
+          : {
+              id: subId,
+              status: "fail",
+              detail: `overrides["${pin.key}"]["${sub}"] pins ${subSpec} but resolves to ${resolved ? `${resolved.path}@${resolved.version}` : "nothing installed"}; restore with \`npm install\` from a clean tree and file a follow-up`,
+            },
+      );
+    }
+    if (Object.keys(spec).length === 0) {
+      checks.push({ id, status: "info", detail: `overrides["${pin.key}"] is an empty map` });
+    } else {
+      checks.push({ id, status: "pass", detail: `overrides["${pin.key}"] present` });
+    }
   }
   for (const pin of manifestPins) {
     const id = `manifest:${pin.section}[${pin.key}]`;
@@ -518,6 +698,139 @@ function selftest() {
       transitiveResult.checks.some((c) => c.id === "installed:tmp" && c.status === "info") &&
       !holdBackNames(withTransitive).includes("tmp"),
     "transitive pins are informational, never held back",
+  );
+  // Multiline assertions: a trailing `(` continues onto the next physical line.
+  const splitCall = scanTestSource(
+    ['expect(JSON.parse(readFileSync("foo/package.json")).version', '  ).toBe("1.2.3");'].join(
+      "\n",
+    ),
+    "t.ts",
+  );
+  assert(
+    splitCall.installed.length === 1 &&
+      splitCall.installed[0].name === "foo" &&
+      splitCall.installed[0].version === "1.2.3",
+    "assertions split across continuation lines are discovered",
+  );
+  // Alias receivers: the asserted alias wins over a nearer unrelated reference.
+  const aliased = scanTestSource(
+    [
+      'const a = require("foo/package.json");',
+      'const b = require("bar/package.json");',
+      'expect(a.version).toBe("1.2.3");',
+    ].join("\n"),
+    "t.ts",
+  );
+  assert(
+    aliased.installed.length === 1 &&
+      aliased.installed[0].name === "foo" &&
+      aliased.installed[0].version === "1.2.3",
+    "alias receivers attach to their own package",
+  );
+  // Consumer-resolved pins stay held back but verify where the owning test reads.
+  const viaConsumer = {
+    ...base,
+    installed: [
+      {
+        name: "wrangler",
+        version: "4.152.0",
+        file: "t.ts",
+        line: 1,
+        root: false,
+        via: "lhciRequire",
+      },
+    ],
+  };
+  const viaResult = verifyPins(viaConsumer);
+  assert(
+    viaResult.ok === true &&
+      viaResult.checks.some((c) => c.id === "installed:wrangler" && c.status === "info") &&
+      holdBackNames(viaConsumer).join(" ") === "wrangler",
+    "consumer-resolved pins are held back but verify as informational",
+  );
+  // Exact ranges are checked against the lockfile, not just the manifest.
+  const exactDrift = {
+    ...base,
+    lockfile: { packages: { ...base.lockfile.packages, "node_modules/zod": { version: "9.9.9" } } },
+  };
+  const exactDriftResult = verifyPins(exactDrift);
+  assert(
+    exactDriftResult.ok === false &&
+      exactDriftResult.checks.some(
+        (c) => c.id === "exact:zod" && c.detail.includes("npm install zod@4.6.7"),
+      ),
+    "exact-range drift fails with a restore hint",
+  );
+  // String overrides must hold for every installed copy.
+  const overrideBase = {
+    ...base,
+    manifest: { ...base.manifest, overrides: { ...base.manifest.overrides, undici: "7.30.1" } },
+    overrides: [...base.overrides, { key: "undici" }],
+    exact: [],
+    lockfile: {
+      packages: {
+        ...base.lockfile.packages,
+        "node_modules/undici": { version: "7.30.1" },
+        "node_modules/foo/node_modules/undici": { version: "7.30.0" },
+      },
+    },
+  };
+  const overrideDrift = verifyPins(overrideBase);
+  assert(
+    overrideDrift.ok === false &&
+      overrideDrift.checks.some((c) => c.id === "override:undici" && c.status === "fail"),
+    "a drifted nested copy fails the string override",
+  );
+  const overrideFixed = {
+    ...overrideBase,
+    lockfile: {
+      packages: {
+        ...overrideBase.lockfile.packages,
+        "node_modules/foo/node_modules/undici": { version: "7.30.1" },
+      },
+    },
+  };
+  assert(verifyPins(overrideFixed).ok === true, "agreeing copies pass the string override");
+  // Nested overrides follow the scope package; a missing edge is vacuous, not a pass.
+  const nestedBase = {
+    ...base,
+    manifest: {
+      ...base.manifest,
+      overrides: { ...base.manifest.overrides, "@lhci/cli": { tmp: "0.2.7" } },
+    },
+    overrides: [...base.overrides, { key: "@lhci/cli" }],
+    exact: [],
+    installed: [],
+    manifestPins: [],
+    lockfile: {
+      packages: {
+        ...base.lockfile.packages,
+        "node_modules/@lhci/cli": { version: "0.15.1", dependencies: { tmp: "^0.2.7" } },
+        "node_modules/tmp": { version: "0.2.7" },
+      },
+    },
+  };
+  const nestedResult = verifyPins(nestedBase);
+  assert(
+    nestedResult.ok === true &&
+      nestedResult.checks.some((c) => c.id === "override:@lhci/cli[tmp]" && c.status === "pass"),
+    "nested overrides verify the copy their scope resolves",
+  );
+  const vacuousBase = {
+    ...nestedBase,
+    lockfile: {
+      packages: {
+        ...base.lockfile.packages,
+        "node_modules/@lhci/cli": { version: "0.15.1", dependencies: {} },
+        "node_modules/tmp": { version: "9.9.9" },
+      },
+    },
+  };
+  const vacuousResult = verifyPins(vacuousBase);
+  assert(
+    vacuousResult.ok === true &&
+      vacuousResult.checks.some((c) => c.id === "override:@lhci/cli[tmp]" && c.status === "info"),
+    "vacuous nested overrides stay informational instead of passing blindly",
   );
   console.log(`dependency pins selftest: ${cases} cases passed.`);
   return 0;
