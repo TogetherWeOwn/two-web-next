@@ -34,15 +34,16 @@ async function writeOutput(dir, report = reportFixture()) {
   for (const r of report.results) await fs.writeFile(path.join(dir, r.screenshot), png);
 }
 
-test('both capture jobs route runners by repo visibility and retain the pinned browser container', async () => {
+test('both capture jobs route runners by repo visibility and event, and retain the pinned browser container', async () => {
   const workflow = await fs.readFile(path.join(__dirname, '../../.github/workflows/featured-offline-proof.yml'), 'utf8');
   for (const job of ['capture', 'current-source']) {
     const block = workflow.split(`  ${job}:\n`)[1]?.split(/\n  [a-z-]+:\n/)[0];
     assert.ok(block, `${job} exists`);
-    // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-    assert.ok(block.includes(`runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`));
+    // Self-hosted only for non-PR events while private; pull_request and
+    // merge_group runs always stay GitHub-hosted (runner separation).
+    assert.ok(block.includes(`runs-on: \${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`));
     assert.match(block, /image: mcr\.microsoft\.com\/playwright:v1\.58\.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d/);
-    assert.equal(block.split('ubuntu-latest').length - 1, 1, 'ubuntu-latest only as the public-repo branch');
+    assert.equal(block.split('ubuntu-latest').length - 1, 1, 'ubuntu-latest only as the hosted fallback');
   }
 });
 
@@ -160,12 +161,12 @@ const FEATURED_WORKFLOW_PATH = path.join(
 );
 
 function extractScopeGlobs(workflowText) {
-  const marker = 'bash ci/path-scope.sh "$RUNNER_TEMP';
+  const marker = 'bash "$RUNNER_TEMP/trusted-scope/path-scope.sh" "$RUNNER_TEMP';
   const begin = workflowText.indexOf(marker);
   assert.ok(begin >= 0, 'featured scope invocation exists');
   const separator = workflowText.indexOf('--', begin);
   assert.ok(separator >= 0, 'featured scope glob separator exists');
-  const redirect = workflowText.indexOf('>>', separator);
+  const redirect = workflowText.indexOf('>', separator);
   const section = workflowText.slice(separator, redirect >= 0 ? redirect : undefined);
   const globs = [];
   for (const match of section.matchAll(/"([^"]+)"|'([^']+)'/g)) {

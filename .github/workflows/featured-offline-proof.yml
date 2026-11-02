@@ -8,6 +8,12 @@ name: featured-offline-proof
 # the current-source proof is gated on that verdict, and the always-run
 # `featured-proof` aggregator below reports the conclusion. No ruleset change
 # here: requiring the aggregator is a human-admin step.
+#
+# Runner separation: pull_request runs always use GitHub-hosted runners, so
+# code that has not landed on main never runs on the self-hosted fleet. The
+# `runs-on` expressions below reach that fleet only for non-PR events (here:
+# manual dispatches) while the repository is private; see
+# docs/private-flip-checklist.md.
 on:
   pull_request:
   workflow_dispatch:
@@ -28,7 +34,7 @@ jobs:
     name: scope
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.scope.outputs.relevant }}
@@ -36,14 +42,30 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Path-scope selftest (fixtures, no network)
-        run: bash ci/path-scope.sh --selftest
-      - id: scope
+      # Token boundary (mirrors ci.yml): this is the only step that holds
+      # GH_TOKEN, and it runs no repository code. It fetches the changed-file
+      # list and the scope script as of the PR's base commit, so
+      # classification below executes trusted code instead of the PR tree's
+      # copy of the script.
+      - name: Fetch changed-file list and base scope script
+        if: github.event_name == 'pull_request'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          EVENT_NAME: ${{ github.event_name }}
           REPO: ${{ github.repository }}
           PR_NUMBER: ${{ github.event.pull_request.number }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
+            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
+          mkdir -p "$RUNNER_TEMP/trusted-scope"
+          gh api "repos/$REPO/contents/ci/path-scope.sh?ref=$BASE_SHA" \
+            -H "Accept: application/vnd.github.raw" > "$RUNNER_TEMP/trusted-scope/path-scope.sh"
+      # No token in this step. It runs the base-branch scope script and
+      # publishes only a single validated verdict line.
+      - id: scope
+        env:
+          EVENT_NAME: ${{ github.event_name }}
           CHANGED_FILES: ${{ github.event.pull_request.changed_files }}
         run: |
           set -euo pipefail
@@ -51,9 +73,8 @@ jobs:
             echo "relevant=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-          gh api "repos/$REPO/pulls/$PR_NUMBER/files" --paginate \
-            --jq '.[] | "\(.filename)\t\(.previous_filename // "")"' > "$RUNNER_TEMP/pr-files.tsv"
-          bash ci/path-scope.sh "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" -- \
+          bash "$RUNNER_TEMP/trusted-scope/path-scope.sh" "$RUNNER_TEMP/pr-files.tsv" "$CHANGED_FILES" -- \
+            "ci/path-scope.sh" \
             ".github/workflows/featured-offline-proof.yml" \
             "ci/featured-proof/**" \
             "src/admin/pages.tsx" \
@@ -80,14 +101,26 @@ jobs:
             "src/seo.ts" \
             "public/styles.css" \
             "public/theme.css" \
-            "public/theme-tokens.css" >> "$GITHUB_OUTPUT"
+            "public/theme-tokens.css" > "$RUNNER_TEMP/scope-verdict.txt"
+          verdict=$(cat "$RUNNER_TEMP/scope-verdict.txt")
+          case "$verdict" in
+            relevant=true|relevant=false) echo "$verdict" >> "$GITHUB_OUTPUT" ;;
+            *) echo "::error::unexpected path-scope verdict; failing closed."; exit 1 ;;
+          esac
+      # Last on purpose: this runs the PR tree's copy of the script, so it
+      # sits after the token-bearing fetch and the classification it could
+      # otherwise reach. It holds no token and cannot change the verdict
+      # above; a failure still fails this job, and the aggregator fails
+      # closed on a non-success scope.
+      - name: Path-scope selftest (fixtures, no network)
+        run: bash ci/path-scope.sh --selftest
 
   capture:
     if: github.event_name == 'workflow_dispatch'
     name: featured-offline-proof
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 8
     # Browser + system libraries are already present; only the matching JS
     # module is installed, inside this CI container. No app/DB service or secrets.
@@ -152,7 +185,7 @@ jobs:
     name: featured-current-source-proof
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 8
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
@@ -211,7 +244,7 @@ jobs:
     if: always()
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     steps:
       - name: Report the required-check conclusion

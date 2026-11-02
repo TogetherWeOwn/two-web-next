@@ -50,6 +50,9 @@ jobs:
       pull-requests: write
     uses: TogetherWeOwn/.github/.github/workflows/pr-size.yml@82c5b367c6e3e8032666029dc22d206fff39c3f2
     with:
+      # Runner separation: pull_request runs stay on GitHub-hosted runners in
+      # both visibilities (docs/private-flip-checklist.md).
+      runs-on: '["ubuntu-latest"]'
       pr-number: ${{ inputs.pr_number || '' }}
       # This repo's generated outputs (ci/minify-assets.mjs builds them
       # from assets/; drizzle-kit writes a ~2,000-line full-schema
@@ -66,3 +69,5 @@ jobs:
       issues: read
       pull-requests: read
     uses: TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@82c5b367c6e3e8032666029dc22d206fff39c3f2
+    with:
+      runs-on: '["ubuntu-latest"]'

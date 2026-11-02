@@ -16,3 +16,8 @@ jobs:
     with:
       packs: ts,security
       mode: warn
+      # Runner separation: this workflow runs on pull_request and merge_group,
+      # so pin GitHub-hosted runners explicitly instead of accepting the
+      # reusable workflow's visibility-based default
+      # (docs/private-flip-checklist.md).
+      runs-on-json: '["ubuntu-latest"]'

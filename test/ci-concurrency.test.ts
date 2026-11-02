@@ -222,7 +222,11 @@ describe("merge queue validation", () => {
       const scratch = mkdtempSync(join(tmpdir(), "merge-group-scope-"));
       try {
         const output = join(scratch, "outputs");
-        const result = spawnSync("bash", ["-c", runScript(jobBlock(text, "scope"))], {
+        // The classify step (`id: scope`), not the token-holding fetch step
+        // ahead of it: merge_group must reach the constant verdicts without
+        // any PR API context.
+        const classify = jobBlock(text, "scope").split("\n      - id: scope\n")[1] ?? "";
+        const result = spawnSync("bash", ["-c", runScript(classify)], {
           env: { EVENT_NAME: "merge_group", GITHUB_OUTPUT: output },
           encoding: "utf8",
         });
