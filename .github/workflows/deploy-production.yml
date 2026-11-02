@@ -162,8 +162,9 @@ jobs:
     # Least privilege with no approval wait: the candidate's staging Worker
     # versions (tagged with its commit; every tagged version counts) and
     # their invocation errors since the oldest deployed, from the staging
-    # account's Workers API and analytics. Staging credentials only and no
-    # Environment binding, so this starts at once in reviewer mode too. The
+    # account's Workers API and analytics. Staging credentials only, under
+    # the staging Environment (branch policy only, no reviewers, so this
+    # still starts at once in reviewer mode too). The
     # job only reads (versions list, analytics query) and never mutates, but
     # the token is the staging deploy token, not a read-only credential; the
     # production comparison runs in regression below.
@@ -172,6 +173,11 @@ jobs:
     # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
+    # Secrets preflight: any job reading staging Cloudflare secrets must bind
+    # the staging Environment (fail-closed without it). Repo-level names keep
+    # resolving under the binding; the Environment adds its main-only branch
+    # policy. This workflow never runs on a push or PR, so PR CI is unaffected.
+    environment: staging
     outputs:
       requests: ${{ steps.soak.outputs.requests }}
       errors: ${{ steps.soak.outputs.errors }}

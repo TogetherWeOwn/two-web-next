@@ -722,7 +722,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
     "ubuntu-latest only as the public-repo branch",
   );
   // Staging credentials appear only in the staging-soak job, which binds
-  // no Environment, runs no wrangler and makes one gate call.
+  // the staging Environment, runs no wrangler and makes one gate call.
   const soak = workflow.slice(
     workflow.indexOf("\n  staging-soak:\n"),
     workflow.indexOf("\n  regression:\n"),
@@ -731,7 +731,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.ok(!outsideSoak.includes("secrets.CLOUDFLARE_API_TOKEN"));
   assert.ok(!outsideSoak.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
   assert.equal(soak.split("secrets.CLOUDFLARE_API_TOKEN").length - 1, 1);
-  assert.ok(!/\n {4}environment:/.test(soak), "staging-soak binds no Environment");
+  assert.match(soak, /\n {4}environment: staging\n/, "staging-soak binds the staging Environment");
   assert.ok(!soak.includes("wrangler "), "staging-soak never runs wrangler");
   assert.ok(!/secrets\.PRODUCTION_/.test(soak), "staging-soak never sees production secrets");
   assert.match(soak, /run: node ci\/production-deploy-gate\.mjs --staging-soak\n/);
