@@ -2,13 +2,17 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   MAX_QA_PRESENTED_TOKEN_LENGTH,
+  MIN_QA_TOKEN_LENGTH,
+  QA_ATTEMPT_CAPACITY,
   STAGING_APP_URL,
   qaEnabled,
   qaIdentity,
   qaTokenMatches,
+  refundQaAttempt,
+  takeQaAttempt,
 } from "../src/qa";
 
-const CONFIGURED = "test-only-qa-token-match";
+const CONFIGURED = "test-only-qa-token-match-32-plus-chars";
 const WRONG = "test-only-qa-token-mismatch";
 const PRODUCTION_APP_URL = "https://togetherweown.com";
 
@@ -98,5 +102,68 @@ describe("qaEnabled", () => {
 
   it.each([undefined, ""])("is disabled without a configured token (%j)", (token) => {
     expect(qaEnabled(STAGING_APP_URL, token)).toBe(false);
+  });
+
+  it("floors the configured token at 32 characters", () => {
+    expect(MIN_QA_TOKEN_LENGTH).toBe(32);
+    expect(CONFIGURED.length).toBeGreaterThanOrEqual(MIN_QA_TOKEN_LENGTH);
+  });
+
+  it("is disabled for a configured token under the minimum length", () => {
+    expect(qaEnabled(STAGING_APP_URL, "x".repeat(MIN_QA_TOKEN_LENGTH - 1))).toBe(false);
+  });
+
+  it("is enabled for a configured token at exactly the minimum length", () => {
+    expect(qaEnabled(STAGING_APP_URL, "x".repeat(MIN_QA_TOKEN_LENGTH))).toBe(true);
+  });
+});
+
+describe("QA attempt budget", () => {
+  const T0 = 1_800_000_000_000;
+
+  it("admits a burst up to capacity, then refuses until a refill", () => {
+    const client = "attempt-burst";
+    for (let i = 0; i < QA_ATTEMPT_CAPACITY; i++) expect(takeQaAttempt(client, T0)).toBe(true);
+    expect(takeQaAttempt(client, T0)).toBe(false);
+    expect(takeQaAttempt(client, T0 + 999)).toBe(false);
+    expect(takeQaAttempt(client, T0 + 1_000)).toBe(true);
+    expect(takeQaAttempt(client, T0 + 1_000)).toBe(false);
+  });
+
+  it("a refund returns the spent attempt", () => {
+    const client = "attempt-refund";
+    for (let i = 0; i < QA_ATTEMPT_CAPACITY; i++) expect(takeQaAttempt(client, T0)).toBe(true);
+    expect(takeQaAttempt(client, T0)).toBe(false);
+    refundQaAttempt(client);
+    expect(takeQaAttempt(client, T0)).toBe(true);
+  });
+
+  it("budgets are per client", () => {
+    for (let i = 0; i < QA_ATTEMPT_CAPACITY; i++) takeQaAttempt("attempt-client-a", T0);
+    expect(takeQaAttempt("attempt-client-a", T0)).toBe(false);
+    expect(takeQaAttempt("attempt-client-b", T0)).toBe(true);
+  });
+
+  it("refunding an unseen client is a no-op", () => {
+    expect(() => refundQaAttempt("attempt-never-seen")).not.toThrow();
+    expect(takeQaAttempt("attempt-never-seen", T0)).toBe(true);
+  });
+
+  it("evicts the least recently seen client past the client bound", () => {
+    const first = "attempt-evict-first";
+    for (let i = 0; i < QA_ATTEMPT_CAPACITY; i++) expect(takeQaAttempt(first, T0)).toBe(true);
+    expect(takeQaAttempt(first, T0)).toBe(false);
+    // Push past the 1024-client bound with other clients; the first client's
+    // spent entry is evicted, so it presents with a fresh budget.
+    for (let i = 0; i < 1100; i++) takeQaAttempt(`attempt-evict-other-${i}`, T0);
+    expect(takeQaAttempt(first, T0)).toBe(true);
+  });
+
+  it("refilling never exceeds capacity after a long idle", () => {
+    const client = "attempt-idle";
+    expect(takeQaAttempt(client, T0)).toBe(true);
+    for (let i = 0; i < QA_ATTEMPT_CAPACITY; i++)
+      expect(takeQaAttempt(client, T0 + 3_600_000)).toBe(true);
+    expect(takeQaAttempt(client, T0 + 3_600_000)).toBe(false);
   });
 });
