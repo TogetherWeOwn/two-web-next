@@ -39,9 +39,16 @@ export function shouldReport(err: unknown): boolean {
   return true;
 }
 
+const MAX_EXCEPTION_CLASS_LENGTH = 100;
+
 export function exceptionClass(err: unknown): string {
-  if (err instanceof Error) return err.constructor?.name || err.name || "Error";
-  return typeof err;
+  const raw = err instanceof Error ? err.constructor?.name || err.name || "Error" : typeof err;
+  // Only strings are sanitized: a non-string name (a hostile class can define
+  // one) degrades to unknown instead of throwing inside a logging path.
+  const name = typeof raw === "string" ? raw : "unknown";
+  // De-newline and bound, like lookupExceptionClass (src/roles.ts): a hostile
+  // error name must not forge log lines or unbounded fingerprints.
+  return name.replace(/[\r\n]+/g, "_").slice(0, MAX_EXCEPTION_CLASS_LENGTH) || "unknown";
 }
 
 export function fingerprintOf(err: unknown, route: string): string {

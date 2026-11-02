@@ -34,7 +34,7 @@
 // the login-only behavior; both real stores implement them.
 import { exceptionClass } from "./alerts";
 import type { Env } from "./env";
-import { isQaFixtureId } from "./qa";
+import { isQaFixtureId, qaEnabled } from "./qa";
 import { parseModeratorRoleIds, recheckGuildRoles } from "./roles";
 import type { DbSessionRow, SessionStore } from "./sessions";
 
@@ -42,6 +42,12 @@ export type RoleRecheckConfig = {
   guildId: string;
   botToken: string;
   moderatorRoleIds: string[];
+  /** True only where the QA sign-in seam itself exists (staging APP_URL plus
+   * a configured QA token, src/qa.ts): only there may a QA fixture session
+   * keep its issued bits without a Discord re-derivation. Keyed on the
+   * environment as well as the snowflake so production never exempts any
+   * identity from the recheck. */
+  qaFixturesExempt: boolean;
 };
 
 /** The bot-credentialed lookup inputs, read from the request bindings. An
@@ -53,6 +59,7 @@ export function roleRecheckConfigFor(env: Env): RoleRecheckConfig {
     guildId: env.DISCORD_GUILD_ID ?? "",
     botToken: env.DISCORD_BOT_TOKEN ?? "",
     moderatorRoleIds: parseModeratorRoleIds(env.DISCORD_MODERATOR_ROLE_IDS),
+    qaFixturesExempt: qaEnabled(env.APP_URL ?? "", env.QA_AUTH_TOKEN),
   };
 }
 
@@ -70,10 +77,14 @@ export async function refreshSessionRoles(
   config: RoleRecheckConfig,
 ): Promise<DbSessionRow | null> {
   if (!row.member && !row.moderator) return row;
-  // QA fixture sessions (staging only) carry fixture bits for synthetic
-  // identities Discord has never heard of; re-deriving them would strip a
-  // fixture mid-journey on a 404. They keep exactly the bits they issued.
-  if (isQaFixtureId(row.userId)) return row;
+  // QA fixture sessions carry fixture bits for synthetic identities Discord
+  // has never heard of; re-deriving them would strip a fixture mid-journey
+  // on a 404. They keep exactly the bits they issued — but only where the
+  // QA seam itself is enabled (qaFixturesExempt): the snowflake alone never
+  // exempts an identity, so in production even a fixture-shaped id goes
+  // through the normal recheck. Optional-chained so a malformed config
+  // degrades to "not exempt" instead of failing the request before the try.
+  if (config?.qaFixturesExempt && isQaFixtureId(row.userId)) return row;
   try {
     // Incomplete derivation config cannot reproduce the login derivation:
     // no lookup, no stamp, the stored bits stand. Inside the try (and

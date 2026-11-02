@@ -6,6 +6,7 @@ import {
   AlertRateLimit,
   alertQueueFailing,
   alertRequestError,
+  exceptionClass,
   fingerprintOf,
   shouldReport,
 } from "../src/alerts";
@@ -19,6 +20,35 @@ import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs
 class BoomError extends Error {}
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("exceptionClass", () => {
+  it("names plain errors and non-errors as before", () => {
+    expect(exceptionClass(new BoomError("x"))).toBe("BoomError");
+    expect(exceptionClass(new TypeError("x"))).toBe("TypeError");
+    expect(exceptionClass("string")).toBe("string");
+    expect(exceptionClass(null)).toBe("object");
+    expect(exceptionClass(undefined)).toBe("undefined");
+  });
+
+  it("de-newlines and bounds a hostile class name so it cannot forge log lines", () => {
+    class ForgedError extends Error {}
+    Object.defineProperty(ForgedError, "name", {
+      value: `Forged\r\n{"level":"critical"}${"x".repeat(200)}`,
+    });
+    const cls = exceptionClass(new ForgedError());
+    expect(cls).not.toContain("\n");
+    expect(cls).not.toContain("\r");
+    expect(cls.startsWith('Forged_{"level":"critical"}')).toBe(true);
+    expect(cls.length).toBe(100);
+    expect(fingerprintOf(new ForgedError(), "/join")).toBe(`${cls}@/join`);
+  });
+
+  it("degrades a non-string class name to unknown instead of throwing", () => {
+    class OddError extends Error {}
+    Object.defineProperty(OddError, "name", { value: 42 });
+    expect(exceptionClass(new OddError())).toBe("unknown");
+  });
+});
 
 describe("dont-report list", () => {
   it("stays silent for 404/403/429 and validation, reports 5xx and plain errors", () => {
