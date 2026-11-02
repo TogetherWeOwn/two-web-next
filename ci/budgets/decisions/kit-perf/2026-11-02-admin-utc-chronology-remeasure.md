@@ -15,18 +15,18 @@ stack; it moves no gate, file-count cap or user-facing performance target.
 ## Measurements
 
 Canonical builds are `npm run build --prefix web`, then
-`node ci/check-kit-perf.mjs`, on Node v24.21.0. The roster head alone and
-the composed stack were each built twice locally; exact-head CI on the
-stack agrees within 2 bytes raw and 1 byte gzip.
+`node ci/check-kit-perf.mjs`, on Node v24.21.0. The roster head alone was
+built twice locally and the composed stack three times; exact-head CI on
+the stack agrees within 2 bytes on every axis.
 
-| Metric | First-admission build (stack) | Roster head, two builds | Stack local x2 / CI | Old ceiling | New ceiling |
+| Metric | First-admission build (stack) | Roster head, two builds | Stack local / CI | Old ceiling | New ceiling |
 | --- | ---: | ---: | ---: | ---: | ---: |
 | Server JS raw | 1212373 | 1212789 / 1212791 | 1213135 / 1213133 | 1212416 | 1213440 |
-| Server JS gzip | 339026 | 339298 / 339297 | 339319 / 339318 | 339200 | 339456 |
+| Server JS gzip | 339026 | 339298 / 339297 | 339319-339320 / 339318 | 339200 | 339456 |
 | Client JS raw | 261380 | 261536 | 261850 | 261632 | 262144 |
 | Client JS gzip | 104463 | 104514 | 104682 | 104704 | 104704 (unchanged) |
 
-Since the first admission the composed stack grew +762 server raw, +293
+Since the first admission the composed stack grew +762 server raw, +294
 server gzip, +470 client raw and +219 client gzip (0.06%, 0.09%, 0.18% and
 0.21%). The growth is the hardened adapter shipping in the server admin
 chunk and the shared client chunk; the adapter still has no imports, so no
@@ -42,14 +42,14 @@ Least-cover aligned steps on each breached axis, as before:
 - Server raw 1212416 -> 1213440: +1024 bytes (0.084%); margin 305 bytes
   over the worst build. The lower 512-byte step 1212928 rejects the worst
   build by 207.
-- Server gzip 339200 -> 339456: +256 bytes (0.075%); margin 137 bytes.
-  The previous ceiling rejects the worst build by 119.
+- Server gzip 339200 -> 339456: +256 bytes (0.075%); margin 136 bytes.
+  The previous ceiling rejects the worst build by 120.
 - Client raw 261632 -> 262144: +512 bytes (0.196%); margin 294 bytes.
   The previous ceiling rejects the worst build by 218.
 - Client gzip stays 104704: the worst build is 104682, margin 22 bytes.
   This axis is not breached, so least-cover discipline leaves it alone;
-  the local and CI builds above agree within 2 bytes raw and 1 byte gzip,
-  and exact-head CI remeasures every later composition.
+  the local and CI builds above agree within 2 bytes on every axis, and
+  exact-head CI remeasures every later composition.
 
 The roster head alone also breaches the old server ceilings (worst build
 1212791/339298), so the admission stays in the roster PR admitting the
