@@ -969,13 +969,15 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   );
   // Each environment gets only its own credentials: production secrets only
   // when the environment is exactly production, staging (repo-level)
-  // secrets only when it is exactly staging. Staging passes its repo
-  // secret under its own name via the declared workflow_call secret.
+  // secrets for any non-production environment. The inverse guard keeps an
+  // empty production secret resolving to '' (a loud credentials-check
+  // failure) instead of falling back to the staging name. Staging passes
+  // its repo secret under its own name via the declared workflow_call secret.
   // Credential check before the mutation.
   for (const key of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]) {
     // Credentials check, live-version guard, rollback target-version secrets
     // preflight and the rollback itself.
-    const selector = `\${{ inputs.environment == 'production' && secrets.PRODUCTION_${key} || inputs.environment == 'staging' && secrets.${key} || '' }}`;
+    const selector = `\${{ inputs.environment == 'production' && secrets.PRODUCTION_${key} || inputs.environment != 'production' && secrets.${key} || '' }}`;
     assert.equal(workflow.split(selector).length - 1, 4);
     assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 4);
     assert.equal((workflow.match(new RegExp(`secrets\\.${key}\\b`, "g")) ?? []).length, 4);
