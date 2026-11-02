@@ -38,6 +38,7 @@ import {
   rosterRangeText,
   rosterRecovery,
   rosterUrl,
+  sortHeaderAriaLabel,
   type ListParams,
   type RosterQuery,
   type RosterSort,
@@ -187,7 +188,7 @@ function sortHeader(eventKey: string, query: RosterQuery, key: RosterSort, label
       | "ascending"
       | "descending"
       | "none",
-    linkLabel: `Sort by ${label.toLowerCase()} ${next === "asc" ? "ascending" : "descending"}`,
+    linkLabel: sortHeaderAriaLabel(label, next),
     marker: active ? (query.order === "asc" ? " ↑" : " ↓") : "",
   };
 }
@@ -303,7 +304,7 @@ export async function resolveKitEventEdit(
             : null,
         sortHeaders: [
           sortHeader(row.eventKey, query, "status", "Status"),
-          sortHeader(row.eventKey, query, "answered", "Answered"),
+          sortHeader(row.eventKey, query, "answered", "Answered (UTC)"),
         ],
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
