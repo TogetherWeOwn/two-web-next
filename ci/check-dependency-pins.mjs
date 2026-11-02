@@ -7,8 +7,10 @@
 //      semver, e.g. test/remote-runner-isolation.test.ts pins wrangler 4.152.0
 //      while package.json allows ^4.152.0. A bare `npm update` floats these.
 //      Pins read through a consumer's resolver (lhciRequire, req, ...) stay
-//      held back but verify in the owning test: the guard only vouches for
-//      copies it can resolve (the root entry).
+//      held back but verify in the owning test. A transitive pin read from
+//      the root copy (bare require() or an explicit node_modules/ path) is
+//      verified against the root lockfile entry: the guard only vouches for
+//      copies it can resolve, and it never claims an unchecked pin is verified.
 //   2. Manifest pins — test/performance-ci.test.ts asserts package.json ranges
 //      and overrides entries verbatim (e.g. devDependencies["@lhci/cli"],
 //      overrides["basic-ftp"], and the absence of overrides["zod"]). `npm
@@ -25,8 +27,13 @@
 //   [ -n "$UPDATE" ] && npm update $UPDATE
 //   node ci/check-dependency-pins.mjs   # exit 1 names drifted pins
 //
-// A drifted pin is restored lockfile-only with `npm install <pkg>@<version>`
-// (the manifest range is left untouched) and adoption of the newer version is
+// A drifted direct pin is restored lockfile-only with
+// `npm install --package-lock-only <pkg>@<version>` (a bare `npm install
+// <pkg>@<version>` would save the version into the manifest range; verified
+// against npm 11: the manifest is untouched while the lockfile entry is
+// restored with its resolved URL and integrity). Drift on a transitive pin
+// files a follow-up instead: installing a transitive package by name would
+// promote it to a direct dependency. Adoption of the newer version is
 // filed as a follow-up instead of being floated by the sweep. After undrafting
 // a sweep PR, wait for the heavy jobs (check/node22-compat re-run on
 // ready_for_review) rather than trusting draft-CI green: drafts skip them.
@@ -313,14 +320,7 @@ export function verifyPins({
   const direct = manifestDirectDeps(manifest);
   for (const pin of installed) {
     const id = `installed:${pin.name}`;
-    if (!Object.hasOwn(direct, pin.name)) {
-      checks.push({
-        id,
-        status: "info",
-        detail: `transitive pin ${pin.name}@${pin.version} (${pin.file}:${pin.line}); enforced by overrides, verified by the owning test`,
-      });
-      continue;
-    }
+    const directName = Object.hasOwn(direct, pin.name);
     if (pin.root === false) {
       checks.push({
         id,
@@ -337,16 +337,26 @@ export function verifyPins({
         detail: `no root lockfile entry for pinned ${pin.name} (expected ${pin.version}; ${pin.file}:${pin.line})`,
       });
     } else if (actual !== pin.version) {
-      checks.push({
-        id,
-        status: "fail",
-        detail: `${pin.name} drifted to ${actual} (pinned ${pin.version}; ${pin.file}:${pin.line}); restore with \`npm install ${pin.name}@${pin.version}\` and file a follow-up`,
-      });
+      checks.push(
+        directName
+          ? {
+              id,
+              status: "fail",
+              detail: `${pin.name} drifted to ${actual} (pinned ${pin.version}; ${pin.file}:${pin.line}); restore with \`npm install --package-lock-only ${pin.name}@${pin.version}\` and file a follow-up`,
+            }
+          : {
+              id,
+              status: "fail",
+              detail: `transitive pin ${pin.name} drifted to ${actual} (pinned ${pin.version}; ${pin.file}:${pin.line}); file a follow-up (installing it by name would promote it to a direct dependency)`,
+            },
+      );
     } else {
       checks.push({
         id,
         status: "pass",
-        detail: `${pin.name}@${actual} matches ${pin.file}:${pin.line}`,
+        detail: directName
+          ? `${pin.name}@${actual} matches ${pin.file}:${pin.line}`
+          : `transitive pin ${pin.name}@${actual} matches the root lockfile entry (${pin.file}:${pin.line})`,
       });
     }
   }
@@ -372,7 +382,7 @@ export function verifyPins({
         : {
             id,
             status: "fail",
-            detail: `${pin.name} lockfile is ${resolved ?? "missing"} (manifest pins exact ${pin.version}); restore with \`npm install ${pin.name}@${pin.version}\` and file a follow-up`,
+            detail: `${pin.name} lockfile is ${resolved ?? "missing"} (manifest pins exact ${pin.version}); restore with \`npm install --package-lock-only ${pin.name}@${pin.version}\` and file a follow-up`,
           },
     );
   }
@@ -405,7 +415,7 @@ export function verifyPins({
         checks.push({
           id,
           status: "fail",
-          detail: `overrides["${pin.key}"] pins ${spec} but ${offenders} drifted; restore with \`npm install ${pin.key}@${spec}\` and file a follow-up`,
+          detail: `overrides["${pin.key}"] pins ${spec} but ${offenders} drifted; restore with \`npm install --package-lock-only ${pin.key}@${spec}\` and file a follow-up`,
         });
       }
       continue;
@@ -683,21 +693,79 @@ function selftest() {
   const driftResult = verifyPins(drifted);
   assert(
     driftResult.ok === false &&
-      driftResult.checks.some((c) => c.detail.includes("npm install wrangler@4.152.0")),
+      driftResult.checks.some((c) =>
+        c.detail.includes("npm install --package-lock-only wrangler@4.152.0"),
+      ),
     "drift fails with a lockfile-only restore hint",
   );
   const missing = { ...base, lockfile: { packages: {} } };
   assert(verifyPins(missing).ok === false, "missing lockfile entry fails closed");
+  // Consumer-resolved transitive pins (the shape the scanner emits for
+  // `lhciRequire("tmp/package.json")`) stay informational and never held back.
   const withTransitive = {
     ...base,
-    installed: [...base.installed, { name: "tmp", version: "0.2.7", file: "t.ts", line: 9 }],
+    installed: [
+      ...base.installed,
+      { name: "tmp", version: "0.2.7", file: "t.ts", line: 9, root: false, via: "lhciRequire" },
+    ],
   };
   const transitiveResult = verifyPins(withTransitive);
   assert(
     transitiveResult.ok === true &&
       transitiveResult.checks.some((c) => c.id === "installed:tmp" && c.status === "info") &&
       !holdBackNames(withTransitive).includes("tmp"),
-    "transitive pins are informational, never held back",
+    "consumer-resolved transitive pins are informational, never held back",
+  );
+  // A transitive pin read from the root copy is verified against the root
+  // lockfile entry instead of passing blindly.
+  const withRootTransitive = {
+    ...base,
+    installed: [
+      ...base.installed,
+      { name: "lighthouse", version: "12.6.1", file: "t.ts", line: 12, root: true },
+    ],
+    lockfile: {
+      packages: {
+        ...base.lockfile.packages,
+        "node_modules/lighthouse": { version: "12.6.1" },
+      },
+    },
+  };
+  const rootTransitiveResult = verifyPins(withRootTransitive);
+  assert(
+    rootTransitiveResult.ok === true &&
+      rootTransitiveResult.checks.some(
+        (c) => c.id === "installed:lighthouse" && c.status === "pass",
+      ),
+    "root-resolved transitive pins verify when the lockfile agrees",
+  );
+  const driftedRootTransitive = {
+    ...withRootTransitive,
+    lockfile: {
+      packages: {
+        ...withRootTransitive.lockfile.packages,
+        "node_modules/lighthouse": { version: "12.6.2" },
+      },
+    },
+  };
+  const driftedRootTransitiveResult = verifyPins(driftedRootTransitive);
+  assert(
+    driftedRootTransitiveResult.ok === false &&
+      driftedRootTransitiveResult.checks.some(
+        (c) =>
+          c.id === "installed:lighthouse" &&
+          c.status === "fail" &&
+          !c.detail.includes("npm install"),
+      ),
+    "root-resolved transitive drift fails without an install-by-name hint",
+  );
+  const missingRootTransitive = {
+    ...withRootTransitive,
+    lockfile: { packages: { ...base.lockfile.packages } },
+  };
+  assert(
+    verifyPins(missingRootTransitive).ok === false,
+    "missing root entry for a root-resolved transitive pin fails closed",
   );
   // Multiline assertions: a trailing `(` continues onto the next physical line.
   const splitCall = scanTestSource(
@@ -757,7 +825,8 @@ function selftest() {
   assert(
     exactDriftResult.ok === false &&
       exactDriftResult.checks.some(
-        (c) => c.id === "exact:zod" && c.detail.includes("npm install zod@4.6.7"),
+        (c) =>
+          c.id === "exact:zod" && c.detail.includes("npm install --package-lock-only zod@4.6.7"),
       ),
     "exact-range drift fails with a restore hint",
   );

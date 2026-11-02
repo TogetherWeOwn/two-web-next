@@ -67,7 +67,7 @@ test("exact ranges are verified against the lockfile", () => {
   assert.equal(result.ok, false);
   assert.match(
     JSON.stringify(result.checks),
-    /npm install zod@4\.6\.7/,
+    /npm install --package-lock-only zod@4\.6\.7/,
     "exact-range drift names the lockfile-only restore",
   );
 });
@@ -117,7 +117,41 @@ test("drifted lockfile entries fail with a restore hint", () => {
   assert.equal(result.ok, false);
   assert.match(
     JSON.stringify(result.checks),
-    /npm install wrangler@4\.152\.0/,
+    /npm install --package-lock-only wrangler@4\.152\.0/,
     "the failure names the lockfile-only restore",
   );
+});
+
+test("root-resolved transitive pins verify instead of passing blindly", () => {
+  const pins = collectPins();
+  const withRootTransitive = {
+    ...pins,
+    // Drop the live consumer-resolved lighthouse pin so the fixture pin is
+    // the only `installed:lighthouse` row under test.
+    installed: [
+      ...pins.installed.filter((pin) => pin.name !== "lighthouse"),
+      { name: "lighthouse", version: "12.6.1", file: "t.ts", line: 1, root: true },
+    ],
+    lockfile: {
+      packages: {
+        ...pins.lockfile.packages,
+        "node_modules/lighthouse": { version: "12.6.1" },
+      },
+    },
+  };
+  assert.equal(verifyPins(withRootTransitive).ok, true);
+  const drifted = {
+    ...withRootTransitive,
+    lockfile: {
+      packages: {
+        ...withRootTransitive.lockfile.packages,
+        "node_modules/lighthouse": { version: "12.6.2" },
+      },
+    },
+  };
+  const result = verifyPins(drifted);
+  assert.equal(result.ok, false);
+  const row = result.checks.find((c) => c.id === "installed:lighthouse");
+  assert.equal(row.status, "fail");
+  assert.ok(!row.detail.includes("npm install"), "no install-by-name hint for transitives");
 });

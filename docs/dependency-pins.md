@@ -32,13 +32,18 @@ one-liner goes to stderr. Exit 0 is pass, 1 is pin drift, 2 is usage.
 | String `overrides` entry | `undici` 7.30.1 | Every installed copy must agree with the override |
 | Nested `overrides` entry | `overrides["@lhci/cli"]["tmp"]` 0.2.7 | The copy the scope package resolves must agree; reported as informational when the scope declares no such dependency edge |
 
-Transitive pins (for example `tmp` 0.2.7 read through a consumer's resolver)
-are reported as informational: the manifest overrides enforce them and the
-owning test verifies them, so they never enter the hold-back set. Pins read
-through a consumer resolver (`lhciRequire`, `req`, …) rather than a bare
-`require()` or an explicit `node_modules/` path stay held back but likewise
-verify in the owning test: the guard only vouches for copies it can resolve
-(the root entry).
+Transitive pins read through a consumer's resolver (for example `tmp` 0.2.7
+via `lhciRequire`) are reported as informational: the manifest overrides
+enforce them and the owning test verifies them, so they never enter the
+hold-back set. A transitive pin read from the root copy (a bare `require()`
+or an explicit `node_modules/` path) is verified against the root lockfile
+entry like a direct pin, except drift files a follow-up instead of an
+`npm install` restore: installing a transitive package by name would promote
+it to a direct dependency. Pins read through a consumer resolver
+(`lhciRequire`, `req`, …) rather than a bare `require()` or an explicit
+`node_modules/` path stay held back but likewise verify in the owning test:
+the guard only vouches for copies it can resolve (the root entry), and never
+claims an unchecked pin is verified.
 
 ## Sweep procedure
 
@@ -48,9 +53,12 @@ UPDATE=$(node ci/check-dependency-pins.mjs --updatable)
 node ci/check-dependency-pins.mjs
 ```
 
-A drifted pin is restored lockfile-only with `npm install <pkg>@<version>`
-(the manifest range is left untouched) and adopting the newer version is filed
-as a follow-up instead of being floated by the sweep. After undrafting a sweep
-PR, wait for the heavy jobs (`check`, `node22-compat`) to re-run on
-`ready_for_review` rather than trusting draft-CI green: drafts skip them by
-design.
+A drifted direct pin is restored lockfile-only with
+`npm install --package-lock-only <pkg>@<version>`: a bare
+`npm install <pkg>@<version>` would save the version into the manifest range,
+while `--package-lock-only` leaves the manifest untouched and restores the
+lockfile entry with its resolved URL and integrity. Adopting the newer version
+is filed as a follow-up instead of being floated by the sweep. After
+undrafting a sweep PR, wait for the heavy jobs (`check`, `node22-compat`) to
+re-run on `ready_for_review` rather than trusting draft-CI green: drafts skip
+them by design.
