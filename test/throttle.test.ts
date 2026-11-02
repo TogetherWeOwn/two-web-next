@@ -155,7 +155,7 @@ describe("budgets on the legacy paths", () => {
     const e = {
       // Enable the QA environment gate in-process; no staging HTTP/DB.
       APP_URL: "https://next.togetherweown.com",
-      QA_AUTH_TOKEN: "test-only-qa-token",
+      QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
       SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
       THROTTLE_STORE: async () => sql,
     } as unknown as EnvWithThrottle;
@@ -170,7 +170,7 @@ describe("budgets on the legacy paths", () => {
       headers: {
         origin: e.APP_URL,
         accept: "application/json",
-        [QA_HEADER]: "test-only-qa-token",
+        [QA_HEADER]: "test-only-qa-token-with-32-plus-chars",
       },
     };
     for (let i = 0; i < 10; i++)

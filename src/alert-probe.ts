@@ -2,8 +2,8 @@ import type { Hono } from "hono";
 import type { Env } from "./env";
 import { requestBodyLimit } from "./body-limit";
 import { ALERT_PROBE_HEADER, AlertProbeError, validProbeId } from "./alert-probe-error";
-import { QA_HEADER, qaEnabled, qaTokenMatches } from "./qa";
-import { AUTH_THROTTLE_PER_MINUTE, throttle } from "./throttle";
+import { QA_HEADER, qaEnabled, qaTokenMatches, refundQaAttempt, takeQaAttempt } from "./qa";
+import { AUTH_THROTTLE_PER_MINUTE, clientKey, throttle } from "./throttle";
 
 export function registerAlertProbe(app: Hono<{ Bindings: Env }>): void {
   app.post(
@@ -12,11 +12,16 @@ export function registerAlertProbe(app: Hono<{ Bindings: Env }>): void {
       // The global host/same-origin guards still precede this route. No new exemption.
       // Gate BEFORE the throttle/reader: disabled/bad-token calls always 404.
       // Middleware order: https://hono.dev/docs/guides/middleware
-      if (
-        !qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN) ||
-        !(await qaTokenMatches(c.env.QA_AUTH_TOKEN, c.req.header(QA_HEADER) ?? ""))
-      )
-        return c.notFound();
+      if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
+      // Same per-client attempt budget as the QA login gate (src/qa.ts): a
+      // presented token takes an attempt before the digest compare and a
+      // match refunds it, so failed guesses against either surface drain
+      // the one budget. Refusal is the same 404 as a bad token.
+      const presented = c.req.header(QA_HEADER) ?? "";
+      const client = clientKey(c);
+      if (presented && !takeQaAttempt(client)) return c.notFound();
+      if (!(await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented))) return c.notFound();
+      if (presented) refundQaAttempt(client);
       await next();
     },
     // Body cap BEFORE the throttle (cap-first): oversized probes get a 413
