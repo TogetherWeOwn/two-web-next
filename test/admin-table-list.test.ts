@@ -646,7 +646,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       );
       expect(fallback.indexOf("Unknown member")).toBeLessThan(fallback.indexOf("Alice"));
       expect(fallback).not.toContain("100000000000001005");
-      expect(fallback).toContain('aria-label="Sort by answered ascending"');
+      expect(fallback).toContain('aria-label="Sort by answered (UTC) ascending"');
       const html = await request(
         "/events/01K00000000000000000000011?roster_q=alice&roster_sort=status&roster_order=asc",
       );

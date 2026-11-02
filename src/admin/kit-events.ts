@@ -11,7 +11,13 @@
 // audit; this only tells the load which rows and page controls to render.
 // The fetch stays bounded: listEvents over-fetches by exactly one row
 // (EVENT_PAGE_SIZE + 1, no count query), and the view slices to the page.
-import { EVENT_PAGE_SIZE, eventEmptyText, type EventListQuery } from "./event-list";
+import {
+  EVENT_PAGE_SIZE,
+  eventEmptyText,
+  pageTitleDuplicates,
+  sameTitleSuffix,
+  type EventListQuery,
+} from "./event-list";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 import type { EventListRow } from "./store-event-reads";
 
@@ -73,10 +79,17 @@ export function buildEventListView(
   query: EventListQuery,
   fetched: EventListRow[],
 ): KitEventListView {
+  // §4a: same-title rows share one page; only those pause names take the ISO suffix.
+  const duplicates = pageTitleDuplicates(fetched.slice(0, EVENT_PAGE_SIZE));
   const pauseReviews: Record<string, string> = {};
   for (const row of fetched.slice(0, EVENT_PAGE_SIZE)) {
     if (row.status === "published" && row.rsvpOpen) {
-      pauseReviews[row.eventKey] = renderRsvpPauseReviewHtml(row.title, row.eventKey);
+      const iso = Number.isFinite(row.startsAt.getTime()) ? row.startsAt.toISOString() : null;
+      pauseReviews[row.eventKey] = renderRsvpPauseReviewHtml(
+        row.title,
+        row.eventKey,
+        sameTitleSuffix(row.title, iso, duplicates),
+      );
     }
   }
   return {

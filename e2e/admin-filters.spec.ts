@@ -101,8 +101,10 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     // Reopen control proves the paused state stuck.
     await page.goto(`/admin/events/${pausedKey}`);
     await page.getByTestId("rsvp-pause-review").locator("summary").click();
-    await page.getByRole("button", { name: "Pause RSVPs", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Reopen RSVPs", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: `Pause RSVPs for ${pausedTitle}`, exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: `Reopen RSVPs for ${pausedTitle}`, exact: true }),
+    ).toBeVisible();
 
     const table = page.getByTestId("events-table");
     const rowFor = (title: string) => table.locator("tbody tr", { hasText: title });
