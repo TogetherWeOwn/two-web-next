@@ -29,10 +29,15 @@ function escapeReviewAttr(value: string): string {
  * markup, classes, testids and copy to the Hono RsvpAction disclosure, with
  * the saved title and key escaped exactly like Svelte would. The Kit client
  * bundle never sees this string; it arrives via load data. */
-export function renderRsvpPauseReviewHtml(title: string, eventKey: string): string {
+export function renderRsvpPauseReviewHtml(
+  title: string,
+  eventKey: string,
+  titleSuffix = "",
+): string {
   const copy = rsvpPauseReviewCopy;
   const safeTitle = escapeReviewText(title);
-  const safeLabel = escapeReviewAttr(`${copy.summary}: ${title}`);
+  const safeLabel = escapeReviewAttr(`${copy.summary}: ${title}${titleSuffix}`);
+  const safePauseLabel = escapeReviewAttr(`Pause RSVPs for ${title}${titleSuffix}`);
   const safeKey = escapeReviewAttr(eventKey);
   return (
     `<details class="rsvp-review" data-testid="rsvp-pause-review">` +
@@ -42,7 +47,7 @@ export function renderRsvpPauseReviewHtml(title: string, eventKey: string): stri
     `<p>${escapeReviewText(copy.consequence)}</p>` +
     `<p>${escapeReviewText(copy.keep)}</p>` +
     `<form method="post" action="/admin/events/${safeKey}/rsvp-pause">` +
-    `<button type="submit" class="btn" data-testid="rsvp-pause">${escapeReviewText(copy.final)}</button>` +
+    `<button type="submit" class="btn" data-testid="rsvp-pause" aria-label="${safePauseLabel}">${escapeReviewText(copy.final)}</button>` +
     `</form></details>`
   );
 }

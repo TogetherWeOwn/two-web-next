@@ -651,6 +651,7 @@ describe("Kit bridge past the cap (hermetic)", () => {
     const decision = await resolveRequestSession(requestWith(cookie), {
       sessionSecret: SECRET,
       store,
+      roleRecheck: null,
     });
     expect(decision).toEqual({ status: "guest", session: null });
     expect(renew).not.toHaveBeenCalled();
@@ -667,6 +668,7 @@ describe("Kit bridge past the cap (hermetic)", () => {
     const decision = await resolveRequestSession(requestWith(cookie), {
       sessionSecret: SECRET,
       store,
+      roleRecheck: null,
     });
     expect(decision.status).toBe("authenticated");
     expect(decision.session).toMatchObject({ userId: MEMBER.userId });

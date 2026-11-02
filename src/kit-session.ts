@@ -87,10 +87,11 @@ export type KitLocals = KitRequestSession & KitReturnJourney;
 export type RequestSessionDeps = {
   sessionSecret: string;
   store: SessionStore;
-  /** Mid-session role recheck inputs (src/session-role-refresh.ts). The
-   * production bridges always pass them; direct test deps may omit them and
-   * keep the login-only bits. */
-  roleRecheck?: RoleRecheckConfig;
+  /** Mid-session role recheck inputs (src/session-role-refresh.ts). Required
+   * so no caller gets login-only bits by forgetting them: the production
+   * bridges always pass a config, and a test double that deliberately wants
+   * the login-only behavior passes null as its explicit opt-out. */
+  roleRecheck: RoleRecheckConfig | null;
 };
 
 const GUEST: KitRequestSession = { status: "guest", session: null };
