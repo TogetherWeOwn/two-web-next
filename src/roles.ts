@@ -25,27 +25,50 @@ function isDiscordId(value: unknown): value is string {
 
 export type GuildMemberRoles = { roles: string[]; joinedAt: string | null };
 
-export async function fetchMemberRoles(
+/**
+ * One guild-member lookup, keeping the three outcomes apart that
+ * `fetchMemberRoles` collapses to null: Discord answered for a member, the
+ * user is not in the guild (404, code 10007), or the lookup failed (admission, config,
+ * HTTP failure, non-JSON). A transport rejection still propagates, exactly
+ * as before, so each caller classifies it at its own boundary.
+ * `rolesKnown` is false when a 200 body carries no roles array, or any
+ * entry is not a snowflake: membership is still proven, but no definitive
+ * role verdict can be derived from the shape.
+ */
+type GuildMemberLookup =
+  | { kind: "member"; roles: string[]; rolesKnown: boolean; joinedAt: string | null }
+  | { kind: "not_member" }
+  | { kind: "failed" };
+
+async function lookupGuildMember(
   guildId: string,
   userId: string,
   botToken: string,
-): Promise<GuildMemberRoles | null> {
-  // Charset admission first: a malformed guild or user id returns null before
+): Promise<GuildMemberLookup> {
+  // Charset admission first: a malformed guild or user id returns before
   // any header construction or fetch, so zero Discord requests are emitted.
-  if (!isDiscordId(guildId) || !isDiscordId(userId)) return null;
+  if (!isDiscordId(guildId) || !isDiscordId(userId)) return { kind: "failed" };
   // Fail closed on an unconfigured bot token (TOG-12687): no bot call is
   // emitted, so the caller degrades to a non-moderator flag.
-  if (!botToken || botToken.trim().length === 0) return null;
+  if (!botToken || botToken.trim().length === 0) return { kind: "failed" };
   const res = await discordFetch(
     `${API}/guilds/${encodeURIComponent(guildId)}/members/${encodeURIComponent(userId)}`,
     {
       headers: { authorization: `Bot ${botToken}` },
     },
   );
-  if (res.status === 404) return null;
+  if (res.status === 404) {
+    // Only Discord code 10007 (Unknown Member) proves the user is not in
+    // the guild. Any other 404 — an unknown guild from a misconfigured
+    // guild id, an edge HTML page — falls through to the failed branch
+    // below, so the mid-session recheck reads it as inconclusive instead
+    // of stripping every privileged session within one cadence.
+    const errBody = (await res.json().catch(() => null)) as { code?: unknown } | null;
+    if (errBody?.code === 10007) return { kind: "not_member" };
+  }
   if (!res.ok) {
     console.warn("moderator recompute lookup failed", { status: res.status, guild_id: guildId });
-    return null;
+    return { kind: "failed" };
   }
   // Discord answers JSON here; a non-JSON edge response is a failed lookup, not a crash.
   let body: unknown;
@@ -53,7 +76,7 @@ export async function fetchMemberRoles(
     body = await res.json();
   } catch {
     console.warn("moderator recompute lookup returned non-JSON", { guild_id: guildId });
-    return null;
+    return { kind: "failed" };
   }
   // A valid-JSON body with no object shape (null, scalar) carries no roles;
   // degrade to empty instead of throwing, so the recomputeModerator boundary
@@ -63,14 +86,28 @@ export async function fetchMemberRoles(
     typeof body === "object" && body !== null
       ? (body as { roles?: unknown; joined_at?: unknown })
       : null;
-  const roles =
-    shape !== null && Array.isArray(shape.roles)
-      ? shape.roles.filter((r): r is string => typeof r === "string")
-      : [];
+  const rawRoles = shape !== null && Array.isArray(shape.roles) ? (shape.roles as unknown[]) : null;
+  // Known only when every entry is a snowflake. A malformed entry is a shape
+  // miss, not an empty role list: the mid-session recheck must not read it as
+  // a definitive demotion. `roles` keeps the legacy string-filtered list so
+  // login derivation (`fetchMemberRoles`) is byte-for-byte unchanged.
+  const rolesKnown = rawRoles !== null && rawRoles.every((r) => isDiscordId(r));
+  const roles = rawRoles ? rawRoles.filter((r): r is string => typeof r === "string") : [];
   return {
+    kind: "member",
     roles,
+    rolesKnown,
     joinedAt: shape !== null && typeof shape.joined_at === "string" ? shape.joined_at : null,
   };
+}
+
+export async function fetchMemberRoles(
+  guildId: string,
+  userId: string,
+  botToken: string,
+): Promise<GuildMemberRoles | null> {
+  const lookup = await lookupGuildMember(guildId, userId, botToken);
+  return lookup.kind === "member" ? { roles: lookup.roles, joinedAt: lookup.joinedAt } : null;
 }
 
 /** Parse `DISCORD_MODERATOR_ROLE_IDS` ("id1,id2") into snowflakes. Blank = nobody. */
@@ -132,4 +169,38 @@ export async function recomputeModerator(opts: {
   );
   if (!member) return false;
   return isModerator(member.roles, opts.moderatorRoleIds);
+}
+
+/**
+ * Mid-session re-derivation of a session's member/moderator bits. Unlike
+ * `recomputeModerator` at login — which fails closed to non-moderator
+ * because nothing is granted yet — a live session already holds bits, so
+ * only a definitive Discord answer may replace them: a guild-member body
+ * whose roles array is well-formed (every entry a snowflake), or a
+ * 404 with code 10007 proving the user left the guild. Transport
+ * failures, HTTP errors, missing configuration and shape misses resolve
+ * to null ("inconclusive: keep the stored bits"), so a Discord outage
+ * never strips privilege mid-session; the session's absolute age cap
+ * remains the hard bound. A blank moderator allowlist still yields a
+ * definitive membership verdict with moderator=false, matching login.
+ */
+export async function recheckGuildRoles(opts: {
+  guildId: string;
+  userId: string;
+  botToken: string;
+  moderatorRoleIds: string[];
+}): Promise<{ member: boolean; moderator: boolean } | null> {
+  const lookup = await lookupGuildMember(opts.guildId, opts.userId, opts.botToken).catch(
+    (err: unknown) => {
+      console.warn("session role recheck lookup transport failed", {
+        exception: lookupExceptionClass(err),
+        guild_id: opts.guildId,
+      });
+      return { kind: "failed" } as GuildMemberLookup;
+    },
+  );
+  if (lookup.kind === "failed") return null;
+  if (lookup.kind === "not_member") return { member: false, moderator: false };
+  if (!lookup.rolesKnown) return null;
+  return { member: true, moderator: isModerator(lookup.roles, opts.moderatorRoleIds) };
 }

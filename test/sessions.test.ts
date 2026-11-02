@@ -52,11 +52,13 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
     });
 
     it("preserves the status key across repeated and no-op rotation without reviving old login tokens", async () => {
-      const original = row();
+      // Moderator steps down across the chain, never up: rotation carries
+      // the least-privileged combination of caller and source bits.
+      const original = { ...row(), moderator: true };
       await store.create(original);
       const statusHash = (await store.statusHash(original.tokenHash))!;
-      const first = row();
-      const second = { ...row(), moderator: true };
+      const first = { ...row(), moderator: true };
+      const second = row();
       for (const [source, replacement] of [
         [original, first],
         [first, second],
@@ -70,11 +72,12 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
           moderator: replacement.moderator,
         });
         if (source.tokenHash !== replacement.tokenHash) {
-          // Immediate predecessor stays valid for 10s with its own member row
-          // while its successor is live; the status key never authenticates.
+          // Immediate predecessor stays valid for 10s while its successor is
+          // live, with the same least-privileged combination as the
+          // successor; the status key never authenticates.
           expect(await store.get(source.tokenHash)).toMatchObject({
             userId: "42",
-            moderator: source.moderator,
+            moderator: source.moderator && replacement.moderator,
           });
           expect(await store.statusHash(source.tokenHash)).toBeNull();
         }
@@ -159,7 +162,7 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
     );
 
     it("rotation deletes the old row and inserts the replacement; replay misses", async () => {
-      const s = row();
+      const s = { ...row(), moderator: true };
       await store.create(s);
       const replacement = { ...row(), moderator: true };
       expect(await store.rotate(s.tokenHash, replacement)).toBe(true);

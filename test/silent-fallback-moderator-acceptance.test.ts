@@ -103,8 +103,15 @@ describe("transport-throw moderator degrade warns (failing-first)", () => {
 });
 
 describe("moderator silence + flag stability", () => {
-  it("404 still degrades with no warning at all", async () => {
-    vi.stubGlobal("fetch", vi.fn().mockResolvedValue(new Response("{}", { status: 404 })));
+  it("404 (Unknown Member, code 10007) still degrades with no warning at all", async () => {
+    vi.stubGlobal(
+      "fetch",
+      vi
+        .fn()
+        .mockResolvedValue(
+          new Response(JSON.stringify({ message: "Unknown Member", code: 10007 }), { status: 404 }),
+        ),
+    );
     await expect(recomputeModerator(opts())).resolves.toBe(false);
     expect(diagnostics).toEqual([]);
   });

@@ -150,9 +150,13 @@ function kitFixture(t, fragments) {
 // and 338213; 338176 rejects by 37).
 // 338688 admits the MCP truncation notice on top of it (two builds 338619;
 // 338432 rejects by 187).
+// 339968 admits the session role recheck on top of it (two builds 339958;
+// 338688 rejects by 1270).
+// 340224 admits the recheck review hardening on top of that (two builds
+// 340038 and 340039; 339968 rejects by 70 and 71).
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
   335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176,
-  338432, 338688,
+  338432, 338688, 339968, 340224,
 ];
 // Admitted server.js maxRawBytes allocations. The SHIPPING_KIT_BUDGET pin
 // above (1203200) is the historical baseline; 1203968 admits the
@@ -171,8 +175,12 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // and 1209742; 1209344 rejects by 396 and 398).
 // 1211392 admits the MCP truncation notice on top of it (two builds 1210976;
 // 1209856 rejects by 1120).
+// 1217024 admits the session role recheck on top of it (two builds 1217003;
+// 1211392 rejects by 5611).
+// 1217536 admits the recheck review hardening on top of that (two builds
+// 1217202; 1217024 rejects by 178).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
-  1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392,
+  1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -201,12 +209,12 @@ function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339968, 340224`,
   );
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -351,6 +359,32 @@ test("shipping oracle admits the measured MCP truncation-notice server allocatio
     ...SHIPPING_KIT_BUDGET,
     server: {
       js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1211392, maxGzipBytes: 338688 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 260608, maxGzipBytes: 103936 },
+    },
+  });
+});
+
+test("shipping oracle admits the measured session role-recheck server allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1217024, maxGzipBytes: 339968 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 260608, maxGzipBytes: 103936 },
+    },
+  });
+});
+
+test("shipping oracle admits the measured recheck-hardening server allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1217536, maxGzipBytes: 340224 },
     },
     client: {
       ...SHIPPING_KIT_BUDGET.client,
