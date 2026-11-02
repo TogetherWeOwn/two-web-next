@@ -748,8 +748,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
     assert.equal(
       (workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length,
       count,
-    );
-  }
+    );  }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
   const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
   const rollbackTarget = workflow.indexOf(
