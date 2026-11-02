@@ -35,11 +35,17 @@ export const MAX_QA_PRESENTED_TOKEN_LENGTH = 512;
 // Same 32-character floor as the ops control token (src/admin/ops-overrides.tsx)
 // and the source-evidence bearer (src/admin/source-evidence.ts): a shorter
 // configured value leaves the route disabled (404) instead of running with a
-// guessable secret.
+// guessable secret. Surrounding whitespace never counts toward the floor and
+// disables the seam too, matching the ops-token gate.
 export const MIN_QA_TOKEN_LENGTH = 32;
 
 export function qaEnabled(appUrl: string, qaToken: string | undefined): boolean {
-  return appUrl === STAGING_APP_URL && !!qaToken && qaToken.length >= MIN_QA_TOKEN_LENGTH;
+  return (
+    appUrl === STAGING_APP_URL &&
+    !!qaToken &&
+    qaToken.trim() === qaToken &&
+    qaToken.length >= MIN_QA_TOKEN_LENGTH
+  );
 }
 
 const sha256 = (s: string) => crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
