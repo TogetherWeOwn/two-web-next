@@ -1014,9 +1014,11 @@ const STAGING_CLOUDFLARE_SECRET =
 // The production name is taken only under the same input that selects the
 // production Environment, and the staging name only under the inverse
 // guard, so an empty production secret resolves to '' (a loud downstream
-// auth failure), never to the staging credential.
+// auth failure), never to the staging credential. Both `inputs.target`
+// (db-backup, deploy) and `inputs.environment` (rollback-production)
+// select the Environment.
 const TARGET_GUARDED_STAGING_CLOUDFLARE =
-  /\binputs\.target\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\s*\|\|\s*inputs\.target\s*!=\s*'production'\s*&&\s*secrets\s*\.\s*CLOUDFLARE_\1\s*\|\|\s*''/i;
+  /\binputs\.(?:target|environment)\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\s*\|\|\s*inputs\.(?:target|environment)\s*!=\s*'production'\s*&&\s*secrets\s*\.\s*CLOUDFLARE_\1\s*\|\|\s*''/i;
 
 export function stagingCloudflareEnvironmentViolations(text, file) {
   const { outside, jobs } = splitWorkflow(text);
@@ -1040,7 +1042,7 @@ export function stagingCloudflareEnvironmentViolations(text, file) {
       for (const line of referencing) {
         if (!TARGET_GUARDED_STAGING_CLOUDFLARE.test(line)) {
           violations.push(
-            `${file}: job ${id} maps a staging Cloudflare secret without the inputs.target == 'production' guard to its PRODUCTION_* pair`,
+            `${file}: job ${id} maps a staging Cloudflare secret without the inputs.target/environment == 'production' guard to its PRODUCTION_* pair`,
           );
           break;
         }
@@ -1206,6 +1208,18 @@ test("target-selected environment requires the PRODUCTION_* guard for staging Cl
   // An expression that cannot be shown to select staging is rejected.
   const opaque = guarded.replace("inputs.target || 'staging'", "vars.ENVIRONMENT_NAME");
   assert.equal(stagingCloudflareEnvironmentViolations(opaque, "fixture.yml").length, 1);
+  // `inputs.environment` selects the Environment the same way `inputs.target`
+  // does (rollback-production.yml names its input `environment`), so its
+  // guarded mapping passes and its unguarded mapping fails.
+  const envGuarded = guarded
+    .replaceAll("inputs.target", "inputs.environment")
+    .replace("environment: ${{ inputs.environment || 'staging' }}", "environment: ${{ inputs.environment }}");
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(envGuarded, "fixture.yml"), []);
+  const envUnguarded = envGuarded.replace(
+    "inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || ",
+    "",
+  );
+  assert.equal(stagingCloudflareEnvironmentViolations(envUnguarded, "fixture.yml").length, 1);
 });
 
 // ---------------------------------------------------------------------------

@@ -24,6 +24,9 @@ jobs:
   plan:
     name: plan staging rollback drill
     if: github.ref == 'refs/heads/main'
+    # Staging-only drill: bind the staging Environment so the staging
+    # Cloudflare secrets below resolve under its branch policy.
+    environment: staging
     # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 40
@@ -94,7 +97,9 @@ jobs:
     needs: plan
     # Staging legs need only the two repo-level staging Cloudflare values,
     # passed by declared name: production Environment secrets stay out of
-    # this run entirely.
+    # this run entirely. The staging binding keeps the secret read under
+    # the staging Environment's branch policy.
+    environment: staging
     uses: ./.github/workflows/rollback-production.yml
     with:
       environment: staging
@@ -112,6 +117,8 @@ jobs:
     # and refuses when a newer deploy landed in between.
     needs: [plan, rollback]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
+    # Same staging binding as the rollback leg above.
+    environment: staging
     uses: ./.github/workflows/rollback-production.yml
     with:
       environment: staging
