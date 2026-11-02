@@ -72,11 +72,12 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
           moderator: replacement.moderator,
         });
         if (source.tokenHash !== replacement.tokenHash) {
-          // Immediate predecessor stays valid for 10s with its own member row
-          // while its successor is live; the status key never authenticates.
+          // Immediate predecessor stays valid for 10s while its successor is
+          // live, with the same least-privileged combination as the
+          // successor; the status key never authenticates.
           expect(await store.get(source.tokenHash)).toMatchObject({
             userId: "42",
-            moderator: source.moderator,
+            moderator: source.moderator && replacement.moderator,
           });
           expect(await store.statusHash(source.tokenHash)).toBeNull();
         }

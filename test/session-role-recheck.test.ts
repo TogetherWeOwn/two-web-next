@@ -283,6 +283,27 @@ describe("memory store recheck stamping (manual clock, no timers)", () => {
     expect(await store.roleRecheckDue!(newHash)).toBe(true);
   });
 
+  it("rotation carrying a demotion demotes the predecessor grace too", async () => {
+    // The caller's replacement carries a demotion the stored row does not
+    // have yet. The grace row takes the same least-privileged combination
+    // as the successor, so the old bearer cannot outrank its successor
+    // during the 10s overlap.
+    const oldHash = await seed();
+    now = LOGIN_AT + CADENCE_MS;
+    const newHash = await hashToken(newSessionToken());
+    expect(
+      await store.rotate(oldHash, {
+        ...MODERATOR,
+        member: false,
+        moderator: false,
+        tokenHash: newHash,
+        expiresAt: new Date(now + TTL_MS),
+      }),
+    ).toBe(true);
+    expect(await store.get(newHash)).toEqual({ ...MODERATOR, member: false, moderator: false });
+    expect(await store.get(oldHash)).toEqual({ ...MODERATOR, member: false, moderator: false });
+  });
+
   it("rotation preserves the recheck stamp instead of freshening it", async () => {
     const oldHash = await seed();
     now = LOGIN_AT + CADENCE_MS;

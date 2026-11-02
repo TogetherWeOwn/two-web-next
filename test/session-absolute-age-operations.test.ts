@@ -279,6 +279,28 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await s.get("race-new")).toMatchObject({ member: true, moderator: false });
         expect(await s.roleRecheckDue!("race-new")).toBe(true);
       });
+
+      it("rotation carrying a demotion demotes the predecessor grace too", async () => {
+        // The caller's replacement carries a demotion the stored row does
+        // not have yet. The grace row takes the same least-privileged
+        // combination as the successor, so the old bearer cannot outrank
+        // its successor during the 10s overlap.
+        const s = store();
+        await seedRecheck("grace-old", { createdOffset: -3600 * SECOND });
+        expect(
+          await s.rotate("grace-old", {
+            userId: MEMBER,
+            username: "fixture",
+            avatar: null,
+            member: false,
+            moderator: false,
+            tokenHash: "grace-new",
+            expiresAt: at(3600 * SECOND),
+          }),
+        ).toBe(true);
+        expect(await s.get("grace-new")).toMatchObject({ member: false, moderator: false });
+        expect(await s.get("grace-old")).toMatchObject({ member: false, moderator: false });
+      });
     });
   },
 );

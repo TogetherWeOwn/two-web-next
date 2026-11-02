@@ -367,7 +367,9 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       // successor's next authorizing read. The successor's bits themselves
       // are the least-privileged combination of the caller's and the deleted
       // row's, so that same race cannot resurrect a cleared bit even while
-      // Discord is unavailable to re-derive it. Past the cap the source
+      // Discord is unavailable to re-derive it; the grace row carries that
+      // same combination, so the old bearer cannot outrank its successor
+      // during the 10s overlap either. Past the cap the source
       // refuses rotation and plants nothing.
       const rows = await sql<Record<string, unknown>[]>`with locked as materialized (
           select token_hash, revoked_at, expires_at, created_at, user_id, username, avatar, member, moderator,
@@ -409,7 +411,8 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
             (predecessor_hash, successor_hash, status_hash, user_id, username, avatar, member, moderator, expires_at, grace_expires_at)
           select deleted.old_hash, ${replacement.tokenHash}, deleted.status_hash,
             deleted.user_id, deleted.username, deleted.avatar,
-            deleted.member, deleted.moderator, deleted.expires_at,
+            ${replacement.member} and deleted.member,
+            ${replacement.moderator} and deleted.moderator, deleted.expires_at,
             clock_timestamp() + make_interval(secs => ${SESSION_PREDECESSOR_GRACE_SECONDS})
           from deleted
           on conflict (predecessor_hash) do update set
@@ -639,8 +642,8 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
         userId: source.userId,
         username: source.username,
         avatar: source.avatar,
-        member: source.member,
-        moderator: source.moderator,
+        member: replacement.member && source.member,
+        moderator: replacement.moderator && source.moderator,
         successorHash: replacement.tokenHash,
         statusHash: source.statusHash,
         expiresAt: source.expiresAt,
@@ -655,7 +658,8 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
       // date from lineage start instead, so the successor re-derives them on
       // its next authorizing read (the PG store's null stamp). Its bits are
       // the least-privileged combination of the caller's and the source's,
-      // mirroring the PG store, so that race cannot resurrect a cleared bit.
+      // mirroring the PG store, so that race cannot resurrect a cleared bit;
+      // the grace row above carries that same combination.
       rows.set(replacement.tokenHash, {
         ...replacement,
         member: replacement.member && source.member,
