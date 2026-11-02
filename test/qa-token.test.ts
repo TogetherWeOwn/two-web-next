@@ -122,6 +122,14 @@ describe("qaEnabled", () => {
     expect(qaEnabled(STAGING_APP_URL, ` ${"x".repeat(MIN_QA_TOKEN_LENGTH)}`)).toBe(false);
     expect(qaEnabled(STAGING_APP_URL, `${"x".repeat(MIN_QA_TOKEN_LENGTH)}\n`)).toBe(false);
   });
+
+  it("is enabled for a configured token at exactly the maximum length", () => {
+    expect(qaEnabled(STAGING_APP_URL, "x".repeat(MAX_QA_PRESENTED_TOKEN_LENGTH))).toBe(true);
+  });
+
+  it("is disabled for a configured token over the maximum length", () => {
+    expect(qaEnabled(STAGING_APP_URL, "x".repeat(MAX_QA_PRESENTED_TOKEN_LENGTH + 1))).toBe(false);
+  });
 });
 
 describe("QA attempt budget", () => {

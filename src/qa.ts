@@ -6,8 +6,9 @@
 // synthetic snowflakes so fixtures stay stable across the ports.
 //
 // Env gate: `APP_URL` must be the staging host (`https://next.togetherweown.com`)
-// AND `QA_AUTH_TOKEN` must be set to a value of at least MIN_QA_TOKEN_LENGTH
-// characters. Anywhere else the route does not exist (404).
+// AND `QA_AUTH_TOKEN` must be set to a value of MIN_QA_TOKEN_LENGTH to
+// MAX_QA_PRESENTED_TOKEN_LENGTH characters (32-512, no surrounding
+// whitespace). Anywhere else the route does not exist (404).
 
 export const QA_HEADER = "X-TWO-QA-Auth";
 
@@ -42,12 +43,13 @@ export const STAGING_APP_URL = "https://next.togetherweown.com";
 // byte-identical 404, so valid and short-bad-token behavior is unchanged.
 export const MAX_QA_PRESENTED_TOKEN_LENGTH = 512;
 
-// The shortest configured QA token the seam will run with, in characters.
-// Same 32-character floor as the ops control token (src/admin/ops-overrides.tsx)
-// and the source-evidence bearer (src/admin/source-evidence.ts): a shorter
-// configured value leaves the route disabled (404) instead of running with a
-// guessable secret. Surrounding whitespace never counts toward the floor and
-// disables the seam too, matching the ops-token gate.
+// The configured QA token window, in characters. Same 32-512 window as the
+// ops control token (src/admin/ops-overrides.tsx): a shorter configured value
+// leaves the route disabled (404) instead of running with a guessable secret,
+// and a longer one disables it too because `qaTokenMatches` never hashes a
+// presented token over MAX_QA_PRESENTED_TOKEN_LENGTH, so it could never match.
+// Surrounding whitespace never counts toward the window and disables the seam
+// too, matching the ops-token gate.
 export const MIN_QA_TOKEN_LENGTH = 32;
 
 export function qaEnabled(appUrl: string, qaToken: string | undefined): boolean {
@@ -55,7 +57,8 @@ export function qaEnabled(appUrl: string, qaToken: string | undefined): boolean 
     appUrl === STAGING_APP_URL &&
     !!qaToken &&
     qaToken.trim() === qaToken &&
-    qaToken.length >= MIN_QA_TOKEN_LENGTH
+    qaToken.length >= MIN_QA_TOKEN_LENGTH &&
+    qaToken.length <= MAX_QA_PRESENTED_TOKEN_LENGTH
   );
 }
 
