@@ -94,6 +94,41 @@ test("journey outcomes name each test by its describe path and project", () => {
   assert.throws(() => journeyOutcomes({}), /no suites/);
 });
 
+test("journey outcomes keep a repeated journey's worst outcome", () => {
+  const repeated = (first, second) => ({
+    suites: [
+      {
+        title: "guest-journeys.spec.ts",
+        specs: [],
+        suites: [
+          {
+            title: "guest",
+            specs: [
+              { title: "home", tests: [{ projectName: "chromium", status: first }] },
+              { title: "home", tests: [{ projectName: "chromium", status: second }] },
+            ],
+          },
+        ],
+      },
+    ],
+  });
+  assert.equal(
+    journeyOutcomes(repeated("unexpected", "expected")).get("journey › guest › home › chromium"),
+    "failed",
+    "a later passed entry must not hide an earlier failed one",
+  );
+  assert.equal(
+    journeyOutcomes(repeated("expected", "unexpected")).get("journey › guest › home › chromium"),
+    "failed",
+    "order must not matter",
+  );
+  assert.equal(
+    journeyOutcomes(repeated("expected", "skipped")).get("journey › guest › home › chromium"),
+    "skipped",
+    "skipped outranks passed, like the smoke ledger",
+  );
+});
+
 test("a check production passes must have passed on staging", () => {
   const production = new Map([
     ["a", "passed"],
@@ -393,7 +428,15 @@ function fetchLedgers(options, unzipSeen = {}) {
   );
 }
 
-const e2eRun = (id) => ({ id, display_title: `e2e-staging deploy ${SHA}` });
+const e2eRun = (id, overrides = {}) => ({
+  id,
+  display_title: `e2e-staging deploy ${SHA}`,
+  status: "completed",
+  head_branch: "main",
+  path: ".github/workflows/e2e-staging.yml",
+  head_repository: { full_name: "fixture/repo" },
+  ...overrides,
+});
 
 test("passive ledgers come from the newest e2e-staging run for the candidate, without the token on the blob", async () => {
   const seen = {};
@@ -428,6 +471,34 @@ test("missing, expired or mismatched passive ledgers refuse promotion", async ()
     }),
     /names c{40}, not the candidate/,
   );
+  await assert.rejects(
+    fetchLedgers({
+      runs: [e2eRun(9, { status: "in_progress" })],
+      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+    }),
+    /is not completed/,
+  );
+  await assert.rejects(
+    fetchLedgers({
+      runs: [e2eRun(9, { head_branch: "feature" })],
+      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+    }),
+    /revision\/branch\/workflow mismatch/,
+  );
+  await assert.rejects(
+    fetchLedgers({
+      runs: [e2eRun(9, { head_repository: { full_name: "evil/fork" } })],
+      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+    }),
+    /revision\/branch\/workflow mismatch/,
+  );
+  await assert.rejects(
+    fetchLedgers({
+      runs: [{ ...e2eRun(9), id: "nine" }],
+      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+    }),
+    /invalid run id/,
+  );
 });
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
@@ -457,6 +528,10 @@ test("e2e-staging records the passive set for every promotable deploy", () => {
   assert.match(job, /SMOKE_ALLOW_MISSING_BASELINE: "1"/);
   assert.match(job, /name: staging-passive-ledger-\$\{\{ github\.run_id \}\}/);
   assert.ok(!/secrets\./.test(job), "the passive set needs no secrets");
+  // The job checks out the workflow_run head, so it must not write caches
+  // (CodeQL cache-poisoning): no setup-node npm cache, no actions/cache.
+  assert.ok(!/cache: npm/.test(job), "the passive set must not use the npm cache");
+  assert.ok(!/uses: actions\/cache@/.test(job), "the passive set must not write caches");
 });
 
 test("watch config writes the journey ledger only when asked", () => {
