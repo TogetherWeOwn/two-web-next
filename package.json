@@ -81,6 +81,8 @@
     "lighthouse:evidence:selftest": "node --test ci/lighthouse-evidence.test.mjs",
     "deps:audit": "node ci/deps-audit.mjs",
     "deps:audit:selftest": "node --test ci/deps-audit.test.mjs",
+    "deps:pins": "node ci/check-dependency-pins.mjs",
+    "deps:pins:selftest": "node ci/check-dependency-pins.mjs --selftest && node --test ci/check-dependency-pins.test.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:selftest": "node --test ci/db-migrate-selftest.mjs",

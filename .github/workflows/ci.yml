@@ -553,6 +553,9 @@ jobs:
       - name: Dependency audit (lockfile, including dev dependencies)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run deps:audit
+      - name: Dependency-pin guard selftest and verify (local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run deps:pins:selftest && npm run deps:pins
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
       # The toolchain suite pins the declared browser-helper peer metadata;
