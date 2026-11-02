@@ -55,10 +55,22 @@ install_atomic() {
 sudo -n env DEBIAN_FRONTEND=noninteractive apt-get update -y
 sudo -n env DEBIAN_FRONTEND=noninteractive apt-get install -y curl ca-certificates gnupg lsb-release
 curl -fsSL --output "$T/pgdg.asc" https://www.postgresql.org/media/keys/ACCC4CF8.asc
-# Check that the download contains a key, not just decodable armor. GPG uses
-# only run-owned scratch, never the existing privileged keyring or user key store.
+# Check that the download contains a key, not just decodable armor, and that it
+# is exactly the pinned PGDG archive key: compare the full primary-key
+# fingerprint (the ACCC4CF8.asc name carries only the short key ID) and fail
+# closed on any other key, or on extra keys bundled alongside it, before the
+# download is installed as a trusted keyring. Change the pin only in a
+# reviewed PR. GPG uses only run-owned scratch, never the existing privileged
+# keyring or user key store.
 # --batch/--no-tty prohibit prompts; --yes also permits repeated scratch output.
-gpg --batch --yes --no-tty --homedir "$T" --show-keys "$T/pgdg.asc" >/dev/null
+PGDG_FINGERPRINT="B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+KEY_INFO="$(gpg --batch --yes --no-tty --homedir "$T" --with-colons --with-fingerprint --show-keys "$T/pgdg.asc")"
+# Primary-key fingerprints: the fpr record (field 10) following each pub record.
+PRIMARY_FINGERPRINTS="$(printf '%s\n' "$KEY_INFO" | awk -F: '$1 == "pub" { pub = 1; next } $1 == "fpr" && pub { print $10; pub = 0 }')"
+if [ "$PRIMARY_FINGERPRINTS" != "$PGDG_FINGERPRINT" ]; then
+  echo "backup-bootstrap: PGDG key fingerprint mismatch; refusing to install the downloaded key" >&2
+  exit 1
+fi
 gpg --batch --yes --no-tty --homedir "$T" --dearmor --output "$T/pgdg.gpg" "$T/pgdg.asc"
 [ -s "$T/pgdg.gpg" ]
 install_atomic "$T/pgdg.gpg" "$KEYRING"

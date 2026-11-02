@@ -1,8 +1,8 @@
 "use strict";
 
 // Test-only provider boundary. Every gh request is answered from disk; unknown
-// commands fail rather than reaching GitHub. The real publisher and local git
-// history remain under test. Run/attempt hints select evidence, never authorize it.
+// commands fail rather than reaching GitHub. The real request builder and local
+// git history remain under test. Run/attempt hints select evidence, never authorize it.
 const { execFileSync, spawnSync } = require("node:child_process");
 const fs = require("node:fs");
 const os = require("node:os");
@@ -12,11 +12,11 @@ const REPO = "o/r";
 const RUN = 700;
 const ATTEMPT = 2;
 const VERSION = "12345678-1234-4234-8234-123456789abc";
-const ARTIFACT = `production-promotion-${RUN}-${ATTEMPT}`;
+const DIGEST = `sha256:${"4".repeat(64)}`;
+const artifactName = (sha) => `production-promotion-${sha}-${RUN}-${ATTEMPT}`;
 const SCRIPT = path.resolve(
-  process.env.RELEASE_ON_PROMOTE || path.join(__dirname, "release-on-promote.cjs"),
+  process.env.RELEASE_REQUEST || path.join(__dirname, "release-request.cjs"),
 );
-const CONFIG = path.join(__dirname, "..", "release-please-config.json");
 
 function fakeGh() {
   const root = process.env.PROOF_FIXTURE;
@@ -57,12 +57,6 @@ function fakeGh() {
     for (const field of fields) {
       const equals = field.indexOf("=");
       url.searchParams.set(field.slice(0, equals), field.slice(equals + 1));
-    }
-    if (route.startsWith(`repos/${REPO}/releases/tags/`)) {
-      if (state.releaseError) fail("gh: Service Unavailable (HTTP 503)");
-      const tag = route.split("/").at(-1);
-      if (state.releases.includes(tag)) json({ id: 99, tag_name: tag, draft: false });
-      fail("gh: Not Found (HTTP 404)");
     }
     if (!route.startsWith(`repos/${REPO}/actions/`))
       fail(`fixture: unexpected API route ${route}`, 2);
@@ -135,32 +129,6 @@ function fakeGh() {
     }
     fail(`fixture: unexpected API route ${route}`, 2);
   }
-  if (argv[0] === "run" && argv[1] === "download" && argv[2] === String(RUN)) {
-    const nameAt = argv.findIndex((arg) => arg === "--name" || arg === "-n");
-    const dirAt = argv.findIndex((arg) => arg === "--dir" || arg === "-D");
-    if (nameAt < 0 || argv[nameAt + 1] !== ARTIFACT || dirAt < 0)
-      fail("fixture: download must select the attempt-bound artifact", 2);
-    const destination = path.resolve(argv[dirAt + 1]);
-    if (!destination.startsWith(`${root}${path.sep}`))
-      fail("fixture: download outside owned scratch", 2);
-    fs.mkdirSync(destination, { recursive: true });
-    fs.writeFileSync(path.join(destination, "promotion.json"), receipt());
-    process.exit(0);
-  }
-  if (argv[0] === "release" && argv[1] === "create") {
-    const tag = argv[2];
-    const targetAt = argv.indexOf("--target");
-    if (targetAt < 0) fail("fixture: release create requires exact target", 2);
-    const target = argv[targetAt + 1];
-    // Model gh's implicit tag creation, including a partial publication failure:
-    // tag succeeds, GitHub Release fails. Retry must reuse the same version.
-    const exists = spawnSync("git", ["rev-parse", "--verify", `refs/tags/${tag}`], { cwd: root });
-    if (exists.status !== 0) execFileSync("git", ["tag", tag, target], { cwd: root });
-    if (state.createError) fail("gh: release create failed (HTTP 500)");
-    state.releases.push(tag);
-    fs.writeFileSync(statePath, JSON.stringify(state));
-    process.exit(0);
-  }
   fail(`fixture: unexpected gh command ${JSON.stringify(argv)}`, 2);
 }
 
@@ -173,14 +141,7 @@ function fixture(t) {
   git("init", "-q", "-b", "main");
   git("config", "user.email", "fixture@example.invalid");
   git("config", "user.name", "Fixture");
-  const pkg = JSON.parse(fs.readFileSync(CONFIG, "utf8")).packages["."];
-  delete pkg["release-as"];
-  fs.writeFileSync(
-    path.join(root, "release-please-config.json"),
-    JSON.stringify({ packages: { ".": pkg } }),
-  );
-  git("add", ".");
-  git("commit", "-qm", "chore: release baseline");
+  git("commit", "-q", "--allow-empty", "-m", "chore: release baseline");
   git("tag", "v0.8.0");
   const commit = (subject) => {
     git("commit", "-q", "--allow-empty", "-m", subject);
@@ -239,7 +200,8 @@ function fixture(t) {
     artifacts: [
       {
         id: 800,
-        name: ARTIFACT,
+        name: artifactName(sha),
+        digest: DIGEST,
         expired: false,
         size_in_bytes: 512,
         workflow_run: {
@@ -261,7 +223,6 @@ function fixture(t) {
       run_id: String(RUN),
       run_attempt: String(ATTEMPT),
     },
-    releases: [],
   };
   const bin = path.join(root, "bin");
   fs.mkdirSync(bin);
@@ -286,12 +247,7 @@ function fixture(t) {
     guard,
     'const deny=()=>{throw new Error("acceptance forbids network")}; globalThis.fetch=deny; for(const m of ["http","https"]){const a=require("node:"+m);a.request=deny;a.get=deny;} require("node:net").Socket.prototype.connect=deny;',
   );
-  const environment = ({
-    dryRun = false,
-    workflowCall = false,
-    hints = true,
-    extraEnv = {},
-  } = {}) => ({
+  const environment = ({ workflowCall = false, hints = true, extraEnv = {} } = {}) => ({
     PATH: `${bin}${path.delimiter}${process.env.PATH}`,
     HOME: root,
     TMPDIR: root,
@@ -309,7 +265,6 @@ function fixture(t) {
     GITHUB_SHA: sha,
     GITHUB_REF: "refs/heads/main",
     RELEASE_SHA: sha,
-    DRY_RUN: dryRun ? "true" : "false",
     GITHUB_OUTPUT: path.join(root, "output"),
     RUNNER_TEMP: root,
     ...(hints ? { PROMOTION_RUN_ID: String(RUN), PROMOTION_RUN_ATTEMPT: String(ATTEMPT) } : {}),
@@ -332,15 +287,12 @@ function fixture(t) {
       .split("\n")
       .filter(Boolean)
       .map((line) => JSON.parse(line));
-    return {
-      ...result,
-      calls,
-      output: fs.readFileSync(output, "utf8"),
-      creates: calls.filter((args) => args[0] === "release" && args[1] === "create"),
-    };
+    const text = fs.readFileSync(output, "utf8");
+    const line = /^request=(.*)$/m.exec(text);
+    return { ...result, calls, output: text, request: line ? JSON.parse(line[1]) : null };
   };
   return { root, git, sha, historical, state, run: runPublisher, commit, environment };
 }
 
 if (process.argv[2] === "--fake-gh") fakeGh();
-module.exports = { fixture, REPO, RUN, ATTEMPT, VERSION, ARTIFACT };
+module.exports = { fixture, REPO, RUN, ATTEMPT, VERSION, DIGEST, artifactName };

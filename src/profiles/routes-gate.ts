@@ -11,6 +11,7 @@ import { isDatabaseUnavailable } from "../db/errors";
 import { databaseUnavailable, forbidden } from "../errors";
 import { bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { bounceToLogin, takeJoinResult } from "../return-journey";
+import { refreshSessionRoles, roleRecheckConfigFor } from "../session-role-refresh";
 import { SESSION_COOKIE } from "../session-cookie";
 import {
   hashToken,
@@ -73,6 +74,11 @@ export function memberGate(deps: ProfileDeps) {
       if (!sessions) throw new Error("no session store");
       const tokenHash = await hashToken(token);
       let row = await sessions.get(tokenHash);
+      // Mid-session role recheck before the member decision
+      // (src/session-role-refresh.ts): refreshed bits authorize below, and
+      // a row that stopped being live during the refresh reads as guest.
+      if (row)
+        row = await refreshSessionRoles(sessions, tokenHash, row, roleRecheckConfigFor(c.env));
       if (row) {
         if (row.member && c.req.method === "GET") {
           // get() also admits short predecessor grace; only a current bearer

@@ -213,7 +213,7 @@ function scanSkips(added, removed, sources) {
 }
 // *-selftest scripts are CI-executed checks too (ci/*-selftest.mjs, .sh and
 // extensionless forms, plus dotted and nested variants such as
-// ci/release-on-promote.selftest.cjs and ci/backup-restore-proof/selftest.py),
+// ci/example.selftest.cjs and ci/backup-restore-proof/selftest.py),
 // so deleting or stripping them trips the same floor as a *.test.* file.
 const TEST_PATH = /\.(test|spec)\.|_test\.|test_|[-./]selftest(?=\.|$)/;
 const CONSTRAINTS_FILE = /CONSTRAINTS\.md$/;

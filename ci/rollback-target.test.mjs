@@ -448,9 +448,23 @@ test("promotion records a valid rollback target and honours the drill hold befor
   );
   const tailAt = job.indexOf("- name: Deploy production alert Tail Worker first");
   assert.ok(confirmAt > 0 && confirmAt < tailAt);
+  // The live-state checks run the workflow-tip scripts, not the target
+  // checkout's: a rescue redeploy of a commit older than
+  // --rollback-version/--capture-rollback-target must not run scripts that
+  // predate those flags. The tip checkout precedes the confirm step.
+  const tipAt = job.indexOf("path: workflow-tip");
+  assert.ok(tipAt > 0 && tipAt < confirmAt);
   const confirm = job.slice(confirmAt, tailAt);
-  assert.match(confirm, /--capture-rollback-target/);
-  assert.match(confirm, /node ci\/check-production-secrets\.mjs --rollback-version/);
+  assert.match(
+    confirm,
+    /node workflow-tip\/\.github\/actions\/gradual-promote\/gradual-promote\.mjs --capture-rollback-target/,
+  );
+  assert.match(confirm, /node workflow-tip\/ci\/check-production-secrets\.mjs --rollback-version/);
+  // The gate recheck and the pre-deploy secrets check stay on the target
+  // checkout: they assert the target's wrangler.jsonc and its required
+  // secret set, the artifact being deployed.
+  assert.match(job, /run: node ci\/production-deploy-gate\.mjs\n/);
+  assert.match(job, /run: node ci\/check-production-secrets\.mjs\n/);
   assert.match(
     confirm,
     /ROLLBACK_VERSION_ID: \$\{\{ needs\.preflight\.outputs\.rollback_version_id \}\}/,
