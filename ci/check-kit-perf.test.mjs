@@ -432,7 +432,8 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // review-hardening 340224 ceiling on top of that (two builds 340038 and
 // 340039; 339968 rejects by 70 and 71), and the moderator row-names
 // 340736 ceiling on top of that (two builds 340593 and 340594; 340224
-// rejects by 369 and 370).
+// rejects by 369 and 370), and the QA-token throttle 341248 ceiling on
+// top of that (two builds, both 341055; 340736 rejects by 319).
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -464,10 +465,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   339968: { intervalBytes: 339958, exactBytes: 339968, overBytes: 339969 },
   340224: { intervalBytes: 340039, exactBytes: 340224, overBytes: 340225 },
   340736: { intervalBytes: 340594, exactBytes: 340736, overBytes: 340737 },
+  341248: { intervalBytes: 341055, exactBytes: 341248, overBytes: 341249 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339968, 340224, 340736`;
+  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339968, 340224, 340736, 341248`;
 
 test("shipping budget: server gzip allocation is explicitly approved", () => {
   assert.ok(
@@ -974,6 +976,25 @@ function shippingServerGzipCases() {
       },
     ];
   }
+  if (SHIPPING_SERVER_GZIP_CAP === 341248) {
+    return [
+      {
+        name: "server gzip newly allowed interval",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 341055,
+      },
+      { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 341248 },
+      {
+        name: "server gzip one byte over",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 341249,
+        ceiling: 341248,
+        breach: true,
+      },
+    ];
+  }
   return [
     { name: "server gzip newly allowed interval", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
     { name: "server gzip exact ceiling", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
@@ -1238,20 +1259,20 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
   ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   ...shippingClientGzipCases(),
-  // Moderator row accessible names on the recheck hardening: 1219131 raw; the previous 1217536 cap rejects.
+  // QA-token throttle on the moderator row-names: 1220482 raw; the previous 1219584 cap rejects.
   {
     name: "server raw newly allowed interval",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1219131,
+    bytes: 1220482,
   },
-  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1219584 },
+  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1220608 },
   {
     name: "server raw one byte over",
     group: "kit.server.js",
     axis: "raw",
-    bytes: 1219585,
-    ceiling: 1219584,
+    bytes: 1220609,
+    ceiling: 1220608,
     breach: true,
   },
   {
