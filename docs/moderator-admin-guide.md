@@ -10,6 +10,14 @@ This guide is checked against repository source; it is not a claim that staging
 or production has been exercised. The [parity matrix](parity.md) tracks the
 migration, but its older pending labels are not a substitute for current screens.
 
+## Read roster response times
+
+The event roster's **Answered** column shows the latest response update in UTC,
+not attendance or the original waitlist join time. Valid times keep their exact
+machine instant in semantic HTML. **Unrenderable time** means that row has no
+usable timestamp; the other rows stay visible. On a narrow screen, focus the
+labelled roster region and scroll horizontally to read every column.
+
 ## Get into the panel
 
 1. Open `/admin`. There is no separate admin password or login form: guests go

@@ -150,9 +150,14 @@ function kitFixture(t, fragments) {
 // and 338213; 338176 rejects by 37).
 // 338688 admits the MCP truncation notice on top of it (two builds 338619;
 // 338432 rejects by 187).
+// 339200 admits the admin UTC chronology composed with current main (two builds
+// 339026 and 339026; the lower 256-byte step 338944 rejects by 82).
+// 339456 re-admits the composed stack after the review-round adapter
+// hardening (two local builds 339319 and exact-head CI 339318; 339200
+// rejects by 119).
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
   335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176,
-  338432, 338688,
+  338432, 338688, 339200, 339456,
 ];
 // Admitted server.js maxRawBytes allocations. The SHIPPING_KIT_BUDGET pin
 // above (1203200) is the historical baseline; 1203968 admits the
@@ -171,8 +176,13 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // and 1209742; 1209344 rejects by 396 and 398).
 // 1211392 admits the MCP truncation notice on top of it (two builds 1210976;
 // 1209856 rejects by 1120).
+// 1212416 admits the admin UTC chronology composed with current main (two builds
+// 1212373 and 1212371; the lower 512-byte step 1211904 rejects by 469).
+// 1213440 re-admits the composed stack after the review-round adapter
+// hardening (two local builds 1213135 and exact-head CI 1213133; the lower
+// 512-byte step 1212928 rejects by 207).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
-  1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392,
+  1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -195,18 +205,25 @@ const SHIPPING_CLIENT_JS_ALLOCATIONS = [
   // Activity-log recovery links: two builds 260403/103909; the lower 260096
   // raw step rejects by 307, gzip ceiling unchanged.
   [260608, 103936],
+  // Admin UTC chronology: stack local and CI builds 261380/104463; the
+  // lower 261120 raw step rejects by 260, the lower 104448 gzip step by 15.
+  [261632, 104704],
+  // Admin UTC chronology remeasure: composed-stack builds 261850/104682
+  // after the adapter hardening; the 261632 raw ceiling rejects by 218,
+  // gzip ceiling unchanged.
+  [262144, 104704],
 ];
 
 function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339200, 339456`,
   );
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -359,6 +376,32 @@ test("shipping oracle admits the measured MCP truncation-notice server allocatio
   });
 });
 
+test("shipping oracle admits the measured admin-UTC-chronology allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1212416, maxGzipBytes: 339200 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 261632, maxGzipBytes: 104704 },
+    },
+  });
+});
+
+test("shipping oracle admits the remeasured admin-UTC-chronology allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1213440, maxGzipBytes: 339456 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 262144, maxGzipBytes: 104704 },
+    },
+  });
+});
+
 test("shipping oracle admits the measured 1203968 server raw allocation", () => {
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
@@ -378,7 +421,7 @@ test("shipping oracle admits the measured ongoing-night server allocations", () 
 test("shipping oracle rejects an unsupported server raw allocation", () => {
   for (const maxRawBytes of [
     1203201, 1203712, 1203967, 1203969, 1205248, 1205503, 1205505, 1207551, 1207553, 1209343,
-    1209345, 1209855, 1209857, 1211391, 1211393,
+    1209345, 1209855, 1209857, 1211391, 1211393, 1212415, 1212417, 1213439, 1213441,
   ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
@@ -394,7 +437,7 @@ test("shipping oracle rejects an unsupported server raw allocation", () => {
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
   for (const maxGzipBytes of [
     335105, 335359, 335616, 336385, 336641, 336897, 337153, 337407, 337409, 337919, 337921, 338175,
-    338177, 338431, 338433, 338687, 338689,
+    338177, 338431, 338433, 338687, 338689, 339199, 339201, 339455, 339457,
   ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
@@ -474,6 +517,17 @@ test("shipping oracle rejects client js pairs outside the admitted list", () => 
     [260609, 103936],
     [260608, 103935],
     [260608, 103937],
+    [261632, 103936],
+    [260608, 104704],
+    [261631, 104704],
+    [261633, 104704],
+    [261632, 104703],
+    [261632, 104705],
+    [262143, 104704],
+    [262145, 104704],
+    [262144, 104703],
+    [262144, 104705],
+    [262144, 103936],
   ]) {
     assert.throws(
       () =>

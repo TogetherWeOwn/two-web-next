@@ -13,6 +13,7 @@ import {
   type RosterQuery,
 } from "../table-list";
 import { TableSortHeader } from "./shell";
+import { formatAdminTime } from "../chronology";
 
 export const EventRosterSection: FC<{
   eventKey: string;
@@ -37,6 +38,9 @@ export const EventRosterSection: FC<{
     <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
       <h2>RSVPs ({total})</h2>
       <p class="hint">Save event changes before searching or sorting the roster.</p>
+      <p class="hint">
+        Answered shows the latest response update in UTC, not the original waitlist join time.
+      </p>
       <p data-testid="roster-range">{rosterRangeText(rangeStart, rangeEnd, total)}</p>
       <form method="get" action={`${action}#rsvp-roster`} class="filters">
         <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
@@ -100,13 +104,18 @@ export const EventRosterSection: FC<{
                 </td>
               </tr>
             ) : (
-              roster.map((r) => (
-                <tr key={r.userId}>
-                  <td>{r.username?.trim() || "Unknown member"}</td>
-                  <td>{r.status}</td>
-                  <td>{r.answeredAt.toISOString()}</td>
-                </tr>
-              ))
+              roster.map((r) => {
+                const time = formatAdminTime(r.answeredAt);
+                return (
+                  <tr key={r.userId}>
+                    <td>{r.username?.trim() || "Unknown member"}</td>
+                    <td>{r.status}</td>
+                    <td class="admin-chronology">
+                      {time.iso ? <time datetime={time.iso}>{time.label}</time> : time.label}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

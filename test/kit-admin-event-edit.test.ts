@@ -230,6 +230,27 @@ describe("resolveKitEventEdit: bounded roster paging", () => {
     }
   });
 
+  it("nulls an unusable roster instant instead of throwing, keeping the row", async () => {
+    const outcome = await resolveKitEventEdit(
+      "EVTPAST01",
+      {},
+      depsFor({
+        list: async () => ({
+          rows: [
+            { username: "mod", status: "going", answeredAt },
+            { username: "broken", status: "going", answeredAt: new Date(Number.NaN) },
+          ],
+          total: 2,
+        }),
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.roster.entries).toEqual([
+      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
+      { member: "broken", status: "going", answeredAt: null },
+    ]);
+  });
+
   it("computes the Hono range line and next-page flag from the filtered total", async () => {
     const outcome = await resolveKitEventEdit(
       "EVTPAST01",

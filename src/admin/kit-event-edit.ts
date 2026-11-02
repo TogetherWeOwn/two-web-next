@@ -46,6 +46,7 @@ import {
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { formatAdminTime } from "./chronology";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -60,13 +61,14 @@ export type KitEventEditValues = {
 };
 
 /** One roster row as the Hono table renders it: display name, status and the
- * ISO instant. The member identifier stays out of the view: Hono uses it only
- * as a vnode key, never as rendered text, so the Svelte page keys rows by
- * their instant and index instead. */
+ * ISO instant, or null when the stored timestamp is unusable. The member
+ * identifier stays out of the view: Hono uses it only as a vnode key, never
+ * as rendered text, so the Svelte page keys rows by their instant and index
+ * instead. */
 export type KitEventEditRosterEntry = {
   member: string;
   status: string;
-  answeredAt: string;
+  answeredAt: string | null;
 };
 
 /** One roster sort header, mirroring the Hono TableSortHeader copy exactly. */
@@ -231,7 +233,7 @@ export async function resolveKitEventEdit(
   const entries = roster.rows.map((r) => ({
     member: r.username?.trim() || "Unknown member",
     status: r.status,
-    answeredAt: r.answeredAt.toISOString(),
+    answeredAt: formatAdminTime(r.answeredAt).iso,
   }));
   const rangeStart = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + 1 : 0;
   const rangeEnd = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + entries.length : 0;

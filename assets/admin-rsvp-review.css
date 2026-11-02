@@ -38,3 +38,10 @@
 .admin-table .rsvp-review {
   min-width: 16rem;
 }
+
+/* Admin chronology cells (roster Answered, activity-log When). Admin only,
+   same as above: the shared leaf bundle must not regrow, and both admin
+   shells link this sheet externally. */
+.admin-table .admin-chronology {
+  white-space: nowrap;
+}

@@ -134,6 +134,14 @@ describe("Kit event-edit page contract", () => {
     expect(source).toContain('rel="next"');
   });
 
+  it("labels roster instants in UTC like Hono and keeps bad rows visible", () => {
+    expect(source).toContain("latest response update in UTC");
+    expect(source).toContain("formatAdminTime");
+    expect(source).toContain('class="admin-chronology"');
+    expect(source).toContain("<time datetime={time.iso}>{time.label}</time>");
+    expect(source).toContain("{:else}{time.label}");
+  });
+
   it("keeps the progressive text-limit and editor islands with no framework handlers", () => {
     expect(source).toContain("/islands/admin-event-text-limits.js");
     expect(source).toContain("/islands/admin-event-editor.js");

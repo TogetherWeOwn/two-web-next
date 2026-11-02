@@ -1,5 +1,6 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
+import { formatAdminTime } from "../../../../../../src/admin/chronology";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -235,6 +236,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
   <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
     <h2>RSVPs ({roster.total})</h2>
     <p class="hint">Save event changes before searching or sorting the roster.</p>
+    <p class="hint">Answered shows the latest response update in UTC, not the original waitlist join time.</p>
     <p data-testid="roster-range">
       {roster.rangeText}
     </p>
@@ -289,10 +291,11 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
             </tr>
           {:else}
             {#each roster.entries as r, i (`${r.answeredAt}-${i}`)}
+              {@const time = formatAdminTime(r.answeredAt)}
               <tr>
                 <td>{r.member}</td>
                 <td>{r.status}</td>
-                <td>{r.answeredAt}</td>
+                <td class="admin-chronology">{#if time.iso}<time datetime={time.iso}>{time.label}</time>{:else}{time.label}{/if}</td>
               </tr>
             {/each}
           {/if}
