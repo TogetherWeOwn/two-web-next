@@ -98,8 +98,8 @@
     "audit:moderator-roles": "node --import ./bin/ts-hook.mjs bin/role-audit.mjs"
   },
   "dependencies": {
-    "@modelcontextprotocol/server": "2.3.1",
-    "agents": "0.30.0",
+    "@modelcontextprotocol/server": "2.4.0",
+    "agents": "0.32.0",
     "drizzle-orm": "^0.45.4",
     "hono": "^4.13.13",
     "postgres": "^3.4.9",
@@ -107,9 +107,9 @@
   },
   "devDependencies": {
     "@axe-core/playwright": "^4.14.0",
-    "@babel/parser": "8.0.7",
-    "@babel/types": "8.0.6",
-    "@biomejs/biome": "2.6.2",
+    "@babel/parser": "8.0.10",
+    "@babel/types": "8.0.10",
+    "@biomejs/biome": "2.6.4",
     "@cloudflare/workers-types": "^5.20261023.1",
     "@lhci/cli": "0.15.1",
     "@playwright/test": "1.64.1",
