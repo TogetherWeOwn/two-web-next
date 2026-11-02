@@ -21,6 +21,7 @@ import {
   runMigration,
   safeMigrationError,
 } from "./db-migrate.mjs";
+import { OwnershipRefusal, assertMigratorOwnership } from "./migration-ownership.mjs";
 import {
   DefaultAclRefusal,
   SEQUENCE_RIGHTS,
@@ -778,6 +779,114 @@ test("sequence post-default matrix for login, group, and runtime roles", async (
   });
 });
 
+test("ownership guard: inherited group ownership passes, foreign and non-inherited ownership refuse", async () => {
+  await fixture(async ({ client, run }) => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const group = `own_group_${suffix}`;
+    const migrator = `own_migrator_${suffix}`;
+    const noninherited = `own_noninherit_${suffix}`;
+    const foreign = `own_foreign_${suffix}`;
+    try {
+      await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+      await client.unsafe(`CREATE ROLE "${migrator}" LOGIN`);
+      await client.unsafe(`CREATE ROLE "${noninherited}" LOGIN`);
+      await client.unsafe(`CREATE ROLE "${foreign}" NOLOGIN`);
+      await client.unsafe(`GRANT "${group}" TO "${migrator}" WITH INHERIT TRUE`);
+      await client.unsafe(`GRANT "${group}" TO "${noninherited}" WITH INHERIT FALSE`);
+      await client.unsafe(`GRANT CREATE ON SCHEMA public TO "${group}", "${foreign}"`);
+      // web_sessions owned by a group the migrator inherits (the repaired
+      // production shape); join_attempts owned by an unrelated role; an
+      // unreviewed table under the same foreign owner stays out of scope.
+      await client.unsafe(`SET ROLE "${group}"`);
+      await client.unsafe("CREATE TABLE public.web_sessions (id bigint)");
+      await client.unsafe("RESET ROLE");
+      await client.unsafe(`SET ROLE "${foreign}"`);
+      await client.unsafe("CREATE TABLE public.join_attempts (id bigint)");
+      await client.unsafe("CREATE TABLE public.ownership_unreviewed (id bigint)");
+      await client.unsafe("RESET ROLE");
+      // As the inheriting migrator: the foreign-owned reviewed table refuses
+      // by name; the group-owned reviewed table and the unreviewed table do
+      // not.
+      await client.unsafe(`SET ROLE "${migrator}"`);
+      try {
+        await assert.rejects(assertMigratorOwnership(client), (error) => {
+          assert.ok(error instanceof OwnershipRefusal);
+          assert.match(error.message, /Migration ownership guard refused/);
+          assert.match(error.message, new RegExp(`public\\.join_attempts \\(owner ${foreign}\\)`));
+          assert.doesNotMatch(error.message, /web_sessions/);
+          assert.doesNotMatch(error.message, /ownership_unreviewed/);
+          return true;
+        });
+      } finally {
+        await client.unsafe("RESET ROLE");
+      }
+      // plan() through the runner: a superuser connection bypasses ownership
+      // (it can ALTER anything), a non-superuser connection surfaces the
+      // named refusal instead of a masked driver error.
+      const [session] = await client`select rolsuper from pg_roles where rolname = session_user`;
+      if (session.rolsuper) {
+        assert.equal((await run("plan")).length, journal.entries.length);
+      } else {
+        let failure;
+        try {
+          await run("plan");
+        } catch (error) {
+          failure = error;
+        }
+        assert.ok(failure, "plan must refuse while a reviewed object is foreign-owned");
+        assert.match(safeMigrationError(failure), /Migration ownership guard refused/);
+        assert.match(safeMigrationError(failure), /public\.join_attempts/);
+      }
+      // With the foreign-owned reviewed table gone, the inheriting migrator
+      // passes on group ownership alone (USAGE, not literal equality).
+      await client.unsafe(`SET ROLE "${foreign}"`);
+      await client.unsafe("DROP TABLE public.join_attempts");
+      await client.unsafe("RESET ROLE");
+      await client.unsafe(`SET ROLE "${migrator}"`);
+      try {
+        await assertMigratorOwnership(client);
+      } finally {
+        await client.unsafe("RESET ROLE");
+      }
+      // A membership without INHERIT cannot ALTER as the group and the
+      // runner never SET ROLEs, so it still refuses (USAGE, not MEMBER).
+      await client.unsafe(`SET ROLE "${noninherited}"`);
+      try {
+        await assert.rejects(assertMigratorOwnership(client), (error) => {
+          assert.ok(error instanceof OwnershipRefusal);
+          assert.match(error.message, new RegExp(`public\\.web_sessions \\(owner ${group}\\)`));
+          return true;
+        });
+      } finally {
+        await client.unsafe("RESET ROLE");
+      }
+    } finally {
+      await client.unsafe("RESET ROLE").catch(() => {});
+      await client.unsafe(`SET ROLE "${foreign}"`).catch(() => {});
+      await client.unsafe("DROP TABLE IF EXISTS public.ownership_unreviewed").catch(() => {});
+      await client.unsafe("DROP TABLE IF EXISTS public.join_attempts").catch(() => {});
+      await client.unsafe("RESET ROLE").catch(() => {});
+      await client.unsafe(`SET ROLE "${group}"`).catch(() => {});
+      await client.unsafe("DROP TABLE IF EXISTS public.web_sessions").catch(() => {});
+      await client.unsafe("RESET ROLE").catch(() => {});
+      await client.unsafe(`REVOKE "${group}" FROM "${migrator}"`).catch(() => {});
+      await client.unsafe(`REVOKE "${group}" FROM "${noninherited}"`).catch(() => {});
+      // Schema grants and anything else the fixture roles hold in this
+      // database block DROP ROLE, and roles are cluster-global: strip them
+      // here or every run leaks two roles onto the shared test cluster.
+      await client
+        .unsafe(`REVOKE CREATE ON SCHEMA public FROM "${group}", "${foreign}"`)
+        .catch(() => {});
+      for (const role of [migrator, noninherited, foreign, group]) {
+        await client.unsafe(`DROP OWNED BY "${role}"`).catch(() => {});
+        await client.unsafe(`DROP ROLE IF EXISTS "${role}"`).catch((error) => {
+          console.log(`ownership fixture cleanup: could not drop role ${role}: ${error.message}`);
+        });
+      }
+    }
+  });
+});
+
 test("schema-scoped drizzle default refuses instead of staying invisible", async () => {
   await fixture(async ({ client, run }) => {
     const created = await ensureRuntimeRole(client);
@@ -1022,6 +1131,8 @@ function controlledDriver(_url, options) {
     if (text === "select current_user as current_user") return [{ current_user: "agent_test" }];
     if (text.includes("FROM pg_default_acl AS d")) return [];
     if (text.includes("pg_get_serial_sequence")) return [];
+    if (text.includes("rolsuper")) return [{ is_superuser: false }];
+    if (text.includes("pg_has_role")) return [];
     if (text.includes("to_regclass")) return [{ ledger: null }];
     if (text.includes("clock_timestamp")) return [{ timestamp: "2026-10-21T00:00:00.000000Z" }];
     throw new Error(`unexpected fixture statement: ${text}`);
@@ -1160,6 +1271,17 @@ assert.deepEqual(state.statements, [
     CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
    WHERE targets.oid IS NOT NULL
    ORDER BY 1, 2, 3, 4
+`)},
+  "select coalesce((select rolsuper from pg_roles where rolname = current_user), false) as is_superuser",
+  ${JSON.stringify(`
+  SELECT 'public.' || c.relname AS object_name,
+         pg_get_userbyid(c.relowner) AS owner,
+         pg_has_role(current_user, pg_get_userbyid(c.relowner), 'USAGE') AS owner_equivalent
+    FROM pg_class AS c
+    JOIN pg_namespace AS n ON n.oid = c.relnamespace
+   WHERE n.nspname = 'public'
+     AND c.relkind IN ('r', 'p', 'S')
+   ORDER BY 1
 `)},
   "select to_regclass(?) as ledger",
   ${JSON.stringify("select to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') as timestamp")},
