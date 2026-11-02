@@ -11,6 +11,7 @@
 // default while the front door stays open.
 
 import { discordFetch } from "./discord-http";
+import { sanitizeExceptionClass } from "./exception-class";
 
 const API = "https://discord.com/api/v10";
 
@@ -120,18 +121,12 @@ export function parseModeratorRoleIds(raw: string | undefined): string[] {
 }
 
 /** Class-only classification of a lookup rejection: never the message, which can carry wire detail. */
-const MAX_LOOKUP_CLASS_LENGTH = 100;
-
 function lookupExceptionClass(err: unknown): string {
   const raw =
     err instanceof Error
       ? err.name
       : ((err as { constructor?: { name?: string } })?.constructor?.name ?? "unknown");
-  // Only strings are sanitized: a non-string name must degrade to unknown
-  // instead of throwing the degrading catch into a rejection.
-  const name = typeof raw === "string" ? raw : "unknown";
-  // De-newline and bound: a hostile error name must not forge log lines.
-  return name.replace(/[\r\n]+/g, "_").slice(0, MAX_LOOKUP_CLASS_LENGTH) || "unknown";
+  return sanitizeExceptionClass(raw);
 }
 
 /** ID intersection, never name matching. A blank allowlist fails closed. */
