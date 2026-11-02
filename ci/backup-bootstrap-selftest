@@ -47,9 +47,19 @@ elif name == "gpg":
     assert args[:3] == ["--batch", "--yes", "--no-tty"], "gpg must not prompt"
     assert args[3] == "--homedir"
     target(args[4] + "/placeholder")
-    if args[5] == "--show-keys":
-        assert len(args) == 7
-        if mode == "key-validation" or target(args[6]).read_text() != "public-key": sys.exit(38)
+    if args[5:8] == ["--with-colons", "--with-fingerprint", "--show-keys"]:
+        assert len(args) == 9
+        if mode == "key-validation" or target(args[8]).read_text() != "public-key": sys.exit(38)
+        pinned = "B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"
+        other = "1111111111111111111111111111111111111111"
+        def block(fpr):
+            print("pub:-:4096:1:" + fpr[-16:] + ":1318537154:::-:::scSC::::::23::0:")
+            print("fpr" + ":" * 9 + fpr + ":")
+        if mode == "wrong-fingerprint":
+            block(other)
+        else:
+            block(pinned)
+            if mode == "extra-key": block(other)
         sys.exit(0)
     assert args[5:7] == ["--dearmor", "--output"]
     output, source = target(args[7]), target(args[8])
@@ -111,7 +121,8 @@ HELPER_TEXT = HELPER.read_text()
 assert '${PGDG_CLIENT_BIN:-/usr/lib/postgresql/18/bin}' in HELPER_TEXT, "script default must be pg 18"
 assert 'postgresql-client-18' in HELPER_TEXT, "script must install pg 18 client"
 assert 'postgresql-client-17' not in HELPER_TEXT and '/17/bin' not in HELPER_TEXT, "stale pg 17 default"
-ok("script default installs/selects pg_dump 18")
+assert 'PGDG_FINGERPRINT="B97B0AFCAA1A47F044F244A07FCC7D46ACCC4CF8"' in HELPER_TEXT, "script must pin the full PGDG fingerprint"
+ok("script default installs/selects pg_dump 18 and pins the PGDG fingerprint")
 WORKFLOW_TEXT = (ROOT / ".github/workflows/db-backup.yml").read_text()
 assert 'PGDG_CLIENT_BIN' not in WORKFLOW_TEXT, "workflow must use the script default client"
 assert 'bash bin/backup-bootstrap.sh' in WORKFLOW_TEXT, "workflow must run the bootstrap script"
@@ -190,6 +201,7 @@ with tempfile.TemporaryDirectory(prefix="backup-bootstrap-", dir=os.environ.get(
 
     expected_codes = {"apt-1": 31, "apt-2": 31, "apt-3": 31, "apt-4": 31,
                       "download": 32, "invalid-key": 38, "key-validation": 38, "dearmor": 33,
+                      "wrong-fingerprint": 1, "extra-key": 1,
                       "empty-key": 1, "install": 34, "install-source": 34,
                       "rename": 35, "rename-source": 35, "codename": 36,
                       "version-command": 37, "wrong-major": 1}
@@ -199,11 +211,11 @@ with tempfile.TemporaryDirectory(prefix="backup-bootstrap-", dir=os.environ.get(
         result, calls = run(mode)
         assert result.returncode == code, (mode, result.returncode, result.stderr)
         assert not github_path.exists(), mode
-        if mode in ("apt-1", "apt-2", "download", "invalid-key", "key-validation", "dearmor", "empty-key", "install", "rename"):
+        if mode in ("apt-1", "apt-2", "download", "invalid-key", "key-validation", "wrong-fingerprint", "extra-key", "dearmor", "empty-key", "install", "rename"):
             assert keyring.read_text() == "old-key" and source.read_text() == "old-source", mode
         if mode in ("install-source", "rename-source", "codename"):
             assert source.read_text() == "old-source", mode
-        if mode in ("download", "invalid-key", "key-validation", "dearmor", "empty-key", "install", "install-source", "rename", "rename-source", "codename"):
+        if mode in ("download", "invalid-key", "key-validation", "wrong-fingerprint", "extra-key", "dearmor", "empty-key", "install", "install-source", "rename", "rename-source", "codename"):
             assert not any(c[:3] == ["apt-get", "install", "-y"] and c[-1] == "postgresql-client-18" for c in calls), mode
         ok(f"{mode} fails hard, cleans scratch and does not publish client PATH")
 
