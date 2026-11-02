@@ -334,20 +334,27 @@ describe("memory store recheck stamping (manual clock, no timers)", () => {
 });
 
 describe("roleRecheckConfigFor", () => {
+  // QA fixture token for this suite: must clear the configured-token floor
+  // (src/qa.ts MIN_QA_TOKEN_LENGTH), unlike the short "qa-token" probe below.
+  const QA_TOKEN = "test-only-qa-recheck-fixture-token";
   it("exempts QA fixtures only on the staging host with a configured QA token", () => {
     expect(
-      roleRecheckConfigFor({ ...env, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: "qa-token" })
+      roleRecheckConfigFor({ ...env, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: QA_TOKEN })
         .qaFixturesExempt,
     ).toBe(true);
     expect(
       roleRecheckConfigFor({
         ...env,
         APP_URL: "https://togetherweown.com",
-        QA_AUTH_TOKEN: "qa-token",
+        QA_AUTH_TOKEN: QA_TOKEN,
       }).qaFixturesExempt,
     ).toBe(false);
     expect(
       roleRecheckConfigFor({ ...env, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: undefined })
+        .qaFixturesExempt,
+    ).toBe(false);
+    expect(
+      roleRecheckConfigFor({ ...env, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: "qa-token" })
         .qaFixturesExempt,
     ).toBe(false);
     expect(roleRecheckConfigFor(env).qaFixturesExempt).toBe(false);
