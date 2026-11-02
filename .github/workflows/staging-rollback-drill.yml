@@ -97,9 +97,11 @@ jobs:
     needs: plan
     # Staging legs need only the two repo-level staging Cloudflare values,
     # passed by declared name: production Environment secrets stay out of
-    # this run entirely. The staging binding keeps the secret read under
-    # the staging Environment's branch policy.
-    environment: staging
+    # this run entirely. No job-level `environment:` here: GitHub forbids it
+    # on reusable-workflow caller jobs. The literal `with: environment:
+    # staging` pin below fixes the callee on its staging leg, whose own job
+    # binds `environment: ${{ inputs.environment }}`; the secrets preflight
+    # accepts this pinned-caller shape (ci/check-production-secrets.test.mjs).
     uses: ./.github/workflows/rollback-production.yml
     with:
       environment: staging
@@ -117,8 +119,9 @@ jobs:
     # and refuses when a newer deploy landed in between.
     needs: [plan, rollback]
     if: ${{ !cancelled() && needs.plan.result == 'success' }}
-    # Same staging binding as the rollback leg above.
-    environment: staging
+    # Same pinned-caller shape as the rollback leg above: no job-level
+    # `environment:` (forbidden on caller jobs), the `with:` pin fixes the
+    # staging leg.
     uses: ./.github/workflows/rollback-production.yml
     with:
       environment: staging
