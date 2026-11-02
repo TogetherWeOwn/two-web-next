@@ -31,9 +31,13 @@
 // `npm install --package-lock-only <pkg>@<version>` (a bare `npm install
 // <pkg>@<version>` would save the version into the manifest range; verified
 // against npm 11: the manifest is untouched while the lockfile entry is
-// restored with its resolved URL and integrity). Drift on a transitive pin
-// files a follow-up instead: installing a transitive package by name would
-// promote it to a direct dependency. Adoption of the newer version is
+// restored with its resolved URL and integrity). The same precise restore
+// applies to a drifted string override whose key is a direct dependency.
+// Drift on a transitive pin files a follow-up instead: installing a
+// transitive package by name would promote it to a direct dependency, so a
+// drifted transitive override re-resolves with a bare `npm install
+// --package-lock-only` (no package argument; the override reapplies).
+// Adoption of the newer version is
 // filed as a follow-up instead of being floated by the sweep. After undrafting
 // a sweep PR, wait for the heavy jobs (check/node22-compat re-run on
 // ready_for_review) rather than trusting draft-CI green: drafts skip them.
@@ -412,10 +416,17 @@ export function verifyPins({
           .filter((copy) => copy.version !== spec)
           .map((copy) => `${copy.path}@${copy.version}`)
           .join(", ");
+        // Installing a transitive override key by name would promote it to
+        // a direct dependency, so only direct keys get the precise restore;
+        // transitive drift re-resolves (the override reapplies) with no
+        // package argument.
+        const restore = Object.hasOwn(direct, pin.key)
+          ? `restore with \`npm install --package-lock-only ${pin.key}@${spec}\` and file a follow-up`
+          : `re-resolve with \`npm install --package-lock-only\` (no package argument; naming ${pin.key} would promote it to a direct dependency) and file a follow-up`;
         checks.push({
           id,
           status: "fail",
-          detail: `overrides["${pin.key}"] pins ${spec} but ${offenders} drifted; restore with \`npm install --package-lock-only ${pin.key}@${spec}\` and file a follow-up`,
+          detail: `overrides["${pin.key}"] pins ${spec} but ${offenders} drifted; ${restore}`,
         });
       }
       continue;
@@ -849,6 +860,45 @@ function selftest() {
     overrideDrift.ok === false &&
       overrideDrift.checks.some((c) => c.id === "override:undici" && c.status === "fail"),
     "a drifted nested copy fails the string override",
+  );
+  // undici is transitive in the fixture manifest, so its drift must re-resolve
+  // without naming the package (naming it would promote it to a direct dep).
+  const undiciRow = overrideDrift.checks.find((c) => c.id === "override:undici");
+  assert(
+    undiciRow?.status === "fail" &&
+      undiciRow.detail.includes("`npm install --package-lock-only`") &&
+      !undiciRow.detail.includes("install --package-lock-only undici@"),
+    "transitive override drift re-resolves without an install-by-name hint",
+  );
+  // A drifted string override on a direct dependency keeps the precise restore.
+  // (@lhci/cli is a direct devDependency in the fixture manifest.)
+  const directOverrideBase = {
+    ...base,
+    manifest: {
+      ...base.manifest,
+      overrides: { ...base.manifest.overrides, "@lhci/cli": "0.15.1" },
+    },
+    overrides: [...base.overrides, { key: "@lhci/cli" }],
+    exact: [],
+    installed: [],
+    manifestPins: [],
+    lockfile: {
+      packages: {
+        ...base.lockfile.packages,
+        "node_modules/@lhci/cli": { version: "9.9.9" },
+      },
+    },
+  };
+  const directOverrideResult = verifyPins(directOverrideBase);
+  assert(
+    directOverrideResult.ok === false &&
+      directOverrideResult.checks.some(
+        (c) =>
+          c.id === "override:@lhci/cli" &&
+          c.status === "fail" &&
+          c.detail.includes("npm install --package-lock-only @lhci/cli@0.15.1"),
+      ),
+    "direct override drift keeps the lockfile-only restore hint",
   );
   const overrideFixed = {
     ...overrideBase,

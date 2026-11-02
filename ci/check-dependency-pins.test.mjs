@@ -2,6 +2,7 @@
 // inventory assertion over the real checkout. No network, no registry, no
 // node_modules install: everything runs with node --test on a bare checkout.
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import {
   collectPins,
@@ -39,7 +40,14 @@ test("live inventory pins wrangler and holds it back", () => {
   const pins = collectPins();
   const wrangler = pins.installed.find((pin) => pin.name === "wrangler");
   assert.ok(wrangler, "the remote-runner isolation pin is discovered");
-  assert.equal(wrangler.version, "4.152.0");
+  // The expected version is read from the test source with an independent
+  // pattern (not the guard's scanner), so adoption of a newer wrangler
+  // updates the test file and the lockfile together without rotting this case.
+  const asserted = readFileSync("test/remote-runner-isolation.test.ts", "utf8").match(
+    /wrangler\/package\.json[\s\S]{0,300}?\.toBe\("([^"]+)"\)/,
+  )?.[1];
+  assert.ok(asserted, "the isolation test asserts a wrangler version");
+  assert.equal(wrangler.version, asserted);
   assert.ok(wrangler.file.endsWith("remote-runner-isolation.test.ts"));
   assert.deepEqual(holdBackNames(pins), ["wrangler"]);
   assert.ok(!updatableNames(pins).includes("wrangler"));
@@ -107,6 +115,8 @@ test("nested overrides verify the copy their scope resolves", () => {
 
 test("drifted lockfile entries fail with a restore hint", () => {
   const pins = collectPins();
+  const wranglerPin = pins.installed.find((pin) => pin.name === "wrangler");
+  assert.ok(wranglerPin, "the remote-runner isolation pin is discovered");
   const drifted = {
     ...pins,
     lockfile: {
@@ -115,10 +125,44 @@ test("drifted lockfile entries fail with a restore hint", () => {
   };
   const result = verifyPins(drifted);
   assert.equal(result.ok, false);
+  // The hint must name the pinned version (not the drifted 9.9.9); the pinned
+  // version itself is the guard's discovery, so adoption never rots this case.
+  const pinned = wranglerPin.version.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   assert.match(
     JSON.stringify(result.checks),
-    /npm install --package-lock-only wrangler@4\.152\.0/,
+    new RegExp(`npm install --package-lock-only wrangler@${pinned}`),
     "the failure names the lockfile-only restore",
+  );
+});
+
+test("transitive override drift re-resolves without an install-by-name hint", () => {
+  const pins = collectPins();
+  const direct = new Set([
+    ...Object.keys(pins.manifest.dependencies ?? {}),
+    ...Object.keys(pins.manifest.devDependencies ?? {}),
+    ...Object.keys(pins.manifest.optionalDependencies ?? {}),
+  ]);
+  const key = pins.overrides
+    .map((pin) => pin.key)
+    .find((name) => typeof pins.manifest.overrides?.[name] === "string" && !direct.has(name));
+  assert.ok(key, "the manifest carries a transitive string override");
+  const spec = pins.manifest.overrides[key];
+  const driftedPackages = Object.fromEntries(
+    Object.entries(pins.lockfile.packages).map(([path, entry]) => [
+      path,
+      path === `node_modules/${key}` || path.endsWith(`/node_modules/${key}`)
+        ? { ...entry, version: "9.9.9-override-drift" }
+        : entry,
+    ]),
+  );
+  const result = verifyPins({ ...pins, lockfile: { ...pins.lockfile, packages: driftedPackages } });
+  assert.equal(result.ok, false);
+  const row = result.checks.find((check) => check.id === `override:${key}`);
+  assert.equal(row?.status, "fail");
+  assert.ok(
+    row.detail.includes("`npm install --package-lock-only`") &&
+      !row.detail.includes(`${key}@${spec}`),
+    "the failure re-resolves instead of naming the transitive package",
   );
 });
 

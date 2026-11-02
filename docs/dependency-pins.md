@@ -26,7 +26,7 @@ one-liner goes to stderr. Exit 0 is pass, 1 is pin drift, 2 is usage.
 
 | Source | Example | `npm update` behavior |
 | --- | --- | --- |
-| Installed-version test assertion | wrangler pinned to 4.152.0 by `test/remote-runner-isolation.test.ts` while the range is `^4.152.0` | Floats: hold back with `--updatable` |
+| Installed-version test assertion | wrangler pinned by `test/remote-runner-isolation.test.ts` while the manifest range allows newer | Floats: hold back with `--updatable` |
 | `package.json` range / overrides assertion | `test/performance-ci.test.ts` asserts `devDependencies["@lhci/cli"]`, `overrides["basic-ftp"]`, and the absence of `overrides["zod"]` | Never rewrites the manifest: verify-only |
 | Exact range in `package.json` | `zod` 4.6.7, `esbuild` 0.28.2 | Cannot float, but the lockfile copy is still checked against the exact version |
 | String `overrides` entry | `undici` 7.30.1 | Every installed copy must agree with the override |
@@ -57,7 +57,11 @@ A drifted direct pin is restored lockfile-only with
 `npm install --package-lock-only <pkg>@<version>`: a bare
 `npm install <pkg>@<version>` would save the version into the manifest range,
 while `--package-lock-only` leaves the manifest untouched and restores the
-lockfile entry with its resolved URL and integrity. Adopting the newer version
+lockfile entry with its resolved URL and integrity. The same command restores
+a drifted string override whose key is a direct dependency. A drifted
+transitive override is re-resolved with a bare `npm install
+--package-lock-only` (no package argument; the override reapplies, and naming
+the package would promote it to a direct dependency). Adopting the newer version
 is filed as a follow-up instead of being floated by the sweep. After
 undrafting a sweep PR, wait for the heavy jobs (`check`, `node22-compat`) to
 re-run on `ready_for_review` rather than trusting draft-CI green: drafts skip
