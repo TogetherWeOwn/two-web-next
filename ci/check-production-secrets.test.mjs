@@ -1020,6 +1020,28 @@ const STAGING_CLOUDFLARE_SECRET =
 const TARGET_GUARDED_STAGING_CLOUDFLARE =
   /\binputs\.(?:target|environment)\s*==\s*'production'\s*&&\s*secrets\s*\.\s*PRODUCTION_CLOUDFLARE_(API_TOKEN|ACCOUNT_ID)\s*\|\|\s*inputs\.(?:target|environment)\s*!=\s*'production'\s*&&\s*secrets\s*\.\s*CLOUDFLARE_\1\s*\|\|\s*''/i;
 
+// Job-level `environment:` is forbidden on reusable-workflow caller jobs
+// (`uses:`): GitHub only allows name/uses/with/secrets/needs/if/permissions
+// there. A caller job runs no code of its own, so every staging secret it
+// names travels by declared name into the called workflow via its `secrets:`
+// block. It counts as staging-bound when it calls a workflow in this repo
+// (`uses: ./...`) with the callee's environment pinned to the literal
+// `staging` in `with:`: the pin fixes the callee's target-selected
+// Environment to staging on every run, and the callee's own secret reads are
+// gated independently. A remote callee, or a missing or expression-driven
+// pin, fails closed: the pin must be auditable as the literal staging leg.
+function isStagingPinnedCall(lines) {
+  if (!lines.some((line) => /^ {4}uses:\s*\.\//.test(line))) return false;
+  const at = lines.findIndex((line) => /^ {4}with:\s*$/.test(line));
+  if (at < 0) return false;
+  for (const line of lines.slice(at + 1)) {
+    if (/^ {4}\S/.test(line)) break;
+    const pin = /^ {6}environment:\s*(.+)$/.exec(line);
+    if (pin) return /^staging$/i.test(stripQuotes(pin[1]));
+  }
+  return false;
+}
+
 export function stagingCloudflareEnvironmentViolations(text, file) {
   const { outside, jobs } = splitWorkflow(text);
   const violations = [];
@@ -1032,10 +1054,13 @@ export function stagingCloudflareEnvironmentViolations(text, file) {
     const referencing = lines.filter((line) => STAGING_CLOUDFLARE_SECRET.test(line));
     if (referencing.length === 0) continue;
     const environment = jobEnvironment(lines);
-    if (environment === undefined) {
+    if (environment === undefined && !isStagingPinnedCall(lines)) {
       violations.push(
         `${file}: job ${id} reads a staging Cloudflare secret without an environment`,
       );
+    } else if (environment === undefined) {
+      // Staging-pinned local reusable call: pass-through only, the callee's
+      // own jobs are gated independently.
     } else if (/^staging$/i.test(environment)) {
       // Bound to the staging Environment on every run.
     } else if (TARGET_ENVIRONMENT.test(environment)) {
@@ -1147,6 +1172,53 @@ ${block}
 `;
     assert.deepEqual(stagingCloudflareEnvironmentViolations(text, "fixture.yml"), [], block);
   }
+});
+
+test("staging-pinned reusable caller passes staging secrets through without a job environment", () => {
+  // `environment:` is forbidden on caller jobs, so the drill's rollback and
+  // restore legs cannot bind staging the way the plan job does. The literal
+  // `with:` pin fixes the local callee on its staging leg, whose own jobs
+  // are gated independently.
+  const pinned = `${FIXTURE_HEAD}jobs:
+  rollback:
+    needs: plan
+    uses: ./.github/workflows/rollback-production.yml
+    with:
+      environment: staging
+      version_id: \${{ needs.plan.outputs.previous }}
+    secrets:
+      CLOUDFLARE_API_TOKEN: \${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: \${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+`;
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(pinned, "fixture.yml"), []);
+  const quoted = pinned.replace("environment: staging", "environment: 'staging'");
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(quoted, "fixture.yml"), [], "quoted pin");
+  // A remote callee's `environment` input has unknown semantics: fail closed.
+  const remote = pinned.replace(
+    "uses: ./.github/workflows/rollback-production.yml",
+    "uses: octo-org/octo-repo/.github/workflows/rollback.yml@main",
+  );
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(remote, "fixture.yml"), [
+    "fixture.yml: job rollback reads a staging Cloudflare secret without an environment",
+  ]);
+  // An expression-driven pin cannot be shown to select staging: fail closed.
+  const expression = pinned.replace(
+    "environment: staging",
+    "environment: ${{ inputs.environment }}",
+  );
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(expression, "fixture.yml"), [
+    "fixture.yml: job rollback reads a staging Cloudflare secret without an environment",
+  ]);
+  // A production pin is not a staging leg: fail closed.
+  const production = pinned.replace("environment: staging", "environment: production");
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(production, "fixture.yml"), [
+    "fixture.yml: job rollback reads a staging Cloudflare secret without an environment",
+  ]);
+  // No pin at all: fail closed.
+  const unpinned = pinned.replace("      environment: staging\n", "");
+  assert.deepEqual(stagingCloudflareEnvironmentViolations(unpinned, "fixture.yml"), [
+    "fixture.yml: job rollback reads a staging Cloudflare secret without an environment",
+  ]);
 });
 
 test("staging Cloudflare secret outside any job, or via bracket syntax, is a violation", () => {
