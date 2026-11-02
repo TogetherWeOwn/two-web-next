@@ -19,6 +19,7 @@ export const SCHEDULED_FAILING_JOBS = ["events:reconcile", "model:prune"] as con
 export type ScheduledFailingJob = (typeof SCHEDULED_FAILING_JOBS)[number];
 
 import { AlertProbeError } from "./alert-probe-error";
+import { sanitizeExceptionClass } from "./exception-class";
 import { currentReleaseFields } from "./release-tag";
 import { safeRequestId } from "./request-log";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./jobs/sync-retry-diagnostic";
@@ -39,16 +40,9 @@ export function shouldReport(err: unknown): boolean {
   return true;
 }
 
-const MAX_EXCEPTION_CLASS_LENGTH = 100;
-
 export function exceptionClass(err: unknown): string {
   const raw = err instanceof Error ? err.constructor?.name || err.name || "Error" : typeof err;
-  // Only strings are sanitized: a non-string name (a hostile class can define
-  // one) degrades to unknown instead of throwing inside a logging path.
-  const name = typeof raw === "string" ? raw : "unknown";
-  // De-newline and bound, like lookupExceptionClass (src/roles.ts): a hostile
-  // error name must not forge log lines or unbounded fingerprints.
-  return name.replace(/[\r\n]+/g, "_").slice(0, MAX_EXCEPTION_CLASS_LENGTH) || "unknown";
+  return sanitizeExceptionClass(raw);
 }
 
 export function fingerprintOf(err: unknown, route: string): string {

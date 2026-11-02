@@ -11,6 +11,7 @@ import {
   shouldReport,
 } from "../src/alerts";
 import { registerErrorHandlers } from "../src/errors";
+import { sanitizeExceptionClass } from "../src/exception-class";
 import { MemberReadRefused } from "../src/member-reads";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
@@ -55,6 +56,12 @@ describe("exceptionClass", () => {
     const atLimit = "E".repeat(100);
     expect(exceptionClass(named(atLimit))).toBe(atLimit);
     expect(exceptionClass(named(`${atLimit}X`))).toBe(atLimit);
+  });
+
+  it("sanitizeExceptionClass degrades empty and non-string raw names to unknown", () => {
+    expect(sanitizeExceptionClass("")).toBe("unknown");
+    expect(sanitizeExceptionClass(42)).toBe("unknown");
+    expect(sanitizeExceptionClass("Boom\r\nError")).toBe("Boom_Error");
   });
 
   it("degrades a non-string class name to unknown instead of throwing", () => {
