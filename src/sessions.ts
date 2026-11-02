@@ -75,7 +75,10 @@ export type SessionStore = {
    * cadence; with non-null bits (a definitive Discord answer) also replaces
    * the member/moderator bits on the row and on any live predecessor grace
    * pointing at it. Null bits means the lookup was inconclusive and the
-   * stored bits stand. Resolves false when no live row was updated. */
+   * stored bits stand. Resolves false when no live row was updated — the
+   * row died or rotated, or a parallel recheck already landed (the stamp
+   * is fresh), in which case this older-read verdict is discarded and the
+   * caller re-reads. */
   applyRoleRecheck?: (
     tokenHash: string,
     bits: { member: boolean; moderator: boolean } | null,
@@ -268,13 +271,17 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
       // One statement: the stamp and (on a definitive answer) the new bits
       // land together, and a live predecessor grace serving this successor
       // gets the same bits so its remaining seconds authorize identically.
-      // A row that died or rotated since the read updates nothing.
+      // A row that died or rotated since the read updates nothing. The
+      // still-stale clause is the concurrency guard: if a parallel recheck
+      // already landed (fresh stamp), this older-read verdict must not
+      // overwrite it — first applier wins, and the caller re-reads.
       if (!bits) {
         const rows = await sql<Record<string, unknown>[]>`update web_sessions
           set roles_checked_at = clock_timestamp()
           where token_hash = ${tokenHash} and revoked_at is null
             and expires_at > clock_timestamp()
             and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
+            and coalesce(roles_checked_at, created_at) <= clock_timestamp() - make_interval(secs => ${SESSION_ROLE_RECHECK_SECONDS})
           returning 1`;
         return rows.length > 0;
       }
@@ -285,10 +292,11 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
           where token_hash = ${tokenHash} and revoked_at is null
             and expires_at > clock_timestamp()
             and created_at > clock_timestamp() - make_interval(secs => ${SESSION_ABSOLUTE_MAX_AGE_SECONDS})
+            and coalesce(roles_checked_at, created_at) <= clock_timestamp() - make_interval(secs => ${SESSION_ROLE_RECHECK_SECONDS})
           returning 1
         ), grace as (
           update web_session_grace set member = ${bits.member}, moderator = ${bits.moderator}
-          where successor_hash = ${tokenHash} returning 1
+          where successor_hash = ${tokenHash} and exists (select 1 from updated) returning 1
         )
         select (select count(*)::int from updated) as updated`;
       return Number(rows[0]?.updated ?? 0) > 0;
@@ -577,6 +585,11 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
     async applyRoleRecheck(hash, bits) {
       const r = live(hash);
       if (!r) return false;
+      // Still-stale guard, mirroring the PG store: a parallel recheck that
+      // already landed freshens the stamp, and this older-read verdict must
+      // not overwrite it. (Unprivileged rows are never due, so a
+      // privilege-clearing apply also closes the door behind it.)
+      if (r.rolesCheckedAt > clock() - SESSION_ROLE_RECHECK_SECONDS * 1000) return false;
       r.rolesCheckedAt = clock();
       if (bits) {
         r.member = bits.member;

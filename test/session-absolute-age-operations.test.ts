@@ -205,6 +205,17 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await s.applyRoleRecheck!("missing", null)).toBe(false);
       });
 
+      it("a second apply after a landed recheck is discarded", async () => {
+        await seedRecheck("raced", { createdOffset: -3600 * SECOND });
+        const s = store();
+        expect(await s.applyRoleRecheck!("raced", { member: true, moderator: false })).toBe(true);
+        // Fresh stamp: an older-read privileged verdict (or a late restamp)
+        // must not overwrite the landed demotion.
+        expect(await s.applyRoleRecheck!("raced", { member: true, moderator: true })).toBe(false);
+        expect(await s.applyRoleRecheck!("raced", null)).toBe(false);
+        expect(await s.get("raced")).toMatchObject({ member: true, moderator: false });
+      });
+
       it("rotation carries the recheck stamp to the successor and apply rewrites grace bits", async () => {
         const s = store();
         const row = {

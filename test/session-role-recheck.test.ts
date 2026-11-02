@@ -205,8 +205,20 @@ describe("memory store recheck stamping (manual clock, no timers)", () => {
     expect(await store.roleRecheckDue!(tokenHash)).toBe(false);
   });
 
+  it("a second apply after a landed recheck is discarded", async () => {
+    const tokenHash = await seed();
+    now = LOGIN_AT + CADENCE_MS;
+    expect(await store.applyRoleRecheck!(tokenHash, { member: true, moderator: false })).toBe(true);
+    // The stamp is fresh: a verdict read before the landed demotion (or a
+    // late restamp) must not overwrite it.
+    expect(await store.applyRoleRecheck!(tokenHash, { member: true, moderator: true })).toBe(false);
+    expect(await store.applyRoleRecheck!(tokenHash, null)).toBe(false);
+    expect(await store.get(tokenHash)).toEqual({ ...MODERATOR, moderator: false });
+  });
+
   it("apply rewrites the live predecessor grace with the same bits", async () => {
     const oldHash = await seed();
+    now = LOGIN_AT + CADENCE_MS;
     const newHash = await hashToken(newSessionToken());
     expect(
       await store.rotate(oldHash, {
@@ -341,10 +353,10 @@ describe("refreshSessionRoles", () => {
     const tokenHash = await seed();
     now = LOGIN_AT + CADENCE_MS;
     const row = (await store.get(tokenHash))!;
-    expect(
-      await refreshSessionRoles(store, tokenHash, row, { ...CONFIG, moderatorRoleIds: [] }),
-    ).toEqual(MODERATOR);
     expect(await refreshSessionRoles(store, tokenHash, row, { ...CONFIG, guildId: " " })).toEqual(
+      MODERATOR,
+    );
+    expect(await refreshSessionRoles(store, tokenHash, row, { ...CONFIG, botToken: " " })).toEqual(
       MODERATOR,
     );
     // Absent bindings read as undefined at runtime: stored bits, never a throw.
@@ -437,6 +449,56 @@ describe("refreshSessionRoles", () => {
     );
     expect(refreshed).toEqual(MODERATOR);
     expect(calls).toHaveLength(0);
+  });
+
+  it("a blank moderator allowlist re-derives to non-moderator, matching login", async () => {
+    const calls = stubDiscord(() => memberBody([MOD_ROLE]));
+    const tokenHash = await seed();
+    now = LOGIN_AT + CADENCE_MS;
+    const refreshed = await refreshSessionRoles(store, tokenHash, (await store.get(tokenHash))!, {
+      ...CONFIG,
+      moderatorRoleIds: [],
+    });
+    expect(refreshed).toEqual({ ...MODERATOR, moderator: false });
+    expect(await store.get(tokenHash)).toEqual({ ...MODERATOR, moderator: false });
+    expect(calls).toHaveLength(1);
+  });
+
+  it("a verdict read before a parallel demotion cannot overwrite it", async () => {
+    const tokenHash = await seed();
+    now = LOGIN_AT + CADENCE_MS;
+    // This request's Discord read still sees the moderator role, but a
+    // parallel recheck lands its demotion first; the stale verdict is
+    // discarded and the landed bits authorize.
+    stubDiscord(async () => {
+      await store.applyRoleRecheck!(tokenHash, { member: true, moderator: false });
+      return memberBody([MOD_ROLE]);
+    });
+    const refreshed = await refreshSessionRoles(
+      store,
+      tokenHash,
+      (await store.get(tokenHash))!,
+      CONFIG,
+    );
+    expect(refreshed).toEqual({ ...MODERATOR, moderator: false });
+    expect(await store.get(tokenHash)).toEqual({ ...MODERATOR, moderator: false });
+  });
+
+  it("reads as no session when the re-read after a failed apply also fails", async () => {
+    stubDiscord(() => memberBody([MOD_ROLE]));
+    const tokenHash = await seed();
+    now = LOGIN_AT + CADENCE_MS;
+    const row = (await store.get(tokenHash))!;
+    const dying: SessionStore = {
+      ...store,
+      applyRoleRecheck: async () => false,
+      get: async () => {
+        throw new Error("store unavailable");
+      },
+    };
+    // The pre-lookup row is known not to be live in that form; it must
+    // never be the fallback when the authoritative re-read cannot answer.
+    await expect(refreshSessionRoles(dying, tokenHash, row, CONFIG)).resolves.toBeNull();
   });
 
   it("reads as no session when the row is revoked during the lookup", async () => {

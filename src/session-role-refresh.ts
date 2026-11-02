@@ -23,9 +23,11 @@
 //   authenticated the row, so any error here (transport, store, a schema
 //   that predates the stamp column) degrades to the stored bits with one
 //   class-only warning, never member ids, roles or credentials.
-// - An incomplete derivation config (no guild id, bot token, or moderator
-//   allowlist) cannot reproduce the login derivation, so it is inconclusive
-//   by construction: no lookup, no stamp, the stored bits stand.
+// - An incomplete derivation config (no guild id or bot token) cannot
+//   reproduce the login derivation, so it is inconclusive by construction:
+//   no lookup, no stamp, the stored bits stand. A blank moderator
+//   allowlist is complete config with its login meaning — nobody
+//   moderates — and re-derives to moderator=false like login.
 //
 // Stores without the optional recheck methods (injected test doubles) keep
 // the login-only behavior; both real stores implement them.
@@ -75,8 +77,7 @@ export async function refreshSessionRoles(
     // Incomplete derivation config cannot reproduce the login derivation:
     // no lookup, no stamp, the stored bits stand. Inside the try (and
     // null-safe) so even a malformed config can never fail the request.
-    if (!config.guildId?.trim() || !config.botToken?.trim() || !config.moderatorRoleIds?.length)
-      return row;
+    if (!config.guildId?.trim() || !config.botToken?.trim()) return row;
     if (!store.roleRecheckDue || !store.applyRoleRecheck) return row;
     if (!(await store.roleRecheckDue(tokenHash))) return row;
     // get() also admits short predecessor grace; only a current bearer has a
@@ -90,11 +91,13 @@ export async function refreshSessionRoles(
     });
     const applied = await store.applyRoleRecheck(tokenHash, bits);
     if (!applied) {
-      // The row rotated, expired or was revoked during the lookup, so the
-      // bits were not recorded on it: re-read once and authorize from
-      // whatever is actually live (a grace row, or nothing). A rotated
-      // successor keeps the old stamp and rechecks on its own next read.
-      return await store.get(tokenHash);
+      // The row rotated, expired or was revoked during the lookup — or a
+      // parallel recheck landed first — so these bits were not recorded on
+      // it: re-read once and authorize from whatever is actually live (the
+      // landed verdict, a grace row, or nothing). If even that read fails,
+      // fail closed to no session: the row read before the lookup is known
+      // to no longer be live in that form, so it must never be the fallback.
+      return await store.get(tokenHash).catch(() => null);
     }
     return bits ? { ...row, member: bits.member, moderator: bits.moderator } : row;
   } catch (err) {
