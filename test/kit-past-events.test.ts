@@ -3,7 +3,11 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __resetAnonEventCacheForTests, retireAnonEventCaches } from "../src/events/anon-cache";
-import { dispatchPastArchiveRequest, loadPastArchivePage } from "../src/kit-past-events";
+import {
+  dispatchPastArchiveRequest,
+  loadPastArchivePage,
+  toPublicPastArchiveRow,
+} from "../src/kit-past-events";
 import {
   HONO_FALLBACK_ROUTE_ID,
   dispatchHookRequest,
@@ -250,6 +254,60 @@ describe("past archive load helper", () => {
     expect(headers["x-two-past-cacheable"]).toBe("true");
   });
 
+  it("maps frozen Echoes by event id through the injected reader", async () => {
+    const { setHeaders } = headersOf();
+    const echo = { eventId: 1, label: "attendance record" } as never;
+    const echoesFn = async (_db: unknown, eventIds: number[]) => {
+      expect(eventIds).toEqual([1]);
+      return new Map([[1, echo]]);
+    };
+    const data = await loadPastArchivePage({
+      env,
+      pageParam: "1",
+      setHeaders,
+      dbForFn: async () => fakeDb,
+      listPastFn: async () => ({ rows: [row], hasMore: false, totalPages: 1 }),
+      echoesFn,
+    });
+
+    expect(data.echoes.get(1)).toBe(echo);
+  });
+
+  it("fails open to no records when the Echo lookup throws", async () => {
+    const { headers, setHeaders } = headersOf();
+    const data = await loadPastArchivePage({
+      env,
+      pageParam: "1",
+      setHeaders,
+      dbForFn: async () => fakeDb,
+      listPastFn: async () => ({ rows: [row], hasMore: false, totalPages: 1 }),
+      echoesFn: async () => {
+        throw new Error("echoes down");
+      },
+    });
+
+    expect(data.rows).toEqual([row]);
+    expect(data.echoes.size).toBe(0);
+    expect(headers["x-two-past-cacheable"]).toBe("true");
+  });
+
+  it("skips the Echo lookup on empty pages", async () => {
+    const { setHeaders } = headersOf();
+    const echoesFn = async () => {
+      throw new Error("must not be called without event ids");
+    };
+    const data = await loadPastArchivePage({
+      env,
+      pageParam: "1",
+      setHeaders,
+      dbForFn: async () => fakeDb,
+      listPastFn: async () => ({ rows: [], hasMore: false, totalPages: 0 }),
+      echoesFn,
+    });
+
+    expect(data.echoes.size).toBe(0);
+  });
+
   it("marks empty pages uncacheable so time-arriving events still render", async () => {
     const { headers, setHeaders } = headersOf();
     const data = await loadPastArchivePage({
@@ -356,6 +414,35 @@ describe("past archive load helper", () => {
   });
 });
 
+describe("past archive row projection", () => {
+  const publicRow = {
+    id: 7,
+    eventKey: "archive-7",
+    title: "ORBITAL",
+    startsAt: new Date("2026-09-01T19:00:00Z"),
+    timezone: "UTC",
+    location: "Lounge",
+    game: "Co-op night",
+    organizer_name: "Host",
+    goingCount: 12,
+    goingOccupancy: 0.6,
+    capacity: 20,
+    discordEventId: "123",
+    description: "ORBITAL context",
+  } as never;
+
+  it("projects a null Echo for pre-Echo events", () => {
+    expect(toPublicPastArchiveRow(publicRow, "").echo).toBeNull();
+  });
+
+  it("carries the frozen Echo on the projected row", () => {
+    const echo = { eventId: 7, label: "attendance record" } as never;
+    const projected = toPublicPastArchiveRow(publicRow, "", echo);
+    expect(projected.echo).toBe(echo);
+    expect(projected.title).toBe("ORBITAL");
+  });
+});
+
 describe("hook archive dispatch", () => {
   const archiveManifest = [
     { method: "GET", path: "/events/past", enabled: true, reads: "public" },
@@ -442,5 +529,8 @@ describe("archive load binding", () => {
     expect(source).toContain('pageParam: url.searchParams.get("page")');
     expect(source).toContain("dbForFn: dbFor");
     expect(source).toContain("listPastFn: listPast");
+    // Rows carry their own Echo by event id; the by-id map stays server-side
+    // so __data.json holds no redundant copy.
+    expect(source).toContain("echoes.get(row.id)");
   });
 });

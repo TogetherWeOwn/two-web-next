@@ -2,15 +2,22 @@
 import { effectiveZone, fmt } from "../../../src/events/date-format";
 import type { PastArchiveEvent } from "../../../src/kit-past-events";
 import { archiveEventHref, type ArchiveContext } from "../../../src/events/attendee-paths";
-import { goingCountText } from "../../../src/islands/contracts";
+import {
+  ECHO_RECORD_TESTID,
+  echoShortLine,
+  goingCountText,
+  recordLabel,
+} from "../../../src/islands/contracts";
 
-// Same markup contract as Card in src/events/pages.tsx, including the
-// schedule-row chrome and the month/day date badge. The prop is the
-// anonymous-safe slice the past load projects (never the full row), so a
-// new rendered field fails typecheck here instead of silently widening the
-// __data.json payload. During a search the slice also carries the
-// pre-segmented title spans and the bounded description passage, never
-// the description itself; the segment authority stays server-side.
+// Same markup contract as Card in src/events/pages-past.tsx, including the
+// schedule-row chrome, the month/day date badge and the frozen-record
+// attendance span (Echo line or sign-up count, the record label, the host
+// headline). The prop is the anonymous-safe slice the past load projects
+// (never the full row), so a new rendered field fails typecheck here
+// instead of silently widening the __data.json payload. During a search
+// the slice also carries the pre-segmented title spans and the bounded
+// description passage, never the description itself; the segment authority
+// stays server-side.
 let {
   e,
   q = "",
@@ -58,5 +65,5 @@ const zone = $derived(effectiveZone(e.timezone));
     {#if e.game}<p>{e.game}</p>{/if}
     {#if host}<p data-testid="event-card-host">Hosted by {host}</p>{/if}{#if q && e.passage}<p class="archive-passage">{#each e.passage as part}{#if part.match}<mark>{part.text}</mark>{:else}{part.text}{/if}{/each}</p>{/if}
   </div>
-  <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
+  <span class="schedule-attendance">{e.echo ? echoShortLine(e.echo) : goingCountText(e.goingCount, e.capacity)}{" · "}<span data-testid={ECHO_RECORD_TESTID}>{recordLabel(e.echo != null)}</span>{#if e.echo?.headline}{" — "}{e.echo.headline}{/if}</span>
 </li>

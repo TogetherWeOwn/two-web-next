@@ -2,8 +2,9 @@
 // route-inventory: GET /admin/echoes/:id
 // route-inventory: POST /admin/echoes/:id/headline
 // Event Echoes render acceptance: a seeded Echo row on every surface.
-// Disposable test database only (describe skips without DATABASE_URL); one
-// Echo per event, frozen counts, host headline, F20 projections end to end.
+// Disposable test database only (the fixture refuses before connecting
+// without an approved DATABASE_URL); one Echo per event, frozen counts,
+// host headline, F20 projections end to end.
 import { eq } from "drizzle-orm";
 import { afterAll, beforeEach, describe, expect, it } from "vitest";
 import app from "./app";
@@ -88,7 +89,7 @@ async function seedEcho(db: Db): Promise<number> {
   return echo!.id;
 }
 
-describe.skipIf(!process.env.DATABASE_URL)("event echo render acceptance", () => {
+describe("event echo render acceptance", () => {
   let fixture: MemberDataFixture;
 
   beforeEach(async () => {

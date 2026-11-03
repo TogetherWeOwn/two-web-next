@@ -193,26 +193,17 @@ export async function updateEchoHeadline(
   return updated;
 }
 
-/** Record label, binding the backfill policy: an event WITH an Echo is the
- * attendance record; anything earlier is the sign-up record, forever. */
-export const ECHO_RECORD_LABEL = "attendance record" as const;
-export const SIGNUP_RECORD_LABEL = "sign-up record" as const;
-
-export function recordLabel(
-  hasEcho: boolean,
-): typeof ECHO_RECORD_LABEL | typeof SIGNUP_RECORD_LABEL {
-  return hasEcho ? ECHO_RECORD_LABEL : SIGNUP_RECORD_LABEL;
-}
-
-/** One-line counts copy shared by the cream band, the detail section and the
- * archive cards — one Echo reads identically everywhere (acceptance). */
-export function echoShortLine(
-  echo: Pick<PublicEcho, "attendedCount" | "peakConcurrent" | "rooms">,
-): string {
-  const count = echo.rooms.length;
-  const rooms = count > 0 ? ` across ${count} room${count === 1 ? "" : "s"}` : "";
-  return `${echo.attendedCount} showed up${rooms} · peak ${echo.peakConcurrent} in voice`;
-}
+/** Frozen-record copy lives in the island-contract leaf (no DB graph) so the
+ * Kit card bundles it for browsers; re-exported here so server import paths
+ * keep working. */
+import {
+  ECHO_RECORD_LABEL,
+  SIGNUP_RECORD_LABEL,
+  echoShortLine,
+  recordLabel,
+  type EchoCounts,
+} from "../islands/contracts-echoes";
+export { ECHO_RECORD_LABEL, SIGNUP_RECORD_LABEL, echoShortLine, recordLabel, type EchoCounts };
 
 /** Shared copy for the site cream band AND the Discord thread post — one Echo
  * renders identically on both (acceptance). Stays within the 2000-character
