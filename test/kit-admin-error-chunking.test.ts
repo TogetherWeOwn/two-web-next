@@ -80,6 +80,40 @@ describe("static content server chunking", () => {
   });
 });
 
+describe("profile and board server chunking", () => {
+  it("co-compresses mirrored hot-zone renderers with their shared read helpers", () => {
+    const pattern = groupPattern("profiles");
+    for (const module of [
+      "src/profiles/pages.tsx",
+      "src/hotzones/pages.tsx",
+      "src/hotzones/reads.ts",
+      "src/kit-hotzones.ts",
+      "web/src/lib/ProfileView.svelte",
+      "web/src/routes/leaderboards/members/+page.svelte",
+      "web/src/routes/hotzones/+page.svelte",
+      "web/src/routes/hotzones/+error.svelte",
+      "web/src/routes/hotzones/[signal]/+page.svelte",
+    ]) {
+      expect(pattern.test(`/checkout/${module}`), module).toBe(true);
+    }
+  });
+
+  it("does not capture Kit loaders, endpoints, unrelated pages or lookalike helpers", () => {
+    const pattern = groupPattern("profiles");
+    for (const module of [
+      "src/kit-hotzones.ts.backup",
+      "src/kit-hotzones-other.ts",
+      "web/src/routes/hotzones/+page.server.ts",
+      "web/src/routes/hotzones/+server.ts",
+      "web/src/routes/hotzones/nested/+page.svelte",
+      "web/src/routes/admin/+page.svelte",
+      "web/src/routes/profile/+page.svelte",
+    ]) {
+      expect(pattern.test(`/checkout/${module}`), module).toBe(false);
+    }
+  });
+});
+
 describe("native admin error server chunking", () => {
   it("co-compresses both boundaries with their pure shell and retry helper", () => {
     const pattern = groupPattern("admin-errors");
