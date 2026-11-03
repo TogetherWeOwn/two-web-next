@@ -72,6 +72,20 @@ test("deploy outcomes name what fired", () => {
       "failed",
       /automatic rollback failed/,
     ],
+    // A failed auto-rollback job whose mutation moved traffic completed the
+    // restoration and failed verification: it must not claim the promoted
+    // version may still serve.
+    [
+      {
+        WATCH_RESULT: "failure",
+        WATCH_BREACH: "true",
+        ROLLBACK_RESULT: "failure",
+        ROLLBACK_MUTATION: "success",
+        ROLLBACK_SMOKE: "failure",
+      },
+      "failed",
+      /restored the pre-promote version but post-rollback smoke failed/,
+    ],
     [{ PREFLIGHT_RESULT: "failure", DEPLOY_RESULT: "skipped" }, "failed", /preflight refused/],
     [{ REGRESSION_RESULT: "failure", DEPLOY_RESULT: "skipped" }, "failed", /regression check/],
     [
@@ -140,6 +154,44 @@ test("rollback events report the target and the version they replaced", () => {
   assert.match(
     manualSkipped.reason,
     /rollback did not complete \(rollback skipped\); production may be unchanged/,
+  );
+  // A failed job whose mutation moved traffic completed the restoration and
+  // failed verification: the record must say the restored version serves,
+  // not that traffic never moved.
+  const restoredSmokeFailed = buildPayload(
+    {
+      ...env,
+      ROLLBACK_RESULT: "failure",
+      ROLLBACK_MUTATION: "success",
+      ROLLBACK_SMOKE: "failure",
+      ROLLBACK_REASON: "",
+      EXPECTED_CURRENT_VERSION_ID: "",
+    },
+    { now: NOW },
+  );
+  assert.equal(restoredSmokeFailed.outcome, "failed");
+  assert.match(
+    restoredSmokeFailed.reason,
+    /rollback completed but post-rollback smoke failed; production serves the restored version/,
+  );
+  // Same when the guard skipped the mutation because the target already
+  // served and the smoke then failed.
+  const alreadyServedSmokeFailed = buildPayload(
+    {
+      ...env,
+      ROLLBACK_RESULT: "failure",
+      ROLLBACK_ACTION: "skip",
+      ROLLBACK_MUTATION: "skipped",
+      ROLLBACK_SMOKE: "failure",
+      ROLLBACK_REASON: "",
+      EXPECTED_CURRENT_VERSION_ID: "",
+    },
+    { now: NOW },
+  );
+  assert.equal(alreadyServedSmokeFailed.outcome, "failed");
+  assert.match(
+    alreadyServedSmokeFailed.reason,
+    /rollback completed but post-rollback smoke failed; production serves the restored version/,
   );
   assert.throws(() => buildPayload({ ...env, NOTIFY_EVENT: "push" }), /deploy or rollback/);
 });
@@ -258,6 +310,15 @@ test("deploy and rollback workflows end with a non-blocking notify", () => {
     }
     if (event === "deploy") {
       assert.match(job, /WATCH_VERDICT: \$\{\{ needs\.post-deploy-watch\.outputs\.verdict \}\}/);
+      assert.match(job, /ROLLBACK_MUTATION: \$\{\{ needs\.auto-rollback\.outputs\.mutation \}\}/);
+      assert.match(job, /ROLLBACK_SMOKE: \$\{\{ needs\.auto-rollback\.outputs\.smoke \}\}/);
+    }
+    if (event === "rollback") {
+      assert.match(
+        job,
+        /ROLLBACK_MUTATION: \$\{\{ needs\.rollback-production\.outputs\.mutation \}\}/,
+      );
+      assert.match(job, /ROLLBACK_SMOKE: \$\{\{ needs\.rollback-production\.outputs\.smoke \}\}/);
     }
     assert.match(
       job,
@@ -277,5 +338,20 @@ test("deploy and rollback workflows end with a non-blocking notify", () => {
   assert.match(
     read("../.github/workflows/rollback-production.yml"),
     /inputs\.environment == 'production' \}\}/,
+  );
+  // The rollback mutation is recorded separately from the post-rollback
+  // smoke so a failed job cannot misreport a completed restoration.
+  const rollback = read("../.github/workflows/rollback-production.yml");
+  assert.match(rollback, /id: rollback\n/);
+  assert.match(rollback, /id: rollback-smoke\n/);
+  assert.match(rollback, /mutation: \$\{\{ steps\.rollback\.outcome \}\}/);
+  assert.match(rollback, /smoke: \$\{\{ steps\.rollback-smoke\.outcome \}\}/);
+  assert.ok(
+    rollback.includes("jobs.rollback-production.outputs.mutation"),
+    "rollback workflow exposes the mutation outcome",
+  );
+  assert.ok(
+    rollback.includes("jobs.rollback-production.outputs.smoke"),
+    "rollback workflow exposes the smoke outcome",
   );
 });

@@ -78,6 +78,12 @@ on:
       action:
         description: "rollback when traffic moved, skip when version_id already served"
         value: ${{ jobs.rollback-production.outputs.action }}
+      mutation:
+        description: "wrangler rollback step outcome (success when traffic moved)"
+        value: ${{ jobs.rollback-production.outputs.mutation }}
+      smoke:
+        description: "post-rollback smoke step outcome (failure when the restored version fails verification)"
+        value: ${{ jobs.rollback-production.outputs.smoke }}
 
 # Both gate jobs need Actions read to GET the private repository's Environment.
 permissions:
@@ -130,6 +136,8 @@ jobs:
     needs: preflight
     outputs:
       action: ${{ steps.guard.outputs.action }}
+      mutation: ${{ steps.rollback.outcome }}
+      smoke: ${{ steps.rollback-smoke.outcome }}
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
@@ -247,6 +255,7 @@ jobs:
         env:
           ROLLBACK_ORIGIN: ${{ steps.target.outputs.origin }}
       - name: Roll back to the recorded Worker Version
+        id: rollback
         if: steps.guard.outputs.action == 'rollback'
         # Non-interactive CI auto-accepts wrangler's confirmation prompt with the
         # default answer. The version id was gate-validated above and is quoted.
@@ -259,6 +268,7 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment != 'production' && secrets.CLOUDFLARE_API_TOKEN || '' }}
           CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment != 'production' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
       - name: Smoke test public routes on the rolled-back version
+        id: rollback-smoke
         # Same GET-only public-route set as staging (bin/smoke.mjs), so the two
         # gates cannot drift. Manual redirects keep the checks unauthenticated
         # and never visit Discord: no auth, no writes, no PII. Indexable apex
@@ -335,6 +345,8 @@ jobs:
           EXPECTED_CURRENT_VERSION_ID: ${{ inputs.expected_current_version_id }}
           ROLLBACK_RESULT: ${{ needs.rollback-production.result }}
           ROLLBACK_ACTION: ${{ needs.rollback-production.outputs.action }}
+          ROLLBACK_MUTATION: ${{ needs.rollback-production.outputs.mutation }}
+          ROLLBACK_SMOKE: ${{ needs.rollback-production.outputs.smoke }}
           ROLLBACK_REASON: ${{ inputs.reason }}
           PAPERCLIP_DEPLOY_WEBHOOK_URL: ${{ vars.PAPERCLIP_DEPLOY_WEBHOOK_URL }}
           PAPERCLIP_DEPLOY_WEBHOOK_SECRET: ${{ secrets.PAPERCLIP_DEPLOY_WEBHOOK_SECRET }}

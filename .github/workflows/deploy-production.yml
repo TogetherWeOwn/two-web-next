@@ -697,5 +697,7 @@ jobs:
           WATCH_BREACH: ${{ needs.post-deploy-watch.outputs.breach }}
           WATCH_VERDICT: ${{ needs.post-deploy-watch.outputs.verdict }}
           ROLLBACK_RESULT: ${{ needs.auto-rollback.result }}
+          ROLLBACK_MUTATION: ${{ needs.auto-rollback.outputs.mutation }}
+          ROLLBACK_SMOKE: ${{ needs.auto-rollback.outputs.smoke }}
           PAPERCLIP_DEPLOY_WEBHOOK_URL: ${{ vars.PAPERCLIP_DEPLOY_WEBHOOK_URL }}
           PAPERCLIP_DEPLOY_WEBHOOK_SECRET: ${{ secrets.PAPERCLIP_DEPLOY_WEBHOOK_SECRET }}

@@ -20,6 +20,19 @@ const VERSION_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-
 
 const optionalVersion = (value) => (VERSION_PATTERN.test(value ?? "") ? value : null);
 
+// The rollback mutation (wrangler rollback) is recorded separately from the
+// post-rollback smoke: a failed rollback job does not imply traffic never
+// moved. When the mutation succeeded (or the guard skipped it because the
+// target already served) but the smoke failed, production already serves the
+// restored version and the record must say so.
+export function rollbackRestored(env) {
+  return env.ROLLBACK_MUTATION === "success" || env.ROLLBACK_ACTION === "skip";
+}
+
+export function rollbackSmokeFailed(env) {
+  return rollbackRestored(env) && env.ROLLBACK_SMOKE === "failure";
+}
+
 // The deploy run's outcome from its job results, in the order a reader needs:
 // a completed rollback first, then a clean promotion, then everything else.
 export function deployOutcome(env) {
@@ -43,6 +56,13 @@ export function deployOutcome(env) {
     return { outcome: "success", reason: null };
   }
   if (env.ROLLBACK_RESULT === "failure") {
+    if (rollbackSmokeFailed(env)) {
+      return {
+        outcome: "failed",
+        reason:
+          "automatic rollback restored the pre-promote version but post-rollback smoke failed; production serves the restored version",
+      };
+    }
     return {
       outcome: "failed",
       reason: "automatic rollback failed; production may still serve the promoted version",
@@ -93,12 +113,17 @@ export function buildPayload(env, { now = () => new Date() } = {}) {
           // A rollback that completed (traffic moved, or the target already
           // served) is a success; anything else failed. A non-success must
           // name the rollback result, not the trigger: ROLLBACK_REASON says
-          // how the run started, not why it failed.
+          // how the run started, not why it failed. A failed job whose
+          // mutation moved traffic (or skipped because the target already
+          // served) completed the restoration and failed verification, so
+          // the record must not claim traffic never moved.
           outcome: env.ROLLBACK_RESULT === "success" ? "success" : "failed",
           reason:
             env.ROLLBACK_RESULT === "success"
               ? env.ROLLBACK_REASON || "manual rollback-production dispatch"
-              : `rollback did not complete (rollback ${env.ROLLBACK_RESULT || "unknown"}); production may be unchanged`,
+              : rollbackSmokeFailed(env)
+                ? "rollback completed but post-rollback smoke failed; production serves the restored version"
+                : `rollback did not complete (rollback ${env.ROLLBACK_RESULT || "unknown"}); production may be unchanged`,
         };
   const sha = /^[0-9a-f]{40}$/.test(env.NOTIFY_SHA ?? "") ? env.NOTIFY_SHA : null;
   return {
