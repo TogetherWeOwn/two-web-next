@@ -13,6 +13,38 @@ The homepage, `/about`, `/faq`, `/rules`, `/privacy`, the `/join` landing, the c
 - `public/profile-theme.css`: profile-only layout under 8 KB, loaded only when `theme="profile"`.
 - `public/schedule-theme.css`: schedule-only layout under 6 KB, loaded only when `theme="schedule"`. Every rule is scoped to `.events-page`, so the shared chrome stays in `theme.css`.
 
+## Token value mapping (Living Lobby design §3.1, §3.7)
+
+The Hono source of truth is `public/theme-tokens.css`; the Kit twin is
+`web/src/app.css` `@theme` with the same §3 values under its own names.
+Keep the two in step.
+
+| Old | §3 token | Value | Notes |
+| --- | --- | --- | --- |
+| page `#151720` | `--ground` | `#17130f` | ember-tinted action ground |
+| surface `#222430` | `--raised` | `#221c15` | panels, rungs |
+| text `#f5f6fb` | `--text-1` | `#f7f2e9` | headings, primary |
+| muted `#c6cbea` | `--text-2` | `#ddd3c2` | body-safe step; p/card rules use it |
+| border `#41465c` | cream 14% alpha hairline | `rgb(247 242 233 / 0.14)` | never the only separator for meaning |
+| accent `#a3ff12` | `--ember` | `#ff9c36` | action accent, focus, "you" marks |
+
+Lime accents (`#a3ff12`, `#c2f45b`) retire to `--ember` as surfaces
+migrate; `--color-accent`/`--brand` already resolve to ember. New tokens:
+`--raised-2` (room rows, status boxes), `--text-3`/`--text-4` (secondary /
+quiet steps, both still ≥ 4.5:1 on every ground they can touch), `--live`
+(live state only, always paired with words), `--ok` (confirmed/online),
+`--focus` (ember keyboard focus), the cream records set (the bot-recorded
+ground, the only light surface in v1), font-role stacks, radius and
+band-spacing. Records ink is `--records-ink` (not `--ink`: that alias
+still means light themed text until card 2 renames usages). The light
+legacy sheet (`styles.css`) stays untouched for unmigrated pages; the
+records cream is not that sheet. `--theme-*` plugs preserve explicit
+overrides; route ownership (`src/route-ownership.ts`) is unchanged.
+
+This mapping lived as a served comment in `public/theme-tokens.css` and
+moved here so the inlined homepage/leaf bundle does not ship prose on
+every response.
+
 ## Community schedule
 
 The list and archive use responsive schedule rows with decorative, timezone-aware date tiles; the meaningful `<time>` text remains available to assistive technology. The month view retains its labelled, focusable horizontal scroll region on narrow screens. Search, month/view navigation, past drawer and archive pagination keep their original island zones, live regions and test IDs. The visible Search button submits the existing GET form without JavaScript; subscribe/ICS, RSS and guest Discord links remain real anchors. No vendor script or additional island bundle is introduced.

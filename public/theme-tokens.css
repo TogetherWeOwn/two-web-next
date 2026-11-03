@@ -1,29 +1,5 @@
-/*
- * Living Lobby design tokens (design §3.1, §3.7). Single source of truth for
- * the Hono themed pages: every colour, font-role, radius and spacing value
- * on those pages flows from this file. The Kit twin (web/src/app.css @theme)
- * carries the same §3 values under its own names; keep the two in step.
- *
- * Value mapping (old → §3). Lime accents (#a3ff12) retire to ember as
- * surfaces migrate; --color-accent/--brand already resolve to ember.
- * - page    #151720 → --ground    #17130f (ember-tinted action ground)
- * - surface #222430 → --raised    #221c15 (panels, rungs)
- * - text    #f5f6fb → --text-1    #f7f2e9 (headings, primary)
- * - muted   #c6cbea → --text-2    #ddd3c2 (body-safe step: p/card rules use it)
- * - border  #41465c → cream 14% alpha hairline (never the only separator for
- *   meaning)
- * - accent  #a3ff12 → --ember     #ff9c36 (action accent, focus, "you" marks)
- * New: --raised-2 (room rows, status boxes), --text-3/--text-4 (secondary /
- * quiet steps, both still ≥ 4.5:1 on every ground they can touch), --live
- * (live state only, always paired with words), --ok (confirmed/online),
- * --focus (ember keyboard focus), the cream records set (the bot-recorded
- * ground, the only light surface in v1), font-role stacks, radius and
- * band-spacing. Records ink is --records-ink (not --ink: that alias still
- * means light themed text until card 2 renames usages).
- * The light legacy sheet (styles.css) stays untouched for unmigrated pages;
- * the records cream is not that sheet. --theme-* plugs preserve explicit
- * overrides; route ownership (src/route-ownership.ts) is unchanged.
- */
+/* Living Lobby tokens (design §3.1, §3.7). Single source for Hono themed
+ * pages; Kit twin in web/src/app.css. Value mapping in docs/home-theme.md. */
 .base-theme {
   --ground: #17130f;
   --raised: #221c15;
