@@ -86,6 +86,22 @@ test("deploy outcomes name what fired", () => {
       "failed",
       /restored the pre-promote version but post-rollback smoke failed/,
     ],
+    // Same when the guard skipped the mutation because the target already
+    // served and the smoke then failed: the restored version serves, so the
+    // deploy record must say so. ROLLBACK_ACTION arrives from the
+    // auto-rollback outputs on the deploy notify job.
+    [
+      {
+        WATCH_RESULT: "failure",
+        WATCH_BREACH: "true",
+        ROLLBACK_RESULT: "failure",
+        ROLLBACK_ACTION: "skip",
+        ROLLBACK_MUTATION: "skipped",
+        ROLLBACK_SMOKE: "failure",
+      },
+      "failed",
+      /restored the pre-promote version but post-rollback smoke failed/,
+    ],
     [{ PREFLIGHT_RESULT: "failure", DEPLOY_RESULT: "skipped" }, "failed", /preflight refused/],
     [{ REGRESSION_RESULT: "failure", DEPLOY_RESULT: "skipped" }, "failed", /regression check/],
     [
@@ -310,10 +326,12 @@ test("deploy and rollback workflows end with a non-blocking notify", () => {
     }
     if (event === "deploy") {
       assert.match(job, /WATCH_VERDICT: \$\{\{ needs\.post-deploy-watch\.outputs\.verdict \}\}/);
+      assert.match(job, /ROLLBACK_ACTION: \$\{\{ needs\.auto-rollback\.outputs\.action \}\}/);
       assert.match(job, /ROLLBACK_MUTATION: \$\{\{ needs\.auto-rollback\.outputs\.mutation \}\}/);
       assert.match(job, /ROLLBACK_SMOKE: \$\{\{ needs\.auto-rollback\.outputs\.smoke \}\}/);
     }
     if (event === "rollback") {
+      assert.match(job, /ROLLBACK_ACTION: \$\{\{ needs\.rollback-production\.outputs\.action \}\}/);
       assert.match(
         job,
         /ROLLBACK_MUTATION: \$\{\{ needs\.rollback-production\.outputs\.mutation \}\}/,
@@ -346,6 +364,10 @@ test("deploy and rollback workflows end with a non-blocking notify", () => {
   assert.match(rollback, /id: rollback-smoke\n/);
   assert.match(rollback, /mutation: \$\{\{ steps\.rollback\.outcome \}\}/);
   assert.match(rollback, /smoke: \$\{\{ steps\.rollback-smoke\.outcome \}\}/);
+  assert.ok(
+    rollback.includes("jobs.rollback-production.outputs.action"),
+    "rollback workflow exposes the guard action",
+  );
   assert.ok(
     rollback.includes("jobs.rollback-production.outputs.mutation"),
     "rollback workflow exposes the mutation outcome",
