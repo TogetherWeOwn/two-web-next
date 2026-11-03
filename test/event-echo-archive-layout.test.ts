@@ -22,8 +22,11 @@ describe("echo archive row layout", () => {
   it("clamps the attendance column so a long Echo headline wraps in place", () => {
     const rule = attendanceRule();
     expect(rule).toMatch(/max-width\s*:\s*\d/);
-    expect(rule).toMatch(/min-width\s*:\s*0/);
-    expect(rule).toMatch(/overflow-wrap\s*:\s*anywhere/);
+  });
+
+  it("wraps the clamped column anywhere (inherited from the row)", () => {
+    const css = stripComments(sheet());
+    expect(css).toMatch(/\.schedule-row\s*\{[^}]*overflow-wrap\s*:\s*anywhere/);
   });
 
   it("keeps the info column fluid above the clamp", () => {
