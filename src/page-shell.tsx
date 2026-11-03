@@ -52,20 +52,21 @@ export const Layout: FC<
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         {theme && theme !== "content" ? (
-          // First network hint: the Display-700 LCP text must be discovered
+          // First network hint: the Mona Sans LCP text must be discovered
           // with the first document chunk, not after the ~19 KB inlined style
           // block below. Late discovery left the simulated font completion at
           // the paint boundary and flipped `/` mobile LCP between FCP and
-          // FCP + ~450 ms across staging runs.
+          // FCP + ~450 ms across staging runs. Mona Sans is the only
+          // preloaded family (kit §2); serif and mono are display-optional.
           <link
             rel="preload"
-            href="/fonts/display-latin-700.woff2"
+            href="/fonts/mona-sans-latin-var.woff2"
             as="font"
             type="font/woff2"
             crossorigin="anonymous"
           />
         ) : null}
-        <meta name="theme-color" content="#151720" />
+        <meta name="theme-color" content="#15100f" />
         <link rel="manifest" href="/site.webmanifest" />
         <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
@@ -117,12 +118,12 @@ export const Layout: FC<
           // preload hints for the same files measured zero. The homepage
           // reuses the exact same bundle: its hero paints at first paint
           // (LCP equals FCP every staging run), so removing the three external
-          // stylesheet requests is the primary FCP improvement. The Display-700
+          // stylesheet requests is the primary FCP improvement. The Mona Sans
           // preload stays at the top of the head (above this block) for an early
-          // font fetch; the Arial-metric 'Display Fallback' reduces delayed-font
-          // layout shift (the preload alone cannot close the FCP/font gap on
-          // cold mobile). The block is allowlisted by hash in style-src
-          // (no unsafe-inline).
+          // font fetch; the metric-matched 'Mona Sans Fallback' reduces
+          // delayed-font layout shift (the preload alone cannot close the
+          // FCP/font gap on cold mobile). The block is allowlisted by hash
+          // in style-src (no unsafe-inline).
           <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
         ) : (
           <link rel="stylesheet" href="/styles.css" />

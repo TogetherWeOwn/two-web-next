@@ -34,7 +34,7 @@ describe("content leaves render without the Display webfont", () => {
     expect(content).not.toContain('.woff2" as="font"');
     for (const theme of ["home", "event", "join", "profile", "schedule"] as const) {
       const html = Layout({ title: "Fixture", theme })!.toString();
-      expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+      expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
     }
   });
 });

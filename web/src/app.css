@@ -23,29 +23,27 @@
 @source not "./routes/admin/join-attempts";
 
 /*
- * Open Lobby tokens. Single source of truth for the SvelteKit
- * shell: every colour, type, spacing, radius and surface value in Kit chrome
- * flows from this file. A later design direction is a token swap here plus
- * light component edits; components must use these utilities (bg-lobby-*,
- * text-lobby-*, border-lobby-*, font-display) and never hard-code palette
- * values or arbitrary hex. Spacing and radius stay on the Tailwind scale
- * (no arbitrary p-[…]/rounded-[…] values).
- *
- * Values are the Open Lobby direction, not Tailwind Plus: the Plus catalogue
- * is design reference only and must never be pasted into this repo. The
- * display stack reuses the self-hosted Display font already served from
- * public/fonts; swapping the direction swaps this token, not every caller.
+ * Ember Hours tokens (two-design-kit v0.2.0, tokens §1-§2). Single source of
+ * truth for the SvelteKit shell: every colour in Kit chrome flows from this
+ * file. Values are kit literals, not variables: the kit file is the source
+ * of truth and ci/check-ember-token-sync.mjs fails when a value below
+ * differs from vendor/design-kit/tokens.css. Value mapping (old ramp to
+ * kit) in docs/home-theme.md. Components must use these utilities
+ * (bg-lobby-*, text-lobby-*, border-lobby-*, font-display) and never
+ * hard-code palette values or arbitrary hex. Spacing and radius stay on the
+ * Tailwind scale (no arbitrary p-[…]/rounded-[…] values). The display stack
+ * reuses the self-hosted Mona Sans variable font served from public/fonts.
  */
 @theme {
-  --color-lobby-surface: #121719;
-  --color-lobby-raised: #1e292c;
-  --color-lobby-ink: #f5f5eb;
-  --color-lobby-muted: #b5c1c1;
-  --color-lobby-accent: #c2f45b;
-  --color-lobby-on-accent: #14200a;
-  --color-lobby-line: #4b5b5d;
-  --color-lobby-focus: #ffffff;
-  --font-display: Display, "Display Fallback", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+  --color-lobby-surface: #1c1614;
+  --color-lobby-raised: #241c19;
+  --color-lobby-ink: #f6f1ea;
+  --color-lobby-muted: #d2c7bd;
+  --color-lobby-accent: #ff9c36;
+  --color-lobby-on-accent: #1d0b00;
+  --color-lobby-line: #85766b;
+  --color-lobby-focus: #ff9c36;
+  --font-display: Mona Sans, system-ui, sans-serif;
   --font-sans: ui-sans-serif, system-ui, sans-serif;
 }
 

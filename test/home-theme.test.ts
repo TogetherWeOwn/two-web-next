@@ -61,12 +61,12 @@ describe("homepage theme", () => {
     const html = render();
     expect(html).toContain('<body class="base-theme homepage-theme"><a class="skip-link"');
     // The homepage inlines the shared critical-CSS bundle and retains the
-    // Display-700 preload for an early font fetch; the Arial-metric
-    // 'Display Fallback' reduces delayed-font layout shift.
+    // Mona Sans variable preload for an early font fetch; the Arimo-metric
+    // 'Mona Sans Fallback' reduces delayed-font layout shift.
     expect(html).toContain("<style>");
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
     expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
     expect(html).toContain('data-testid="site-jsonld"');
     const withoutJsonLd = html.replace(
@@ -267,11 +267,15 @@ describe("homepage theme", () => {
     expect(css).toContain("prefers-reduced-motion: no-preference");
     expect(css).not.toContain("@import");
     expect(css).not.toContain("https://");
-    // Scoping every Display text rule away from the content leaves (late
+    // Scoping every display text rule away from the content leaves (late
     // font swap became mobile LCP) raised the cap from 12000: it costs
-    // ~600 bytes of :not(.content-theme) guards. Still no @import, no remote
-    // URLs, still one hand-readable file.
-    expect(css.length).toBeLessThan(13000);
+    // ~600 bytes of :not(.content-theme) guards. The Ember Hours migration
+    // adds the four kit §2 @font-face blocks (variable Mona Sans, its
+    // local-metric fallback, optional serif and mono) plus the ember focus
+    // and forced-colors rules: measured 13825 bytes, so the cap is that
+    // plus 200 B slack. Still no @import, no remote URLs, still one
+    // hand-readable file.
+    expect(css.length).toBeLessThan(14025);
   });
 
   it("keeps the primary .btn:hover lift on the brand token", () => {

@@ -4,11 +4,71 @@ The purchased HTML landing page is the visual foundation for the homepage. Its c
 
 The homepage, `/about`, `/faq`, `/rules`, `/privacy`, the `/join` landing, the community schedule (`/events`, `/events/past`), event detail/cancelled pages and branded error/OAuth recovery shells opt into the stylesheet through `Layout.theme`. The homepage and four content leaves (`/about`, `/faq`, `/rules`, `/privacy`) render it as a single generated inline `<style>` block (`src/leaf-critical-css.ts`, git-ignored build output regenerated on every install via `npm run build:leaf-css`) allowlisted in `style-src` by its sha256 hash instead of a render-blocking stylesheet request; other themed routes keep the external stylesheet. They share the presentational `SiteHeader` and `SiteFooter`; error/recovery composition uses `RecoveryShell` without reading sessions or requiring a database. The content leaves use compact information navigation with a current-page indicator and readable policy text; Join uses a split content/preview layout that stacks on mobile. The 404 keeps optional event suggestions and labelled GET search below the centered status hero. The maintenance header and primary action link directly to the configured Discord invite, not OAuth. Member profiles opt into the base tokens through `theme="profile"` with layout details in the separate `profile-theme.css` sheet; the schedule does the same through `theme="schedule"` and `schedule-theme.css`, and event pages through `theme="event"` and `event-theme.css`. Other routes, including admin, retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
 
+## Ember Hours token migration (two-design-kit v0.2.0)
+
+The served sheets carry kit values as literals under the existing hook names.
+Source of truth is `vendor/design-kit/` at the pinned tag (`VERSION`); two
+drift gates hold the wiring: `ci/check-design-kit-drift.mjs` (vendored bytes
+equal the tag) and `ci/check-ember-token-sync.mjs` (13 Hono + 9 Kit sheet
+declarations equal the vendored values), both in `npm run check`.
+`public/theme-tokens.css` cannot `@import` the 8 KB kit file (budget and the
+inlined leaf bundle forbid it), and Tailwind `@theme` needs literals, so a
+kit update is VERSION + re-vendor + new literals here.
+
+Hono (`public/theme-tokens.css`, base and schedule blocks):
+
+| hook | old ramp | kit literal |
+| --- | --- | --- |
+| `--color-text` | `#f5f6fb` | `#f6f1ea` (text-1) |
+| `--color-page` | `#151720` | `#15100f` (ground-0) |
+| `--color-accent` | `#a3ff12` (lime) | `#ff9c36` (ember) |
+| `--color-muted` | `#c6cbea` | `#d2c7bd` (text-2) |
+| `--color-surface` | `#222430` | `#1c1614` (ground-1) |
+| `--color-border` | `#41465c` | `#85766b` (control border) |
+| `--font-display` | Rajdhani `Display` stack | `Mona Sans, system-ui, sans-serif` (kit literal; rule stacks add the local `'Mona Sans Fallback'`) |
+
+Kit (`web/src/app.css` `@theme`, utility names unchanged):
+
+| token | old ramp | kit literal |
+| --- | --- | --- |
+| `--color-lobby-surface` | `#121719` | `#1c1614` |
+| `--color-lobby-raised` | `#1e292c` | `#241c19` |
+| `--color-lobby-ink` | `#f5f5eb` | `#f6f1ea` |
+| `--color-lobby-muted` | `#b5c1c1` | `#d2c7bd` |
+| `--color-lobby-accent` | `#c2f45b` | `#ff9c36` |
+| `--color-lobby-on-accent` | `#14200a` | `#1d0b00` |
+| `--color-lobby-line` | `#4b5b5d` | `#85766b` |
+| `--color-lobby-focus` | `#ffffff` | `#ff9c36` |
+| `--font-display` | Rajdhani `Display` stack | `Mona Sans, system-ui, sans-serif` |
+
+Focus is the 2 px ember ring with 3 px offset (forced-colors: `Highlight`);
+`color-scheme: dark` is declared. Contrast: every served text pair clears
+4.5:1 and the control border clears 3:1 (`test/ember-contrast.test.ts`
+recomputes the ratios from the sheet with independent luminance math); echo
+violet never appears as text (it fails 4.5:1 on overlay, so the test fails
+closed on any echo text usage). Full declared table: the kit's
+`docs/tokens.md` §1.8 at the pinned tag.
+
+Fonts: variable Mona Sans (preloaded once, `swap`, metric-matched local
+fallback) for display and UI; Instrument Serif Italic and Fragment Mono ship
+as `optional`, never-preloaded faces. Provenance, subsets and reproduction
+in `public/fonts/OFL-SOURCES.txt`. The variable face covers wght 200-900
+from the single fetch, which is what lets the homepage LCP ratchets re-base
+down instead of up.
+
+Deferred to the UX Designer (no invented design): body type size stays
+`17px/1.65 system-ui` (kit type-scale adoption is theirs); the unthemed
+global `:focus-visible` and error-search rules stay as-is (admin is outside
+the Ember theme); serif/mono rule adoption (one serif accent phrase per
+heading, mono-is-data) is theirs once the faces ship here; the kit state
+roles (live/echo/ok/warn/danger) are vendored but not yet wired into served
+sheets.
+
 ## Assets
 
-- `public/fonts/display-latin-{500,700}.woff2`: Latin Rajdhani from `@fontsource/rajdhani` 5.3.0 (OFL-1.1). Its unmodified font license is retained in `public/fonts/LICENSE.txt`. Two weights total roughly 31 KB. No remote font origin.
+- `public/fonts/mona-sans-latin-var.woff2`, `instrument-serif-latin-400-italic.woff2`, `fragment-mono-latin-400.woff2`: self-hosted OFL-1.1 families for the Ember Hours migration (variable Mona Sans plus subset serif/mono, ~119 KB total). Provenance in `public/fonts/OFL-SOURCES.txt`, full license texts in `public/fonts/LICENSE.txt`, byte pins in `test/pinned-assets.test.ts`. The retired Rajdhani statics (`display-latin-{500,700}.woff2`) are removed. No remote font origin.
 - `public/logo.svg` and `public/icons/*.png`: generated temporary TWO wordmark, not template art. Regenerate all five consistently with `python3 ci/generate-icons.py`. The mark stays inside the maskable safe area. Existing install icon URLs, sizes and manifest identity are unchanged; theme/background colors match the new mark.
-- `public/theme.css`: adapted, explicitly opted-in base-theme rules (home, content/join, recovery), under 12 KB uncompressed. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
+- `public/theme.css`: adapted, explicitly opted-in base-theme rules (home, content/join, recovery), under 15 KB uncompressed (four kit §2 faces plus focus/forced-colors). Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
 - `public/profile-theme.css`: profile-only layout under 8 KB, loaded only when `theme="profile"`.
 - `public/schedule-theme.css`: schedule-only layout under 6 KB, loaded only when `theme="schedule"`. Every rule is scoped to `.events-page`, so the shared chrome stays in `theme.css`.
 

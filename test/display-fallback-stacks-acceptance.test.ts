@@ -2,12 +2,13 @@ import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// Typography acceptance: every Display stack in the four theme sheets carries
-// the metric-matched 'Display Fallback' directly after Display (the theme.css
-// position), every --font-display token definition carries it too, and no
-// hardcoded hex lives in theme sheets outside token files. Static pins only:
-// no app, no database, no network. The E7 build greens these without editing
-// this file.
+// Typography acceptance: every Mona Sans stack in the four theme sheets
+// carries the metric-matched 'Mona Sans Fallback' directly after Mona Sans
+// (the theme.css position), every --font-display token definition carries the
+// kit family without the local fallback (literal equality with the vendored
+// kit is sync-gated in ci/check-ember-token-sync.mjs), and no hardcoded hex
+// lives in theme sheets outside token files. Static pins only: no app, no
+// database, no network.
 
 const THEME_SHEETS = [
   "theme.css",
@@ -27,16 +28,16 @@ const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, 
 const stripFontFace = (css: string): string => css.replace(/@font-face\s*\{[^}]*\}/g, "");
 
 const FONT_DECLARATION = /(?:font-family|font)\s*:[^;{}]+;/g;
-// Bare Display: neither the quoted 'Display Fallback' family nor font-display.
-const BARE_DISPLAY = /(?<!['"-\w])Display(?!['"-\w])/;
-// theme.css position: the fallback sits directly after Display.
-const UNIFIED_STACK = /Display,\s*["']Display Fallback["']/;
+// Bare Mona Sans: neither the quoted 'Mona Sans Fallback' family nor font-display.
+const BARE_MONA = /(?<!['"-\w])Mona Sans(?!['"-\w])/;
+// theme.css position: the fallback sits directly after Mona Sans.
+const UNIFIED_STACK = /Mona Sans,\s*["']Mona Sans Fallback["']/;
 const HEX_LITERAL = /#[0-9a-fA-F]{3,8}\b/g;
 const TOKEN_DECLARATION = /--font-display\s*:[^;{}]+;/g;
 
 const displayStacks = (css: string): string[] =>
   (stripFontFace(stripComments(css)).match(FONT_DECLARATION) ?? []).filter((declaration) =>
-    BARE_DISPLAY.test(declaration),
+    BARE_MONA.test(declaration),
   );
 
 const tokenDefinitions = (): string[] =>
@@ -44,8 +45,8 @@ const tokenDefinitions = (): string[] =>
     (css) => stripComments(css).match(TOKEN_DECLARATION) ?? [],
   );
 
-describe("unified Display fallback stacks", () => {
-  it("carries 'Display Fallback' directly after Display in every stack", () => {
+describe("unified Mona Sans fallback stacks", () => {
+  it("carries 'Mona Sans Fallback' directly after Mona Sans in every stack", () => {
     const violations: string[] = [];
     for (const entry of THEME_SHEETS) {
       for (const stack of displayStacks(sheet(entry))) {
@@ -67,7 +68,7 @@ describe("unified Display fallback stacks", () => {
     expect(unified.length).toBeGreaterThanOrEqual(minimum);
   });
 
-  it("finds every Display stack (the sweep is not vacuous)", () => {
+  it("finds every Mona Sans stack (the sweep is not vacuous)", () => {
     const total = THEME_SHEETS.reduce(
       (count, entry) => count + displayStacks(sheet(entry)).length,
       0,
@@ -81,9 +82,18 @@ describe("--font-display token", () => {
     expect(tokenDefinitions().length).toBeGreaterThanOrEqual(1);
   });
 
-  it("carries 'Display Fallback' directly after Display in every definition", () => {
-    const violations = tokenDefinitions().filter((declaration) => !UNIFIED_STACK.test(declaration));
-    expect(violations).toEqual([]);
+  it("carries the kit family without the local fallback in every definition", () => {
+    // The token is the kit literal verbatim: ci/check-ember-token-sync.mjs
+    // fails on any drift from vendor/design-kit/tokens.css, and the local()
+    // fallback chain is platform-specific, never vendored. The stacks above
+    // are where the fallback lives.
+    for (const definition of tokenDefinitions()) {
+      expect(definition).toContain("Mona Sans");
+    }
+    const withFallback = tokenDefinitions().filter((definition) =>
+      definition.includes("Mona Sans Fallback"),
+    );
+    expect(withFallback).toEqual([]);
   });
 });
 

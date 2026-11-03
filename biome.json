@@ -65,6 +65,11 @@
       "linter": { "enabled": false }
     },
     {
+      "includes": ["vendor/design-kit/**"],
+      "formatter": { "enabled": false },
+      "linter": { "enabled": false }
+    },
+    {
       "includes": [
         "test/import-audit.test.ts",
         "test/import-events-rsvps.test.ts",

@@ -75,8 +75,8 @@ const themeStylesheet = $derived(
     {@html leafCss ? `<style>${leafCss}</style>` : ""}
   {:else}
     <link rel="stylesheet" href="/styles.css" />
-    <link rel="preload" href="/fonts/display-latin-700.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
-    <!-- Kit token source is web/src/app.css (Tailwind v4 @theme, Open Lobby),
+    <link rel="preload" href="/fonts/mona-sans-latin-var.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
+    <!-- Kit token source is web/src/app.css (Tailwind v4 @theme, Ember Hours),
       not public/theme-tokens.css, which stays Hono-only outside the inlined
       leaf block above. -->
     <link rel="stylesheet" href="/theme.css" />
