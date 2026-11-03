@@ -232,7 +232,7 @@ test("missing, stale and edited artifacts each fail the check", () => {
         writeFileSync(file, `${good}\n/* edited */`);
         assert.throws(
           () => check(root),
-          new RegExp(`generated token drift: ${path.replace(/[.]/g, "\\.")}`),
+          { message: `generated token drift: ${path}` },
           `${path} edited`,
         );
         writeFileSync(file, "");
