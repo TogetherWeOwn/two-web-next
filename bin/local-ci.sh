@@ -214,6 +214,16 @@ fi
 
 for i in $(seq 1 "$shards"); do wait_postgres "$i"; done
 
+# Migrations carry the reviewed per-privilege runtime GRANTs to two_web_app
+# (ci/migration-runtime-rights.mjs), so the role must exist before
+# drizzle-kit migrate runs. Fresh tmpfs database: plain CREATE ROLE, NOLOGIN,
+# never a login or superuser grant; test-only, mirroring ci/db-migrate-selftest.mjs.
+step "create runtime role for migration grants"
+for i in $(seq 1 "$shards"); do
+  docker exec "$run_id-$i-pg" psql -U agent_test -d "$db" -v ON_ERROR_STOP=1 \
+    -c "CREATE ROLE two_web_app NOLOGIN" >/dev/null
+done
+
 step "apply migrations"
 pids=()
 for i in $(seq 1 "$shards"); do

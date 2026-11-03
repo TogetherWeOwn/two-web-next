@@ -34,4 +34,14 @@ ALTER TABLE "event_echo_members" ADD CONSTRAINT "event_echo_members_echo_id_even
 ALTER TABLE "event_echoes" ADD CONSTRAINT "event_echoes_event_id_events_id_fk" FOREIGN KEY ("event_id") REFERENCES "public"."events"("id") ON DELETE cascade ON UPDATE no action;--> statement-breakpoint
 CREATE INDEX "event_echo_members_user_id_idx" ON "event_echo_members" USING btree ("user_id");--> statement-breakpoint
 CREATE INDEX "event_echoes_event_key_idx" ON "event_echoes" USING btree ("event_key");--> statement-breakpoint
-CREATE INDEX "event_echoes_created_at_idx" ON "event_echoes" USING btree ("created_at");
+CREATE INDEX "event_echoes_created_at_idx" ON "event_echoes" USING btree ("created_at");--> statement-breakpoint
+GRANT INSERT ON TABLE public.event_echoes TO two_web_app;--> statement-breakpoint
+GRANT SELECT ON TABLE public.event_echoes TO two_web_app;--> statement-breakpoint
+GRANT UPDATE ON TABLE public.event_echoes TO two_web_app;--> statement-breakpoint
+GRANT DELETE ON TABLE public.event_echo_members TO two_web_app;--> statement-breakpoint
+GRANT INSERT ON TABLE public.event_echo_members TO two_web_app;--> statement-breakpoint
+GRANT SELECT ON TABLE public.event_echo_members TO two_web_app;--> statement-breakpoint
+GRANT SELECT ON SEQUENCE public.event_echoes_id_seq TO two_web_app;--> statement-breakpoint
+GRANT USAGE ON SEQUENCE public.event_echoes_id_seq TO two_web_app;--> statement-breakpoint
+GRANT SELECT ON SEQUENCE public.event_echo_members_id_seq TO two_web_app;--> statement-breakpoint
+GRANT USAGE ON SEQUENCE public.event_echo_members_id_seq TO two_web_app;

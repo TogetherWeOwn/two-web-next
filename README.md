@@ -140,6 +140,11 @@ export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
 unset LEGACY_DATABASE_URL
 export PGPASSWORD=
 export W1_AGENT_TESTDB=0
+# Migrations carry the reviewed runtime GRANTs to two_web_app
+# (ci/migration-runtime-rights.mjs), so the role must exist before migrating.
+# Once per cluster; NOLOGIN, test-only. Ignore the duplicate-object error on
+# repeat runs against the same cluster.
+psql "postgres://agent_test@agent-testdb:5432/postgres" -c "CREATE ROLE two_web_app NOLOGIN"
 npm run db:migrate    # apply tracked migrations to this run-owned test database
 npm run db:check      # validate migration history
 npm run format        # formatting only; no lint fixes or import reordering
@@ -153,7 +158,9 @@ Review generated SQL before applying it. Do not edit existing migrations.
 
 Always supply the test URL for full-suite SQL coverage. The DB-free lane
 (`env -u DATABASE_URL npm run check`) runs fixture-only checks; existing live
-suites skip when `DATABASE_URL` is unset. `test/review-p1-verify.test.ts` keeps
+suites skip when `DATABASE_URL` is unset, except
+`test/event-echo-render-acceptance.test.ts`, which fails closed without it so
+an unverified Echo record never reads as green. `test/review-p1-verify.test.ts` keeps
 its P1-3 refusal proofs offline. Featured-unpublish SQL proofs run under the
 pre-existing integration gate in `test/admin.test.ts`; the six registration
 and rendering proofs in `test/admin-featured-unpublish-acceptance.test.ts`
