@@ -10,6 +10,7 @@ import postgres from "postgres";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { queueExceptionClass } from "../jobs/queue-error";
 import { pgReconciliationStore, type ReconciliationStore } from "../jobs/reconciliation";
+import type { TxClient } from "../jobs/types";
 import type { Env } from "../env";
 
 /** Bounded operator reads: the surface stays a page, never a dump. */
@@ -25,7 +26,12 @@ export const RECONCILIATION_NOTE_MAX = 500;
  * disposable database. */
 export type ReconciliationDeps = {
   store?: ReconciliationStore;
-  audit?: (env: Env, actorId: string, idempotencyKey: string, resolution: string) => Promise<void>;
+  audit?: (
+    tx: TxClient,
+    actorId: string,
+    idempotencyKey: string,
+    resolution: string,
+  ) => Promise<void>;
 };
 
 type EnvWithReconciliationDeps = Env & { RECONCILIATION_DEPS?: ReconciliationDeps };
@@ -59,50 +65,45 @@ export async function reconciliationStoreFor(env: Env): Promise<{
 }
 
 /** Audit receipt for a manual reconcile: who stamped which key resolved, and
- * why. Append-only like every admin write; the row itself stays the evidence. */
+ * why. Append-only like every admin write; the row itself stays the evidence.
+ * Runs on the resolve transaction's client, never its own connection. */
 export async function recordReconciliationAccess(
-  env: Env,
+  tx: TxClient,
   actorId: string,
   idempotencyKey: string,
   resolution: string,
 ): Promise<void> {
-  const url = databaseUrl(env);
-  if (!url) throw new Error("no audit database configured");
-  const sql = postgres(url, {
-    ...databaseOptions,
-    connect_timeout: 2,
-    connection: { statement_timeout: 5000 },
-  });
-  try {
-    await sql`insert into activity_log
-      (log_name, description, subject_type, subject_id, causer_type, causer_id, event, properties)
-      values ('operations', 'bot-reconciliation.resolve', 'bot_reconciliation_intents', ${idempotencyKey},
-        'User', ${actorId}, 'resolve', ${sql.json({
-          resolution: { before: null, after: resolution },
-        })})`;
-  } finally {
-    await sql.end({ timeout: 1 });
-  }
+  await tx`insert into activity_log
+    (log_name, description, subject_type, subject_id, causer_type, causer_id, event, properties)
+    values ('operations', 'bot-reconciliation.resolve', 'bot_reconciliation_intents', ${idempotencyKey},
+      'User', ${actorId}, 'resolve', ${JSON.stringify({
+        resolution: { before: null, after: resolution },
+      })}::jsonb)`;
 }
 
-/** Refusal-safe wrapper: an unwritable trail refuses the resolve before the
- * row is stamped, so no resolve ever answers without a receipt. */
-export async function auditOrRefuse(
+/** Stamp the row resolved and write its receipt in one transaction. The
+ * receipt follows the conditional update, so a lost race or failed update
+ * leaves no receipt, and an unwritable trail rolls the stamp back (fail
+ * closed): no resolve ever answers without a receipt. */
+export async function resolveWithReceipt(
   env: Env,
+  store: ReconciliationStore,
   actorId: string,
   idempotencyKey: string,
-  resolution: string,
-): Promise<{ refused: true } | { refused: false }> {
+  note: string,
+): Promise<"resolved" | "unchanged" | "refused"> {
   const audit = depsFor(env).audit ?? recordReconciliationAccess;
   try {
-    await audit(env, actorId, idempotencyKey, resolution);
-    return { refused: false };
+    const row = await store.resolveStuck(idempotencyKey, { by: actorId, note }, new Date(), (tx) =>
+      audit(tx, actorId, idempotencyKey, note),
+    );
+    return row ? "resolved" : "unchanged";
   } catch (err) {
-    console.warn("Reconciliation audit failed; refusing the resolve.", {
+    console.warn("Reconciliation resolve failed; refusing the resolve.", {
       exception: queueExceptionClass(err),
       intent_key: typeof idempotencyKey === "string" ? "present" : "missing",
     });
-    return { refused: true };
+    return "refused";
   }
 }
 

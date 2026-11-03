@@ -1876,8 +1876,12 @@ immutable identity even if the event becomes past. Reconciliation selects those
 attempted recovery candidates independently of eligibility to start a new
 request, then checks their deadline and remaining budget before sending.
 
-Sync carriers (including waiting deliveries) settle their ledger and ACK at 6
-tries, before transport `max_retries: 10`. Internal-action carriers cap at 5.
+Sync carriers (including waiting deliveries) normally settle their ledger and ACK at 6
+tries, before transport `max_retries: 10`. A duplicate finding a live closed claim
+waits even at its carrier cap: `claim_started_at` gives the active owner 60 seconds
+(above the bounded bot request and result persistence) to finish, including its
+final request attempt. Aged abandoned claims may escalate to the operator surface;
+age never reopens retry eligibility. Internal-action carriers cap at 5.
 Sync requests independently persist `request_attempts` and `next_attempt_at`:
 claims durably set eligibility to null **before** bot I/O. Only a committed
 result can reopen that fence: backoff (`10,60,300,900,3600`) or a usable bot Retry-After
@@ -1975,6 +1979,27 @@ the original key and remaining budget. Proved in
 `test/reconciliation-consumer.test.ts`, `test/reconciliation-handlers.test.ts`
 and `test/reconciliation-admin.test.ts`; Postgres shape in
 `test/reconciliation-store.test.ts`.
+
+An Echo announcement can also stop after confirmed bot success if every bounded
+local confirmation write fails. Its same-key row has subject `echo:<id>` and
+`last_code = local_confirmation_pending`; this is a **local receipt marker**, not
+a bot failure code. No announcement body is retained. The consumer persists this
+record before acknowledging the exhausted carrier, and late deliveries cannot
+post again, even after the audit note is resolved. The Echo remains pending until
+local settlement is independently verified. Its existing row is not selected by
+the closing pass, so waiting for another close does not repair it.
+
+Recovery is local-only: the moderator checks the Discord message against the
+original key, records its evidence, and requests a separately authorized,
+reviewed maintenance action on that exact Echo row. If the original post is
+confirmed, that action performs the equivalent of `markEchoAnnounced` (sets
+`event_echoes.announcement_posted_at` and `updated_at` on the verified ID), then
+checks the member archive. If the post cannot be verified, leave the receipt
+pending. Do not enqueue, re-post, re-key, delete the Echo, or reset its queue
+budget. Only after verified settlement should the moderator resolve the same
+operator row with what was checked and done. The resolve form itself only writes
+the audit stamp and its activity receipt atomically; it does not repair the Echo.
+This procedure grants no live database or production-write authority.
 
 ## Backups and restore drill
 

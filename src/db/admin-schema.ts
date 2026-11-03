@@ -131,6 +131,7 @@ export const eventSyncAttempts = pgTable(
     state: text("state").notNull().default("pending"),
     requestAttempts: integer("request_attempts").notNull().default(0),
     nextAttemptAt: timestamp("next_attempt_at", { withTimezone: true }).defaultNow(),
+    claimStartedAt: timestamp("claim_started_at", { withTimezone: true }).defaultNow().notNull(),
     // Terminal-intent marker: a definitive refusal records its redacted reason
     // here while state stays pending, so the pending-slot unique index keeps
     // blocking successors until failSync commits the failed stamp.

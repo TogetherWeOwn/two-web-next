@@ -253,6 +253,13 @@
       "when": 1793729604383,
       "tag": "1035_bot-reconciliation-intents",
       "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1793746206808,
+      "tag": "1036_event-sync-claim-started",
+      "breakpoints": true
     }
   ]
 }

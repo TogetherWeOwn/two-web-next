@@ -42,7 +42,7 @@ import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
 import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./queue-redispatch";
 import {
-  auditOrRefuse,
+  resolveWithReceipt,
   RECONCILIATION_OPEN_LIMIT,
   RECONCILIATION_RESOLVED_LIMIT,
   reconciliationStoreFor,
@@ -1060,12 +1060,17 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
             />,
           );
         }
-        // The receipt is written before the row is stamped: a write that fails
+        // Stamp and receipt share one transaction: the receipt follows the
+        // conditional update (none for a lost race), and a failed write
         // refuses the resolve, so no resolve ever answers without a trail.
-        const audited = await auditOrRefuse(c.env, c.get("adminActor").id, key, note);
-        if (audited.refused) return writeUnavailable(c);
-        const resolved = await handle.store.resolveStuck(key, { by: c.get("adminActor").id, note });
-        if (!resolved) return c.redirect(`/admin/reconciliation/${key}`, 303);
+        const outcome = await resolveWithReceipt(
+          c.env,
+          handle.store,
+          c.get("adminActor").id,
+          key,
+          note,
+        );
+        if (outcome === "refused") return writeUnavailable(c);
         return c.redirect(`/admin/reconciliation/${key}`, 303);
       } catch {
         return writeUnavailable(c);

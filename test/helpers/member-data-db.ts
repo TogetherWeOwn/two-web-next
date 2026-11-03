@@ -101,8 +101,18 @@ export async function createMemberDataFixture(raw: string, opts: { max?: number 
     await client.begin(async (tx) => {
       for (const migration of migrations)
         for (const statement of migration.sql) {
-          if (statement.trim())
-            await tx.unsafe(statement.replaceAll('"public".', `"${schemaName}".`));
+          if (statement.trim()) {
+            // Drizzle emits quoted FK references; hand-written per-privilege
+            // GRANTs use unquoted public. Both must target only our fixture,
+            // including when CI's public schema has never been migrated.
+            const scoped = statement
+              .replaceAll('"public".', `"${schemaName}".`)
+              .replace(
+                /^(\s*GRANT\s+[A-Z, ]+\s+ON\s+(?:TABLE|SEQUENCE)\s+)public\./i,
+                `$1"${schemaName}".`,
+              );
+            await tx.unsafe(scoped);
+          }
         }
     });
   } catch (error) {

@@ -534,7 +534,8 @@ describe("consumer Echo confirm gating", () => {
     await result;
   });
 
-  it("fails terminally when the confirm rejects past the announcement budget", async () => {
+  it("persists an Echo local-confirmation stop before retiring the exhausted carrier", async () => {
+    const { store, rows: intents } = memReconciliation();
     const { ledger, rows } = memLedger();
     rows.set("j9", { state: "pending" });
     const m = msg({ ...announced, jobId: "j9" }, CALL_INTERNAL_ACTION.tries);
@@ -545,16 +546,88 @@ describe("consumer Echo confirm gating", () => {
         events: memStore(),
         lock: memLock(),
         ledger,
+        reconciliation: store,
         onAnnouncementConfirmed: async () => {
           throw new Error("confirm store down");
         },
       },
     );
+    expect(intents.get(KEY)).toMatchObject({
+      idempotencyKey: KEY,
+      verb: "announcement.post",
+      subject: "echo:42",
+      lastCode: "local_confirmation_pending",
+      resolvedAt: null,
+    });
     expect(m.acked).toBe(true);
     expect(rows.get("j9")).toMatchObject({
       state: "failed",
       reason: "announcement confirm unavailable",
     });
+  });
+
+  it("leaves exhausted Echo confirmation unsettled if its operator record cannot commit", async () => {
+    capture();
+    const { store } = memReconciliation();
+    store.recordStuck = vi.fn(async () => {
+      throw new Error("operator store unavailable");
+    });
+    const { ledger, rows } = memLedger();
+    const m = msg({ ...announced, jobId: "j9" }, CALL_INTERNAL_ACTION.tries);
+    await expect(
+      consume(
+        { messages: [m] },
+        {
+          bot: okBot,
+          events: memStore(),
+          lock: memLock(),
+          ledger,
+          reconciliation: store,
+          onAnnouncementConfirmed: async () => {
+            throw new Error("confirm store down");
+          },
+        },
+      ),
+    ).rejects.toThrow("operator store unavailable");
+    expect(m.acked).toBe(false);
+    expect(rows.get("j9")).toEqual({ state: "reserved" });
+  });
+
+  it("never reposts an Echo with a persisted local-confirmation stop, even after resolution", async () => {
+    capture();
+    const { store } = memReconciliation();
+    await store.recordStuck(
+      stuckIntent({
+        idempotencyKey: KEY,
+        verb: "announcement.post",
+        subject: "echo:42",
+        lastCode: "local_confirmation_pending",
+        lastStatus: null,
+        lastRequestId: null,
+        attempts: CALL_INTERNAL_ACTION.tries,
+      }),
+    );
+    const bot = { ...okBot, postAnnouncement: vi.fn(okBot.postAnnouncement) };
+    const confirm = vi.fn(async () => {});
+    const { ledger } = memLedger();
+    for (const resolved of [false, true]) {
+      if (resolved) await store.resolveStuck(KEY, { by: "moderator", note: "locally settled" });
+      const m = msg({ ...announced }, CALL_INTERNAL_ACTION.tries + 1);
+      await consume(
+        { messages: [m] },
+        {
+          bot,
+          events: memStore(),
+          lock: memLock(),
+          ledger,
+          reconciliation: store,
+          onAnnouncementConfirmed: confirm,
+        },
+      );
+      expect(m.acked).toBe(true);
+    }
+    expect(bot.postAnnouncement).not.toHaveBeenCalled();
+    expect(confirm).not.toHaveBeenCalled();
   });
 
   it("never claims delivery for a stuck announcement", async () => {

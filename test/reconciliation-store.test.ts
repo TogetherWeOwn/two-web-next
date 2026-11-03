@@ -9,6 +9,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pgReconciliationStore, stuckIntent } from "../src/jobs/reconciliation";
 import { pgEventStore } from "../src/jobs/events";
 import type { ReconciliationStore } from "../src/jobs/reconciliation";
+import type { TxClient } from "../src/jobs/types";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
 const KEY_A = "11111111-1111-4111-8111-111111111111";
@@ -93,6 +94,41 @@ describe("reconciliation pg store", () => {
     expect((await store.listResolved(10)).map((r) => r.idempotencyKey)).toEqual([KEY_A]);
     expect(await store.listOpen(0)).toEqual([]);
     expect(await store.listResolved(-1)).toEqual([]);
+  });
+
+  it("resolve receipt commits with the stamp, and never exists for a lost or failed stamp", async () => {
+    const receipt = async (tx: TxClient, row: { idempotencyKey: string }) => {
+      await tx`insert into activity_log (log_name, description, subject_type, subject_id, event)
+        values ('operations', 'bot-reconciliation.resolve', 'bot_reconciliation_intents',
+          ${row.idempotencyKey}, 'resolve')`;
+    };
+    const receipts = async () =>
+      (
+        await sql`select count(*)::int as n from activity_log
+        where description = 'bot-reconciliation.resolve' and subject_id = ${KEY_C}`
+      )[0]!.n as number;
+    await sql`delete from activity_log where description = 'bot-reconciliation.resolve'`;
+    await store.recordStuck(intentFor(KEY_C));
+    // A receipt that throws rolls the stamp back: row stays open, no receipt.
+    await expect(
+      store.resolveStuck(KEY_C, { by: "mod", note: "n" }, new Date(), async (tx, row) => {
+        await receipt(tx, row);
+        throw new Error("trail down");
+      }),
+    ).rejects.toThrow("trail down");
+    expect((await store.getStuck(KEY_C))?.resolvedAt).toBeNull();
+    expect(await receipts()).toBe(0);
+    // The winning resolve commits stamp and receipt together.
+    expect(
+      await store.resolveStuck(KEY_C, { by: "mod", note: "n" }, new Date(), receipt),
+    ).not.toBeNull();
+    expect(await receipts()).toBe(1);
+    // A later (concurrent-loser) resolve matches no open row: no second receipt.
+    expect(
+      await store.resolveStuck(KEY_C, { by: "mod2", note: "m" }, new Date(), receipt),
+    ).toBeNull();
+    expect(await receipts()).toBe(1);
+    expect((await store.getStuck(KEY_C))?.resolvedBy).toBe("mod");
   });
 
   it("resolve stamps the row and never deletes it; unknown and repeat resolves return null", async () => {

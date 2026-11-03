@@ -36,6 +36,9 @@ export type Outcome =
 export const uniqueKey = (eventKey: string) => `sync-event:${eventKey}`;
 
 const LOCK_TIMEOUT_MS = 2000;
+// Above the 10s bot deadline plus bounded result persistence. Expiry permits
+// operator escalation only, never a new bot call or a fresh idempotency key.
+export const SYNC_CLAIM_ACTIVE_MS = 60_000;
 /**
  * Per-op bound for the producer's lock-acquire and queue-send.
  * Every neighboring op races a deadline; acquire and send were awaited bare,
@@ -228,6 +231,16 @@ export async function handleSyncEvent(
         Math.max(attempts, prepared.requestAttempts),
       ),
     };
+  }
+  if (
+    !prepared.nextAttemptAt &&
+    prepared.claimStartedAt &&
+    now().getTime() - prepared.claimStartedAt.getTime() < SYNC_CLAIM_ACTIVE_MS
+  ) {
+    // Even an exhausted duplicate must leave the active owner time to commit
+    // its result, including on the final request attempt. Keep this carrier
+    // available to surface an abandoned claim after the bounded grace period.
+    return { retryInSeconds: SYNC_EVENT.uniqueForSeconds };
   }
   if (
     prepared.requestAttempts >= SYNC_EVENT.tries ||

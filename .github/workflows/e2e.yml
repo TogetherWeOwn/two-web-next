@@ -184,6 +184,8 @@ jobs:
       - run: npm ci --include=dev --no-audit --no-fund
       - name: Verify CI isolation
         run: node e2e/prepare.mjs
+      - name: Create runtime role for migration grants
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE two_web_app NOLOGIN"
       - name: Apply migrations to disposable Postgres
         run: npm run db:migrate
       - name: Seed journey fixtures

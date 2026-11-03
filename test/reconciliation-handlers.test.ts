@@ -9,7 +9,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { dispatchAnnouncement, handleCallInternalAction } from "../src/jobs/call-internal-action";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
-import { handleSyncEvent } from "../src/jobs/sync-event";
+import { handleSyncEvent, SYNC_CLAIM_ACTIVE_MS } from "../src/jobs/sync-event";
 import { BotTransportError } from "../src/jobs/types";
 import type { BotClient, BotFailure, EventStore, SyncAttempt } from "../src/jobs/types";
 
@@ -261,6 +261,64 @@ describe("sync-event handler stuck intents", () => {
     });
     expect("stuck" in outcome).toBe(false);
   });
+
+  it.each([0, SYNC_EVENT.tries - 1])(
+    "does not stop a live same-key claim when a duplicate carrier is exhausted (%s prior requests)",
+    async (priorRequests) => {
+      const at = new Date("2026-11-03T12:00:00Z");
+      let answer!: (value: BotFailure) => void;
+      let started!: () => void;
+      const entered = new Promise<void>((resolve) => (started = resolve));
+      const bot = {
+        upsertEvent: vi.fn(() => {
+          started();
+          return new Promise<BotFailure>((resolve) => (answer = resolve));
+        }),
+      } as unknown as BotClient;
+      const { store } = syncStore(syncAttempt(), priorRequests);
+      const claim = store.claimSync;
+      store.claimSync = async (...args) => {
+        const active = await claim(...args);
+        if (active) Object.assign(active, { claimStartedAt: at });
+        return active;
+      };
+      const deps = { bot, events: store, now: () => at };
+      const message = { eventKey: EVENT_KEY, idempotencyKey: KEY };
+      const active = handleSyncEvent(message, 1, deps);
+      await entered;
+      const duplicate = await handleSyncEvent(message, SYNC_EVENT.tries, deps);
+      expect(duplicate).toHaveProperty("retryInSeconds");
+      expect(duplicate).not.toHaveProperty("stuck");
+      expect(duplicate).not.toHaveProperty("failed");
+      expect(bot.upsertEvent).toHaveBeenCalledTimes(1);
+      answer(failure({ code: "in_progress", status: 409 }));
+      const outcome = await active;
+      expect(outcome).toHaveProperty(priorRequests ? "stuck" : "retryInSeconds");
+    },
+  );
+
+  it.each([SYNC_CLAIM_ACTIVE_MS - 1, SYNC_CLAIM_ACTIVE_MS])(
+    "waits only for the bounded active-claim grace (%s ms old), never reopening a claim",
+    async (age) => {
+      const at = new Date("2026-11-03T12:00:00Z");
+      const attempt = syncAttempt({
+        nextAttemptAt: null,
+        claimStartedAt: new Date(at.getTime() - age),
+      });
+      const { store, deferred } = syncStore(attempt, 1);
+      const { bot, seen } = keyedBot(failure());
+      const outcome = await handleSyncEvent(
+        { eventKey: EVENT_KEY, idempotencyKey: KEY },
+        SYNC_EVENT.tries,
+        { bot, events: store, now: () => at },
+      );
+      if (age < SYNC_CLAIM_ACTIVE_MS) expect(outcome).toHaveProperty("retryInSeconds");
+      else expect(outcome).toHaveProperty("stuck.idempotencyKey", KEY);
+      expect(attempt.nextAttemptAt).toBeNull();
+      expect(deferred).toEqual([]);
+      expect(seen).toEqual([]);
+    },
+  );
 
   it("escalates a spent request budget with the same key", async () => {
     const { bot, seen } = keyedBot(failure());

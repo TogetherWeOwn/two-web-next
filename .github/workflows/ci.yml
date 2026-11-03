@@ -241,6 +241,8 @@ jobs:
           nohup setsid socat TCP-LISTEN:5432,bind=127.0.0.1,reuseaddr,fork TCP:postgres:5432 >/dev/null 2>&1 &
           for i in $(seq 1 30); do pg_isready -q -h 127.0.0.1 -U postgres && exit 0; sleep 1; done
           exit 1
+      - name: Create runtime role for isolated fixture grants
+        run: psql "$DATABASE_URL" -v ON_ERROR_STOP=1 -c "CREATE ROLE two_web_app NOLOGIN"
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24

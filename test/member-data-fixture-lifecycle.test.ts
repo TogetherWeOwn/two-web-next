@@ -50,6 +50,28 @@ it("replays every nonempty canonical statement in order in one schema-scoped tra
   }
 });
 
+it("keeps unquoted runtime table and sequence grants inside the owned schema", async () => {
+  mocks.migrations.mockReturnValueOnce([
+    {
+      sql: [
+        "GRANT INSERT ON TABLE public.event_echoes TO two_web_app;",
+        "GRANT USAGE ON SEQUENCE public.event_echoes_id_seq TO two_web_app;",
+        "GRANT SELECT ON TABLE public.bot_reconciliation_intents TO two_web_app;",
+      ],
+    },
+  ]);
+  const fixture = await createMemberDataFixture(url);
+  try {
+    expect(mocks.tx.unsafe.mock.calls).toEqual([
+      [`GRANT INSERT ON TABLE "${fixture.schemaName}".event_echoes TO two_web_app;`],
+      [`GRANT USAGE ON SEQUENCE "${fixture.schemaName}".event_echoes_id_seq TO two_web_app;`],
+      [`GRANT SELECT ON TABLE "${fixture.schemaName}".bot_reconciliation_intents TO two_web_app;`],
+    ]);
+  } finally {
+    await fixture.dispose();
+  }
+});
+
 it("bounds administrative DDL without imposing a timeout on the scoped test workload", async () => {
   const fixture = await createMemberDataFixture(url);
   try {

@@ -1195,6 +1195,73 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     expect(bot.upsertEvent).toHaveBeenCalledOnce();
   });
 
+  it.each([0, 5])(
+    "an exhausted duplicate preserves the live PostgreSQL claim (%s prior requests)",
+    async (priorRequests) => {
+      await seed();
+      await enqueueEventSync(env, eventKey, "published");
+      const original = sent[0]!.body;
+      const at = new Date("2099-01-01T00:00:00Z");
+      const events = pgEventStore(sql);
+      await events.prepareSync(eventKey, original.idempotencyKey, at);
+      await sql`update event_sync_attempts set request_attempts = ${priorRequests}`;
+      let finish!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const bot = botDouble();
+      bot.upsertEvent.mockImplementationOnce(async () => {
+        entered();
+        await held;
+        return {
+          ok: false,
+          code: "in_progress",
+          status: 409,
+          requestId: null,
+          message: "",
+          retryable: true,
+          retryAfterSeconds: 300,
+        };
+      });
+      const dependencies = { ...deps(bot), now: () => at };
+      const first = delivery(original);
+      const consuming = consume({ messages: [first] }, dependencies);
+      await started;
+      try {
+        const duplicate = delivery(original, 6);
+        await consume({ messages: [duplicate] }, dependencies);
+        expect(duplicate.ack).not.toHaveBeenCalled();
+        expect(duplicate.retry).toHaveBeenCalledWith({ delaySeconds: 300 });
+        expect(await dependencies.reconciliation.getStuck(original.idempotencyKey)).toBeNull();
+        expect(await events.pendingSync(eventKey)).toMatchObject({
+          claimStartedAt: at,
+          nextAttemptAt: null,
+          requestAttempts: priorRequests + 1,
+        });
+      } finally {
+        finish();
+        await consuming;
+      }
+      expect(bot.upsertEvent).toHaveBeenCalledOnce();
+      if (priorRequests === 0) {
+        expect(await events.pendingSync(eventKey)).toMatchObject({
+          nextAttemptAt: new Date(at.getTime() + 300_000),
+          requestAttempts: 1,
+        });
+        expect(await dependencies.reconciliation.getStuck(original.idempotencyKey)).toBeNull();
+      } else {
+        expect(await dependencies.reconciliation.getStuck(original.idempotencyKey)).toMatchObject({
+          lastCode: "in_progress",
+          idempotencyKey: original.idempotencyKey,
+        });
+      }
+    },
+  );
+
   it("recurrence materialization shares the flight transaction without changing native job parsers", async () => {
     await seed();
     await sql`update events set recurrence_frequency = 'weekly', recurrence_count = 3, recurrence_index = 1`;

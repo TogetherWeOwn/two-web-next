@@ -13,9 +13,9 @@ import { adminApp } from "../src/admin/routes";
 import { sameOrigin } from "../src/same-origin";
 import { createMemorySessionStore } from "../src/sessions";
 import type { Db } from "../src/db/index";
-import type { Env } from "../src/env";
 import type { ReconciliationStore, StuckIntentRecord } from "../src/jobs/reconciliation";
 import { stuckIntent } from "../src/jobs/reconciliation";
+import type { TxClient } from "../src/jobs/types";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
 
 const KEY = "11111111-1111-4111-8111-111111111111";
@@ -43,6 +43,8 @@ function record(over: Partial<StuckIntentRecord> = {}): StuckIntentRecord {
   };
 }
 
+const txDouble = (async () => []) as unknown as TxClient;
+
 /** In-memory operator surface double. */
 function memStore(seed: StuckIntentRecord[] = []) {
   const rows = new Map(seed.map((r) => [r.idempotencyKey, r]));
@@ -62,7 +64,9 @@ function memStore(seed: StuckIntentRecord[] = []) {
     listOpen: async () => [...rows.values()].filter((r) => !r.resolvedAt),
     listResolved: async () => [...rows.values()].filter((r) => !!r.resolvedAt),
     getStuck: async (key) => rows.get(key) ?? null,
-    resolveStuck: async (key, resolution) => {
+    // Mirrors the pg store: the receipt runs only after a successful
+    // conditional stamp, and a throwing receipt rolls the stamp back.
+    resolveStuck: async (key, resolution, _now, receipt) => {
       const row = rows.get(key);
       if (!row || row.resolvedAt) return null;
       const resolved = {
@@ -71,6 +75,7 @@ function memStore(seed: StuckIntentRecord[] = []) {
         resolvedBy: resolution.by,
         resolution: resolution.note,
       };
+      await receipt?.(txDouble, resolved);
       rows.set(key, resolved);
       return resolved;
     },
@@ -92,7 +97,7 @@ const db = {
 
 async function mounted(
   store: ReconciliationStore,
-  audit: (env: Env, actorId: string, key: string, note: string) => Promise<void>,
+  audit: (tx: TxClient, actorId: string, key: string, note: string) => Promise<void>,
 ) {
   const sessions = createMemorySessionStore();
   const cookie = await cookieFor(sessions, MODERATOR);
@@ -239,7 +244,7 @@ describe("reconciliation resolve", () => {
   it("stamps the row on a valid note: audit first, then 303 to the detail", async () => {
     const audits: { actorId: string; key: string; note: string }[] = [];
     const { store } = memStore([record()]);
-    const { app, cookie, bindings } = await mounted(store, async (_e, actorId, key, note) => {
+    const { app, cookie, bindings } = await mounted(store, async (_tx, actorId, key, note) => {
       audits.push({ actorId, key, note });
     });
     const res = await app.request(
@@ -306,6 +311,41 @@ describe("reconciliation resolve", () => {
       bindings,
     );
     expect(res.status).toBe(503);
+    expect((await store.getStuck(KEY))?.resolvedAt).toBeNull();
+  });
+
+  it("writes no receipt when the conditional stamp loses a concurrent resolution", async () => {
+    const audits: unknown[] = [];
+    const { store: base } = memStore([record()]);
+    // The row reads open, then another moderator resolves it before our stamp.
+    const store: ReconciliationStore = { ...base, resolveStuck: async () => null };
+    const { app, cookie, bindings } = await mounted(store, async () => void audits.push(1));
+    const res = await app.request(
+      `/admin/reconciliation/${KEY}/resolve`,
+      post(cookie, { resolution: "checked Discord" }),
+      bindings,
+    );
+    expect(res.status).toBe(303);
+    expect(audits).toEqual([]);
+  });
+
+  it("refuses with 503 and keeps the row open when the stamp itself fails", async () => {
+    const audits: unknown[] = [];
+    const { store: base } = memStore([record()]);
+    const store: ReconciliationStore = {
+      ...base,
+      resolveStuck: async () => {
+        throw new Error("update failed");
+      },
+    };
+    const { app, cookie, bindings } = await mounted(store, async () => void audits.push(1));
+    const res = await app.request(
+      `/admin/reconciliation/${KEY}/resolve`,
+      post(cookie, { resolution: "checked Discord" }),
+      bindings,
+    );
+    expect(res.status).toBe(503);
+    expect(audits).toEqual([]);
     expect((await store.getStuck(KEY))?.resolvedAt).toBeNull();
   });
 

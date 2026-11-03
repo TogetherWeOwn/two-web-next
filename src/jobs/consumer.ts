@@ -5,7 +5,7 @@ import { CALL_INTERNAL_ACTION, SYNC_EVENT, backoffFor } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
 import { queueExceptionClass, sanitizeQueueCode, sanitizeQueueScope } from "./queue-error";
-import type { ReconciliationStore } from "./reconciliation";
+import { stuckIntent, type ReconciliationStore } from "./reconciliation";
 import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
@@ -452,6 +452,26 @@ export async function consume(
       } catch (e) {
         console.error("announcement confirm failed", { exception: queueExceptionClass(e) });
         if (m.attempts >= JOBS.announcement.tries) {
+          // Bot success is known, but its local receipt is not committed. Keep
+          // a same-key operator record before retiring the carrier; late
+          // deliveries stop at the lookup above instead of posting again.
+          const store = deps.reconciliation;
+          if (!store) throw new Error("reconciliation store missing for Echo confirmation");
+          await requiredOp(
+            store.recordStuck(
+              stuckIntent({
+                idempotencyKey: body.idempotencyKey,
+                verb: "announcement.post",
+                subject: `echo:${body.echoId}`,
+                lastCode: "local_confirmation_pending",
+                lastStatus: null,
+                lastRequestId: null,
+                attempts: m.attempts,
+              }),
+              deps.now?.() ?? new Date(),
+            ),
+            "reconciliation store timed out",
+          );
           const reason = "announcement confirm unavailable";
           alertFailing(body.kind, m.attempts, reason, { requestId });
           if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, reason));

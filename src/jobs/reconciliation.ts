@@ -121,7 +121,7 @@ export type StuckIntent = {
   verb: KeyedMutationVerb;
   /** Scalar only: event_key, channel_key, or member scalar. Never a DM body. */
   subject: string;
-  /** Last wire outcome; nulls when no wire answer was ever obtained (transport loss). */
+  /** Last wire code, or local_confirmation_pending after bot success but a lost local Echo receipt. */
   lastCode: string | null;
   lastStatus: number | null;
   lastRequestId: string | null;
@@ -189,11 +189,17 @@ export interface ReconciliationStore {
    * Reconcile by hand: stamps the open row resolved with the moderator and
    * their note. Returns null when the key is unknown or already resolved.
    * Never deletes: the row stays as the audit evidence.
+   *
+   * `receipt`, when given, runs in the SAME transaction and only after the
+   * conditional update matched the open row: a lost race never runs it, and a
+   * throw rolls the stamp back and rejects, so a receipt and a stamp exist
+   * together or not at all.
    */
   resolveStuck(
     idempotencyKey: string,
     resolution: { by: string; note: string },
     now?: Date,
+    receipt?: (tx: TxClient, record: StuckIntentRecord) => Promise<void>,
   ): Promise<StuckIntentRecord | null>;
 }
 
@@ -313,7 +319,7 @@ export function pgReconciliationStore(
         return row ? recordFrom(row) : null;
       });
     },
-    async resolveStuck(idempotencyKey, resolution, now = new Date()) {
+    async resolveStuck(idempotencyKey, resolution, now = new Date(), receipt) {
       if (typeof idempotencyKey !== "string" || !UUID_RE.test(idempotencyKey)) return null;
       const by = resolution.by.trim().slice(0, 200);
       const note = resolution.note.trim();
@@ -323,7 +329,10 @@ export function pgReconciliationStore(
           set resolved_at = ${now}, resolved_by = ${by}, resolution = ${note}
           where idempotency_key = ${idempotencyKey}::uuid and resolved_at is null
           returning *`) as unknown as StuckRow[];
-        return row ? recordFrom(row) : null;
+        if (!row) return null;
+        const record = recordFrom(row);
+        await receipt?.(tx, record);
+        return record;
       });
     },
   };
