@@ -95,6 +95,13 @@ app.get("/fixture/:surface/:mode", async (c) => {
         return [];
       }
       if (!fields?.length) return []; // fixed timeouts / empty self waitlist
+      // Frozen Echoes are classified reads with their own suite; the memory
+      // fallthrough would build null echo rows that crash window parsing.
+      if (
+        statement.includes('from "event_echoes"') ||
+        statement.includes('from "event_echo_members"')
+      )
+        return [];
       if (
         statement.includes('from "event_search_logs"') ||
         statement.includes('from "featured_contents"')

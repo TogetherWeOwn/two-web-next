@@ -20,6 +20,7 @@ import {
 import { discordEventsSource } from "./discord-transients";
 import { listPast, normalizePastPage } from "./reads";
 import { matchQuery } from "./search-log";
+import { mapEchoesByEvent, type EchoRow } from "./echoes";
 import { EventsCalendarPage, EventsSearchTooLongPage, PastEventsPage } from "./pages";
 import { eventsUnavailable, publicReadGuard, type App, type SessionReader } from "./routes-shared";
 
@@ -273,6 +274,18 @@ export function registerCalendarRoutes(
     // this archive render awaits its read must stop stale bytes settling.
     const pastGen = pastSource ? anonCacheGeneration() : 0;
     const { rows, hasMore, totalPages } = await listPast(db, page, new Date(), q);
+    // Frozen Echo rows for the rendered page (public counts only): a failed
+    // lookup fails open to no records rather than 503ing the archive; the
+    // shared entry still settles, so recovery converges at the TTL.
+    let echoRows: Map<number, EchoRow>;
+    try {
+      echoRows = await mapEchoesByEvent(
+        db,
+        rows.map((row) => row.id),
+      );
+    } catch {
+      echoRows = new Map();
+    }
     c.header("cache-control", input.searching ? "private, no-store" : "public, max-age=300");
     // Browsing renders are public and shared, like the Kit twin: name the
     // Cookie variance so shared caches key anonymous and signed-in shells
@@ -286,6 +299,7 @@ export function registerCalendarRoutes(
         totalPages={totalPages}
         appUrl={c.env.APP_URL}
         q={q ?? ""}
+        echoes={echoRows}
       />,
     );
     // Buffer before the final generation comparison (see /events above): a

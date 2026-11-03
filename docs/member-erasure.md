@@ -115,6 +115,15 @@ For ONE Discord id, in one transaction:
 | `web_sessions` | `user_id` (this signs the member out everywhere) |
 | `web_session_grace` | `user_id` (retired predecessor identity and bearer hashes) |
 | `join_attempts` | `discord_id` |
+| `event_echo_members` | `user_id` (the member's own Echo played-minutes only) |
+
+Erasure deletes the member's `event_echo_members` rows and keeps the frozen
+`event_echoes` aggregates: the counts are the published attendance record
+(bot-live-voice-contract §4), not member data, so they stand after the
+member's own minutes are gone — like `events` rows surviving the RSVP
+deletion. The disposable-Postgres proof in `test/member-erasure.test.ts`
+seeds one Echo attendance row per member and checks it deletes with the
+member while the other member's row survives.
 
 The output counts carry one key per table: `web_sessions` counts live
 session rows and `web_session_grace` counts retired predecessor records, so a

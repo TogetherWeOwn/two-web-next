@@ -106,6 +106,10 @@ describe.skipIf(!process.env.DATABASE_URL)("homepage counts (test container)", (
       // Past-zones probe (timezone-only select): this fixture holds a single
       // future event, so there are no past zones.
       if (query.includes('"timezone"') && !query.includes('"title"')) return { rows: [] };
+      // Frozen Echoes live in their own acceptance suite; the band stays
+      // absent here so the counts/degrade pins keep their scope.
+      if (query.includes('from "event_echoes"') || query.includes('from "event_echo_members"'))
+        return { rows: [] };
       if (query.includes('from "events"'))
         return {
           rows: [

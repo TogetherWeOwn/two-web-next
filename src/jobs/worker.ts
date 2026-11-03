@@ -1,5 +1,5 @@
 import postgres from "postgres";
-import { alertScheduledFailing, type ScheduledFailingJob } from "../alerts";
+import { alertScheduledFailing, exceptionClass, type ScheduledFailingJob } from "../alerts";
 import { createBotClient } from "../bot/client";
 import type { Env, JobsEnv } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
@@ -15,6 +15,7 @@ import {
   type ReconcilePreparation,
 } from "./cron";
 import { consume } from "./consumer";
+import { closeEventEchoes } from "./echo-close";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
 import type {
@@ -287,6 +288,25 @@ export async function handleScheduled(
         });
         const failed = (result as { failed?: unknown }).failed;
         if (typeof failed === "number" && failed > 0) reconcilePartialFailures = failed;
+        // Event Echoes ride the reconcile pass (Living Lobby 7,
+        // bot-live-voice-contract §4): published events whose bot window
+        // closed with no Echo yet are pulled and written, then posted via
+        // announcement.post. Contained below so an Echo-side failure never
+        // fails the reconcile pass it rides — the next pass retries.
+        try {
+          const echo = await closeEventEchoes({ env, sql: dispatchClient });
+          if (echo.written > 0 || echo.announced > 0 || echo.pending.length > 0)
+            console.info("Event Echo pass completed.", {
+              checked: echo.checked,
+              written: echo.written,
+              announced: echo.announced,
+              pending: echo.pending.length,
+            });
+        } catch (err) {
+          console.warn("Event Echo pass failed; the next pass retries.", {
+            error_class: exceptionClass(err),
+          });
+        }
         return result;
       },
       prune: async (db) => {

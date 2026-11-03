@@ -140,8 +140,8 @@ it("CONTROL U2.4/U2.6 Hono: no added server reads, writes, network or cache-vary
   } as unknown as Env;
   const response = await app.request(schedulePath, {}, env);
   expect(response.status).toBe(200);
-  // Existing guest route: event + two aggregate counts + two neighbors + related.
-  expect(statements).toHaveLength(6);
+  // Existing guest route: event + two aggregate counts + two neighbors + related + echo.
+  expect(statements).toHaveLength(7);
   expect(statements.every((sql) => /^select\b/i.test(sql))).toBe(true);
   expect(response.headers.get("vary")).toMatch(/cookie/i);
   expect(response.headers.get("cache-control")).toMatch(/no-store/i);

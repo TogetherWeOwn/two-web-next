@@ -1,12 +1,17 @@
 import type { FC } from "hono/jsx";
 import type { Counts } from "../counts";
 import type { Session } from "../env";
+import type { HomeEchoItem } from "../home-cache";
+import { echoShortLine } from "../events/echoes";
 import type { HomeUpcomingRow } from "../events/reads";
 import { groupTeaserEvents } from "../events/teaser-groups";
 import type { VisibleFeatured } from "../featured";
 import { FALLBACK_RANKS } from "../home-copy";
 import { inviteDestination } from "../invite";
 import {
+  ECHO_BAND_TESTID,
+  ECHO_CARD_TESTID,
+  ECHO_RECORD_TESTID,
   SPOTS_LEFT_TESTID,
   cardTimeLabel,
   goingCountText,
@@ -38,6 +43,8 @@ export const Home: FC<{
   eventsUnavailable: boolean;
   featured: VisibleFeatured[];
   imageHosts?: string;
+  /** Latest frozen Echoes (counts only); empty renders no band (flag-off honest state). */
+  echoes?: HomeEchoItem[];
 }> = ({
   session,
   notice,
@@ -50,6 +57,7 @@ export const Home: FC<{
   eventsUnavailable,
   featured,
   imageHosts,
+  echoes = [],
 }) => {
   const inviteUrl = inviteDestination(configuredInviteUrl);
   // Site identities for AI consumers: stable Organization + WebSite @ids.
@@ -312,6 +320,45 @@ export const Home: FC<{
             </p>
           ) : null}
         </section>
+        {echoes.length > 0 ? (
+          <section
+            // Reuses the notice panel: the homepage inlines its whole critical
+            // bundle, and the LCP weight ratchets leave no room for a bespoke
+            // band skin. Cream band, card rhythm, zero new CSS bytes.
+            class="notice"
+            aria-labelledby="echoes-heading"
+            data-testid={ECHO_BAND_TESTID}
+          >
+            <p class="strap">Last time, as the bot recorded it</p>
+            <h2 id="echoes-heading">Fresh from the lobby</h2>
+            <ul class="facts home-events">
+              {echoes.map((echo) => (
+                <li class="card" data-testid={ECHO_CARD_TESTID} key={echo.eventKey}>
+                  <a class="home-event-link" href={`/e/${encodeURIComponent(echo.eventKey)}`}>
+                    <p>
+                      <time datetime={echo.windowEndsAt}>
+                        {new Date(echo.windowEndsAt).toLocaleDateString("en-GB", {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                        })}
+                      </time>
+                    </p>
+                    <h3>{echo.eventTitle}</h3>
+                    <p>{echoShortLine(echo)}</p>
+                    {echo.headline ? <p>{echo.headline}</p> : null}
+                    <p data-testid={ECHO_RECORD_TESTID}>{echo.label}</p>
+                  </a>
+                </li>
+              ))}
+            </ul>
+            <p>
+              <a href="/events/past">
+                Browse the archive <span aria-hidden="true">→</span>
+              </a>
+            </p>
+          </section>
+        ) : null}
       </main>
       <script
         type="application/ld+json"

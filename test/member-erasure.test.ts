@@ -1,6 +1,6 @@
 // Member erasure (TOG-12548). Proves the operator command backs the
 // published deletion promise: dry-run writes nothing, apply removes exactly
-// one member's rows across all six tables, re-apply is a no-op, and a
+// one member's rows across all seven tables, re-apply is a no-op, and a
 // malformed id is refused before any connection is opened.
 //
 // Live round-trips use a guarded disposable schema on agent-testdb or the
@@ -400,6 +400,7 @@ const url = process.env.DATABASE_URL;
 describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
   let fixture: MemberDataFixture;
   let eventId: number;
+  let echoId: number;
 
   const seedMember = async (id: string, username: string) => {
     // Bind expiry as ISO text: the driver's Date serializer is version-sensitive,
@@ -415,16 +416,21 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
              (${`hash-${id}-2`}, ${id}, ${username}, true, false, ${expiresAt})`;
     await fixture.client`insert into join_attempts (outcome, source, request_id, discord_id)
       values ('added', 'site', ${`request-${id}`}, ${id})`;
+    // One Echo attendance row per member: erasure deletes these, while the
+    // frozen aggregates in event_echoes survive as the published record.
+    await fixture.client`insert into event_echo_members (echo_id, user_id, minutes, sessions)
+      values (${echoId}, ${id}, 95, 2)`;
   };
 
   const countsFor = async (id: string) => {
-    const [[u], [p], [r], [s], [g], [j]] = await Promise.all([
+    const [[u], [p], [r], [s], [g], [j], [e]] = await Promise.all([
       fixture.client`select count(*)::int as n from users where id = ${id}`,
       fixture.client`select count(*)::int as n from profiles where user_id = ${id}`,
       fixture.client`select count(*)::int as n from rsvps where user_id = ${id}`,
       fixture.client`select count(*)::int as n from web_sessions where user_id = ${id}`,
       fixture.client`select count(*)::int as n from web_session_grace where user_id = ${id}`,
       fixture.client`select count(*)::int as n from join_attempts where discord_id = ${id}`,
+      fixture.client`select count(*)::int as n from event_echo_members where user_id = ${id}`,
     ]);
     return {
       users: (u as { n: number }).n,
@@ -433,6 +439,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: (s as { n: number }).n,
       web_session_grace: (g as { n: number }).n,
       join_attempts: (j as { n: number }).n,
+      event_echo_members: (e as { n: number }).n,
     };
   };
 
@@ -448,6 +455,8 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
     await fixture.client`delete from rsvps`;
     await fixture.client`delete from profiles`;
     await fixture.client`delete from join_attempts`;
+    await fixture.client`delete from event_echo_members`;
+    await fixture.client`delete from event_echoes`;
     await fixture.client`delete from events`;
     await fixture.client`delete from users`;
     const [event] = (await fixture.client`insert into events
@@ -455,6 +464,13 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       (${EVENT_KEY}, 'Synthetic erasure event', '2099-11-04T20:00:00Z', '2099-11-04T22:00:00Z')
       returning id`) as { id: number }[];
     eventId = event!.id;
+    const [echo] = (await fixture.client`insert into event_echoes
+      (event_id, event_key, window_starts_at, window_ends_at, threshold_minutes,
+       peak_concurrent, attended_count, rooms) values
+      (${eventId}, ${EVENT_KEY}, '2099-11-04T19:45:00Z', '2099-11-04T22:15:00Z',
+       10, 24, 2, '[{"channel_id": "111111111111111111", "name_at_close": "Tavern"}]')
+      returning id`) as { id: number }[];
+    echoId = echo!.id;
     await seedMember(MEMBER_A, "synthetic-erase-a");
     await seedMember(MEMBER_B, "synthetic-erase-b");
   });
@@ -472,6 +488,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_echo_members: 1,
     });
     const preview = await eraseMember(
       fixture.client as unknown as Parameters<typeof eraseMember>[0],
@@ -483,7 +500,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
     expect(await countsFor(MEMBER_B)).toEqual(before);
   });
 
-  it("apply removes exactly member A across all six tables and leaves member B intact", async () => {
+  it("apply removes exactly member A across all seven tables and leaves member B intact", async () => {
     const removed = await eraseMember(
       fixture.client as unknown as Parameters<typeof eraseMember>[0],
       MEMBER_A,
@@ -496,6 +513,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_echo_members: 1,
       passes: 1,
       deletesPerPass: [2],
     });
@@ -506,6 +524,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      event_echo_members: 0,
     });
     expect(await countsFor(MEMBER_B)).toEqual({
       users: 1,
@@ -514,6 +533,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_echo_members: 1,
     });
     // The event itself survives: erasure removes answers, never content.
     expect(
@@ -625,6 +645,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 0,
       web_session_grace: 0,
       join_attempts: 0,
+      event_echo_members: 0,
       passes: 1,
       deletesPerPass: [0],
     });
@@ -635,6 +656,7 @@ describe.skipIf(!url)("member erasure against isolated test Postgres", () => {
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_echo_members: 1,
     });
   });
 });

@@ -32,6 +32,7 @@ import { archiveContext } from "./archive-context";
 import { archiveEventHref, authReturnHref } from "./attendee-paths";
 import { waitlistPosition } from "./waitlist";
 import { recordAccess } from "../admin/store";
+import { getEventEcho, projectPublicEcho, type PublicEcho } from "./echoes";
 import { EventGonePage, EventPage } from "./pages";
 import {
   dbUnavailableJson,
@@ -214,14 +215,22 @@ export function registerDetailRoutes(
             (series) => series,
             (): EventSeriesContext | null => null,
           );
-          const [neighbors, related, series, attendees, position, answer] = await Promise.all([
-            neighborsSettled,
-            relatedSettled,
-            seriesSettled,
-            session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
-            session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
-            session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
-          ]);
+          // Frozen Echo record: published-only counts, fail open to no record.
+          const echoSettled: Promise<PublicEcho | null> = getEventEcho(db, e.id).then(
+            (row) => (row ? projectPublicEcho(row) : null),
+            (): PublicEcho | null => null,
+          );
+          const [neighbors, related, series, attendees, position, answer, echo] = await Promise.all(
+            [
+              neighborsSettled,
+              relatedSettled,
+              seriesSettled,
+              session?.member ? listGoingAttendees(db, e.id, attendeePage) : Promise.resolve([]),
+              session ? waitlistPosition(db, e.id, session.id) : Promise.resolve(null),
+              session && member ? getViewerRsvp(db, e.id, session.id) : Promise.resolve(null),
+              echoSettled,
+            ],
+          );
           // One-row lookahead probe that powers Next, only from a full page:
           // a partial page cannot have a successor, so the probe (and its
           // audit subject) is skipped there.
@@ -277,6 +286,7 @@ export function registerDetailRoutes(
               answer={answer}
               returnTo={returnTo}
               attendeePage={attendeePage}
+              echo={echo}
               // Drafts have no Markdown view: the session-free .md route 403s
               // for every viewer, so only link it where it answers 200.
               markdownAlternate={e.status === "draft" ? undefined : `/e/${e.eventKey}.md`}

@@ -81,6 +81,16 @@
   },
   {
     "method": "GET",
+    "path": "/admin/echoes",
+    "auth": "moderator"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/echoes/:id",
+    "auth": "moderator"
+  },
+  {
+    "method": "GET",
     "path": "/admin/events",
     "auth": "moderator"
   },
@@ -423,6 +433,11 @@
     "method": "POST",
     "path": "/__probe/alert",
     "auth": "staging-token"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/echoes/:id/headline",
+    "auth": "moderator"
   },
   {
     "method": "POST",

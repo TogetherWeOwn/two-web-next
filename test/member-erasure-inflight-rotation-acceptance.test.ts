@@ -56,6 +56,7 @@ const ZERO: ErasureCounts = {
   web_sessions: 0,
   web_session_grace: 0,
   join_attempts: 0,
+  event_echo_members: 0,
 };
 
 describe.skipIf(!url)("member erasure against already-in-flight rotations", () => {
@@ -224,6 +225,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 2,
         web_session_grace: 1,
         join_attempts: 1,
+        event_echo_members: 0,
       });
       expect(raced.passes).toBe(raced.deletesPerPass.length);
       expect(raced.deletesPerPass.reduce((total, deleted) => total + deleted, 0)).toBe(
@@ -237,7 +239,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       // The minted successor cannot be rotated back to life afterwards.
       expect(await store.rotate("race-successor", session("race-revival"))).toBe(false);
       expect(await store.get("race-revival")).toBeNull();
-      // Repeat apply is a no-op across all six tables.
+      // Repeat apply is a no-op across all seven tables.
       await expect(eraseMember(sql(), VICTIM, { dryRun: false })).resolves.toEqual({
         ...ZERO,
         passes: 1,
@@ -251,6 +253,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 1,
         web_session_grace: 0,
         join_attempts: 1,
+        event_echo_members: 0,
       });
       expect(await store.get("race-bystander")).not.toBeNull();
     } finally {
@@ -334,6 +337,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 4,
         web_session_grace: 3,
         join_attempts: 1,
+        event_echo_members: 0,
       });
       expect(multi.passes).toBe(multi.deletesPerPass.length);
       expect(multi.deletesPerPass.reduce((total, deleted) => total + deleted, 0)).toBe(
@@ -352,6 +356,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 1,
         web_session_grace: 1,
         join_attempts: 1,
+        event_echo_members: 0,
       });
       expect(await store.get("multi-bystander-source")).toMatchObject({ userId: BYSTANDER });
       expect(await store.get("multi-bystander-successor")).toMatchObject({ userId: BYSTANDER });
@@ -389,6 +394,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
         web_sessions: 1,
         web_session_grace: 0,
         join_attempts: 1,
+        event_echo_members: 0,
       });
       expect(won.passes).toBe(won.deletesPerPass.length);
       expect(won.deletesPerPass.reduce((total, deleted) => total + deleted, 0)).toBe(
@@ -415,6 +421,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 2,
       web_session_grace: 0,
       join_attempts: 1,
+      event_echo_members: 0,
       passes: 0,
       deletesPerPass: [],
     });
@@ -430,6 +437,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 2,
       web_session_grace: 1,
       join_attempts: 1,
+      event_echo_members: 0,
       passes: 0,
       deletesPerPass: [],
     });
@@ -444,6 +452,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 2,
       web_session_grace: 1,
       join_attempts: 1,
+      event_echo_members: 0,
       passes: 1,
       deletesPerPass: [2],
     });
@@ -462,7 +471,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
     expect(await store.get("dry-new-signin")).toMatchObject({ userId: VICTIM });
   });
 
-  it("rolls back all six tables when a late deletion fails (control)", async () => {
+  it("rolls back all seven tables when a late deletion fails (control)", async () => {
     await seedMember(VICTIM, "synthetic-erase-rollback-a");
     await seedMember(BYSTANDER, "synthetic-erase-rollback-b");
     await store.create(session("rollback-source"));
@@ -476,6 +485,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 1,
       web_session_grace: 1,
       join_attempts: 1,
+      event_echo_members: 0,
     });
 
     // Fail the last of the six deletions from inside the database: every
@@ -514,6 +524,7 @@ describe.skipIf(!url)("member erasure against already-in-flight rotations", () =
       web_sessions: 1,
       web_session_grace: 0,
       join_attempts: 1,
+      event_echo_members: 0,
     });
   }, 15_000);
 });

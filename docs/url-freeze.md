@@ -214,6 +214,8 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /about.md` | public | ai-friendly-md: curated Markdown alternate, `text/markdown`, static TTL, staging noindex |
 | `GET /admin` | moderator | admin: dashboard |
 | `GET /admin/activity-log` | moderator | admin-activity-log: read-only activity viewer |
+| `GET /admin/echoes` | moderator | event-echo-render-acceptance: frozen Echo ledger, counts only |
+| `GET /admin/echoes/:id` | moderator | event-echo-render-acceptance: Echo detail + moderator member-minutes |
 | `GET /admin/events` | moderator | admin: event table |
 | `GET /admin/events/:key` | moderator | admin: edit form |
 | `GET /admin/events/new` | moderator | admin: create form |
@@ -273,6 +275,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `PATCH /events/:key` | moderator | events: JSON update |
 | `PATCH /members/:user` | member-owner | profiles: self-only edit |
 | `POST /__probe/alert` | staging-token | alerts: QA-only request + poison-job drill; expected 500, no production seam |
+| `POST /admin/echoes/:id/headline` | moderator | event-echo-render-acceptance: host headline only, counts never edited |
 | `POST /admin/events` | moderator | admin: draft create |
 | `POST /admin/events/:key` | moderator | admin: update |
 | `POST /admin/events/:key/cancel` | moderator | admin: cancel |

@@ -210,6 +210,9 @@ describe("event detail theme", () => {
     // 6650: two hidden-row rules (+192 bytes over 6414) keep each deferred
     // island row's laid-out size while hidden, so revealing it never shifts
     // content (CLS); the 7168 ceiling is unchanged.
-    expect(css.length).toBeLessThan(6650);
+    // 7060: the frozen Echo record block (+345 bytes over 6607) surfaces the
+    // counts-only record in the related-grid card family; the 7168 raw and
+    // 2048 gzip bundle ceilings are unchanged.
+    expect(css.length).toBeLessThan(7060);
   });
 });

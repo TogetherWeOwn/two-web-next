@@ -14,6 +14,7 @@ const COUNTS = {
   web_sessions: 0,
   web_session_grace: 0,
   join_attempts: 0,
+  event_echo_members: 0,
 };
 const REMOTE_TARGETS = [
   { target: "staging", authority: "db.staging.invalid:5433", host: "db.staging.invalid" },
@@ -107,7 +108,7 @@ describe("erase-member exact dry-run host and copy-to-confirm flow", () => {
         });
         expect(body.confirmHint).toContain("--confirm");
         expect(driver.factory).toHaveBeenCalledTimes(1);
-        expect(sql).toHaveBeenCalledTimes(6);
+        expect(sql).toHaveBeenCalledTimes(7);
         expect(sql.begin).not.toHaveBeenCalled();
         expect(sql.end).toHaveBeenCalledTimes(1);
         for (const privateValue of [databaseUrl, "synthetic-password", ID, "postgres://"])

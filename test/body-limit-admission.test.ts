@@ -46,6 +46,7 @@ const CAP_FIRST_ROUTES = new Set([
   "POST /events/:key/duplicate",
   "POST /events/:key/rsvp-pause",
   "POST /events/:key/rsvp-reopen",
+  "POST /admin/echoes/:id/headline",
   "POST /admin/events",
   "POST /admin/events/:key",
   "POST /admin/events/:key/publish",

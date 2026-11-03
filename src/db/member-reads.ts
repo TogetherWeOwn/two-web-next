@@ -21,6 +21,11 @@ const owners: Record<string, string> = {
   profiles: "user_id",
   rsvps: "user_id",
   join_attempts: "discord_id",
+  // Event Echo member minutes (Living Lobby 7, src/events/echoes.ts): the
+  // per-member played-minutes rows. Like rsvps, the Discord id owns the row;
+  // keyed reads must project it so the subject is attributed, and the F20
+  // projections in echoes.ts keep it off member-facing surfaces.
+  event_echo_members: "user_id",
 };
 // CTEs can mutate even when the final SELECT never references them. Only the
 // supported SELECT shapes are reads; do not infer safety from a WITH prefix.

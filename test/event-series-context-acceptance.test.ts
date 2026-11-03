@@ -243,6 +243,8 @@ function seriesFixture(opts: SeriesFixtureOpts) {
 
   const db = drizzle(async (sql: string, params: unknown[]) => {
     queries.push({ sql, params });
+    if (sql.includes('from "event_echoes"') || sql.includes('from "event_echo_members"'))
+      return { rows: [] };
     if (sql.includes('from "rsvps"') || sql.includes("from rsvps")) return { rows: [] };
     if (sql.includes('"event_key" =')) return { rows: [toRow(current, sql)] };
     if (isSeriesRead(sql)) {
