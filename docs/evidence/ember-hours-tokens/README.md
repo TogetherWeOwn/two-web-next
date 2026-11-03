@@ -72,10 +72,33 @@ The inherited logo artwork is unchanged.
 - The mobile `01` date has one rendered text line; its glyph right edge is 85px,
   inside the tile's 93px right edge.
 - Hono Events navigation and Kit's calendar subscription disclosure work.
-- Served homepage: **26,368 bytes HTML**, **20,333 bytes inline CSS**, below the
-  unchanged **26,732 / 20,697** ceilings.
+- Served homepage after the three-sheet partition: **26,380 bytes HTML**,
+  **20,345 bytes inline CSS**, below the unchanged **26,732 / 20,697** ceilings.
+- Refreshed all 16 after-state screenshots after redistributing generated roles
+  across the same three served sheets. Opened every image and compared decoded
+  pixels: all 16 are identical to the images linked above. No baseline changed.
+- Original stylesheet ceilings hold (raw / gzip): `styles.css` 5,426 / 1,854
+  bytes, `theme-tokens.css` 1,468 / 494, `theme.css` 13,449 / 3,513. No ceiling
+  was raised and no extra stylesheet request was added.
 
 ## Automated gates observed
+
+After the three-sheet partition, reran and observed:
+
+- `node --test ci/check-ember-token-sync.test.mjs`: 17 passing tests, including
+  fixed original byte ceilings and missing/stale artifact rejection.
+- `npm run build:assets:selftest`: 47 passing mutation cases.
+- `npm run build:assets:check`, `npm run budget`, `npm run lint`,
+  `npm run typecheck`, `npm run docs:links`: exit 0.
+- `bin/local-ci.sh -- <12 affected theme test files>`: exit 0, 181 passing tests
+  against disposable Postgres 17; the same host fixture run also passed.
+- `npm --prefix web run build`: exit 0.
+- `npm run a11y`: exit 0, 154 passing Hono cases.
+- `npm run lighthouse`: exit 0, 24/24 mobile reports, all assertions passed.
+- `npm run lighthouse:quality`: exit 0, 24/24 desktop reports, all assertions passed.
+
+Earlier full verification, before the mechanical partition (not an exact-head
+aggregate verdict for the partition):
 
 - `bin/local-ci.sh -j 8`: exit 0; 1,229 passing files, 25,853 passing tests.
   Coverage: 97.87% statements, 95.54% branches, 97.66% functions, 98.81% lines.

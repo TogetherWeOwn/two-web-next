@@ -113,7 +113,10 @@ node ci/build-leaf-css.mjs
 checked sheets, so it runs in dependency-free scratch snapshots. The separate
 `ci/build-ember-tokens.mjs` adapter builds the Hono and Kit token sheets from
 the pinned vendored design-kit CSS and needs the locked esbuild installed to
-compact served sheets. Root postinstall and predev, plus Kit postinstall and
+compact served sheets. It composes scoped roles with `assets/styles.css` and
+`assets/theme.css`; all three existing Hono sheets keep their original raw and
+gzip ceilings, without extra requests or changes to unthemed legacy pages.
+Root postinstall and predev, plus Kit postinstall and
 prebuild, **check** the tracked adapters before generating ignored critical CSS.
 They fail without repairing stale committed output, so install cannot mask drift
 before CI checks it. After editing the kit pin or theme source, explicitly run

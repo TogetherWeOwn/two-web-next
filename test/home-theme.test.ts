@@ -279,8 +279,9 @@ describe("homepage theme", () => {
     expect(css).toMatch(
       /\.base-theme :focus-visible\s*\{\s*outline:\s*var\(--focus-width\) solid var\(--brand\);\s*outline-offset:\s*var\(--focus-offset\);?\s*\}/,
     );
-    expect(css).toMatch(/--focus-width:\s*2px/);
-    expect(css).toMatch(/--focus-offset:\s*3px/);
+    const tokens = readFileSync(new URL("../public/theme-tokens.css", import.meta.url), "utf8");
+    expect(tokens).toMatch(/--focus-width:\s*2px/);
+    expect(tokens).toMatch(/--focus-offset:\s*3px/);
     expect(source).not.toContain("@import");
     expect(source).not.toContain("https://");
     // Scoping every display text rule away from the content leaves (late

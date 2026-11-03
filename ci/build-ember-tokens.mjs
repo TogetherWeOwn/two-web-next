@@ -6,7 +6,12 @@ import { fileURLToPath } from "node:url";
 import { transformSync } from "esbuild";
 
 export const ROOT = fileURLToPath(new URL("../", import.meta.url));
-export const ARTIFACTS = ["public/theme-tokens.css", "public/theme.css", "web/src/ember-theme.css"];
+export const ARTIFACTS = [
+  "public/theme-tokens.css",
+  "public/theme.css",
+  "web/src/ember-theme.css",
+  "public/styles.css",
+];
 
 // Value-free role selection and aliasing. Omit Discord/layout/avatar roles and
 // duplicate semantic synonyms, never a required web role or its media override.
@@ -184,13 +189,15 @@ export function generate(root = ROOT) {
         return `--color-${name}:var(--theme-${prefix}${name},${fallback});`;
       })
       .join("");
-  // Keep foundation palette, display scale and accent roles in the facade;
-  // interaction/layout roles live beside their theme rules. Both are always
-  // served together, and this split fits each existing raw AND gzip ceiling.
+  // Keep palette/interaction roles in the facade and type scale in the shared
+  // sheet; other roles live beside theme rules. All three sheets are already
+  // served together. Scoping keeps legacy pages unchanged and fits the original
+  // raw AND gzip ceilings without a new request or a budget increase.
   const foundation = ([alias]) =>
-    /^(g\d$|t\d$|hair\d$|radius-|font-size-|tracking-|font-accent$|font-data$|gradient-)/.test(
+    /^(g\d$|t\d$|hair\d$|ember$|on-accent$|accent-hi$|border$|live|echo|ok|danger|warn|focus-)/.test(
       alias,
     );
+  const shared = ([alias]) => /^(font-size-|tracking-)/.test(alias);
   const declarations = (selected) =>
     selected.map(([alias, , value]) => `--${alias}:${value};`).join("");
   const facade = `.base-theme{${hooks("")}${aliases}color-scheme:dark;${declarations(roles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}}`;
@@ -198,8 +205,10 @@ export function generate(root = ROOT) {
     .filter(([, source]) => kit.reduced.has(`--two-${source}`))
     .map(([alias, source]) => `--${alias}:${kit.reduced.get(`--two-${source}`)};`)
     .join("");
-  const roleCss = `.base-theme{${declarations(roles.filter((role) => !foundation(role)))}}@media(prefers-reduced-motion:reduce){.base-theme{${reduced}}}`;
+  const sharedCss = `.base-theme{${declarations(roles.filter(shared))}}`;
+  const roleCss = `.base-theme{${declarations(roles.filter((role) => !foundation(role) && !shared(role)))}}@media(prefers-reduced-motion:reduce){.base-theme{${reduced}}}`;
   const source = readFileSync(join(root, "assets/theme.css"), "utf8");
+  const sharedSource = readFileSync(join(root, "assets/styles.css"), "utf8");
   const compact = (css) =>
     transformSync(css, { loader: "css", minify: true, legalComments: "none" }).code;
   const kitColors = [
@@ -233,6 +242,7 @@ export function generate(root = ROOT) {
     [ARTIFACTS[0], compact(facade)],
     [ARTIFACTS[1], compact(roleCss + source)],
     [ARTIFACTS[2], kitCss],
+    [ARTIFACTS[3], compact(sharedSource + sharedCss)],
   ]);
 }
 

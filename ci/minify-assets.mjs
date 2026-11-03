@@ -1,8 +1,8 @@
 // Build the served public assets from readable sources (minification follow-up):
 // assets/islands/*.js and assets/styles.css are the reviewed sources;
-// public/islands/*.js and public/styles.css are the deterministic esbuild
-// --minify output that Workers serves. Ember adapters compose pinned kit roles
-// with assets/theme.css; build-ember-tokens owns their exact regeneration.
+// public/islands/*.js are deterministic esbuild --minify output that Workers
+// serves. Ember adapters compose pinned kit roles with assets/styles.css and
+// assets/theme.css; build-ember-tokens owns their exact regeneration.
 // Other public/*-theme.css sheets are authored in place and budgeted as-is.
 // The budget ceilings in ci/budgets/bundle/ measure the served bytes, and
 // every binder test executes them, proving the minified output equivalent.

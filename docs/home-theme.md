@@ -13,10 +13,12 @@ duplicate declarations, alias collisions and unsupported input structures.
 No palette or type values are copied into consumer source files.
 
 The generated `public/theme-tokens.css` is the compact operator-hook facade,
-including foundation palette, display-scale, radius and accent roles.
-The generated `public/theme.css` composes interaction/layout roles with readable
-`assets/theme.css` rules, minified using the locked esbuild. Both sheets are
-served together; their partition meets the existing raw and gzip budgets. Kit imports the
+including palette, state and focus roles. The generated `public/styles.css`
+composes scoped type-scale and tracking roles with readable `assets/styles.css`;
+`public/theme.css` composes the remaining roles with `assets/theme.css` rules.
+All three existing sheets use the locked esbuild and retain their original raw
+and gzip ceilings, without an extra request or changes to unthemed legacy pages.
+Kit imports the
 generated `web/src/ember-theme.css` from `app.css`: a static `@theme` plus
 unlayered hook mappings. Kit keeps its existing surface/raised distinction
 rather than adopting Hono's page/surface mapping. The three-file critical
@@ -32,7 +34,7 @@ written by those lifecycle hooks. The leaf generator stays pure Node builtins
 snapshots; the adapter requires installed esbuild. Two independent checks
 run in `npm run check`: `ci/check-design-kit-drift.mjs` verifies tag bytes,
 and `ci/check-ember-token-sync.mjs` regenerates and compares **all bytes of
-all three adapters**, including reduced-motion rules. `build:assets:check`
+all four adapters**, including reduced-motion rules. `build:assets:check`
 also checks those artifacts. A kit update is VERSION + exact re-vendor +
 regeneration, never manual literal edits.
 

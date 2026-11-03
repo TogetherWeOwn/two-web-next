@@ -13,6 +13,7 @@ import {
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
 import test from "node:test";
 import {
   ARTIFACTS,
@@ -39,6 +40,7 @@ function withScratch(fn) {
     cpSync(join(ROOT, "vendor/design-kit"), join(root, "vendor/design-kit"), { recursive: true });
     mkdirSync(join(root, "assets"), { recursive: true });
     cpSync(join(ROOT, "assets/theme.css"), join(root, "assets/theme.css"));
+    cpSync(join(ROOT, "assets/styles.css"), join(root, "assets/styles.css"));
     mkdirSync(join(root, "public"), { recursive: true });
     mkdirSync(join(root, "web/src"), { recursive: true });
     return fn(root);
@@ -75,6 +77,34 @@ test("generation is exact, repeatable and leaves the real repo untouched", () =>
     ARTIFACTS.map((path) => readFileSync(join(ROOT, path), "utf8")),
     before,
   );
+});
+
+test("generated Hono sheets fit every original raw and gzip ceiling", () => {
+  const outputs = generate(ROOT);
+  for (const [path, raw, gzip] of [
+    ["public/styles.css", 6144, 2048],
+    ["public/theme-tokens.css", 1536, 512],
+    ["public/theme.css", 15360, 3584],
+  ]) {
+    const bytes = Buffer.from(outputs.get(path) ?? readFileSync(join(ROOT, path), "utf8"));
+    assert.ok(bytes.length <= raw, `${path}: ${bytes.length} raw bytes exceeds ${raw}`);
+    assert.ok(gzipSync(bytes).length <= gzip, `${path}: gzip exceeds ${gzip}`);
+  }
+});
+
+test("Hono exposes each role once across the existing three-sheet bundle", () => {
+  const outputs = generate(ROOT);
+  const css = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"]
+    .map((path) => outputs.get(path))
+    .join("\n")
+    .split("@media(prefers-reduced-motion:reduce)")[0];
+  for (const [alias] of ROLES) {
+    assert.equal([...css.matchAll(new RegExp(`--${alias}:`, "g"))].length, 1, alias);
+  }
+  const styles = outputs.get("public/styles.css");
+  assert.match(styles, /\.base-theme\{--font-size-hero:/);
+  assert.ok(!outputs.get("public/theme.css").includes("--font-size-hero:"));
+  assert.ok(!outputs.get("public/theme-tokens.css").includes("--font-size-hero:"));
 });
 
 test("every required role group resolves from the kit", () => {
@@ -225,6 +255,10 @@ test("stale artifacts after a kit or theme source change fail the check", () => 
     const theme = join(root, "assets/theme.css");
     writeFileSync(theme, `${readFileSync(theme, "utf8")}\n.ember-sync-probe{color:#123456}\n`);
     assert.throws(() => check(root), /generated token drift: public\/theme\.css/);
+    build(root);
+    const shared = join(root, "assets/styles.css");
+    writeFileSync(shared, `${readFileSync(shared, "utf8")}\n.ember-shared-probe{color:#123456}\n`);
+    assert.throws(() => check(root), /generated token drift: public\/styles\.css/);
   });
 });
 
