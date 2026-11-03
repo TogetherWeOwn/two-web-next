@@ -109,8 +109,16 @@ node ci/build-leaf-css.mjs
 # Or, from the root: npm run build:leaf-css
 ```
 
-The generator uses only Node builtins, so it also works before dependency
-installation. See [security-pin contracts](docs/security-pin-contracts.md)
+`ci/build-leaf-css.mjs` uses only Node builtins and concatenates the three
+checked sheets, so it runs in dependency-free scratch snapshots. The separate
+`ci/build-ember-tokens.mjs` adapter builds the Hono and Kit token sheets from
+the pinned vendored design-kit CSS and needs the locked esbuild installed to
+compact served sheets. Root postinstall and predev, plus Kit postinstall and
+prebuild, **check** the tracked adapters before generating ignored critical CSS.
+They fail without repairing stale committed output, so install cannot mask drift
+before CI checks it. After editing the kit pin or theme source, explicitly run
+`npm run build:assets` or `npm run build:leaf-css` and commit the regenerated
+adapters with their sources. Never hand-edit generated outputs. See [security-pin contracts](docs/security-pin-contracts.md)
 for the offline static gate and generated-hash review evidence.
 
 Set the local origin in `.dev.vars` to match Wrangler's local server and the

@@ -1,12 +1,11 @@
 // Build the served public assets from readable sources (minification follow-up):
 // assets/islands/*.js and assets/styles.css are the reviewed sources;
 // public/islands/*.js and public/styles.css are the deterministic esbuild
-// --minify output that Workers serves. Top-level theme stylesheets
-// (public/theme.css, public/*-theme.css) are authored in place with no
-// assets/ source, so they are budgeted but never minified here. The budget
-// ceilings in ci/budgets/bundle/ measure the minified bytes for built
-// assets and the authored bytes for theme stylesheets, and every binder test
-// executes them, so the suite itself proves the minified output equivalent.
+// --minify output that Workers serves. Ember adapters compose pinned kit roles
+// with assets/theme.css; build-ember-tokens owns their exact regeneration.
+// Other public/*-theme.css sheets are authored in place and budgeted as-is.
+// The budget ceilings in ci/budgets/bundle/ measure the served bytes, and
+// every binder test executes them, proving the minified output equivalent.
 // Regenerate with `npm run build:assets`; CI fails on drift (`--check`).
 // 0 = built/verified, 1 = drift or minify failure.
 import { execFileSync, spawnSync } from "node:child_process";
@@ -25,6 +24,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { loadBundleBudgets } from "./budget-fragments.mjs";
+import { ARTIFACTS, build as buildEmberTokens } from "./build-ember-tokens.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const esbuild = join(repoRoot, "node_modules", ".bin", "esbuild");
@@ -35,12 +35,10 @@ const esbuild = join(repoRoot, "node_modules", ".bin", "esbuild");
 // of silently escaping the drift check (still enforced by
 // check-bundle-budget.mjs either way).
 const AUTHORED_CSS = new Set([
-  "public/theme.css",
   "public/event-theme.css",
   "public/profile-theme.css",
   "public/operator-overrides-theme.css",
   "public/schedule-theme.css",
-  "public/theme-tokens.css",
 ]);
 // Budget entries are read from the checked root (not captured at import),
 // so --selftest can copy the budget fragments into a scratch root and prove
@@ -50,7 +48,7 @@ const AUTHORED_CSS = new Set([
 function budgetPathsFor(root) {
   const budgets = loadBundleBudgets(root);
   return Object.keys(budgets)
-    .filter((entry) => !AUTHORED_CSS.has(entry))
+    .filter((entry) => !AUTHORED_CSS.has(entry) && !ARTIFACTS.includes(entry))
     .sort();
 }
 
@@ -102,6 +100,7 @@ export function build(root = repoRoot, output = console) {
   let entries;
   try {
     entries = budgetPathsFor(root);
+    buildEmberTokens(root);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     output.error(`minify assets: cannot read budget: ${detail}`);
@@ -140,6 +139,7 @@ export function check(root = repoRoot, output = console) {
   let entries;
   try {
     entries = budgetPathsFor(root);
+    buildEmberTokens(root, true);
   } catch (error) {
     const detail = error instanceof Error ? error.message : String(error);
     output.error(`minify assets: cannot read budget: ${detail}`);
@@ -211,6 +211,12 @@ function selftest() {
   try {
     cpSync(join(repoRoot, "assets"), join(scratch, "assets"), { recursive: true });
     cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
+    cpSync(join(repoRoot, "vendor"), join(scratch, "vendor"), { recursive: true });
+    mkdirSync(join(scratch, "web/src"), { recursive: true });
+    copyFileSync(
+      join(repoRoot, "web/src/ember-theme.css"),
+      join(scratch, "web/src/ember-theme.css"),
+    );
     mkdirSync(join(scratch, "ci", "budgets"), { recursive: true });
     cpSync(join(repoRoot, "ci", "budgets", "bundle"), join(scratch, "ci", "budgets", "bundle"), {
       recursive: true,
@@ -246,6 +252,56 @@ function selftest() {
       assert.equal(code, 0, `unmodified scratch copy should pass: ${errors.join("; ")}`);
       cases += 1;
       console.log("PASS unmodified scratch copy is in sync");
+    }
+
+    // Generated token adapters and their theme source are gated by check()
+    // too: edit or delete every artifact, and drift the source, in the scratch.
+    for (const artifact of ARTIFACTS) {
+      const artifactPath = join(scratch, artifact);
+      const original = readFileSync(artifactPath);
+      try {
+        writeFileSync(artifactPath, Buffer.concat([original, Buffer.from("\n/* drift */")]));
+        const edited = runCheck();
+        assert.equal(edited.code, 1, `edited ${artifact} should fail: ${edited.errors.join("; ")}`);
+        assert.ok(
+          edited.errors.some((text) => text.includes(`generated token drift: ${artifact}`)),
+          `edited ${artifact} should report token drift: ${edited.errors.join("; ")}`,
+        );
+        rmSync(artifactPath);
+        const missing = runCheck();
+        assert.equal(
+          missing.code,
+          1,
+          `missing ${artifact} should fail: ${missing.errors.join("; ")}`,
+        );
+        assert.ok(missing.errors.length > 0, `missing ${artifact} should report an error`);
+      } finally {
+        writeFileSync(artifactPath, original);
+      }
+      cases += 1;
+      console.log(`PASS edited and missing generated artifact fail for ${artifact}`);
+    }
+
+    {
+      const themePath = join(scratch, "assets/theme.css");
+      const original = readFileSync(themePath);
+      try {
+        writeFileSync(
+          themePath,
+          Buffer.concat([original, Buffer.from("\n.minify-selftest-drift{color:#123456}\n")]),
+        );
+        const { code, errors } = runCheck();
+        assert.equal(code, 1, `changed assets/theme.css should fail: ${errors.join("; ")}`);
+        assert.ok(
+          errors.some((text) => text.includes("generated token drift: public/theme.css")),
+          `changed assets/theme.css should report public/theme.css drift: ${errors.join("; ")}`,
+        );
+      } finally {
+        writeFileSync(themePath, original);
+      }
+      assert.equal(runCheck().code, 0, "scratch is in sync again after restoring sources");
+      cases += 1;
+      console.log("PASS assets/theme.css source drift fails against public/theme.css");
     }
 
     // Prove drift and missing-output for every budgeted entry, not just one

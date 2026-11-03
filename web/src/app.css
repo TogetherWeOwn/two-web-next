@@ -7,6 +7,9 @@
 @layer theme, base, components, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities) source(none);
+/* Generated @theme and unlayered operator hooks from the pinned kit CSS.
+ * Keep the surface/raised Kit mapping; Hono's canvas is a different role. */
+@import "./ember-theme.css";
 
 /* Utility classes live in Kit components, not prose in server helpers.
  * Head-only metadata has no utility classes and also stays out of detection. */
@@ -22,41 +25,8 @@
  * the rule silently will not generate. */
 @source not "./routes/admin/join-attempts";
 
-/*
- * Ember Hours tokens (two-design-kit v0.2.0, tokens §1-§2). Single source of
- * truth for the SvelteKit shell: every colour in Kit chrome flows from this
- * file. Values are kit literals, not variables: the kit file is the source
- * of truth and ci/check-ember-token-sync.mjs fails when a value below
- * differs from vendor/design-kit/tokens.css. Value mapping (old ramp to
- * kit) in docs/home-theme.md. Components must use these utilities
- * (bg-lobby-*, text-lobby-*, border-lobby-*, font-display) and never
- * hard-code palette values or arbitrary hex. Spacing and radius stay on the
- * Tailwind scale (no arbitrary p-[…]/rounded-[…] values). The display stack
- * reuses the self-hosted Mona Sans variable font served from public/fonts.
- */
-@theme {
-  --color-lobby-surface: #1c1614;
-  --color-lobby-raised: #241c19;
-  --color-lobby-ink: #f6f1ea;
-  --color-lobby-muted: #d2c7bd;
-  --color-lobby-accent: #ff9c36;
-  --color-lobby-on-accent: #1d0b00;
-  --color-lobby-line: #85766b;
-  --color-lobby-focus: #ff9c36;
-  --font-display: Mona Sans, system-ui, sans-serif;
-  --font-sans: ui-sans-serif, system-ui, sans-serif;
-}
-
-/*
- * Canvas rule. Unlayered on purpose: layered author styles lose to the
- * unlayered public sheets Kit still links (styles.css sets
- * body{background:var(--paper)} cream, #f4efe6). The html background paints
- * the canvas regardless of the body rule, so it covers overscroll bounce,
- * pinch zoom-out and mobile bar tinting. `html body` outranks the bare `body`
- * selector, so the body itself stays dark whichever stylesheet loads first.
- * Both values flow from the @theme tokens above, so a direction swap stays a
- * token swap.
- */
+/* Unlayered: public sheets still set a legacy body background. Paint both
+ * the html canvas (overscroll) and body from the generated Kit roles. */
 :root {
   color-scheme: dark;
 }
@@ -69,31 +39,6 @@ html {
 html body {
   background-color: var(--color-lobby-surface);
   color: var(--color-lobby-ink);
-}
-
-/*
- * Kit shell mapping. The Hono app keeps its own public/theme-tokens.css; Kit
- * pages do not link it (see SiteMetadata) and take the same semantic
- * variables from the @theme tokens above instead. Every public theme rule
- * styles through these variables, so the whole Kit shell follows a token
- * swap with no per-component edits. The --theme-* / --theme-schedule-*
- * plugs are preserved, so an explicit override still wins over the default.
- * Unlayered on purpose: layered author styles lose to the unlayered public
- * theme sheets Kit still links (theme.css, schedule-theme.css).
- */
-.base-theme {
-  --color-text: var(--theme-text, var(--color-lobby-ink));
-  --color-page: var(--theme-page, var(--color-lobby-surface));
-  --color-accent: var(--theme-accent, var(--color-lobby-accent));
-  --color-muted: var(--theme-muted, var(--color-lobby-muted));
-  --color-surface: var(--theme-surface, var(--color-lobby-raised));
-  --color-border: var(--theme-border, var(--color-lobby-line));
-  --ink: var(--color-text);
-  --paper: var(--color-page);
-  --brand: var(--color-accent);
-  --muted: var(--color-muted);
-  --surface: var(--color-surface);
-  --line: var(--color-border);
 }
 
 /* Hono keeps its light admin palette. Kit's shared admin chrome adapts only
@@ -109,20 +54,4 @@ html body {
 }
 .kit-admin fieldset {
   background: var(--color-lobby-raised);
-}
-
-.base-theme.schedule-theme,
-.base-theme[data-theme="schedule"] {
-  --color-text: var(--theme-schedule-text, var(--color-lobby-ink));
-  --color-page: var(--theme-schedule-page, var(--color-lobby-surface));
-  --color-accent: var(--theme-schedule-accent, var(--color-lobby-accent));
-  --color-muted: var(--theme-schedule-muted, var(--color-lobby-muted));
-  --color-surface: var(--theme-schedule-surface, var(--color-lobby-raised));
-  --color-border: var(--theme-schedule-border, var(--color-lobby-line));
-  --ink: var(--color-text);
-  --paper: var(--color-page);
-  --brand: var(--color-accent);
-  --muted: var(--color-muted);
-  --surface: var(--color-surface);
-  --line: var(--color-border);
 }

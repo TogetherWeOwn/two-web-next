@@ -46,6 +46,9 @@
     {
       "includes": [
         "assets/styles.css",
+        "assets/theme.css",
+        "public/theme-tokens.css",
+        "web/src/ember-theme.css",
         "assets/admin-rsvp-review.css",
         "public/styles.css",
         "public/admin-rsvp-review.css",
@@ -87,7 +90,7 @@
       }
     },
     {
-      "includes": ["web/src/app.css"],
+      "includes": ["web/src/app.css", "web/src/ember-theme.css"],
       "css": { "parser": { "tailwindDirectives": true } }
     },
     {

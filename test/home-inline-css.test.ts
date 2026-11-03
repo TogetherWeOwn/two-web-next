@@ -41,22 +41,35 @@ describe("homepage inlined critical CSS", () => {
     // overrides scale Mona Sans' hhea metrics by the same factor, so the
     // fallback hero paints close to the swapped-in text and the swap is not
     // a larger repaint that re-times LCP after FCP.
-    expect(LEAF_CRITICAL_CSS).toContain("@font-face { font-family: 'Mona Sans Fallback'");
-    expect(LEAF_CRITICAL_CSS).toContain("local('Liberation Sans'), local('Arimo'), local('Arial')");
-    expect(LEAF_CRITICAL_CSS).toContain("size-adjust: 103.33%");
-    expect(LEAF_CRITICAL_CSS).toContain("ascent-override: 105.49%");
-    expect(LEAF_CRITICAL_CSS).toContain("descent-override: 30.97%");
-    expect(LEAF_CRITICAL_CSS).toContain("line-gap-override: 0%");
-    expect(LEAF_CRITICAL_CSS).toContain("Mona Sans, 'Mona Sans Fallback', system-ui, sans-serif");
+    // The served bundle is generated and minified, so match semantically:
+    // the minifier may drop quotes and whitespace.
+    expect(LEAF_CRITICAL_CSS).toMatch(
+      /@font-face\s*\{\s*font-family:\s*["']?Mona Sans Fallback["']?\s*;/,
+    );
+    expect(LEAF_CRITICAL_CSS).toMatch(
+      /local\(["']?Liberation Sans["']?\),\s*local\(["']?Arimo["']?\),\s*local\(["']?Arial["']?\)/,
+    );
+    expect(LEAF_CRITICAL_CSS).toMatch(/size-adjust:\s*103\.33%/);
+    expect(LEAF_CRITICAL_CSS).toMatch(/ascent-override:\s*105\.49%/);
+    expect(LEAF_CRITICAL_CSS).toMatch(/descent-override:\s*30\.97%/);
+    expect(LEAF_CRITICAL_CSS).toMatch(/line-gap-override:\s*0%/);
+    // The shared --font-display hook carries the kit family directly followed
+    // by the fallback; the sheet's display rules reference the hook.
+    expect(LEAF_CRITICAL_CSS).toMatch(
+      /--font-display:\s*Mona Sans,\s*["']Mona Sans Fallback["'],\s*system-ui,\s*sans-serif/,
+    );
+    expect(LEAF_CRITICAL_CSS).toMatch(/font(?:-family)?:[^;{}]*var\(--font-display\)/);
     // Every Mona Sans stack carries the fallback: a stack without it would
-    // swap to unadjusted system sans. (--font-display is the bare kit
-    // literal, so match declarations, not the whole bundle.)
+    // swap to unadjusted system sans. Literal stacks and --font-display
+    // definitions are both checked.
     const stacks =
-      LEAF_CRITICAL_CSS.match(/(?:font-family|font)\s*:[^;{}]*Mona Sans,[^;{}]*;/g) ?? [];
+      LEAF_CRITICAL_CSS.match(
+        /(?:--font-display|font-family|font)\s*:[^;{}]*Mona Sans,[^;{}]*;?/g,
+      ) ?? [];
     expect(stacks.length).toBeGreaterThanOrEqual(1);
-    for (const stack of stacks) expect(stack).toContain("'Mona Sans Fallback'");
+    for (const stack of stacks) expect(stack).toMatch(/Mona Sans,\s*["']Mona Sans Fallback["']/);
     const html = Layout({ title: "Fixture", theme: "home", inlineCriticalCss: true })!.toString();
-    expect(html).toContain("'Mona Sans Fallback'");
+    expect(html).toMatch(/["']?Mona Sans Fallback["']?/);
   });
 
   it("emits the Mona Sans preload before the inlined style block", async () => {

@@ -206,12 +206,10 @@ it("keeps event detail on its own theme, outside the schedule-only sheet", async
 
 it("keeps schedule layout in its own self-contained sheet", () => {
   const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
-  // Tracks the authoritative raw ceiling in ci/budgets/bundle/schedule-theme.css.json (6656): the
-  // 6000 pin dated from #222 while approved slices grew the sheet (main alone
-  // is 5953; the Ember kit font stack lands it at 6144, see
-  // ci/budgets/decisions/bundle/2026-11-03-ember-schedule-sheet.md). The budget
-  // gate still enforces raw+gzip independently.
-  expect(css.length).toBeLessThan(6656);
+  // Match the existing served-asset ceiling; the budget gate also checks gzip.
+  expect(Buffer.byteLength(css, "utf8")).toBeLessThanOrEqual(6144);
+  expect(css).toMatch(/\.schedule-date\{[^}]*font-family:var\(--font-display\)/);
+  expect(css).toMatch(/\.schedule-date strong\{[^}]*white-space:nowrap/);
   expect(css).toContain("@media (max-width: 48rem)");
   expect(css).not.toMatch(/@import|https:\/\/|@font-face/);
   // Every rule stays scoped to the schedule main, never the shared chrome.

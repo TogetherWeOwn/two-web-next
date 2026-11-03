@@ -112,9 +112,13 @@ it("/faq skips rendering offscreen sections until scrolled near (LCP)", async ()
   // defect was found there to fix.
   const html = await (await app.request("/faq", {}, env)).text();
   const style = html.match(/<style>([\s\S]*?)<\/style>/)?.[1] ?? "";
-  expect(style).toContain("[data-testid='faq-list']>section");
-  expect(style).toContain("content-visibility:auto");
-  expect(style).toContain("contain-intrinsic-size:auto 20rem");
+  // Minified bundle: the attribute value may be unquoted.
+  expect(style).toMatch(
+    /\[data-testid=["']?faq-list["']?\]>section\s*\{[^}]*content-visibility:\s*auto/,
+  );
+  expect(style).toMatch(
+    /\[data-testid=["']?faq-list["']?\]>section\s*\{[^}]*contain-intrinsic-size:\s*auto 20rem/,
+  );
 });
 
 it("keeps the join targets, guarded return path, widget and fallback in the auth layout", async () => {

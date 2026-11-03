@@ -1,0 +1,264 @@
+// Consumer adapters, not a second token source: values come only from the pinned
+// kit CSS. Keep media contexts separate; the TS export has no reduced-motion layer.
+import { readFileSync, writeFileSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+import { transformSync } from "esbuild";
+
+export const ROOT = fileURLToPath(new URL("../", import.meta.url));
+export const ARTIFACTS = ["public/theme-tokens.css", "public/theme.css", "web/src/ember-theme.css"];
+
+// Value-free role selection and aliasing. Omit Discord/layout/avatar roles and
+// duplicate semantic synonyms, never a required web role or its media override.
+export const ROLES = [
+  ...Array.from({ length: 5 }, (_, n) => [`g${n}`, `color-ground-${n}`]),
+  ["hair1", "color-hair-1"],
+  ["hair2", "color-hair-2"],
+  ...Array.from({ length: 3 }, (_, n) => [`t${n + 1}`, `color-text-${n + 1}`]),
+  ...[
+    "ember",
+    "on-accent",
+    "accent-hi",
+    "border",
+    "live",
+    "echo",
+    "ok",
+    "danger",
+    "warn",
+    "live-bg",
+    "ok-bg",
+    "echo-bg",
+    "warn-bg",
+    "danger-bg",
+  ].map((name) => [name, `color-${name}`]),
+  ["focus-ring", "color-focus-ring"],
+  ["focus-ring-on-accent", "color-focus-ring-on-accent"],
+  ["focus-width", "size-focus-width"],
+  ["focus-offset", "size-focus-offset"],
+  ...Array.from({ length: 11 }, (_, n) => [`space-${n + 1}`, `space-${n + 1}`]),
+  ...[
+    "section",
+    "section-compact",
+    "inset-tag-y",
+    "inset-tag-x",
+    "inset-tight",
+    "inset-room",
+    "inset-compact",
+    "inset-card",
+    "inset-card-lg",
+  ].map((name) => [`space-${name}`, `space-${name}`]),
+  ...["s", "m", "l", "pill"].map((name) => [`radius-${name}`, `radius-${name}`]),
+  ...[
+    "hero",
+    "h1",
+    "h2",
+    "h3",
+    "figure",
+    "title",
+    "body-reading",
+    "body",
+    "small",
+    "label",
+    "band",
+    "lede",
+    "ui",
+    "figure-compact",
+    "tile",
+  ].map((name) => [`font-size-${name}`, `font-size-${name}`]),
+  ...["display", "h2", "h3", "figure", "body", "label"].map((name) => [
+    `tracking-${name}`,
+    `tracking-${name}`,
+  ]),
+  ...["display", "accent", "data"].map((name) => [`font-${name}`, `font-${name}`]),
+  ...["regular", "medium", "display", "semibold"].map((name) => [
+    `font-weight-${name}`,
+    `font-weight-${name}`,
+  ]),
+  ...["body", "button", "display", "band"].map((name) => [
+    `font-width-${name}`,
+    `font-width-${name}`,
+  ]),
+  ...["display", "heading", "title", "body", "reading", "label"].map((name) => [
+    `line-height-${name}`,
+    `line-height-${name}`,
+  ]),
+  ...[
+    "ease",
+    "duration-fast",
+    "duration-base",
+    "duration-slow",
+    "duration-enter",
+    "distance-enter",
+    "poll-live",
+    "poll-stale-after",
+  ].map((name) => [`motion-${name}`, `motion-${name}`]),
+  ["gradient-brand", "gradient-brand"],
+];
+
+export function parseKit(css) {
+  const clean = css.replace(/\/\*[\s\S]*?\*\//g, "").trim();
+  const structure = clean.match(
+    /^:root\s*\{([^{}]*)\}\s*@media\s*\(prefers-reduced-motion:\s*reduce\)\s*\{\s*:root\s*\{([^{}]*)\}\s*\}$/,
+  );
+  if (!structure)
+    throw new Error("unknown kit CSS structure (expected base and reduced-motion rules)");
+  const declarations = (body, reduced) => {
+    const values = new Map();
+    for (const part of body.split(";")) {
+      if (!part.trim()) continue;
+      const declaration = part.trim().match(/^(--two-[\w-]+|color-scheme)\s*:\s*(.+)$/);
+      if (!declaration) throw new Error("invalid kit declaration");
+      const [, name, value] = declaration;
+      if (values.has(name)) throw new Error(`duplicate kit declaration ${name}`);
+      if (reduced && !name.startsWith("--two-motion-"))
+        throw new Error("unknown reduced-motion role");
+      // The pinned formatter resolves references. A changed formatter needs a
+      // deliberate adapter update, not silently unresolved dependencies.
+      if (/var\(|[<>]|!important/.test(value))
+        throw new Error(`unresolved or unsafe kit value ${name}`);
+      values.set(name, value.trim());
+    }
+    return values;
+  };
+  const base = declarations(structure[1], false);
+  const reduced = declarations(structure[2], true);
+  if (base.get("color-scheme") !== "dark") throw new Error("kit must remain dark only");
+  for (const name of [
+    "ease",
+    "duration-fast",
+    "duration-base",
+    "duration-slow",
+    "duration-enter",
+  ]) {
+    if (!reduced.has(`--two-motion-${name}`)) throw new Error(`missing reduced-motion ${name}`);
+  }
+  for (const name of reduced.keys()) {
+    if (!base.has(name)) throw new Error(`reduced-motion role has no base ${name}`);
+  }
+  return { base, reduced };
+}
+
+export function roleDeclarations(kit, roles = ROLES) {
+  const aliases = new Set();
+  return roles.map(([alias, source]) => {
+    if (!/^[a-z][\w-]*$/.test(alias) || aliases.has(alias))
+      throw new Error(`alias collision or invalid alias ${alias}`);
+    aliases.add(alias);
+    const value = kit.base.get(`--two-${source}`);
+    if (value === undefined) throw new Error(`missing kit role --two-${source}`);
+    // Preserve the measured local fallback without inventing a kit font role.
+    const resolved =
+      alias === "font-display" ? value.replace(/,/, ', "Mona Sans Fallback",') : value;
+    return [alias, source, resolved];
+  });
+}
+
+const aliases =
+  "--ink:var(--color-text);--paper:var(--color-page);--brand:var(--color-accent);--muted:var(--color-muted);--surface:var(--color-surface);--line:var(--color-border);";
+const colors = [
+  ["text", "text"],
+  ["page", "page"],
+  ["accent", "accent"],
+  ["muted", "muted"],
+  ["surface", "surface"],
+  ["border", "control-border"],
+];
+const schedule = '.base-theme.schedule-theme,.base-theme[data-theme="schedule"]';
+
+export function generate(root = ROOT) {
+  const version = readFileSync(join(root, "vendor/design-kit/VERSION"), "utf8").trim();
+  if (!/^v\d+\.\d+\.\d+$/.test(version)) throw new Error("invalid design-kit VERSION");
+  const kit = parseKit(readFileSync(join(root, "vendor/design-kit/tokens.css"), "utf8"));
+  const roles = roleDeclarations(kit);
+  const get = (name) => {
+    const value = kit.base.get(`--two-${name}`);
+    if (value === undefined) throw new Error(`missing kit role --two-${name}`);
+    return value;
+  };
+  const hooks = (prefix, kitStack = false) =>
+    colors
+      .map(([name, source]) => {
+        const fallback = kitStack
+          ? `var(--color-lobby-${{ text: "ink", page: "surface", accent: "accent", muted: "muted", surface: "raised", border: "line" }[name]})`
+          : get(source);
+        return `--color-${name}:var(--theme-${prefix}${name},${fallback});`;
+      })
+      .join("");
+  // Keep foundation palette, display scale and accent roles in the facade;
+  // interaction/layout roles live beside their theme rules. Both are always
+  // served together, and this split fits each existing raw AND gzip ceiling.
+  const foundation = ([alias]) =>
+    /^(g\d$|t\d$|hair\d$|radius-|font-size-|tracking-|font-accent$|font-data$|gradient-)/.test(
+      alias,
+    );
+  const declarations = (selected) =>
+    selected.map(([alias, , value]) => `--${alias}:${value};`).join("");
+  const facade = `.base-theme{${hooks("")}${aliases}color-scheme:dark;${declarations(roles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}}`;
+  const reduced = roles
+    .filter(([, source]) => kit.reduced.has(`--two-${source}`))
+    .map(([alias, source]) => `--${alias}:${kit.reduced.get(`--two-${source}`)};`)
+    .join("");
+  const roleCss = `.base-theme{${declarations(roles.filter((role) => !foundation(role)))}}@media(prefers-reduced-motion:reduce){.base-theme{${reduced}}}`;
+  const source = readFileSync(join(root, "assets/theme.css"), "utf8");
+  const compact = (css) =>
+    transformSync(css, { loader: "css", minify: true, legalComments: "none" }).code;
+  const kitColors = [
+    ["surface", "surface"],
+    ["raised", "raised"],
+    ["ink", "text"],
+    ["muted", "muted"],
+    ["accent", "accent"],
+    ["on-accent", "accent-ink"],
+    ["line", "control-border"],
+    ["focus", "accent"],
+  ];
+  const utility = (alias) => {
+    if (
+      /^(g\d|hair\d|t\d|ember|on-accent|accent-hi|border|live|echo|ok|danger|warn|focus-ring)/.test(
+        alias,
+      )
+    )
+      return `color-${alias}`;
+    if (alias.startsWith("font-size-")) return alias.replace("font-size-", "text-");
+    if (alias.startsWith("line-height-")) return alias.replace("line-height-", "leading-");
+    return alias;
+  };
+  const kitCss = `/* GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs. */\n@theme static{${kitColors.map(([alias, source]) => `--color-lobby-${alias}:${get(source)};`).join("")}${roles.map(([alias, , value]) => `--${utility(alias)}:${value};`).join("")}--font-sans:ui-sans-serif,system-ui,sans-serif;}\n.base-theme{${hooks("", true)}${aliases}}\n${schedule}{${hooks("schedule-", true)}${aliases}}\n@media(prefers-reduced-motion:reduce){:root{${roles
+    .filter(([, source]) => kit.reduced.has(`--two-${source}`))
+    .map(([alias, source]) => `--${utility(alias)}:${kit.reduced.get(`--two-${source}`)};`)
+    .join("")}}}\n`;
+  const validation = transformSync(kitCss, { loader: "css", logLevel: "silent" });
+  if (validation.warnings.length) throw new Error("invalid generated Kit stylesheet");
+  return new Map([
+    [ARTIFACTS[0], compact(facade)],
+    [ARTIFACTS[1], compact(roleCss + source)],
+    [ARTIFACTS[2], kitCss],
+  ]);
+}
+
+export function build(root = ROOT, check = false) {
+  for (const [path, css] of generate(root)) {
+    if (check) {
+      if (readFileSync(join(root, path), "utf8") !== css)
+        throw new Error(`generated token drift: ${path}`);
+    } else {
+      writeFileSync(join(root, path), css);
+    }
+  }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length && args[0] !== "--check")) {
+    console.error("Usage: node ci/build-ember-tokens.mjs [--check]");
+    process.exitCode = 2;
+  } else {
+    try {
+      build(ROOT, args[0] === "--check");
+      console.log("ember adapters: in sync");
+    } catch (error) {
+      console.error(error.message);
+      process.exitCode = 1;
+    }
+  }
+}

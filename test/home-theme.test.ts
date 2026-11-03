@@ -261,21 +261,36 @@ describe("homepage theme", () => {
   });
 
   it("keeps the responsive, focus and reduced-motion rules external and compact", () => {
+    // public/theme.css is generated and minified from assets/theme.css plus
+    // the kit role block (exactness is gated by ci/check-ember-token-sync), so
+    // served assertions are semantic. Source assertions pin the authored text.
     const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
+    const source = readFileSync(new URL("../assets/theme.css", import.meta.url), "utf8");
     expect(css).toContain(".base-theme :focus-visible");
-    expect(css).toContain("@media (max-width: 48rem)");
-    expect(css).toContain("prefers-reduced-motion: no-preference");
+    expect(css).toMatch(/@media\s*\(max-width:\s*48rem\)/);
+    expect(css).toMatch(/@media\s*\(prefers-reduced-motion:\s*no-preference\)/);
     expect(css).not.toContain("@import");
     expect(css).not.toContain("https://");
+    // Focus ring: authored source and served sheet agree, widths come from the
+    // generated roles (2px width, 3px offset).
+    expect(source).toMatch(
+      /\.base-theme :focus-visible\s*\{\s*outline:\s*var\(--focus-width\) solid var\(--brand\);\s*outline-offset:\s*var\(--focus-offset\);/,
+    );
+    expect(css).toMatch(
+      /\.base-theme :focus-visible\s*\{\s*outline:\s*var\(--focus-width\) solid var\(--brand\);\s*outline-offset:\s*var\(--focus-offset\);?\s*\}/,
+    );
+    expect(css).toMatch(/--focus-width:\s*2px/);
+    expect(css).toMatch(/--focus-offset:\s*3px/);
+    expect(source).not.toContain("@import");
+    expect(source).not.toContain("https://");
     // Scoping every display text rule away from the content leaves (late
     // font swap became mobile LCP) raised the cap from 12000: it costs
     // ~600 bytes of :not(.content-theme) guards. The Ember Hours migration
     // adds the four kit §2 @font-face blocks (variable Mona Sans, its
     // local-metric fallback, optional serif and mono) plus the ember focus
-    // and forced-colors rules: measured 13825 bytes, so the cap is that
-    // plus 200 B slack. Still no @import, no remote URLs, still one
-    // hand-readable file.
-    expect(css.length).toBeLessThan(14025);
+    // and forced-colors rules. Keep the existing 14025 B cap on the actual
+    // served sheet, including its generated kit interaction/layout roles.
+    expect(Buffer.byteLength(css, "utf8")).toBeLessThan(14025);
   });
 
   it("keeps the primary .btn:hover lift on the brand token", () => {
@@ -288,7 +303,7 @@ describe("homepage theme", () => {
     const hovers = css.match(/\.base-theme \.btn:hover\s*\{[^}]*\}/g) ?? [];
     expect(hovers).toHaveLength(1);
     expect(hovers[0]).toContain("var(--brand)");
-    expect(hovers[0]).toContain("filter: brightness(1.1)");
+    expect(hovers[0]).toMatch(/filter:\s*brightness\(1\.1\)/);
     const rests = css.match(/\.base-theme \.btn\s*\{[^}]*\}/g) ?? [];
     expect(rests.length).toBeGreaterThanOrEqual(1);
     for (const rest of rests) {

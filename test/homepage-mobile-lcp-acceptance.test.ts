@@ -127,11 +127,15 @@ describe("homepage mobile LCP acceptance", () => {
   it("retains the Mona Sans Fallback swap chain for delayed font swaps", async () => {
     const { html } = await homepageHtml();
     const css = inlineCss(html);
-    expect(css).toContain("@font-face { font-family: 'Mona Sans Fallback'");
-    expect(css).toContain("size-adjust: 103.33%");
-    expect(css).toContain("ascent-override: 105.49%");
-    expect(css).toContain("descent-override: 30.97%");
-    expect(css).toContain("font-weight: 200 900");
+    // Served CSS is generated and minified: allow whitespace and optional quotes.
+    expect(css).toMatch(/@font-face\s*\{\s*font-family:\s*["']?Mona Sans Fallback["']?\s*;/);
+    expect(css).toMatch(/size-adjust:\s*103\.33%/);
+    expect(css).toMatch(/ascent-override:\s*105\.49%/);
+    expect(css).toMatch(/descent-override:\s*30\.97%/);
+    expect(css).toMatch(/font-weight:\s*200 900/);
+    expect(css).toMatch(
+      /--font-display:\s*Mona Sans,\s*["']Mona Sans Fallback["'],\s*system-ui,\s*sans-serif/,
+    );
   });
 
   it("keeps homepage images non-blocking and sized", async () => {
