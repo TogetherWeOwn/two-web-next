@@ -1,10 +1,61 @@
+/*
+ * Living Lobby design tokens (design §3.1, §3.7). Single source of truth for
+ * the Hono themed pages: every colour, font-role, radius and spacing value
+ * on those pages flows from this file. The Kit twin (web/src/app.css @theme)
+ * carries the same §3 values under its own names; keep the two in step.
+ *
+ * Value mapping (old → §3). Lime accents (#a3ff12) retire to ember as
+ * surfaces migrate; --color-accent/--brand already resolve to ember.
+ * - page    #151720 → --ground    #17130f (ember-tinted action ground)
+ * - surface #222430 → --raised    #221c15 (panels, rungs)
+ * - text    #f5f6fb → --text-1    #f7f2e9 (headings, primary)
+ * - muted   #c6cbea → --text-2    #ddd3c2 (body-safe step: p/card rules use it)
+ * - border  #41465c → cream 14% alpha hairline (never the only separator for
+ *   meaning)
+ * - accent  #a3ff12 → --ember     #ff9c36 (action accent, focus, "you" marks)
+ * New: --raised-2 (room rows, status boxes), --text-3/--text-4 (secondary /
+ * quiet steps, both still ≥ 4.5:1 on every ground they can touch), --live
+ * (live state only, always paired with words), --ok (confirmed/online),
+ * --focus (ember keyboard focus), the cream records set (the bot-recorded
+ * ground, the only light surface in v1), font-role stacks, radius and
+ * band-spacing. Records ink is --records-ink (not --ink: that alias still
+ * means light themed text until card 2 renames usages).
+ * The light legacy sheet (styles.css) stays untouched for unmigrated pages;
+ * the records cream is not that sheet. --theme-* plugs preserve explicit
+ * overrides; route ownership (src/route-ownership.ts) is unchanged.
+ */
 .base-theme {
-  --color-text: var(--theme-text, #f5f6fb);
-  --color-page: var(--theme-page, #151720);
-  --color-accent: var(--theme-accent, #a3ff12);
-  --color-muted: var(--theme-muted, #c6cbea);
-  --color-surface: var(--theme-surface, #222430);
-  --color-border: var(--theme-border, #41465c);
+  --ground: #17130f;
+  --raised: #221c15;
+  --raised-2: #2a231a;
+  --text-1: #f7f2e9;
+  --text-2: #ddd3c2;
+  --text-3: #c0b39c;
+  --text-4: #ab9c83;
+  --ember: #ff9c36;
+  --live: #ff4d7e;
+  --ok: #7ee2a0;
+  --focus: #ff9c36;
+  --cream: #f7f2e9;
+  --records-ink: #17130f;
+  --records-ink-muted: #5c5546;
+  --echo: #9a4a00;
+  --font-display: "Space Grotesk", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-serif: "Source Serif 4", Georgia, serif;
+  --radius-panel: 20px;
+  --radius-record: 24px;
+  --radius-pill: 999px;
+  --container: 1240px;
+  --gutter: 32px;
+  --band: 56px;
+  --color-text: var(--theme-text, var(--text-1));
+  --color-page: var(--theme-page, var(--ground));
+  --color-accent: var(--theme-accent, var(--ember));
+  --color-muted: var(--theme-muted, var(--text-2));
+  --color-surface: var(--theme-surface, var(--raised));
+  --color-border: var(--theme-border, rgb(247 242 233 / 0.14));
   --ink: var(--color-text);
   --paper: var(--color-page);
   --brand: var(--color-accent);
@@ -18,14 +69,19 @@
     17px / 1.65 system-ui,
     sans-serif;
 }
+
+.base-theme:not(.content-theme) {
+  color-scheme: dark;
+}
+
 .base-theme.schedule-theme,
 .base-theme[data-theme="schedule"] {
-  --color-text: var(--theme-schedule-text, #f5f6fb);
-  --color-page: var(--theme-schedule-page, #151720);
-  --color-accent: var(--theme-schedule-accent, #a3ff12);
-  --color-muted: var(--theme-schedule-muted, #c6cbea);
-  --color-surface: var(--theme-schedule-surface, #222430);
-  --color-border: var(--theme-schedule-border, #41465c);
+  --color-text: var(--theme-schedule-text, var(--text-1));
+  --color-page: var(--theme-schedule-page, var(--ground));
+  --color-accent: var(--theme-schedule-accent, var(--ember));
+  --color-muted: var(--theme-schedule-muted, var(--text-2));
+  --color-surface: var(--theme-schedule-surface, var(--raised));
+  --color-border: var(--theme-schedule-border, rgb(247 242 233 / 0.14));
   --ink: var(--color-text);
   --paper: var(--color-page);
   --brand: var(--color-accent);

@@ -62,7 +62,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/admin-rsvp-review.css": { maxRawBytes: 1024, maxGzipBytes: 512 },
   "public/operator-overrides-theme.css": { maxRawBytes: 512, maxGzipBytes: 256 },
   "public/theme.css": { maxRawBytes: 15360, maxGzipBytes: 3584 },
-  "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
+  "public/theme-tokens.css": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/event-theme.css": { maxRawBytes: 7168, maxGzipBytes: 2048 },
   "public/profile-theme.css": { maxRawBytes: 8704, maxGzipBytes: 2048 },
   "public/schedule-theme.css": { maxRawBytes: 6144, maxGzipBytes: 1792 },

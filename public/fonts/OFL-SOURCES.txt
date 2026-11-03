@@ -6,11 +6,13 @@ Re-run that script and diff this directory to audit any file.
 Each family below is licensed under the SIL Open Font License 1.1
 (see LICENSE.txt in this directory for the full text).
 
-1. Space Grotesk 500 / 700 — display + band headings
+1. Space Grotesk 700 — display + band headings
    Upstream: https://github.com/floriankarsten/space-grotesk
    Source file: SpaceGrotesk[wght].ttf (variable, wght 300-700), instanced
    Version 2.000. Copyright 2020 The Space Grotesk Project Authors.
-   Files: space-grotesk-latin-500.woff2, space-grotesk-latin-700.woff2
+   Single-weight face only: the homepage pins no exact font-weight: 500
+   declaration (one Display weight per the mobile LCP recovery).
+   Files: space-grotesk-latin-700.woff2
 
 2. Atkinson Hyperlegible 400 / 700 — body + UI
    Upstream: https://github.com/google/fonts (ofl/atkinsonhyperlegible)
@@ -20,12 +22,13 @@ Each family below is licensed under the SIL Open Font License 1.1
    Files: atkinson-hyperlegible-latin-400.woff2,
    atkinson-hyperlegible-latin-700.woff2
 
-3. IBM Plex Mono 400 / 500 — data (counts, dates, freshness, zones)
+3. IBM Plex Mono 400 — data (counts, dates, freshness, zones)
    Upstream: https://github.com/IBM/plex
    (via https://github.com/google/fonts, ofl/ibmplexmono)
-   Source files: IBMPlexMono-Regular.ttf, IBMPlexMono-Medium.ttf (static).
+   Source file: IBMPlexMono-Regular.ttf (static).
    Version 2.3. Copyright 2017 IBM Corp. All rights reserved.
-   Files: ibm-plex-mono-latin-400.woff2, ibm-plex-mono-latin-500.woff2
+   Single-weight face only, same homepage 500 pin as item 1.
+   Files: ibm-plex-mono-latin-400.woff2
 
 4. Source Serif 4 italic 600 — records names only
    Upstream: https://github.com/adobe-fonts/source-serif

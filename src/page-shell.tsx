@@ -65,7 +65,7 @@ export const Layout: FC<
             crossorigin="anonymous"
           />
         ) : null}
-        <meta name="theme-color" content="#151720" />
+        <meta name="theme-color" content="#17130f" />
         <link rel="manifest" href="/site.webmanifest" />
         <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />

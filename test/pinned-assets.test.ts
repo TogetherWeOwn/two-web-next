@@ -30,6 +30,18 @@ const IMMUTABLE = "public, max-age=31536000, immutable";
 const FONT_PINS = {
   "display-latin-500.woff2": "23afdb9b5b89b878fab04d80cc30bf41bb4f3f7e8be88e5f16a7cc7671cdb2dc",
   "display-latin-700.woff2": "5b7e4a6f97163c2636724d4de90304fc895653dcfe64c67a7a22f26331ca5c5f",
+  // Living Lobby roles (design §3.2), built by bin/fetch-lobby-fonts.sh.
+  // Single-weight faces only (no exact-500 declaration anywhere inline).
+  "space-grotesk-latin-700.woff2":
+    "53046554a98fc58d308dcc63f4f32d34bae8c59c530c83343c4d7a616a9773d8",
+  "atkinson-hyperlegible-latin-400.woff2":
+    "1ff172a1ca7724c01bb8a74e23c34bd09d087fd6e508a7a9bb31258c59df1284",
+  "atkinson-hyperlegible-latin-700.woff2":
+    "d06e721fd59eb5ef25b0fe052045952a36e22c419ba53114a665f8d5e1bb47d4",
+  "ibm-plex-mono-latin-400.woff2":
+    "c340b7c727affc4c7e600d62ceee85c3d1a893ee54dadedeb744da492be301a9",
+  "source-serif-4-latin-600-italic.woff2":
+    "b18d60aae7830756f0e6168b091897b701cf6b902894784bb8f87e54a1a89c6c",
 } as const;
 
 const fontBytes = (name: string) => readFileSync(resolve(root, "public/fonts", name));

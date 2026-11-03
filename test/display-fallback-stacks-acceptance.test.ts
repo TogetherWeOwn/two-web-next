@@ -2,12 +2,12 @@ import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// Typography acceptance: every Display stack in the four theme sheets carries
-// the metric-matched 'Display Fallback' directly after Display (the theme.css
-// position), every --font-display token definition carries it too, and no
+// Typography acceptance: every Rajdhani Display stack in the four theme sheets
+// carries the metric-matched 'Display Fallback' directly after Display (the
+// theme.css position), every --font-display token definition names the
+// self-hosted Space Grotesk face (design §3.2) with a swap @font-face, and no
 // hardcoded hex lives in theme sheets outside token files. Static pins only:
-// no app, no database, no network. The E7 build greens these without editing
-// this file.
+// no app, no database, no network.
 
 const THEME_SHEETS = [
   "theme.css",
@@ -77,12 +77,34 @@ describe("unified Display fallback stacks", () => {
 });
 
 describe("--font-display token", () => {
-  it("is defined", () => {
-    expect(tokenDefinitions().length).toBeGreaterThanOrEqual(1);
+  it("is defined in both token layers", () => {
+    expect(tokenDefinitions().length).toBeGreaterThanOrEqual(2);
   });
 
-  it("carries 'Display Fallback' directly after Display in every definition", () => {
-    const violations = tokenDefinitions().filter((declaration) => !UNIFIED_STACK.test(declaration));
+  // Token migration (design §3.2, §3.7): the display role is the self-hosted
+  // Space Grotesk face. Rajdhani Display stacks keep the metric-matched
+  // 'Display Fallback' until the last surface using them migrates (enforced
+  // above); the Space Grotesk stacks do not name Display at all, so they
+  // cannot carry that fallback. Metric-tuned local fallbacks for the new
+  // faces land with their first painted usage (later Living Lobby card),
+  // measured then — no unverifiable overrides are declared here.
+  it("names the self-hosted Space Grotesk face in every definition", () => {
+    const violations = tokenDefinitions().filter(
+      (declaration) => !declaration.includes("Space Grotesk"),
+    );
+    expect(violations).toEqual([]);
+  });
+
+  it("declares a swap @font-face for every named display family", () => {
+    const faces = stripComments(sheet("theme.css")).match(/@font-face\s*\{[^}]*\}/g) ?? [];
+    const violations: string[] = [];
+    for (const family of ["Space Grotesk"]) {
+      const face = faces.filter((block) => block.includes(`"${family}"`));
+      if (face.length === 0) violations.push(`${family}: no @font-face`);
+      for (const block of face) {
+        if (!/font-display\s*:\s*swap/.test(block)) violations.push(`${family}: no swap`);
+      }
+    }
     expect(violations).toEqual([]);
   });
 });

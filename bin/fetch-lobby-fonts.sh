@@ -27,8 +27,6 @@ fetch "atkinsonhyperlegible/AtkinsonHyperlegible-Bold.ttf" \
   5a3b0c8cc8ca545155150b4512a1fa248298df121c50d6557e651e61fbdab92f atkinson700.ttf
 fetch "ibmplexmono/IBMPlexMono-Regular.ttf" \
   6a3412f058c7d8dfd9170c41e85ade48e5156ecb89356110ca57a0a27734af46 plex400.ttf
-fetch "ibmplexmono/IBMPlexMono-Medium.ttf" \
-  a9b4c49bb299e05b5f6c481e7fb5e78943d2793249a0c8874ab574a2d1ea6755 plex500.ttf
 fetch "sourceserif4/SourceSerif4-Italic%5Bopsz%2Cwght%5D.ttf" \
   15fbc7e4679489a501998c3669272637a6646388ef7e4bd77eebb5bf967a1f42 serif.ttf
 
@@ -41,7 +39,6 @@ src = sys.argv[1]
 # instantiateVariableFont returns the instance (inplace=False default):
 # ignoring the return value silently ships the variable font.
 jobs = [
-    ("sg.ttf", {"wght": 500}, "sg500.ttf", 500),
     ("sg.ttf", {"wght": 700}, "sg700.ttf", 700),
     ("serif.ttf", {"wght": 600, "opsz": 24}, "serif600.ttf", 600),
 ]
@@ -61,12 +58,10 @@ subset() { # $1=input $2=output $3=layout-features
     --no-hinting --desubroutinize
 }
 
-subset sg500.ttf space-grotesk-latin-500.woff2 '*'
 subset sg700.ttf space-grotesk-latin-700.woff2 '*'
 subset atkinson400.ttf atkinson-hyperlegible-latin-400.woff2 '*'
 subset atkinson700.ttf atkinson-hyperlegible-latin-700.woff2 '*'
 subset plex400.ttf ibm-plex-mono-latin-400.woff2 '*'
-subset plex500.ttf ibm-plex-mono-latin-500.woff2 '*'
 # Records serif is names only: kern+liga, full feature set not needed.
 subset serif600.ttf source-serif-4-latin-600-italic.woff2 "kern,liga"
 

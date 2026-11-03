@@ -23,30 +23,60 @@
 @source not "./routes/admin/join-attempts";
 
 /*
- * Open Lobby tokens. Single source of truth for the SvelteKit
- * shell: every colour, type, spacing, radius and surface value in Kit chrome
- * flows from this file. A later design direction is a token swap here plus
- * light component edits; components must use these utilities (bg-lobby-*,
+ * Living Lobby tokens (design §3.1, §3.7). Single source of truth for the
+ * SvelteKit shell: every colour, type, spacing, radius and surface value in
+ * Kit chrome flows from this file. The Hono twin
+ * (public/theme-tokens.css) carries the same §3 values under its own names;
+ * keep the two in step. A later direction is a token swap here plus light
+ * component edits; components must use these utilities (bg-lobby-*,
  * text-lobby-*, border-lobby-*, font-display) and never hard-code palette
  * values or arbitrary hex. Spacing and radius stay on the Tailwind scale
  * (no arbitrary p-[…]/rounded-[…] values).
  *
- * Values are the Open Lobby direction, not Tailwind Plus: the Plus catalogue
- * is design reference only and must never be pasted into this repo. The
- * display stack reuses the self-hosted Display font already served from
- * public/fonts; swapping the direction swaps this token, not every caller.
+ * Value mapping (old → §3). Lime (#c2f45b) retires to ember as surfaces
+ * migrate; --color-lobby-accent already resolves to ember.
+ * - surface #121719 → --ground #17130f (page; bg-lobby-surface keeps its name
+ *   so the shell canvas follows without per-component edits)
+ * - raised  #1e292c → #221c15 (panels, rungs)
+ * - ink     #f5f5eb → --text-1 #f7f2e9
+ * - muted   #b5c1c1 → --text-2 #ddd3c2 (body-safe step)
+ * - line    #4b5b5d → cream 14% alpha hairline
+ * - accent  #c2f45b → --ember  #ff9c36
+ * - focus   #ffffff → ember 3 px (design §3.1: every interactive element)
+ * New: --color-lobby-raised-2, --text-3/--text-4 steps, --live/--ok,
+ * the cream records set (the only light surface in v1), font-role stacks,
+ * radius and band-spacing. Nothing here is Tailwind Plus: that catalogue
+ * is design reference only and must never be pasted into this repo.
  */
 @theme {
-  --color-lobby-surface: #121719;
-  --color-lobby-raised: #1e292c;
-  --color-lobby-ink: #f5f5eb;
-  --color-lobby-muted: #b5c1c1;
-  --color-lobby-accent: #c2f45b;
-  --color-lobby-on-accent: #14200a;
-  --color-lobby-line: #4b5b5d;
-  --color-lobby-focus: #ffffff;
-  --font-display: Display, "Display Fallback", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
+  --color-lobby-surface: #17130f;
+  --color-lobby-raised: #221c15;
+  --color-lobby-raised-2: #2a231a;
+  --color-lobby-ink: #f7f2e9;
+  --color-lobby-muted: #ddd3c2;
+  --color-lobby-quiet: #c0b39c;
+  --color-lobby-faint: #ab9c83;
+  --color-lobby-accent: #ff9c36;
+  --color-lobby-on-accent: #17130f;
+  --color-lobby-line: rgb(247 242 233 / 0.14);
+  --color-lobby-focus: #ff9c36;
+  --color-lobby-live: #ff4d7e;
+  --color-lobby-ok: #7ee2a0;
+  --color-lobby-cream: #f7f2e9;
+  --color-lobby-records-ink: #17130f;
+  --color-lobby-records-ink-muted: #5c5546;
+  --color-lobby-echo: #9a4a00;
+  --font-display: "Space Grotesk", "Arial Narrow", ui-sans-serif, system-ui, sans-serif;
   --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Atkinson Hyperlegible", system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, monospace;
+  --font-serif: "Source Serif 4", Georgia, serif;
+  --radius-panel: 1.25rem;
+  --radius-record: 1.5rem;
+  --radius-pill: 999px;
+  --spacing-band: 3.5rem;
+  --spacing-gutter: 2rem;
+  --container-lobby: 77.5rem;
 }
 
 /*
@@ -84,6 +114,8 @@ html body {
  * theme sheets Kit still links (theme.css, schedule-theme.css).
  */
 .base-theme {
+  --ember: var(--color-lobby-accent);
+  --focus: var(--color-lobby-focus);
   --color-text: var(--theme-text, var(--color-lobby-ink));
   --color-page: var(--theme-page, var(--color-lobby-surface));
   --color-accent: var(--theme-accent, var(--color-lobby-accent));

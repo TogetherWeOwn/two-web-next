@@ -269,9 +269,12 @@ describe("homepage theme", () => {
     expect(css).not.toContain("https://");
     // Scoping every Display text rule away from the content leaves (late
     // font swap became mobile LCP) raised the cap from 12000: it costs
-    // ~600 bytes of :not(.content-theme) guards. Still no @import, no remote
-    // URLs, still one hand-readable file.
-    expect(css.length).toBeLessThan(13000);
+    // ~600 bytes of :not(.content-theme) guards. Self-hosting the five
+    // Living Lobby OFL role faces (design §3.2) raised it from 13000:
+    // five minified @font-face blocks cost ~1200 bytes at 14094 measured
+    // (the two exact-500 statics stay out per the homepage LCP pins).
+    // Still no @import, no remote URLs, still one hand-readable file.
+    expect(css.length).toBeLessThan(16000);
   });
 
   it("keeps the primary .btn:hover lift on the brand token", () => {

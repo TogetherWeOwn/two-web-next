@@ -144,8 +144,8 @@ export function leafInlineStyleCsp(c: Context): void {
 // a path list. Pinned byte-identical to the template plus its sha256 by
 // test/kit-fallback-style.test.ts; edit the template and the constant together.
 export const KIT_FALLBACK_INLINE_STYLE: string =
-  "body{max-width:35rem;margin:3rem auto;padding:0 1.5rem;background:#121719;color:#f5f5eb;font:1rem/1.6 system-ui}a{display:inline-block;padding:.5rem;color:#c2f45b}a:focus-visible{outline:3px solid;outline-offset:3px}";
-export const KIT_FALLBACK_STYLE_SHA256: string = "U0fk7vWGFjI74MKJiDTgbYe0GqkdbUrAITcJlds8xL4=";
+  "body{max-width:35rem;margin:3rem auto;padding:0 1.5rem;background:#17130f;color:#f7f2e9;font:1rem/1.6 system-ui}a{display:inline-block;padding:.5rem;color:#ff9c36}a:focus-visible{outline:3px solid;outline-offset:3px}";
+export const KIT_FALLBACK_STYLE_SHA256: string = "aI19GQHLaNNXgIpwTQSFPJftgQWrQ5C/C2dvGmNhFoI=";
 
 // True when the body carries the exact fallback style element. The full
 // element (tags included) is the match, so the allowlist below can only
