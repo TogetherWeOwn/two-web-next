@@ -37,6 +37,11 @@ Each family below is licensed under the SIL Open Font License 1.1
    instanced to wght 600 / opsz 24.
    Version 4.004. Copyright 2014-2021 Adobe Systems Incorporated,
    with Reserved Font Name "Source".
+   The shipped subset is a Modified Version, so its internal names
+   are renamed to "TWO Lobby Serif" (family), "TWO Lobby Serif
+   Semibold Italic" (full), "TWOLobbySerif-SemiboldItalic"
+   (PostScript); the copyright record is unchanged. The CSS
+   font-family descriptor stays "Source Serif 4" (no local() use).
    File: source-serif-4-latin-600-italic.woff2
 
 Retired display face (kept until the last surface using it migrates):

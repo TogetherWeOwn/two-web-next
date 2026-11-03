@@ -38,15 +38,49 @@ from fontTools.varLib.instancer import instantiateVariableFont
 src = sys.argv[1]
 # instantiateVariableFont returns the instance (inplace=False default):
 # ignoring the return value silently ships the variable font.
+#
+# The Source Serif 4 upstream carries Reserved Font Name "Source", so the
+# instanced/subset records face ships under a renamed identity (OFL 1.1: a
+# Modified Version may not use the Reserved Font Name). The CSS
+# font-family descriptor stays "Source Serif 4": no stylesheet uses
+# local(), so matching never reads the internal names. The copyright
+# record (name ID 0) is left untouched.
+SERIF_NAMES = {
+    1: "TWO Lobby Serif",
+    2: "Semibold Italic",
+    # Unique ID carries no Reserved Font Name either (upstream ID 3 embeds
+    # "SourceSerif4Italic"); the copyright record (ID 0) stays untouched.
+    3: "4.004;TWO;TWOLobbySerif-SemiboldItalic",
+    4: "TWO Lobby Serif Semibold Italic",
+    6: "TWOLobbySerif-SemiboldItalic",
+    16: "TWO Lobby Serif",
+    17: "Semibold Italic",
+}
 jobs = [
-    ("sg.ttf", {"wght": 700}, "sg700.ttf", 700),
-    ("serif.ttf", {"wght": 600, "opsz": 24}, "serif600.ttf", 600),
+    ("sg.ttf", {"wght": 700}, "sg700.ttf", 700, None),
+    ("serif.ttf", {"wght": 600, "opsz": 24}, "serif600.ttf", 600, SERIF_NAMES),
 ]
-for name, axes, out, weight in jobs:
+for name, axes, out, weight, rename in jobs:
     font = TTFont(f"{src}/{name}")
     instanced = instantiateVariableFont(font, axes, updateFontNames=True)
     assert "fvar" not in instanced, f"{out}: still variable"
     assert instanced["OS/2"].usWeightClass == weight, f"{out}: weight wrong"
+    if rename:
+        names = instanced["name"]
+        for name_id in rename:
+            names.removeNames(nameID=name_id)
+        for name_id, value in rename.items():
+            names.setName(value, name_id, 3, 1, 0x409)
+            names.setName(value, name_id, 1, 0, 0)
+        # The copyright record (ID 0) keeps declaring the Reserved Font
+        # Name; the OFL requires that notice to stay. Only the font-name
+        # IDs below must be free of it.
+        for rec in names.names:
+            if rec.nameID in rename:
+                assert "source" not in str(rec.toUnicode()).lower(), (
+                    f"{out}: name ID {rec.nameID} still uses the Reserved Font Name"
+                )
+        print(f"{out}: renamed")
     instanced.save(f"{src}/{out}")
 print("instanced")
 EOF

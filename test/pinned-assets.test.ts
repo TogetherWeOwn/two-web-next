@@ -41,7 +41,7 @@ const FONT_PINS = {
   "ibm-plex-mono-latin-400.woff2":
     "c340b7c727affc4c7e600d62ceee85c3d1a893ee54dadedeb744da492be301a9",
   "source-serif-4-latin-600-italic.woff2":
-    "b18d60aae7830756f0e6168b091897b701cf6b902894784bb8f87e54a1a89c6c",
+    "864bc60787b6dd339cc6431044b7a761ba38b00c419e47e5b08d9ab0e9adf7f8",
 } as const;
 
 const fontBytes = (name: string) => readFileSync(resolve(root, "public/fonts", name));
