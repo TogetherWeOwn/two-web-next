@@ -22,7 +22,9 @@
 .events-page .schedule-info p{margin:.4rem 0 0}
 .events-page .schedule-description[open] .schedule-excerpt{display:none;}
 .events-page .schedule-actions{display:grid;justify-items:end;gap:.5rem;max-width:14rem;}
-.events-page .schedule-attendance{color:var(--muted);font-variant-numeric:tabular-nums;}
+.events-page .schedule-attendance{color:var(--muted);font-variant-numeric:tabular-nums;min-width:0;max-width:18rem;overflow-wrap:anywhere;}
+/* A long frozen Echo headline must wrap inside its own auto column instead of
+   squeezing the minmax(0,1fr) info column down to one character per line. */
 .events-page .schedule-badge{display:inline-block;border:1px solid var(--line);padding:.1rem .5rem;margin-top:.5rem;}
 .events-page [data-cal-jump]{flex-wrap:wrap;overflow-wrap:anywhere;}
 .events-page [data-cal-jump][data-cancelled] { flex-direction: column; align-items: flex-start; }
