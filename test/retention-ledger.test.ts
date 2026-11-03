@@ -442,6 +442,7 @@ describe("retention ledger doc rows", () => {
       "state",
       "request_attempts",
       "next_attempt_at",
+      "claim_started_at",
       "terminal_reason",
     ]);
     const rows = read("docs/retention-ledger.md")
@@ -456,7 +457,10 @@ describe("retention ledger doc rows", () => {
       "late redelivery cannot replay edits",
       "ON DELETE cascade",
       "no app path deletes events",
-      "Sole writer is `pgEventStore`",
+      "Snapshot lifecycle writer is `pgEventStore`",
+      "The second writer, `pgReconciliationStore`",
+      "`next_attempt_at = null`",
+      "ordering fence",
       "`prepareSync`",
       "`claimSync`",
       "`deferSync`",
@@ -1026,14 +1030,19 @@ describe("retention ledger mechanisms (memory, no DB)", () => {
   });
 
   it("pins the sync-attempt writer, pending index, schema, and readers", () => {
-    // Sole writer: only the event store inserts or updates attempt rows, in
-    // raw SQL today or the Drizzle table-object form tomorrow.
+    // Only the event store and the atomic reconciliation fence write attempt
+    // rows, in raw SQL today or the Drizzle table-object form tomorrow.
     const writers = listTsFiles(join(root, "src")).filter((file) =>
       writesSyncAttempts(readFileSync(file, "utf8")),
     );
     expect(writers.map((file) => file.replace(root, "").replace(/^\/+/, ""))).toEqual([
       "src/jobs/events.ts",
+      "src/jobs/reconciliation.ts",
     ]);
+    const reconciliation = read("src/jobs/reconciliation.ts");
+    expect(reconciliation).toContain("update event_sync_attempts set next_attempt_at = null");
+    expect(reconciliation).toContain("and state = 'pending'");
+    expect(reconciliation).not.toContain("set state = 'failed'");
     const store = read("src/jobs/events.ts");
     expect(store).toContain("insert into event_sync_attempts");
     expect(store).toContain("update event_sync_attempts set state = 'succeeded'");

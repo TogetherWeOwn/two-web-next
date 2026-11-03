@@ -1,6 +1,6 @@
 // Builder-owned pins for the terminal-claim reopen timeout and failure branches.
 //
-// `reopenTerminalClaim` (src/jobs/consumer.ts:205-232) races the pendingSync /
+// `reopenTerminalClaim` (src/jobs/consumer.ts:219-246) races the pendingSync /
 // deferSync reopen against LEDGER_TIMEOUT_MS (:13, 2000 ms) after a failed
 // terminal-intent note: a hang warns "sync terminal claim reopen timed out"
 // with the sanitized scope (:211-213); a throw warns "sync terminal claim
@@ -29,7 +29,7 @@ const IDEMPOTENCY_KEY = "99999999-9999-4999-8999-999999999999";
 const JOB_ID = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
 const LEASE_TOKEN = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
 
-// LEDGER_TIMEOUT_MS is not exported: pin its value (src/jobs/consumer.ts:13)
+// LEDGER_TIMEOUT_MS is not exported: pin its value (src/jobs/consumer.ts:14)
 // so a bound change fails the 1999 ms / 2000 ms timing assertions below.
 const LEDGER_TIMEOUT_MS = 2000;
 const TIMEOUT_WARN = "sync terminal claim reopen timed out";

@@ -5,6 +5,8 @@ const cancelled = "01J00000000000000000000016";
 const draft = "01J00000000000000000000017";
 const member = "100000000000000101";
 const otherMember = "100000000000000102";
+export const A11Y_RECONCILIATION_OPEN_KEY = "a11a11a1-0000-4000-8000-000000000001";
+export const A11Y_RECONCILIATION_RESOLVED_KEY = "a11a11a1-0000-4000-8000-000000000002";
 const skip = (reason) => ({ skip: true, reason });
 export const A11Y_FREEZE_DATES = "12–14 Oct UTC";
 export const A11Y_OPS_CONTROL_TOKEN = "a11y-operator-fixture-".repeat(2);
@@ -214,6 +216,29 @@ export const coverage = {
     cases: [
       { path: "/admin/echoes/1", identity: "moderator" },
       { path: "/admin/echoes/999", identity: "moderator", status: 404 },
+    ],
+  },
+  "/admin/reconciliation": {
+    cases: [{ path: "/admin/reconciliation", identity: "moderator" }],
+  },
+  "/admin/reconciliation/:key": {
+    cases: [
+      {
+        path: `/admin/reconciliation/${A11Y_RECONCILIATION_OPEN_KEY}`,
+        identity: "moderator",
+        state: "open",
+      },
+      {
+        path: `/admin/reconciliation/${A11Y_RECONCILIATION_RESOLVED_KEY}`,
+        identity: "moderator",
+        state: "resolved",
+      },
+      {
+        path: "/admin/reconciliation/a11a11a1-0000-4000-8000-0000000000ff",
+        identity: "moderator",
+        status: 404,
+        state: "not-found",
+      },
     ],
   },
   "/admin/activity-log": {

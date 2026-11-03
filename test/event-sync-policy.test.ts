@@ -30,6 +30,7 @@ const payload = {
   location: "l",
   description: null,
 };
+const KEY = "66666666-6666-4666-8666-666666666666";
 const fail = (o: Partial<BotFailure>): BotFailure => ({
   ok: false,
   code: "x",
@@ -188,7 +189,7 @@ describe("debounce window (fake clock)", () => {
 });
 
 describe("retry count and backoff ladder", () => {
-  it("walks 10/60/300/900/3600 on transport failure, then fails on attempt 6", async () => {
+  it("walks 10/60/300/900/3600 on transport failure, then goes stuck on attempt 6", async () => {
     const bot = {
       upsertEvent: async () => {
         throw new BotTransportError("bot down");
@@ -203,7 +204,7 @@ describe("retry count and backoff ladder", () => {
     ] as const) {
       const deferred: (Date | null)[] = [];
       const s = store({ deferSync: async (_a, at) => void deferred.push(at) }, attempt - 1);
-      const outcome = await handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, attempt, {
+      const outcome = await handleSyncEvent({ eventKey: "e1", idempotencyKey: KEY }, attempt, {
         bot,
         events: s.events,
       });
@@ -214,9 +215,24 @@ describe("retry count and backoff ladder", () => {
     }
     const deferred: (Date | null)[] = [];
     const s = store({ deferSync: async (_a, at) => void deferred.push(at) }, 5);
-    await expect(
-      handleSyncEvent({ eventKey: "e1", idempotencyKey: "k" }, 6, { bot, events: s.events }),
-    ).resolves.toEqual({ failed: "carrier exhausted; unresolved identity retained" });
+    const exhausted = await handleSyncEvent({ eventKey: "e1", idempotencyKey: KEY }, 6, {
+      bot,
+      events: s.events,
+    });
+    // Request budget spent: stuck under the same key, no failure or definitive.
+    expect(exhausted).toEqual({
+      stuck: {
+        idempotencyKey: KEY,
+        verb: "event.upsert",
+        subject: "e1",
+        lastCode: null,
+        lastStatus: null,
+        lastRequestId: null,
+        attempts: 6,
+      },
+    });
+    expect(exhausted).not.toHaveProperty("failed");
+    expect(exhausted).not.toHaveProperty("definitive");
     expect(deferred).toEqual([null]); // exhausted: no further deadline
     expect(s.stamped).toHaveLength(0);
   });

@@ -34,6 +34,7 @@ export const TABLE_RIGHTS = Object.freeze({
   "public.web_oauth_journeys": ["DELETE", "INSERT", "SELECT", "UPDATE"],
   "public.event_echoes": ["INSERT", "SELECT", "UPDATE"],
   "public.event_echo_members": ["DELETE", "INSERT", "SELECT"],
+  "public.bot_reconciliation_intents": ["INSERT", "SELECT", "UPDATE"],
 });
 
 export const SEQUENCE_RIGHTS = Object.freeze(

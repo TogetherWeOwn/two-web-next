@@ -1,8 +1,8 @@
 // The jobs worker sends through the real signed bot client (TOG-12401).
 //
 // Announcement and role-assign go through the actual `handleQueue` entry point
-// with a global fetch double (no ledger id, so no SQL runs; pools are lazy and
-// never connect). Sync-event needs an event store, so it runs the same
+// with a global fetch double and an in-memory reconciliation store (no ledger
+// id, so pools never connect). Sync-event needs an event store, so it runs the same
 // `botClientFor(env)` through `consume` with a fake store. Missing BOT_* config
 // must end as a terminal, alerting failure, never a success ack.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -10,6 +10,68 @@ import type { JobsEnv } from "../src/env";
 import { consume } from "../src/jobs/consumer";
 import type { EventStore, QueueLedger, SyncAttempt, UniqueLock } from "../src/jobs/types";
 import { botClientFor, handleQueue } from "../src/jobs/worker";
+import type { ReconciliationStore, StuckIntentRecord } from "../src/jobs/reconciliation";
+import { markEchoAnnounced } from "../src/events/echoes";
+
+// Only Echo confirmation opens a transaction in this transport-wiring fixture.
+// Its SQL deadlines are covered with a real row lock in event-echo-render-acceptance.
+vi.mock("postgres", async (importOriginal) => {
+  const actual = await importOriginal<{ default: typeof import("postgres") }>();
+  return {
+    ...actual,
+    default: (...args: Parameters<typeof actual.default>) => {
+      const sql = actual.default(...args);
+      sql.begin = vi.fn(async (work: unknown) => {
+        const tx = vi.fn(async () => []);
+        return (work as (tx: unknown) => Promise<unknown>)(tx);
+      }) as typeof sql.begin;
+      return sql;
+    },
+  };
+});
+
+vi.mock("../src/jobs/reconciliation", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../src/jobs/reconciliation")>();
+  return {
+    ...actual,
+    pgReconciliationStore: (): ReconciliationStore => {
+      const rows = new Map<string, StuckIntentRecord>();
+      return {
+        getStuck: async (key) => rows.get(key) ?? null,
+        recordStuck: async (intent, now = new Date()) => {
+          const row = {
+            ...intent,
+            firstSeenAt: now,
+            lastAttemptAt: now,
+            resolvedAt: null,
+            resolvedBy: null,
+            resolution: null,
+          };
+          rows.set(intent.idempotencyKey, row);
+          return row;
+        },
+        listOpen: async (limit) =>
+          [...rows.values()].filter((row) => !row.resolvedAt).slice(0, limit),
+        listResolved: async (limit) =>
+          [...rows.values()].filter((row) => row.resolvedAt).slice(0, limit),
+        resolveStuck: async (key, resolution, now = new Date()) => {
+          const row = rows.get(key);
+          if (!row || row.resolvedAt) return null;
+          Object.assign(row, {
+            resolvedAt: now,
+            resolvedBy: resolution.by,
+            resolution: resolution.note,
+          });
+          return row;
+        },
+      };
+    },
+  };
+});
+vi.mock("../src/events/echoes", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/events/echoes")>()),
+  markEchoAnnounced: vi.fn(async () => {}),
+}));
 
 const configured = {
   BOT_ENDPOINT_URL: "https://bot-staging.internal.example",
@@ -106,6 +168,26 @@ describe("handleQueue with the live bot client", () => {
       '{"action":"announcement.post","channel_key":"general","body":"hello"}',
     );
     expect(queueFailingAlerts()).toEqual([]);
+  });
+
+  it("wires Echo confirmation only after a signed announcement succeeds", async () => {
+    const { fn } = fetchDouble(
+      refusal(503, "discord_unavailable", true),
+      json(200, { ok: true, request_id: "r1", result: { message_id: "m1" } }),
+    );
+    vi.stubGlobal("fetch", fn);
+    const body = { ...announcement(), echoId: 42 };
+    const first = delivery(body);
+    await handleQueue(batch(first), envWith(configured));
+    expect(markEchoAnnounced).not.toHaveBeenCalled();
+    expect(first.ack).not.toHaveBeenCalled();
+    const second = delivery(body, 2);
+    await handleQueue(batch(second), envWith(configured));
+    expect(markEchoAnnounced).toHaveBeenCalledExactlyOnceWith(expect.anything(), 42);
+    expect(second.ack).toHaveBeenCalledOnce();
+    expect(
+      fn.mock.calls.map(([, init]) => (init.headers as Record<string, string>)["Idempotency-Key"]),
+    ).toEqual([uuid, uuid]);
   });
 
   it("signs and sends role.assign without an idempotency key", async () => {

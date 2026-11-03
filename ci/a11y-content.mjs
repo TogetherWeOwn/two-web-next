@@ -1,5 +1,9 @@
 import assert from "node:assert/strict";
-import { A11Y_FREEZE_DATES } from "./a11y-cases.mjs";
+import {
+  A11Y_FREEZE_DATES,
+  A11Y_RECONCILIATION_OPEN_KEY,
+  A11Y_RECONCILIATION_RESOLVED_KEY,
+} from "./a11y-cases.mjs";
 
 export function contentExpectations(scenario) {
   const unavailable = scenario.readState === "unavailable";
@@ -19,6 +23,48 @@ export function contentExpectations(scenario) {
               ? [{ selector: "main", includes: "No overrides are set." }]
               : [{ selector: "main table", includes: "TWO_AUTOMOD_MENTION_LIMIT" }]),
           ]),
+    ];
+  }
+  if (scenario.route === "/admin/reconciliation") {
+    return [
+      { selector: "main h1", text: "Reconciliation" },
+      { selector: "main h2", count: 2 },
+      { selector: '[data-testid="reconciliation-open-table"] tbody tr', count: 1 },
+      {
+        selector: '[data-testid="reconciliation-open-table"] a',
+        text: "event.upsert",
+        attributes: { href: `/admin/reconciliation/${A11Y_RECONCILIATION_OPEN_KEY}` },
+      },
+      {
+        selector: '[data-testid="reconciliation-open-table"]',
+        includes: "needs_reconciliation · status 409",
+      },
+      { selector: '[data-testid="reconciliation-resolved-table"] tbody tr', count: 1 },
+      {
+        selector: '[data-testid="reconciliation-resolved-table"] a',
+        text: "announcement.post",
+        attributes: { href: `/admin/reconciliation/${A11Y_RECONCILIATION_RESOLVED_KEY}` },
+      },
+    ];
+  }
+  if (scenario.route === "/admin/reconciliation/:key") {
+    if (scenario.state === "not-found") return [];
+    const open = scenario.state === "open";
+    return [
+      { selector: "main h1", text: open ? "event.upsert" : "announcement.post" },
+      {
+        selector: "main dl",
+        includes: open ? A11Y_RECONCILIATION_OPEN_KEY : A11Y_RECONCILIATION_RESOLVED_KEY,
+      },
+      {
+        selector: "main dl",
+        includes: open ? "needs_reconciliation · status 409" : "no wire answer (transport loss)",
+      },
+      open
+        ? { selector: "main p.notice", includes: "Discord may or may not carry this change." }
+        : { selector: "main dl", includes: "Checked Discord; the announcement was posted." },
+      { selector: '[data-testid="reconciliation-resolve"]', count: open ? 1 : 0 },
+      { selector: 'main form textarea[name="resolution"]', count: open ? 1 : 0 },
     ];
   }
   if (scenario.route === "/events/past" && scenario.state === "past-page-overflow") {

@@ -51,7 +51,8 @@ export const Shell: FC<
           <nav aria-label="Administration">
             <a href="/admin/events">Events</a> · <a href="/admin/featured">Featured</a> ·{" "}
             <a href="/admin/join-attempts">Join attempts</a> ·{" "}
-            <a href="/admin/activity-log">Activity log</a> · <a href="/">Site</a>
+            <a href="/admin/activity-log">Activity log</a> ·{" "}
+            <a href="/admin/reconciliation">Reconciliation</a> · <a href="/">Site</a>
           </nav>
         </header>
         <main id="main" tabindex={-1}>

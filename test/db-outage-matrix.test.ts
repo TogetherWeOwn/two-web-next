@@ -41,6 +41,7 @@ type Case = {
   contentType?: string;
   location?: string;
 };
+const RECONCILIATION_KEY = "11111111-1111-4111-8111-111111111111";
 const eventForm = JSON.stringify({
   title: "Outage fixture",
   timezone: "UTC",
@@ -301,6 +302,33 @@ const MATRIX: Case[] = [
     actor: "moderator",
     format: "html",
   },
+  // The reconciliation reads answer a plain-text 503 on an unreachable store,
+  // and the resolve write answers the admin-chrome HTML shell (not the public
+  // brand header), so these rows carry no `format`; the dedicated test below
+  // pins the resolve shell. The keyed detail and resolve need a real UUID key,
+  // or they 404 before any store read.
+  {
+    method: "GET",
+    route: "/admin/reconciliation",
+    status: 503,
+    actor: "moderator",
+  },
+  {
+    method: "GET",
+    route: "/admin/reconciliation/:key",
+    path: `/admin/reconciliation/${RECONCILIATION_KEY}`,
+    status: 503,
+    actor: "moderator",
+  },
+  {
+    method: "POST",
+    route: "/admin/reconciliation/:key/resolve",
+    path: `/admin/reconciliation/${RECONCILIATION_KEY}/resolve`,
+    status: 503,
+    actor: "moderator",
+    body: "resolution=Checked+on+Discord",
+    contentType: "application/x-www-form-urlencoded",
+  },
   // Empty create forms expose no member subjects and need no data read.
   ...["/admin/events/new", "/admin/featured/new"].map((route) => ({
     method: "GET",
@@ -396,6 +424,18 @@ function assertInventory(router: { routes: { method: string; path: string }[] })
       .sort(),
   ).toEqual([...MIDDLEWARE, "ALL /events/:key/rsvp"].sort());
 }
+
+it("a reconciliation resolve during an outage renders the admin 503 shell and stamps nothing", async () => {
+  const row = MATRIX.find((r) => r.route === "/admin/reconciliation/:key/resolve")!;
+  const res = await request(row);
+  expect(res.status).toBe(503);
+  expect(res.headers.get("content-type")).toContain("text/html");
+  expect(res.headers.get("cache-control")).toContain("no-store");
+  const body = await res.text();
+  expect(body).toContain("Admin temporarily unavailable");
+  expect(body).toContain('<a class="brand" href="/admin">TWO admin</a>');
+  expect(body).not.toMatch(/ECONNREFUSED|outage_fixture|127\.0\.0\.1/);
+});
 
 it("an enabled dedicated operator preview refuses a real source socket outage", async () => {
   const store = createMemorySessionStore();

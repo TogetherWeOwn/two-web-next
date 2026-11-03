@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { consume } from "../src/jobs/consumer";
 import { reconcileEvents } from "../src/jobs/cron";
 import { pgEventStore } from "../src/jobs/events";
+import { pgReconciliationStore } from "../src/jobs/reconciliation";
 import { trackingQueue } from "../src/jobs/ledger";
 import { pgQueueLedger, pgUniqueLock } from "../src/jobs/postgres";
 import { dispatchSyncEvent } from "../src/jobs/sync-event";
@@ -100,6 +101,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event sync eligibility (native Postg
     return {
       bot,
       events: store,
+      reconciliation: pgReconciliationStore(sql),
       ledger: pgQueueLedger(sql),
       lock: pgUniqueLock(sql),
       dispatchPending: (key: string) => dispatchSyncEvent(queue, pgUniqueLock(sql), key),

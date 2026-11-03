@@ -1,5 +1,7 @@
 import { eq } from "drizzle-orm";
 import postgres from "postgres";
+import { A11Y_RECONCILIATION_OPEN_KEY, A11Y_RECONCILIATION_RESOLVED_KEY } from "./a11y-cases.mjs";
+import { pgReconciliationStore, stuckIntent } from "../src/jobs/reconciliation";
 import { auditDatabaseOptions, auditDatabaseUrl } from "./a11y-policy.mjs";
 import { createMemberDataFixture } from "../test/helpers/member-data-db";
 import { cookieFor, env, MODERATOR, seed, SUBJECT } from "../test/helpers/member-data";
@@ -100,6 +102,38 @@ export async function fixtures(raw: string) {
     });
     await migrate(sessionClient as unknown as Sql);
     const sessions = createPostgresSessionStore(sessionClient as unknown as Sql);
+    // Real stuck-intent rows through the production store on the raw client
+    // (its Date serializers are untouched, unlike the Drizzle client).
+    const reconciliation = pgReconciliationStore(sessionClient as unknown as postgres.Sql);
+    await reconciliation.recordStuck(
+      stuckIntent({
+        idempotencyKey: A11Y_RECONCILIATION_OPEN_KEY,
+        verb: "event.upsert",
+        subject: "01J00000000000000000000015",
+        lastCode: "needs_reconciliation",
+        lastStatus: 409,
+        lastRequestId: "a11y-req-open",
+        attempts: 3,
+      }),
+      new Date("2026-10-01T12:00:00Z"),
+    );
+    await reconciliation.recordStuck(
+      stuckIntent({
+        idempotencyKey: A11Y_RECONCILIATION_RESOLVED_KEY,
+        verb: "announcement.post",
+        subject: "a11y-channel-announcements",
+        lastCode: null,
+        lastStatus: null,
+        lastRequestId: null,
+        attempts: 5,
+      }),
+      new Date("2026-10-02T09:00:00Z"),
+    );
+    await reconciliation.resolveStuck(
+      A11Y_RECONCILIATION_RESOLVED_KEY,
+      { by: MODERATOR.userId, note: "Checked Discord; the announcement was posted." },
+      new Date("2026-10-02T10:30:00Z"),
+    );
     return {
       schemaName: fixture.schemaName,
       sessionSecret: env.SESSION_SECRET,

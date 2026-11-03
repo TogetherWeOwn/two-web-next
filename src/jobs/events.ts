@@ -14,6 +14,7 @@ type AttemptRow = {
   state: SyncAttempt["state"];
   request_attempts: number;
   next_attempt_at: Date | null;
+  claim_started_at?: Date;
   terminal_reason?: string | null;
   discord_event_id?: string | null;
 } & (
@@ -30,6 +31,7 @@ function attemptFrom(row: AttemptRow): SyncAttempt {
     state: row.state,
     requestAttempts: row.request_attempts,
     nextAttemptAt: row.next_attempt_at,
+    claimStartedAt: row.claim_started_at,
     // Terminal-intent marker; absent on pre-migration rows (null then).
     terminalReason: row.terminal_reason ?? null,
     // Absent on pre-mirror rows (hermetic doubles leave it undefined, which
@@ -315,7 +317,7 @@ export function pgEventStore(
       ) update event_sync_attempts a
         set state = case when candidate.obsolete then 'obsolete' else a.state end,
           request_attempts = a.request_attempts + case when candidate.obsolete then 0 else 1 end,
-          next_attempt_at = null
+          next_attempt_at = null, claim_started_at = ${now}
         from candidate where a.idempotency_key = candidate.idempotency_key
         returning a.*, candidate.discord_event_id`;
         return row ? attemptFrom(row) : null;

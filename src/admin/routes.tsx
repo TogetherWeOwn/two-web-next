@@ -41,6 +41,14 @@ import { Hono } from "hono";
 import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
 import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./queue-redispatch";
+import {
+  resolveWithReceipt,
+  RECONCILIATION_OPEN_LIMIT,
+  RECONCILIATION_RESOLVED_LIMIT,
+  reconciliationStoreFor,
+  validateResolutionNote,
+} from "./reconciliation";
+import { parseStuckKey } from "../jobs/reconciliation";
 import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
 import { opsOverridesHandler, opsOverridesMethodRefused } from "./ops-overrides";
 import { dbFor, type EnvWithAdminDb } from "./db";
@@ -117,6 +125,8 @@ import {
   FeaturedPage,
   JoinAttemptPage,
   JoinAttemptsPage,
+  ReconciliationDetailPage,
+  ReconciliationPage,
   type RecoveryLink,
 } from "./pages";
 
@@ -188,6 +198,12 @@ function featuredNotFound(c: Context<Vars>) {
 
 function echoNotFound(c: Context<Vars>) {
   return errorPage(c, 404, "Echo not found");
+}
+
+function reconciliationNotFound(c: Context<Vars>) {
+  return errorPage(c, 404, "Stuck intent not found", undefined, [
+    { href: "/admin/reconciliation", label: "Back to reconciliation" },
+  ]);
 }
 
 function writeUnavailable(c: Context<Vars>) {
@@ -953,6 +969,114 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         throw err;
       }
       return c.redirect(`/admin/echoes/${id}`, 303);
+    },
+  );
+
+  // Reconciliation queue (contract §7.4/§11): moderator-only operator surface
+  // for keyed bot intents that ended without confirmation. List and detail
+  // are reads; only the resolve stamp writes (audited first, throttled).
+  admin.get("/reconciliation", async (c) => {
+    declareAccess(c, {
+      resource: "reconciliation",
+      action: "list",
+      route: "admin.reconciliation.index",
+    });
+    let handle;
+    try {
+      handle = await reconciliationStoreFor(c.env);
+    } catch {
+      return adminUnavailable(c);
+    }
+    try {
+      const [open, resolved] = await Promise.all([
+        handle.store.listOpen(RECONCILIATION_OPEN_LIMIT),
+        handle.store.listResolved(RECONCILIATION_RESOLVED_LIMIT),
+      ]);
+      return bufferedMemberHtml(c, <ReconciliationPage open={open} resolved={resolved} />);
+    } catch {
+      return adminUnavailable(c);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  admin.get("/reconciliation/:key", async (c) => {
+    declareAccess(c, {
+      resource: "reconciliation",
+      action: "view",
+      route: "admin.reconciliation.show",
+    });
+    const key = parseStuckKey(c.req.param("key"));
+    if (!key) return reconciliationNotFound(c);
+    let handle;
+    try {
+      handle = await reconciliationStoreFor(c.env);
+    } catch {
+      return adminUnavailable(c);
+    }
+    try {
+      const row = await handle.store.getStuck(key);
+      if (!row) return reconciliationNotFound(c);
+      return bufferedMemberHtml(c, <ReconciliationDetailPage row={row} />);
+    } catch {
+      return adminUnavailable(c);
+    } finally {
+      await handle.close();
+    }
+  });
+
+  admin.post(
+    "/reconciliation/:key/resolve",
+    // Cap first: refuse an oversized moderator body before spending admin-write throttle.
+    requestBodyLimit("form"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    async (c) => {
+      const key = parseStuckKey(c.req.param("key"));
+      if (!key) return reconciliationNotFound(c);
+      let handle;
+      try {
+        handle = await reconciliationStoreFor(c.env);
+      } catch {
+        return writeUnavailable(c);
+      }
+      try {
+        const row = await handle.store.getStuck(key);
+        if (!row) return reconciliationNotFound(c);
+        if (row.resolvedAt) return c.redirect(`/admin/reconciliation/${key}`, 303);
+        const values = await parsedForm(c);
+        if (!values) return badRequest(c);
+        const note = validateResolutionNote(values.resolution);
+        if (!note) {
+          // Resolution-only refusal: re-render the detail with the field error,
+          // same shape as the headline form refusal (422, values kept).
+          c.status(422);
+          return c.html(
+            <ReconciliationDetailPage
+              row={row}
+              values={values}
+              errors={{
+                resolution: "Describe what you verified on Discord, in 500 characters or fewer.",
+              }}
+            />,
+          );
+        }
+        // Stamp and receipt share one transaction: the receipt follows the
+        // conditional update (none for a lost race), and a failed write
+        // refuses the resolve, so no resolve ever answers without a trail.
+        const outcome = await resolveWithReceipt(
+          c.env,
+          handle.store,
+          c.get("adminActor").id,
+          key,
+          note,
+        );
+        if (outcome === "refused") return writeUnavailable(c);
+        return c.redirect(`/admin/reconciliation/${key}`, 303);
+      } catch {
+        return writeUnavailable(c);
+      } finally {
+        await handle.close();
+      }
     },
   );
 

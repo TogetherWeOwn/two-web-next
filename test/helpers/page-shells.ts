@@ -7,10 +7,13 @@ import { events, featuredContents } from "../../src/db/admin-schema";
 import type { Db } from "../../src/db/index";
 import { joinAttempts } from "../../src/db/schema";
 import type { Env } from "../../src/env";
+import { stuckIntent, type ReconciliationStore } from "../../src/jobs/reconciliation";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../../src/sessions";
 
 export const MEMBER_ID = "100000000000000001";
 export const EVENT_KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
+// Reconciliation rows are keyed by the carrier UUID, not an event key.
+export const RECONCILIATION_KEY = "11111111-1111-4111-8111-111111111111";
 
 export const HTML_READS = [
   "/",
@@ -41,6 +44,8 @@ export const HTML_READS = [
   "/admin/featured/:id",
   "/admin/join-attempts",
   "/admin/join-attempts/:id",
+  "/admin/reconciliation",
+  "/admin/reconciliation/:key",
 ];
 
 // Bearer-only operational HTML needs a precise local upstream fixture, not the
@@ -95,6 +100,7 @@ export const NON_HTML_READS = [
 
 export const concretePath = (pattern: string) =>
   pattern
+    .replace("/admin/reconciliation/:key", `/admin/reconciliation/${RECONCILIATION_KEY}`)
     .replace(":key", EVENT_KEY)
     .replace(":user", MEMBER_ID)
     .replace(":id", "1")
@@ -296,6 +302,30 @@ export function pageShellFixture(status = "published") {
   ).session;
   session.transaction = async (fn) => fn(db as unknown as Db);
   const sessions = createMemorySessionStore();
+  // One open stuck intent for the reconciliation shells; no SQL, no Discord.
+  const stuck = {
+    ...stuckIntent({
+      idempotencyKey: RECONCILIATION_KEY,
+      verb: "announcement.post",
+      subject: "channel-synthetic",
+      lastCode: "needs_reconciliation",
+      lastStatus: 409,
+      lastRequestId: "page-shell-request",
+      attempts: 3,
+    }),
+    firstSeenAt: now,
+    lastAttemptAt: now,
+    resolvedAt: null,
+    resolvedBy: null,
+    resolution: null,
+  };
+  const reconciliationStore: ReconciliationStore = {
+    recordStuck: async () => stuck,
+    listOpen: async () => [stuck],
+    listResolved: async () => [],
+    getStuck: async (key) => (key === RECONCILIATION_KEY ? stuck : null),
+    resolveStuck: async () => null,
+  };
   const env = {
     APP_URL: "https://next.example.test",
     DISCORD_CLIENT_ID: "fixture-client",
@@ -306,6 +336,7 @@ export function pageShellFixture(status = "published") {
     SESSION_SECRET: "fixture-session-secret-at-least-32-bytes-long",
     SESSION_STORE: sessions,
     ADMIN_DB: db as unknown as Db,
+    RECONCILIATION_DEPS: { store: reconciliationStore },
     DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
   } as Env;
   const cookie = async () => {

@@ -34,7 +34,11 @@ export function isQueueMessage(value: unknown): value is QueueMessage {
         typeof value.idempotencyKey === "string" &&
         isRecord(value.action) &&
         typeof value.action.channelKey === "string" &&
-        typeof value.action.body === "string"
+        typeof value.action.body === "string" &&
+        (value.echoId === undefined ||
+          (typeof value.echoId === "number" &&
+            Number.isSafeInteger(value.echoId) &&
+            value.echoId > 0))
       );
     case "role-assign":
       return (

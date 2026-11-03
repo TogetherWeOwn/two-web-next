@@ -9,6 +9,7 @@ import type { Env } from "../src/env";
 import { buildSyncMessage, enqueueEventSync } from "../src/events/sync";
 import { consume } from "../src/jobs/consumer";
 import { pgEventStore } from "../src/jobs/events";
+import { pgReconciliationStore } from "../src/jobs/reconciliation";
 import { reconcileEvents } from "../src/jobs/cron";
 import { trackingQueue } from "../src/jobs/ledger";
 import { BotTransportError } from "../src/jobs/types";
@@ -207,6 +208,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     events: pgEventStore(sql),
     lock: pgUniqueLock(sql),
     ledger: pgQueueLedger(sql),
+    reconciliation: pgReconciliationStore(sql),
     dispatchPending: (key: string) => enqueueSyncEvent(env, buildSyncMessage(key, "published")!),
   });
 
@@ -732,9 +734,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       await consume({ messages: [other] }, deps(bot));
       expect(other.ack).toHaveBeenCalledOnce();
       expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
-      // Explicit operator recovery renews only the budget/eligibility, never
-      // action/payload/key or the fact that this request was already attempted.
-      // No automatic edit/reconcile performs this renewal.
+      expect(await pgReconciliationStore(sql).getStuck(original.idempotencyKey)).toMatchObject({
+        verb: "event.upsert",
+        subject: eventKey,
+        attempts: 6,
+      });
+      // Even an accidental budget/deadline reset cannot replay a persisted
+      // stop. Only explicit, independently verified local settlement may let
+      // later revisions proceed; resolving an audit note alone is not replay authorization.
       await sql`update event_sync_attempts set request_attempts = 1, next_attempt_at = now() - interval '1 second'
         where idempotency_key = ${original.idempotencyKey}::uuid`;
       bot.upsertEvent.mockResolvedValue({ ok: true, requestId: null, discordEventId: "discord-1" });
@@ -745,7 +752,19 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       });
       expect(sent[1]!.body.idempotencyKey).toBe(original.idempotencyKey);
       await consume({ messages: [delivery(sent[1]!.body)] }, deps(bot));
-      expect(bot.upsertEvent.mock.calls[6]).toEqual([pending!.payload, original.idempotencyKey]);
+      expect(bot.upsertEvent).toHaveBeenCalledTimes(6);
+      expect(bot.upsertEvent.mock.calls[5]).toEqual([pending!.payload, original.idempotencyKey]);
+      expect(sent).toHaveLength(2);
+      await pgEventStore(sql).completeSync(pending!, "discord-1");
+      await pgReconciliationStore(sql).resolveStuck(original.idempotencyKey, {
+        by: "mod-synthetic",
+        note: "Verified the remote state and settled the local snapshot by hand",
+      });
+      await reconcileEvents({
+        events: pgEventStore(sql),
+        queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)),
+        lock: pgUniqueLock(sql),
+      });
       expect(sent[2]!.body.idempotencyKey).not.toBe(original.idempotencyKey);
       await consume({ messages: [delivery(sent[2]!.body)] }, deps(bot));
       expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
@@ -985,7 +1004,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       clock = start + 3600_000;
       if (failedWrites) {
         // Even after the old lease and known deadline, loss of the durable result
-        // must not resume I/O. A reviewed settlement can restore that exact result.
+        // must not resume I/O. Reopening eligibility alone cannot override the stop.
         await reconcileEvents({
           events,
           queue: trackingQueue(env.SYNC_EVENT_QUEUE!, pgQueueLedger(sql)),
@@ -1006,11 +1025,25 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
       expect(sent).toHaveLength(2);
       expect(sent[1]!.body.idempotencyKey).toBe(original.idempotencyKey);
       await consume({ messages: [delivery(sent[1]!.body)] }, dependencies);
-      expect(bot.upsertEvent).toHaveBeenCalledTimes(2);
-      expect(bot.upsertEvent.mock.calls[1]).toEqual(bot.upsertEvent.mock.calls[0]);
-      expect(await sql`select state, request_attempts from event_sync_attempts`).toEqual([
-        { state: "succeeded", request_attempts: 2 },
-      ]);
+      if (failedWrites) {
+        // A closed request reached the carrier cap with no durable result. Its
+        // operator stop survives even an out-of-band attempt to reopen eligibility.
+        expect(await dependencies.reconciliation.getStuck(original.idempotencyKey)).toMatchObject({
+          idempotencyKey: original.idempotencyKey,
+          verb: "event.upsert",
+          resolvedAt: null,
+        });
+        expect(bot.upsertEvent).toHaveBeenCalledOnce();
+        expect(await sql`select state, request_attempts from event_sync_attempts`).toEqual([
+          { state: "pending", request_attempts: 1 },
+        ]);
+      } else {
+        expect(bot.upsertEvent).toHaveBeenCalledTimes(2);
+        expect(bot.upsertEvent.mock.calls[1]).toEqual(bot.upsertEvent.mock.calls[0]);
+        expect(await sql`select state, request_attempts from event_sync_attempts`).toEqual([
+          { state: "succeeded", request_attempts: 2 },
+        ]);
+      }
     });
   }
 
@@ -1161,6 +1194,73 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     await consume({ messages: [delivery(original, 3)] }, deps(bot));
     expect(bot.upsertEvent).toHaveBeenCalledOnce();
   });
+
+  it.each([0, 5])(
+    "an exhausted duplicate preserves the live PostgreSQL claim (%s prior requests)",
+    async (priorRequests) => {
+      await seed();
+      await enqueueEventSync(env, eventKey, "published");
+      const original = sent[0]!.body;
+      const at = new Date("2099-01-01T00:00:00Z");
+      const events = pgEventStore(sql);
+      await events.prepareSync(eventKey, original.idempotencyKey, at);
+      await sql`update event_sync_attempts set request_attempts = ${priorRequests}`;
+      let finish!: () => void;
+      let entered!: () => void;
+      const started = new Promise<void>((resolve) => {
+        entered = resolve;
+      });
+      const held = new Promise<void>((resolve) => {
+        finish = resolve;
+      });
+      const bot = botDouble();
+      bot.upsertEvent.mockImplementationOnce(async () => {
+        entered();
+        await held;
+        return {
+          ok: false,
+          code: "in_progress",
+          status: 409,
+          requestId: null,
+          message: "",
+          retryable: true,
+          retryAfterSeconds: 300,
+        };
+      });
+      const dependencies = { ...deps(bot), now: () => at };
+      const first = delivery(original);
+      const consuming = consume({ messages: [first] }, dependencies);
+      await started;
+      try {
+        const duplicate = delivery(original, 6);
+        await consume({ messages: [duplicate] }, dependencies);
+        expect(duplicate.ack).not.toHaveBeenCalled();
+        expect(duplicate.retry).toHaveBeenCalledWith({ delaySeconds: 300 });
+        expect(await dependencies.reconciliation.getStuck(original.idempotencyKey)).toBeNull();
+        expect(await events.pendingSync(eventKey)).toMatchObject({
+          claimStartedAt: at,
+          nextAttemptAt: null,
+          requestAttempts: priorRequests + 1,
+        });
+      } finally {
+        finish();
+        await consuming;
+      }
+      expect(bot.upsertEvent).toHaveBeenCalledOnce();
+      if (priorRequests === 0) {
+        expect(await events.pendingSync(eventKey)).toMatchObject({
+          nextAttemptAt: new Date(at.getTime() + 300_000),
+          requestAttempts: 1,
+        });
+        expect(await dependencies.reconciliation.getStuck(original.idempotencyKey)).toBeNull();
+      } else {
+        expect(await dependencies.reconciliation.getStuck(original.idempotencyKey)).toMatchObject({
+          lastCode: "in_progress",
+          idempotencyKey: original.idempotencyKey,
+        });
+      }
+    },
+  );
 
   it("recurrence materialization shares the flight transaction without changing native job parsers", async () => {
     await seed();

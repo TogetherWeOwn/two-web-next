@@ -5,7 +5,12 @@ import type { Env, JobsEnv } from "../env";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { setReleaseMetadata } from "../release-tag";
 import { qaEnabled } from "../qa";
-import { PRUNE_CRON, RECONCILE_CRON } from "./constants";
+import {
+  LEDGER_DB_LOCK_TIMEOUT_MS,
+  LEDGER_DB_TIMEOUT_MS,
+  PRUNE_CRON,
+  RECONCILE_CRON,
+} from "./constants";
 import {
   PruneBatchCapError,
   ReconcilePartialFailureError,
@@ -16,8 +21,12 @@ import {
 } from "./cron";
 import { consume } from "./consumer";
 import { closeEventEchoes } from "./echo-close";
+import { markEchoAnnounced } from "../events/echoes";
+import { drizzleOver } from "../db/proxy";
+import type { Db } from "../db/index";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
+import { pgReconciliationStore } from "./reconciliation";
 import type {
   BotClient,
   EventStore,
@@ -123,6 +132,14 @@ export async function enqueueSyncEvent(
   }
 }
 
+/** Bound SQL execution as well as the consumer wait; local settings never leak to the pool. */
+export async function confirmEchoAnnouncement(sql: postgres.Sql, echoId: number): Promise<void> {
+  await sql.begin(async (tx) => {
+    await tx`select set_config('lock_timeout', ${`${LEDGER_DB_LOCK_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${LEDGER_DB_TIMEOUT_MS}ms`}, true)`;
+    await markEchoAnnounced(drizzleOver(tx) as unknown as Db, echoId);
+  });
+}
+
 export async function handleQueue(
   batch: MessageBatch<unknown>,
   env: JobsEnv,
@@ -153,6 +170,11 @@ export async function handleQueue(
       events: pgEventStore(sql),
       lock: pgUniqueLock(cleanupSql),
       ledger,
+      // Stuck keyed intents (contract §7.4/§11) persist here before any
+      // terminal settlement, for the moderator reconciliation surface.
+      reconciliation: pgReconciliationStore(sql),
+      // Echo rows confirm only on bot-confirmed announcement delivery.
+      onAnnouncementConfirmed: (echoId) => confirmEchoAnnouncement(sql, echoId),
       needsSync: pgEventStore(cleanupSql).needsSync,
       dispatchPending: (eventKey, signal) => {
         // Late settlement stays inside Workers lifetime: dispatch rejects at

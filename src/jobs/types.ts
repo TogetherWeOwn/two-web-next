@@ -66,6 +66,8 @@ export type SyncAttempt = {
   requestAttempts: number;
   /** Null while a claim's result is unsettled, or after retirement/exhaustion. */
   nextAttemptAt: Date | null;
+  /** Durable claim clock; a live closed claim must not be stopped by a duplicate carrier. */
+  claimStartedAt?: Date;
   /**
    * Terminal-intent marker: the redacted definitive reason, recorded while
    * state stays pending so redelivery re-runs settlement without the bot
@@ -212,7 +214,14 @@ export type QueueMessage = QueueCorrelation &
         leaseToken?: string;
         jobId?: string;
       }
-    | { kind: "announcement"; idempotencyKey: string; action: Announcement; jobId?: string }
+    | {
+        kind: "announcement";
+        idempotencyKey: string;
+        action: Announcement;
+        jobId?: string;
+        /** Echo row awaiting confirmed delivery; the consumer confirms it only on bot success. */
+        echoId?: number;
+      }
     | { kind: "role-assign"; idempotencyKey: null; action: RoleAssignment; jobId?: string }
     | { kind: "alert-probe"; probeId?: string; jobId?: never }
   );

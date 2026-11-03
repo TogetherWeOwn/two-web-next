@@ -140,6 +140,14 @@
     {
       "path": "drizzle/1034_event-echoes.sql",
       "sha256": "5b35e192433f369990f96b14c681fc77179e15df9dd73c2f84a7446e4220fada"
+    },
+    {
+      "path": "drizzle/1035_bot-reconciliation-intents.sql",
+      "sha256": "0322c376fb923eb09833b0a7e0dca1635f25a1d79025f456dea0d87cce7ba583"
+    },
+    {
+      "path": "drizzle/1036_event-sync-claim-started.sql",
+      "sha256": "cc2993bd6cd66dadcc69acbb1ab4732941e975f423b2e2ebd632f11d59118573"
     }
   ]
 }

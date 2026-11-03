@@ -22,6 +22,7 @@ import { memberDataAccessLogs } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import { profiles } from "../src/db/schema";
 import { createMemorySessionStore } from "../src/sessions";
+import { pgReconciliationStore } from "../src/jobs/reconciliation";
 import {
   cookieFor,
   env,
@@ -58,6 +59,8 @@ const ADMIN_READS = [
   "/featured/:id",
   "/join-attempts",
   "/join-attempts/:id",
+  "/reconciliation",
+  "/reconciliation/:key",
   ...ADMIN_REDIRECTS,
 ];
 const OPERATIONAL_READS = [
@@ -190,6 +193,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     const bindings = () => ({
       ...env,
       ADMIN_DB: db,
+      RECONCILIATION_DEPS: { store: pgReconciliationStore(fixture.client) },
       SESSION_STORE: sessions,
       DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
     });
@@ -283,6 +287,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
                       "/featured-contents/:id/edit",
                       "/join-attempts/:id",
                       "/echoes/:id",
+                      "/reconciliation/:key",
                     ].includes(pattern)
                   ? 404
                   : ADMIN_REDIRECTS.includes(pattern)
