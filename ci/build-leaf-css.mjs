@@ -15,14 +15,14 @@
 // keep prior rendering. Overrides = Display's 93%/34.6% ascent/descent at 77% +
 // margin: fallback hero paints >= swapped-in text (no larger repaint).
 // Same rule for the Logo/Icon 1 brand ramp (ember #ff9c36 -> magenta #ff0e52 ->
-// violet #5701ae, top to bottom): the tokens ship as one spaceless line in
+// violet #5701ae, top to bottom): the three color tokens ship in
 // public/theme-tokens.css with no comment and no gradient token, because this
 // bundle inlines verbatim into the homepage critical CSS under a 24.8 kB
-// ratchet (test/homepage-mobile-lcp-acceptance.test.ts): the line is even
-// unindented, saving two bytes the ratchet currently needs. Rationale lives here
-// so shipped bytes stay minimal; the gradient stops live baked in the logo,
-// icon and favicon artwork. A component that needs the gradient re-adds the
-// token with its own budget.
+// ratchet (test/homepage-mobile-lcp-acceptance.test.ts). The tokens keep
+// standard Biome formatting (lint gates outrank byte-shaving here); rationale
+// lives here so shipped bytes stay minimal, and the gradient stops live baked
+// in the logo, icon and favicon artwork. A component that needs the gradient
+// re-adds the token with its own budget.
 import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";

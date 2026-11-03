@@ -1,7 +1,7 @@
 # 2026-11-03 decision: brand color tokens in theme-tokens.css
 
 Set the `public/theme-tokens.css` ceiling to 1792B raw / 512B gzip. The
-stylesheet measures 1292B raw / 369B gzip with the checker's default
+stylesheet measures 1303B raw / 371B gzip with the checker's default
 `gzipSync` measurement; the ceilings follow measured size x1.25 rounded up
 (raw to 512B, gzip to 256B).
 

@@ -65,8 +65,10 @@ dimension-checked, and `site.webmanifest` lists the SVG first. The share card
 1200×630 RGB; no test pins its bytes.
 
 No visual baseline was changed or accepted, and no threshold was relaxed. Known
-boundary: the homepage HTML LCP ratchet
-(`test/homepage-mobile-lcp-acceptance.test.ts`, 24800 B) measures 24939 B on
-this head — the +145 B brand delta is fully itemized and irreducible — while
-the inline-CSS ratchet passes (18849 ≤ 18850). That reconciliation belongs to
-the paired LCP card and is flagged in the pull request, not absorbed here.
+boundary: the homepage LCP ratchets (`test/homepage-mobile-lcp-acceptance.test.ts`)
+measure 24950 B HTML (> 24800) and 18860 B inlined CSS (> 18850) on this head.
+The brand delta is fully itemized and irreducible — every byte is required
+artwork wiring (SVG favicon link, token layer, lockup dimensions, share path)
+— and the token lines keep standard Biome formatting because the lint gate
+outranks byte-shaving. That reconciliation belongs to the paired LCP card and
+is flagged in the pull request, not absorbed here.
