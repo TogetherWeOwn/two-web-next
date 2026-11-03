@@ -97,6 +97,7 @@ describe("stuckIntent factory", () => {
     { ...base(), lastCode: "code\nsplit" },
     { ...base(), lastStatus: -1 },
     { ...base(), lastStatus: 1.5 },
+    { ...base(), lastRequestId: "x".repeat(101) },
     { ...base(), attempts: 0 },
     { ...base(), attempts: -2 },
     { ...base(), attempts: Number.MAX_SAFE_INTEGER + 1 },
@@ -140,6 +141,18 @@ describe("lastWireOutcome safe capture", () => {
       expect(() => lastWireOutcome(bad)).not.toThrow();
     }
     expect(lastWireOutcome(undefined)).toEqual({ code: "unknown", status: null, requestId: null });
+  });
+
+  it("treats a proxy refusing own-property inspection as unknown without throwing", () => {
+    const hostile = new Proxy(
+      {},
+      {
+        getOwnPropertyDescriptor() {
+          throw new Error("inspection refused");
+        },
+      },
+    );
+    expect(lastWireOutcome(hostile)).toEqual({ code: "unknown", status: null, requestId: null });
   });
 
   it("bounds status and requestId to scalars the intent accepts", () => {

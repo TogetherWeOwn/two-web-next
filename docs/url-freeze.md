@@ -227,6 +227,8 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `GET /admin/ops-overrides` | ops-control-bearer | dashboard-operator-override-panel-acceptance: read-only record/epoch HTML, token-only admission, no-store, explicit staleness bound |
 | `GET /admin/queue/failed/:id/preview` | staging-operator | queue-preview-route / queue-preview-postgres: one-row snapshot advice only; the guarded apply lives on the redispatch route |
 | `GET /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route / source-evidence-postgres / source-evidence-statements: evidence-only source/cache proof; session-free, no audit write, inert without runtime-only settings |
+| `GET /admin/reconciliation` | moderator | reconciliation-admin: stuck keyed bot intents, open and resolved lists; guests redirect, members forbid, outage is a 503 shell |
+| `GET /admin/reconciliation/:key` | moderator | reconciliation-admin: one stuck intent by UUID key, scalar facts only; non-UUID or unknown key is a 404 |
 | `GET /api/public/community` | public | public-data: community snapshot; null counts when collectors are down, public ETag/304 |
 | `GET /api/public/events` | public | public-data: published events, 20-row/32 KiB cap, public ETag/304 |
 | `GET /api/public/events/:key` | public | public-data: one published event; drafts and cancelled rows 404, public ETag/304 |
@@ -287,6 +289,7 @@ Public routes may read optional sessions; this does not promise zero DB queries.
 | `POST /admin/ops-overrides` | ops-control-bearer | dashboard-operator-override-panel-acceptance: writes refuse locally |
 | `POST /admin/queue/failed/:id/redispatch` | staging-operator | queue-redispatch-route / queue-redispatch-postgres: one-row guarded re-dispatch of replay advice only; refusals and stale rows are never deleted, reset or re-budgeted |
 | `POST /admin/queue/source-evidence/:id` | evidence-bearer | source-evidence-route: write verbs refuse before any middleware or source read |
+| `POST /admin/reconciliation/:key/resolve` | moderator | reconciliation-admin: audited-first resolve stamp, `admin-write` throttled and body-capped; never re-sends under a new key |
 | `POST /api/agent-events` | machine-bearer | agent-events: W14 machine ingress |
 | `POST /auth/qa/:identity` | staging-token | app: deliberate POST divergence from legacy GET |
 | `POST /csp-reports` | public | csp-reports: no-store violation sink |

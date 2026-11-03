@@ -6,8 +6,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
 import { BotTerminalError, BotTransportError } from "../src/jobs/types";
+import type { ReconciliationStore, StuckIntent } from "../src/jobs/reconciliation";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
+const STUCK_KEY = "33333333-3333-4333-8333-333333333333";
 const TOK = "***synthetic-queue-token-9q2z***";
 const SQL = "***synthetic-select-secret-4m7x***";
 const PII = "***synthetic-member-mail-6k1p***";
@@ -324,17 +326,37 @@ describe("terminal queue alerts and diagnostics are class-only", () => {
     const last = msg(
       {
         kind: "announcement",
-        idempotencyKey: "k",
+        idempotencyKey: STUCK_KEY,
         action: { channelKey: "c", body: "b" },
         jobId: "j7",
       },
       CALL_INTERNAL_ACTION.tries,
     );
-    await consume({ messages: [last] }, { ...d2, bot: terminal });
+    const recorded: StuckIntent[] = [];
+    const reconciliation = {
+      getStuck: async () => null,
+      recordStuck: async (intent: StuckIntent) => {
+        recorded.push(intent);
+        return {} as never;
+      },
+    } as unknown as ReconciliationStore;
+    const lines = capture();
+    await consume({ messages: [last] }, { ...d2, bot: terminal, reconciliation });
     expect(last.ack).toHaveBeenCalledOnce();
     expect(last.retry).not.toHaveBeenCalled();
-    expect(d2.failedReasons).toEqual([
-      `The bot refused announcement.post with a retryable \`unknown\` on all ${CALL_INTERNAL_ACTION.tries} attempts.`,
-    ]);
+    // Exhausted unknown: the same-key intent is captured and the ledger reason
+    // is class-only and claims no delivery outcome; no provider text anywhere.
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      idempotencyKey: STUCK_KEY,
+      verb: "announcement.post",
+      subject: "c",
+      attempts: CALL_INTERNAL_ACTION.tries,
+    });
+    expect(d2.failedReasons).toEqual(["stuck announcement.post for c (last code unknown)"]);
+    for (const sink of [JSON.stringify(recorded), d2.failedReasons.join("\n"), lines.join("\n")]) {
+      expect(sink).not.toContain(PII);
+      expect(sink).not.toContain("still calm");
+    }
   });
 });

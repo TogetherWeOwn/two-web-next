@@ -268,6 +268,14 @@ export function pgReconciliationStore(
             last_request_id = excluded.last_request_id
           where bot_reconciliation_intents.resolved_at is null
           returning *`) as unknown as StuckRow[];
+        if (intent.verb === "event.upsert" || intent.verb === "event.cancel") {
+          // Keep the pending snapshot as the event's ordering fence, but remove
+          // automatic retry eligibility in the SAME transaction as the stop.
+          // Neither a later revision nor scheduler recovery may replace an
+          // ambiguous remote request with a newly minted key.
+          await tx`update event_sync_attempts set next_attempt_at = null
+            where idempotency_key = ${intent.idempotencyKey}::uuid and state = 'pending'`;
+        }
         if (!row) {
           // Conflict on an already-resolved row: the intent is reconciled, the
           // audit row stands. Return the standing row unchanged.

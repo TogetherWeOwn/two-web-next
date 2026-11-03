@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createBotClient } from "../src/bot/client";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
+import type { ReconciliationStore, StuckIntent } from "../src/jobs/reconciliation";
 import type {
   BotClient,
   EventStore,
@@ -128,6 +129,8 @@ const SCENARIOS: {
   retryable: boolean;
   attempts: number;
   action?: "event.upsert" | "event.cancel";
+  /** Keyed unknown at the cap: escalates to a recorded stuck intent, not a refusal. */
+  stuck?: boolean;
 }[] = [
   {
     label: "announcement refusal",
@@ -144,6 +147,7 @@ const SCENARIOS: {
     name: "announcement.post",
     retryable: true,
     attempts: CALL_INTERNAL_ACTION.tries,
+    stuck: true,
   },
   {
     label: "role refusal",
@@ -192,7 +196,15 @@ describe.each(SCENARIOS)("provider metadata at queue sinks: $label", (scenario) 
       const p = provider(pick, scenario.retryable);
       const call = vi.spyOn(p.bot, scenario.method);
       const m = { body: scenario.body, attempts: scenario.attempts, ack: vi.fn(), retry: vi.fn() };
-      await consume({ messages: [m] }, { ...d, bot: p.bot });
+      const recorded: StuckIntent[] = [];
+      const reconciliation = {
+        getStuck: async () => null,
+        recordStuck: async (intent: StuckIntent) => {
+          recorded.push(intent);
+          return {} as never;
+        },
+      } as unknown as ReconciliationStore;
+      await consume({ messages: [m] }, { ...d, bot: p.bot, reconciliation });
 
       expect(p.fetchFn).toHaveBeenCalledOnce();
       expect(p.echoed().length).toBeGreaterThan(0);
@@ -202,9 +214,11 @@ describe.each(SCENARIOS)("provider metadata at queue sinks: $label", (scenario) 
         requestId: SECRET,
         retryable: scenario.retryable,
       });
-      const reason = scenario.retryable
-        ? `The bot refused ${scenario.name} with a retryable \`unknown\` on all ${scenario.attempts} attempts.`
-        : `The bot refused ${scenario.name} with \`unknown\``;
+      const reason = scenario.stuck
+        ? "stuck announcement.post for general (last code unknown)"
+        : scenario.retryable
+          ? `The bot refused ${scenario.name} with a retryable \`unknown\` on all ${scenario.attempts} attempts.`
+          : `The bot refused ${scenario.name} with \`unknown\``;
       expect(m.ack).toHaveBeenCalledOnce();
       expect(m.retry).not.toHaveBeenCalled();
       expect(d.ledger.failed).toHaveBeenCalledExactlyOnceWith(
@@ -234,6 +248,27 @@ describe.each(SCENARIOS)("provider metadata at queue sinks: $label", (scenario) 
         hits: [],
         incomplete: [],
       });
+      if (scenario.stuck) {
+        // Intent captured under the original key; persisted facts carry no
+        // provider string, and nothing claims the post was delivered or refused.
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0]).toMatchObject({
+          idempotencyKey: UUID,
+          verb: "announcement.post",
+          subject: "general",
+          lastCode: "unknown",
+          attempts: scenario.attempts,
+        });
+        // The bot request id is the one opaque correlation scalar the intent
+        // keeps for operators (this fixture reuses the wire secret as that id).
+        // Every other persisted field must be free of provider strings.
+        expect(recorded[0]!.lastRequestId).toBe(SECRET);
+        const facts = JSON.stringify({ ...recorded[0], lastRequestId: null });
+        for (const canary of [SECRET, BODY, p.echoed()]) expect(facts).not.toContain(canary);
+        expect(reason).not.toMatch(/delivered|posted|refused/);
+      } else {
+        expect(recorded).toEqual([]);
+      }
       expect(d.ledger.released).not.toHaveBeenCalled();
       expect(d.ledger.dequeued).not.toHaveBeenCalled();
       if (scenario.action) {

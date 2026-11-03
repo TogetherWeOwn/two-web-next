@@ -55,6 +55,7 @@ const CAP_FIRST_ROUTES = new Set([
   "POST /admin/events/:key/rsvp-pause",
   "POST /admin/events/:key/rsvp-reopen",
   "POST /admin/queue/failed/:id/redispatch",
+  "POST /admin/reconciliation/:key/resolve",
   "POST /__probe/alert",
 ]);
 

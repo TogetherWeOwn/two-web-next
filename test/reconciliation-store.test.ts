@@ -7,6 +7,7 @@
 import type postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { pgReconciliationStore, stuckIntent } from "../src/jobs/reconciliation";
+import { pgEventStore } from "../src/jobs/events";
 import type { ReconciliationStore } from "../src/jobs/reconciliation";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
 
@@ -25,7 +26,7 @@ const intentFor = (key: string, verb = "announcement.post", subject = "channel-s
     attempts: 2,
   });
 
-describe.skipIf(!process.env.DATABASE_URL)("reconciliation pg store", () => {
+describe("reconciliation pg store", () => {
   let fixture: JobsFixture | undefined;
   let sql: postgres.Sql;
   let store: ReconciliationStore;
@@ -112,6 +113,43 @@ describe.skipIf(!process.env.DATABASE_URL)("reconciliation pg store", () => {
     expect(kept.resolution).toBe("re-posted by hand");
     expect(kept.resolvedAt).toBeInstanceOf(Date);
   });
+
+  for (const verb of ["event.upsert", "event.cancel"] as const) {
+    it(`atomically fences ${verb} without retiring or re-keying its pending snapshot`, async () => {
+      const eventKey = `evt-stuck-${verb}`;
+      const [event] = await sql`insert into events
+        (event_key, title, starts_at, ends_at, status, discord_event_id)
+        values (${eventKey}, 'Synthetic', now(), now() + interval '1 hour',
+          ${verb === "event.cancel" ? "cancelled" : "published"}, 'discord-synthetic') returning id`;
+      const events = pgEventStore(sql);
+      const prepared = await events.prepareSync(eventKey, KEY_A, new Date());
+      expect(prepared && !("waiting" in prepared)).toBe(true);
+      if (!prepared || "waiting" in prepared) throw new Error("missing pending snapshot");
+      const claimed = await events.claimSync(prepared, new Date());
+      expect(claimed?.requestAttempts).toBe(1);
+      if (!claimed) throw new Error("missing claim");
+      // Prove the store itself removes even previously scheduled eligibility.
+      await events.deferSync(claimed, new Date(0));
+      await store.recordStuck(intentFor(KEY_A, verb, eventKey));
+      expect(await events.pendingSync(eventKey)).toMatchObject({
+        idempotencyKey: KEY_A,
+        state: "pending",
+        requestAttempts: 1,
+        nextAttemptAt: null,
+      });
+      await sql`update events set title = 'Later revision' where id = ${event!.id}`;
+      expect(await events.needsSync(eventKey)).toBe(false);
+      expect(await events.staleEventKeys()).not.toContain(eventKey);
+      expect(await events.prepareSync(eventKey, KEY_B, new Date())).toBeNull();
+      // Resolving the audit note never authorizes automatic replay of this key.
+      await store.resolveStuck(KEY_A, { by: "mod", note: "checked manually" });
+      expect(await events.needsSync(eventKey)).toBe(false);
+      expect(
+        await sql`select idempotency_key from event_sync_attempts where event_id = ${event!.id}`,
+      ).toEqual([{ idempotency_key: KEY_A }]);
+      await sql`delete from events where id = ${event!.id}`;
+    });
+  }
 
   it("refuses blank, over-long and non-UUID resolutions without touching the row", async () => {
     await store.recordStuck(intentFor(KEY_A));

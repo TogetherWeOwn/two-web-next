@@ -1964,8 +1964,14 @@ outcome, timestamps — scalars only, never message bodies), then stamp what was
 checked and done in the resolve form. The row stays as the audit evidence with
 an `activity_log` receipt; rows are never deleted and never re-sent from the
 surface — a fresh key would fork the bot's key log, which is exactly what the
-`needs_reconciliation` rows report. New revisions sync under their own keys
-while the stuck revision waits for the human. Proved in
+`needs_reconciliation` rows report. A stuck event keeps its pending immutable
+snapshot as an ordering fence, with automatic retry eligibility closed atomically
+with the reconciliation record. Later revisions cannot overtake that unknown
+remote outcome. Resolving the audit note does not resume or replay the key,
+even on a late carrier; independently verified local settlement is a separate
+operator action, not something this surface performs. Exhausting a queue carrier
+alone does not exhaust the durable request budget: scheduler recovery retains
+the original key and remaining budget. Proved in
 `test/reconciliation-consumer.test.ts`, `test/reconciliation-handlers.test.ts`
 and `test/reconciliation-admin.test.ts`; Postgres shape in
 `test/reconciliation-store.test.ts`.

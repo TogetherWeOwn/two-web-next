@@ -13,6 +13,7 @@ import {
 } from "../src/errors";
 import { adminSchema, schema } from "../src/db/index";
 import type { Env } from "../src/env";
+import { pgReconciliationStore } from "../src/jobs/reconciliation";
 import { createPostgresSessionStore, type Sql } from "../src/sessions";
 
 app.get("/__a11y/404", notFoundHandler);
@@ -69,6 +70,10 @@ export default {
           readState,
         ),
         SESSION_STORE: createPostgresSessionStore(sessionClient as unknown as Sql),
+        // Raw schema-scoped client: the Drizzle client above rewrites Date serializers.
+        RECONCILIATION_DEPS: {
+          store: pgReconciliationStore(sessionClient as unknown as postgres.Sql),
+        },
         DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
       };
       return await app.fetch(request, bindings, ctx);

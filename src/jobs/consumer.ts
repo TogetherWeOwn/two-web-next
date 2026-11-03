@@ -252,9 +252,29 @@ export async function consume(
       syncRetry = receipt;
       console.warn("sync retry classified", projectSyncRetryDiagnostic(receipt));
     };
+    // A persisted stop survives every carrier, including redelivery after a
+    // moderator resolves the audit row. Lookup failures fail closed outside
+    // the handler's exhausted-carrier catch: never call the bot without this
+    // check, and never acknowledge a key whose stop could not be read.
+    const requiredOp = async <T>(op: Promise<T>, message: string): Promise<T> => {
+      let timer: ReturnType<typeof setTimeout>;
+      const deadline = new Promise<never>((_, reject) => {
+        timer = setTimeout(() => reject(new Error(message)), LEDGER_TIMEOUT_MS);
+      });
+      return Promise.race([op, deadline]).finally(() => clearTimeout(timer));
+    };
+    const stopped =
+      (body.kind === "sync-event" || body.kind === "announcement") && deps.reconciliation
+        ? await requiredOp(
+            deps.reconciliation.getStuck(body.idempotencyKey),
+            "reconciliation store timed out",
+          )
+        : null;
     let outcome: Outcome;
     try {
-      if (body.kind === "alert-probe") {
+      if (stopped) {
+        outcome = { stuck: stopped };
+      } else if (body.kind === "alert-probe") {
         // Poison only the synthetic job, only when the runtime's QA gate is on.
         // No ledger fixture, bot request, event mutation or uniqueness lock.
         if (deps.probeEnabled) throw new AlertProbeError(body.probeId);
@@ -332,27 +352,19 @@ export async function consume(
       }
     }
     if ("stuck" in outcome) {
-      // Needs-reconciliation hard stop or budget-exhausted unknown: record the
-      // same-key intent FIRST, then settle terminally. A record failure throws
-      // into the existing redelivery path (same carrier, same key) instead of
-      // settling first and losing the operator surface; with no store wired at
-      // all the throw is loud for the same reason.
+      // Persist before acknowledging the carrier. The store atomically closes
+      // retry eligibility but keeps the pending sync ordering fence: an unknown
+      // remote outcome is not a definitive refusal and must never call failSync.
+      // A failed write leaves this same-key carrier unsettled for recovery.
       const store = deps.reconciliation;
       if (!store) throw new Error("reconciliation store missing for stuck intent");
       const stuck = outcome.stuck;
-      await store.recordStuck(stuck, deps.now?.() ?? new Date());
-      if (body.kind === "sync-event") {
-        // Settle the claim so future revisions are not bricked behind this
-        // unresolved key: same-revision auto-retry stays blocked (a moderator
-        // reconciles by hand), while new revisions sync under their own keys.
-        if (!(await settleAttempt())) {
-          if (jobId)
-            await bounded("released", deps.ledger.released(jobId, deps.now?.() ?? new Date()));
-          m.retry();
-          continue;
-        }
-        await releaseLock(uniqueKey(body.eventKey));
-      }
+      if (!stopped)
+        await requiredOp(
+          store.recordStuck(stuck, deps.now?.() ?? new Date()),
+          "reconciliation store timed out",
+        );
+      if (body.kind === "sync-event") await releaseLock(uniqueKey(body.eventKey));
       // Class-only ledger reason: closed verb + scalar subject + closed code.
       const reason =
         `stuck ${stuck.verb} for ${sanitizeQueueScope(stuck.subject)} ` +
@@ -421,8 +433,6 @@ export async function consume(
       console.error("job failed", body.kind, outcome.failed);
       alertFailing(body.kind, m.attempts, outcome.failed, { requestId }, syncRetry);
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
-    } else if (jobId) {
-      await bounded("dequeued", deps.ledger.dequeued(jobId));
     }
     if (
       body.kind === "announcement" &&
@@ -435,7 +445,10 @@ export async function consume(
       // the same carrier — the same-key re-post replays instead of
       // duplicating — until the announcement budget runs out.
       try {
-        await deps.onAnnouncementConfirmed(body.echoId);
+        await requiredOp(
+          deps.onAnnouncementConfirmed(body.echoId),
+          "announcement confirmation timed out",
+        );
       } catch (e) {
         console.error("announcement confirm failed", { exception: queueExceptionClass(e) });
         if (m.attempts >= JOBS.announcement.tries) {
@@ -458,6 +471,8 @@ export async function consume(
         continue;
       }
     }
+    // Keep successful announcements in depth accounting until local confirmation commits.
+    if ("done" in outcome && jobId) await bounded("dequeued", deps.ledger.dequeued(jobId));
     if (body.kind === "sync-event") {
       await releaseLock(uniqueKey(body.eventKey));
       if ("done" in outcome && deps.dispatchPending) {

@@ -45,7 +45,7 @@ persistence fails. It adds only these optional fields:
 | Field | Meaning and safe values |
 | --- | --- |
 | `sync_retry_class` | `BotFailure` (a retryable refusal), `BotTransportError` (no usable bot result), or constant `unknown` for malformed diagnostic input |
-| `sync_retry_code` | Refusals only: exactly `in_progress`, `rate_limited`, `internal`, `discord_unavailable`, `upstream_timeout`; every other/missing/malformed code becomes `unknown` |
+| `sync_retry_code` | Refusals only: exactly `in_progress`, `rate_limited`, `internal`, `discord_unavailable`, `upstream_timeout`, `needs_reconciliation`; every other/missing/malformed code becomes `unknown` |
 | `queue_carrier_attempts` | Positive integer from the current queue message's delivery attempts; existing `attempts` remains this same carrier count for compatibility |
 | `sync_request_attempts` | Nonnegative integer from the durable snapshot returned by `claimSync`; counts durable claims, not necessarily completed HTTP sends |
 | `sync_snapshot_age_at_claim_seconds` | Whole seconds from the snapshot's `mirroredAt` to this delivery's claim clock; unavailable, invalid or future times are omitted |

@@ -1,3 +1,6 @@
+// route-inventory: GET /admin/reconciliation
+// route-inventory: GET /admin/reconciliation/:key
+// route-inventory: POST /admin/reconciliation/:key/resolve
 // Reconciliation operator surface pins (contract v2 §7.4/§11).
 //
 // Moderator/admin-only queue over stuck keyed intents: list and detail are
@@ -196,7 +199,8 @@ describe("reconciliation list and detail", () => {
     expect(html).toContain(KEY);
     expect(html).toContain("channel-synthetic");
     expect(html).toContain("needs_reconciliation");
-    expect(html).toContain("Open — Discord may or may not carry this change.");
+    expect(html).toContain('class="notice"');
+    expect(html).toContain("Discord may or may not carry this change.");
     expect(html).toContain('data-testid="reconciliation-resolve"');
     expect(html).toContain(`/admin/reconciliation/${KEY}/resolve`);
   });
@@ -212,6 +216,9 @@ describe("reconciliation list and detail", () => {
       await app.request(`/admin/reconciliation/${KEY}`, { headers: { cookie } }, bindings)
     ).text();
     expect(html).toContain("re-posted by hand");
+    expect(html).toContain("Resolution note");
+    expect(html).toContain("Resolved by");
+    expect(html).not.toContain('class="notice"');
     expect(html).not.toContain('data-testid="reconciliation-resolve"');
   });
 

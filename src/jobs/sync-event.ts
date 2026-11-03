@@ -186,25 +186,12 @@ export async function handleSyncEvent(
   },
 ): Promise<Outcome> {
   const now = deps.now ?? (() => new Date());
-  // A carrier that runs out while the claim is still closed never confirmed
-  // delivery. Escalate the same-key intent to the operator surface instead of
-  // a terminal failure: members see the honest in-between state, moderators
-  // reconcile by hand. No re-key on any path: the carrier key is the intent.
-  const stuckWaiting = (verb: "event.upsert" | "event.cancel" = "event.upsert"): Outcome => ({
-    stuck: stuckIntent({
-      idempotencyKey: msg.idempotencyKey,
-      verb,
-      subject: msg.eventKey,
-      lastCode: null,
-      lastStatus: null,
-      lastRequestId: null,
-      attempts: Math.max(1, attempts),
-    }),
-  });
-  const waiting = (
-    seconds: number = SYNC_EVENT.debounceSeconds,
-    verb?: "event.upsert" | "event.cancel",
-  ): Outcome => (attempts >= SYNC_EVENT.tries ? stuckWaiting(verb) : { retryInSeconds: seconds });
+  // A waiting carrier may not own the pending request. Retire only the
+  // carrier at its cap; never reconcile or settle a different request's key.
+  const waiting = (seconds: number = SYNC_EVENT.debounceSeconds): Outcome =>
+    attempts >= SYNC_EVENT.tries
+      ? { failed: "waiting carrier exhausted; request remains recoverable" }
+      : { retryInSeconds: seconds };
   // First send snapshots the debounced row; all recovery uses that exact request.
   const prepared = await deps.events.prepareSync(msg.eventKey, msg.idempotencyKey, now());
   if (!prepared) return { done: true };
@@ -242,9 +229,16 @@ export async function handleSyncEvent(
       ),
     };
   }
-  if (prepared.requestAttempts >= SYNC_EVENT.tries) {
-    // Request budget spent with no confirmed delivery: operator surface, never
-    // a terminal failure (the Discord state is unknown, not refused).
+  if (
+    prepared.requestAttempts >= SYNC_EVENT.tries ||
+    (attempts >= SYNC_EVENT.tries &&
+      prepared.requestAttempts > 0 &&
+      !prepared.nextAttemptAt &&
+      prepared.idempotencyKey === msg.idempotencyKey)
+  ) {
+    // A closed same-key request cannot recover automatically, even if the stop
+    // write failed after a bot answer. At the carrier cap surface that unknown
+    // without replaying it. An unrelated waiting carrier never takes this path.
     return {
       stuck: stuckIntent({
         idempotencyKey: msg.idempotencyKey,
@@ -259,17 +253,17 @@ export async function handleSyncEvent(
   }
   // Claims stay closed until their result commits. A lost response/deadline
   // cannot become eligible again merely because a short lease expired.
-  if (!prepared.nextAttemptAt) return waiting(SYNC_EVENT.uniqueForSeconds, prepared.action);
+  if (!prepared.nextAttemptAt) return waiting(SYNC_EVENT.uniqueForSeconds);
   const remaining = Math.ceil((prepared.nextAttemptAt.getTime() - now().getTime()) / 1000);
   // An already-persisted deadline can predate admission and lie outside the
   // queue transport range. Cap it before it becomes the queue delay (and the
   // ledger availability Date); remaining > 0 keeps the 1s floor, the cap sets
   // the 86400s ceiling. Both bounds are integers: remaining is ceiled above.
-  if (remaining > 0) return waiting(Math.min(remaining, MAX_RETRY_DELAY_SECONDS), prepared.action);
+  if (remaining > 0) return waiting(Math.min(remaining, MAX_RETRY_DELAY_SECONDS));
   // A durable closed claim fences concurrent carriers until its result commits.
   const claimedAt = now();
   const attempt = await deps.events.claimSync(prepared, claimedAt);
-  if (!attempt) return waiting(SYNC_EVENT.debounceSeconds, prepared.action);
+  if (!attempt) return waiting();
   // A never-attempted snapshot may have become obsolete since preparation.
   // Its atomic first claim retires it without remote I/O or revision acknowledgement.
   if (attempt.state !== "pending") return { done: true };
@@ -300,7 +294,7 @@ export async function handleSyncEvent(
     const exhausted = attempt.requestAttempts >= SYNC_EVENT.tries;
     retryDeadline = exhausted ? null : new Date(now().getTime() + seconds * 1000);
     await deps.events.deferSync(attempt, retryDeadline);
-    if (exhausted || attempts >= SYNC_EVENT.tries) {
+    if (exhausted) {
       return {
         stuck: stuckIntent({
           idempotencyKey: msg.idempotencyKey,
@@ -313,7 +307,9 @@ export async function handleSyncEvent(
         }),
       };
     }
-    return { retryInSeconds: seconds };
+    return attempts >= SYNC_EVENT.tries
+      ? { failed: "carrier exhausted; unresolved identity retained" }
+      : { retryInSeconds: seconds };
   };
   const backoff = () =>
     backoffFor(SYNC_EVENT.backoffSeconds, Math.max(attempts, attempt.requestAttempts));
@@ -387,12 +383,10 @@ export async function handleSyncEvent(
       reportRetry("BotTransportError");
       return retry(backoff());
     }
-    await deps.events.deferSync(
-      attempt,
-      attempt.requestAttempts >= SYNC_EVENT.tries
-        ? null
-        : new Date(now().getTime() + backoff() * 1000),
-    );
+    // Completion can fail after the bot applied the mutation. At the request
+    // cap that ambiguity needs the same operator surface as transport loss.
+    if (attempt.requestAttempts >= SYNC_EVENT.tries) return retry(backoff());
+    await deps.events.deferSync(attempt, new Date(now().getTime() + backoff() * 1000));
     throw e;
   }
 }

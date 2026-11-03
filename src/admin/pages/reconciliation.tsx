@@ -24,7 +24,7 @@ export const ReconciliationPage: FC<{
   open: StuckIntentRecord[];
   resolved: StuckIntentRecord[];
 }> = ({ open, resolved }) => (
-  <Shell title="Reconciliation">
+  <Shell title="Reconciliation" stylesheet="/admin-reconciliation.css">
     <section>
       <h1>Reconciliation</h1>
       <p>
@@ -37,12 +37,12 @@ export const ReconciliationPage: FC<{
         <p>Nothing stuck. Every keyed change is confirmed or still retrying with its own key.</p>
       ) : (
         <div class="admin-table-scroll" role="region" aria-label="Open stuck intents" tabindex={0}>
-          <table class="admin-table" data-testid="reconciliation-open-table">
+          <table class="admin-table reconciliation-table" data-testid="reconciliation-open-table">
             <thead>
               <tr>
                 <th scope="col">Change</th>
+                <th scope="col">Stuck since (UTC)</th>
                 <th scope="col">Subject</th>
-                <th scope="col">Stuck since</th>
                 <th scope="col">Last outcome</th>
               </tr>
             </thead>
@@ -52,10 +52,10 @@ export const ReconciliationPage: FC<{
                   <td>
                     <a href={`/admin/reconciliation/${row.idempotencyKey}`}>{row.verb}</a>
                   </td>
-                  <td>{row.subject}</td>
                   <td>
                     <time datetime={iso(row.firstSeenAt)}>{iso(row.firstSeenAt)}</time>
                   </td>
+                  <td>{row.subject}</td>
                   <td>{lastOutcome(row)}</td>
                 </tr>
               ))}
@@ -73,12 +73,15 @@ export const ReconciliationPage: FC<{
           aria-label="Resolved stuck intents"
           tabindex={0}
         >
-          <table class="admin-table" data-testid="reconciliation-resolved-table">
+          <table
+            class="admin-table reconciliation-table"
+            data-testid="reconciliation-resolved-table"
+          >
             <thead>
               <tr>
                 <th scope="col">Change</th>
                 <th scope="col">Subject</th>
-                <th scope="col">Resolved</th>
+                <th scope="col">Resolved (UTC)</th>
                 <th scope="col">By</th>
               </tr>
             </thead>
@@ -112,12 +115,18 @@ export const ReconciliationDetailPage: FC<{
   values?: Record<string, unknown>;
   errors?: Record<string, string>;
 }> = ({ row, values = { resolution: "" }, errors = {} }) => (
-  <Shell title={`Reconciliation — ${row.verb}`}>
-    <section>
-      <h1>{row.verb}</h1>
+  <Shell title={`Reconciliation — ${row.verb}`} stylesheet="/admin-reconciliation.css">
+    <section class="reconciliation-detail">
       <p>
         <a href="/admin/reconciliation">Back to reconciliation</a>
       </p>
+      <h1>{row.verb}</h1>
+      {row.resolvedAt ? null : (
+        <p class="notice">
+          Discord may or may not carry this change. Check Discord before acting, then stamp what you
+          did below.
+        </p>
+      )}
       <dl>
         <div>
           <dt>Intent key</dt>
@@ -128,13 +137,13 @@ export const ReconciliationDetailPage: FC<{
           <dd>{row.subject}</dd>
         </div>
         <div>
-          <dt>Stuck since</dt>
+          <dt>Stuck since (UTC)</dt>
           <dd>
             <time datetime={iso(row.firstSeenAt)}>{iso(row.firstSeenAt)}</time>
           </dd>
         </div>
         <div>
-          <dt>Last attempt</dt>
+          <dt>Last attempt (UTC)</dt>
           <dd>
             <time datetime={iso(row.lastAttemptAt)}>{iso(row.lastAttemptAt)}</time>
           </dd>
@@ -153,15 +162,35 @@ export const ReconciliationDetailPage: FC<{
             <dd>{row.lastRequestId}</dd>
           </div>
         ) : null}
-        <div>
-          <dt>Status</dt>
-          <dd>
-            {row.resolvedAt
-              ? `Resolved at ${iso(row.resolvedAt)} by ${row.resolvedBy ?? "unknown"}: ${row.resolution ?? ""}`
-              : "Open — Discord may or may not carry this change. Check Discord before acting, then stamp what you did below."}
-          </dd>
-        </div>
+        {row.resolvedAt ? (
+          <>
+            <div>
+              <dt>Status</dt>
+              <dd>Resolved</dd>
+            </div>
+            <div>
+              <dt>Resolved (UTC)</dt>
+              <dd>
+                <time datetime={iso(row.resolvedAt)}>{iso(row.resolvedAt)}</time>
+              </dd>
+            </div>
+            <div>
+              <dt>Resolved by</dt>
+              <dd>{row.resolvedBy ?? "unknown"}</dd>
+            </div>
+            <div>
+              <dt>Resolution note</dt>
+              <dd>{row.resolution ?? ""}</dd>
+            </div>
+          </>
+        ) : (
+          <div>
+            <dt>Status</dt>
+            <dd>Open</dd>
+          </div>
+        )}
       </dl>
+      {row.resolvedAt ? <p class="hint">Read-only. The row stays as the audit evidence.</p> : null}
     </section>
     {!row.resolvedAt ? (
       <section aria-labelledby="reconcile-resolve-heading">
@@ -178,12 +207,15 @@ export const ReconciliationDetailPage: FC<{
             hint={`What you verified on Discord and did about it. At most ${RECONCILIATION_NOTE_MAX} characters.`}
           >
             {(id) => (
-              <input
+              <textarea
                 id={id}
                 name="resolution"
-                value={val(values, "resolution")}
+                rows={4}
                 maxlength={RECONCILIATION_NOTE_MAX}
-              />
+                required
+              >
+                {val(values, "resolution")}
+              </textarea>
             )}
           </Field>
           <div class="actions">

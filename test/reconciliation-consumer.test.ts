@@ -1,14 +1,14 @@
 // Consumer stuck-intent and Echo-confirm pins (contract v2 §7.4/§11).
 //
-// The consumer records the same-key intent FIRST, then settles terminally:
-// a record failure redelivers the same carrier instead of settling first
-// and losing the operator row, and a missing store throws loudly for the
+// The consumer records the same-key intent FIRST, then retires the carrier
+// while preserving an unresolved sync request's pending ordering fence.
+// A record failure leaves that carrier unsettled; a missing store throws for the
 // same reason. Echo rows confirm only on bot-confirmed delivery — never at
 // enqueue — and a rejecting confirm redelivers the same carrier. Hermetic:
 // in-memory doubles, synthetic keys, no queue, no database.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { consume } from "../src/jobs/consumer";
-import { CALL_INTERNAL_ACTION } from "../src/jobs/constants";
+import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
 import {
   stuckIntent,
   type ReconciliationStore,
@@ -161,7 +161,10 @@ function capture() {
   return calls;
 }
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe("consumer stuck-intent settlement", () => {
   it("records the same-key intent, then acks terminally with a class-only reason", async () => {
@@ -170,11 +173,12 @@ describe("consumer stuck-intent settlement", () => {
     const { ledger, rows: ledgerRows } = memLedger();
     ledgerRows.set("j1", { state: "pending" });
     const m = msg({ kind: "sync-event", eventKey: EVENT_KEY, idempotencyKey: KEY, jobId: "j1" }, 1);
+    const failSync = vi.fn(async () => {});
     await consume(
       { messages: [m] },
       {
         bot: needsReconciliationBot(),
-        events: stuckSyncStore(),
+        events: { ...stuckSyncStore(), failSync },
         lock: memLock(),
         ledger,
         reconciliation: store,
@@ -187,7 +191,8 @@ describe("consumer stuck-intent settlement", () => {
       subject: EVENT_KEY,
       lastCode: "needs_reconciliation",
     });
-    // ... then terminal settlement: acked, failed ledger row, never retried.
+    // Retire the carrier, never the unresolved request or its ordering fence.
+    expect(failSync).not.toHaveBeenCalled();
     expect(m.acked).toBe(true);
     expect(m.retried).toBeUndefined();
     expect(ledgerRows.get("j1")).toMatchObject({
@@ -230,6 +235,121 @@ describe("consumer stuck-intent settlement", () => {
     expect(ledgerRows.get("j2")?.state).toBe("failed");
   });
 
+  it("never calls the bot on redelivery of an open or resolved stuck key", async () => {
+    capture();
+    const { store } = memReconciliation();
+    const { ledger } = memLedger();
+    const postAnnouncement = vi.fn(needsReconciliationBot().postAnnouncement);
+    const deps = {
+      bot: { ...needsReconciliationBot(), postAnnouncement },
+      events: memStore(),
+      lock: memLock(),
+      ledger,
+      reconciliation: store,
+    };
+    const body = {
+      kind: "announcement",
+      idempotencyKey: KEY,
+      action: { channelKey: CHANNEL_KEY, body: "b" },
+    };
+    for (const attempts of [1, 2]) {
+      const m = msg(body, attempts);
+      await consume({ messages: [m] }, deps);
+      expect(m.acked).toBe(true);
+      expect(m.retried).toBeUndefined();
+    }
+    await store.resolveStuck(KEY, { by: "mod", note: "checked by hand" });
+    const late = msg(body, 3);
+    await consume({ messages: [late] }, deps);
+    expect(late.acked).toBe(true);
+    expect(postAnnouncement).toHaveBeenCalledExactlyOnceWith(body.action, KEY);
+  });
+
+  it("never prepares or calls the bot again for a persisted sync stop", async () => {
+    capture();
+    const { store } = memReconciliation();
+    const { ledger } = memLedger();
+    const bot = needsReconciliationBot();
+    const upsertEvent = vi.spyOn(bot, "upsertEvent");
+    const events = stuckSyncStore();
+    const prepareSync = vi.spyOn(events, "prepareSync");
+    const deps = { bot, events, lock: memLock(), ledger, reconciliation: store };
+    for (const attempts of [1, 2]) {
+      const m = msg({ kind: "sync-event", eventKey: EVENT_KEY, idempotencyKey: KEY }, attempts);
+      await consume({ messages: [m] }, deps);
+      expect(m.acked).toBe(true);
+      expect(m.retried).toBeUndefined();
+    }
+    expect(prepareSync).toHaveBeenCalledTimes(1);
+    expect(upsertEvent).toHaveBeenCalledTimes(1);
+  });
+
+  for (const operation of ["lookup", "record"] as const) {
+    it(`bounds a hung reconciliation ${operation} without acknowledging or replaying`, async () => {
+      capture();
+      vi.useFakeTimers();
+      const { store } = memReconciliation();
+      const { ledger } = memLedger();
+      const postAnnouncement = vi.fn(needsReconciliationBot().postAnnouncement);
+      if (operation === "lookup") store.getStuck = () => new Promise(() => {});
+      else store.recordStuck = () => new Promise(() => {});
+      const m = msg(
+        {
+          kind: "announcement",
+          idempotencyKey: KEY,
+          action: { channelKey: CHANNEL_KEY, body: "b" },
+        },
+        CALL_INTERNAL_ACTION.tries,
+      );
+      const result = expect(
+        consume(
+          { messages: [m] },
+          {
+            bot: { ...needsReconciliationBot(), postAnnouncement },
+            events: memStore(),
+            lock: memLock(),
+            ledger,
+            reconciliation: store,
+          },
+        ),
+      ).rejects.toThrow("reconciliation store timed out");
+      await vi.advanceTimersByTimeAsync(2001);
+      await result;
+      expect(postAnnouncement).toHaveBeenCalledTimes(operation === "lookup" ? 0 : 1);
+      expect(m.acked).toBe(false);
+      expect(m.retried).toBeUndefined();
+      expect(vi.getTimerCount()).toBe(0);
+    });
+  }
+
+  it("fails closed on a rejected stop lookup even at the carrier cap", async () => {
+    const { store } = memReconciliation();
+    store.getStuck = async () => {
+      throw new Error("lookup down");
+    };
+    const { ledger } = memLedger();
+    const postAnnouncement = vi.fn(needsReconciliationBot().postAnnouncement);
+    const m = msg(
+      { kind: "announcement", idempotencyKey: KEY, action: { channelKey: CHANNEL_KEY, body: "b" } },
+      CALL_INTERNAL_ACTION.tries,
+    );
+    await expect(
+      consume(
+        { messages: [m] },
+        {
+          bot: { ...needsReconciliationBot(), postAnnouncement },
+          events: memStore(),
+          lock: memLock(),
+          ledger,
+          reconciliation: store,
+        },
+      ),
+    ).rejects.toThrow("lookup down");
+    expect(postAnnouncement).not.toHaveBeenCalled();
+    expect(m.acked).toBe(false);
+    expect(m.retried).toBeUndefined();
+  });
+
   it("throws to the transport when recording fails, instead of settling and losing the row", async () => {
     capture();
     const failing: ReconciliationStore = {
@@ -258,6 +378,38 @@ describe("consumer stuck-intent settlement", () => {
     expect(m.acked).toBe(false);
     expect(m.retried).toBeUndefined();
     expect(m.body).toMatchObject({ idempotencyKey: KEY });
+  });
+
+  it("recovers a failed stop write at the carrier cap without replaying the closed request", async () => {
+    capture();
+    const { store, rows } = memReconciliation();
+    const recordStuck = vi.spyOn(store, "recordStuck");
+    recordStuck.mockRejectedValueOnce(new Error("store down"));
+    const { ledger } = memLedger();
+    const bot = needsReconciliationBot();
+    const upsertEvent = vi.spyOn(bot, "upsertEvent");
+    const events = stuckSyncStore();
+    const failSync = vi.spyOn(events, "failSync");
+    const deps = { bot, events, lock: memLock(), ledger, reconciliation: store };
+    const body = { kind: "sync-event", eventKey: EVENT_KEY, idempotencyKey: KEY };
+    const first = msg(body);
+    await expect(consume({ messages: [first] }, deps)).rejects.toThrow("store down");
+    expect(first.acked).toBe(false);
+    expect(rows.size).toBe(0);
+    for (let attempts = 2; attempts <= SYNC_EVENT.tries; attempts++) {
+      const delivery = msg(body, attempts);
+      await consume({ messages: [delivery] }, deps);
+      expect(delivery.acked).toBe(attempts === SYNC_EVENT.tries);
+    }
+    expect(rows.get(KEY)).toMatchObject({
+      idempotencyKey: KEY,
+      verb: "event.upsert",
+      subject: EVENT_KEY,
+    });
+    expect(upsertEvent).toHaveBeenCalledTimes(1);
+    expect(failSync).not.toHaveBeenCalled();
+    const pending = await events.prepareSync(EVENT_KEY, KEY, new Date());
+    expect(pending).toMatchObject({ state: "pending", nextAttemptAt: null, requestAttempts: 1 });
   });
 
   it("throws loudly with no store wired instead of settling silently", async () => {
@@ -352,6 +504,34 @@ describe("consumer Echo confirm gating", () => {
     expect(m.acked).toBe(false);
     expect(m.retried).toBeDefined();
     expect(m.body).toMatchObject({ idempotencyKey: KEY, echoId: 42 });
+  });
+
+  it("bounds a hung confirmation and still handles the next message in the batch", async () => {
+    capture();
+    vi.useFakeTimers();
+    const { ledger } = memLedger();
+    const first = msg({ ...announced });
+    const next = msg({
+      kind: "role-assign",
+      idempotencyKey: null,
+      action: { userId: "u", roleKey: "r" },
+    });
+    const result = consume(
+      { messages: [first, next] },
+      {
+        bot: okBot,
+        events: memStore(),
+        lock: memLock(),
+        ledger,
+        onAnnouncementConfirmed: () => new Promise(() => {}),
+      },
+    );
+    await vi.advanceTimersByTimeAsync(2001);
+    expect(first.acked).toBe(false);
+    expect(first.retried).toBeDefined();
+    expect(next.acked).toBe(true);
+    expect(vi.getTimerCount()).toBe(0);
+    await result;
   });
 
   it("fails terminally when the confirm rejects past the announcement budget", async () => {

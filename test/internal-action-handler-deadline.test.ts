@@ -6,14 +6,16 @@ import {
 } from "../src/jobs/internal-action-deadline";
 import { handleCallInternalAction } from "../src/jobs/call-internal-action";
 import { BotTransportError, BotTerminalError } from "../src/jobs/types";
+import type { ReconciliationStore, StuckIntent } from "../src/jobs/reconciliation";
 import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs/types";
 
 // TOG-11628: the queued internal-action handler must bound a never-settling
 // BotClient promise. Ledger/lock cleanup is already bounded; the bot call was
 // awaited bare, so one hung call stalled the whole serial batch behind it.
+const KEY = "22222222-2222-4222-8222-222222222222";
 const ann = {
   kind: "announcement",
-  idempotencyKey: "k",
+  idempotencyKey: KEY,
   action: { channelKey: "c", body: "b" },
 } as const;
 const role = {
@@ -85,7 +87,7 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     // Bounded wait (first backoff is 5 s), same carrier key, no terminal ack …
     expect(first.retried).toBe(5);
     expect(first.acked).toBe(false);
-    expect(first.body).toMatchObject({ idempotencyKey: "k" });
+    expect(first.body).toMatchObject({ idempotencyKey: KEY });
     // … and the later message still reaches disposition.
     expect(second.acked).toBe(true);
     expect(vi.getTimerCount()).toBe(0);
@@ -107,18 +109,41 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     expect(vi.getTimerCount()).toBe(0);
   });
 
-  it("a hung call at the cap fails terminally instead of retrying", async () => {
+  it("a hung call at the cap escalates to a recorded stuck intent, never a terminal failure", async () => {
     vi.useFakeTimers();
     const bot = { postAnnouncement: () => new Promise(() => {}) } as unknown as BotClient;
     const { ledger, rows } = memLedger();
     rows.set("j1", { state: "pending" });
+    const recorded: StuckIntent[] = [];
+    const reconciliation = {
+      getStuck: async () => null,
+      recordStuck: async (intent: StuckIntent) => {
+        recorded.push(intent);
+        return {} as never;
+      },
+    } as unknown as ReconciliationStore;
     const last = msg({ ...ann, jobId: "j1" }, 5);
-    const p = consume({ messages: [last] }, { bot, events: store(), lock: memLock(), ledger });
+    const p = consume(
+      { messages: [last] },
+      { bot, events: store(), lock: memLock(), ledger, reconciliation },
+    );
     await vi.advanceTimersByTimeAsync(INTERNAL_ACTION_DEADLINE_MS + 1000);
     await p;
     expect(last.acked).toBe(true);
     expect(last.retried).toBeUndefined();
-    expect(rows.get("j1")).toMatchObject({ state: "failed", reason: "gave up after 5 attempts" });
+    // Intent captured under the original carrier key; no delivery claim.
+    expect(recorded).toHaveLength(1);
+    expect(recorded[0]).toMatchObject({
+      idempotencyKey: KEY,
+      verb: "announcement.post",
+      subject: "c",
+      lastCode: null,
+      lastStatus: null,
+      attempts: 5,
+    });
+    expect(JSON.stringify(recorded)).not.toContain("gave up");
+    expect(rows.get("j1")?.state).toBe("failed");
+    expect(rows.get("j1")?.reason).toBe("stuck announcement.post for c (last code unknown)");
   });
 
   it("late success after the deadline cannot reclassify the disposed outcome", async () => {
@@ -174,7 +199,7 @@ describe("internal-action handler deadline (TOG-11628)", () => {
     await expect(attempt).resolves.toEqual({ retryInSeconds: 5 });
     // Redelivery carries the same carrier (same key), and the bot dedupes it.
     await expect(handleCallInternalAction({ ...ann }, 2, bot)).resolves.toEqual({ done: true });
-    expect(seen).toEqual(["k", "k"]);
+    expect(seen).toEqual([KEY, KEY]);
   });
 
   it("fast paths are unchanged: success, refusal, retry-after, transport and terminal throws", async () => {

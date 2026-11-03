@@ -1,0 +1,4 @@
+/* Reconciliation screens (admin only). Separate stylesheet so these rules
+   stay out of the inlined leaf critical-CSS bundle; see admin-rsvp-review.css. */
+.reconciliation-detail { overflow-wrap: anywhere; }
+.reconciliation-table time { white-space: nowrap; }

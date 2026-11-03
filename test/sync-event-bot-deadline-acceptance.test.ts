@@ -23,7 +23,7 @@ import type {
 // not change the disposed outcome, settle the attempt, or leak a rejection.
 const clock = 1_000_000;
 const eventKey = "evt-deadline-acceptance";
-const idempotencyKey = "sync-deadline-request-key";
+const idempotencyKey = "55555555-5555-4555-8555-555555555555";
 
 function makeAttempt(
   priorRequests = 0,
@@ -219,7 +219,20 @@ describe("sync-event bot calls are bounded by the shared deadline", () => {
     await done;
 
     expect(settledOnBudget).toBe(true);
-    expect(box.value).toEqual({ failed: "carrier exhausted; unresolved identity retained" });
+    // Request budget spent: the unknown outcome escalates as a stuck intent
+    // under the same request key; never a failure, never definitive.
+    expect(box.value).toEqual({
+      stuck: {
+        idempotencyKey,
+        verb: "event.upsert",
+        subject: eventKey,
+        lastCode: null,
+        lastStatus: null,
+        lastRequestId: null,
+        attempts: 6,
+      },
+    });
+    expect(box.value).not.toHaveProperty("failed");
     expect(box.value).not.toHaveProperty("definitive");
     expect(d.events.deferSync).toHaveBeenCalledExactlyOnceWith(d.attempt, null);
     expect(d.events.failSync).not.toHaveBeenCalled();

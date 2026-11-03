@@ -171,6 +171,16 @@
   },
   {
     "method": "GET",
+    "path": "/admin/reconciliation",
+    "auth": "moderator"
+  },
+  {
+    "method": "GET",
+    "path": "/admin/reconciliation/:key",
+    "auth": "moderator"
+  },
+  {
+    "method": "GET",
     "path": "/api/public/community",
     "auth": "public"
   },
@@ -508,6 +518,11 @@
     "method": "POST",
     "path": "/admin/queue/source-evidence/:id",
     "auth": "evidence-bearer"
+  },
+  {
+    "method": "POST",
+    "path": "/admin/reconciliation/:key/resolve",
+    "auth": "moderator"
   },
   {
     "method": "POST",

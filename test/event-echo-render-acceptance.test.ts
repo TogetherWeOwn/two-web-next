@@ -6,7 +6,7 @@
 // without an approved DATABASE_URL); one Echo per event, frozen counts,
 // host headline, F20 projections end to end.
 import { eq } from "drizzle-orm";
-import { afterAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
 import { eventEchoMembers, eventEchoes, events, rsvps } from "../src/db/admin-schema";
@@ -16,6 +16,7 @@ import type { Env } from "../src/env";
 import { __resetAnonEventCacheForTests } from "../src/events/anon-cache";
 import { __resetHomeGuestCacheForTests } from "../src/home-cache";
 import { profilesApp } from "../src/profiles/routes";
+import { confirmEchoAnnouncement } from "../src/jobs/worker";
 import { createMemorySessionStore } from "../src/sessions";
 import { cookieFor, env, MEMBER, SUBJECT } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
@@ -93,16 +94,48 @@ describe("event echo render acceptance", () => {
   let fixture: MemberDataFixture;
 
   beforeEach(async () => {
-    if (!fixture) fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    // Snapshot reads stay local; synthetic auth must never reach Discord.
+    vi.stubGlobal(
+      "fetch",
+      vi.fn(async () => Response.json([])),
+    );
+    if (!fixture) fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 2 });
     await fixture.reset();
     __resetHomeGuestCacheForTests();
     __resetAnonEventCacheForTests();
     await seedBase(fixture.db);
   }, 30_000);
+  afterEach(() => vi.unstubAllGlobals());
   afterAll(() => fixture?.dispose());
 
   const mainBindings = (store = createMemorySessionStore()) =>
     ({ ...env, ADMIN_DB: fixture.db, SESSION_STORE: store }) as Env;
+
+  it("cancels a lock-blocked confirmation, frees the pool, and confirms only after recovery", async () => {
+    const id = await seedEcho(fixture.db);
+    const holder = await fixture.client.reserve();
+    try {
+      await holder`begin`;
+      await holder`select id from event_echoes where id = ${id} for update`;
+      await expect(confirmEchoAnnouncement(fixture.client, id)).rejects.toMatchObject({
+        cause: { code: "55P03" },
+      });
+      // The second connection is usable while the first still owns the row lock.
+      expect(
+        await fixture.client`select announcement_posted_at from event_echoes where id = ${id}`,
+      ).toEqual([{ announcement_posted_at: null }]);
+      const [settings] =
+        await fixture.client`select current_setting('lock_timeout') as lock, current_setting('statement_timeout') as statement`;
+      expect(settings).toEqual({ lock: "0", statement: "0" });
+    } finally {
+      await holder`rollback`;
+      await holder.release();
+    }
+    await confirmEchoAnnouncement(fixture.client, id);
+    const [confirmed] =
+      await fixture.client`select announcement_posted_at is not null as posted from event_echoes where id = ${id}`;
+    expect(confirmed?.posted).toBe(true);
+  });
 
   describe("home cream band", () => {
     it("shows the frozen record with the host headline and an archive link", async () => {
@@ -264,7 +297,11 @@ describe("event echo render acceptance", () => {
       expect(html).toContain("Echo render night");
       expect(html).toContain("12");
       expect(html).toContain(HEADLINE);
-      expect(html).toContain("pending");
+      // Honest state: enqueue is not delivery, so an unposted echo reads
+      // Confirming (never "pending"/"posted") until the bot confirms.
+      expect(html).toContain("<td>Confirming</td>");
+      expect(html).not.toContain("<td>posted</td>");
+      expect(html).not.toContain("pending");
       expect(html).not.toContain("45 minutes in voice");
     });
 

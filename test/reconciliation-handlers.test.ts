@@ -7,7 +7,7 @@
 // error or a false success claim. Hermetic: stub bots and stores, no queue,
 // no database.
 import { describe, expect, it, vi } from "vitest";
-import { handleCallInternalAction } from "../src/jobs/call-internal-action";
+import { dispatchAnnouncement, handleCallInternalAction } from "../src/jobs/call-internal-action";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
 import { handleSyncEvent } from "../src/jobs/sync-event";
 import { BotTransportError } from "../src/jobs/types";
@@ -107,6 +107,23 @@ const announcementMsg = {
 } as const;
 
 describe("announcement handler stuck intents", () => {
+  it.each([42, 0, -1, 1.5, Number.NaN, Number.POSITIVE_INFINITY, undefined])(
+    "carries only a valid Echo identity (%s), separate from the intent UUID",
+    async (echoId) => {
+      const send = vi.fn(async (_body: unknown) => {});
+      await dispatchAnnouncement({ send }, announcementMsg.action, undefined, echoId);
+      expect(send).toHaveBeenCalledTimes(1);
+      const carrier = send.mock.calls[0]![0];
+      expect(carrier).toMatchObject({
+        kind: "announcement",
+        idempotencyKey: expect.stringMatching(/^[0-9a-f-]{36}$/),
+        action: announcementMsg.action,
+      });
+      if (echoId === 42) expect(carrier).toHaveProperty("echoId", 42);
+      else expect(carrier).not.toHaveProperty("echoId");
+    },
+  );
+
   it("hard-stops on needs_reconciliation with the same key, even when the flag says retryable", async () => {
     const { bot, seen } = keyedBot(
       failure({ code: "needs_reconciliation", status: 409, retryable: true }),
@@ -231,7 +248,7 @@ describe("sync-event handler stuck intents", () => {
     });
   });
 
-  it("escalates a closed claim with no bot answer instead of a terminal failure", async () => {
+  it("retires a waiting carrier without inventing a stuck intent for a different request", async () => {
     const { bot } = keyedBot(failure());
     const { store } = syncStore({ waiting: true });
     const outcome = await handleSyncEvent(
@@ -239,15 +256,10 @@ describe("sync-event handler stuck intents", () => {
       SYNC_EVENT.tries,
       { bot, events: store },
     );
-    expect("stuck" in outcome && outcome.stuck).toMatchObject({
-      idempotencyKey: KEY,
-      verb: "event.upsert",
-      subject: EVENT_KEY,
-      lastCode: null,
-      lastStatus: null,
-      lastRequestId: null,
+    expect(outcome).toEqual({
+      failed: "waiting carrier exhausted; request remains recoverable",
     });
-    expect("failed" in outcome).toBe(false);
+    expect("stuck" in outcome).toBe(false);
   });
 
   it("escalates a spent request budget with the same key", async () => {
