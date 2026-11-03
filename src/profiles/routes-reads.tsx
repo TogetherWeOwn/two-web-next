@@ -1,7 +1,9 @@
 // GET /profile and GET /members/:user: the profile page render. Split out of
 // src/profiles/routes.tsx; registered after the gate so every read is
 // member-gated and access-logged by routes-gate.ts.
+import { dbFor } from "../admin/db";
 import { databaseUnavailableBuffered, NotFoundPage } from "../errors";
+import { listOwnEchoRows, type OwnEchoRow } from "../events/echoes";
 import { bufferedMemberHtml, declareMemberResult } from "../member-reads";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import { readJoinResult } from "../return-journey";
@@ -42,6 +44,18 @@ export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: Prof
     const sharedGames = needsMatch ? findSharedGames(member.games, viewerRow?.games ?? []) : [];
     const joinResult = await readJoinResult(c);
     const stats = await statsFor(c, member.id);
+    // F20 own-profile view: the viewer's own played-minutes, newest first.
+    // Owner-only (moderators use the admin Echo detail); a failed read omits
+    // the section instead of 503ing the profile.
+    let ownEchoes: OwnEchoRow[] = [];
+    if (isOwner) {
+      try {
+        const db = await dbFor(c);
+        ownEchoes = db ? await listOwnEchoRows(db, viewer.id) : [];
+      } catch {
+        ownEchoes = [];
+      }
+    }
     return bufferedMemberHtml(
       c,
       <ProfilePage
@@ -52,6 +66,7 @@ export function registerReadRoutes(app: ProfileApp, { storeFor, statsFor }: Prof
         appUrl={c.env.APP_URL}
         joinResult={joinResult}
         sharedGames={sharedGames}
+        ownEchoes={ownEchoes}
       />,
     );
   };

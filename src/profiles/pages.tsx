@@ -26,6 +26,8 @@ import {
   profileIsNewMember,
   profileJoinedMonth,
 } from "../islands/contracts";
+import { ECHO_OWN_MINUTES_TESTID } from "../islands/contracts";
+import type { OwnEchoRow } from "../events/echoes";
 import type { MemberView } from "./store";
 import { MEMBER_MILESTONES_CAP, type MemberStats } from "./stats";
 import {
@@ -200,6 +202,8 @@ export const ProfilePage: FC<{
    * equal to a value render the shared marker. Absent (or empty) renders the
    * plain list: own profile and zero-shared never mark. */
   sharedGames?: string[];
+  /** Owner-only played-minutes across recent Echoes (F20); never set for guests. */
+  ownEchoes?: OwnEchoRow[];
 }> = ({
   member,
   isOwner,
@@ -211,6 +215,7 @@ export const ProfilePage: FC<{
   values,
   statsDraftWarning,
   sharedGames,
+  ownEchoes = [],
 }) => {
   const img = profileAvatarSrcset(member.id, member.avatar);
   const joined = profileJoinedMonth(member.joinedAt ?? null);
@@ -402,6 +407,29 @@ export const ProfilePage: FC<{
             profilePath={`/members/${member.id}`}
             draftWarning={statsDraftWarning}
           />
+        ) : null}
+        {isOwner && ownEchoes.length > 0 ? (
+          <section
+            class="profile-panel"
+            aria-labelledby="own-echoes-heading"
+            data-testid={ECHO_OWN_MINUTES_TESTID}
+          >
+            <h2 id="own-echoes-heading">Your recent game nights</h2>
+            <ul>
+              {ownEchoes.map((row) => (
+                <li key={row.eventKey}>
+                  <a href={`/e/${encodeURIComponent(row.eventKey)}`}>{row.eventTitle}</a>{" "}
+                  <span>
+                    {row.minutes.minutes} minutes in voice
+                    {row.minutes.attended
+                      ? ""
+                      : ` (below the ${row.minutes.thresholdMinutes}-minute attendance mark)`}
+                  </span>
+                  {row.headline ? <span> — {row.headline}</span> : null}
+                </li>
+              ))}
+            </ul>
+          </section>
         ) : null}
         {isOwner ? (
           <section

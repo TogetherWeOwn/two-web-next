@@ -311,6 +311,8 @@ const MATRIX: Case[] = [
   })),
   ...[
     "/admin/activity-log",
+    "/admin/echoes",
+    "/admin/echoes/:id",
     "/admin/join-attempts",
     "/admin/join-attempts/:id",
     "/admin/events",
@@ -332,6 +334,7 @@ const MATRIX: Case[] = [
     "/admin/events/:key/duplicate",
     "/admin/events/:key/rsvp-pause",
     "/admin/events/:key/rsvp-reopen",
+    "/admin/echoes/:id/headline",
     "/admin/featured",
     "/admin/featured/:id",
     "/admin/featured/:id/delete",
@@ -342,7 +345,11 @@ const MATRIX: Case[] = [
     status: 503,
     actor: "moderator" as const,
     format: "html" as const,
-    body: route.includes("featured") ? "title=Fixture&position=0" : adminForm,
+    body: route.includes("featured")
+      ? "title=Fixture&position=0"
+      : route.includes("headline")
+        ? "headline=Outage+fixture"
+        : adminForm,
     contentType: "application/x-www-form-urlencoded",
   })),
 ];

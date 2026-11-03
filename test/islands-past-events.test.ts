@@ -69,6 +69,9 @@ function archive(total: number) {
     queries.push({ sql, params });
     if (sql.startsWith('select count(*) from "events"')) return { rows: [[total]] };
     if (sql.includes('from "rsvps"')) return { rows: [] };
+    // Frozen Echo batch (mapEchoesByEvent): the row-shape fallthrough below
+    // would decode event rows as Echo rows and mint phantom records.
+    if (sql.includes('from "event_echoes"')) return { rows: [] };
     const hasOffset = sql.includes(" offset ");
     const offset = hasOffset ? Number(params.at(-1)) : 0;
     if (!Number.isSafeInteger(offset) || offset < 0) throw new Error("Invalid archive SQL offset");
@@ -186,7 +189,7 @@ describe("PastEvents contract and SSR drift", () => {
     expect(keys(html)).toEqual(Array.from({ length: 20 }, (_, i) => `archive-${25 - i}`));
     expect(html).toContain('data-page="1"');
     expect(html).toContain(`rel="canonical" href="${APP_URL}/events/past"`);
-    expect(source.queries).toHaveLength(4);
+    expect(source.queries).toHaveLength(5); // + frozen Echo batch
     expect(source.queries[1]!.sql).not.toContain(" offset "); // Drizzle elides zero
   });
 
@@ -228,8 +231,8 @@ describe("PastEvents contract and SSR drift", () => {
   it("uses one predicate for count/rows, stable newest-first paging and two grouped aggregates, never viewer answers", async () => {
     const source = archive(25);
     await source.request("/events/past?page=2");
-    expect(source.queries).toHaveLength(4);
-    const [count, rows, named, occupancy] = source.queries;
+    expect(source.queries).toHaveLength(5);
+    const [count, rows, named, occupancy, echo] = source.queries;
     expect(count!.sql.split(" where ")[1]).toBe(
       rows!.sql.split(" where ")[1]!.split(" order by ")[0],
     );
@@ -246,6 +249,7 @@ describe("PastEvents contract and SSR drift", () => {
     expect(named!.sql).toContain('"users"."username" <>');
     expect(named!.params.at(-1)).toBe("");
     expect(occupancy!.sql).not.toContain('inner join "users"');
+    expect(echo!.sql).toContain('from "event_echoes"');
     expect(source.queries.every((q) => !/member_id/i.test(q.sql))).toBe(true);
     expect(source.queries.filter((q) => /\bjoin\b/i.test(q.sql))).toEqual([named]);
   });

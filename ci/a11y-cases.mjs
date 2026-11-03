@@ -210,6 +210,12 @@ export const coverage = {
       { path: "/admin/join-attempts/999999", identity: "moderator", status: 404 },
     ],
   },
+  "/admin/echoes/:id": {
+    cases: [
+      { path: "/admin/echoes/1", identity: "moderator" },
+      { path: "/admin/echoes/999", identity: "moderator", status: 404 },
+    ],
+  },
   "/admin/activity-log": {
     cases: [
       { path: "/admin/activity-log", identity: "moderator" },

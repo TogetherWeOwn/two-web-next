@@ -2,6 +2,7 @@
 import type { FC } from "hono/jsx";
 import { canonicalUrl } from "../seo";
 import {
+  ECHO_RECORD_TESTID,
   EVENT_CARD_HOST_TESTID,
   EVENTS_EMPTY_COPY,
   EVENTS_SUBSCRIBE_TESTID,
@@ -20,6 +21,7 @@ import {
   pastEventsOutOfRangeCopy,
   pastEventsUrl,
 } from "../islands/contracts";
+import { echoShortLine, projectPublicEcho, recordLabel, type EchoRow } from "./echoes";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { feedUrl, rssUrl, webcalUrl } from "./feeds";
 import { subscriptionHelp } from "./subscription-help";
@@ -28,7 +30,12 @@ import { effectiveZone } from "./date-format";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
 import { searchContext } from "./search-context";
 
-const Card: FC<{ e: PublicEvent; q: string; archive: ArchiveContext }> = ({ e, q, archive }) => {
+const Card: FC<{ e: PublicEvent; q: string; archive: ArchiveContext; echo?: EchoRow | null }> = ({
+  e,
+  q,
+  archive,
+  echo = null,
+}) => {
   // Same compact host line as the upcoming CalCard: trimmed public organizer,
   // already on the row (no new read); blank/missing renders no node.
   const host = (e.organizer_name ?? "").trim();
@@ -73,7 +80,22 @@ const Card: FC<{ e: PublicEvent; q: string; archive: ArchiveContext }> = ({ e, q
           </p>
         ) : null}
       </div>
-      <span class="schedule-attendance">{goingCountText(e.goingCount, e.capacity)}</span>
+      {/* Frozen record, one line: the attendance span is the grid's placed
+          child, so the label and headline ride inside it — sibling spans
+          would auto-place into the narrow date column and wrap mid-word.
+          Echo events carry the attendance record, every earlier event keeps
+          the sign-up record, forever (backfill policy). */}
+      <span class="schedule-attendance">
+        {echo ? echoShortLine(projectPublicEcho(echo)) : goingCountText(e.goingCount, e.capacity)}
+        {" · "}
+        <span data-testid={ECHO_RECORD_TESTID}>{recordLabel(echo !== null)}</span>
+        {echo?.headline ? (
+          <>
+            {" — "}
+            {echo.headline}
+          </>
+        ) : null}
+      </span>
     </li>
   );
 };
@@ -85,7 +107,9 @@ export const PastEventsPage: FC<{
   totalPages: number;
   appUrl: string;
   q?: string;
-}> = ({ rows, page, hasMore, totalPages, appUrl, q = "" }) => (
+  /** Frozen Echo rows by event id; absent events render the sign-up record. */
+  echoes?: Map<number, EchoRow>;
+}> = ({ rows, page, hasMore, totalPages, appUrl, q = "", echoes }) => (
   <ScheduleShell
     title="Past events"
     canonical={canonicalUrl(appUrl, pastEventsUrl(page, q))}
@@ -167,7 +191,7 @@ export const PastEventsPage: FC<{
       </div>
       <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>
         {rows.map((e) => (
-          <Card e={e} q={q} archive={{ page, q }} />
+          <Card e={e} q={q} archive={{ page, q }} echo={echoes?.get(e.id) ?? null} />
         ))}
       </ul>
       <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>

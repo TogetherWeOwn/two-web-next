@@ -10,7 +10,8 @@
 // functions, so no database connection is needed.
 
 import { describe, expect, it } from "vitest";
-import { events, featuredContents } from "../src/db/admin-schema";
+import { eventEchoes, events, featuredContents } from "../src/db/admin-schema";
+import { users } from "../src/db/schema";
 import {
   normalizedStatement,
   rawMemberOwner,
@@ -26,6 +27,7 @@ import { MemberReadRefused, type NonSensitiveRead } from "../src/member-reads";
 // - "join-funnel": admin dashboard join-funnel aggregate (src/admin/reads.ts)
 // - "going-counts": per-event RSVP going counts (src/events/reads.ts)
 // - "search-widget": event search-log aggregate (src/events/search-log.ts)
+// - "event-echoes": frozen public Echo aggregates (src/events/echoes.ts)
 // - "timeouts": lock/statement timeout setup (src/events/suggestions.ts)
 
 const TIMEOUTS =
@@ -62,6 +64,39 @@ const eventFields = (...names: Array<keyof typeof events>): SelectedField[] =>
   names.map((name) => ({ path: [name], field: events[name] }));
 const featuredFields = (...names: Array<keyof typeof featuredContents>): SelectedField[] =>
   names.map((name) => ({ path: [name], field: featuredContents[name] }));
+// Event Echo list shape (home band, admin ledger, detail): the full Echo
+// projection joined to the event title. Kept in sync on purpose — if the
+// read changes shape, these pins must change too.
+const ECHO_LIST_FIELDS: SelectedField[] = [
+  ...(
+    [
+      "id",
+      "eventId",
+      "eventKey",
+      "windowStartsAt",
+      "windowEndsAt",
+      "thresholdMinutes",
+      "peakConcurrent",
+      "attendedCount",
+      "rooms",
+      "headline",
+      "announcementPostedAt",
+      "createdAt",
+      "updatedAt",
+    ] as const
+  ).map((name) => ({ path: ["echo", name], field: eventEchoes[name] })),
+  { path: ["eventTitle"], field: events.title },
+];
+const ECHO_LIST_SELECT =
+  'select "event_echoes"."id", "event_echoes"."event_id", "event_echoes"."event_key", ' +
+  '"event_echoes"."window_starts_at", "event_echoes"."window_ends_at", ' +
+  '"event_echoes"."threshold_minutes", "event_echoes"."peak_concurrent", ' +
+  '"event_echoes"."attended_count", "event_echoes"."rooms", "event_echoes"."headline", ' +
+  '"event_echoes"."announcement_posted_at", "event_echoes"."created_at", ' +
+  '"event_echoes"."updated_at", "events"."title" ' +
+  'from "event_echoes" inner join "events" on "events"."id" = "event_echoes"."event_id"';
+const echoFields = (...names: Array<keyof typeof eventEchoes>): SelectedField[] =>
+  names.map((name) => ({ path: [name], field: eventEchoes[name] }));
 
 const refuses = (classification: NonSensitiveRead, statement: string, fields?: SelectedField[]) =>
   expect(() => validateNonSensitiveRead(classification, statement, fields)).toThrow(
@@ -139,6 +174,42 @@ describe("validateNonSensitiveRead accepts each intended shape", () => {
   it("featured accepts the edit-form timestamp-text read", () => {
     allows("featured", FEATURED_EDIT_READ, featuredFields("id", "title"));
   });
+
+  it("event-echoes accepts the four frozen-aggregate shapes", () => {
+    allows(
+      "event-echoes",
+      `${ECHO_LIST_SELECT} order by "event_echoes"."window_ends_at" desc limit $1`,
+      ECHO_LIST_FIELDS,
+    );
+    allows(
+      "event-echoes",
+      `${ECHO_LIST_SELECT} where "event_echoes"."event_id" = $1`,
+      ECHO_LIST_FIELDS,
+    );
+    allows("event-echoes", `${ECHO_LIST_SELECT} where "event_echoes"."id" = $1`, ECHO_LIST_FIELDS);
+    allows(
+      "event-echoes",
+      'select "id", "event_id", "event_key", "window_starts_at", "window_ends_at", ' +
+        '"threshold_minutes", "peak_concurrent", "attended_count", "rooms", "headline", ' +
+        '"announcement_posted_at", "created_at", "updated_at" from "event_echoes" ' +
+        'where "event_echoes"."event_id" in ($1, $2)',
+      echoFields(
+        "id",
+        "eventId",
+        "eventKey",
+        "windowStartsAt",
+        "windowEndsAt",
+        "thresholdMinutes",
+        "peakConcurrent",
+        "attendedCount",
+        "rooms",
+        "headline",
+        "announcementPostedAt",
+        "createdAt",
+        "updatedAt",
+      ),
+    );
+  });
 });
 
 describe("PII-bearing reads never classify as public", () => {
@@ -182,6 +253,33 @@ describe("PII-bearing reads never classify as public", () => {
       'select "id" from "featured_contents" join "profiles" on true where "featured_contents"."id" = $1',
       featuredFields("id"),
     );
+  });
+
+  it("event-echoes refuses member tables, minutes and widened projections", () => {
+    // Per-member minutes never classify as public: they travel keyed reads only.
+    refuses(
+      "event-echoes",
+      'select "id", "echo_id", "user_id", "minutes", "sessions", "first_joined_at" ' +
+        'from "event_echo_members" where "event_echo_members"."echo_id" = $1',
+    );
+    // A users join smuggled into the aggregate.
+    refuses(
+      "event-echoes",
+      `${ECHO_LIST_SELECT} inner join "users" on "users"."id" = "event_echoes"."event_id"`,
+      ECHO_LIST_FIELDS,
+    );
+    // A narrowed projection: the column list stays pinned, never subset.
+    refuses(
+      "event-echoes",
+      ECHO_LIST_SELECT.replace(', "event_echoes"."headline"', "") +
+        ' where "event_echoes"."id" = $1',
+      ECHO_LIST_FIELDS,
+    );
+    // A member-table column smuggled into the field provenance.
+    refuses("event-echoes", `${ECHO_LIST_SELECT} where "event_echoes"."id" = $1`, [
+      ...ECHO_LIST_FIELDS,
+      { path: ["username"], field: users.username },
+    ]);
   });
 });
 

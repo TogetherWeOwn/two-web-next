@@ -34,7 +34,7 @@ import { registerEventRoutes } from "./events/routes";
 import { registerHotzoneRoutes } from "./hotzones/routes";
 import { discordEventsSource } from "./events/discord-transients";
 import { dbFor } from "./admin/db";
-import { cachedFeatured, cachedHomeUpcoming } from "./home-cache";
+import { cachedFeatured, cachedHomeEchoes, cachedHomeUpcoming } from "./home-cache";
 import { leafInlineStyleCsp, robotsTag, SECURITY_HEADERS } from "./headers";
 import { registerJoinRoutes } from "./join/route";
 import { registerAiFriendlyRoutes } from "./ai-friendly/routes";
@@ -565,14 +565,24 @@ app.get("/", async (c) => {
     executionCtx,
     c.get("requestId"),
   );
-  const [{ session, unavailable: sessionUnavailable }, counts, flashed, homeUpcoming, featured] =
-    await Promise.all([
-      sessionPromise,
-      countsPromise,
-      flashedPromise,
-      homeUpcomingPromise,
-      featuredPromise,
-    ]);
+  // Frozen Echo records (counts only, guest-invariant): never throws — an
+  // unavailable read renders no band, never a 500 on the funnel top.
+  const echoesPromise = cachedHomeEchoes(c.env, () => dbFor(c), executionCtx, c.get("requestId"));
+  const [
+    { session, unavailable: sessionUnavailable },
+    counts,
+    flashed,
+    homeUpcoming,
+    featured,
+    echoes,
+  ] = await Promise.all([
+    sessionPromise,
+    countsPromise,
+    flashedPromise,
+    homeUpcomingPromise,
+    featuredPromise,
+    echoesPromise,
+  ]);
   const joinResult = [
     "join_failed",
     "signin_failed",
@@ -595,6 +605,7 @@ app.get("/", async (c) => {
       eventsUnavailable={homeUpcoming.unavailable}
       featured={featured}
       imageHosts={c.env.FEATURED_IMAGE_HOSTS}
+      echoes={echoes}
     />,
   );
 });

@@ -31,6 +31,8 @@ export const HTML_READS = [
   "/members/:user",
   "/admin",
   "/admin/activity-log",
+  "/admin/echoes",
+  "/admin/echoes/:id",
   "/admin/events",
   "/admin/events/new",
   "/admin/events/:key",
@@ -245,6 +247,36 @@ export function pageShellFixture(status = "published") {
       return {
         rows: [[1, "Fixture activity", "event", "1", null, "created", now.toISOString()]],
       };
+    // Frozen Echo fixture (id 1) for the admin detail shell only: the detail
+    // select pins the `"event_echoes"."id" = $` where-clause (the join's
+    // `"events"."id" = "event_echoes"."event_id"` never matches it). Every
+    // other Echo read answers empty so the home/detail/archive shells keep
+    // their scope and the ledger list shell renders its empty state. Member
+    // rows stay empty: no fixture subject is invented.
+    if (sql.includes('from "event_echo_members"')) return { rows: [] };
+    if (sql.includes('from "event_echoes"')) {
+      if (!sql.includes('"event_echoes"."id" = $') || !params.includes(1)) return { rows: [] };
+      return {
+        rows: [
+          [
+            1,
+            1,
+            EVENT_KEY,
+            now.toISOString(),
+            new Date("2030-01-01T22:15:00Z").toISOString(),
+            10,
+            5,
+            4,
+            [{ channel_id: "1", name_at_close: "Arena" }],
+            "Fixture headline",
+            null,
+            now.toISOString(),
+            now.toISOString(),
+            "Fixture game night",
+          ],
+        ],
+      };
+    }
     if (
       sql.includes('from "rsvps"') ||
       sql.includes("from rsvps") ||

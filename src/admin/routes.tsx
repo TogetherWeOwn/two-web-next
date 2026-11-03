@@ -27,6 +27,9 @@
 // - POST /admin/featured/:id         update
 // - POST /admin/featured/:id/unpublish  unpublish
 // - POST /admin/featured/:id/delete  delete (safe: nothing refers to it)
+// - GET  /admin/echoes               frozen Echo ledger (counts only)
+// - GET  /admin/echoes/:id           Echo detail + moderator member-minutes
+// - POST /admin/echoes/:id/headline  host headline only (counts never edited)
 //
 // Read routes declare stable metadata; keyed retrieval owns the subjects and
 // the guard flushes before releasing buffered HTML (M5). Writes leave the
@@ -76,6 +79,16 @@ import {
   updateFeatured,
 } from "./store";
 import { topZeroResultSearches } from "../events/search-log";
+import {
+  ECHO_HEADLINE_MAX,
+  EchoWriteError,
+  getAdminEcho,
+  listAdminEchoes,
+  listEchoMembers,
+  projectModeratorEchoMembers,
+  updateEchoHeadline,
+  validateEchoHeadline,
+} from "../events/echoes";
 import { JOIN_OUTCOMES } from "../join/service";
 import { databaseUrl } from "../db/connection";
 import { isDatabaseQueryCancellation, isDatabaseUnavailable } from "../db/errors";
@@ -95,6 +108,8 @@ import { dispatchWriteBack } from "./writeback";
 import {
   ActivityLogPage,
   AdminDashboard,
+  EchoDetailPage,
+  EchoesPage,
   ErrorPage,
   EventFormPage,
   EventsPage,
@@ -169,6 +184,10 @@ function eventNotFound(c: Context<Vars>) {
 
 function featuredNotFound(c: Context<Vars>) {
   return errorPage(c, 404, "Featured content not found");
+}
+
+function echoNotFound(c: Context<Vars>) {
+  return errorPage(c, 404, "Echo not found");
 }
 
 function writeUnavailable(c: Context<Vars>) {
@@ -861,6 +880,79 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         if (err instanceof NotFoundError) return featuredNotFound(c);
         throw err;
       }
+    },
+  );
+
+  // Frozen Echo ledger (contract §4): counts stand as written; the headline is
+  // the one editable field, via the headline form below. Member minutes load
+  // on the detail view only — the list stays counts-only.
+  admin.get("/echoes", async (c) => {
+    declareAccess(c, { resource: "event_echoes", action: "list", route: "admin.echoes.index" });
+    const db = await dbOr503(c);
+    if (!db) return adminUnavailable(c);
+    const rows = await listAdminEchoes(db);
+    return bufferedMemberHtml(c, <EchoesPage rows={rows} />);
+  });
+
+  admin.get("/echoes/:id", async (c) => {
+    declareAccess(c, { resource: "event_echoes", action: "view", route: "admin.echoes.show" });
+    const id = parseRecordId(c.req.param("id"));
+    if (id === null) return echoNotFound(c);
+    const db = await dbOr503(c);
+    if (!db) return adminUnavailable(c);
+    const row = await getAdminEcho(db, id);
+    if (!row) return echoNotFound(c);
+    const members = projectModeratorEchoMembers(
+      await listEchoMembers(db, row.id),
+      row.thresholdMinutes,
+    );
+    return bufferedMemberHtml(c, <EchoDetailPage row={row} members={members} />);
+  });
+
+  admin.post(
+    "/echoes/:id/headline",
+    // Cap first: refuse an oversized moderator body before spending admin-write throttle.
+    requestBodyLimit("form"),
+    throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
+    async (c) => {
+      // Writes leave the audit trail in the store like every other admin
+      // write; only read routes declare access (see the module contract).
+      const id = parseRecordId(c.req.param("id"));
+      if (id === null) return echoNotFound(c);
+      const db = await dbOr503(c);
+      if (!db) return writeUnavailable(c);
+      const existing = await getAdminEcho(db, id);
+      if (!existing) return echoNotFound(c);
+      const values = await parsedForm(c);
+      if (!values) return badRequest(c);
+      let headline: string | null;
+      try {
+        headline = validateEchoHeadline(values.headline);
+      } catch (err) {
+        if (!(err instanceof EchoWriteError)) throw err;
+        // Headline-only refusal: re-render the detail with the field error,
+        // same shape as the featured form refusal (422, values kept).
+        const members = projectModeratorEchoMembers(
+          await listEchoMembers(db, existing.id),
+          existing.thresholdMinutes,
+        );
+        c.status(422);
+        return c.html(
+          <EchoDetailPage
+            row={existing}
+            members={members}
+            values={values}
+            errors={{ headline: `Headline is at most ${ECHO_HEADLINE_MAX} characters.` }}
+          />,
+        );
+      }
+      try {
+        await updateEchoHeadline(db, id, headline);
+      } catch (err) {
+        if (err instanceof EchoWriteError) return echoNotFound(c);
+        throw err;
+      }
+      return c.redirect(`/admin/echoes/${id}`, 303);
     },
   );
 

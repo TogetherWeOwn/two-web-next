@@ -355,12 +355,13 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
         ).toEqual(scripts);
       });
 
-      it("PSC-010 CONTROL preserves four-read filtered responses, shared ordinary cache and no audit writes", async () => {
+      it("PSC-010 CONTROL preserves five-read filtered responses, shared ordinary cache and no audit writes", async () => {
         const source = archiveReadFixture();
         source.replaceRows([archiveRow(1, { title: "ORBITAL", description: "ORBITAL context" })]);
         const ordinary = await requestArchive(twin, "/events/past", source.env, kit);
         const ordinaryHtml = await ordinary.text();
-        expect(source.statements).toHaveLength(4);
+        // Four archive reads plus the one batched frozen-Echo lookup.
+        expect(source.statements).toHaveLength(5);
         source.statements.length = 0;
         expect(await (await requestArchive(twin, "/events/past", source.env, kit)).text()).toBe(
           ordinaryHtml,
@@ -371,7 +372,7 @@ export function registerPastSearchContextAcceptance(getBrowser: () => Browser): 
           expect(filtered.status).toBe(200);
           expect(filtered.headers.get("cache-control")).toBe("private, no-store");
           expect(filtered.headers.get("x-two-past-cacheable")).toBeNull();
-          expect(source.statements).toHaveLength(4);
+          expect(source.statements).toHaveLength(5);
           expect(source.statements.every(({ sql }) => sql.startsWith("select "))).toBe(true);
           source.statements.length = 0;
         }

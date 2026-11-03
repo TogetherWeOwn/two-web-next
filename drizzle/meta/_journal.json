@@ -239,6 +239,13 @@
       "when": 1793575814261,
       "tag": "1033_session-roles-checked-at",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1793703763186,
+      "tag": "1034_event-echoes",
+      "breakpoints": true
     }
   ]
 }

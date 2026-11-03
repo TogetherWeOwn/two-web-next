@@ -2,7 +2,15 @@
 import type { FC } from "hono/jsx";
 import { isPublicJoinUrl } from "./public-join-url";
 import { canonicalUrl } from "../seo";
-import { EVENT_ONGOING_TESTID, isValidZone, renderGoingCount } from "../islands/contracts";
+import {
+  ECHO_DETAIL_TESTID,
+  ECHO_RECORD_TESTID,
+  EVENT_ONGOING_TESTID,
+  goingCountText,
+  isValidZone,
+  renderGoingCount,
+} from "../islands/contracts";
+import { echoShortLine, recordLabel, type PublicEcho } from "./echoes";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
@@ -92,6 +100,8 @@ export const EventPage: FC<{
   attendeePage?: number;
   /** Rooted .md alternate path (A2), e.g. `/e/<key>.md`. */
   markdownAlternate?: string;
+  /** Frozen bot-recorded attendance (public counts only); null renders the sign-up record label. */
+  echo?: PublicEcho | null;
 }> = ({
   e,
   neighbors,
@@ -111,6 +121,7 @@ export const EventPage: FC<{
   returnTo,
   attendeePage = 1,
   markdownAlternate,
+  echo = null,
 }) => {
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
@@ -292,6 +303,21 @@ export const EventPage: FC<{
           </dd>
         </div>
       </dl>
+      {echo ? (
+        <section class="event-echo" aria-labelledby="echo-heading" data-testid={ECHO_DETAIL_TESTID}>
+          <h2 id="echo-heading">Last time, as the bot recorded it</h2>
+          <p>{echoShortLine(echo)}</p>
+          {echo.headline ? <p>{echo.headline}</p> : null}
+          <p data-testid={ECHO_RECORD_TESTID}>{recordLabel(true)}</p>
+        </section>
+      ) : e.status === "past" ? (
+        <section class="event-echo" aria-labelledby="echo-heading" data-testid={ECHO_DETAIL_TESTID}>
+          <h2 id="echo-heading">Last time, from the sign-up sheet</h2>
+          <p data-testid={ECHO_RECORD_TESTID}>
+            {goingCountText(e.goingCount, e.capacity)} · {recordLabel(false)}
+          </p>
+        </section>
+      ) : null}
       <div class="event-rsvp">
         <RsvpButton
           e={e}

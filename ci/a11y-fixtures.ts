@@ -1,8 +1,9 @@
+import { eq } from "drizzle-orm";
 import postgres from "postgres";
 import { auditDatabaseOptions, auditDatabaseUrl } from "./a11y-policy.mjs";
 import { createMemberDataFixture } from "../test/helpers/member-data-db";
 import { cookieFor, env, MODERATOR, seed, SUBJECT } from "../test/helpers/member-data";
-import { events, featuredContents, rsvps } from "../src/db/admin-schema";
+import { eventEchoes, events, featuredContents, rsvps } from "../src/db/admin-schema";
 import { createPostgresSessionStore, migrate, type Sql } from "../src/sessions";
 
 export async function fixtures(raw: string) {
@@ -74,6 +75,23 @@ export async function fixtures(raw: string) {
       { eventId: waitlisted!.id, userId: MODERATOR.userId, status: "going" },
       { eventId: waitlisted!.id, userId: SUBJECT.userId, status: "waitlisted" },
     ]);
+    // One frozen Echo on the past event so the admin detail audit case
+    // renders 200 and the homepage audit covers the cream band.
+    const [pastEvent] = await fixture.db
+      .select()
+      .from(events)
+      .where(eq(events.eventKey, "01J00000000000000000000018"));
+    await fixture.db.insert(eventEchoes).values({
+      eventId: pastEvent!.id,
+      eventKey: pastEvent!.eventKey,
+      windowStartsAt: new Date("2020-11-06T20:00:00Z"),
+      windowEndsAt: new Date("2020-11-06T22:15:00Z"),
+      thresholdMinutes: 10,
+      peakConcurrent: 5,
+      attendedCount: 4,
+      rooms: [{ channel_id: "111", name_at_close: "Arena" }],
+      headline: "Five regulars, four first-timers",
+    });
     await fixture.db.insert(featuredContents).values({
       title: "Community games",
       body: "Everyone is welcome — مرحباً",

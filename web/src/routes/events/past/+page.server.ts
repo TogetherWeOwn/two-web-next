@@ -43,7 +43,15 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
     // snowflake and other unrendered row fields never ride the rows (the
     // join precedent: toPublicWidgetSnapshot). The card only reads the
     // projected fields (plus, while searching, the bounded passage), so the view is unchanged.
-    return { ...data, rows: data.rows.map((row) => toPublicPastArchiveRow(row, data.q)) };
+    // Frozen Echo records ride the rows by event id (public counts only);
+    // pre-Echo events project null and render the sign-up record, like Hono.
+    // The by-id map stays server-side: rows carry their own Echo, so the
+    // client payload holds no redundant copy.
+    const { echoes, ...rest } = data;
+    return {
+      ...rest,
+      rows: data.rows.map((row) => toPublicPastArchiveRow(row, data.q, echoes.get(row.id))),
+    };
   } catch {
     error(503, "Events temporarily unavailable");
   }

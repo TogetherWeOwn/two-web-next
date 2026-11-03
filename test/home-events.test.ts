@@ -93,6 +93,9 @@ function fixture(
     if (sql.includes('from "featured_contents"')) {
       return { rows: featured ? [[1, "Community news", "Featured body", null, null, null]] : [] };
     }
+    // Frozen Echo rows have their own acceptance suite with seeded rows; here
+    // the band stays absent so the event-reader pins below keep their scope.
+    if (sql.includes('from "event_echoes"')) return { rows: [] };
     if (sql.includes("set_config") && params[0] !== `${HOME_EVENTS_DB_TIMEOUT_MS}ms`)
       return { rows: [] };
     queries.push({ sql, params });

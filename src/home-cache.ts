@@ -1,10 +1,12 @@
 // Homepage guest-invariant short-TTL cache (isolate-local). Counts, upcoming
-// events and the published featured base are identical for guests and members,
-// so one shared entry serves every viewer; the response stays
-// `private, no-store` because it also embeds the per-viewer session and the
-// one-shot join flash, which are never cached here. The featured window
+// events, the published featured base and the latest Echoes are identical for
+// guests and members, so one shared entry serves every viewer; the response
+// stays `private, no-store` because it also embeds the per-viewer session and
+// the one-shot join flash, which are never cached here. The featured window
 // ([startsAt, endsAt)) is evaluated per request against the cached base, so
-// boundary instants stay exact.
+// boundary instants stay exact. Echo rows are written by the jobs worker
+// isolate, which cannot retire this memory; a new Echo converges here when
+// the short TTL lapses (at most HOME_GUEST_CACHE_TTL_MS).
 // Outage fallbacks are preserved: a cache miss or a cache failure falls
 // through to the direct read, and an unavailable upcoming read is never
 // stored (a stored outage would hide recovery behind the TTL). A
@@ -28,6 +30,7 @@
 import { databaseUrl } from "./db/connection";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
+import { listRecentEchoes, projectPublicEcho, type PublicEcho } from "./events/echoes";
 import { listPublishedFeatured, type PublishedFeatured, type VisibleFeatured } from "./featured";
 import { currentlyVisible } from "./featured-status";
 import { loadHomeUpcomingMerged, type HomeUpcomingMerged } from "./events/reads";
@@ -35,6 +38,14 @@ import type { DiscordEventsSource } from "./events/discord-transients-types";
 import { safeRequestId } from "./request-log";
 
 export const HOME_GUEST_CACHE_TTL_MS = 60_000;
+
+/** Cream records band item: the public Echo projection plus its event title.
+ * Counts only, never member rows (privacy floor F20, enforced by the
+ * projection, not the template). */
+export type HomeEchoItem = PublicEcho & { eventTitle: string };
+
+/** How many Echoes the cream band shows. */
+export const HOME_ECHOES_LIMIT = 3;
 
 type WaitUntilCtx = { waitUntil?: (promise: Promise<unknown>) => void };
 
@@ -46,8 +57,11 @@ type FeaturedEntry = { value: PublishedFeatured[]; expiresAt: number; gen: numbe
 // each injected object gets its own entry so hermetic fixtures never share.
 const upcomingByUrl = new Map<string, UpcomingEntry>();
 const featuredByUrl = new Map<string, FeaturedEntry>();
+type EchoesEntry = { value: HomeEchoItem[]; expiresAt: number; gen: number };
+const echoesByUrl = new Map<string, EchoesEntry>();
 const upcomingByDb = new WeakMap<object, UpcomingEntry>();
 const featuredByDb = new WeakMap<object, FeaturedEntry>();
+const echoesByDb = new WeakMap<object, EchoesEntry>();
 
 // A committed featured or event mutation retires every entry at once: the
 // WeakMaps cannot be cleared key by key, and one fixture object is routinely
@@ -68,6 +82,7 @@ function urlKey(env: Env): string {
 function clearMemory(): void {
   upcomingByUrl.clear();
   featuredByUrl.clear();
+  echoesByUrl.clear();
   generation++;
 }
 
@@ -179,6 +194,74 @@ export async function cachedHomeUpcoming(
   }
   try {
     storeUpcomingMemory(key, injected, value, genAtStart);
+  } catch {
+    // Cache failures never fail the request.
+  }
+  return value;
+}
+
+function readEchoesMemory(key: string, injected: Db | undefined): HomeEchoItem[] | undefined {
+  const now = Date.now();
+  const memory = injected ? echoesByDb.get(injected) : echoesByUrl.get(key);
+  if (memory && memory.gen === generation && now < memory.expiresAt) return memory.value;
+  return undefined;
+}
+
+function storeEchoesMemory(
+  key: string,
+  injected: Db | undefined,
+  value: HomeEchoItem[],
+  genAtStart?: number,
+): void {
+  // Empty is stored, unlike the featured base: a genuinely empty table means
+  // no Echo has ever been written, and the next write lands from the jobs
+  // worker isolate, which cannot retire this memory — convergence rides the
+  // TTL either way.
+  if (genAtStart !== undefined && genAtStart !== generation) return;
+  const entry = { value, expiresAt: Date.now() + HOME_GUEST_CACHE_TTL_MS, gen: generation };
+  if (injected) echoesByDb.set(injected, entry);
+  else echoesByUrl.set(key, entry);
+}
+
+/**
+ * Guest-invariant Echo band with the same short-TTL isolate-local layer. The
+ * public projection carries counts only, so the cached rows are safe for
+ * every viewer. Never throws: an unavailable read renders no band.
+ */
+export async function cachedHomeEchoes(
+  env: Env,
+  openDb: () => Promise<Db | null>,
+  ctx?: WaitUntilCtx,
+  requestId?: string,
+): Promise<HomeEchoItem[]> {
+  void ctx;
+  const injected = injectedDb(env);
+  const key = urlKey(env);
+  try {
+    const hit = readEchoesMemory(key, injected);
+    if (hit) return hit;
+  } catch {
+    // Fall through to the direct read.
+  }
+  const genAtStart = generation;
+  let value: HomeEchoItem[];
+  try {
+    const db = await openDb();
+    value = db
+      ? (await listRecentEchoes(db, HOME_ECHOES_LIMIT)).map((row) => ({
+          ...projectPublicEcho(row),
+          eventTitle: row.eventTitle,
+        }))
+      : [];
+  } catch {
+    console.warn("Home echoes unavailable; serving without the band.", {
+      request_id: safeRequestId(requestId),
+      exception: "ReadFailure",
+    });
+    return [];
+  }
+  try {
+    storeEchoesMemory(key, injected, value, genAtStart);
   } catch {
     // Cache failures never fail the request.
   }

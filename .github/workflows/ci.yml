@@ -576,6 +576,12 @@ jobs:
       - name: Public-route smoke selftest (loopback fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run test:smoke
+      # Migrations carry the reviewed per-privilege runtime GRANTs to
+      # two_web_app, so the role must exist before drizzle-kit migrate runs.
+      # Fresh service container: plain CREATE ROLE, NOLOGIN, test-only.
+      - name: Create runtime role for migration grants
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: psql "postgres://postgres:ci@localhost:5432/postgres" -v ON_ERROR_STOP=1 -c "CREATE ROLE two_web_app NOLOGIN"
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate
@@ -1026,6 +1032,12 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      # Migrations carry the reviewed per-privilege runtime GRANTs to
+      # two_web_app, so the role must exist before drizzle-kit migrate runs.
+      # Fresh service container: plain CREATE ROLE, NOLOGIN, test-only.
+      - name: Create runtime role for migration grants
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: psql "postgres://postgres:ci@localhost:5432/postgres" -v ON_ERROR_STOP=1 -c "CREATE ROLE two_web_app NOLOGIN"
       - name: Apply migrations
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate

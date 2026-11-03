@@ -125,6 +125,10 @@ export type JobsEnv = Env & {
   BOT_ENDPOINT_URL?: string;
   BOT_KEY_ID?: string;
   BOT_SHARED_SECRET?: string;
+  // Living Lobby 7: bot channel-map key the Echo thread post goes to via
+  // announcement.post. Operator-provisioned; the bot channel map must carry
+  // this key. Unset skips the Discord post (the Echo still stands on site).
+  ECHO_ANNOUNCEMENT_CHANNEL_KEY?: string;
 };
 
 export type Session = {

@@ -8,3 +8,4 @@ export * from "./contracts-past-events";
 export * from "./contracts-going-count";
 export * from "./contracts-rsvp-button";
 export * from "./contracts-member-profile";
+export * from "./contracts-echoes";

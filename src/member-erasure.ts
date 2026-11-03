@@ -1,10 +1,12 @@
 // Member erasure (TOG-12548). Backs the published deletion promise
 // (src/privacy-content.ts "Deletion"): one Discord id, one transaction,
-// six member tables: users, profiles, rsvps, web_sessions, the session
-// predecessor-grace table, and join_attempts. Seats the member held go to
-// the waitlist in the same transaction. Authorship columns (events.created_by,
-// featured_contents.created_by) and the append-only audit tables are
-// deliberately out of scope — see docs/member-erasure.md.
+// seven member tables: users, profiles, rsvps, web_sessions, the session
+// predecessor-grace table, join_attempts, and event_echo_members. Seats the
+// member held go to the waitlist in the same transaction. Authorship columns
+// (events.created_by, featured_contents.created_by), the frozen Echo
+// aggregates (event_echoes counts stand as the published record), and the
+// append-only audit tables are deliberately out of scope — see
+// docs/member-erasure.md.
 import { inArray } from "drizzle-orm";
 import { events } from "./db/admin-schema";
 import { drizzleOver, type UnsafeClient } from "./db/proxy";
@@ -39,6 +41,7 @@ export type ErasureCounts = {
   web_sessions: number;
   web_session_grace: number;
   join_attempts: number;
+  event_echo_members: number;
 };
 
 /**
@@ -61,6 +64,7 @@ export const ERASURE_TABLES = [
   "web_sessions",
   "web_session_grace",
   "join_attempts",
+  "event_echo_members",
 ] as const;
 
 export type ErasureTable = (typeof ERASURE_TABLES)[number];
@@ -84,6 +88,7 @@ const zeroCounts = (): ErasureCounts => ({
   web_sessions: 0,
   web_session_grace: 0,
   join_attempts: 0,
+  event_echo_members: 0,
 });
 
 /** Per-table row counts for one member. Reads only; never row contents. */
@@ -108,12 +113,19 @@ export async function countMemberRows(sql: ErasureTx, discordId: string): Promis
   const [j] = await sql<
     { n: number }[]
   >`select count(*)::int as n from join_attempts where discord_id = ${discordId}`;
+  // Per-member Echo attendance (bot-live-voice-contract §4, privacy floor
+  // F20). The frozen aggregates in event_echoes survive — only the member's
+  // own played-minutes rows are deleted.
+  const [e] = await sql<
+    { n: number }[]
+  >`select count(*)::int as n from event_echo_members where user_id = ${discordId}`;
   counts.users = u?.n ?? 0;
   counts.profiles = p?.n ?? 0;
   counts.rsvps = r?.n ?? 0;
   counts.web_sessions = s?.n ?? 0;
   counts.web_session_grace = g?.n ?? 0;
   counts.join_attempts = j?.n ?? 0;
+  counts.event_echo_members = e?.n ?? 0;
   return counts;
 }
 
@@ -141,7 +153,7 @@ async function promoteFreedSeats(
 
 /**
  * Erase one member's rows. Dry-run counts only and writes nothing; apply
- * deletes all six member tables in one transaction, promotes the waitlist of
+ * deletes all seven member tables in one transaction, promotes the waitlist of
  * every event where the member held a seat, and returns rows removed plus the
  * session-chase pass forensics. The id is validated before any
  * query runs.
@@ -199,12 +211,15 @@ export async function eraseMember(
     const grace = await tx`delete from web_session_grace where user_id = ${discordId} returning 1`;
     const attempts =
       await tx`delete from join_attempts where discord_id = ${discordId} returning 1`;
+    const echoMembers =
+      await tx`delete from event_echo_members where user_id = ${discordId} returning 1`;
     counts.users = users.length;
     counts.profiles = profiles.length;
     counts.rsvps = rsvps.length;
     counts.web_sessions = sessions;
     counts.web_session_grace = grace.length;
     counts.join_attempts = attempts.length;
+    counts.event_echo_members = echoMembers.length;
     return { ...counts, passes: deletesPerPass.length, deletesPerPass };
   });
 }

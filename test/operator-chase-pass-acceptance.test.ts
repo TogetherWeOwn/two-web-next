@@ -81,6 +81,7 @@ function makeEraseDouble(opts: {
   rsvps?: number;
   grace?: number;
   attempts?: number;
+  echoMembers?: number;
   sessionDeletes?: number[];
   sessionRemainings?: number[];
   failOnSessionPass?: number;
@@ -101,6 +102,7 @@ function makeEraseDouble(opts: {
     if (text.startsWith("delete from rsvps")) return rows(opts.rsvps ?? 0);
     if (text.startsWith("delete from web_session_grace")) return rows(opts.grace ?? 0);
     if (text.startsWith("delete from join_attempts")) return rows(opts.attempts ?? 0);
+    if (text.startsWith("delete from event_echo_members")) return rows(opts.echoMembers ?? 0);
     if (text.startsWith("select count") && text.includes("from web_sessions")) {
       const remaining = opts.sessionRemainings?.[pass] ?? 0;
       pass++;
@@ -116,6 +118,8 @@ function makeEraseDouble(opts: {
       return [{ n: opts.grace ?? 0 }];
     if (text.startsWith("select count") && text.includes("from join_attempts"))
       return [{ n: opts.attempts ?? 0 }];
+    if (text.startsWith("select count") && text.includes("from event_echo_members"))
+      return [{ n: opts.echoMembers ?? 0 }];
     throw new Error(`unexpected statement: ${text.slice(0, 120)}`);
   };
   (tag as unknown as Record<string, unknown>).begin = (fn: (tx: unknown) => Promise<unknown>) =>

@@ -76,6 +76,8 @@ function pageFixture(
   const columns = Object.keys(getTableColumns(events)) as (keyof EventRow)[];
   const db = drizzle(async (sql, params) => {
     queries.push({ sql, params });
+    if (sql.includes('from "event_echoes"') || sql.includes('from "event_echo_members"'))
+      return { rows: [] };
     if (sql.includes('from "rsvps"') || sql.includes("from rsvps")) return { rows: [] };
     if (sql.includes('"event_key" =')) {
       return {
@@ -205,7 +207,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     expect(html).toContain(`href="/join?next=%2Fe%2F${key(2)}" data-testid="event-related-join"`);
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("vary")).toBe("Cookie");
-    expect(f.queries).toHaveLength(6); // Event + two going aggregates + 3 navigation reads.
+    expect(f.queries).toHaveLength(7); // Event + two going aggregates + 3 navigation reads + echo.
   });
 
   it.each(["added", "already_member"])(
@@ -305,7 +307,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
       }
       expect(response.headers.get("cache-control")).toBe("private, no-store");
       expect(response.headers.get("vary")).toBe("Cookie");
-      expect(f.queries).toHaveLength(9); // Event/count, viewer answer/position, attendees, two going aggregates and three navigation reads.
+      expect(f.queries).toHaveLength(10); // Event/count, viewer answer/position, attendees, two going aggregates, three navigation reads and echo.
       const viewerAnswers = f.queries.filter((q) =>
         q.sql.includes('select "user_id", "status", "synced_to_discord_at"'),
       );
@@ -360,7 +362,7 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
     const mod = await draft.request({ headers: { cookie: await cookie(draft.env, true) } });
     expect(mod.status).toBe(200);
     expect(mod.headers.get("cache-control")).toBe("private, no-store");
-    expect(draft.queries.slice(6)).toHaveLength(6); // Navigation, attendees, viewer answer and position.
+    expect(draft.queries.slice(6)).toHaveLength(7); // Navigation, attendees, viewer answer, position and echo.
     const cancelled = pageFixture(row(2, { status: "cancelled" }));
     const gone = await cancelled.request();
     expect(gone.status).toBe(410);

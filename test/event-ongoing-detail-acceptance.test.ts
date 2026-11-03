@@ -127,9 +127,10 @@ for (const twin of ["Hono", "Kit"] as const) {
       for (const now of [new Date("2035-10-20T10:59:59.999Z"), START, MID, END]) {
         const result = await detailSnapshot(twin, ongoingEvent(), kit, now);
         expect(result.status).toBe(200);
-        // One event, two batched RSVP counts, two neighbours, related and
-        // the existing member attendee/viewer/waitlist reads. No clock query.
-        expect(result.queries).toHaveLength(9);
+        // One event, two batched RSVP counts, two neighbours, related,
+        // the frozen Echo record, and the existing member
+        // attendee/viewer/waitlist reads. No clock query.
+        expect(result.queries).toHaveLength(10);
         expect(result.queries.every((sql) => /^select\b/i.test(sql))).toBe(true);
         expect(result.headers.get("cache-control")).toBe("private, no-store");
       }

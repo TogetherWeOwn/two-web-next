@@ -136,6 +136,10 @@
     {
       "path": "drizzle/1033_session-roles-checked-at.sql",
       "sha256": "352b2bce735e1bf57241df14d264ce0843d0300170e3e6763341f0000b615734"
+    },
+    {
+      "path": "drizzle/1034_event-echoes.sql",
+      "sha256": "5b35e192433f369990f96b14c681fc77179e15df9dd73c2f84a7446e4220fada"
     }
   ]
 }

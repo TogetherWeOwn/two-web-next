@@ -50,6 +50,11 @@
 .event-theme .event-related-location, .event-theme .event-related-game, .event-theme .event-related-state{display: block;font-size: .9rem;color: var(--muted)}
 .event-theme .event-gone{min-height: 28rem;padding-block: 4rem}
 .event-theme .event-gone h1{margin-bottom: 1.5rem}
+/* Frozen Echo record: a surfaced band in the same card family as the
+   related grid. Counts only — never member rows, never absence. */
+.event-theme .event-echo{margin: 0 0 2rem;padding: 1.5rem;background: var(--surface);border: 1px solid var(--line)}
+.event-theme .event-echo h2{margin: 0 0 .5rem;font-size: 1.4rem}
+.event-theme .event-echo p{margin: .25rem 0;overflow-wrap: anywhere}
 @media (max-width: 48rem) {
 .event-theme .event-hero{padding: 2rem 0 3rem}
 .event-theme .event-meta{grid-template-columns: 1fr}

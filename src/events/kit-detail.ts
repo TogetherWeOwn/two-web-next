@@ -61,6 +61,7 @@ import {
   type ViewerRsvp,
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
+import { getEventEcho, projectPublicEcho, type PublicEcho } from "./echoes";
 import { archiveContext } from "./archive-context";
 import { archiveEventHref, authReturnHref } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
@@ -81,6 +82,9 @@ export interface KitEventDetailStore {
   viewerRsvpFn: (db: Db, eventId: number, userId: string) => Promise<ViewerRsvp | null>;
   waitlistFn: (db: Db, eventId: number, userId: string | null) => Promise<number | null>;
   suggestionsFn: (env: Env, path: string) => Promise<SuggestedEvent[]>;
+  /** Frozen Echo read. Optional so existing fakes keep compiling: the
+   * resolver falls back to the shared read and fails open to no record. */
+  echoFn?: (db: Db, eventId: number) => Promise<PublicEcho | null>;
 }
 
 export interface KitEventDetailRequest {
@@ -156,6 +160,10 @@ export interface KitEventDetailModel {
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
+  /** Frozen bot-recorded attendance (counts only); null renders the sign-up
+   * record label on past events. The Svelte render is a stated follow-up —
+   * this field lands the model now so the view needs no resolver change. */
+  echo?: PublicEcho | null;
   capacity: number | null;
   rsvpOpen: boolean;
   /** Server-decided RSVP closure at render: the RsvpButton twin's verdict
@@ -314,6 +322,11 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
       // position, exactly as the served handler passes null for guests.
       userId ? waitlistPosition(db, eventId, userId) : Promise.resolve(null),
     suggestionsFn: (bound, path) => cachedNotFoundSuggestions(bound, path),
+    echoFn: (db, eventId) =>
+      getEventEcho(db, eventId).then(
+        (row) => (row ? projectPublicEcho(row) : null),
+        () => null,
+      ),
   };
 }
 
@@ -476,13 +489,23 @@ export async function resolveKitEventDetail(
         (series) => series,
         (): EventSeriesContext | null => null,
       );
-      const [neighbors, related, series, attendeeRows, position, answer] = await Promise.all([
+      // Frozen Echo record: published-only counts, fail open to no record.
+      const echoSettled = (
+        store.echoFn
+          ? store.echoFn(db, event.id)
+          : getEventEcho(db, event.id).then((row) => (row ? projectPublicEcho(row) : null))
+      ).then(
+        (echo) => echo,
+        (): PublicEcho | null => null,
+      );
+      const [neighbors, related, series, attendeeRows, position, answer, echo] = await Promise.all([
         neighborsSettled,
         relatedSettled,
         seriesSettled,
         member ? store.attendeesFn(db, event.id, attendeePage) : Promise.resolve([]),
         viewer ? store.waitlistFn(db, event.id, viewer.userId) : Promise.resolve(null),
         viewer && member ? store.viewerRsvpFn(db, event.id, viewer.userId) : Promise.resolve(null),
+        echoSettled,
       ]);
       // Declare the retrieved attendee owners so the hook boundary audits
       // exactly the disclosed subjects. Non-SQL fakes declare nothing on
@@ -556,6 +579,7 @@ export async function resolveKitEventDetail(
           isOngoing: isOngoing(event, now),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
+          echo,
           capacity: event.capacity,
           rsvpOpen: event.rsvpOpen,
           rsvpClosed,

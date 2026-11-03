@@ -48,6 +48,8 @@ const ADMIN_REDIRECTS = [
 const ADMIN_READS = [
   "/",
   "/activity-log",
+  "/echoes",
+  "/echoes/:id",
   "/events",
   "/events/new",
   "/events/:key",
@@ -276,9 +278,12 @@ describe.skipIf(!process.env.DATABASE_URL)(
               ? 302
               : role !== "moderator"
                 ? 403
-                : ["/featured/:id", "/featured-contents/:id/edit", "/join-attempts/:id"].includes(
-                      pattern,
-                    )
+                : [
+                      "/featured/:id",
+                      "/featured-contents/:id/edit",
+                      "/join-attempts/:id",
+                      "/echoes/:id",
+                    ].includes(pattern)
                   ? 404
                   : ADMIN_REDIRECTS.includes(pattern)
                     ? 301

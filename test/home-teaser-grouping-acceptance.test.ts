@@ -138,6 +138,9 @@ function fixture(
       return { rows: [] };
     queries.push({ sql, params });
     if (sql.includes("set_config")) return { rows: [] };
+    // Frozen Echo band read: the band owns this query, not the grouping.
+    // Answer empty so event-shaped rows never decode as phantom Echoes.
+    if (sql.includes('from "event_echoes"')) return { rows: [] };
     if (failAt && sql.includes(`from "${failAt}"`))
       throw new Error("postgres://user:secret@host/db private-member private-session");
     if (sql.includes('from "rsvps"')) {
@@ -542,7 +545,7 @@ describe("teaser grouping acceptance: unchanged behavior controls", () => {
       expect(
         query.sql,
         `grouping must add no reads (unexpected query: ${query.sql.slice(0, 120)})`,
-      ).toMatch(/set_config|from "events"|from "rsvps"|featured_contents/);
+      ).toMatch(/set_config|from "events"|from "rsvps"|featured_contents|from "event_echoes"/);
     }
   });
 });

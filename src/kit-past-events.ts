@@ -11,6 +11,7 @@ import {
   readAnonCache,
   writeAnonCache,
 } from "./events/anon-cache";
+import { mapEchoesByEvent, projectPublicEcho, type PublicEcho } from "./events/echoes";
 import { normalizePastPage } from "./events/reads";
 import type { PublicEvent } from "./events/reads";
 import { resolveCalendarInput } from "./events/page-models.server";
@@ -143,6 +144,12 @@ export type PastArchiveListPast<Row = never> = (
   q?: string | null,
 ) => Promise<{ rows: Row[]; hasMore: boolean; totalPages: number }>;
 
+/** Frozen Echo rows by event id. Optional so existing fakes keep compiling:
+ * the loader falls back to the shared batched read and fails open to no
+ * records (same as the Hono twin: a failed lookup renders sign-up records,
+ * never a 503). */
+export type PastArchiveEchoesFn = (db: Db, eventIds: number[]) => Promise<Map<number, PublicEcho>>;
+
 export interface PastArchiveLoadArgs<Row = never> {
   env: Env;
   pageParam: string | null;
@@ -150,8 +157,22 @@ export interface PastArchiveLoadArgs<Row = never> {
   setHeaders: (headers: Record<string, string>) => void;
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   listPastFn: PastArchiveListPast<Row>;
+  echoesFn?: PastArchiveEchoesFn;
   /** Optional correlation ID from the caller (validated inside the alert, omitted otherwise). */
   requestId?: string;
+}
+
+/** Shared batched Echo read behind the default echoesFn: one statement for
+ * the rendered page (never N+1), projecting the F20 public shape (counts
+ * only — member rows and absence never leave the server). */
+export async function readPastArchiveEchoes(
+  db: Db,
+  eventIds: number[],
+): Promise<Map<number, PublicEcho>> {
+  const rows = await mapEchoesByEvent(db, eventIds);
+  const out = new Map<number, PublicEcho>();
+  for (const [eventId, echo] of rows) out.set(eventId, projectPublicEcho(echo));
+  return out;
 }
 
 /** Branded-outage marker: the Kit binding maps every throw to error(503). */
@@ -187,6 +208,7 @@ export async function loadPastArchivePage<Row>({
   setHeaders,
   dbForFn,
   listPastFn,
+  echoesFn,
   requestId,
 }: PastArchiveLoadArgs<Row>): Promise<{
   rows: Row[];
@@ -195,6 +217,7 @@ export async function loadPastArchivePage<Row>({
   totalPages: number;
   appUrl: string;
   q: string;
+  echoes: Map<number, PublicEcho>;
 }> {
   const input = resolveCalendarInput({ q: queryParam });
   if (input.queryTooLong) {
@@ -217,6 +240,21 @@ export async function loadPastArchivePage<Row>({
     const { rows, hasMore, totalPages } = q
       ? await listPastFn(db, page, new Date(), q)
       : await listPastFn(db, page);
+    // Frozen Echo records for the rendered page (public counts only): a
+    // failed lookup fails open to no records, exactly like the Hono twin —
+    // the archive renders sign-up records, never a 503. Rows are generic in
+    // tests, so ids extract defensively; an empty page skips the read.
+    const eventIds = rows
+      .map((row) => (row as { id?: unknown }).id)
+      .filter((id): id is number => typeof id === "number");
+    let echoes = new Map<number, PublicEcho>();
+    if (eventIds.length > 0) {
+      try {
+        echoes = await (echoesFn ?? readPastArchiveEchoes)(db, eventIds);
+      } catch {
+        echoes = new Map();
+      }
+    }
     setHeaders({
       "cache-control": input.searching ? "private, no-store" : "public, max-age=300",
       "x-two-past-cacheable": String(!input.searching && rows.length > 0),
@@ -225,7 +263,7 @@ export async function loadPastArchivePage<Row>({
       // apart. Searching renders stay private no-store with no Vary.
       ...(!input.searching ? { vary: "Cookie" } : {}),
     });
-    return { rows, page, hasMore, totalPages, appUrl: env.APP_URL, q: q ?? "" };
+    return { rows, page, hasMore, totalPages, appUrl: env.APP_URL, q: q ?? "", echoes };
   } catch (err) {
     reportPastArchiveLoadFailure(err, setHeaders, requestId);
   }
@@ -248,7 +286,9 @@ export async function loadPastArchivePage<Row>({
  * from the already public title or a bounded excerpt, never member data,
  * and keep segment authority server-side so the client ships no search code.
  * Mirrors the join precedent (`toPublicWidgetSnapshot`) and the home teaser
- * (`HomeEvent`).
+ * (`HomeEvent`). The frozen Echo rides along as the F20 public projection
+ * (counts only — never member rows, never absence), or null for pre-Echo
+ * events, so the card renders the same record label as the Hono twin.
  */
 export type PastArchiveEvent = Pick<
   PublicEvent,
@@ -263,10 +303,14 @@ export type PastArchiveEvent = Pick<
   | "goingOccupancy"
   | "capacity"
   | "discordEventId"
-> & { passage?: SearchSegment[]; titleSpans?: SearchSegment[] };
+> & { passage?: SearchSegment[]; titleSpans?: SearchSegment[]; echo: PublicEcho | null };
 
 /** Project a past-archive row to its anonymous-safe slice. */
-export function toPublicPastArchiveRow(row: PublicEvent, q?: string): PastArchiveEvent {
+export function toPublicPastArchiveRow(
+  row: PublicEvent,
+  q?: string,
+  echo?: PublicEcho | null,
+): PastArchiveEvent {
   const projected: PastArchiveEvent = {
     eventKey: row.eventKey,
     title: row.title,
@@ -279,6 +323,7 @@ export function toPublicPastArchiveRow(row: PublicEvent, q?: string): PastArchiv
     goingOccupancy: row.goingOccupancy,
     capacity: row.capacity,
     discordEventId: row.discordEventId,
+    echo: echo ?? null,
   };
   if (q && row.description) projected.passage = searchContext(row.description, q, true);
   if (q) projected.titleSpans = searchContext(row.title, q);
