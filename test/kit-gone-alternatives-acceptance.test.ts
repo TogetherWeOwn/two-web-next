@@ -338,11 +338,12 @@ describe("Kit gone alternatives acceptance", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const bytes = new Uint8Array(await response.arrayBuffer());
-    // Re-captured with main 4cd035fd8 merged. The delta from the prior pin is
-    // main 48e55e5d6 (final attendance line in src/events/pages-gone.tsx); this
-    // change leaves Hono source identical to that main commit.
+    // Re-captured for the Living Lobby token migration (design §3): the only
+    // byte delta from the prior pin is the shell theme-color meta
+    // #151720 → #17130f (ground token). Proven by re-rendering and swapping
+    // that string back, which reproduces the prior pin exactly.
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-      "2001bedeed052bd720d8946ad1814b8a165c018b45ca120be55328a8a90f3bcf",
+      "9844f3a0e5c5c69f3df19d127280a06fd11267c4021a881820715173e7cabde4",
     );
   });
 
