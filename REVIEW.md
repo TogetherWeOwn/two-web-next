@@ -61,6 +61,35 @@ merits a finding", "Test rigor" and "Skip"; they never make an item
 reportable. Most of the Not Severe items are skipped outright, and any
 that is still reported is Non-severe.
 
+## Before you flag a security issue
+
+- Flag security only with a concrete exploit path at the exact reviewed commit:
+  name the attacker, the input they control, what they gain, and the file and
+  lines where protection is missing. Keep suspected vulnerabilities with an
+  unverified step on the private `SECURITY.md` reporting path above.
+- First check documented design: ADRs, README, module docs, and the PR body.
+  Behavior explicitly intended there is not a security finding; raise design
+  disagreement as a non-blocking question instead.
+- Trace earlier protection before claiming it is missing: middleware, size
+  caps, signature checks, server-only creation, and allowlists.
+- Hypothetical hardening without an exploit path ("could log", "might leak",
+  defence in depth) is Non-severe at most, categorized as analysis, not security;
+  the existing Skip rules still apply.
+
+Examples grounded in this repo:
+
+- **Real security finding, conditional regression (not present):** if a PR
+  changes the blank-allowlist branches in `src/roles.ts`'s `recomputeModerator`
+  and `isModerator` to grant moderator status, an ordinary guild member could
+  use their own Discord sign-in to gain moderator-only admin access. The join
+  callback stores that computed bit; `src/admin/guard.ts` trusts the session
+  row's bit. Both helpers currently deny a blank allowlist (README).
+- **False alarm:** a missing null-session check inside the profile read
+  renderer is not an auth bypass. `src/profiles/routes.tsx` registers
+  `registerGate` before read routes; `src/profiles/routes-gate.ts` redirects
+  guests and refuses non-members before `routes-reads.tsx` runs. Check that
+  registration order rather than asking each handler to duplicate the gate.
+
 ## Disproof pass (before posting any finding)
 
 Try to prove your own candidate wrong first:
