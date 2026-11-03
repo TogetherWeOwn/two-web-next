@@ -184,23 +184,25 @@ describe("closeDueEchoes (stub §4 answers)", () => {
       read: async () => ({ ok: true as const, attendance: finalPayload() }),
       write: async () => ({ written: true as const, echoId: 42 }),
       announce: async () => {},
-      markPosted: async () => {},
       ...overrides,
     };
   }
 
-  it("writes and announces on final:true, then marks the post", async () => {
-    const markPosted = vi.fn(async () => {});
-    const announced: string[] = [];
+  it("writes and dispatches on final:true; delivery confirms later, never at enqueue", async () => {
+    const dispatched: { body: string; echoId: number }[] = [];
     const result = await closeDueEchoes(
       baseDeps({
-        markPosted,
-        announce: async (_e: unknown, body: string) => void announced.push(body),
+        announce: async (_e: unknown, body: string, echoId: number) => {
+          dispatched.push({ body, echoId });
+        },
       }),
     );
     expect(result).toEqual({ checked: 1, written: 1, announced: 1, pending: [] });
-    expect(markPosted).toHaveBeenCalledWith(42);
-    expect(announced[0]).toContain("Last time, as the bot recorded it");
+    // The echoId rides the carrier so the queue consumer confirms the row
+    // only on bot-confirmed delivery. Enqueue stamps nothing on the row.
+    expect(dispatched).toHaveLength(1);
+    expect(dispatched[0]!.echoId).toBe(42);
+    expect(dispatched[0]!.body).toContain("Last time, as the bot recorded it");
   });
 
   it("treats not_found as honest pending, never written", async () => {

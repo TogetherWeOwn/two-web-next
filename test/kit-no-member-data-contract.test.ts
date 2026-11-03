@@ -634,7 +634,10 @@ describe("Kit GET /events/past anonymous payload", () => {
   // query, and `passage` only when the row has a description. The description
   // itself, member bytes and internal columns never appear in either mode.
   // `organizer_name` is not a search exception: the public host display name is
-  // one of the eleven base keys on every row, in browse and search alike.
+  // one of the twelve base keys on every row, in browse and search alike.
+  // `echo` is the twelfth: the frozen F20 public Echo projection (counts and
+  // room names only, null for pre-Echo events), pinned as a base key so the
+  // no-member-bytes assertion below covers its serialized shape.
   describe("search-only payload fields", () => {
     const BASE_ROW_KEYS = [
       "eventKey",
@@ -648,6 +651,7 @@ describe("Kit GET /events/past anonymous payload", () => {
       "goingOccupancy",
       "capacity",
       "discordEventId",
+      "echo",
     ].sort();
     const TEASER_TITLE = "Hostile Teaser Title zz9 漢字";
     const TEASER_DESCRIPTION =
@@ -739,7 +743,7 @@ describe("Kit GET /events/past anonymous payload", () => {
     ];
 
     for (const [label, search] of BLANK_QUERIES) {
-      it(`ships only the eleven base keys per row for ${label}, descriptions and all`, async () => {
+      it(`ships only the twelve base keys per row for ${label}, descriptions and all`, async () => {
         const { payload, bytes, headers } = await servedArchive(
           [descriptionRow(), noDescriptionRow(), emptyDescriptionRow(), longDescriptionRow()],
           search,

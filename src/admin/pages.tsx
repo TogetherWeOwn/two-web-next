@@ -12,3 +12,4 @@ export { EventFormPage } from "./pages/event-form";
 export { FeaturedPage } from "./pages/featured-list";
 export { FeaturedFormPage } from "./pages/featured-form";
 export { EchoDetailPage, EchoesPage } from "./pages/echoes";
+export { ReconciliationDetailPage, ReconciliationPage } from "./pages/reconciliation";

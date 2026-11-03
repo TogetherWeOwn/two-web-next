@@ -1,6 +1,12 @@
 import { SYNC_EVENT, backoffFor } from "./constants";
 import { withInternalActionDeadline } from "./internal-action-deadline";
 import { botRefusalReason, sanitizeQueueScope, terminalFailureReason } from "./queue-error";
+import {
+  isNeedsReconciliation,
+  lastWireOutcome,
+  stuckIntent,
+  type StuckIntent,
+} from "./reconciliation";
 import { admitRetryDelay, MAX_RETRY_DELAY_SECONDS } from "./retry-delay";
 import { BotTerminalError, BotTransportError, SyncRetryPersistenceError } from "./types";
 import type { BotClient, BotFailure, EventStore, UniqueLock } from "./types";
@@ -14,6 +20,7 @@ import {
 export type Outcome =
   | { done: true }
   | { retryInSeconds: number }
+  | { stuck: StuckIntent }
   | {
       failed: string;
       definitive?: true;
@@ -179,10 +186,25 @@ export async function handleSyncEvent(
   },
 ): Promise<Outcome> {
   const now = deps.now ?? (() => new Date());
-  const waiting = (seconds: number = SYNC_EVENT.debounceSeconds): Outcome =>
-    attempts >= SYNC_EVENT.tries
-      ? { failed: "waiting carrier exhausted; request remains recoverable" }
-      : { retryInSeconds: seconds };
+  // A carrier that runs out while the claim is still closed never confirmed
+  // delivery. Escalate the same-key intent to the operator surface instead of
+  // a terminal failure: members see the honest in-between state, moderators
+  // reconcile by hand. No re-key on any path: the carrier key is the intent.
+  const stuckWaiting = (verb: "event.upsert" | "event.cancel" = "event.upsert"): Outcome => ({
+    stuck: stuckIntent({
+      idempotencyKey: msg.idempotencyKey,
+      verb,
+      subject: msg.eventKey,
+      lastCode: null,
+      lastStatus: null,
+      lastRequestId: null,
+      attempts: Math.max(1, attempts),
+    }),
+  });
+  const waiting = (
+    seconds: number = SYNC_EVENT.debounceSeconds,
+    verb?: "event.upsert" | "event.cancel",
+  ): Outcome => (attempts >= SYNC_EVENT.tries ? stuckWaiting(verb) : { retryInSeconds: seconds });
   // First send snapshots the debounced row; all recovery uses that exact request.
   const prepared = await deps.events.prepareSync(msg.eventKey, msg.idempotencyKey, now());
   if (!prepared) return { done: true };
@@ -221,21 +243,33 @@ export async function handleSyncEvent(
     };
   }
   if (prepared.requestAttempts >= SYNC_EVENT.tries) {
-    return { failed: "request retry budget exhausted; unresolved identity retained" };
+    // Request budget spent with no confirmed delivery: operator surface, never
+    // a terminal failure (the Discord state is unknown, not refused).
+    return {
+      stuck: stuckIntent({
+        idempotencyKey: msg.idempotencyKey,
+        verb: prepared.action,
+        subject: msg.eventKey,
+        lastCode: null,
+        lastStatus: null,
+        lastRequestId: null,
+        attempts: Math.max(1, attempts, prepared.requestAttempts),
+      }),
+    };
   }
   // Claims stay closed until their result commits. A lost response/deadline
   // cannot become eligible again merely because a short lease expired.
-  if (!prepared.nextAttemptAt) return waiting(SYNC_EVENT.uniqueForSeconds);
+  if (!prepared.nextAttemptAt) return waiting(SYNC_EVENT.uniqueForSeconds, prepared.action);
   const remaining = Math.ceil((prepared.nextAttemptAt.getTime() - now().getTime()) / 1000);
   // An already-persisted deadline can predate admission and lie outside the
   // queue transport range. Cap it before it becomes the queue delay (and the
   // ledger availability Date); remaining > 0 keeps the 1s floor, the cap sets
   // the 86400s ceiling. Both bounds are integers: remaining is ceiled above.
-  if (remaining > 0) return waiting(Math.min(remaining, MAX_RETRY_DELAY_SECONDS));
+  if (remaining > 0) return waiting(Math.min(remaining, MAX_RETRY_DELAY_SECONDS), prepared.action);
   // A durable closed claim fences concurrent carriers until its result commits.
   const claimedAt = now();
   const attempt = await deps.events.claimSync(prepared, claimedAt);
-  if (!attempt) return waiting();
+  if (!attempt) return waiting(SYNC_EVENT.debounceSeconds, prepared.action);
   // A never-attempted snapshot may have become obsolete since preparation.
   // Its atomic first claim retires it without remote I/O or revision acknowledgement.
   if (attempt.state !== "pending") return { done: true };
@@ -252,13 +286,34 @@ export async function handleSyncEvent(
     } catch {}
   };
   let retryDeadline: Date | null | undefined;
-  const retry = async (seconds: number): Promise<Outcome> => {
+  /** Same-key retry while budget remains; stuck operator intent at exhaustion.
+   * The last wire outcome rides along so the surface shows what the bot last
+   * said (or nulls when no wire answer was ever obtained). Never re-keys. */
+  const retry = async (
+    seconds: number,
+    last: { code: string | null; status: number | null; requestId: string | null } = {
+      code: null,
+      status: null,
+      requestId: null,
+    },
+  ): Promise<Outcome> => {
     const exhausted = attempt.requestAttempts >= SYNC_EVENT.tries;
     retryDeadline = exhausted ? null : new Date(now().getTime() + seconds * 1000);
     await deps.events.deferSync(attempt, retryDeadline);
-    return exhausted || attempts >= SYNC_EVENT.tries
-      ? { failed: "carrier exhausted; unresolved identity retained" }
-      : { retryInSeconds: seconds };
+    if (exhausted || attempts >= SYNC_EVENT.tries) {
+      return {
+        stuck: stuckIntent({
+          idempotencyKey: msg.idempotencyKey,
+          verb: attempt.action,
+          subject: msg.eventKey,
+          lastCode: last.code,
+          lastStatus: last.status,
+          lastRequestId: last.requestId,
+          attempts: Math.max(1, attempts, attempt.requestAttempts),
+        }),
+      };
+    }
+    return { retryInSeconds: seconds };
   };
   const backoff = () =>
     backoffFor(SYNC_EVENT.backoffSeconds, Math.max(attempts, attempt.requestAttempts));
@@ -280,6 +335,26 @@ export async function handleSyncEvent(
         : deps.bot.upsertEvent(attempt.payload, msg.idempotencyKey),
     );
     if (!answer.ok) {
+      // Safe capture first: the code check and the intent's last outcome share
+      // one own-data read that never executes input accessors and classifies
+      // the code through the closed vocabulary (a garbage wire answer
+      // escalates as unknown instead of wedging the carrier).
+      const last = lastWireOutcome(answer);
+      // Hard stop on the code alone: the bot's key log disagrees with this
+      // request, so no retry — same key or re-keyed — can converge. Never a
+      // terminal failure either: the Discord state is unknown, not refused.
+      if (isNeedsReconciliation(last.code))
+        return {
+          stuck: stuckIntent({
+            idempotencyKey: msg.idempotencyKey,
+            verb: attempt.action,
+            subject: msg.eventKey,
+            lastCode: last.code,
+            lastStatus: last.status,
+            lastRequestId: last.requestId,
+            attempts: Math.max(1, attempts, attempt.requestAttempts),
+          }),
+        };
       if (!answer.retryable)
         return {
           definitive: true,
@@ -290,7 +365,7 @@ export async function handleSyncEvent(
         };
       // Record the refusal before persistence can throw and obscure its cause.
       reportRetry("BotFailure", answer);
-      return await retry(admitRetryDelay(answer.retryAfterSeconds, backoff()));
+      return await retry(admitRetryDelay(answer.retryAfterSeconds, backoff()), last);
     }
     await deps.events.completeSync(attempt, answer.discordEventId);
     return { done: true };

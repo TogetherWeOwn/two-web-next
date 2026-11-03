@@ -4,7 +4,8 @@ import { safeRequestId } from "../request-log";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT, backoffFor } from "./constants";
 import { handleCallInternalAction } from "./call-internal-action";
 import { toQueueMessage } from "./envelope";
-import { queueExceptionClass, sanitizeQueueScope } from "./queue-error";
+import { queueExceptionClass, sanitizeQueueCode, sanitizeQueueScope } from "./queue-error";
+import type { ReconciliationStore } from "./reconciliation";
 import { SYNC_RETRY_PERSISTENCE_REASON, SyncRetryPersistenceError } from "./types";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./sync-retry-diagnostic";
 import { handleSyncEvent, uniqueKey, type Outcome } from "./sync-event";
@@ -80,6 +81,19 @@ export async function consume(
     needsSync?: EventStore["needsSync"];
     dispatchPending?: (eventKey: string, signal: AbortSignal) => Promise<unknown>;
     probeEnabled?: boolean;
+    /**
+     * Operator surface for stuck keyed intents (contract §7.4/§11). Optional
+     * so older doubles keep compiling; a stuck outcome with no store throws
+     * loudly into the existing redelivery path instead of settling first and
+     * losing the surface row.
+     */
+    reconciliation?: ReconciliationStore;
+    /**
+     * Confirms an Echo row only on bot-confirmed announcement delivery.
+     * A rejecting confirm redelivers the same carrier (the same-key re-post
+     * replays instead of duplicating) until the announcement budget runs out.
+     */
+    onAnnouncementConfirmed?: (echoId: number) => Promise<void>;
   },
 ): Promise<void> {
   for (const m of batch.messages) {
@@ -317,6 +331,38 @@ export async function consume(
         continue;
       }
     }
+    if ("stuck" in outcome) {
+      // Needs-reconciliation hard stop or budget-exhausted unknown: record the
+      // same-key intent FIRST, then settle terminally. A record failure throws
+      // into the existing redelivery path (same carrier, same key) instead of
+      // settling first and losing the operator surface; with no store wired at
+      // all the throw is loud for the same reason.
+      const store = deps.reconciliation;
+      if (!store) throw new Error("reconciliation store missing for stuck intent");
+      const stuck = outcome.stuck;
+      await store.recordStuck(stuck, deps.now?.() ?? new Date());
+      if (body.kind === "sync-event") {
+        // Settle the claim so future revisions are not bricked behind this
+        // unresolved key: same-revision auto-retry stays blocked (a moderator
+        // reconciles by hand), while new revisions sync under their own keys.
+        if (!(await settleAttempt())) {
+          if (jobId)
+            await bounded("released", deps.ledger.released(jobId, deps.now?.() ?? new Date()));
+          m.retry();
+          continue;
+        }
+        await releaseLock(uniqueKey(body.eventKey));
+      }
+      // Class-only ledger reason: closed verb + scalar subject + closed code.
+      const reason =
+        `stuck ${stuck.verb} for ${sanitizeQueueScope(stuck.subject)} ` +
+        `(last code ${sanitizeQueueCode(stuck.lastCode ?? "unknown")})`;
+      console.error("job failed", body.kind, reason);
+      alertFailing(body.kind, m.attempts, reason, { requestId }, syncRetry);
+      if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, reason));
+      m.ack();
+      continue;
+    }
     if ("retryInSeconds" in outcome) {
       if (jobId)
         await bounded(
@@ -377,6 +423,40 @@ export async function consume(
       if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, outcome.failed));
     } else if (jobId) {
       await bounded("dequeued", deps.ledger.dequeued(jobId));
+    }
+    if (
+      body.kind === "announcement" &&
+      "done" in outcome &&
+      typeof body.echoId === "number" &&
+      deps.onAnnouncementConfirmed
+    ) {
+      // Gate Echo "posted" on confirmed delivery: the row stays honestly
+      // pending until the bot answers success. A rejecting confirm redelivers
+      // the same carrier — the same-key re-post replays instead of
+      // duplicating — until the announcement budget runs out.
+      try {
+        await deps.onAnnouncementConfirmed(body.echoId);
+      } catch (e) {
+        console.error("announcement confirm failed", { exception: queueExceptionClass(e) });
+        if (m.attempts >= JOBS.announcement.tries) {
+          const reason = "announcement confirm unavailable";
+          alertFailing(body.kind, m.attempts, reason, { requestId });
+          if (jobId) await bounded("failed", deps.ledger.failed(jobId, body.kind, key, reason));
+          m.ack();
+        } else {
+          const delay = backoffFor(CALL_INTERNAL_ACTION.backoffSeconds, m.attempts);
+          if (jobId)
+            await bounded(
+              "released",
+              deps.ledger.released(
+                jobId,
+                new Date((deps.now?.() ?? new Date()).getTime() + delay * 1000),
+              ),
+            );
+          m.retry({ delaySeconds: delay });
+        }
+        continue;
+      }
     }
     if (body.kind === "sync-event") {
       await releaseLock(uniqueKey(body.eventKey));

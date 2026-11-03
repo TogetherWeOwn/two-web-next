@@ -3,6 +3,7 @@ import { alertQueueFailing, type FailedJob } from "../src/alerts";
 import { consume } from "../src/jobs/consumer";
 import { handleSyncEvent } from "../src/jobs/sync-event";
 import { projectSyncRetryDiagnostic, syncRetryDiagnostic } from "../src/jobs/sync-retry-diagnostic";
+import type { ReconciliationStore, StuckIntent } from "../src/jobs/reconciliation";
 import { BotTransportError, SYNC_RETRY_PERSISTENCE_REASON } from "../src/jobs/types";
 import type {
   BotClient,
@@ -21,7 +22,10 @@ const sentinels = {
   cookie: "COOKIE_SENTINEL",
   headers: "HEADER_SENTINEL",
   eventKey: "RAW_EVENT_KEY_SENTINEL",
-  idempotencyKey: "RAW_REQUEST_KEY_SENTINEL",
+  // UUID-shaped: keyed handlers key the stuck operator intent on the carrier
+  // UUID (contract §7.4/§11), so exhaustion paths validate it. Still a
+  // canary: assertSafe fails if it ever reaches logs or alerts.
+  idempotencyKey: "12345678-1234-4234-8234-123456789012",
   jobId: "RAW_CARRIER_KEY_SENTINEL",
   message: "MESSAGE_SENTINEL",
   body: "RESPONSE_BODY_SENTINEL",
@@ -180,6 +184,18 @@ describe("finite sync retry projection", () => {
         sync_retry_code: code,
       }),
     ).toEqual({ sync_retry_class: "BotFailure", sync_retry_code: code });
+  });
+  it("admits the needs_reconciliation hard-stop code without retrying it", () => {
+    // The code rides the same diagnostic projection so the operator surface
+    // can show the last wire outcome; retry policy still hard-stops on it in
+    // the handlers, never in the projection.
+    expect(
+      projectSyncRetryDiagnostic({
+        ...sentinels,
+        sync_retry_class: "BotFailure",
+        sync_retry_code: "needs_reconciliation",
+      }),
+    ).toEqual({ sync_retry_class: "BotFailure", sync_retry_code: "needs_reconciliation" });
   });
   it.each([
     undefined,
@@ -478,23 +494,73 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
     it.each([...codes, undefined, null, hostileText, "future_code"])(
       `${action} keeps refusal cause and privacy at exhaustion (%#)`,
       async (code) => {
+        // Carrier budget spent with an unconfirmed mutation: the same-key
+        // intent escalates to the operator surface (contract §7.4/§11),
+        // never a terminal failure and never a member error. The carrier key
+        // stays synthetic here — the stuck reason legitimately names the
+        // subject, so the hostile event-key canary yields to a benign key
+        // while every other canary keeps proving nothing leaks.
+        const eventKey = "evt-synthetic-exhaustion";
         const calls = capture();
         const d = fixture(1, action);
-        const m = carrier(6);
+        const recorded: StuckIntent[] = [];
+        const reconciliation: ReconciliationStore = {
+          recordStuck: async (intent) => {
+            recorded.push(intent);
+            return {
+              ...intent,
+              firstSeenAt: new Date(clock),
+              lastAttemptAt: new Date(clock),
+              resolvedAt: null,
+              resolvedBy: null,
+              resolution: null,
+            };
+          },
+          listOpen: async () => [],
+          listResolved: async () => [],
+          getStuck: async () => null,
+          resolveStuck: async () => null,
+        };
+        const m = {
+          body: {
+            kind: "sync-event",
+            eventKey,
+            idempotencyKey: sentinels.idempotencyKey,
+            leaseToken,
+            jobId: sentinels.jobId,
+            requestId: sentinels.secret,
+          },
+          attempts: 6,
+          ack: vi.fn(),
+          retry: vi.fn(),
+        };
         const bot = botFor(code);
-        await consume({ messages: [m] }, { ...d, bot });
+        await consume({ messages: [m] }, { ...d, bot, reconciliation });
+        const classified = codes.includes(code as string) ? code : "unknown";
+        const reason = `stuck ${action} for ${eventKey} (last code ${classified})`;
         const receipt = {
           sync_retry_class: "BotFailure",
-          sync_retry_code: codes.includes(code as string) ? code : "unknown",
+          sync_retry_code: classified,
           queue_carrier_attempts: 6,
           sync_request_attempts: 2,
           sync_snapshot_age_at_claim_seconds: 12,
         };
+        // The same UUID the producer minted is the intent the surface keeps,
+        // with the last wire outcome attached — never re-keyed, never refused.
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0]).toMatchObject({
+          idempotencyKey: sentinels.idempotencyKey,
+          verb: action,
+          subject: eventKey,
+          lastCode: classified,
+          lastStatus: 429,
+          lastRequestId: sentinels.member,
+        });
         expect(calls.find(([label]) => label === "sync retry classified")?.[1]).toEqual(receipt);
         expect(calls.find(([label]) => label === "job failed")).toEqual([
           "job failed",
           "sync-event",
-          "carrier exhausted; unresolved identity retained",
+          reason,
         ]);
         expect(alerts(calls)).toEqual([
           {
@@ -504,8 +570,8 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
             queue: "two-sync-event",
             job: "SyncEventToDiscord",
             attempts: 6,
-            exception: "carrier exhausted; unresolved identity retained",
-            error_class: "carrier exhausted; unresolved identity retained",
+            exception: reason,
+            error_class: reason,
             build_sha: null,
             release: null,
             ...receipt,
@@ -516,19 +582,22 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
           new Date(clock + 42_000),
         );
         expect(d.attempt.state).toBe("pending");
-        expect(d.events.failSync).not.toHaveBeenCalled();
+        // Record-first, then terminal settlement: the claim settles so future
+        // revisions are not bricked, but same-revision auto-retry stays
+        // blocked behind the operator surface.
+        expect(d.events.failSync).toHaveBeenCalledExactlyOnceWith(sentinels.idempotencyKey);
         expect(d.events.completeSync).not.toHaveBeenCalled();
         expect(m.ack).toHaveBeenCalledOnce();
         expect(m.retry).not.toHaveBeenCalled();
         expect(d.lock.release).toHaveBeenCalledExactlyOnceWith(
-          `sync-event:${sentinels.eventKey}`,
+          `sync-event:${eventKey}`,
           leaseToken,
         );
         expect(d.ledger.failed).toHaveBeenCalledExactlyOnceWith(
           sentinels.jobId,
           "sync-event",
-          `sync-event:${sentinels.eventKey}`,
-          "carrier exhausted; unresolved identity retained",
+          `sync-event:${eventKey}`,
+          reason,
         );
         expect(
           action === "event.upsert" ? bot.upsertEvent : bot.cancelEvent,
@@ -542,15 +611,61 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
     ])(
       `${action} distinguishes transport with independently exhausted budgets (%s/%s)`,
       async (carrierAttempts, priorRequests) => {
+        // Transport loss never confirms delivery, so whichever budget runs
+        // out — this carrier's or the durable request's — the same-key intent
+        // escalates to the operator surface with nulls (no wire answer was
+        // ever obtained), never a terminal failure.
+        const eventKey = "evt-synthetic-transport-budget";
         const calls = capture();
         const d = fixture(priorRequests, action);
-        const m = carrier(carrierAttempts);
-        await consume({ messages: [m] }, { ...d, bot: transportBot() });
+        const recorded: StuckIntent[] = [];
+        const reconciliation: ReconciliationStore = {
+          recordStuck: async (intent) => {
+            recorded.push(intent);
+            return {
+              ...intent,
+              firstSeenAt: new Date(clock),
+              lastAttemptAt: new Date(clock),
+              resolvedAt: null,
+              resolvedBy: null,
+              resolution: null,
+            };
+          },
+          listOpen: async () => [],
+          listResolved: async () => [],
+          getStuck: async () => null,
+          resolveStuck: async () => null,
+        };
+        const m = {
+          body: {
+            kind: "sync-event",
+            eventKey,
+            idempotencyKey: sentinels.idempotencyKey,
+            leaseToken,
+            jobId: sentinels.jobId,
+            requestId: sentinels.secret,
+          },
+          attempts: carrierAttempts,
+          ack: vi.fn(),
+          retry: vi.fn(),
+        };
+        await consume({ messages: [m] }, { ...d, bot: transportBot(), reconciliation });
+        const reason = `stuck ${action} for ${eventKey} (last code unknown)`;
+        expect(recorded).toHaveLength(1);
+        expect(recorded[0]).toMatchObject({
+          idempotencyKey: sentinels.idempotencyKey,
+          verb: action,
+          subject: eventKey,
+          lastCode: null,
+          lastStatus: null,
+          lastRequestId: null,
+        });
         expect(alerts(calls)[0]).toMatchObject({
           sync_retry_class: "BotTransportError",
           queue_carrier_attempts: carrierAttempts,
           sync_request_attempts: priorRequests + 1,
           sync_snapshot_age_at_claim_seconds: 12,
+          exception: reason,
         });
         expect(alerts(calls)[0]).not.toHaveProperty("sync_retry_code");
         expect(d.events.deferSync).toHaveBeenCalledExactlyOnceWith(
@@ -558,7 +673,7 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
           priorRequests === 5 ? null : new Date(clock + 3_600_000),
         );
         expect(d.attempt.state).toBe("pending");
-        expect(d.events.failSync).not.toHaveBeenCalled();
+        expect(d.events.failSync).toHaveBeenCalledExactlyOnceWith(sentinels.idempotencyKey);
         expect(d.events.completeSync).not.toHaveBeenCalled();
         expect(m.ack).toHaveBeenCalledOnce();
         expect(m.retry).not.toHaveBeenCalled();
@@ -629,17 +744,78 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
     },
   );
   it("does not infer a previous cause or count for a waiting delivery, including a batch sibling", async () => {
+    // Both carriers exhaust at the cap: the first through a retryable refusal,
+    // the second through a still-closed waiting claim. Each escalates its own
+    // same-key stuck intent (contract §7.4/§11) — the waiting sibling never
+    // inherits the first carrier's cause or counts. Benign key: the stuck
+    // reason legitimately names the subject, so the hostile canary yields here
+    // while every other canary keeps proving nothing leaks.
+    const eventKey = "evt-synthetic-waiting-sibling";
     const calls = capture();
     const d = fixture(1);
+    d.attempt.eventKey = eventKey;
     vi.mocked(d.events.prepareSync)
       .mockResolvedValueOnce(d.attempt)
       .mockResolvedValueOnce({ waiting: true });
-    await consume({ messages: [carrier(6), carrier(6)] }, { ...d, bot: botFor("internal") });
+    const recorded: StuckIntent[] = [];
+    const reconciliation: ReconciliationStore = {
+      recordStuck: async (intent) => {
+        recorded.push(intent);
+        return {
+          ...intent,
+          firstSeenAt: new Date(clock),
+          lastAttemptAt: new Date(clock),
+          resolvedAt: null,
+          resolvedBy: null,
+          resolution: null,
+        };
+      },
+      listOpen: async () => [],
+      listResolved: async () => [],
+      getStuck: async () => null,
+      resolveStuck: async () => null,
+    };
+    const body = {
+      kind: "sync-event",
+      eventKey,
+      idempotencyKey: sentinels.idempotencyKey,
+      leaseToken,
+      jobId: sentinels.jobId,
+      requestId: sentinels.secret,
+    };
+    const m1 = { body, attempts: 6, ack: vi.fn(), retry: vi.fn() };
+    const m2 = { body, attempts: 6, ack: vi.fn(), retry: vi.fn() };
+    await consume({ messages: [m1, m2] }, { ...d, bot: botFor("internal"), reconciliation });
     expect(alerts(calls)).toHaveLength(2);
-    for (const key of diagnosticKeys) expect(alerts(calls)[1]).not.toHaveProperty(key);
-    expect(alerts(calls)[1]).toMatchObject({
-      exception: "waiting carrier exhausted; request remains recoverable",
+    // The refusal carrier carries its classified cause; the waiting sibling
+    // carries none — delivery-local, never inferred.
+    expect(alerts(calls)[0]).toMatchObject({
+      sync_retry_class: "BotFailure",
+      sync_retry_code: "internal",
+      queue_carrier_attempts: 6,
+      sync_request_attempts: 2,
     });
+    for (const key of diagnosticKeys) expect(alerts(calls)[1]).not.toHaveProperty(key);
+    expect(alerts(calls)[0]).toMatchObject({
+      exception: `stuck event.upsert for ${eventKey} (last code internal)`,
+    });
+    expect(alerts(calls)[1]).toMatchObject({
+      exception: `stuck event.upsert for ${eventKey} (last code unknown)`,
+    });
+    // Same carrier key on both intents, never re-keyed.
+    expect(recorded).toHaveLength(2);
+    for (const intent of recorded)
+      expect(intent).toMatchObject({
+        idempotencyKey: sentinels.idempotencyKey,
+        verb: "event.upsert",
+        subject: eventKey,
+      });
+    expect(recorded[0]!.lastCode).toBe("internal");
+    expect(recorded[1]!.lastCode).toBeNull();
+    expect(m1.ack).toHaveBeenCalledOnce();
+    expect(m2.ack).toHaveBeenCalledOnce();
+    expect(m1.retry).not.toHaveBeenCalled();
+    expect(m2.retry).not.toHaveBeenCalled();
     assertSafe(calls);
   });
   it.each(["refusal", "transport"])(
@@ -786,14 +962,51 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
   it.each(["event.upsert", "event.cancel"] as const)(
     "%s retains cause/counts when the snapshot property is unreadable",
     async (action) => {
+      // At the carrier cap an unreadable snapshot clock still escalates the
+      // same-key stuck intent (contract §7.4/§11) with the classified cause and
+      // durable counts, minus the age. Benign key: the stuck reason names the
+      // subject, so the hostile canary yields here while the other canaries
+      // keep proving nothing leaks.
+      const eventKey = "evt-synthetic-unreadable-snapshot";
       const calls = capture();
       const d = fixture(1, action);
+      d.attempt.eventKey = eventKey;
       const read = vi.fn(() => {
         throw new Error(hostileText);
       });
       Object.defineProperty(d.attempt, "mirroredAt", { get: read });
-      const m = carrier(6);
-      await consume({ messages: [m] }, { ...d, bot: botFor("internal") });
+      const recorded: StuckIntent[] = [];
+      const reconciliation: ReconciliationStore = {
+        recordStuck: async (intent) => {
+          recorded.push(intent);
+          return {
+            ...intent,
+            firstSeenAt: new Date(clock),
+            lastAttemptAt: new Date(clock),
+            resolvedAt: null,
+            resolvedBy: null,
+            resolution: null,
+          };
+        },
+        listOpen: async () => [],
+        listResolved: async () => [],
+        getStuck: async () => null,
+        resolveStuck: async () => null,
+      };
+      const m = {
+        body: {
+          kind: "sync-event",
+          eventKey,
+          idempotencyKey: sentinels.idempotencyKey,
+          leaseToken,
+          jobId: sentinels.jobId,
+          requestId: sentinels.secret,
+        },
+        attempts: 6,
+        ack: vi.fn(),
+        retry: vi.fn(),
+      };
+      await consume({ messages: [m] }, { ...d, bot: botFor("internal"), reconciliation });
       expect(alerts(calls)[0]).toMatchObject({
         sync_retry_class: "BotFailure",
         sync_retry_code: "internal",
@@ -801,11 +1014,25 @@ describe("retry diagnostics preserve behavior and survive carrier exhaustion", (
         sync_request_attempts: 2,
       });
       expect(alerts(calls)[0]).not.toHaveProperty("sync_snapshot_age_at_claim_seconds");
+      expect(alerts(calls)[0]).toMatchObject({
+        exception: `stuck ${action} for ${eventKey} (last code internal)`,
+      });
       expect(read).not.toHaveBeenCalled();
       expect(d.events.deferSync).toHaveBeenCalledExactlyOnceWith(
         d.attempt,
         new Date(clock + 42_000),
       );
+      // Same UUID the producer minted, with the last wire outcome attached.
+      expect(recorded).toHaveLength(1);
+      expect(recorded[0]).toMatchObject({
+        idempotencyKey: sentinels.idempotencyKey,
+        verb: action,
+        subject: eventKey,
+        lastCode: "internal",
+        lastStatus: 429,
+        lastRequestId: sentinels.member,
+      });
+      expect(d.events.failSync).toHaveBeenCalledExactlyOnceWith(sentinels.idempotencyKey);
       expect(m.ack).toHaveBeenCalledOnce();
       expect(m.retry).not.toHaveBeenCalled();
       assertSafe(calls);

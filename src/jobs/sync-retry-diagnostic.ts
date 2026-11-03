@@ -6,6 +6,7 @@ export type SyncRetryCode =
   | "internal"
   | "discord_unavailable"
   | "upstream_timeout"
+  | "needs_reconciliation"
   | "unknown";
 
 export type SyncRetryDiagnostic = {
@@ -45,6 +46,8 @@ function retryCode(value: unknown): SyncRetryCode {
       return "discord_unavailable";
     case "upstream_timeout":
       return "upstream_timeout";
+    case "needs_reconciliation":
+      return "needs_reconciliation";
     default:
       return "unknown";
   }

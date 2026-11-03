@@ -141,6 +141,50 @@ export const eventSyncAttempts = pgTable(
   ],
 );
 
+// Stuck keyed bot-mutation intents (contract v2 §7.4/§11): one row per logical
+// intent, keyed by the carrier UUID the site minted at dispatch. `needs_recon-
+// ciliation` hard-stops and budget-exhausted unknowns escalate here instead of
+// a terminal failure; a moderator reconciles by hand and stamps the row
+// resolved. Rows are never deleted: they are the audit evidence. Scalars only
+// (verb key, scalar subject, last wire outcome) — never DM bodies.
+export const botReconciliationIntents = pgTable(
+  "bot_reconciliation_intents",
+  {
+    idempotencyKey: uuid("idempotency_key").primaryKey(),
+    verb: text("verb").notNull(),
+    // Scalar only: event_key, channel_key, or member scalar. Never a DM body
+    // (the store constructor refuses multi-line subjects).
+    subject: text("subject").notNull(),
+    firstSeenAt: timestamp("first_seen_at", { withTimezone: true }).notNull().defaultNow(),
+    lastAttemptAt: timestamp("last_attempt_at", { withTimezone: true }).notNull().defaultNow(),
+    attempts: integer("attempts").notNull(),
+    lastCode: text("last_code"),
+    lastStatus: integer("last_status"),
+    lastRequestId: text("last_request_id"),
+    resolvedAt: timestamp("resolved_at", { withTimezone: true }),
+    resolvedBy: text("resolved_by"),
+    resolution: text("resolution"),
+  },
+  (t) => [
+    // Operator surface reads open rows oldest-first; resolved rows are never
+    // scanned by that query.
+    index("bot_reconciliation_open_idx").on(t.firstSeenAt).where(sql`${t.resolvedAt} is null`),
+    index("bot_reconciliation_resolved_idx")
+      .on(t.resolvedAt)
+      .where(sql`${t.resolvedAt} is not null`),
+    check(
+      "bot_reconciliation_verb_known",
+      sql`${t.verb} in ('announcement.post', 'event.upsert', 'event.cancel', 'reminder.send', 'place_offer.send')`,
+    ),
+    check("bot_reconciliation_subject_bound", sql`char_length(${t.subject}) <= 200`),
+    check("bot_reconciliation_attempts_positive", sql`${t.attempts} >= 1`),
+    check(
+      "bot_reconciliation_resolution_bound",
+      sql`${t.resolution} is null or char_length(${t.resolution}) <= 500`,
+    ),
+  ],
+);
+
 export const featuredContents = pgTable(
   "featured_contents",
   {

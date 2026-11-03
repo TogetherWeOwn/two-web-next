@@ -17,7 +17,6 @@ import type { JobsEnv } from "../env";
 import {
   closeDueEchoes,
   listDueEchoEvents,
-  markEchoAnnounced,
   writeEventEcho,
   type EchoCloseResult,
 } from "../events/echoes";
@@ -55,15 +54,18 @@ export async function closeEventEchoes(deps: {
     }),
     write: (event, payload) => writeEventEcho(db, event, payload),
     // Unset channel key skips the Discord post without failing the Echo: the
-    // row stands on the site and the post retries once configured.
+    // row stands on the site and the post retries once configured. The echoId
+    // rides the carrier; the queue consumer confirms the row only on
+    // bot-confirmed delivery, never at enqueue time (contract §7.4/§11).
     announce:
       channelKey === ""
         ? null
-        : (event, body) =>
+        : (event, body, echoId) =>
             dispatchAnnouncement(
               trackingQueue(deps.env.INTERNAL_ACTION_QUEUE, pgQueueLedger(deps.sql)),
               { channelKey, body },
+              undefined,
+              echoId,
             ),
-    markPosted: (echoId) => markEchoAnnounced(db, echoId),
   });
 }

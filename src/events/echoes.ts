@@ -337,10 +337,11 @@ export type EchoCloseDeps = {
     payload: AttendancePayload,
   ) => Promise<{ written: boolean; reason?: string; echoId?: number }>;
   /** Enqueue the Discord thread post (the existing bot announcement verb —
-   * no new verb). Null skips the post without failing the Echo: the row
-   * stands on the site and the post retries once a channel key is configured. */
-  announce: ((event: EchoCloseEvent, body: string) => Promise<void>) | null;
-  markPosted?: (echoId: number) => Promise<void>;
+   * no new verb). The echoId rides the carrier so the queue consumer confirms
+   * the row only on bot-confirmed delivery — never at enqueue time. Null
+   * skips the post without failing the Echo: the row stands on the site and
+   * the post retries once a channel key is configured. */
+  announce: ((event: EchoCloseEvent, body: string, echoId: number) => Promise<void>) | null;
 };
 
 export type EchoCloseResult = {
@@ -351,11 +352,12 @@ export type EchoCloseResult = {
 };
 
 /** Site closing pass: for each due event pull `event.attendance.read`; write
- * on `final:true` only, then post the thread via the existing bot
- * announcement verb. A failed post never unpicks the Echo — the row stands
- * on the site and the job retries the post. `not_found` (flag off,
- * pre-Echo) and `final:false` (window still open) are honest pending
- * states, not errors. */
+ * on `final:true` only, then enqueue the thread via the existing bot
+ * announcement verb. Enqueue is not delivery: the row is confirmed only when
+ * the queue consumer reports bot success (contract §7.4/§11), so a failed
+ * enqueue never unpicks the Echo — the row stands on the site and the job
+ * retries the post. `not_found` (flag off, pre-Echo) and `final:false`
+ * (window still open) are honest pending states, not errors. */
 export async function closeDueEchoes(deps: EchoCloseDeps): Promise<EchoCloseResult> {
   const due = await deps.listDue();
   const result: EchoCloseResult = { checked: due.length, written: 0, announced: 0, pending: [] };
@@ -402,9 +404,12 @@ export async function closeDueEchoes(deps: EchoCloseDeps): Promise<EchoCloseResu
           rooms: answer.attendance.rooms,
           headline: null,
         }),
+        outcome.echoId,
       );
+      // Dispatched, not delivered: the consumer confirms the row on bot
+      // success (same carrier key, same echoId) and the reconciliation
+      // surface owns the post if delivery never confirms.
       result.announced++;
-      await deps.markPosted?.(outcome.echoId);
     } catch {
       result.pending.push({ eventKey: event.eventKey, code: "announce_failed" });
     }

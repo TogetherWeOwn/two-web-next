@@ -16,8 +16,12 @@ import {
 } from "./cron";
 import { consume } from "./consumer";
 import { closeEventEchoes } from "./echo-close";
+import { markEchoAnnounced } from "../events/echoes";
+import { drizzleOver } from "../db/proxy";
+import type { Db } from "../db/index";
 import { trackingQueue } from "./ledger";
 import { pgPruneStores, pgQueueLedger, pgSingleFlight, pgUniqueLock } from "./postgres";
+import { pgReconciliationStore } from "./reconciliation";
 import type {
   BotClient,
   EventStore,
@@ -153,6 +157,12 @@ export async function handleQueue(
       events: pgEventStore(sql),
       lock: pgUniqueLock(cleanupSql),
       ledger,
+      // Stuck keyed intents (contract §7.4/§11) persist here before any
+      // terminal settlement, for the moderator reconciliation surface.
+      reconciliation: pgReconciliationStore(sql),
+      // Echo rows confirm only on bot-confirmed announcement delivery.
+      onAnnouncementConfirmed: (echoId) =>
+        markEchoAnnounced(drizzleOver(sql) as unknown as Db, echoId),
       needsSync: pgEventStore(cleanupSql).needsSync,
       dispatchPending: (eventKey, signal) => {
         // Late settlement stays inside Workers lifetime: dispatch rejects at

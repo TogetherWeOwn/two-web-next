@@ -17,7 +17,9 @@ export const EchoesPage: FC<{ rows: AdminEchoRow[] }> = ({ rows }) => (
       <h1>Event echoes</h1>
       <p>
         Frozen bot-recorded attendance. Counts stand as written; only the host headline below is
-        editable, and only before the Discord post goes out.
+        editable, and only before the Discord post goes out. The post reads Confirming until the bot
+        confirms delivery — never assume it landed. A delivery that never confirms lands on{" "}
+        <a href="/admin/reconciliation">Reconciliation</a>.
       </p>
       {rows.length === 0 ? (
         <p>No echoes yet. The writer mints the first row when a bot window closes final.</p>
@@ -48,7 +50,7 @@ export const EchoesPage: FC<{ rows: AdminEchoRow[] }> = ({ rows }) => (
                   <td>{row.attendedCount}</td>
                   <td>{row.peakConcurrent}</td>
                   <td>{row.headline ?? "—"}</td>
-                  <td>{row.announcementPostedAt ? "posted" : "pending"}</td>
+                  <td>{row.announcementPostedAt ? "posted" : "Confirming"}</td>
                 </tr>
               ))}
             </tbody>
@@ -108,7 +110,7 @@ export const EchoDetailPage: FC<{
           <dd>
             {row.announcementPostedAt
               ? `posted at ${row.announcementPostedAt.toISOString()}`
-              : "pending"}
+              : "Confirming — enqueue is not delivery; this stamps only on bot-confirmed success"}
           </dd>
         </div>
         <div>

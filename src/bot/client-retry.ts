@@ -12,6 +12,10 @@ export function retryableFallback(code: string): boolean {
     case "discord_unavailable":
     case "upstream_timeout":
       return true;
+    // Hard stop: the bot's key log disagrees with this request, so retrying —
+    // same key or re-keyed — can never converge. Surface to moderators instead.
+    case "needs_reconciliation":
+      return false;
     default:
       return false;
   }

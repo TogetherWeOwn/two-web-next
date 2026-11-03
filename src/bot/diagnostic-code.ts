@@ -16,6 +16,7 @@ const DIAGNOSTIC_CODES: ReadonlySet<string> = new Set([
   "internal",
   "discord_unavailable",
   "upstream_timeout",
+  "needs_reconciliation",
 ]);
 
 export function diagnosticCode(code: unknown): string {

@@ -1947,6 +1947,29 @@ unrelated slow sends cannot retain recurring-parent row locks. Dirty revision
 reconciliation remains the delivery backstop. Ledger/locks alone still do not
 prove exactly-once remote effects. See [consumer error paths](../src/jobs/consumer.ts).
 
+### Stuck keyed intents (needs_reconciliation and exhausted unknowns)
+
+Keyed bot mutations (announcement posts, event upserts/cancels) carry one
+UUID per logical intent and retry only with that key. Two endings land on the
+moderator reconciliation surface instead of a terminal failure or a member
+error: the bot's `needs_reconciliation` answer (its key log disagrees with the
+request — hard stop, never retried, never re-keyed) and retry-budget-exhausted
+unknowns (transport loss, `upstream_timeout`, `in_progress` — same key to the
+budget, then the surface). Members see the honest in-between state; nothing
+claims delivery for an unconfirmed mutation.
+
+Operator loop: open `/admin/reconciliation` (moderator-only), open the oldest
+stuck row first, check Discord by hand for that key (verb, subject, last wire
+outcome, timestamps — scalars only, never message bodies), then stamp what was
+checked and done in the resolve form. The row stays as the audit evidence with
+an `activity_log` receipt; rows are never deleted and never re-sent from the
+surface — a fresh key would fork the bot's key log, which is exactly what the
+`needs_reconciliation` rows report. New revisions sync under their own keys
+while the stuck revision waits for the human. Proved in
+`test/reconciliation-consumer.test.ts`, `test/reconciliation-handlers.test.ts`
+and `test/reconciliation-admin.test.ts`; Postgres shape in
+`test/reconciliation-store.test.ts`.
+
 ## Backups and restore drill
 
 [bin/db-backup.sh](../bin/db-backup.sh) supports `backup`, `promote-weekly`,

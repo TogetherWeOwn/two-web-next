@@ -266,3 +266,14 @@ share the 10-login window with the admin probe and the staging suites.
 Only after successful reconciliation of the re-dispatched message should its
 dead row be discarded; unbounded history cleanup belongs to the separately
 approved path, not this loop.
+
+## Stuck keyed intents are a different surface
+
+Dead-letter rows above (`queue_failed_jobs`) are diagnostic identity for the
+transport. Keyed bot intents that end without confirmation live instead in
+`bot_reconciliation_intents` and surface at `/admin/reconciliation`
+(moderator-only): the bot's `needs_reconciliation` hard stop and
+retry-budget-exhausted unknowns, retried only with their own key and never
+re-keyed. Check Discord by hand for the row's key, then stamp the resolution;
+never re-send from that surface and never reconstruct or fabricate a key.
+Details in [runbook.md](runbook.md#stuck-keyed-intents-needs_reconciliation-and-exhausted-unknowns).

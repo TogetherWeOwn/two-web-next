@@ -213,6 +213,13 @@ export async function runInternalActionDrill(
         false,
         `retry requested in ${outcome.retryInSeconds}s after attempt 1: the queue would redeliver; the drill takes a single pass`,
       );
+    } else if ("stuck" in outcome) {
+      check(
+        id,
+        label,
+        false,
+        `stuck ${outcome.stuck.verb} for ${outcome.stuck.subject}: needs a moderator, not a retry`,
+      );
     } else {
       check(id, label, false, outcome.failed);
     }
