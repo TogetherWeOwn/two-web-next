@@ -67,7 +67,7 @@ describe("homepage theme", () => {
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
-    expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
+    expect(html).toContain('src="/logo.svg" width="180" height="50" alt="Together We Own"');
     expect(html).toContain('data-testid="site-jsonld"');
     const withoutJsonLd = html.replace(
       /<script type="application\/ld\+json"[^>]*>[\s\S]*?<\/script>/g,

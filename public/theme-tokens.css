@@ -11,6 +11,18 @@
   --muted: var(--color-muted);
   --surface: var(--color-surface);
   --line: var(--color-border);
+  /* Logo/Icon 1 brand ramp (ember -> magenta -> violet, top to bottom).
+  Components reference these tokens; the gradient stops also live baked in
+  the logo, icon and favicon artwork, which carries its own copy. */
+  --color-brand-ember: #ff9c36;
+  --color-brand-magenta: #ff0e52;
+  --color-brand-violet: #5701ae;
+  --brand-gradient: linear-gradient(
+    180deg,
+    var(--color-brand-ember),
+    var(--color-brand-magenta) 52%,
+    var(--color-brand-violet)
+  );
   min-height: 100vh;
   background: var(--color-page);
   color: var(--color-text);

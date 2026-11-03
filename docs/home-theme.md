@@ -7,7 +7,7 @@ The homepage, `/about`, `/faq`, `/rules`, `/privacy`, the `/join` landing, the c
 ## Assets
 
 - `public/fonts/display-latin-{500,700}.woff2`: Latin Rajdhani from `@fontsource/rajdhani` 5.3.0 (OFL-1.1). Its unmodified font license is retained in `public/fonts/LICENSE.txt`. Two weights total roughly 31 KB. No remote font origin.
-- `public/logo.svg` and `public/icons/*.png`: generated temporary TWO wordmark, not template art. Regenerate all five consistently with `python3 ci/generate-icons.py`. The mark stays inside the maskable safe area. Existing install icon URLs, sizes and manifest identity are unchanged; theme/background colors match the new mark.
+- `public/logo.svg` (Logo 1 horizontal lockup), `public/favicon.svg` / `public/favicon.ico` (Icon 1), `public/icons/*.png` (Icon 1 install icons) and `public/og-1200x630.png` (share card): the owner's Logo/Icon 1 brand art, dark-background variants for the dark UI. The icon stays inside the maskable safe area. Install icon URLs, sizes and manifest identity are unchanged; the manifest additionally lists the SVG favicon. The brand gradient ramp lives in `public/theme-tokens.css` (`--color-brand-ember/magenta/violet`, `--brand-gradient`); the same stops ship baked in the artwork.
 - `public/theme.css`: adapted, explicitly opted-in base-theme rules (home, content/join, recovery), under 12 KB uncompressed. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
 - `public/profile-theme.css`: profile-only layout under 8 KB, loaded only when `theme="profile"`.
 - `public/schedule-theme.css`: schedule-only layout under 6 KB, loaded only when `theme="schedule"`. Every rule is scoped to `.events-page`, so the shared chrome stays in `theme.css`.
