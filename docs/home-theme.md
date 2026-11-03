@@ -56,6 +56,11 @@ in `public/fonts/OFL-SOURCES.txt`. The variable face covers wght 200-900
 from the single fetch, which is what lets the homepage LCP ratchets re-base
 down instead of up.
 
+Install chrome follows the page ground: the `theme-color` meta and
+`public/site.webmanifest` `background_color`/`theme_color` are ground-0
+`#15100f`, pinned by `test/n2-manifest-errors.test.ts`. Icon URLs, sizes,
+and manifest identity are unchanged.
+
 Deferred to the UX Designer (no invented design): body type size stays
 `17px/1.65 system-ui` (kit type-scale adoption is theirs); the unthemed
 global `:focus-visible` and error-search rules stay as-is (admin is outside

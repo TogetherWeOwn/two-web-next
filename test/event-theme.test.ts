@@ -75,7 +75,7 @@ describe("event detail theme", () => {
     expect(html).toContain('<body class="base-theme event-theme">');
     expect(html).toContain('href="/theme.css"');
     expect(html).toContain('href="/event-theme.css"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
     expect(html).toContain('class="event-hero"');
     expect(html).toContain('<dl class="event-meta" aria-label="Event details">');
     expect(html).toContain('href="/events" aria-current="location"');

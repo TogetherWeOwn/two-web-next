@@ -338,11 +338,13 @@ describe("Kit gone alternatives acceptance", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const bytes = new Uint8Array(await response.arrayBuffer());
-    // Re-captured with main 4cd035fd8 merged. The delta from the prior pin is
-    // main 48e55e5d6 (final attendance line in src/events/pages-gone.tsx); this
-    // change leaves Hono source identical to that main commit.
+    // Re-captured for the Ember Hours kit migration: the only delta from the
+    // prior pin is the shared shell chrome (Mona Sans preload, ground-0
+    // theme-color). Prior history: re-captured with main 4cd035fd8 merged;
+    // the delta from the earlier pin was main 48e55e5d6 (final attendance
+    // line in src/events/pages-gone.tsx).
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-      "2001bedeed052bd720d8946ad1814b8a165c018b45ca120be55328a8a90f3bcf",
+      "9ed48d60f6371be8f5edf5417ef39b73f33108ce6e3ca119cab92b7703b5ecbb",
     );
   });
 
