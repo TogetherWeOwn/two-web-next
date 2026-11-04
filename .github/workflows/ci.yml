@@ -254,6 +254,8 @@ jobs:
           restore-keys: |
             playwright-chromium-${{ runner.os }}-
       - run: npx playwright install --with-deps chromium
+      - name: Annotated screenshot known-answer qualification
+        run: timeout 240s npm run test:annotated-diff
       - name: Chromium cancellation regressions
         env:
           A11Y_BROWSER_TESTS: "true"
