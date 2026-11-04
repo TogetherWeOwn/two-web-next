@@ -23,7 +23,7 @@ import {
   parseKit,
   roleDeclarations,
 } from "./build-ember-tokens.mjs";
-import { check } from "./check-ember-token-sync.mjs";
+import { CHROME_CONSUMERS, check } from "./check-ember-token-sync.mjs";
 
 const ROOT = fileURLToPath(new URL("../", import.meta.url));
 const SCRIPT = join(ROOT, "ci/check-ember-token-sync.mjs");
@@ -43,6 +43,8 @@ function withScratch(fn) {
     cpSync(join(ROOT, "assets/styles.css"), join(root, "assets/styles.css"));
     mkdirSync(join(root, "public"), { recursive: true });
     mkdirSync(join(root, "web/src"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    for (const path of CHROME_CONSUMERS) cpSync(join(ROOT, path), join(root, path));
     return fn(root);
   } finally {
     rmSync(root, { recursive: true, force: true });
@@ -270,7 +272,7 @@ for (const [directory, hooks] of [
     test(`${directory} ${hook} rejects drift without repairing tracked outputs`, () => {
       withScratch((root) => {
         mkdirSync(join(root, "ci"));
-        mkdirSync(join(root, "src"));
+        mkdirSync(join(root, "src"), { recursive: true });
         for (const path of [
           "package.json",
           "web/package.json",
@@ -347,6 +349,90 @@ test("ember token sync check passes on the wired sheets", () => {
   const parsed = lastJsonLine(out);
   assert.equal(parsed.ok, true);
   assert.match(parsed.summary, /ember token sync ok/);
+});
+
+test("browser chrome consumers reject edited, missing and duplicate ground values", () => {
+  withScratch((root) => {
+    build(root);
+    for (const path of CHROME_CONSUMERS) {
+      const file = join(root, path);
+      const good = readFileSync(file, "utf8");
+      writeFileSync(file, good.replaceAll("#15100f", "#121719"));
+      assert.throws(() => check(root), /browser chrome token drift/, path);
+      writeFileSync(file, path.endsWith("webmanifest") ? "{}" : "");
+      assert.throws(() => check(root), /browser chrome token drift/, `${path} missing role`);
+      if (!path.endsWith("webmanifest")) {
+        writeFileSync(file, good + '\n<meta name="theme-color" content="#15100f" />');
+        assert.throws(() => check(root), /browser chrome token drift/, `${path} duplicate role`);
+      }
+      writeFileSync(file, good);
+      assert.equal(check(root).ok, true);
+    }
+  });
+});
+
+test("catastrophic fallback palette and focus are generated with their CSP hash", () => {
+  const outputs = generate(ROOT);
+  const html = outputs.get("web/src/error.html");
+  const module = outputs.get("src/ember-fallback-style.ts");
+  const style = html.match(/<style>([^]*?)<\/style>/)[1];
+  assert.ok(module.includes(JSON.stringify(style)));
+  assert.ok(style.includes(`background:${realKit().base.get("--two-color-ground-0")}`));
+  assert.ok(style.includes(`color:${realKit().base.get("--two-color-text-1")}`));
+  assert.ok(style.includes("outline:2px solid #ff9c36;outline-offset:3px"));
+  assert.ok(style.includes("outline-color:Highlight"));
+  withScratch((root) => {
+    mutateKit(root, (css) => css.replaceAll("#ff9c36", "#ffffff"));
+    const changed = generate(root);
+    assert.notEqual(changed.get("src/ember-fallback-style.ts"), module);
+    assert.ok(changed.get("web/src/error.html").includes("outline:2px solid #ffffff"));
+  });
+});
+
+test("both stacks use the kit UI family and Hono body metrics", () => {
+  const outputs = generate(ROOT);
+  const hono = outputs.get("public/theme.css");
+  assert.match(
+    hono,
+    /font:var\(--font-size-body\)\/var\(--line-height-body\) var\(--font-display\)/,
+  );
+  assert.match(outputs.get("web/src/ember-theme.css"), /--font-sans:var\(--font-display\)/);
+});
+
+test("Kit bridges the shared sheet's renamed semantic roles without copying values", () => {
+  const css = generate(ROOT).get("web/src/ember-theme.css");
+  for (const [alias, utility] of [
+    ["focus-ring", "color-focus-ring"],
+    ["focus-ring-on-accent", "color-focus-ring-on-accent"],
+    ["on-accent", "color-on-accent"],
+    ["accent-hi", "color-accent-hi"],
+    ["font-size-body", "text-body"],
+    ["line-height-body", "leading-body"],
+  ]) {
+    assert.ok(css.includes(`--${alias}:var(--${utility});`), alias);
+  }
+});
+
+test("authored event and profile rules reference the family role", () => {
+  for (const path of ["public/event-theme.css", "public/profile-theme.css"]) {
+    const css = readFileSync(join(ROOT, path), "utf8");
+    assert.ok(css.includes("var(--font-display)"), path);
+    assert.ok(!css.includes("Mona Sans"), path);
+  }
+});
+
+test("themed focus and accent controls use their semantic roles", () => {
+  const css = generate(ROOT).get("public/theme.css");
+  assert.match(css, /outline:var\(--focus-width\) solid var\(--focus-ring\)/);
+  assert.match(
+    css,
+    /\.base-theme \.btn:hover\{background:var\(--accent-hi\);color:var\(--on-accent\)/,
+  );
+  assert.ok(!css.includes("brightness("));
+  const source = readFileSync(join(ROOT, "assets/styles.css"), "utf8");
+  assert.match(source, /\.home-event-link:focus-visible[^}]+var\(--focus-ring,var\(--brand\)\)/);
+  const event = readFileSync(join(ROOT, "public/event-theme.css"), "utf8");
+  assert.match(event, /background: var\(--brand\); color: var\(--on-accent\)/);
 });
 
 test("unknown flags are a usage error", () => {

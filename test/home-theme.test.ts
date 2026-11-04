@@ -274,10 +274,10 @@ describe("homepage theme", () => {
     // Focus ring: authored source and served sheet agree, widths come from the
     // generated roles (2px width, 3px offset).
     expect(source).toMatch(
-      /\.base-theme :focus-visible\s*\{\s*outline:\s*var\(--focus-width\) solid var\(--brand\);\s*outline-offset:\s*var\(--focus-offset\);/,
+      /\.base-theme :focus-visible\s*\{\s*outline:\s*var\(--focus-width\) solid var\(--focus-ring\);\s*outline-offset:\s*var\(--focus-offset\);/,
     );
     expect(css).toMatch(
-      /\.base-theme :focus-visible\s*\{\s*outline:\s*var\(--focus-width\) solid var\(--brand\);\s*outline-offset:\s*var\(--focus-offset\);?\s*\}/,
+      /\.base-theme :focus-visible\s*\{\s*outline:\s*var\(--focus-width\) solid var\(--focus-ring\);\s*outline-offset:\s*var\(--focus-offset\);?\s*\}/,
     );
     const tokens = readFileSync(new URL("../public/theme-tokens.css", import.meta.url), "utf8");
     expect(tokens).toMatch(/--focus-width:\s*2px/);
@@ -294,17 +294,13 @@ describe("homepage theme", () => {
     expect(Buffer.byteLength(css, "utf8")).toBeLessThan(14025);
   });
 
-  it("keeps the primary .btn:hover lift on the brand token", () => {
-    // The brightness lift is the entire hover affordance: rest and hover
-    // share background var(--brand) and color var(--paper), so deleting or
-    // inverting the filter leaves the join and RSVP CTAs with no visible
-    // hover change. Pin the exact lift and its direction here; the
-    // acceptance file owns only the brand-derivation shape.
+  it("uses the kit hover and on-accent roles for the primary button", () => {
     const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
     const hovers = css.match(/\.base-theme \.btn:hover\s*\{[^}]*\}/g) ?? [];
     expect(hovers).toHaveLength(1);
-    expect(hovers[0]).toContain("var(--brand)");
-    expect(hovers[0]).toMatch(/filter:\s*brightness\(1\.1\)/);
+    expect(hovers[0]).toContain("var(--accent-hi)");
+    expect(hovers[0]).toContain("var(--on-accent)");
+    expect(hovers[0]).not.toContain("filter:");
     const rests = css.match(/\.base-theme \.btn\s*\{[^}]*\}/g) ?? [];
     expect(rests.length).toBeGreaterThanOrEqual(1);
     for (const rest of rests) {

@@ -1,10 +1,30 @@
 // Exact generated adapters, independent of the tag-byte provenance check.
-import { resolve } from "node:path";
+import { readFileSync } from "node:fs";
+import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { ARTIFACTS, build } from "./build-ember-tokens.mjs";
+import { ARTIFACTS, ROOT, build, parseKit } from "./build-ember-tokens.mjs";
 
-export function check(root) {
+export const CHROME_CONSUMERS = [
+  "src/page-shell.tsx",
+  "web/src/app.html",
+  "public/site.webmanifest",
+];
+
+export function check(root = ROOT) {
   build(root, true);
+  const kit = parseKit(readFileSync(join(root, "vendor/design-kit/tokens.css"), "utf8"));
+  const ground = kit.base.get("--two-color-ground-0");
+  for (const path of CHROME_CONSUMERS) {
+    const source = readFileSync(join(root, path), "utf8");
+    const values = path.endsWith(".webmanifest")
+      ? [JSON.parse(source).background_color, JSON.parse(source).theme_color]
+      : [...source.matchAll(/<meta\s+name="theme-color"\s+content="([^"]+)"\s*\/?\s*>/g)].map(
+          (match) => match[1],
+        );
+    const count = path.endsWith(".webmanifest") ? 2 : 1;
+    if (values.length !== count || values.some((value) => value !== ground))
+      throw new Error(`browser chrome token drift: ${path}`);
+  }
   return { ok: true, summary: `ember token sync ok (${ARTIFACTS.length} generated adapters)` };
 }
 

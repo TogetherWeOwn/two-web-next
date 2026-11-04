@@ -1,5 +1,9 @@
 # Ember Hours token and font migration evidence
 
+**Historical capture.** See the [2026-11-04 integration review fixes](review-fixes/README.md)
+for the current design contract, refreshed screenshots and verification results.
+The measurements below describe the earlier implementation, not that correction batch.
+
 Captured on 2026-11-03 from the real local applications with disposable fixtures.
 Every image linked below was opened. These are viewport screenshots, not full-page
 captures or accepted visual-regression baselines.

@@ -154,13 +154,21 @@ describe("no hardcoded hex in theme sheets", () => {
     expect(violations).toEqual([]);
   });
 
-  it("derives every .btn:hover rule from the brand token", () => {
+  it("derives primary and account-button hover states from their semantic roles", () => {
     const css = stripComments(sheet("theme.css"));
     const hovers = css.match(/[^{}]*\.btn:hover\s*\{[^}]*\}/g) ?? [];
-    expect(hovers.length).toBeGreaterThanOrEqual(1);
-    const violations = hovers.filter(
-      (rule) => !rule.includes("var(--brand)") || rule.match(/#[0-9a-fA-F]{3,8}\b/) !== null,
-    );
-    expect(violations).toEqual([]);
+    expect(hovers).toHaveLength(2);
+    for (const rule of hovers) {
+      expect(rule.match(HEX_LITERAL) ?? []).toEqual([]);
+      if (rule.includes(".header-account")) {
+        expect(rule).toContain("background:var(--surface)");
+        expect(rule).toContain("border-color:var(--brand)");
+        expect(rule).toContain("color:var(--brand)");
+      } else {
+        expect(rule).toContain("background:var(--accent-hi)");
+        expect(rule).toContain("color:var(--on-accent)");
+        expect(rule).not.toContain("filter:");
+      }
+    }
   });
 });

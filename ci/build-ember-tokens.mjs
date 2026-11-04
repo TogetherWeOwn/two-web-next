@@ -1,5 +1,6 @@
 // Consumer adapters, not a second token source: values come only from the pinned
 // kit CSS. Keep media contexts separate; the TS export has no reduced-motion layer.
+import { createHash } from "node:crypto";
 import { readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -11,6 +12,8 @@ export const ARTIFACTS = [
   "public/theme.css",
   "web/src/ember-theme.css",
   "public/styles.css",
+  "src/ember-fallback-style.ts",
+  "web/src/error.html",
 ];
 
 // Value-free role selection and aliasing. Omit Discord/layout/avatar roles and
@@ -232,17 +235,31 @@ export function generate(root = ROOT) {
     if (alias.startsWith("line-height-")) return alias.replace("line-height-", "leading-");
     return alias;
   };
-  const kitCss = `/* GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs. */\n@theme static{${kitColors.map(([alias, source]) => `--color-lobby-${alias}:${get(source)};`).join("")}${roles.map(([alias, , value]) => `--${utility(alias)}:${value};`).join("")}--font-sans:ui-sans-serif,system-ui,sans-serif;}\n.base-theme{${hooks("", true)}${aliases}}\n${schedule}{${hooks("schedule-", true)}${aliases}}\n@media(prefers-reduced-motion:reduce){:root{${roles
+  // Kit's utility namespaces differ from the shared Hono sheet's aliases.
+  // Bridge renamed roles without duplicating their pinned values.
+  const kitSharedRoles = roles
+    .filter(([alias]) => utility(alias) !== alias)
+    .map(([alias]) => `--${alias}:var(--${utility(alias)});`)
+    .join("");
+  const kitCss = `/* GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs. */\n@theme static{${kitColors.map(([alias, source]) => `--color-lobby-${alias}:${get(source)};`).join("")}${roles.map(([alias, , value]) => `--${utility(alias)}:${value};`).join("")}--font-sans:var(--font-display);}\n.base-theme{${hooks("", true)}${aliases}${kitSharedRoles}}\n${schedule}{${hooks("schedule-", true)}${aliases}}\n@media(prefers-reduced-motion:reduce){:root{${roles
     .filter(([, source]) => kit.reduced.has(`--two-${source}`))
     .map(([alias, source]) => `--${utility(alias)}:${kit.reduced.get(`--two-${source}`)};`)
     .join("")}}}\n`;
   const validation = transformSync(kitCss, { loader: "css", logLevel: "silent" });
   if (validation.warnings.length) throw new Error("invalid generated Kit stylesheet");
+  // The catastrophic fallback must render without fonts or stylesheet fetches.
+  // Generate its embedded roles and CSP hash together, retaining a system face.
+  const fallbackStyle = `body{max-width:35rem;margin:3rem auto;padding:0 1.5rem;background:${get("color-ground-0")};color:${get("color-text-1")};font:1rem/1.6 system-ui;color-scheme:dark}a{display:inline-block;padding:.5rem;color:${get("color-ember")}}a:focus-visible{outline:${get("size-focus-width")} solid ${get("color-focus-ring")};outline-offset:${get("size-focus-offset")}}@media(forced-colors:active){a:focus-visible{outline-color:Highlight}}`;
+  const fallbackHash = createHash("sha256").update(fallbackStyle).digest("base64");
+  const fallbackModule = `// GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs.\nexport const KIT_FALLBACK_INLINE_STYLE: string =\n  ${JSON.stringify(fallbackStyle)};\nexport const KIT_FALLBACK_STYLE_SHA256: string = "${fallbackHash}";\n`;
+  const fallbackHtml = `<!doctype html>\n<html lang="en">\n<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="robots" content="noindex">\n<title>Error — Together We Own</title>\n<style>${fallbackStyle}</style>\n<main><b>Together We Own</b><h1>%sveltekit.status%: Page unavailable</h1><p>Please try again later.</p><p><a href="/">Home</a> <a href="/events">Events</a></p></main>\n</html>\n`;
   return new Map([
     [ARTIFACTS[0], compact(facade)],
     [ARTIFACTS[1], compact(roleCss + source)],
     [ARTIFACTS[2], kitCss],
     [ARTIFACTS[3], compact(sharedSource + sharedCss)],
+    [ARTIFACTS[4], fallbackModule],
+    [ARTIFACTS[5], fallbackHtml],
   ]);
 }
 
