@@ -137,7 +137,33 @@ function fixture(t) {
     process.env.PAPERCLIP_RUN_SCRATCH_DIR || process.env.PAPERCLIP_SCRATCH_DIR || os.tmpdir();
   const root = fs.mkdtempSync(path.join(parent, "release-proof-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const git = (...args) => execFileSync("git", ["-C", root, ...args], { encoding: "utf8" }).trim();
+  // Local setup/helpers need no broker capability or host Git configuration.
+  // Keep PATH intact so managed launchers retain their normal policy boundary.
+  const gitEnv = {
+    PATH: process.env.PATH,
+    HOME: root,
+    TMPDIR: root,
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_CONFIG_NOSYSTEM: "1",
+    GIT_TERMINAL_PROMPT: "0",
+  };
+  const git = (...args) =>
+    execFileSync(
+      "git",
+      [
+        "-c",
+        "credential.helper=",
+        "-c",
+        "core.askPass=",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-C",
+        root,
+        ...args,
+      ],
+      { encoding: "utf8", env: gitEnv },
+    ).trim();
   git("init", "-q", "-b", "main");
   git("config", "user.email", "fixture@example.invalid");
   git("config", "user.name", "Fixture");
