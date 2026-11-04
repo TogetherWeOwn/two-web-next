@@ -1,0 +1,149 @@
+# Route client dependency closures and a lower-only measured ratchet
+
+Decision: add hard per-route immutable JS/CSS ceilings without raising any
+existing aggregate or served-asset ceiling. This is a measurement/gate change,
+not permission to remove product, content, accessibility, design or tests for
+bytes. Headroom restoration that would raise an existing ceiling is not included.
+
+Undo: revert this PR's checker, build-evidence generation, route budget and
+ratchet workflow through a reviewed PR; preserve the existing aggregate and
+served-asset gates. Automation itself never raises a ceiling or merges a PR.
+
+## Reproduction and baseline
+
+Measured source: main `10099ce45e7f6a4f1ade945bbbca85278982109e`, Node 24.21.0,
+locked SvelteKit 3.1.0, Vite 8.3.5 and adapter-cloudflare 8.0.1.
+
+```sh
+npm ci --include=dev
+npm ci --prefix web --include=dev
+npm run build --prefix web
+node ci/check-kit-perf.mjs --format json
+node ci/check-kit-route-perf.mjs
+node --test ci/check-kit-route-perf.test.mjs ci/kit-client-ratchet.test.mjs
+```
+
+The pre-existing checker measured JS **261,250 raw / 104,332 gzip B**, 54 files;
+CSS **2,861 raw / 1,019 gzip B**, 2 files. Ceilings remain JS
+261,632 / 104,448 B / 55 files and CSS 3,072 / 1,280 B / 4 files.
+These bytes do not change in this PR. The default headroom targets are JS
+326,656 / 130,560 B and CSS 3,584 / 1,280 B. Thus aggregate JS lacks
+65,024 raw / 26,112 gzip B of default target headroom, and CSS lacks 512 raw B.
+Those shortfalls are reported, not silently converted into increases.
+
+## What a route measurement means
+
+`web/.svelte-kit/output/client/.vite/manifest.json` supplies emitted assets,
+static imports, dynamic imports and route CSS. During the token-free build,
+`ci/kit-route-evidence.mjs` serializes the real Kit server manifest's route IDs,
+bootstrap, layout/error/leaf node indexes and node count to JSON. The checker
+never executes a manifest. SHA-256 bindings catch mismatched manifest evidence.
+
+For each page, count the cold-cache union of bootstrap, its actual layouts
+(including resets), error boundaries and leaf node; follow both static and
+dynamic dependencies recursively and include their CSS. Deduplicate by emitted
+path, including cycles. Charge shared dependencies in full to each route that
+can need them. Only the generated app router's dispatch edges to *other* page
+nodes are excluded: navigating to another route is charged to that route and
+also covered by the unchanged aggregate gate. Other dynamic imports, including
+runtime startup and the error template, are included conservatively whether or
+not a particular visit executes them. This is an upper dependency closure, not
+a claim about first-request network timing, compressed concatenations or cache
+reuse. Gzip is summed per emitted file, with Node's existing gzip defaults.
+
+Inventory includes all Kit route IDs, even gated routes and endpoint-only
+routes. Endpoint-only `/events` and `/[...path]` have zero **Kit immutable**
+client cost; zero is not a claim about Hono responses or islands. Legacy
+`public/` assets, inline scripts/styles, fonts and response HTML remain outside
+this metric and under the independent existing served-asset, payload and page
+quality gates. Missing/extra source, built or budget routes; unowned JS/CSS;
+missing chunks; symlinks; malformed lists/indexes and orphan graph chunks refuse
+enforcement (exit 2), rather than returning pass. A measured breach exits 1.
+
+REA angle: source-first inspection of SvelteKit's shipped manifest generation
+and the actual Vite build, instead of inventing entry-file proxy costs or
+filesystem-parent approximations to layout/error inheritance.
+
+## Initial values and explicit bounded headroom exception
+
+Byte target = ceil(measured × 1.25 / step) × step; raw step **512 B**, gzip
+step **256 B**. Initial route byte ceilings are the smaller of that target and
+the unchanged corresponding aggregate ceiling. The extra hard route gate
+therefore cannot relax the aggregate gate. Initial route file caps are measured
+count + 1, bounded by the existing aggregate file cap; empty endpoint groups
+remain exactly zero. File caps do not auto-ratchet.
+
+Every page requires 2,784 raw / 927 gzip B of CSS (one file), except `/admin`,
+which requires 2,861 / 1,019 B (two files). The default raw targets of 3,584 B
+would exceed the existing 3,072 B aggregate CSS ceiling. Each page's initial raw
+CSS ceiling is explicitly clipped to 3,072 B; gzip targets are 1,280 B. This is
+reported headroom debt, not restored 25% raw headroom. No product change is made
+to erase that debt. The measured JS route closures are:
+
+| Route ID | Raw B | Gzip B | JS files |
+| --- | ---: | ---: | ---: |
+| `/` | 120059 | 46715 | 17 |
+| `/about` | 111151 | 43225 | 17 |
+| `/admin` | 116671 | 45712 | 20 |
+| `/admin/activity-log` | 116937 | 46102 | 21 |
+| `/admin/events` | 122948 | 48300 | 22 |
+| `/admin/events/[key]` | 124858 | 48284 | 21 |
+| `/admin/events/new` | 122072 | 47137 | 21 |
+| `/admin/featured` | 117864 | 46229 | 20 |
+| `/admin/featured/[id]` | 118667 | 46351 | 20 |
+| `/admin/featured/new` | 115587 | 45230 | 20 |
+| `/admin/join-attempts` | 117895 | 46500 | 21 |
+| `/admin/join-attempts/[id]` | 116062 | 45759 | 21 |
+| `/auth/recover` | 110172 | 42591 | 16 |
+| `/e/[key]` | 136760 | 51885 | 20 |
+| `/events/past` | 114816 | 44606 | 16 |
+| `/faq` | 111831 | 43584 | 17 |
+| `/hotzones` | 113638 | 44198 | 17 |
+| `/hotzones/[signal]` | 113124 | 44059 | 17 |
+| `/join` | 112660 | 43709 | 16 |
+| `/leaderboards/members` | 115160 | 44944 | 17 |
+| `/members/[user]` | 127231 | 48585 | 17 |
+| `/privacy` | 110901 | 43038 | 16 |
+| `/profile` | 127231 | 48585 | 17 |
+| `/rules` | 111932 | 43587 | 17 |
+
+The endpoint-only rows have zero bytes/files in both groups. Exact initial
+ceilings live in `ci/budgets/kit-routes.json`, with strict runtime validation
+and the editor-facing `ci/kit-route-budget.schema.json`.
+
+## Automation boundary and step semantics
+
+The dedicated push-to-main workflow has no PR, workflow-run or manual-input
+trigger. A read-only job installs/builds and runs fixture, aggregate,
+served-asset and route gates without a token in the executing process. It
+uploads JSON measurements bound to that main SHA. A separate fresh writer job
+checks out the same trusted SHA, installs nothing, and parses only bounded JSON
+from this run's artifact. Its only token-bearing step uses the existing
+`github.token`, scoped to contents/pull-requests write. No new secret, service,
+ruleset, identity or approval bypass is introduced.
+
+Only raw/gzip values in the two aggregate client fragments and route budget are
+eligible. A metric lowers only when **current − rounded target > one step**.
+Equality to one step does nothing. A draft's earlier decrease is an upper bound
+on all later proposals: growth can report debt, never re-raise that ceiling.
+Server/startup, file caps, CWV, served budgets and other files are not writable.
+
+One stable `ci/client-budget-ratchet` branch owns at most one open draft. The
+writer refuses a ready PR, edited title/body, non-bot or unsigned history,
+non-client file changes, changed main budget revisions, and orphan refs.
+GraphQL `createCommitOnBranch` uses `expectedHeadOid` to reject human branch
+races atomically, with no retry, force push or main write. A newer main build
+makes an old measurement a no-op. Missing permissions fail without fallback.
+Each proposal carries the complete measurement and Undo in a generated decision.
+There is no auto-merge; marking the draft ready must trigger normal CI/reviews
+and the exact-head production merge confirmation.
+
+Read-only capability inspection on 2026-11-04 returned
+`default_workflow_permissions: read` and
+`can_approve_pull_request_reviews: true` from the repository Actions workflow
+permissions API. The write job requests its own narrow permissions. The complete
+create/update/refusal path is fixture-tested; **no live ratchet PR was opened to
+test capability**. If GitHub refuses PR creation, an operator must inspect the
+repository's Actions “Allow GitHub Actions to create and approve pull requests”
+setting and the existing workflow identity; this workflow does not change that
+setting, acquire credentials, bypass required checks or substitute a token.
