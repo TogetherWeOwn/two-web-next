@@ -159,6 +159,16 @@ jobs:
 
   staging-soak:
     name: staging-soak
+    permissions:
+      contents: read
+      actions: read
+      deployments: read
+    # Fence only this staging observer, never the production mutation interval.
+    concurrency:
+      group: >-
+        ${{ github.ref == 'refs/heads/main' && 'staging-application-exclusive' ||
+        format('staging-rejected-soak-{0}', github.run_id) }}
+      cancel-in-progress: false
     # Least privilege with no approval wait: the candidate's staging Worker
     # versions (tagged with its commit; every tagged version counts) and
     # their invocation errors since the oldest deployed, from the staging
@@ -182,6 +192,25 @@ jobs:
       requests: ${{ steps.soak.outputs.requests }}
       errors: ${{ steps.soak.outputs.errors }}
     steps:
+      - name: Read installed staging occupancy tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .staging-occupancy-control
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            ci/candidate-staging-clear.mjs
+            ci/candidate-staging-occupancy.mjs
+            ci/candidate-staging-admission.mjs
+      - name: Set up staging occupancy runtime
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Refuse unresolved candidate occupancy
+        run: node .staging-occupancy-control/ci/candidate-staging-clear.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       # Tip checkout, like the preflight checks: an older candidate cannot
       # skip the gate with a script that lacks this mode.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1

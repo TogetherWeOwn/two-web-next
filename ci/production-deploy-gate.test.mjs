@@ -624,8 +624,9 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
     "utf8",
   );
   assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
-  // The post-deploy `release` call (release.yml) is the only job override: it
-  // needs only Actions read for promotion proof and contents write to tag/release.
+  // The post-deploy `release` call needs Actions read for promotion proof and
+  // contents write to tag/release. The staging-only occupancy reader adds just
+  // deployments read in its own job, retaining both inherited read scopes.
   const release = workflow.slice(workflow.indexOf("\n  release:\n"));
   const releaseLines = release
     .split("\n")
@@ -643,10 +644,22 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
     ["actions: read", "contents: write"],
     "release caller must grant exactly Actions read and contents write",
   );
-  assert.ok(
-    !/^ {4,}permissions:/m.test(workflow.slice(0, workflow.indexOf("\n  release:\n"))),
-    "job overrides must not drop inherited Actions read",
+  const jobs = YAML.parse(workflow).jobs;
+  assert.deepEqual(
+    Object.entries(jobs)
+      .filter(([, job]) => job.permissions)
+      .map(([id]) => id),
+    ["staging-soak", "release"],
+    "only the staging observer and release caller may override inherited scopes",
   );
+  assert.deepEqual(jobs["staging-soak"].permissions, {
+    contents: "read",
+    actions: "read",
+    deployments: "read",
+  });
+  for (const id of ["preflight", "deploy-production"]) {
+    assert.equal(jobs[id].permissions, undefined, `${id} must inherit both read scopes`);
+  }
   assert.match(workflow, /^  preflight:/m);
   assert.match(workflow, /^  deploy-production:/m);
   assert.equal((workflow.match(/run: node ci\/production-deploy-gate\.mjs\n/g) ?? []).length, 2);

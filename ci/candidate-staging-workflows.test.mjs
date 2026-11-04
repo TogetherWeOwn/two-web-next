@@ -652,6 +652,153 @@ test("database actors have no staging reusable callers that could reacquire thei
   assert.deepEqual(calls, []);
 });
 
+const WATCH_ACTORS = [
+  [
+    "watch-guest-journeys",
+    "guest-journeys",
+    "c2bcbea440d673cf9b919ac666073813430009e256d5f2d5c724b10777b9e5fe",
+  ],
+  [
+    "watch-lighthouse",
+    "lighthouse",
+    "4ab8f70d57131b15939554e401e62b0c6ff830268bec69534036b0eb16974cc1",
+  ],
+];
+const STAGING_ORIGIN = "https://next.togetherweown.com";
+
+function inlineGuard(job, condition) {
+  const steps = job.steps.slice(0, 3);
+  assert.equal(steps[0].name, "Read installed staging occupancy tooling");
+  trustedCheckout(steps[0]);
+  assert.equal(steps[0].with.path, ".staging-occupancy-control");
+  assert.equal(steps[1].uses, NODE);
+  assert.deepEqual(steps[1].with, { "node-version": 24 });
+  assert.equal(steps[2].run, "node .staging-occupancy-control/ci/candidate-staging-clear.mjs");
+  assert.deepEqual(steps[2].env, { GITHUB_TOKEN: "${{ github.token }}" });
+  for (const step of steps) {
+    assert.equal(step.if, condition);
+    assert.equal(step["continue-on-error"], undefined);
+  }
+}
+
+for (const [name, leaf, baseline] of WATCH_ACTORS) {
+  test(`${name}: staging guard precedes the unchanged browser job while preserving its legacy lock`, () => {
+    const w = workflow(name);
+    const job = w.jobs[leaf];
+    assert.deepEqual(job.permissions, { contents: "read", deployments: "read" });
+    assert.equal(job.concurrency["cancel-in-progress"], false);
+    assert.equal(job["continue-on-error"], undefined);
+    inlineGuard(job, "inputs.origin == 'https://next.togetherweown.com'");
+    // Reporting may still execute on guard failure, but every network probe,
+    // dependency install and original setup step must retain implicit success().
+    for (const step of job.steps.slice(3)) {
+      if (step.uses?.startsWith("actions/upload-artifact@") || step.name === "Per-route summary")
+        continue;
+      assert.equal(step.if, undefined);
+    }
+    const original = structuredClone(w);
+    delete original.jobs[leaf].if;
+    delete original.jobs[leaf].permissions;
+    delete original.jobs[leaf].concurrency;
+    original.jobs[leaf].steps.splice(0, 3);
+    assert.equal(createHash("sha256").update(JSON.stringify(original)).digest("hex"), baseline);
+    assert.notEqual(w.concurrency.group, EXCLUSIVE);
+    assert.equal(w.concurrency["cancel-in-progress"], false);
+  });
+
+  for (const ref of ["refs/heads/main", "refs/heads/topic", "refs/tags/main"]) {
+    for (const origin of [
+      STAGING_ORIGIN,
+      "https://togetherweown.com",
+      "https://www.togetherweown.com",
+    ]) {
+      test(`${name}: ${ref} at ${origin} fences only eligible staging and preserves apex watches`, () => {
+        const job = workflow(name).jobs[leaf];
+        const github = { ...eventContext(), ref };
+        const inputs = { origin };
+        const staging = origin === STAGING_ORIGIN;
+        const eligible = staging && ref === "refs/heads/main";
+        assert.equal(evaluate(job.if, github, inputs), !staging || eligible);
+        assert.equal(
+          evaluate(job.concurrency.group, github, inputs),
+          eligible ? EXCLUSIVE : `staging-unlocked-${name}-900`,
+        );
+        for (const step of job.steps.slice(0, 3))
+          assert.equal(evaluate(step.if, github, inputs), staging);
+      });
+    }
+  }
+  for (const origin of [
+    "",
+    undefined,
+    `${STAGING_ORIGIN}/`,
+    `${STAGING_ORIGIN}:443`,
+    `${STAGING_ORIGIN}?x`,
+    "https://next.togetherweown.com.attacker.invalid",
+    "https://togetherweown.com/",
+    "https://togetherweown.com@next.togetherweown.com",
+  ]) {
+    test(`${name}: unrecognized origin ${origin} cannot bypass staging admission via URL normalization`, () => {
+      const job = workflow(name).jobs[leaf];
+      assert.equal(evaluate(job.if, eventContext(), { origin }), false);
+      assert.equal(
+        evaluate(job.concurrency.group, eventContext(), { origin }),
+        `staging-unlocked-${name}-900`,
+      );
+    });
+  }
+  for (const event of ["pull_request", "pull_request_target", "schedule", "push", "workflow_run"]) {
+    test(`${name}: unconfigured ${event} cannot displace a pending staging actor`, () => {
+      const job = workflow(name).jobs[leaf];
+      const github = eventContext(event);
+      const inputs = { origin: STAGING_ORIGIN };
+      assert.equal(evaluate(job.if, github, inputs), false);
+      assert.equal(evaluate(job.concurrency.group, github, inputs), `staging-unlocked-${name}-900`);
+    });
+  }
+}
+
+test("production's staging-only soak observer holds exclusion and refuses dirty state before its original reads", () => {
+  const w = workflow("deploy-production");
+  const job = w.jobs["staging-soak"];
+  assert.deepEqual(job.permissions, { contents: "read", actions: "read", deployments: "read" });
+  assert.equal(job.concurrency["cancel-in-progress"], false);
+  assert.equal(job["continue-on-error"], undefined);
+  inlineGuard(job, undefined);
+  for (const event of ["workflow_dispatch", "schedule", "workflow_run"]) {
+    const github = eventContext(event);
+    assert.equal(evaluate(job.concurrency.group, github), EXCLUSIVE);
+    github.ref = "refs/heads/topic";
+    assert.equal(evaluate(job.concurrency.group, github), "staging-rejected-soak-900");
+  }
+  for (const step of job.steps) assert.equal(step.if, undefined);
+  const original = structuredClone(w);
+  delete original.jobs["staging-soak"].permissions;
+  delete original.jobs["staging-soak"].concurrency;
+  original.jobs["staging-soak"].steps.splice(0, 3);
+  // No selector, production job, output, credential, hold or promotion check is changed.
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(original)).digest("hex"),
+    "87bbf32ba9fa73b02b80a652c1e320f63cf18c97de5bcdc1bf0776439e15b7b1",
+  );
+});
+
+test("the production-only RUM reader stays outside application staging fencing unchanged", () => {
+  const w = workflow("rum-web-vitals");
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(w)).digest("hex"),
+    "2bf68fa319977d911792f033f00781755200a3df46f580536461ab900c9e457e",
+  );
+  // The documented site-tag/account contract is production-only, not a live
+  // capability or configuration observation. Reclassify if that binding changes.
+  const docs = readFileSync(new URL("../docs/rum-web-vitals.md", import.meta.url), "utf8");
+  assert.match(docs, /CF_RUM_ACCOUNT_ID.*production account id/);
+  assert.match(docs, /CF_RUM_SITE_TAG.*production site/);
+  const source = readFileSync(new URL("./rum-check.mjs", import.meta.url), "utf8");
+  assert.match(source, /siteTag: \$site/);
+  assert.doesNotMatch(source, /next\.togetherweown\.com|workers\/scripts/);
+});
+
 test("occupancy source closure resolves only Node builtins and its three explicitly checked out files", () => {
   for (const path of CLOSURE) {
     const source = readFileSync(new URL(`../${path}`, import.meta.url), "utf8");

@@ -551,12 +551,42 @@ guard and the requirement that traffic move in both legs remain unchanged.
 Original workflow graphs are hash-pinned after removing only the new fence and
 that obsolete poll. No production workflow or target selector is changed.
 
-**Incomplete exclusion:** mixed-origin guest/browser/analytics probes and the
-production workflow's staging-soak
-observer are not fenced yet. The isolated `gradual-promote-proof` harness targets
-its own synthetic Worker, not this application's staging Worker; its generated
+### Mixed-origin watches and staging soak
+
+`watch-guest-journeys` and `watch-lighthouse` retain their original workflow-level
+watch groups. Only the main-branch, manual staging-origin job additionally holds
+`staging-application-exclusive` for every step. The same trusted three-step
+occupancy guard runs before original checkout, dependencies or browser probes.
+Apex and www watch jobs stay outside shared staging exclusion, skip all guard
+steps and keep their original tools, budgets, targets, timeouts and reporting.
+Job admission explicitly allows only those two production origins or eligible
+staging: unknown origins, including staging URL aliases with a trailing slash or
+port, cannot fall through to an unfenced probe. Tool-level target validation is
+still unchanged. Non-main staging cannot run or displace pending shared work.
+Failure-reporting artifact/summary steps may run after guard failure, but all
+network probes and installs retain implicit success conditions and cannot run.
+
+The production workflow's `staging-soak` job alone holds shared exclusion while
+reading staging versions and analytics. Its unconditional trusted occupancy guard
+precedes all original steps, including staging credential access. The workflow's
+legacy `deploy-production` group, original preflight, selectors, staging measurement,
+outputs, production checks/mutations/holds and rollback path remain unchanged.
+Only this staging observer gains deployments-read; production jobs do not.
+No parent or reusable child reacquires its shared key. These staging scheduling
+changes are not changes to production serving, selection or deployment behavior.
+
+The existing `rum-web-vitals` reader is unchanged and outside this application
+staging key: its [documented contract](rum-web-vitals.md) binds the production
+account and production site tag; its query selects that site, not staging Worker
+versions. This is a **source-contract classification, not a live configuration or
+capability observation**. Changed or mixed site bindings require reclassification
+before activation. The isolated `gradual-promote-proof` harness targets its own
+synthetic Worker, not this application's staging Worker; its generated
 `env.production` names that synthetic target and is not production deployment
 configuration. Shared account/capability admission is still required separately.
+
+**Incomplete exclusion:** this source-backed set of workflow fences is not proof
+of complete actor coverage or installed global exclusion.
 Pre-install in-flight runs, console writers and other-repository actors are not
 contained by these changes. Source/environment protection, complete actor
 coverage, independent principal/data admission and drain evidence remain required
