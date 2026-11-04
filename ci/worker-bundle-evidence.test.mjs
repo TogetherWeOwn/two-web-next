@@ -151,9 +151,12 @@ describe("createInventory and verifyInventory", () => {
   test("records scoped and pnpm package roots with manifest identity and version", () => {
     const inv = createInventory(fixture(), DIR, context);
     const byRoot = Object.fromEntries(inv.packages.map((p) => [p.manifest.path, p]));
-    assert.equal(byRoot["node_modules/hono/package.json"].version, "4.1.0");
+    // These versions come from fixture inventory, not installed dependency pins.
+    const { version: honoVersion } = byRoot["node_modules/hono/package.json"];
+    const { version: scopedVersion } = byRoot["node_modules/@scope/pkg/package.json"];
+    assert.equal(honoVersion, "4.1.0");
     assert.equal(byRoot["node_modules/@scope/pkg/package.json"].name, "@scope/pkg");
-    assert.equal(byRoot["node_modules/@scope/pkg/package.json"].version, "2.0.0");
+    assert.equal(scopedVersion, "2.0.0");
     const pnpm = byRoot["node_modules/.pnpm/dep@1.0.0/node_modules/dep/package.json"];
     assert.equal(pnpm.name, "dep");
     assert.equal(pnpm.version, "1.0.0");
