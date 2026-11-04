@@ -881,6 +881,9 @@ jobs:
       - name: Production deploy gate selftest (fixtures, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/production-deploy-gate.test.mjs
+      - name: Production ancestry admission selftest (stubbed GitHub API, no network)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/production-ancestry.test.mjs
       - name: Gradual promotion selftest (fixtures, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/gradual-promote.test.mjs

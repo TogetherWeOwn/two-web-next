@@ -672,6 +672,36 @@ line: `-- rollback-safe: <reason>`; reviewers check that note. The deploy job
 then confirms the recorded version is still the single 100% deployment and
 still carries its required secrets before any production mutation.
 
+#### Default promotion ancestry admission
+
+The resolver (`ci/resolve-promotion-sha.mjs`) retains latest-run invalidation:
+a newer skipped, unfinished or failed staging run cannot be outvoted by an
+older pass for the same SHA. Consequently, its newest eligible candidate can
+be older than the commit production currently serves. Staging eligibility is
+not proof of forward ancestry.
+
+After `/up` live-SHA capture, `deploy-production` runs
+`node ci/production-deploy-gate.mjs --check-ancestry` from the trusted
+**workflow-head** checkout, before candidate checkout, migration checks or any
+promotion side effects. For `workflow_run`, `schedule`, and manual dispatch
+with an empty `sha`, live production must name a full 40-hex commit. Equality
+retains the existing clean no-op. Otherwise GitHub's exact-SHA
+`compare/<live>...<candidate>` must positively prove a forward descendant:
+`ahead`, positive integral `ahead_by`, zero `behind_by`, matching total count,
+and both base and merge-base equal to live. A behind or divergent candidate
+is a **refusal**, not a quiet no-op; missing, inconsistent, malformed or
+unavailable evidence also fails closed. No candidate checkout or downstream
+deployment runs after that refusal. The guard does not search for a different
+candidate or change staging skip policy.
+
+Only `workflow_dispatch` with a nonblank, full SHA matching the resolved
+candidate selects the separate explicit redeploy/recovery route. That input
+is not authorization: retain current Release Manager approval, independent
+Security and QA review, exact-SHA CI, incident/rollback requirements and all
+other applicable promotion gates. `migrations_applied=true` does not bypass
+default ancestry admission, and neither does an empty-SHA manual dispatch.
+The rollback workflow remains a separate already-served-version route.
+
 #### Regression check against production
 
 Before the deploy job, `deploy-production` runs two more gates

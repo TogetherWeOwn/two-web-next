@@ -101,6 +101,69 @@ export function isAlreadyLive(deploySha, liveSha) {
   );
 }
 
+// Default selection is monotonic even when staging eligibility falls back to
+// an older green. Run from the workflow-head checkout before candidate code.
+// An explicit dispatch only selects the existing recovery route; it grants no
+// authorization and does not replace any of that route's other gates.
+export async function checkPromotionAncestry(env, { fetchImpl = fetch } = {}) {
+  const targetSha = env.DEPLOY_SHA;
+  if (!/^[0-9a-f]{40}$/.test(targetSha)) {
+    throw new Error("Promotion ancestry requires a full 40-hex DEPLOY_SHA");
+  }
+  if (!AUTOMATIC_PROMOTION_EVENTS.has(env.GITHUB_EVENT_NAME)) {
+    throw new Error("Promotion ancestry requires workflow_run, schedule or workflow_dispatch");
+  }
+  const input = (env.INPUT_SHA ?? "").trim().toLowerCase();
+  if (env.GITHUB_EVENT_NAME === "workflow_dispatch" && input) {
+    if (!/^[0-9a-f]{40}$/.test(input) || input !== targetSha) {
+      throw new Error("Explicit dispatch SHA must be full 40-hex and match DEPLOY_SHA");
+    }
+    return "explicit";
+  }
+  const liveSha = env.LIVE_SHA;
+  if (typeof liveSha !== "string" || !/^[0-9a-f]{40}$/.test(liveSha)) {
+    throw new Error("Default promotion requires a known full 40-hex live production SHA");
+  }
+  if (isAlreadyLive(targetSha, liveSha)) return "equal";
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY ?? "")) {
+    throw new Error("Promotion ancestry requires GITHUB_REPOSITORY owner/repo");
+  }
+  if (!env.GITHUB_TOKEN) throw new Error("Promotion ancestry requires GITHUB_TOKEN");
+  const response = await fetchImpl(
+    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${liveSha}...${targetSha}`,
+    {
+      headers: {
+        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Promotion ancestry lookup failed (HTTP ${response.status})`);
+  }
+  const comparison = await response.json();
+  // Exact SHA refs bind the requested head. Require the base and merge-base
+  // identities plus consistent counts, not a status string alone. Do not use
+  // the commits array: GitHub can paginate/truncate it for large comparisons.
+  if (
+    comparison?.status !== "ahead" ||
+    !Number.isSafeInteger(comparison.ahead_by) ||
+    comparison.ahead_by <= 0 ||
+    comparison.behind_by !== 0 ||
+    comparison.total_commits !== comparison.ahead_by ||
+    comparison.base_commit?.sha !== liveSha ||
+    comparison.merge_base_commit?.sha !== liveSha
+  ) {
+    throw new Error(
+      `Default promotion refused: ${targetSha} is not a verified forward descendant of live ${liveSha} (behind, divergent or invalid ancestry evidence)`,
+    );
+  }
+  return "ahead";
+}
+
 // Pending-production-migration comparison: tags in the target journal that
 // the live production journal lacks. Pure, so the workflow and the tests
 // share one definition without database access.
@@ -1015,7 +1078,7 @@ export async function checkRollbackGate(env, fetchImpl = fetch, options = {}) {
 // gate. A bare invocation (or a non-flag positional, as before) runs the
 // full gate.
 export const PRODUCTION_DEPLOY_GATE_USAGE =
-  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-migrations | --help]\nWith no flag, runs the full production gate.";
+  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --help]\nWith no flag, runs the full production gate.";
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
@@ -1067,7 +1130,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // Clean skip when production already serves the target: exits 0 in
       // both cases and reports via GITHUB_OUTPUT so the workflow can skip
       // the deploy without going red. An unreadable /up never counts as
-      // live (fail open toward deploying, not toward skipping).
+      // live; --check-ancestry then refuses every default selection.
       const deploySha = (process.env.DEPLOY_SHA ?? "").replace(/\s+/g, "").toLowerCase();
       if (!/^[0-9a-f]{40}$/.test(deploySha)) {
         throw new Error("DEPLOY_SHA must be a full 40-hex commit (resolved by the preflight job)");
@@ -1089,6 +1152,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           `already_live=${already ? "true" : "false"}\nlive_sha=${live ?? ""}\n`,
         );
       }
+    } else if (process.argv[2] === "--check-ancestry") {
+      const result = await checkPromotionAncestry(process.env);
+      console.log(
+        result === "explicit"
+          ? "Explicit dispatch SHA selected; existing recovery authorization and promotion gates still required"
+          : `Default promotion ancestry: ${result}`,
+      );
     } else if (process.argv[2] === "--check-migrations") {
       // Pending-migration stop until the least-privilege migrator lands.
       // This step runs from the tip checkout (before the target re-checkout

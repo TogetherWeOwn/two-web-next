@@ -85,6 +85,18 @@ jobs:
         run: node ci/production-deploy-gate.mjs --already-live
         env:
           DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+      - name: Refuse backward or unproven default production promotion
+        # Workflow-head code, before candidate checkout or any promotion side
+        # effects. Only an explicit dispatch SHA selects the existing recovery
+        # route; an empty-SHA dispatch obeys the same ancestry rule as auto runs.
+        if: steps.target.outputs.sha != ''
+        run: node ci/production-deploy-gate.mjs --check-ancestry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          INPUT_SHA: ${{ inputs.sha }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+          LIVE_SHA: ${{ steps.live.outputs.live_sha }}
       - name: Refuse pending production migrations before any deploy
         # A target whose journal has entries production lacks reads the live
         # production ledger via /up: when the ledger holds every target web
