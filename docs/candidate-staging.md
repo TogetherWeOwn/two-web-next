@@ -111,6 +111,54 @@ controller admission must establish those separately. It supplies no filesystem
 extraction, module execution, version upload, global lock or live qualification.
 Only mocked HTTP fixtures have exercised this path.
 
+## Explicit-binding web upload request construction
+
+[The request constructor](../ci/candidate-staging-upload.mjs) builds an inert
+multipart **version-create** request for the existing staging web Worker. It
+makes no network request, runs no candidate code or build tool, reads no files,
+and activates no version. It does not yet support jobs, tail or separate Kit
+components. Only local fixtures have exercised its output.
+
+Its account/resource profile must come from the installed trusted closure and
+match an independently pinned SHA-256, never a digest supplied alongside a
+candidate's chosen profile. The target Worker name and API origin are fixed;
+production and preview Worker names refuse even with a matching digest. Only
+`DB`/`BOT_DB` Hyperdrive IDs and numeric public Discord application/guild IDs are
+accepted from that profile. The profile hash proves byte identity, **not** that
+an account token is staging-scoped or a Hyperdrive resource is synthetic-only.
+Security must independently admit those capabilities before use.
+
+The constructor rehashes and copies the admitted bundle, verifies its Q, root,
+paths, counts and sizes, and constructs module parts only from regular Worker
+bytes. It uses the reviewed compatibility date/flags and explicit bindings for
+the canonical staging origin, public run verifier and version metadata. The
+verifier must match the full descriptor/Q, the issuer's fixed 25-minute lifetime
+and the original unexpired cutoff. No secret/inherit/service binding or arbitrary
+metadata override is accepted. `keep_bindings: []`, `keep_assets: false` and empty
+tail-consumer lists are explicit; no baseline binding/config is copied into the
+request. This is request construction, not proof of provider omission semantics.
+
+Static assets require a completion ticket from the separately trusted asset
+transport, joined to Q and the canonical SHA-256 record roots of the whole bundle
+and its asset subset. The constructor checks its shape and joins, **not** its
+signature, remote scope, freshness or issuance. It does not upload assets or
+mint this ticket. Module-only uploads require a null ticket and cannot implicitly
+retain B's assets. Asset routing is Worker-first, with no candidate-provided
+headers, redirect rules or asset configuration. The form contains an asset
+upload capability: never log, publish or persist it. The separate allowlisted
+proof contains only immutable identities, hashes, original times and literal
+`promotable:false`, not the ticket, verifier JSON or module bytes.
+
+The form is mutable transport state, not an authority token. The installed
+sender must submit the exact constructed metadata/module bytes and bind provider
+readback to the request proof before activation. It must independently establish
+live head/CI/build/producer provenance, asset-ticket provenance, global exclusion,
+dirty occupancy, preview-route disablement, baseline restoration and next-upload
+compatibility. Independent binding/config readback, version/serving history,
+transport and activation/recovery integration remain unimplemented. Ordinary
+Wrangler upload remains unsuitable because it retains secrets by default; this
+constructor does not make a live candidate safe merely by omitting those secrets.
+
 ## Durable occupancy journal and recovery boundary
 
 [The journal](../ci/candidate-staging-occupancy.mjs) implements a narrow GitHub

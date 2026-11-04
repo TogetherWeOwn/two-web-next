@@ -9,6 +9,7 @@ import {
   candidateIdentity,
   candidateSha256,
   completeCandidatePages,
+  safeBundlePath,
 } from "./candidate-staging-admission.mjs";
 import { deploymentTarget } from "./staging-deploy-gate.mjs";
 
@@ -31,6 +32,21 @@ test("admission fixtures execute in required CI and the local complete check", (
   assert.equal(matches[0]["continue-on-error"], undefined);
   assert.ok(workflow.jobs["ci-ok"].needs.includes("check"));
 });
+
+for (const suffix of ["\n", "\r", "\r\n"]) {
+  for (const path of ["worker/chunks/app.mjs", "assets/app.css"]) {
+    test(`bundle paths reject terminal line endings ${JSON.stringify([path, suffix])}`, () => {
+      assert.equal(safeBundlePath(`${path}${suffix}`), false);
+    });
+  }
+  for (const field of ["prNumber", "headSha", "ciRunId", "ciRunAttempt"]) {
+    test(`selection rejects terminal line ending ${JSON.stringify([field, suffix])}`, () => {
+      const input = fixture();
+      input.selection[field] += suffix;
+      assert.throws(() => candidateIdentity(input.selection, input.launcher));
+    });
+  }
+}
 
 function fixture() {
   const selection = { prNumber: "42", headSha: "a".repeat(40), ciRunId: "100", ciRunAttempt: "1" };
