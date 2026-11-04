@@ -41,14 +41,17 @@ The production workflow:
    another build. Wrangler loads the adjacent sourcemap using the preserved
    sourceMappingURL. Assets and bindings still use the production configuration;
    this inventory covers runtime JS, not the asset upload or binding values.
-3. Reads Wrangler's native `WRANGLER_OUTPUT_FILE_PATH` JSONL. Requires exactly one
-   `type: version-upload`, `version: 1` record with the expected Worker,
+3. Reads Wrangler's native `WRANGLER_OUTPUT_FILE_PATH` JSONL (at most 1 MiB of
+   bytes). Missing paths, empty output and malformed lines fail closed. Requires
+   exactly one `type: version-upload`, `version: 1` record with the expected Worker,
    environment and valid version UUID. Writes a sanitized `upload.json`, never
    archives the raw output file. An upload is not a promotion.
 4. Runs the existing gradual promotion and ordinary-traffic, version-aware smoke.
-   Only after they succeed, requires the promoted UUID to match `upload.json`
-   and writes `deployed.json` binding that UUID to the inventory and bundle
-   digests. Existing promotion receipts and rollback/watch gates remain intact.
+   After they succeed, records and uploads the existing production promotion proof
+   before binding bundle evidence. It then requires the promoted UUID to match
+   `upload.json` and writes `deployed.json` binding that UUID to the inventory and
+   bundle digests. A binding failure still fails the job, but cannot suppress the
+   successful promotion record. Existing rollback/watch gates remain intact.
 5. Publishes `worker-bundle-production-<sha>-<run>-<attempt>` (30-day retention).
    Failed runs may retain diagnostic **build/upload-only** artifacts; a missing
    deployment receipt is never an absence result. Use the existing successful

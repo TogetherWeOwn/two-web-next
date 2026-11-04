@@ -1,5 +1,14 @@
 import assert from "node:assert/strict";
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, test } from "node:test";
@@ -10,6 +19,7 @@ import {
   deploymentReceipt,
   packageFinding,
   packageRoot,
+  readWranglerOutput,
   sha256,
   uploadReceipt,
   verifyInventory,
@@ -469,6 +479,93 @@ describe("receipts", () => {
     return verifyInventory(root, DIR, context);
   };
 
+  describe("Wrangler JSONL file reader", () => {
+    const outputFile = (raw) => {
+      const root = fixture();
+      put(root, "upload.jsonl", raw);
+      return join(root, "upload.jsonl");
+    };
+    const limit = 1024 * 1024;
+
+    test("reads multiple records with CRLF and a trailing newline", () => {
+      const records = [{ type: "version-upload-start" }, upload()];
+      const path = outputFile(
+        `${records.map((record) => JSON.stringify(record)).join("\r\n")}\r\n`,
+      );
+      assert.deepEqual(readWranglerOutput(path), records);
+    });
+
+    for (const raw of ["", " \r\n\t"]) {
+      test(`rejects empty output ${JSON.stringify(raw)}`, () => {
+        assert.throws(() => readWranglerOutput(outputFile(raw)), /Wrangler output empty/);
+      });
+    }
+
+    test("rejects a malformed line even after a valid upload record", () => {
+      assert.throws(
+        () => readWranglerOutput(outputFile(`${JSON.stringify(upload())}\n{broken}\n`)),
+        SyntaxError,
+      );
+    });
+
+    test("accepts exactly 1 MiB and rejects one byte over", () => {
+      const record = JSON.stringify(upload());
+      const raw = `${record}${" ".repeat(limit - Buffer.byteLength(record))}`;
+      assert.equal(Buffer.byteLength(raw), limit);
+      assert.deepEqual(readWranglerOutput(outputFile(raw)), [upload()]);
+      assert.throws(() => readWranglerOutput(outputFile(`${raw} `)), /Wrangler output too large/);
+    });
+
+    test("enforces the byte limit for multibyte UTF-8 output", () => {
+      const prefix = '{"message":"';
+      const suffix = '"}\n';
+      const raw = `${prefix}${"é".repeat((limit - prefix.length - suffix.length - 1) / 2)} ${suffix}`;
+      assert.equal(Buffer.byteLength(raw), limit);
+      assert.equal(readWranglerOutput(outputFile(raw)).length, 1);
+      assert.throws(() => readWranglerOutput(outputFile(`${raw} `)), /Wrangler output too large/);
+    });
+
+    test("rejects a missing, empty or nonexistent output path", () => {
+      assert.throws(() => readWranglerOutput(undefined), /Wrangler output path required/);
+      assert.throws(() => readWranglerOutput(""), /Wrangler output path required/);
+      assert.throws(() => readWranglerOutput(join(fixture(), "missing.jsonl")), /ENOENT/);
+    });
+
+    test("uploaded CLI requires its output env path and writes no receipt on invalid JSONL", () => {
+      const root = fixture();
+      saved(root);
+      const env = {
+        ...process.env,
+        BUILD_SHA: SHA,
+        GITHUB_RUN_ID: context.runId,
+        GITHUB_RUN_ATTEMPT: context.runAttempt,
+      };
+      delete env.WRANGLER_OUTPUT_FILE_PATH;
+      const run = () =>
+        spawnSync(
+          process.execPath,
+          [new URL("./worker-bundle-evidence.mjs", import.meta.url).pathname, "uploaded", DIR],
+          { cwd: root, env, encoding: "utf8", timeout: 10_000 },
+        );
+      let result = run();
+      assert.equal(result.status, 1, result.stderr);
+      assert.match(result.stderr, /Wrangler output path required/);
+      assert.equal(existsSync(join(root, DIR, "upload.json")), false);
+      env.WRANGLER_OUTPUT_FILE_PATH = join(root, "upload.jsonl");
+      for (const raw of ["", `${JSON.stringify(upload())}\n{broken}\n`, " ".repeat(limit + 1)]) {
+        put(root, "upload.jsonl", raw);
+        result = run();
+        assert.equal(result.status, 1, result.stderr);
+        assert.equal(existsSync(join(root, DIR, "upload.json")), false);
+      }
+      put(root, "upload.jsonl", `${JSON.stringify(upload())}\n`);
+      result = run();
+      assert.equal(result.status, 0, result.stderr);
+      const receipt = JSON.parse(readFileSync(join(root, DIR, "upload.json"), "utf8"));
+      assert.deepEqual(receipt, uploadReceipt(verifyInventory(root, DIR, context), [upload()]));
+    });
+  });
+
   test("uploadReceipt binds the upload to the verified inventory digest", () => {
     const verified = verifiedFor();
     const receipt = uploadReceipt(verified, [{ type: "version-upload-start" }, upload()]);
@@ -577,6 +674,8 @@ describe("workflow evidence wiring", () => {
     const inventory = find("Inventory the exact");
     const upload = find("Upload reviewed production");
     const smoke = find("Verify public routes on the promoted");
+    const promotion = find("Record successful production promotion");
+    const proof = find("Upload production promotion proof");
     const deployed = find("Bind bundle evidence");
     const archive = find("Archive production bundle");
     assert.ok(
@@ -584,7 +683,9 @@ describe("workflow evidence wiring", () => {
         build < inventory &&
         inventory < upload &&
         upload < smoke &&
-        smoke < deployed &&
+        smoke < promotion &&
+        promotion < proof &&
+        proof < deployed &&
         deployed < archive,
     );
     assert.match(

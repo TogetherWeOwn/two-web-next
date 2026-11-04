@@ -192,6 +192,15 @@ export function packageFinding(inventory, name) {
   return inventory.absenceEligible ? "absent-from-runtime-bundle" : "unknown";
 }
 
+export function readWranglerOutput(path) {
+  assert.ok(typeof path === "string" && path.length > 0, "Wrangler output path required");
+  const raw = readFileSync(path);
+  assert.ok(raw.length <= 1024 * 1024, "Wrangler output too large");
+  const text = raw.toString("utf8").trim();
+  assert.ok(text.length > 0, "Wrangler output empty");
+  return text.split("\n").map((line) => JSON.parse(line));
+}
+
 export function uploadReceipt(verified, records) {
   const { inventory, inventorySha256 } = verified;
   const uploads = records.filter((record) => record.type === "version-upload");
@@ -264,12 +273,7 @@ function main() {
         }),
       );
     } else if (command === "uploaded") {
-      const raw = readFileSync(process.env.WRANGLER_OUTPUT_FILE_PATH, "utf8");
-      assert.ok(raw.length <= 1024 * 1024, "Wrangler output too large");
-      const records = raw
-        .trim()
-        .split("\n")
-        .map((line) => JSON.parse(line));
+      const records = readWranglerOutput(process.env.WRANGLER_OUTPUT_FILE_PATH);
       writeFileSync(
         resolve(root, directory, "upload.json"),
         json(uploadReceipt(verified, records)),
