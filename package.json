@@ -43,7 +43,7 @@
     "seed:staging": "node bin/seed-staging.mjs",
     "test:cutover": "node --test ci/cutover-check-selftest.mjs",
     "test:shadow": "node --test ci/shadow-compare-selftest.mjs",
-    "test:candidate-staging": "node --test ci/candidate-staging-admission.test.mjs",
+    "test:candidate-staging": "node --test ci/candidate-staging-*.test.mjs",
     "test:catalog-preflight": "node --test ci/staging-catalog-preflight.test.mjs",
     "mutation:sessions-join": "node ci/mutation-sessions-join.mjs",
     "mutation:sessions-join:selftest": "node ci/mutation-sessions-join.mjs --selftest",

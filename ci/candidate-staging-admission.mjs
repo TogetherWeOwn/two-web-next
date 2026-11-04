@@ -233,7 +233,7 @@ export function admitCandidateCi(identity, contract, runs, before, jobs, after) 
   }
 }
 
-function safeBundlePath(path) {
+export function safeBundlePath(path) {
   return (
     typeof path === "string" &&
     path.length <= 240 &&

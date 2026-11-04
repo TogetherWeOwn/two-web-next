@@ -36,7 +36,51 @@ and production deployment selectors remain separate and unchanged.
 Diagnostics use fixed refusal codes, not untrusted API messages, filenames or
 bundle contents. No helper reads credentials, calls a remote API or opens a DB.
 
-## Required caller boundaries — not implemented by these predicates
+## Read-only GitHub evidence reader
+
+[The reader](../ci/candidate-staging-github.mjs) constructs only repository-local
+GET requests to GitHub's fixed API origin. It has no arbitrary-URL method, does
+not follow API-provided links, refuses redirects and authentication failures
+without retry, and bounds each request to ten seconds and 2 MiB of decoded JSON.
+Errors discard remote messages, URLs and source text. Every response stream is
+closed, including on a size or status refusal.
+
+`verifyCi` obtains full unfiltered run listings before and after explicit
+run/attempt/job reads, validates both observations with the installed contract,
+and rechecks the live PR as the final operation. A result is a bounded
+observation, not a lock on future GitHub state. `readArtifact` joins the complete
+build-run listing and immutable artifact-ID detail; it does not attest the build
+attempt, producer, download bytes or execution by itself.
+
+`verifyInstalledSources` requires a manifest digest independently anchored by the
+reviewed installation, verifies its controller revision, and reads each named
+file at that immutable ref. Nonrecursive Git trees reject links, submodules and
+ambiguous/missing entries before content reads. Content must agree on byte size,
+canonical base64, Git blob SHA-1 and SHA-256. Bounds: 128 named files, 512 KiB per
+file, 4 MiB total source, 64 trees and eight path components. Returned buffers are
+inert. This verifies the **named** closure only; it cannot establish that a
+caller-supplied manifest is complete or trusted. No installed manifest, launcher
+or credential-bearing execution is supplied by this reader.
+
+## In-memory archive decoder
+
+[The ZIP decoder](../ci/candidate-staging-archive.mjs) first checks the independent
+selected archive SHA-256 and a 16 MiB compressed-input cap. It returns regular
+file buffers, never filesystem entries or executed modules. Central and local
+records, names, modes, sizes, CRCs and optional signed streaming descriptors must
+agree. Local records must cover the exact data region with no prefixes, gaps,
+overlaps or suffixes. Deflate output has a hard allocation limit and cannot hide
+trailing compressed data. The shared bundle-path allowlist, case-collision guard,
+4096-entry cap and aggregate 16 MiB expanded limit apply before decompression.
+
+The producer must emit this narrow ZIP profile: store or deflate, regular files,
+ASCII paths, optional UTF-8 flag and signed data descriptors, no comments or
+multipart/ZIP64/encryption/alternate-name features. Only timestamp and UID/GID
+extra-field types are accepted, as inert metadata. Unsupported archive features
+refuse rather than being interpreted by another extractor. This is not yet a
+trusted build producer, artifact downloader or provenance attestation.
+
+## Required caller boundaries — still not installed
 
 The controller must establish the provenance of its installed source, complete
 policy/test dependency closure and producer receipts independently. Passing a
@@ -44,15 +88,16 @@ candidate's manifest as a trusted producer receipt defeats that boundary;
 matching hashes alone do not attest source provenance. CI dispatch/workflow
 source provenance and baseline execution ledgers also need independent checks.
 
-The bundle predicate is **not an archive parser**. A trusted decoder must verify
-archive bytes against the selected immutable digest and reject malformed or
-ambiguous archives, links, path aliases and expansion bombs before producing its
-flat file list. No credential-bearing tool may discover candidate package,
+The bundle predicate is **not an archive parser**; the separate decoder above
+provides that bounded byte boundary. The controller still needs to connect the
+immutable artifact download and independently attested producer to decoding and
+bundle admission. No credential-bearing tool may discover candidate package,
 configuration, plugin or script files. No raw credential belongs in the bundle,
 receipt, workflow output, argument list or cache.
 
-Still required before an installed qualification can pass: secret-free build
-sandboxing, bounded complete API readers, trusted inert version upload,
+Still required before an installed qualification can pass: installed source and
+baseline policy provenance, secret-free build sandboxing, authenticated artifact
+download/producer integration, trusted inert version upload,
 independently admitted staging-only deployment and synthetic-data capabilities,
 global exclusion, durable dirty occupancy, complete provider serving-history
 proof, the unchanged full authenticated live suite within one original deadline,

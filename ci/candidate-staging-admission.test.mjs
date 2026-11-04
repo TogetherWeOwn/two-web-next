@@ -19,10 +19,7 @@ test("admission fixtures execute in required CI and the local complete check", (
   const scripts = JSON.parse(
     readFileSync(new URL("../package.json", import.meta.url), "utf8"),
   ).scripts;
-  assert.equal(
-    scripts["test:candidate-staging"],
-    "node --test ci/candidate-staging-admission.test.mjs",
-  );
+  assert.equal(scripts["test:candidate-staging"], "node --test ci/candidate-staging-*.test.mjs");
   assert.ok(scripts.check.split(" && ").includes("npm run test:candidate-staging"));
   const steps = workflow.jobs.check.steps;
   const matches = steps.filter((step) => step.run === "npm run test:candidate-staging");
