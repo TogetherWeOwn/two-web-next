@@ -709,9 +709,23 @@ jobs:
       - name: Authenticated perf gate selftest (session-cookie budgets, hermetic)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/check-auth-perf*.test.mjs
-      - name: Kit adapter build
+      - name: Worker local startup diagnostic selftests (offline fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/check-worker-startup.test.mjs ci/worker-startup-ci-wiring.test.mjs
+      - name: Kit adapter build and local startup diagnostic (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: npm run build --prefix web
+        run: node ci/check-worker-startup.mjs
+      - name: Worker local startup evidence
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: worker-startup-local
+          path: |
+            artifacts/worker-startup-local/*.cpuprofile
+            artifacts/worker-startup-local/*.json
+            artifacts/worker-startup-local/summary.md
+          if-no-files-found: error
+          retention-days: 14
       - name: Kit admin contrast (built runtime, intercepted fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         env:

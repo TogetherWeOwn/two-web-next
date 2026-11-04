@@ -31,7 +31,7 @@ completed on 2026-11-04. The checker changes affect no build input:
 These before/after bytes are identical; this is a policy boundary change, not
 a byte reduction. Fixture boundary tests are separate from these observations.
 
-## Startup measurement: unresolved, not accepted
+## Accepted staged delivery: local diagnostic, not provider validation
 
 The existing `ci/budgets/kit/startup.json` value of 60,000 ms remains the
 Playwright server-readiness timeout. It is not isolate startup CPU.
@@ -75,12 +75,81 @@ The pinned [workerd limit interface](https://github.com/cloudflare/workerd/blob/
 provides startup-limit hooks, but the shipped offline Wrangler command does
 not expose that provider measurement.
 
-No deployment or production probe was run. The proposed warning at 400 ms and
-failure at 700 ms have **not** been implemented against a substitute metric.
-The measurement choice requires an explicit technical decision before adding
-a dedicated startup budget/checker and CI summary/artifact wiring. This draft
-must not be merged as completion of the combined server/runtime change while
-that acceptance remains unresolved.
+No deployment, upload or production probe was run. The delivery-sequence decision
+now accepts **diagnostic-first staged delivery**, not a substitution for provider
+startup acceptance. Authoritative `startup_time_ms`: **unavailable**. Production
+margin under the provider's startup limit: **unmet**. Neither is passed by proxy.
 
-Undo: revert this change to restore server gzip hard failures; do not change
-any client/Worker ceiling or the independent server-readiness timeout.
+`node ci/check-worker-startup.mjs` builds the adapter anew, serializes one staging
+configuration upload with `wrangler deploy --dry-run --outfile`, then runs exactly
+three fresh `wrangler check startup` processes over that same upload. Each creates
+a fresh Miniflare and dynamically imports the module once; no warmed import or
+retry replaces a slow run. Only `(idle)` samples are excluded. GC, wrapper,
+import, request and response work remain included. Sample node IDs and deltas
+must pair exactly; microseconds are converted to milliseconds.
+
+`ci/worker-startup-budget.json` gates the maximum of all three
+`local_startup_non_idle_sample_ms` values: warning **>=400 ms**, failure
+**>=700 ms**. Exit 0 is a local pass/warning, 1 is a local breach, 2 is unavailable
+or invalid evidence. Tool versions must match the pinned diagnostic budget.
+The controlled Linux x64 Node 24 runner records CPU model/count, memory, kernel,
+Node and local/CI class; local and CI observations are not interchangeable trends.
+This is not per-thread CPU, an authoritative Cloudflare measurement, or proof of
+300 ms production headroom.
+
+The output directory must be new (default `artifacts/worker-startup-local`, or
+`--outdir artifacts/<new-name>`). Retain all three original `cold-N.cpuprofile`
+files and their numeric `cold-N.json` records, plus `report.json` and `summary.md`.
+The report binds source commit and actual tracked/unignored source content,
+both lockfiles, exact staging config, serialized upload and profiles by SHA-256;
+it also records tool implementation/binary hashes, versions, runner identity,
+commands and bounds. Failed/incomplete runs never yield a local pass. No raw
+child output, environment dump, serialized upload or binding values are published
+to the CI artifact. The summary explicitly preserves outstanding provider
+acceptance on success, warning, breach and unavailable evidence.
+
+Each build is bounded to 240 seconds, serialization to 60 seconds, and each
+profile to 30 seconds, with 2 MiB child-output caps and process-group cleanup.
+Profiles are limited to 8 MiB, 50,000 nodes, 100,000 samples and a 15-second window.
+Missing, non-finite, negative, malformed, incomplete, mismatched, wrong-build/tool,
+failed and timed-out evidence fails closed. Pinned Wrangler only rejects module
+failure when unsupported bindings exist, so upload admission deliberately requires
+an unsupported Hyperdrive binding; a future change must replace this failure
+proof, not silently drop it. Local environment/dotenv binding inclusion and
+Wrangler telemetry are disabled. Runtime override variables (including
+`MINIFLARE_WORKERD_PATH`, V8 flags, Node preloads and alternate esbuild paths)
+are removed before spawning. `checkpoint.json` persists source/tool/runner
+identity before the build, upload identity before profiling and every completed
+numeric run; unavailable reports refer to that checkpoint instead of losing the
+failed attempt's provenance.
+
+## Three-cold-run integration observation
+
+A fresh offline build and one serialized upload produced **68.736, 70.715 and
+103.422 ms**; the maximum **103.422 ms** passed the local diagnostic. These were
+real profiles, not unit-test fixtures. Runner: Linux x64, Node 24.21.0, AMD Ryzen
+9 9950X, 32 logical CPUs; the JSON artifact retains the full bounded runner facts.
+Upload SHA-256: `d5da9a25faca4445096c8bab2bf03114de85b6f33dd1cc5d3d23c64d0098158a`.
+Actual source inventory SHA-256:
+`b6ee7367bdebc0abf36e3a4126331aa22631ceb4e876fd3c35a01249e98d963b`.
+This observation predates the subsequent provenance/checkpoint hardening; the PR
+also records its final-head integration separately. No provider acceptance is
+claimed from either local observation.
+
+An initial implementation attempt rejected a valid 15.393 ms unsampled profile
+tail using an invented 10 ms gap cap. That attempt remained unavailable and its
+original evidence was retained. The regression now explicitly preserves the
+unsampled tail in `unsampledMs`, without adding it to the non-idle sample metric.
+No breach was retried or slow completed profile discarded to obtain a pass.
+
+CI runs the diagnostic as the Kit adapter build in the existing hard `check` job,
+then uploads all profiles/numeric evidence on success or failure for 14 days.
+The upload and worker fixture remain offline; the independent readiness timeout
+and every hard visitor-facing/raw/count/whole-Worker gate remain unchanged.
+Security and QA review, CI, and exact-head production merge approval still apply.
+The earlier single-profile numbers above establish tool feasibility only; they
+are not the required three-run implementation integration evidence.
+
+Undo: revert this change to restore server gzip hard failures and remove the
+local diagnostic/check wiring; do not change any client/Worker ceiling or the
+independent server-readiness timeout.
