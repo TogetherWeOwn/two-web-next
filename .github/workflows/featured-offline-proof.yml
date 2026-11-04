@@ -9,11 +9,7 @@ name: featured-offline-proof
 # `featured-proof` aggregator below reports the conclusion. No ruleset change
 # here: requiring the aggregator is a human-admin step.
 #
-# Runner separation: pull_request runs always use GitHub-hosted runners, so
-# code that has not landed on main never runs on the self-hosted fleet. The
-# `runs-on` expressions below reach that fleet only for non-PR events (here:
-# manual dispatches) while the repository is private; see
-# docs/private-flip-checklist.md.
+# Runs on standard GitHub-hosted ubuntu-latest in this public repo.
 on:
   pull_request:
   workflow_dispatch:
@@ -21,8 +17,7 @@ on:
 permissions:
   contents: read
   # The scope job lists the PR's changed files via the API.
-  pull-requests: read
-
+  pull-requests: read # List changed PR files for the trusted proof-scope classifier.
 concurrency:
   group: featured-offline-proof-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -32,9 +27,7 @@ jobs:
   # proof. Manual dispatches and any doubt always count as relevant.
   scope:
     name: scope
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.scope.outputs.relevant }}
@@ -119,9 +112,7 @@ jobs:
   capture:
     if: github.event_name == 'workflow_dispatch'
     name: featured-offline-proof
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 8
     # Browser + system libraries are already present; only the matching JS
     # module is installed, inside this CI container. No app/DB service or secrets.
@@ -157,7 +148,9 @@ jobs:
           elif [ "$CHECKOUT_HEAD" != "$PROOF_CHECKOUT_HEAD" ]; then
             export PROOF_SETUP_FAILURE='Checkout revision does not match the expected proof head'
           fi
-          if ! npm install --prefix "$RUNNER_TEMP/featured-runtime" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.58.2; then
+          if ! (mkdir -p "$RUNNER_TEMP/featured-runtime" &&
+            cp ci/featured-proof/runtime/package.json ci/featured-proof/runtime/package-lock.json "$RUNNER_TEMP/featured-runtime/" &&
+            npm ci --prefix "$RUNNER_TEMP/featured-runtime" --ignore-scripts --no-audit --no-fund); then
             export PROOF_SETUP_FAILURE='Pinned Playwright module setup failed; capture not executed'
           fi
           export NODE_PATH="$RUNNER_TEMP/featured-runtime/node_modules"
@@ -184,9 +177,7 @@ jobs:
     needs: scope
     if: github.event_name == 'pull_request' && needs.scope.outputs.relevant == 'true'
     name: featured-current-source-proof
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 8
     container:
       image: mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d
@@ -220,7 +211,9 @@ jobs:
           node "$RUNNER_TEMP/featured-fixtures.cjs" "$RUNNER_TEMP/featured-current-fixtures"
       - name: Capture twelve current-source views with no app, database or network
         run: |
-          npm install --prefix "$RUNNER_TEMP/featured-runtime" --ignore-scripts --no-audit --no-fund --save-exact playwright@1.58.2
+          mkdir -p "$RUNNER_TEMP/featured-runtime"
+          cp ci/featured-proof/runtime/package.json ci/featured-proof/runtime/package-lock.json "$RUNNER_TEMP/featured-runtime/"
+          npm ci --prefix "$RUNNER_TEMP/featured-runtime" --ignore-scripts --no-audit --no-fund
           export NODE_PATH="$RUNNER_TEMP/featured-runtime/node_modules"
           # Resolve only the pinned runtime module, not the app's newer Playwright.
           cp ci/featured-proof/capture-current.cjs "$RUNNER_TEMP/featured-current-capture.cjs"
@@ -243,9 +236,7 @@ jobs:
     name: featured-proof
     needs: [scope, capture, current-source]
     if: always()
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Report the required-check conclusion

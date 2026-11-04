@@ -622,7 +622,7 @@ test("both Environment gate jobs inherit contents and Actions read permissions",
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
+  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read(?: #[^\n]*)?\n/m);
   // The post-deploy `release` call (release.yml) is the only job override: it
   // needs only Actions read for promotion proof and contents write to tag/release.
   const release = workflow.slice(workflow.indexOf("\n  release:\n"));
@@ -706,20 +706,19 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
   }
 });
 
-test("manual production workflow routes runners by repo visibility and uses production-only secrets", () => {
+test("manual production workflow runs on explicit GitHub-hosted Linux and uses production-only secrets", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
+  const runsOn = "runs-on: ubuntu-latest\n";
   // preflight, staging-soak, regression, deploy-production,
   // post-deploy-watch and notify.
   assert.equal(workflow.split(runsOn).length - 1, 6);
   assert.equal(
     workflow.split("ubuntu-latest").length - 1,
     6,
-    "ubuntu-latest only as the public-repo branch",
+    "every ubuntu-latest mention is a runs-on line",
   );
   // Staging credentials appear only in the staging-soak job, which binds
   // the staging Environment, runs no wrangler and makes one gate call.
@@ -927,7 +926,7 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   assert.ok(!workflow.includes("push:"));
   assert.ok(!workflow.includes("pull_request:"));
   assert.ok(!workflow.includes("workflow_run:"));
-  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read\n/m);
+  assert.match(workflow, /^permissions:\n  contents: read\n  actions: read(?: #[^\n]*)?\n/m);
   assert.ok(
     !/^ {4,}permissions:/m.test(workflow),
     "job overrides must not drop inherited Actions read",
@@ -958,14 +957,14 @@ test("rollback workflow reuses the production gate with no wider permissions", (
     (workflow.match(/run: node ci\/production-deploy-gate\.mjs --version-id\n/g) ?? []).length,
     2,
   );
-  // Same visibility-aware runners as the production deploy workflow:
+  // Same explicit hosted runners as the production deploy workflow:
   // preflight, rollback-production and notify.
-  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
+  const runsOn = "runs-on: ubuntu-latest\n";
   assert.equal(workflow.split(runsOn).length - 1, 3);
   assert.equal(
     workflow.split("ubuntu-latest").length - 1,
     3,
-    "ubuntu-latest only as the public-repo branch",
+    "every ubuntu-latest mention is a runs-on line",
   );
   // Each environment gets only its own credentials: production secrets only
   // when the environment is exactly production, staging (repo-level)
@@ -1521,10 +1520,7 @@ test("each gradual stage also judges the new version's live error rate before ro
   assert.equal((action.match(/id: error-rate-(5|50|100)\n/g) ?? []).length, 3);
   // End-of-line anchor: a trailing `|| true` on the run line would
   // neutralize the gate while an unanchored count stays green.
-  assert.equal(
-    (action.match(/node "\$\{\{ github\.action_path \}\}\/error-rate-gate\.mjs"$/gm) ?? []).length,
-    3,
-  );
+  assert.equal((action.match(/node "\$ACTION_PATH\/error-rate-gate\.mjs"$/gm) ?? []).length, 3);
   // The gate reads analytics with the same caller-supplied token/account
   // pair as the wrangler steps; the rehearsal-only fixture override must
   // never be reachable from the production promotion path.

@@ -60,12 +60,14 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
       - id: scope
+        env:
+          HEAD_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           set -euo pipefail
-          HEAD_SHA="${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}"
           # A manual dispatch always runs the journeys; a deploy with no
           # parent (practically impossible on main) fails closed.
-          if [ "${{ github.event_name }}" = workflow_dispatch ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
+          if [ "$EVENT_NAME" = workflow_dispatch ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi

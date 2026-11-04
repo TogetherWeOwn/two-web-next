@@ -50,9 +50,7 @@ concurrency:
 jobs:
   backup:
     name: backup
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 20
     # Required reviewers + main-only branch policy are live repo settings on
     # the `production` Environment, not YAML.

@@ -259,10 +259,10 @@ describe("staging deployment selection", () => {
     expect(deployWorkflow).toContain("default: hono");
     expect(deployWorkflow).toContain("- hono\n          - archive\n          - archive-static");
     expect(deployWorkflow).toContain(
-      "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}",
+      "KIT_ROUTE_ARCHIVE: ${{ steps.kit-route-flags.outputs.archive }}",
     );
     expect(deployWorkflow).toContain(
-      "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}",
+      "KIT_ROUTE_STATIC: ${{ steps.kit-route-flags.outputs.static }}",
     );
     expect(deployWorkflow).toContain("--config web/wrangler.staging.jsonc");
     expect(deployWorkflow).not.toContain("--config wrangler.jsonc --tag");

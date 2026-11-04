@@ -74,8 +74,8 @@ const tailCommand = `${step("Re-verify exact-SHA full CI before Tail Worker depl
 const deployGateCommand = step("Re-verify exact-SHA full CI before Worker deploy");
 const defaultRouteFlags = kitRouteFlagsForFamily("hono");
 const deployCommand = `${deployGateCommand}\n${step("Deploy to Cloudflare Workers")
-  .replaceAll("${{ steps.kit-route-flags.outputs.archive }}", defaultRouteFlags.archive)
-  .replaceAll("${{ steps.kit-route-flags.outputs.static }}", defaultRouteFlags.static)}`;
+  .replaceAll("$KIT_ROUTE_ARCHIVE", defaultRouteFlags.archive)
+  .replaceAll("$KIT_ROUTE_STATIC", defaultRouteFlags.static)}`;
 
 function executeStaging(ctx, evidence, changes = {}) {
   const dir = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "staging-gate-"));
@@ -583,12 +583,10 @@ test("workflow wires the tested gate before both mutations and preserves staging
     /github.event.workflow_run.head_repository.full_name == github.repository/,
   );
   assert.match(workflow, /github.event.workflow_run.conclusion == 'success'/);
-  assert.match(workflow, /contents: read\n  actions: read/);
+  assert.match(workflow, /contents: read\n  actions: read(?: #[^\n]*)?\n/);
   assert.ok(
-    workflow.includes(
-      "runs-on: ${{ github.event.repository.private && fromJSON('[\"self-hosted\",\"two-selfhosted\"]') || 'ubuntu-latest' }}",
-    ),
-    "Private repo deploys on the self-hosted fleet; public repo on GitHub-hosted",
+    workflow.includes("runs-on: ubuntu-latest\n"),
+    "Staging deploy runs on explicit GitHub-hosted Linux",
   );
   // Digest-pinned, never the bare mutable tag: the named tag stays readable
   // and any refreshed sha256 passes, but dropping the pin fails here.

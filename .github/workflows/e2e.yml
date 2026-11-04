@@ -32,8 +32,7 @@ on:
 permissions:
   contents: read
   # The scope job lists the PR's changed files via the API.
-  pull-requests: read
-
+  pull-requests: read # List changed PR files for the trusted scope classifier.
 # Schedule and dispatch runs get their own groups (as in ci.yml): with the
 # default queue a newly queued run cancels any pending run in its group, so a
 # nightly or dispatch sharing main's group would replace a waiting push run.
@@ -160,7 +159,7 @@ jobs:
     timeout-minutes: 25
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17@sha256:3b0cda93be7c8dba2ed484d19393d93845dc3dafb88973e248ba8e6d99d784e1
         env:
           POSTGRES_USER: agent_test
           POSTGRES_DB: two_web_next

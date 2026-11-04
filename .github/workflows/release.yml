@@ -59,9 +59,7 @@ jobs:
     permissions:
       actions: read # Read only this repository's promotion evidence.
       contents: write # Create the tag and its GitHub Release.
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     # One release at a time; a queued promote waits instead of racing the tag.
     concurrency:
@@ -92,8 +90,7 @@ jobs:
         uses: TogetherWeOwn/.github/actions/calver@cf983076f568407ce2dceb6eeabd1beb2e1e28c6 # shared CalVer releaser
         with:
           request: ${{ steps.request.outputs.request }}
-          runs-on-json: ${{ github.event.repository.private && vars.CI_OVERFLOW_RUNNER || '"ubuntu-latest"' }}
-          private-runner-json: ${{ vars.CI_OVERFLOW_RUNNER }}
+          runs-on-json: '"ubuntu-latest"'
       # One in-job retry after a short wait: the releaser's GitHub client makes
       # each API call once, so a single transient fetch failure would
       # otherwise strand a deployed commit untagged. A failed-jobs rerun
@@ -113,8 +110,7 @@ jobs:
         uses: TogetherWeOwn/.github/actions/calver@cf983076f568407ce2dceb6eeabd1beb2e1e28c6 # shared CalVer releaser
         with:
           request: ${{ steps.request.outputs.request }}
-          runs-on-json: ${{ github.event.repository.private && vars.CI_OVERFLOW_RUNNER || '"ubuntu-latest"' }}
-          private-runner-json: ${{ vars.CI_OVERFLOW_RUNNER }}
+          runs-on-json: '"ubuntu-latest"'
       - name: Select the planned release
         id: planned
         if: ${{ !cancelled() && (steps.plan.outcome == 'success' || steps.plan-retry.outcome == 'success') }}
@@ -156,8 +152,7 @@ jobs:
         uses: TogetherWeOwn/.github/actions/calver@cf983076f568407ce2dceb6eeabd1beb2e1e28c6 # shared CalVer releaser
         with:
           request: ${{ steps.publish-request.outputs.request }}
-          runs-on-json: ${{ github.event.repository.private && vars.CI_OVERFLOW_RUNNER || '"ubuntu-latest"' }}
-          private-runner-json: ${{ vars.CI_OVERFLOW_RUNNER }}
+          runs-on-json: '"ubuntu-latest"'
       - name: Build the publish retry request
         id: publish-retry-request
         if: ${{ !cancelled() && steps.publish.outcome == 'failure' }}
@@ -179,5 +174,4 @@ jobs:
         uses: TogetherWeOwn/.github/actions/calver@cf983076f568407ce2dceb6eeabd1beb2e1e28c6 # shared CalVer releaser
         with:
           request: ${{ steps.publish-retry-request.outputs.request }}
-          runs-on-json: ${{ github.event.repository.private && vars.CI_OVERFLOW_RUNNER || '"ubuntu-latest"' }}
-          private-runner-json: ${{ vars.CI_OVERFLOW_RUNNER }}
+          runs-on-json: '"ubuntu-latest"'

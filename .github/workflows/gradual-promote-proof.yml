@@ -36,7 +36,7 @@ jobs:
     # Only the reviewed harness on main may run; a branch copy can never
     # dispatch against the synthetic target.
     if: github.ref == 'refs/heads/main'
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 30
     environment:
       name: staging

@@ -14,8 +14,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
-
+  actions: read # Pass the rollback workflow its required evidence/Environment read grant.
 concurrency:
   group: staging-rollback-drill
   cancel-in-progress: false
@@ -27,8 +26,7 @@ jobs:
     # Staging-only drill: bind the staging Environment so the staging
     # Cloudflare secrets below resolve under its branch policy.
     environment: staging
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 40
     outputs:
       live: ${{ steps.versions.outputs.live }}
@@ -138,7 +136,7 @@ jobs:
     # the previous version and the restore brought the live version back.
     needs: [plan, rollback, restore]
     if: ${{ always() }}
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Require both legs

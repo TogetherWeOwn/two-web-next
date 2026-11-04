@@ -23,8 +23,7 @@ on:
 
 permissions:
   contents: read
-  actions: read
-
+  actions: read # Read exact-SHA full CI evidence before staging mutations.
 jobs:
   deploy-staging:
     name: deploy-staging
@@ -37,20 +36,14 @@ jobs:
     concurrency:
       group: deploy-staging
       cancel-in-progress: false
-    # The org's two-selfhosted runner group refuses public repositories, so a
-    # fixed self-hosted label strands this job while the repo is public
-    # (TOG-12326). Public: GitHub-hosted, free for public repos. Private:
-    # back on the self-hosted fleet with no workflow change.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     # Environment secrets and the deployed staging URL. Exact-SHA CI, the
     # staging hold and post-deploy verification are the automated release gates.
     environment:
       name: staging
       url: https://next.togetherweown.com
-    # Self-hosted runners share one Docker host, so wrangler's dev ports
-    # collide across concurrent jobs. A job container has its own network
-    # namespace.
+    # Keep Wrangler and its toolchain in the existing job-private container.
     container:
       # Pinned by digest, like the action SHAs in this file: the image changes
       # only through a reviewed PR, never by the tag moving upstream. This is
@@ -214,10 +207,12 @@ jobs:
         # one. The detach step below removes them explicitly before the jobs
         # Worker attaches, so two consumers never exist. Route flags come only
         # from the validated workflow input and default to Hono ownership.
-        run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}" --var "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}" --var "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}"
+        run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}" --var "KIT_ROUTE_ARCHIVE:$KIT_ROUTE_ARCHIVE" --var "KIT_ROUTE_STATIC:$KIT_ROUTE_STATIC"
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          KIT_ROUTE_ARCHIVE: ${{ steps.kit-route-flags.outputs.archive }}
+          KIT_ROUTE_STATIC: ${{ steps.kit-route-flags.outputs.static }}
           # workflow_run's github.sha is main's tip; tag the CI-verified checkout.
           DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       - name: Re-verify exact-SHA full CI before detaching web consumers
