@@ -62,6 +62,62 @@ inert. This verifies the **named** closure only; it cannot establish that a
 caller-supplied manifest is complete or trusted. No installed manifest, launcher
 or credential-bearing execution is supplied by this reader.
 
+## Kit bundling and inert packaging (not installed)
+
+[The bundler](../ci/candidate-staging-bundle.mjs) closes the actual staging Kit
+entrypoint's generated imports into a single `worker/worker.mjs` module. It uses
+the existing locked esbuild with fixed options, no plugins, no discovered
+candidate tsconfig or build config, no source maps and no persisted build
+metafile. Only `node:` and `cloudflare:` imports may remain external; warnings,
+unsupported imports/loaders, empty output, additional outputs and a Worker over
+16 MiB refuse with a fixed diagnostic. Neither compiling a source file nor
+hashing its output attests its provenance or makes that source trusted.
+
+**Run the bundler only inside the secret-free candidate build sandbox.** Module
+resolution reads candidate files and dependencies. The helper does not supply a
+sandbox, restrict the filesystem or enforce its own wall-clock timeout. The
+installed wrapper must pin source/toolchain, strip credential and build-override
+environments, remove host/control-file/socket access and bound the whole build.
+It must terminate the entire candidate sandbox before the next phase. Never
+import this bundler into credential-bearing uploader/controller tooling.
+
+[The separate inert collector](../ci/candidate-staging-package.mjs) consumes the
+compiled Worker buffer and a stopped sandbox's read-only Kit asset tree. It uses
+only Node builtins and the admission module, not esbuild or candidate package
+resolution. Linux descriptor-relative traversal pins directory ancestors;
+no-follow/nonblocking opens, regular-file/single-link checks, stable metadata and
+exact-length reads refuse links, special files, replacements and truncation.
+It copies all bytes, rejects path/case aliases and hidden files, and bounds depth
+(16), visited nodes (8192), admitted files (4096) and total module/asset bytes
+(16 MiB). Holding the complete tree read-only and stopping all candidate
+processes remain **caller prerequisites**, not facts proved by these checks.
+
+Only the exact regular root `_worker.js`, `_headers` and `.assetsignore` files
+are discarded, never interpreted as routing/header/ignore policy or published as
+assets. The generated `_worker.js` must exist; nested controls, case aliases,
+`_redirects` and `_routes.json` refuse. Public files retain their paths beneath
+`assets/`; no server source, candidate manifest or build tooling is discovered
+there. Worker-first serving configuration still comes from the trusted upload
+constructor, never these control files.
+
+The trusted wrapper may assemble a `two.candidate-build.v1` producer receipt
+from these files only after immutable artifact ID/digest metadata is known.
+The finalizer rehashes canonical sorted records, joins descriptor/Q, CI/build
+run and attempt, numeric repository/head and unexpired artifact, reuses bundle
+admission, and freezes the receipt. The 1-MiB producer-manifest ceiling matches
+the artifact reader; the final public qualification receipt has its separate
+smaller budget. This is **receipt assembly, not attestation**. A matching receipt
+inside a candidate archive has no authority. Independent installed workflow,
+source, sandbox exit, selected-attempt freshness, publishing and receipt-channel
+provenance must still be established by the controller. No workflow currently
+invokes this code or grants it artifact-writing authority.
+
+The repository's actual Kit build has been compiled and collected locally,
+without a credential environment or deployment: 93 files, 3,709,462 total bytes,
+including a 3,276,936-byte bundled Worker and three discarded control files.
+That observed fit is not live runtime, artifact-service ZIP compatibility,
+provider conformance, sandbox-containment or authenticated-suite acceptance.
+
 ## In-memory archive decoder
 
 [The ZIP decoder](../ci/candidate-staging-archive.mjs) first checks the independent
