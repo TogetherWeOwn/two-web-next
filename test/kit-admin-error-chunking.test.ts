@@ -86,7 +86,8 @@ describe("profile and board server chunking", () => {
     for (const module of [
       "src/profiles/pages.tsx",
       "src/hotzones/pages.tsx",
-      "src/hotzones/reads.ts",
+      "src/hotzones/aggregates.ts",
+      "src/hotzones/season.ts",
       "src/kit-hotzones.ts",
       "web/src/lib/ProfileView.svelte",
       "web/src/routes/leaderboards/members/+page.svelte",
