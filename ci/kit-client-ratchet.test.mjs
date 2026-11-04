@@ -14,6 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { gzipSync } from "node:zlib";
 import { parse } from "yaml";
 import { ROUTE_BUDGET, ROUTE_SCOPE } from "./check-kit-route-perf.mjs";
 import {
@@ -197,6 +198,8 @@ function server(options = {}) {
     number: 12,
     title: TITLE,
     draft: true,
+    state: "open",
+    base: { ref: "main", repo: { full_name: repository } },
     body: prBody(sha),
     user: { login: "github-actions[bot]" },
     head: { sha: head, ref: BRANCH, repo: { full_name: repository } },
@@ -240,8 +243,12 @@ function server(options = {}) {
         content: Buffer.from(JSON.stringify(loaded)).toString("base64"),
       };
     }
-    if (path.includes("/pulls?")) return options.existing ? [pr] : [];
-    if (path.includes("/compare/")) return comparison;
+    if (path.includes("/pulls?")) return options.existing ? [structuredClone(pr)] : [];
+    if (path.endsWith("/pulls/12")) return structuredClone(pr);
+    if (path.includes("/compare/")) {
+      options.afterSnapshot?.(pr);
+      return comparison;
+    }
     if (path.endsWith("/git/refs")) {
       if (options.orphan) throw Error("ref already exists");
       return {};
@@ -249,6 +256,8 @@ function server(options = {}) {
     if (path === "/graphql") {
       assert.equal(body.variables.input.expectedHeadOid, options.existing ? head : sha);
       if (options.humanRace) return { errors: [{ message: "expectedHeadOid mismatch" }] };
+      pr.head.sha = next;
+      options.duringCommit?.(pr);
       return { data: { createCommitOnBranch: { commit: { oid: next } } } };
     }
     if (path.endsWith(`/git/ref/heads/${BRANCH}`)) return { object: { sha: next } };
@@ -347,6 +356,59 @@ for (const [name, mutate] of Object.entries({
     await assert.rejects(publish(s));
     assert.equal(s.calls.filter((c) => c.method !== "GET").length, 0);
   });
+
+for (const [name, mutate] of Object.entries({
+  promotion: (pr) => {
+    pr.draft = false;
+  },
+  closure: (pr) => {
+    pr.state = "closed";
+  },
+  "human body change": (pr) => {
+    pr.body += "\nPromotion hold";
+  },
+  "human title change": (pr) => {
+    pr.title += " (held)";
+  },
+  "base change": (pr) => {
+    pr.base.ref = "other";
+  },
+  "head change": (pr) => {
+    pr.head.sha = next;
+  },
+}))
+  test(`late ${name} after a detached draft snapshot prevents a commit`, async () => {
+    const s = server({ existing: true, afterSnapshot: mutate });
+    await assert.rejects(publish(s));
+    assert.equal(s.calls.filter((c) => c.method !== "GET").length, 0);
+  });
+
+test("metadata changed after the final read is reported after the commit, never retried", async () => {
+  const s = server({
+    existing: true,
+    duringCommit: (pr) => {
+      pr.draft = false;
+    },
+  });
+  await assert.rejects(publish(s), /ready PR/);
+  assert.equal(s.calls.filter((c) => c.method !== "GET").length, 1);
+  assert.equal(s.pr.head.sha, next); // Post-write detection is not an atomic metadata lock.
+});
+
+test("promotion hold is durable: in-flight commit settles and later writers refuse the edited body", async () => {
+  const s = server({
+    existing: true,
+    duringCommit: (pr) => {
+      pr.body += "\nPromotion hold";
+    },
+  });
+  await assert.rejects(publish(s), /human PR revision/);
+  assert.equal(s.pr.draft, true);
+  assert.equal(s.pr.head.sha, next);
+  const before = s.calls.filter((c) => c.method !== "GET").length;
+  await assert.rejects(publish(s), /human PR revision/);
+  assert.equal(s.calls.filter((c) => c.method !== "GET").length, before);
+});
 
 test("expected-head refusal protects a human commit racing the last read; never retries or falls back", async () => {
   const s = server({ existing: true, humanRace: true });
@@ -461,6 +523,75 @@ for (const smallCss of [false, true])
     assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
     assert.match(result.stdout, /# fail 0/);
   });
+
+test("successive asymmetric generated CSS ratchets pass the unchanged shipping gates", (t) => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const root = decisionRoot(t);
+  cpSync(join(repo, "ci"), join(root, "ci"), {
+    recursive: true,
+    filter: (source) => !/\/auto-client-ratchet-[a-f0-9]{12}\.md$/.test(source),
+  });
+  cpSync(join(repo, "package.json"), join(root, "package.json"));
+  symlinkSync(join(repo, "node_modules"), join(root, "node_modules"));
+  const f = shippingFixture();
+  for (const [id, r] of [
+    ["aggregate", f.report.measurement.aggregate],
+    ...Object.entries(f.report.measurement.routes),
+  ])
+    for (const kind of ["js", "css"]) {
+      const ceiling =
+        id === "aggregate" ? INITIAL_CLIENT_BUDGET[kind] : f.files[ROUTE_BUDGET].routes[id][kind];
+      r[kind].rawBytes = ceiling.maxRawBytes;
+      r[kind].gzipBytes = ceiling.maxGzipBytes;
+    }
+  for (const [length, entropy, gzip, rawCap, reportSha] of [
+    [1000, 500, 552, 1536, sha],
+    [300, 240, 276, 512, head],
+  ]) {
+    const bytes = Buffer.alloc(length);
+    let state = 0x12345678;
+    for (let i = 0; i < entropy; i += 1) {
+      state ^= state << 13;
+      state ^= state >>> 17;
+      state ^= state << 5;
+      bytes[i] = state & 255;
+    }
+    assert.equal(gzipSync(bytes).length, gzip);
+    f.report.sha = reportSha;
+    Object.assign(f.report.measurement.aggregate.css, { rawBytes: bytes.length, gzipBytes: gzip });
+    const result = propose(f.report, f.files);
+    assert.deepEqual(result.files[CLIENT_FILES[1]].client.css, {
+      maxRawBytes: rawCap,
+      maxGzipBytes: 768,
+      maxFiles: 4,
+    });
+    assert.ok(result.changes.every((c) => c.id === "aggregate" && c.kind === "css"));
+    saveDecision(root, f, f.files, result);
+    for (const path of CLIENT_FILES)
+      writeFileSync(join(root, path), `${JSON.stringify(result.files[path], null, 2)}\n`);
+    assert.deepEqual(approvedClientBudget(root).css, result.files[CLIENT_FILES[1]].client.css);
+    const env = { ...process.env };
+    delete env.NODE_TEST_CONTEXT;
+    const checked = spawnSync(
+      process.execPath,
+      [
+        "--test",
+        "--test-reporter=tap",
+        "ci/budget-fragments.test.mjs",
+        "ci/check-kit-perf.test.mjs",
+      ],
+      {
+        cwd: root,
+        env,
+        encoding: "utf8",
+        timeout: 60000,
+      },
+    );
+    assert.equal(checked.status, 0, `${checked.stdout}\n${checked.stderr}`);
+    assert.match(checked.stdout, /# fail 0/);
+    f.files = result.files;
+  }
+});
 
 test("initial measured route admission remains pinned independently of the live budget", () => {
   const repo = fileURLToPath(new URL("../", import.meta.url));
@@ -584,6 +715,11 @@ test("generated drafts require independent ready promotion and all normal workfl
   assert.match(body, /exact generated head/);
   assert.match(body, /If they are absent, stop/);
   assert.match(body, /writer refuses further updates once it is ready/);
+  assert.match(body, /persistent "Promotion hold"/);
+  assert.match(body, /including queued\/waiting jobs/);
+  assert.match(body, /pin the final PR head only after those jobs settle/);
+  assert.match(body, /not an atomic PR-state lock/);
+  assert.match(body, /return to draft, keep the hold, drain writers/);
 });
 
 test("ratchet workflow is trusted-main-only with credential-free measurement and a separate bounded writer", () => {

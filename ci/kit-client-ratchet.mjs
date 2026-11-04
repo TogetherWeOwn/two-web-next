@@ -148,10 +148,12 @@ Propose lower client ceilings from a trusted main build. No product or served by
 ## Verification
 
 - Credential-free main build passed aggregate, served-asset and route checks before publishing its measurement.
-- Repository-token create/update events do not trigger PR checks. All automated updates stay draft-only.
-- After the last update, an independently authenticated maintainer must mark this draft ready (GitHub UI or existing authorized CLI identity, never this workflow's repository token).
-- Verify the normal CI, e2e, PR-lint/security checks and required reviews on that exact generated head before merge. If they are absent, stop; do not bypass or substitute older-head results.
-- This draft does not auto-merge. The writer refuses further updates once it is ready.
+- Repository-token create/update events do not trigger PR checks. Supported updates follow the draft hold-and-drain protocol below.
+- Before promotion, an independently authenticated maintainer must append a persistent "Promotion hold" note to this PR body while it is still draft. Keep the edited body: all future writers refuse it; do not restore the automation body.
+- Wait for every already-started client-budget-ratchet writer job to finish, including queued/waiting jobs. An in-flight commit may land after the hold. Re-read and pin the final PR head only after those jobs settle. No workflow setting or credential change is needed.
+- Then mark this draft ready (GitHub UI or existing authorized CLI identity, never this workflow's repository token). Direct ready promotion while a writer is in flight is unsupported: the final metadata read and post-write check are not an atomic PR-state lock.
+- Verify the normal CI, e2e, PR-lint/security checks and required reviews on that exact generated head before merge. If they are absent, stop; do not bypass or substitute older-head results. If a commit races an unsupported promotion, return to draft, keep the hold, drain writers, and promote again independently so normal workflows run on the settled head.
+- This draft does not auto-merge. The writer refuses further updates once it is ready or its body is held; a metadata race after the last read is reported as failure, not rolled back or retried.
 
 ## Attestation
 
@@ -245,19 +247,27 @@ export async function publish({ api, report, repository }) {
   let firstSha = report.sha;
   let previous = base;
   let history = [];
-  if (prs.length) {
-    const pr = prs[0];
+  const validateDraft = (pr) => {
     assert.ok(
-      pr.draft && pr.title === TITLE && pr.user?.login === "github-actions[bot]",
-      "human-owned or ready PR",
+      pr.state === "open" &&
+        pr.draft &&
+        pr.title === TITLE &&
+        pr.user?.login === "github-actions[bot]",
+      "human-owned, closed or ready PR",
     );
     const marker = pr.body?.match(/^<!-- client-budget-ratchet:v1 ([a-f0-9]{40}) -->/);
     assert.ok(marker, "missing automation marker");
-    firstSha = marker[1];
-    assert.equal(pr.body, prBody(firstSha), "human PR revision");
+    assert.equal(pr.body, prBody(marker[1]), "human PR revision");
+    assert.equal(pr.base.ref, "main");
+    assert.equal(pr.base.repo.full_name, repository);
     assert.equal(pr.head.ref, BRANCH);
     assert.equal(pr.head.repo.full_name, repository);
     assert.ok(SHA.test(pr.head.sha));
+    return marker[1];
+  };
+  if (prs.length) {
+    const pr = prs[0];
+    firstSha = validateDraft(pr);
     head = pr.head.sha;
     const comparison = await api("GET", `${prefix}/compare/${firstSha}...${head}`);
     assert.equal(comparison.status, "ahead");
@@ -309,7 +319,13 @@ export async function publish({ api, report, repository }) {
     // A stable ref plus workflow concurrency prevents duplicate PRs. An orphan
     // or human branch is never adopted or overwritten: creation must succeed.
     await api("POST", `${prefix}/git/refs`, { ref: `refs/heads/${BRANCH}`, sha: head });
+  } else {
+    const live = await api("GET", `${prefix}/pulls/${prs[0].number}`);
+    assert.equal(validateDraft(live), firstSha, "changed automation source");
+    assert.equal(live.head.sha, head, "changed PR head");
   }
+  // PR metadata cannot be locked atomically with a commit. Promotion must first
+  // hold the body and drain in-flight writers (see the generated PR protocol).
   // GitHub performs an atomic expected-head check, including human races after
   // the reads above. No force update and no token is persisted in git config.
   const created = await api("POST", "/graphql", {
@@ -330,7 +346,16 @@ export async function publish({ api, report, repository }) {
   assert.ok(!created.errors, "commit compare-and-swap refused");
   const sha = created.data?.createCommitOnBranch?.commit?.oid;
   assert.ok(SHA.test(sha), "missing created commit");
-  if (prs.length) return { status: "updated", sha, number: prs[0].number };
+  if (prs.length) {
+    const live = await api("GET", `${prefix}/pulls/${prs[0].number}`);
+    assert.equal(
+      validateDraft(live),
+      firstSha,
+      "PR changed during commit; stop promotion and recheck exact-head gates",
+    );
+    assert.equal(live.head.sha, sha, "PR changed during commit");
+    return { status: "updated", sha, number: prs[0].number };
+  }
   const live = await api("GET", `${prefix}/git/ref/heads/${BRANCH}`);
   assert.equal(live.object.sha, sha, "branch changed before PR creation");
   const pr = await api("POST", `${prefix}/pulls`, {

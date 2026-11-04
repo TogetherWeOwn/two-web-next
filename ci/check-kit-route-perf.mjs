@@ -91,11 +91,12 @@ export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
     "viteSha256",
     "serverSha256",
     "nodeCount",
+    "unusedNodes",
     "bootstrap",
     "stylesheets",
     "routes",
   ]);
-  assert.equal(evidence.version, 1);
+  assert.equal(evidence.version, 2);
   assert.equal(evidence.viteSha256, sha256(manifestBytes), "stale Vite evidence");
   assert.equal(
     evidence.serverSha256,
@@ -209,6 +210,12 @@ export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
       assets: selected,
     };
   };
+  assert.ok(Array.isArray(evidence.unusedNodes), "missing unused node inventory");
+  const referencedNodes = new Set([0, 1]); // Kit retains root layout/error for 404s.
+  const unusedNodes = new Set(evidence.unusedNodes);
+  assert.equal(unusedNodes.size, evidence.unusedNodes.length, "duplicate unused node");
+  for (const index of unusedNodes)
+    assert.ok(Number.isSafeInteger(index) && nodes.has(index), "invalid unused node");
   const routes = {};
   for (const route of [...evidence.routes].sort((a, b) => a.id.localeCompare(b.id, "en"))) {
     keys(route, ["id", "page"]);
@@ -239,14 +246,23 @@ export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
       };
       for (const index of indexes) {
         assert.ok(Number.isSafeInteger(index) && nodes.has(index), "invalid route node index");
+        assert.ok(!unusedNodes.has(index), "route node marked unused");
+        referencedNodes.add(index);
         visit(nodes.get(index));
       }
+      // Conservatively charge every unused emitted node and its full closure to
+      // every page. Nothing is excluded from aggregate totals or orphan checks.
+      for (const index of unusedNodes) visit(nodes.get(index));
       for (const file of bootstrap) visit(byFile.get(file));
       for (const css of evidence.stylesheets) files.add(css);
     }
     for (const file of files) used.add(file);
     routes[route.id] = { js: summarize(files, "js"), css: summarize(files, "css") };
   }
+  same(
+    [...unusedNodes],
+    [...nodes.keys()].filter((index) => !referencedNodes.has(index)),
+  );
   same([...used], [...assets]); // orphan graph chunks cannot silently pass
   return {
     version: 1,

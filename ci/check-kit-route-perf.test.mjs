@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { spawnSync } from "node:child_process";
 import { mkdtempSync, mkdirSync, readFileSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,8 +61,9 @@ function fixture(t) {
     error: { file: "_app/immutable/error-template.js" },
   };
   const evidence = {
-    version: 1,
+    version: 2,
     nodeCount: 4,
+    unusedNodes: [],
     bootstrap: [manifest.start.file, manifest.app.file],
     stylesheets: [],
     routes: [
@@ -355,6 +357,26 @@ const invalid = {
     f.manifest.app.dynamicImports.pop();
     f.save();
   },
+  "missing unused node inventory": (f) => {
+    delete f.evidence.unusedNodes;
+    f.save();
+  },
+  "invalid unused node": (f) => {
+    f.evidence.unusedNodes = [99];
+    f.save();
+  },
+  "duplicate unused node": (f) => {
+    f.evidence.unusedNodes = [3, 3];
+    f.save();
+  },
+  "route node labeled unused": (f) => {
+    f.evidence.unusedNodes = [2];
+    f.save();
+  },
+  "old evidence version": (f) => {
+    f.evidence.version = 1;
+    f.save();
+  },
   "new missing node": (f) => {
     f.evidence.nodeCount += 1;
     f.save();
@@ -402,6 +424,104 @@ for (const [name, mutate] of Object.entries(invalid))
     mutate(f);
     assert.equal(checkRoutes(f.root).exitCode, 2);
   });
+
+test("real Kit layout-reset output maps compact server nodes without dropping unused emissions", (t) => {
+  const root = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), "route-reset-"));
+  t.after(() => rmSync(root, { recursive: true, force: true }));
+  const put = (p, text) => {
+    mkdirSync(join(root, p, ".."), { recursive: true });
+    writeFileSync(join(root, p), text);
+  };
+  put("package.json", '{"type":"module","private":true}');
+  mkdirSync(join(root, "web"));
+  symlinkSync(
+    new URL("../web/node_modules", import.meta.url).pathname,
+    join(root, "web/node_modules"),
+  );
+  put(
+    "web/vite.config.js",
+    `import { sveltekit } from '@sveltejs/kit/vite'; export default { plugins: [sveltekit()] };`,
+  );
+  put(
+    "web/src/app.html",
+    "<!doctype html><html><head>%sveltekit.head%</head><body><div>%sveltekit.body%</div></body></html>",
+  );
+  put(
+    "web/src/routes/+layout.svelte",
+    "<script>let {children}=$props();</script>{@render children()}",
+  );
+  put("web/src/routes/+page.svelte", "<h1>Home</h1>");
+  put(
+    "web/src/routes/a/+layout.svelte",
+    "<script>let {children}=$props();</script><aside>Unused</aside>{@render children()}",
+  );
+  put("web/src/routes/a/+page@.svelte", "<h1>Reset</h1>");
+  const build = spawnSync(
+    process.execPath,
+    [join(root, "web/node_modules/vite/bin/vite.js"), "build"],
+    {
+      cwd: join(root, "web"),
+      encoding: "utf8",
+      timeout: 90000,
+    },
+  );
+  assert.equal(build.status, 0, `${build.stdout}\n${build.stderr}`);
+  put(
+    "ci/kit-route-evidence.mjs",
+    readFileSync(new URL("./kit-route-evidence.mjs", import.meta.url)),
+  );
+  const generated = spawnSync(process.execPath, [join(root, "ci/kit-route-evidence.mjs")], {
+    encoding: "utf8",
+    timeout: 10000,
+  });
+  assert.equal(generated.status, 0, generated.stderr);
+  const report = measureRoutes(root);
+  const manifest = JSON.parse(readFileSync(join(root, OUTPUT, "client/.vite/manifest.json")));
+  const evidence = JSON.parse(readFileSync(join(root, OUTPUT, "client-route-evidence.json")));
+  const emitted = Object.keys(manifest).filter((key) =>
+    /client-optimized\/nodes\/\d+\.js$/.test(key),
+  );
+  assert.equal(emitted.length, 5);
+  assert.equal(evidence.routes.find((r) => r.id === "/a").page.leaf, 4);
+  assert.deepEqual(evidence.unusedNodes, [2]);
+  assert.equal(evidence.routes.find((r) => r.id === "/").page.leaf, 3);
+  for (const id of ["/", "/a"]) {
+    assert.ok(report.routes[id].js.assets.includes(manifest[node(2)].file));
+    assert.equal(
+      report.routes[id].js.gzipBytes,
+      report.routes[id].js.assets.reduce(
+        (sum, file) => sum + gzipSync(readFileSync(join(root, OUTPUT, "client", file))).length,
+        0,
+      ),
+    );
+  }
+  assert.ok(report.routes["/a"].js.assets.includes(manifest[node(4)].file));
+  assert.ok(!report.routes["/"].js.assets.includes(manifest[node(4)].file));
+  assert.equal(report.aggregate.js.files, Object.values(manifest).length);
+  const evidencePath = `${OUTPUT}/client-route-evidence.json`;
+  put(evidencePath, JSON.stringify({ ...evidence, unusedNodes: [] }));
+  assert.throws(() => measureRoutes(root), /inventory mismatch/);
+  put(evidencePath, JSON.stringify(evidence));
+  put(`${OUTPUT}/client/_app/immutable/orphan.js`, "unaccounted");
+  assert.throws(() => measureRoutes(root), /inventory mismatch/);
+  // A future Kit loader-syntax change must refuse, never guess an index.
+  const serverPath = `${OUTPUT}/server/manifest-full.js`;
+  const serverText = readFileSync(join(root, serverPath), "utf8");
+  assert.ok(serverText.includes("__memo(() => import('./nodes/0.js'))"));
+  put(
+    serverPath,
+    serverText.replace(
+      "__memo(() => import('./nodes/0.js'))",
+      "__memo(()=>import('./nodes/0.js'))",
+    ),
+  );
+  const unsupported = spawnSync(process.execPath, [join(root, "ci/kit-route-evidence.mjs")], {
+    encoding: "utf8",
+    timeout: 10000,
+  });
+  assert.equal(unsupported.status, 1);
+  assert.match(unsupported.stderr, /unsupported Kit node loader syntax/);
+});
 
 test("headroom uses 25% and ceil-to-step boundaries", () => {
   assert.equal(targetBytes(4096, 512), 5120);

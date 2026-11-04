@@ -644,11 +644,35 @@ for (const kind of ["js", "css"]) {
         );
         const result = runJson(fx.root);
         const check = result.report.groups.find((g) => g.id === `kit.client.${kind}`).checks[0];
-        // Very small byte budgets can make the unchanged file cap unreachable.
-        // Prove the count axis itself, even when gzip framing also binds.
-        const byteBreach =
-          check.rawBytes > check.maxRawBytes || check.gzipBytes > check.maxGzipBytes;
-        const expected = delta || (axis === "files" && byteBreach) ? 1 : 0;
+        // Independent ratchets can make another axis bind first (including
+        // raw before gzip). Prove every diagnostic, not an impossible joint fit.
+        const bodies = fx.bodies[`kit.client.${kind}`];
+        const metrics = {
+          raw: bodies.reduce((sum, body) => sum + body.length, 0),
+          gzip: bodies.reduce((sum, body) => sum + gzipSync(body).length, 0),
+          files: bodies.length,
+        };
+        const caps = JSON.parse(shippingBudgetText).client[kind];
+        for (const [metric, capKey] of [
+          ["raw", "maxRawBytes"],
+          ["gzip", "maxGzipBytes"],
+          ["files", "maxFiles"],
+        ]) {
+          const diagnostic =
+            metric === "files"
+              ? `${metrics[metric]} files over ${caps[capKey]}`
+              : `${metric} ${metrics[metric]}B over ${caps[capKey]}B`;
+          assert.equal(
+            result.errors.some((line) => line.includes(diagnostic)),
+            metrics[metric] > caps[capKey],
+          );
+        }
+        const expected =
+          metrics.raw > caps.maxRawBytes ||
+          metrics.gzip > caps.maxGzipBytes ||
+          metrics.files > caps.maxFiles
+            ? 1
+            : 0;
         assert.equal(result.code, expected, result.errors.join("\n"));
         assert.equal(result.errors.length, expected);
         if (axis === "files")
