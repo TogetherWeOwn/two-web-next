@@ -218,6 +218,7 @@ function server(options = {}) {
   };
   const calls = [];
   let mainReads = 0;
+  let branchHead = head;
   const api = async (method, path, body) => {
     calls.push({ method, path, body });
     if (options.failPermission && method !== "GET") throw Error("GitHub failed (403)");
@@ -256,11 +257,12 @@ function server(options = {}) {
     if (path === "/graphql") {
       assert.equal(body.variables.input.expectedHeadOid, options.existing ? head : sha);
       if (options.humanRace) return { errors: [{ message: "expectedHeadOid mismatch" }] };
-      pr.head.sha = next;
+      branchHead = options.branchAfterCommit ?? next;
+      if (!options.laggingPrHead) pr.head.sha = next;
       options.duringCommit?.(pr);
       return { data: { createCommitOnBranch: { commit: { oid: next } } } };
     }
-    if (path.endsWith(`/git/ref/heads/${BRANCH}`)) return { object: { sha: next } };
+    if (path.endsWith(`/git/ref/heads/${BRANCH}`)) return { object: { sha: branchHead } };
     if (path.endsWith("/pulls") && method === "POST") return { number: 12 };
     throw Error(`unexpected API call ${method} ${path}`);
   };
@@ -317,6 +319,39 @@ test("an existing unchanged bot draft updates atomically, without duplicate PRs 
     assertLowerOnly(s.previous, nextFiles);
   }
 });
+
+test("an update accepts a lagging PR head only when the authoritative branch matches the created commit", async () => {
+  const s = server({ existing: true, laggingPrHead: true });
+  assert.deepEqual(await publish(s), { status: "updated", sha: next, number: 12 });
+  assert.equal(s.pr.head.sha, head);
+  assert.equal(s.calls.filter((c) => c.method !== "GET").length, 1);
+  assert.equal(s.calls.filter((c) => c.path.endsWith("/pulls/12")).length, 2);
+  assert.equal(s.calls.at(-1).path, `/repos/${repository}/git/ref/heads/${BRANCH}`);
+});
+
+for (const laggingPrHead of [false, true])
+  test(`a changed authoritative branch after commit refuses success without retry (PR lag: ${laggingPrHead})`, async () => {
+    const s = server({ existing: true, laggingPrHead, branchAfterCommit: sha });
+    await assert.rejects(publish(s), /branch changed during commit/);
+    assert.equal(s.calls.filter((c) => c.method !== "GET").length, 1);
+  });
+
+for (const [name, mutate] of Object.entries({
+  promotion: (pr) => {
+    pr.draft = false;
+  },
+  closure: (pr) => {
+    pr.state = "closed";
+  },
+  "promotion hold": (pr) => {
+    pr.body += "\nPromotion hold";
+  },
+}))
+  test(`a lagging PR head does not bypass post-commit metadata checks (${name})`, async () => {
+    const s = server({ existing: true, laggingPrHead: true, duringCommit: mutate });
+    await assert.rejects(publish(s), /ready PR|human PR revision/);
+    assert.equal(s.calls.filter((c) => c.method !== "GET").length, 1);
+  });
 
 for (const options of [{ stale: true }, { raceMain: true }])
   test(`stale main skips without any writes (${JSON.stringify(options)})`, async () => {

@@ -353,7 +353,9 @@ export async function publish({ api, report, repository }) {
       firstSha,
       "PR changed during commit; stop promotion and recheck exact-head gates",
     );
-    assert.equal(live.head.sha, sha, "PR changed during commit");
+    // PR head metadata may lag a successful commit; the branch ref is authoritative.
+    const ref = await api("GET", `${prefix}/git/ref/heads/${BRANCH}`);
+    assert.equal(ref.object.sha, sha, "branch changed during commit");
     return { status: "updated", sha, number: prs[0].number };
   }
   const live = await api("GET", `${prefix}/git/ref/heads/${BRANCH}`);

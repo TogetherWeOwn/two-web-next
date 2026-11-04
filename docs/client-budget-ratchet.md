@@ -36,9 +36,11 @@ repository token. No new credential or workflow/repository setting is required.
 
 Direct promotion while a writer is in flight is unsupported. The writer checks
 open/draft state, ownership, title, body, base and head immediately before its
-commit, and checks metadata and the resulting head again afterward. These reads
-reject stale snapshots and report late races, but cannot make the PR metadata
-transactional with GitHub's commit mutation. Only `expectedHeadOid` is atomic.
+commit, and checks PR metadata and the authoritative branch ref afterward. The
+post-write PR snapshot may still show the previous head; it is not used to verify
+the created commit. A changed branch ref or invalid metadata refuses success.
+These reads report late races but cannot make the PR metadata transactional with
+GitHub's commit mutation. Only `expectedHeadOid` is atomic.
 A post-write refusal does not undo a commit and never retries or force-pushes.
 If a commit races an unsupported promotion, return the PR to draft, retain the
 body hold, drain writers, and independently promote the settled head again so
