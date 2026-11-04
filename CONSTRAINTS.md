@@ -38,6 +38,14 @@ the CI log and the job summary, so exemptions are tracked in the open.
 Threshold rows pair by label, then by Checked-by cell: renaming a dimension
 while lowering it, or deleting the row, fails the gate.
 
+## Product-safe performance work
+
+No features, content, accessibility or design are cut to save bytes. A size-driven design trade-off needs a product/UX decision, not only a perf PR.
+
+Summed-gzip chunk regrouping alone is not code savings. Duplicate Hono removal
+follows the existing route migration work, not scope expansion in a performance
+PR. Preserve security headers, tests and all existing visitor-facing gates.
+
 ## Enforced with numbers
 
 | Dimension | Rule | Checked by | Runs at |
