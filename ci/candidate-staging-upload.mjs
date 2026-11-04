@@ -171,6 +171,31 @@ function bundleSnapshot(input, identity) {
   };
 }
 
+// Shared asset admission keeps the same profile, verifier and byte predicates
+// as version construction. The sender constructs this snapshot itself; a plan
+// supplied by a caller is never accepted as transport authority.
+export function prepareCandidateAssetInput(options) {
+  try {
+    requireEvidence(keys(options, "identity,bundle,profile,profileSha256,verifier,now"));
+    const identity = identitySnapshot(options.identity);
+    const profile = profileSnapshot(options.profile, options.profileSha256);
+    const run = verifierSnapshot(options.verifier, identity, options.now);
+    const bundle = bundleSnapshot(options.bundle, identity);
+    return {
+      accountId: profile.accountId,
+      scriptName: profile.scriptName,
+      entries: bundle.entries.filter((entry) => entry.path.startsWith("assets/")),
+      q: identity.q,
+      bundleRootSha256: bundle.root,
+      assetRootSha256: bundle.assetRoot,
+      issuedAt: run.issuedAt,
+      expiresAt: run.expiresAt,
+    };
+  } catch {
+    throw new Error("Candidate assets refused: input");
+  }
+}
+
 export function prepareCandidateWebUpload(options) {
   try {
     requireEvidence(

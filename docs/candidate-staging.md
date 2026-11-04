@@ -159,6 +159,58 @@ transport and activation/recovery integration remain unimplemented. Ordinary
 Wrangler upload remains unsuitable because it retains secrets by default; this
 constructor does not make a live candidate safe merely by omitting those secrets.
 
+## Trusted static-assets transport (not installed or activated)
+
+[The asset adapter](../ci/candidate-staging-assets.mjs) constructs and sends the
+fixed staging web Worker's asset-session request, then only the requested
+allowlisted asset hashes. Nothing invokes it from a workflow yet; all transport
+verification uses mocked responses. It never selects or deploys a version, runs
+candidate code, reads candidate configuration or discovers dependencies in the
+candidate bundle. It and its dependency tree must be installed from trusted T.
+
+Admission reuses the version constructor's profile pin, full descriptor/Q,
+verifier/deadline and independent bundle rehash/copy checks. Manifest paths and
+sizes come only from those copied asset bytes. Hashes follow the installed
+Wrangler protocol: BLAKE3 of base64 bytes plus extension, truncated to 32 hex
+characters. The existing lockfile's `blake3-wasm` and `mime` dependencies are
+reused without installation or a dependency change. MIME lookup uses the locked
+`mime` 1.6 lookup table, not Wrangler's bundled newer table; future installed
+producer/manifest admission must establish parity for actual file types. Unknown
+extensions use the protocol's `application/null` sentinel; `text/*` types include
+Wrangler's UTF-8 charset metadata in both protocols. Control paths
+`_worker.js`, `_headers` and `_redirects` refuse rather than acquire routing or
+source-publishing semantics. Equal byte/type hashes deduplicate, never ambiguous
+collisions. A module-only bundle creates no session and returns a null ticket.
+
+The provider API bearer is sent only to the fixed session endpoint. Bucket
+requests use only the session capability, at the fixed same-account asset upload
+endpoint; no remote URL or redirect is followed. Provider-selected bulk mode
+uses base64 multipart files; single mode uses raw-byte Blobs. Every requested
+hash must exist in the admitted manifest, appear only once, and belong to a
+nonempty bounded bucket. Uploads are serial, with no retry or renewed QA expiry,
+a 120-second overall signal, 10-second request signals, a 176128-byte response
+bound derived from the maximum hash/bucket count and capability/envelope overhead,
+strict JSON success envelopes, and monotonic wall-clock/original QA-deadline
+checks before and after requests. Stream errors, failed/cancelled requests,
+malformed or missing completion capabilities and any failed bucket refuse a
+ticket, even if an earlier bucket succeeded. Capability expiry/shape is checked;
+decoded claims are not signature verification. Authority is the adapter's
+fixed-origin provider response, not a candidate-supplied JWT. Conflicting
+completion capabilities refuse rather than choosing one silently.
+
+Only a fully successful transport returns an in-memory ticket joined to Q and
+the entire bundle/asset SHA-256 roots, directly consumable by the inert version
+constructor. The ticket is a capability, not a public receipt: never log, persist
+or publish it. Provider response/error text is replaced by a fixed refusal.
+Client protocol fixtures and hash joins are not provider readback, capability
+scope validation, synthetic-data admission, restoration evidence or native
+Security clearance. A failed upload can leave inert content-addressed assets;
+the installed controller must already hold exclusion and durable dirty occupancy
+before calling this mutating adapter. Trusted build/producer integration,
+provider version sender/readback, global exclusion and complete verified B and
+next-ordinary-upload restoration remain unimplemented. No live use is permitted
+merely because these isolated fixtures pass.
+
 ## Durable occupancy journal and recovery boundary
 
 [The journal](../ci/candidate-staging-occupancy.mjs) implements a narrow GitHub
