@@ -2,7 +2,8 @@ import type { Context } from "hono";
 import { generateCookie } from "hono/cookie";
 import { parseSigned } from "hono/utils/cookie";
 import type { Env } from "./env";
-import { qaRunContext, qaRunNamespaceMatches } from "./qa-run-auth";
+import { securityHeadersFor } from "./headers";
+import { qaRunContext, qaRunCookieTtl, qaRunNamespaceMatches } from "./qa-run-auth";
 import { createQaRunSessionBoundary, type QaRunSessionGrant } from "./qa-run-session";
 import { SESSION_COOKIE } from "./session-cookie";
 import { isValidSessionToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
@@ -18,6 +19,66 @@ export function qaRunConfigured(env: Pick<Env, "QA_RUN_AUTH">): boolean {
 
 export function qaRunRequestFor(request: Request, env: SessionAdmissionEnv) {
   return { binding: env.QA_RUN_AUTH, requestUrl: request.url, appUrl: env.APP_URL };
+}
+
+// One response fence for both renderers. Buffer only an active qualification:
+// a streamed/member render or post-release await must not deliver authority
+// after E. Ordinary responses, including streaming, keep their exact behavior.
+export function qaRunResponseFor(env: SessionAdmissionEnv) {
+  return async (request: Request, render: () => Promise<Response>): Promise<Response> => {
+    if (!qaRunConfigured(env)) return render();
+    const binding = env.QA_RUN_AUTH;
+    const context = await qaRunContext(binding, request.url, env.APP_URL);
+    // Invalid/expired requests retain the routes' guest/status/refusal behavior;
+    // every auth consumer independently refuses them before store admission.
+    if (!context) return render();
+    const refused = () =>
+      new Response("Not Found", {
+        status: 404,
+        headers: {
+          ...Object.fromEntries(
+            securityHeadersFor({ path: new URL(request.url).pathname, method: request.method }),
+          ),
+          "cache-control": "no-store, private",
+          "content-type": "text/plain; charset=UTF-8",
+          "x-robots-tag": "noindex, nofollow",
+        },
+      });
+    if (request.signal.aborted) return refused();
+    let response: Response;
+    let body: ArrayBuffer;
+    try {
+      response = await render();
+      body = await response.arrayBuffer();
+    } catch {
+      // A failed/cancelled stream must not escape to a renderer error handler
+      // that can merge the old auth headers back into its error response.
+      return refused();
+    }
+    const current = await qaRunContext(env.QA_RUN_AUTH, request.url, env.APP_URL);
+    if (!current || binding !== env.QA_RUN_AUTH || request.signal.aborted) return refused();
+    const ttl = qaRunCookieTtl(current);
+    if (ttl === null) return refused();
+    const headers = new Headers(response.headers);
+    const cookies = headers.getSetCookie();
+    headers.delete("set-cookie");
+    headers.delete("content-length");
+    headers.set("cache-control", "no-store, private");
+    for (const cookie of cookies) {
+      headers.append(
+        "set-cookie",
+        cookie.replace(
+          /(;\s*max-age=)(\d+)/i,
+          (_match, prefix, age) => prefix + Math.min(Number(age), ttl),
+        ),
+      );
+    }
+    return new Response(response.body === null ? null : body, {
+      status: response.status,
+      statusText: response.statusText,
+      headers,
+    });
+  };
 }
 
 // Qualification cookies are canonical, opaque values. Read exactly one named

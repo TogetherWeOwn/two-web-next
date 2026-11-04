@@ -15,7 +15,20 @@ type RequiredSecret = (typeof REQUIRED_SECRETS)[number];
 // multibyte boundary counting is deliberately unpinned.
 export const SESSION_SECRET_MIN_LENGTH = 32;
 
-export type ConfigReadiness = { config?: "missing" | "weak" };
+import type { Env } from "./env";
+import { qaRunContext } from "./qa-run-auth";
+import { qaRunConfigured } from "./session-admission";
+
+export type ConfigReadiness = { config?: "missing" | "weak"; auth?: "qualification" };
+
+// This is only a bounded QA-auth capability statement. The unchanged DB and
+// migration readiness checks still run; resource containment is not inferred.
+export async function authConfigReadiness(request: Request, env: Env): Promise<ConfigReadiness> {
+  if (!qaRunConfigured(env)) return configReadiness(env);
+  return (await qaRunContext(env.QA_RUN_AUTH, request.url, env.APP_URL))
+    ? { auth: "qualification" }
+    : { config: "missing" };
+}
 
 export function missingSecrets(env: Partial<Record<RequiredSecret, unknown>>): RequiredSecret[] {
   return REQUIRED_SECRETS.filter((name) => {

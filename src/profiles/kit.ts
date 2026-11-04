@@ -19,6 +19,8 @@ import { dbFor, type EnvWithAdminDb } from "../admin/db";
 import { botDatabaseUrl, databaseOptions } from "../db/connection";
 import type { Env } from "../env";
 import { safeNext } from "../join/service";
+import { qaRunJourneyCookie } from "../journey-cookie";
+import { qaRunConfigured, type SessionAdmissionEnv } from "../session-admission";
 import type { KitRequestSession } from "../kit-session";
 import { declareMemberResult } from "../member-reads";
 import { JOURNEY_TTL_SECONDS, LOGIN_INTENDED_COOKIE, type JoinResult } from "../return-journey";
@@ -47,6 +49,7 @@ export type KitProfileRequest = {
 export type KitProfileDeps = {
   store: ProfileStore | null;
   sessionSecret?: string;
+  qaRun?: SessionAdmissionEnv;
   /** Absent (or resolving null) hides the stats block; a read failure resolves
    * to an unavailable marker the view renders, never a refusal of the page. */
   stats?: (memberId: string) => Promise<MemberStats | null>;
@@ -93,7 +96,7 @@ export function kitProfileDeps(env: Env) {
       });
       return readOwnedMemberStats(drizzle(client), id, signal);
     }, memberId);
-  return { storeFor, statsFor, sessionSecret: env.SESSION_SECRET };
+  return { storeFor, statsFor, sessionSecret: env.SESSION_SECRET, qaRun: env };
 }
 
 export async function resolveKitProfile(
@@ -109,13 +112,27 @@ export async function resolveKitProfile(
   if (session.status !== "authenticated" || !session.session) {
     // Legacy model callers have no request to remember. Real loads always
     // supply both inputs; a rejected destination clears abandoned state.
-    if (!req.url || !deps.sessionSecret)
+    if (!req.url || (!deps.sessionSecret && !(deps.qaRun && qaRunConfigured(deps.qaRun))))
       return { kind: "redirect", location: KIT_PROFILE_LOGIN_LOCATION };
     const url = new URL(req.url);
     const dest = safeNext(url.pathname + url.search);
     const options = { path: "/", secure: true, httpOnly: true, sameSite: "Lax" as const };
+    if (deps.qaRun && qaRunConfigured(deps.qaRun)) {
+      const intendedCookie = dest
+        ? await qaRunJourneyCookie(new Request(req.url), deps.qaRun, LOGIN_INTENDED_COOKIE, dest, {
+            ...options,
+            maxAge: JOURNEY_TTL_SECONDS,
+          })
+        : null;
+      return {
+        kind: "redirect",
+        location: KIT_PROFILE_LOGIN_LOCATION,
+        intendedCookie:
+          intendedCookie ?? generateCookie(LOGIN_INTENDED_COOKIE, "", { ...options, maxAge: 0 }),
+      };
+    }
     const intendedCookie = dest
-      ? await generateSignedCookie(LOGIN_INTENDED_COOKIE, dest, deps.sessionSecret, {
+      ? await generateSignedCookie(LOGIN_INTENDED_COOKIE, dest, deps.sessionSecret!, {
           ...options,
           maxAge: JOURNEY_TTL_SECONDS,
         })

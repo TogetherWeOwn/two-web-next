@@ -493,6 +493,8 @@ export interface KitResolveOptions {
 
 export interface HookDispatchDeps {
   appUrl: string;
+  // Qualification-only response-time expiry fence, bound by the real hook.
+  qualificationResponse?: (request: Request, render: () => Promise<Response>) => Promise<Response>;
   // Staging-only rollout controls. The staging APP_URL selects a fail-closed
   // manifest that admits only these reviewed families; unset or malformed
   // values keep every route on Hono. Preview/local parity stays unchanged.
@@ -835,6 +837,14 @@ function releasedAdminRenewsSession(
 // production wiring has no swappable decideOwner seam to mutate to always-Kit.
 // The original Request passes through untouched (identity, body unread).
 export async function dispatchHookRequest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+): Promise<Response> {
+  const render = () => dispatchOwnedHookRequest(event, deps);
+  return deps.qualificationResponse ? deps.qualificationResponse(event.request, render) : render();
+}
+
+async function dispatchOwnedHookRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
 ): Promise<Response> {

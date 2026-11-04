@@ -11,6 +11,7 @@ import {
   kitSessionBridge,
 } from "../../src/kit-session";
 import { dispatchHookRequest } from "../../src/route-ownership";
+import { qaRunResponseFor } from "../../src/session-admission";
 import { dispatchEventDetailRequest } from "../../src/events/kit-detail";
 import { dispatchEventsRequest } from "../../src/kit-events";
 import { dispatchHotzonesRequest } from "../../src/kit-hotzones";
@@ -35,6 +36,7 @@ import { honoFetch } from "#lib/server/hono.ts";
 export const handle: Handle = async ({ event, resolve }) =>
   dispatchHookRequest(event, {
     appUrl: env.APP_URL,
+    qualificationResponse: qaRunResponseFor(env),
     kitRouteArchive: env.KIT_ROUTE_ARCHIVE,
     kitRouteStatic: env.KIT_ROUTE_STATIC,
     featuredImageHosts: env.FEATURED_IMAGE_HOSTS,

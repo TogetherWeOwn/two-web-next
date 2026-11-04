@@ -14,6 +14,8 @@ import {
 } from "./hotzones/board-log";
 import { parseSeasonParam, type SeasonWindow } from "./hotzones/season";
 import { safeNext } from "./join/service";
+import { qaRunJourneyCookie } from "./journey-cookie";
+import { qaRunConfigured } from "./session-admission";
 import {
   boardRows,
   loadMemberRanking,
@@ -139,8 +141,23 @@ const intendedCookieOpts = {
 async function guestIntendedCookie(
   url: string | undefined,
   secret: unknown,
+  env: Env,
 ): Promise<string | undefined> {
   if (url === undefined) return undefined;
+  if (qaRunConfigured(env)) {
+    try {
+      const parsed = new URL(url);
+      const dest = safeNext(parsed.pathname + parsed.search);
+      return dest
+        ? ((await qaRunJourneyCookie(new Request(url), env, LOGIN_INTENDED_COOKIE, dest, {
+            ...intendedCookieOpts,
+            maxAge: JOURNEY_TTL_SECONDS,
+          })) ?? clearIntendedCookie())
+        : clearIntendedCookie();
+    } catch {
+      return clearIntendedCookie();
+    }
+  }
   if (typeof secret !== "string" || secret === "") return undefined;
   let dest: string | null = null;
   try {
@@ -251,7 +268,9 @@ export async function loadMembersBoardData(args: MembersBoardArgs): Promise<{
   // the guest bounce, whose headers the binding owns.
   if (args.session.status === "unknown") refuseWithNoStore(args, membersSessionUnknown());
   if (args.session.status !== "authenticated" || !args.session.userId) {
-    throw membersGuestBounce(await guestIntendedCookie(args.url, args.env.SESSION_SECRET));
+    throw membersGuestBounce(
+      await guestIntendedCookie(args.url, args.env.SESSION_SECRET, args.env),
+    );
   }
   if (!args.session.member) refuseWithNoStore(args, membersForbidden());
   const season = parseSeasonParam(args.seasonParam);

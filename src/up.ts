@@ -25,7 +25,12 @@
 // importers keep working untouched.
 export { upBody, upHttpStatus } from "./up-body";
 export type { UpBody } from "./up-body";
-export { REQUIRED_SECRETS, configReadiness, missingSecrets } from "./up-config";
+export {
+  REQUIRED_SECRETS,
+  authConfigReadiness,
+  configReadiness,
+  missingSecrets,
+} from "./up-config";
 export type { ConfigReadiness } from "./up-config";
 export {
   HEALTH_LOCK_TIMEOUT_MS,

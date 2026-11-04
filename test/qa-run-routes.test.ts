@@ -89,6 +89,7 @@ async function fixture() {
       qaRun: e,
     });
   return {
+    app,
     store,
     env,
     request,
@@ -416,6 +417,212 @@ describe("qualification route integration (memory fixtures, no external services
       expect(valueOf(expired)).toBe("");
     },
   );
+
+  it("reports only qualified auth readiness without keys, retaining DB and ordinary secret floors", async () => {
+    const f = await fixture();
+    const { healthSql } = await import("./helpers/up");
+    const ready = { ...f.env, QUEUE_DEPTH_STORE: healthSql() } as unknown as Env;
+    const result = await f.request("/up", {}, ready);
+    expect(result.status).toBe(200);
+    expect(await result.json()).toMatchObject({
+      auth: "qualification",
+      db: "ok",
+      pending_migrations: 0,
+    });
+    const missingDb = await f.request("/up");
+    expect(missingDb.status).toBe(503);
+    expect(await missingDb.json()).toMatchObject({ auth: "qualification", db: "error" });
+    for (const bad of ["", "{}", binding.replace(q, "f".repeat(64))]) {
+      const refused = await f.request("/up", {}, { ...ready, QA_RUN_AUTH: bad });
+      expect(refused.status).toBe(503);
+      expect(await refused.json()).toMatchObject({ config: "missing" });
+    }
+    const copied = await f.app.request("https://togetherweown.com/up", {}, ready);
+    expect(copied.status).toBe(404); // Outer trusted-host guard refuses first.
+    const { authConfigReadiness } = await import("../src/up-config");
+    expect(await authConfigReadiness(new Request("https://togetherweown.com/up"), ready)).toEqual({
+      config: "missing",
+    });
+    for (const SESSION_SECRET of [undefined, "weak"]) {
+      const ordinary = await f.request("/up", {}, {
+        ...ready,
+        QA_RUN_AUTH: undefined,
+        SESSION_SECRET,
+      } as unknown as Env);
+      expect(ordinary.status).toBe(503);
+      expect(await ordinary.json()).toMatchObject({ config: SESSION_SECRET ? "weak" : "missing" });
+    }
+    f.advance(1470);
+    const expired = await f.request("/up", {}, ready);
+    expect(expired.status).toBe(503);
+    expect(await expired.json()).toMatchObject({ config: "missing" });
+  });
+
+  it.each(["render", "stream"])(
+    "withholds Hono %s output and cookies when an await crosses E",
+    async (phase) => {
+      const f = await fixture();
+      f.app.get("/fixture-expiry", async () => {
+        if (phase === "render") {
+          await Promise.resolve();
+          f.advance(1470);
+        }
+        return new Response(
+          new ReadableStream({
+            start(controller) {
+              if (phase === "stream") f.advance(1470);
+              controller.enqueue(new TextEncoder().encode("private fixture payload"));
+              controller.close();
+            },
+          }),
+          { headers: { "set-cookie": "fixture=private; Max-Age=1470" } },
+        );
+      });
+      const result = await f.request("/fixture-expiry");
+      expect(result.status).toBe(404);
+      expect(await result.text()).toBe("Not Found");
+      expect(result.headers.getSetCookie()).toEqual([]);
+      expect(result.headers.get("cache-control")).toContain("no-store");
+      expect(result.headers.get("x-content-type-options")).toBe("nosniff");
+    },
+  );
+
+  it.each(["error", "cancel"])(
+    "withholds stale Hono headers when a stream fails by %s during draining",
+    async (mode) => {
+      const f = await fixture();
+      const abort = new AbortController();
+      f.app.get(
+        "/fixture-stream-failure",
+        () =>
+          new Response(
+            new ReadableStream({
+              async pull(controller) {
+                await Promise.resolve();
+                f.advance(1470);
+                if (mode === "error") controller.error(new Error("private stream error"));
+                else {
+                  abort.abort();
+                  controller.enqueue(new TextEncoder().encode("private stream content"));
+                  controller.close();
+                }
+              },
+            }),
+            {
+              headers: {
+                "set-cookie": "fixture=private; Max-Age=1470",
+                location: "/private-fixture",
+              },
+            },
+          ),
+      );
+      const result = await f.request("/fixture-stream-failure", { signal: abort.signal });
+      expect(result.status).toBe(404);
+      expect(await result.text()).toBe("Not Found");
+      expect(result.headers.getSetCookie()).toEqual([]);
+      expect(result.headers.has("location")).toBe(false);
+      expect(result.headers.get("cache-control")).toContain("no-store");
+      expect(result.headers.get("x-content-type-options")).toBe("nosniff");
+    },
+  );
+
+  it("fences real Kit dispatch after render and clamps cookies to remaining E", async () => {
+    const f = await fixture();
+    const { dispatchHookRequest } = await import("../src/route-ownership");
+    const run = (expired: boolean) =>
+      dispatchHookRequest(f.event("", "/about"), {
+        appUrl: STAGING_APP_URL,
+        manifest: [{ method: "GET", path: "/about", enabled: true, reads: "public" }],
+        qualificationResponse: f.admission.qaRunResponseFor(f.env),
+        honoFetch: vi.fn(() => {
+          throw new Error("unexpected Hono fallback");
+        }),
+        resolve: async () => {
+          await Promise.resolve();
+          f.advance(expired ? 1470 : 1400);
+          return new Response("private Kit fixture", {
+            headers: { "set-cookie": "fixture=value; Max-Age=600", "content-type": "text/html" },
+          });
+        },
+      });
+    const live = await run(false);
+    expect(live.status).toBe(200);
+    expect(live.headers.getSetCookie()).toEqual(["fixture=value; Max-Age=70"]);
+    expect(live.headers.get("cache-control")).toContain("no-store");
+    const expired = await run(true);
+    expect(expired.status).toBe(404);
+    expect(await expired.text()).toBe("Not Found");
+    expect(expired.headers.getSetCookie()).toEqual([]);
+  });
+
+  it("refuses aborted or changed qualifications at response time but leaves ordinary streaming untouched", async () => {
+    const f = await fixture();
+    const abort = new AbortController();
+    const request = new Request(`${STAGING_APP_URL}/profile`, { signal: abort.signal });
+    const render = vi.fn(async () => new Response("private fixture"));
+    abort.abort();
+    expect((await f.admission.qaRunResponseFor(f.env)(request, render)).status).toBe(404);
+    expect(render).not.toHaveBeenCalled();
+    const env = { ...f.env };
+    const changed = await f.admission.qaRunResponseFor(env)(f.event("").request, async () => {
+      env.QA_RUN_AUTH = undefined;
+      return new Response("private fixture");
+    });
+    expect(changed.status).toBe(404);
+    const response = new Response(new ReadableStream());
+    const ordinary = await f.admission.qaRunResponseFor(env)(
+      f.event("").request,
+      async () => response,
+    );
+    expect(ordinary).toBe(response);
+    expect(ordinary.bodyUsed).toBe(false);
+    await ordinary.body!.cancel();
+  });
+
+  it("keeps Kit profile and member-board guest intended state key-free and Q/E-bound", async () => {
+    const f = await fixture();
+    const { resolveKitProfile } = await import("../src/profiles/kit");
+    const { loadMembersBoardData } = await import("../src/kit-members");
+    const { readJourneyCookie } = await import("../src/journey-cookie");
+    f.advance(1400);
+    const url = `${STAGING_APP_URL}/profile?tab=games`;
+    const profile = await resolveKitProfile(
+      { session: { status: "guest", session: null }, requestedId: null, joinResult: null, url },
+      { store: null, qaRun: f.env },
+    );
+    expect(profile.kind).toBe("redirect");
+    if (profile.kind !== "redirect") throw new Error("expected guest redirect");
+    expect(profile.intendedCookie).toContain("Max-Age=70");
+    expect(
+      await readJourneyCookie(
+        new Request(url, { headers: { cookie: profile.intendedCookie!.split(";")[0]! } }),
+        f.env,
+        "__Host-two_login_intended",
+      ),
+    ).toBe("/profile?tab=games");
+    const dbForFn = vi.fn();
+    const board = await loadMembersBoardData({
+      env: f.env,
+      session: { status: "guest", userId: null, member: false },
+      seasonParam: null,
+      scopeParam: null,
+      activityParam: null,
+      setHeaders: vi.fn(),
+      dbForFn,
+      url: `${STAGING_APP_URL}/leaderboards/members`,
+    }).catch((err: { intendedCookie: string; status: number }) => err);
+    expect(board).toMatchObject({ status: 302, intendedCookie: expect.stringContaining("q1n.") });
+    expect(dbForFn).not.toHaveBeenCalled();
+    f.advance(1470);
+    const expired = await resolveKitProfile(
+      { session: { status: "guest", session: null }, requestedId: null, joinResult: null, url },
+      { store: null, qaRun: f.env },
+    );
+    expect(expired).toMatchObject({
+      kind: "redirect",
+      intendedCookie: expect.stringContaining("Max-Age=0"),
+    });
+  });
 
   it("refuses both OAuth callbacks before any external fetch or session issuance even with copied secrets", async () => {
     const f = await fixture();

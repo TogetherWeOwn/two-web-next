@@ -24,6 +24,7 @@ import { qaRunContext } from "./qa-run-auth";
 import {
   QaRunSessionRefused,
   qaRunConfigured,
+  qaRunResponseFor,
   qaRunSessionCookie,
   qaRunSessionsFor,
   readSessionCookie,
@@ -56,7 +57,7 @@ import { registerPublicApiRoutes } from "./public-data/routes";
 import { takeJoinResult } from "./return-journey";
 import { buildSecurityTxt } from "./security-txt";
 import {
-  configReadiness,
+  authConfigReadiness,
   revisionReadiness,
   upBody,
   upHttpStatus,
@@ -159,7 +160,18 @@ const staticSecurityHeaders = secureHeaders({
 app.use("*", (c, next) =>
   requestLog(c, async () => {
     try {
-      await staticSecurityHeaders(c, next);
+      await staticSecurityHeaders(c, async () => {
+        const response = await qaRunResponseFor(c.env)(c.req.raw, async () => {
+          await next();
+          return c.res;
+        });
+        if (response !== c.res) {
+          // Hono merges old headers on replacement. Do not reattach expired
+          // auth cookies/redirects or overwrite the fence's clamped lifetimes.
+          for (const name of [...c.res.headers.keys()]) c.res.headers.delete(name);
+          c.res = response;
+        }
+      });
       await robotsTag(c, async () => {});
       leafInlineStyleCsp(c);
     } catch (err) {
@@ -783,7 +795,7 @@ app.get("/up", async (c) => {
     const body = await upBody(
       sql ? () => withHealthReadTimeout(sql, pgQueueDepth) : null,
       sql,
-      configReadiness(c.env),
+      await authConfigReadiness(c.req.raw, c.env),
     );
     // Informational only: the revision never moves the status code.
     return c.json({ ...body, ...revisionReadiness(c.env.CF_VERSION_METADATA) }, upHttpStatus(body));
