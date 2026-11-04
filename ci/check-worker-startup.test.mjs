@@ -1,9 +1,9 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join, relative } from "node:path";
+import { join } from "node:path";
 import { after, describe, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import {
@@ -33,26 +33,26 @@ function isLive(pid) {
 }
 
 const repoRoot = fileURLToPath(new URL("../", import.meta.url));
-// Recorded provenance argv: node + repo CLI path + actual args with artifact paths root-relative.
-function provenance(call, outdir) {
-  return [
-    "node",
-    "node_modules/wrangler/bin/wrangler.js",
-    ...call.args.slice(1).map((a) => (a.startsWith(outdir) ? relative(repoRoot, a) : a)),
-  ];
+// Provenance records the actual executable and full argv, not a reconstructed command.
+function provenance(call) {
+  return [call.command, ...call.args];
 }
 function assertCommands(commands, calls, outdir) {
   const [ser, ...cold] = calls;
   assert.deepEqual(commands.serialize, provenance(ser, outdir));
-  assert.equal(commands.serialize.at(-1), relative(repoRoot, join(outdir, "worker.bundle")));
+  assert.equal(commands.serialize.at(-1), join(outdir, "worker.bundle"));
+  assert.equal(commands.workingDirectory, repoRoot);
+  assert.deepEqual(commands.dotenv, {
+    file: join(outdir, "empty.env"),
+    sha256: sha256(Buffer.alloc(0)),
+  });
+  for (const call of calls)
+    assert.equal(call.args[call.args.indexOf("--env-file") + 1], join(outdir, "empty.env"));
   assert.equal(commands.profile.length, 3);
   commands.profile.forEach((argv, i) => {
     assert.deepEqual(argv, provenance(cold[i], outdir));
-    assert.equal(
-      argv[argv.indexOf("--worker") + 1],
-      relative(repoRoot, join(outdir, "worker.bundle")),
-    );
-    assert.equal(argv.at(-1), relative(repoRoot, join(outdir, `cold-${i + 1}.cpuprofile`)));
+    assert.equal(argv[argv.indexOf("--worker") + 1], join(outdir, "worker.bundle"));
+    assert.equal(argv.at(-1), join(outdir, `cold-${i + 1}.cpuprofile`));
   });
 }
 
@@ -662,9 +662,11 @@ describe("collect orchestration", () => {
     const [ser, ...cold] = h.calls;
     assert.equal(h.calls.filter((c) => c.args.includes("deploy")).length, 1);
     assert.equal(ser.command, process.execPath);
-    assert.deepEqual(ser.args.slice(0, 5), [
+    assert.deepEqual(ser.args.slice(0, 7), [
       cli,
       "deploy",
+      "--env-file",
+      join(h.outdir, "empty.env"),
       "--config",
       "web/wrangler.staging.jsonc",
       "--dry-run",
@@ -678,6 +680,8 @@ describe("collect orchestration", () => {
         cli,
         "check",
         "startup",
+        "--env-file",
+        join(h.outdir, "empty.env"),
         "--worker",
         upload,
         "--outfile",
@@ -817,6 +821,76 @@ describe("collect orchestration", () => {
   });
 });
 
+test("pinned real Wrangler loader cannot restore ignored dotenv runtime overrides", {
+  timeout: 60000,
+}, async () => {
+  const cwd = mkdtempSync(join(tmp, "real-dotenv-"));
+  const marker = join(cwd, "override-executed");
+  const alternate = join(cwd, "owned-runtime");
+  writeFileSync(alternate, `#!/bin/sh\nprintf executed > '${marker}'\nexit 1\n`, { mode: 0o700 });
+  for (const file of [".env", ".env.local"]) {
+    writeFileSync(join(cwd, file), `MINIFLARE_WORKERD_PATH=${alternate}\n`);
+  }
+  const cli = join(repoRoot, "node_modules/wrangler/bin/wrangler.js");
+  const upload = join(cwd, "control.bundle");
+  const loaderUpload = multipart({
+    metadata: goodMeta,
+    parts: {
+      "index.js":
+        "let value = 0; for (let i = 0; i < 10000000; i++) value += Math.sqrt(i); export default { fetch() { return new Response(String(value)); } };",
+    },
+  });
+  writeFileSync(upload, loaderUpload);
+  // Positive control: this is the pinned real CLI's global dotenv middleware,
+  // not a mocked parser. The old sanitized environment alone is insufficient.
+  await assert.rejects(
+    runCommand(
+      process.execPath,
+      [cli, "check", "startup", "--worker", upload, "--outfile", join(cwd, "control.cpuprofile")],
+      { cwd },
+    ),
+  );
+  assert.equal(existsSync(marker), true, "control must execute the owned override");
+  rmSync(marker);
+  const calls = [];
+  const evidence = await collect({
+    outdir: cwd,
+    budget: BUDGET,
+    identity: {},
+    cli,
+    run: async (command, args, options) => {
+      calls.push({ command, args });
+      if (args.includes("deploy")) {
+        writeFileSync(args[args.indexOf("--outfile") + 1], loaderUpload);
+      } else await runCommand(command, args, { ...options, cwd });
+    },
+  });
+  assert.equal(existsSync(marker), false, "ignored dotenv must not change the runtime");
+  assert.equal(evidence.runs.length, 3);
+  assertCommands(evidence.identity.commands, calls, cwd);
+  assert.equal(evidence.status, "pass");
+});
+
+test("modified controlled dotenv cannot yield evidence", async () => {
+  const outdir = mkdtempSync(join(tmp, "changed-dotenv-"));
+  let calls = 0;
+  await assert.rejects(
+    collect({
+      outdir,
+      budget: BUDGET,
+      identity: {},
+      cli: "/fixture/cli",
+      run: async () => {
+        calls++;
+        chmodSync(join(outdir, "empty.env"), 0o600);
+        writeFileSync(join(outdir, "empty.env"), "MINIFLARE_WORKERD_PATH=fixture\n");
+      },
+    }),
+    /Startup dotenv control changed/,
+  );
+  assert.equal(calls, 1);
+});
+
 describe("runCommand", () => {
   const node = process.execPath;
   test("resolves on exit 0", async () => {
@@ -936,6 +1010,130 @@ fs.writeFileSync(${JSON.stringify(pidFile)},String(c.pid));setInterval(()=>{},10
         timeoutMs: 10000,
       }),
       (e) => !/SECRET/.test(e.message),
+    );
+  });
+});
+
+describe("runCommand parent signal cleanup", () => {
+  const node = process.execPath;
+  const modulePath = fileURLToPath(new URL("./check-worker-startup.mjs", import.meta.url));
+  const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+  const waitFor = async (predicate, ms) => {
+    const end = Date.now() + ms;
+    while (Date.now() < end) {
+      if (predicate()) return true;
+      await sleep(25);
+    }
+    return predicate();
+  };
+  const readPid = (file) => {
+    try {
+      const n = Number(readFileSync(file, "utf8").trim());
+      return Number.isInteger(n) && n > 0 ? n : 0;
+    } catch {
+      return 0;
+    }
+  };
+  const grandchildSource = `require("node:fs").writeFileSync(process.argv[1], String(process.pid));
+setInterval(() => {}, 1000);`;
+  const childSource = `const fs = require("node:fs");
+const { spawn } = require("node:child_process");
+const dir = process.argv[2];
+fs.writeFileSync(dir + "/child.pid", String(process.pid));
+spawn(process.execPath, ["-e", ${JSON.stringify(grandchildSource)}, dir + "/grandchild.pid"], {
+  stdio: "ignore",
+});
+fs.writeFileSync(dir + "/child.ready", "1");
+setInterval(() => {}, 1000);`;
+
+  function setup(name) {
+    const dir = mkdtempSync(join(tmp, `${name}-`));
+    writeFileSync(join(dir, "child.js"), childSource);
+    return dir;
+  }
+  function parentSource(dir) {
+    return `import { runCommand } from ${JSON.stringify(modulePath)};
+import { writeFileSync } from "node:fs";
+const before = process.listenerCount("SIGINT") + ":" + process.listenerCount("SIGTERM");
+const p = runCommand(${JSON.stringify(node)}, [${JSON.stringify(join(dir, "child.js"))}, ${JSON.stringify(dir)}], { timeoutMs: 60000 });
+writeFileSync(${JSON.stringify(join(dir, "parent.ready"))}, "1");
+try {
+  await p;
+  writeFileSync(${JSON.stringify(join(dir, "success.marker"))}, "ok");
+} catch {
+  writeFileSync(${JSON.stringify(join(dir, "rejected.marker"))}, "rejected");
+}
+process.exit(process.exitCode ?? 0);`;
+  }
+  function killIfLive(pid) {
+    if (pid && isLive(pid)) {
+      try {
+        process.kill(pid, "SIGKILL");
+      } catch (error) {
+        if (error.code !== "ESRCH") throw error;
+      }
+    }
+  }
+
+  for (const signal of ["SIGINT", "SIGTERM"]) {
+    test(`parent ${signal} terminates the child and grandchild`, { timeout: 30000 }, async () => {
+      const dir = setup(`sig-${signal}`);
+      writeFileSync(join(dir, "parent.mjs"), parentSource(dir));
+      const parent = spawn(node, [join(dir, "parent.mjs")], { stdio: "ignore" });
+      const exited = new Promise((resolve) =>
+        parent.on("exit", (code, sig) => resolve({ code, sig })),
+      );
+      let childPid = 0;
+      let grandchildPid = 0;
+      try {
+        const ready = await waitFor(() => {
+          childPid = readPid(join(dir, "child.pid"));
+          grandchildPid = readPid(join(dir, "grandchild.pid"));
+          return childPid && grandchildPid && readPid(join(dir, "child.ready"));
+        }, 15000);
+        assert.ok(ready, "child and grandchild did not become ready");
+        assert.ok(isLive(childPid) && isLive(grandchildPid));
+        parent.kill(signal);
+        let timer;
+        const result = await Promise.race([
+          exited,
+          new Promise((_, reject) => {
+            timer = setTimeout(() => reject(new Error("parent did not exit after signal")), 10000);
+          }),
+        ]).finally(() => clearTimeout(timer));
+        assert.ok(result.sig || result.code !== 0, `parent exited 0 after ${signal}`);
+        assert.equal(existsSync(join(dir, "success.marker")), false);
+        assert.equal(existsSync(join(dir, "rejected.marker")), true);
+        const gone = await waitFor(() => !isLive(childPid) && !isLive(grandchildPid), 5000);
+        assert.ok(
+          gone,
+          `leaked after ${signal}: child live=${isLive(childPid)} grandchild live=${isLive(grandchildPid)}`,
+        );
+      } finally {
+        killIfLive(childPid);
+        killIfLive(grandchildPid);
+        killIfLive(parent.pid);
+        rmSync(dir, { recursive: true, force: true });
+      }
+    });
+  }
+
+  test("signal listeners are removed after the command settles", { timeout: 30000 }, async () => {
+    const before = ["SIGINT", "SIGTERM"].map((s) => process.listenerCount(s));
+    await runCommand(node, ["-e", "process.exit(0)"], { timeoutMs: 10000 });
+    assert.deepEqual(
+      ["SIGINT", "SIGTERM"].map((s) => process.listenerCount(s)),
+      before,
+    );
+    await assert.rejects(runCommand(node, ["-e", "process.exit(1)"], { timeoutMs: 10000 }));
+    assert.deepEqual(
+      ["SIGINT", "SIGTERM"].map((s) => process.listenerCount(s)),
+      before,
+    );
+    await assert.rejects(runCommand(node, ["-e", "setInterval(()=>{},1000)"], { timeoutMs: 200 }));
+    assert.deepEqual(
+      ["SIGINT", "SIGTERM"].map((s) => process.listenerCount(s)),
+      before,
     );
   });
 });

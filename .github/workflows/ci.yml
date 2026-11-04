@@ -481,7 +481,9 @@ jobs:
     # wrangler's dev ports) collide across concurrent jobs. A job container has
     # its own network namespace; localhost:5432 is forwarded to the service.
     container:
-      image: node:24-bookworm
+      image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
+      # Read ancestor CPU limits as well as the container's own cgroup.
+      options: --cgroupns=host
     services:
       postgres:
         image: postgres:17
@@ -711,9 +713,11 @@ jobs:
         run: node --test ci/check-auth-perf*.test.mjs
       - name: Worker local startup diagnostic selftests (offline fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/check-worker-startup.test.mjs ci/worker-startup-ci-wiring.test.mjs
+        run: node --test ci/check-worker-startup.test.mjs ci/worker-startup-runner.test.mjs ci/worker-startup-ci-wiring.test.mjs
       - name: Kit adapter build and local startup diagnostic (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        env:
+          STARTUP_RUNNER_IMAGE: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
         run: node ci/check-worker-startup.mjs
       - name: Worker local startup evidence
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')

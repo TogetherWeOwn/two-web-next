@@ -5,7 +5,8 @@ import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, lstatSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
-import { arch, cpus, platform, release, totalmem } from "node:os";
+import { arch, platform } from "node:os";
+import { runnerIdentity } from "./worker-startup-runner.mjs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -187,7 +188,9 @@ export function validateEvidence(evidence, expected, profiles, budget) {
   return status;
 }
 
-// Kill the whole owned process group on timeout/output overflow, including workerd.
+// Cancellation is sticky: a caller cannot catch it and accept a later profile.
+let cancelled = false;
+// Kill the whole owned process group on cancellation/timeout/output overflow.
 // Child output is bounded in memory, not published: build tools may print bindings.
 export function runCommand(
   command,
@@ -195,6 +198,7 @@ export function runCommand(
   { cwd = root, timeoutMs = 30000, maxBytes = 2 * 1024 * 1024 } = {},
 ) {
   return new Promise((resolvePromise, reject) => {
+    requireValue(!cancelled, "Startup measurement cancelled");
     const env = { ...process.env };
     // A version/hash is meaningless if inherited overrides execute another runtime.
     for (const key of Object.keys(env)) {
@@ -218,29 +222,55 @@ export function runCommand(
     });
     let size = 0;
     let failed = false;
+    let cleanupTimer;
+    const cleanup = () => {
+      clearTimeout(timer);
+      clearTimeout(cleanupTimer);
+      process.off("SIGINT", onInterrupt);
+      process.off("SIGTERM", onTerminate);
+    };
     const stop = () => {
       failed = true;
       try {
-        process.kill(-child.pid, "SIGKILL");
+        if (child.pid) process.kill(-child.pid, "SIGKILL");
       } catch (error) {
-        if (error.code !== "ESRCH")
+        if (error.code !== "ESRCH") {
+          cleanup();
           reject(new Error("Cannot terminate startup measurement process group"));
+          return;
+        }
       }
+      // Do not depend indefinitely on pipe-close/reaping after SIGKILL.
+      cleanupTimer ??= setTimeout(() => {
+        child.stdout.destroy();
+        child.stderr.destroy();
+        cleanup();
+        reject(new Error("Startup measurement process cleanup exceeded bound"));
+      }, 1000);
     };
+    const cancel = (exitCode) => {
+      cancelled = true;
+      process.exitCode = exitCode;
+      stop();
+    };
+    const onInterrupt = () => cancel(130);
+    const onTerminate = () => cancel(143);
+    process.on("SIGINT", onInterrupt);
+    process.on("SIGTERM", onTerminate);
     const timer = setTimeout(stop, timeoutMs);
     const observe = (chunk) => {
       size += chunk.length;
-      if (size > maxBytes) stop();
+      if (size > maxBytes && !failed) stop();
     };
     child.stdout.on("data", observe);
     child.stderr.on("data", observe);
     child.on("error", () => {
-      clearTimeout(timer);
+      cleanup();
       reject(new Error("Startup measurement command unavailable"));
     });
     child.on("close", (code, signal) => {
-      clearTimeout(timer);
-      if (failed || code !== 0 || signal)
+      cleanup();
+      if (failed || cancelled || code !== 0 || signal)
         reject(new Error("Startup measurement command failed, timed out or exceeded output cap"));
       else resolvePromise();
     });
@@ -350,30 +380,47 @@ function checkpoint(outdir, identity, runs) {
   );
 }
 export async function collect({ outdir, budget, identity, cli, run = runCommand }) {
+  requireValue(!cancelled, "Startup measurement cancelled");
   const upload = join(outdir, "worker.bundle");
-  const serializeArgs = [cli, "deploy", "--config", CONFIG, "--dry-run", "--outfile", upload];
+  // Global Wrangler middleware otherwise reloads ignored .env/.env.local after
+  // runCommand strips inherited runtime overrides. Bind an owned empty file.
+  const envFile = join(outdir, "empty.env");
+  writeFileSync(envFile, "", { flag: "wx", mode: 0o400 });
+  const verifyEnv = () => {
+    const stat = lstatSync(envFile);
+    requireValue(stat.isFile() && stat.size === 0, "Startup dotenv control changed");
+  };
+  const serializeArgs = [
+    cli,
+    "deploy",
+    "--env-file",
+    envFile,
+    "--config",
+    CONFIG,
+    "--dry-run",
+    "--outfile",
+    upload,
+  ];
+  const profileArgs = [1, 2, 3].map((i) => [
+    cli,
+    "check",
+    "startup",
+    "--env-file",
+    envFile,
+    "--worker",
+    upload,
+    "--outfile",
+    join(outdir, `cold-${i}.cpuprofile`),
+  ]);
   const boundIdentity = {
     ...identity,
     uploadSha256: null,
     commands: {
       build: ["npm", "run", "build", "--prefix", "web"],
-      serialize: [
-        "node",
-        "node_modules/wrangler/bin/wrangler.js",
-        ...serializeArgs.slice(1, -1),
-        relative(root, upload),
-      ],
-      profile: [1, 2, 3].map((i) => [
-        "node",
-        "node_modules/wrangler/bin/wrangler.js",
-        "check",
-        "startup",
-        "--worker",
-        relative(root, upload),
-        "--outfile",
-        relative(root, join(outdir, `cold-${i}.cpuprofile`)),
-      ]),
-      workingDirectory: "repository-root",
+      serialize: [process.execPath, ...serializeArgs],
+      profile: profileArgs.map((args) => [process.execPath, ...args]),
+      workingDirectory: root,
+      dotenv: { file: envFile, sha256: sha256(Buffer.alloc(0)) },
       sanitizedRuntimeEnvironment: true,
       config: CONFIG,
       WRANGLER_SEND_METRICS: "false",
@@ -389,22 +436,19 @@ export async function collect({ outdir, budget, identity, cli, run = runCommand 
   const runs = [];
   const profiles = [];
   checkpoint(outdir, boundIdentity, runs);
+  verifyEnv();
   await run(process.execPath, serializeArgs, { timeoutMs: 60000 });
+  verifyEnv();
   const uploadBytes = readBounded(upload, 32 * 1024 * 1024);
   boundIdentity.uploadSha256 = sha256(uploadBytes);
   checkpoint(outdir, boundIdentity, runs);
   await validateUpload(uploadBytes);
   for (let i = 1; i <= 3; i++) {
     const profile = `cold-${i}.cpuprofile`;
-    await run(process.execPath, [
-      cli,
-      "check",
-      "startup",
-      "--worker",
-      upload,
-      "--outfile",
-      join(outdir, profile),
-    ]);
+    verifyEnv();
+    await run(process.execPath, profileArgs[i - 1]);
+    verifyEnv();
+    requireValue(!cancelled, "Startup measurement cancelled");
     requireValue(
       sha256(readBounded(upload, 32 * 1024 * 1024)) === boundIdentity.uploadSha256,
       "Upload changed between cold profiles",
@@ -467,19 +511,7 @@ async function main() {
     );
     const tools = toolIdentity(budget);
     const source = sourceIdentity();
-    const runner = {
-      kind:
-        process.env.GITHUB_ACTIONS === "true"
-          ? "github-actions/check/node24-bookworm"
-          : "local/linux-x64/node24",
-      os: platform(),
-      arch: arch(),
-      kernel: release(),
-      node: process.version,
-      cpu: cpus()[0].model,
-      cpuCount: cpus().length,
-      memoryBytes: totalmem(),
-    };
+    const runner = runnerIdentity();
     checkpoint(
       outdir,
       {
@@ -505,8 +537,11 @@ async function main() {
     });
     stage = "verify";
     requireValue(
-      equal(source, sourceIdentity()) && equal(tools.evidence, toolIdentity(budget).evidence),
-      "Build source or tools changed during profiling",
+      !cancelled &&
+        equal(source, sourceIdentity()) &&
+        equal(tools.evidence, toolIdentity(budget).evidence) &&
+        equal(runner, runnerIdentity()),
+      "Build source, tools or runner changed during profiling",
     );
     writeFileSync(join(outdir, "report.json"), `${JSON.stringify(evidence, null, 2)}\n`);
     const text = summary(evidence);

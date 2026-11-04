@@ -92,8 +92,24 @@ must pair exactly; microseconds are converted to milliseconds.
 `local_startup_non_idle_sample_ms` values: warning **>=400 ms**, failure
 **>=700 ms**. Exit 0 is a local pass/warning, 1 is a local breach, 2 is unavailable
 or invalid evidence. Tool versions must match the pinned diagnostic budget.
-The controlled Linux x64 Node 24 runner records CPU model/count, memory, kernel,
-Node and local/CI class; local and CI observations are not interchangeable trends.
+The controlled Linux x64 Node 24 runner uses the immutable image
+`node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413`.
+The CI container selection and diagnostic image identity must match. Local
+integrations use that same image and set `STARTUP_RUNNER_IMAGE` to its full ref;
+an arbitrary host run without it is unavailable. The OS-release content hash,
+CPU model/count, memory, kernel, Node and local/CI class are retained.
+
+Cgroup v2 ancestry is visible through the read-only hierarchy with
+`--cgroupns=host`: every ancestor's `cpu.max`, controller availability/enabling
+and effective cpuset are recorded alongside process CPU affinity. Effective
+quota is the tightest ancestor quota, and effective CPU count is bounded by
+both quota and affinity. Unlimited is explicit and verified, not inferred from
+a missing file: absent per-cgroup limits require proof that the parent's
+controller is disabled (the hierarchy root has no parent quota). Subtree mounts,
+unknown/malformed quota/cpuset/controller/affinity evidence, cgroup v1 and missing
+required files fail closed. Reads are capped at 16 KiB and ancestry at 64 levels;
+runner facts must still match after profiling. Local and CI observations are not
+interchangeable trends.
 This is not per-thread CPU, an authoritative Cloudflare measurement, or proof of
 300 ms production headroom.
 
@@ -116,12 +132,21 @@ failed and timed-out evidence fails closed. Pinned Wrangler only rejects module
 failure when unsupported bindings exist, so upload admission deliberately requires
 an unsupported Hyperdrive binding; a future change must replace this failure
 proof, not silently drop it. Local environment/dotenv binding inclusion and
-Wrangler telemetry are disabled. Runtime override variables (including
+Wrangler telemetry are disabled. Both Wrangler invocations additionally receive
+`--env-file` pointing to a newly created, read-only empty file; the real pinned
+CLI's global dotenv loader otherwise restores runtime overrides independently
+of its development-binding setting. The file stays empty before/after each
+invocation, its empty-content hash is recorded, and actual executable/argv/cwd
+are bound to the report. A real-loader fixture proves ignored `.env` and
+`.env.local` cannot select an alternate owned runtime. Runtime override variables (including
 `MINIFLARE_WORKERD_PATH`, V8 flags, Node preloads and alternate esbuild paths)
 are removed before spawning. `checkpoint.json` persists source/tool/runner
 identity before the build, upload identity before profiling and every completed
 numeric run; unavailable reports refer to that checkpoint instead of losing the
-failed attempt's provenance.
+failed attempt's provenance. SIGINT/SIGTERM cancellation kills the owned process
+group immediately, including grandchildren; pipe cleanup is bounded to one
+second. Cancellation is sticky and cannot produce pass evidence or begin a
+replacement invocation. Signal listeners are removed when each command settles.
 
 ## Three-cold-run integration observation
 

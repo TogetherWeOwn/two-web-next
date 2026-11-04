@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
 import { parse } from "yaml";
+import { RUNNER_IMAGE } from "./worker-startup-runner.mjs";
 
 const workflow = parse(
   readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8"),
@@ -9,6 +10,19 @@ const workflow = parse(
 const steps = workflow.jobs.check.steps;
 const diagnostic = steps.find((s) => s.run === "node ci/check-worker-startup.mjs");
 const artifact = steps.find((s) => s.with?.name === "worker-startup-local");
+
+test("startup runner uses an immutable selected image and exposes ancestor quotas", () => {
+  assert.equal(workflow.jobs.check.container.image, RUNNER_IMAGE);
+  assert.equal(workflow.jobs.check.container.options, "--cgroupns=host");
+  assert.equal(diagnostic.env.STARTUP_RUNNER_IMAGE, RUNNER_IMAGE);
+  assert(
+    steps.some(
+      (s) =>
+        s.run?.includes("node --test ci/check-worker-startup.test.mjs") &&
+        s.run.includes("ci/worker-startup-runner.test.mjs"),
+    ),
+  );
+});
 
 test("local startup measurement is hard-wired after selftests and before Kit runtime consumers", () => {
   assert(diagnostic);
