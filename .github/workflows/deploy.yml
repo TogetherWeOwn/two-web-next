@@ -24,6 +24,19 @@ on:
 permissions:
   contents: read
   actions: read
+  deployments: read
+
+# Eligible deploys share the global staging interval. Rejected completions and
+# non-main dispatches use their own group and cannot replace a pending deploy.
+# Retain the legacy job-level lock until staging rollback also migrates.
+concurrency:
+  group: >-
+    ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' &&
+    github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' &&
+    github.event.workflow_run.head_repository.full_name == github.repository)) &&
+    'staging-application-exclusive' || format('staging-rejected-deploy-{0}', github.run_id) }}
+  cancel-in-progress: false
 
 jobs:
   deploy-staging:
@@ -68,6 +81,21 @@ jobs:
           # deployed HEAD against its parent.
           fetch-depth: 2
           persist-credentials: false
+      - name: Read installed staging occupancy tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .staging-occupancy-control
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            ci/candidate-staging-clear.mjs
+            ci/candidate-staging-occupancy.mjs
+            ci/candidate-staging-admission.mjs
+      - name: Refuse unresolved candidate occupancy
+        run: node .staging-occupancy-control/ci/candidate-staging-clear.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - name: Staging admission hold (before dependencies or mutations)
         # Staging-only containment: only exactly "false" releases the direct
         # staging migration path. Absent, "true" and malformed values all hold.

@@ -489,21 +489,38 @@ test("real Git accepts only the current checkout despite a container owner misma
 });
 
 test("rejected completion events never enter staging job concurrency", () => {
-  assert.doesNotMatch(workflow, /^concurrency:/m);
   assert.match(
     workflow,
     /    concurrency:\n      group: deploy-staging\n      cancel-in-progress: false/,
   );
   const expression = workflow.match(/    if: >-\n((?:      .*\n)+)/)[1];
   const accepts = new Function("github", `return ${expression}`);
-  const github = { event_name: "workflow_run", repository, event: context("workflow_run").event };
+  const groupExpression = workflow.match(/^concurrency:\n  group: >-\n((?:    .*\n)+)/m)[1].trim();
+  const group = new Function("github", "format", `return ${groupExpression.slice(3, -2)}`);
+  const select = (github) => group(github, (template, value) => template.replace("{0}", value));
+  const github = {
+    event_name: "workflow_run",
+    repository,
+    run_id: "123",
+    event: context("workflow_run").event,
+  };
+  assert.equal(select(github), "staging-application-exclusive");
   assert.equal(accepts(github), true);
   for (const conclusion of ["failure", "cancelled", "skipped", null]) {
     github.event.workflow_run.conclusion = conclusion;
     assert.equal(accepts(github), false);
+    assert.equal(select(github), "staging-rejected-deploy-123");
   }
   assert.equal(accepts({ event_name: "workflow_dispatch", ref: "refs/heads/main" }), true);
   assert.equal(accepts({ event_name: "workflow_dispatch", ref: "refs/heads/topic" }), false);
+  assert.equal(
+    select({ event_name: "workflow_dispatch", ref: "refs/heads/main" }),
+    "staging-application-exclusive",
+  );
+  assert.equal(
+    select({ event_name: "workflow_dispatch", ref: "refs/heads/topic", run_id: "456" }),
+    "staging-rejected-deploy-456",
+  );
 });
 
 test("trigger identity is pinned, main-only and never taken from PR or fork evidence", () => {

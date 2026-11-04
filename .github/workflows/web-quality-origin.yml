@@ -10,6 +10,10 @@ on:
       origin:
         type: string
         required: true
+      staging_lock_inherited:
+        description: The trusted caller holds staging-application-exclusive for this entire call
+        type: boolean
+        default: false
   schedule:
     - cron: "37 4 * * *"
   workflow_dispatch:
@@ -24,10 +28,23 @@ on:
 
 permissions:
   contents: read
+  deployments: read
+
+concurrency:
+  group: >-
+    ${{ github.ref == 'refs/heads/main' &&
+    (inputs.staging_lock_inherited && format('staging-inherited-quality-{0}', github.run_id) ||
+    'staging-application-exclusive') || format('staging-rejected-quality-{0}', github.run_id) }}
+  cancel-in-progress: false
 
 jobs:
+  staging-occupancy:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/staging-occupancy-clear.yml
+
   quality:
     name: quality
+    needs: staging-occupancy
     # Public repo: standard GitHub-hosted Linux only.
     runs-on: ubuntu-latest
     # 60 covers one retry each for the mobile collect

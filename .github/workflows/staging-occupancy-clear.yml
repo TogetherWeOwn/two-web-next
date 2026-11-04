@@ -1,0 +1,32 @@
+name: staging-occupancy-clear
+
+# A read-only preflight under the caller's continuous staging exclusion. Never
+# acquire the global lock here: the calling workflow already holds it.
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  deployments: read
+
+jobs:
+  staging-occupancy-clear:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            ci/candidate-staging-clear.mjs
+            ci/candidate-staging-occupancy.mjs
+            ci/candidate-staging-admission.mjs
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Refuse unresolved candidate occupancy
+        run: node ci/candidate-staging-clear.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}

@@ -419,8 +419,9 @@ record dirty; status-write uncertainty requires readback, not a blind retry.
 baseline digest, writes only a non-promoting status (`auto_inactive: false`), and
 verifies both that exact status and absence of any other dirty occupancy.
 
-This is **not** an installed lock, a provider restore adapter or proof of the
-baseline contents. The restore, verify and exclusion adapters must be installed
+This journal is **not** a lock, a provider restore adapter or proof of the
+baseline contents. The core workflow fencing below is only a partial actor map,
+not complete global exclusion. The restore, verify and exclusion adapters must be installed
 trusted code, never candidate callbacks. A pinned GitHub creator/App is a minimum
 transport check, not independent controller provenance: other writers sharing
 that principal must be contained before use. The source/run provenance, recovery
@@ -428,6 +429,59 @@ artifact producer/download/admission, provider observations, next-upload compari
 complete published recovery receipt and normal-actor workflow wiring remain
 required. A digest-shaped proof supplied by a candidate is never sufficient.
 No live journal API or provider operation was used to qualify this helper.
+
+## Core normal-actor fencing (partial; not activated)
+
+The ordinary deploy, staging-e2e, ZAP and origin-quality workflows now share
+`staging-application-exclusive`, with `cancel-in-progress:false`. Deploy holds
+it for its whole workflow, including staging mutations and smoke. Its existing
+job-level `deploy-staging` lock is retained so mutual exclusion with the not-yet-
+migrated staging rollback path is not lost. Staging-e2e holds the global key at
+workflow level through scope, public/authenticated journeys and both reusable
+children. Failed/cancelled/skipped/foreign/non-main completion events and non-main
+dispatches select distinct rejected-run groups **before** concurrency admission,
+so they cannot replace an eligible pending deploy. Reusable ZAP/quality callers
+also reject non-main refs before entering the global key. GitHub can still replace
+an eligible pending member with a newer eligible member; `cancel-in-progress:false`
+protects the running interval, not a durable FIFO queue. The existing test commands,
+case set, budgets and promotion identities are unchanged. This changes staging
+scheduling, not production selectors.
+
+ZAP and origin-quality acquire the same global key on standalone dispatch or
+schedule. Their reusable-only `staging_lock_inherited` input defaults to false;
+the trusted staging-e2e caller explicitly sets it to true while holding its
+continuous lock. Inherited children use distinct per-run groups, never recursively
+acquire their parent's global key. The read-only preflight workflow acquires no
+lock itself. Any additional caller must establish the same whole-call exclusion;
+the input is not a lock certificate or authorization for a candidate caller.
+
+[The normal-actor guard](../ci/candidate-staging-clear.mjs) reads the complete
+bounded journal with the existing reader and public pinned GitHub Actions bot/App
+identities. No status, or any status other than the admitted restoration success,
+refuses normal work. Unknown/malformed/foreign-principal records, incomplete
+pagination and transport/authentication failures refuse, without retries or an
+alternate token. It only GETs metadata, writes nothing, restores nothing and logs
+no remote error/payload. A clear observation is not a lease on future state.
+
+The guard accepts only main-branch runner context for this repository, never a
+dispatch-selected ref/profile/identity. Its separate three-file Node-builtins-only
+source closure is checked out at immutable `github.workflow_sha`, with persisted
+Git credentials disabled, not at the deployed source SHA. Deploy runs it before
+dependency installation or any live staging operation. The other core workflows
+put it in a prerequisite job, so a failed guard skips the entire probe/test job,
+including steps with `!cancelled()` failure-reporting conditions. Only
+`deployments:read` is added; there is no new write-capable journal principal.
+
+**Incomplete exclusion:** staging rollback/drills, migration/backup, role and
+import/catalog/census tools, scheduled guest/browser/analytics probes, rehearsal
+and the production workflow's staging-soak observer are not fenced yet. Pre-install
+in-flight runs, console writers and other-repository actors are not contained by
+these changes. Source/environment protection, complete actor coverage, independent
+principal/data admission and drain evidence remain required before any candidate
+mutation. A short list of fenced workflows must not be presented as global
+exclusion. The candidate controller, build sandbox, authoritative producer channel,
+activation and verified B/next-upload recovery are still uninstalled/inactive.
+No live journal or staging request has exercised these workflow changes.
 
 ## Required caller boundaries — still not installed
 

@@ -17,20 +17,34 @@ name: zap-staging
 
 on:
   workflow_call:
+    inputs:
+      staging_lock_inherited:
+        description: The trusted caller holds staging-application-exclusive for this entire call
+        type: boolean
+        default: false
   schedule:
     - cron: "41 3 * * *"
   workflow_dispatch:
 
 permissions:
   contents: read
+  deployments: read
 
 concurrency:
-  group: zap-staging-${{ github.event_name }}-${{ github.ref }}
+  group: >-
+    ${{ github.ref == 'refs/heads/main' &&
+    (inputs.staging_lock_inherited && format('staging-inherited-zap-{0}', github.run_id) ||
+    'staging-application-exclusive') || format('staging-rejected-zap-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
+  staging-occupancy:
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/staging-occupancy-clear.yml
+
   zap-baseline:
     name: zap-baseline
+    needs: staging-occupancy
     runs-on: ubuntu-latest
     timeout-minutes: 20
     env:

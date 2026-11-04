@@ -27,12 +27,28 @@ on:
 
 permissions:
   contents: read
+  deployments: read
 
+# Reject before joining the shared group: even a skipped workflow can otherwise
+# replace its one eligible pending member. Non-main dispatches are rejected too.
 concurrency:
-  group: e2e-staging
+  group: >-
+    ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+    (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+    github.event.workflow_run.head_branch == 'main' &&
+    github.event.workflow_run.head_repository.full_name == github.repository)) &&
+    'staging-application-exclusive' || format('staging-rejected-e2e-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
+  staging-occupancy:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       github.event.workflow_run.head_branch == 'main' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    uses: ./.github/workflows/staging-occupancy-clear.yml
+
   # Cheap change-scope gate (mirrors e2e.yml): a deploy whose head commit only
   # touches prose (`docs/**`, root `*.md`) that no gate, test or build reads,
   # or only the `test/` unit tree the journeys never execute, fast-passes the
@@ -41,8 +57,9 @@ jobs:
   # every other path resolves to skip_e2e=false.
   scope:
     name: scope
+    needs: staging-occupancy
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
@@ -82,12 +99,15 @@ jobs:
   # the live Worker, not the diff). A failing scan fails this run, which keeps
   # the commit from being promoted to production.
   zap-baseline:
+    needs: staging-occupancy
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     uses: ./.github/workflows/zap-staging.yml
+    with:
+      staging_lock_inherited: true
 
   # Passive set for the promotion regression check (G1): bin/smoke.mjs and
   # the GET-only guest journeys (e2e/watch) against staging, with the deployed
@@ -100,7 +120,7 @@ jobs:
     name: staging-passive
     needs: scope
     if: >-
-      needs.scope.outputs.skip_e2e != 'true' && (github.event_name == 'workflow_dispatch' ||
+      needs.scope.outputs.skip_e2e != 'true' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository))
@@ -156,7 +176,7 @@ jobs:
     name: staging-journeys
     needs: scope
     if: >-
-      needs.scope.outputs.skip_e2e != 'true' && (github.event_name == 'workflow_dispatch' ||
+      needs.scope.outputs.skip_e2e != 'true' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository))
@@ -246,10 +266,11 @@ jobs:
     name: staging-quality
     needs: scope
     if: >-
-      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     uses: ./.github/workflows/web-quality-origin.yml
     with:
       origin: https://next.togetherweown.com
+      staging_lock_inherited: true
