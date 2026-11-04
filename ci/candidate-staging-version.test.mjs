@@ -79,9 +79,17 @@ function result(value, init = {}) {
   });
 }
 
-function setup({ f = fixture(), uploadReply, readReply, clock = () => NOW, onFetch } = {}) {
+function setup({
+  f = fixture(),
+  uploadReply,
+  readReply,
+  contentReply,
+  clock = () => NOW,
+  onFetch,
+} = {}) {
   const calls = [];
   let metadata;
+  let versionForm;
   const uploader = createCandidateVersionUploader({
     token: TOKEN,
     profile: f.profile,
@@ -96,9 +104,39 @@ function setup({ f = fixture(), uploadReply, readReply, clock = () => NOW, onFet
       }
       if (url.includes("/assets/upload")) return result({ jwt: TICKET });
       if (options.method === "POST") {
-        metadata = JSON.parse(options.body.get("metadata"));
+        versionForm = options.body;
+        metadata = JSON.parse(versionForm.get("metadata"));
         const value = { id: VERSION, resources: { script: { etag: ETAG } } };
         return uploadReply ? uploadReply(value) : result(value);
+      }
+      if (url.includes("?include=modules")) {
+        const value = {
+          id: VERSION,
+          number: 42,
+          urls: [],
+          created_on: new Date(NOW * 1000).toISOString(),
+          annotations: structuredClone(metadata.annotations),
+          main_module: metadata.main_module,
+          compatibility_date: metadata.compatibility_date,
+          compatibility_flags: [...metadata.compatibility_flags],
+          bindings: structuredClone(metadata.bindings),
+          ...(metadata.assets
+            ? { assets: { config: structuredClone(metadata.assets.config) } }
+            : {}),
+          modules: [...versionForm]
+            .filter(([name]) => name !== "metadata")
+            .map(([name, blob]) => ({
+              name,
+              content_type: blob.type,
+              content_base64: "",
+            })),
+        };
+        for (const module of value.modules) {
+          module.content_base64 = Buffer.from(
+            await versionForm.get(module.name).arrayBuffer(),
+          ).toString("base64");
+        }
+        return contentReply ? contentReply(value) : result(value);
       }
       const value = {
         id: VERSION,
@@ -128,8 +166,14 @@ for (const assets of [false, true])
   test(`creates and independently reads only the exact version (${assets ? "with assets" : "module-only"})`, async () => {
     const s = setup({ f: fixture({ assets }) });
     const proof = await s.upload();
-    assert.equal(s.calls.length, assets ? 4 : 2);
-    const [post, get] = s.calls.slice(-2);
+    assert.equal(s.calls.length, assets ? 5 : 3);
+    const [post, get, content] = s.calls.slice(-3);
+    assert.equal(
+      content.url,
+      `${BASE.replace("/workers/scripts/", "/workers/workers/")}/versions/${VERSION}?include=modules`,
+    );
+    assert.equal(content.method, "GET");
+    assert.equal("body" in content, false);
     assert.equal(post.url, `${BASE}/versions?bindings_inherit=strict`);
     assert.equal(post.method, "POST");
     assert.equal(get.url, `${BASE}/versions/${VERSION}`);
@@ -160,14 +204,15 @@ for (const assets of [false, true])
       Buffer.from(await post.body.get("worker/worker.mjs").arrayBuffer()),
       s.f.input.bundle.entries.at(-1).bytes,
     );
-    assert.equal(proof.schema, "two.candidate-version-upload.v1");
+    assert.equal(proof.schema, "two.candidate-version-upload.v2");
     assert.equal(proof.promotable, false);
     assert.equal(proof.versionId, VERSION);
     assert.equal(proof.etag, ETAG);
     assert.equal(proof.q, s.f.input.identity.q);
     assert.equal(proof.bundleRootSha256, s.f.input.bundle.rootSha256);
-    assert.equal(proof.readbackScope, "version-bindings-and-runtime-only");
+    assert.equal(proof.readbackScope, "version-modules-bindings-runtime-and-asset-config");
     assert.match(proof.readbackSha256, /^[a-f0-9]{64}$/);
+    assert.match(proof.contentSha256, /^[a-f0-9]{64}$/);
     assert.ok(Object.isFrozen(proof) && Object.isFrozen(proof.build));
     for (const sensitive of [TOKEN, TICKET, s.f.input.verifier, "never execute candidate"])
       assert.equal(JSON.stringify(proof).includes(sensitive), false);
@@ -202,7 +247,7 @@ test("snapshots installed profile and invocation bytes before any await", async 
     },
   });
   const proof = await s.upload();
-  const post = s.calls.at(-2);
+  const post = s.calls.at(-3);
   assert.equal(post.url, `${BASE}/versions?bindings_inherit=strict`);
   assert.deepEqual(
     Buffer.from(await post.body.get("worker/worker.mjs").arrayBuffer()),
@@ -464,7 +509,7 @@ for (const [label, mutate] of [
     );
   });
 
-for (const stage of ["uploadReply", "readReply"])
+for (const stage of ["uploadReply", "readReply", "contentReply"])
   for (const [label, response] of [
     [
       "provider failure",
@@ -501,11 +546,22 @@ for (const stage of ["uploadReply", "readReply"])
     [
       "oversize length",
       () =>
-        result({}, { headers: { "content-type": "application/json", "content-length": "65537" } }),
+        result(
+          {},
+          {
+            headers: {
+              "content-type": "application/json",
+              "content-length": String((stage === "contentReply" ? 24 * 1024 * 1024 : 65536) + 1),
+            },
+          },
+        ),
     ],
     [
       "oversize stream",
-      () => new Response(" ".repeat(65537), { headers: { "content-type": "application/json" } }),
+      () =>
+        new Response(" ".repeat((stage === "contentReply" ? 24 * 1024 * 1024 : 65536) + 1), {
+          headers: { "content-type": "application/json" },
+        }),
     ],
     [
       "invalid UTF-8",
@@ -541,10 +597,13 @@ for (const stage of ["uploadReply", "readReply"])
     ],
   ])
     test(`redacts and refuses ${stage} ${label}`, async () => {
-      await refused({ [stage]: response }, stage === "uploadReply" ? 1 : 2);
+      await refused(
+        { [stage]: response },
+        { uploadReply: 1, readReply: 2, contentReply: 3 }[stage],
+      );
     });
 
-for (const stage of [1, 2])
+for (const stage of [1, 2, 3])
   for (const [label, time] of [
     ["expired", NOW + 1470],
     ["backward clock", NOW - 1],
@@ -562,6 +621,442 @@ for (const stage of [1, 2])
         stage,
       );
     });
+
+function addChunk(f) {
+  f.input.bundle.entries.push({
+    path: "worker/chunks/chunk.mjs",
+    type: "file",
+    bytes: Buffer.from("export const n = 42;"),
+  });
+  f.input.bundle.entries.sort((a, b) => (a.path < b.path ? -1 : 1));
+  f.input.bundle.rootSha256 = candidateSha256(
+    JSON.stringify(
+      f.input.bundle.entries.map((e) => [e.path, e.bytes.length, candidateSha256(e.bytes)]),
+    ),
+  );
+  f.input.bundle.files = f.input.bundle.entries.length;
+  f.input.bundle.bytes = f.input.bundle.entries.reduce((n, e) => n + e.bytes.length, 0);
+}
+
+for (const [label, mutate] of [
+  [
+    "wrong UUID",
+    (v) => {
+      v.id = "0".repeat(8) + VERSION.slice(8);
+    },
+  ],
+  [
+    "missing modules",
+    (v) => {
+      delete v.modules;
+    },
+  ],
+  [
+    "missing module",
+    (v) => {
+      v.modules.pop();
+    },
+  ],
+  [
+    "extra module",
+    (v) => {
+      v.modules.push({ ...v.modules[0], name: "worker/extra.mjs" });
+    },
+  ],
+  [
+    "duplicate module",
+    (v) => {
+      v.modules[1] = v.modules[0];
+    },
+  ],
+  [
+    "wrong bytes with unchanged etag",
+    (v) => {
+      v.modules[0].content_base64 = Buffer.from("altered module bytes").toString("base64");
+    },
+  ],
+  [
+    "wrong chunk bytes",
+    (v) => {
+      v.modules.find((m) => m.name.includes("chunks/")).content_base64 =
+        Buffer.from("export const n = 43;").toString("base64");
+    },
+  ],
+  [
+    "wrong entrypoint",
+    (v) => {
+      v.main_module = "worker/chunks/chunk.mjs";
+    },
+  ],
+  [
+    "current-script entrypoint",
+    (v) => {
+      v.main_module = "index.js";
+    },
+  ],
+  [
+    "path alias",
+    (v) => {
+      v.modules[0].name = "worker/../worker/worker.mjs";
+    },
+  ],
+  [
+    "case alias",
+    (v) => {
+      v.modules[0].name = v.modules[0].name.toUpperCase();
+    },
+  ],
+  [
+    "string modules",
+    (v) => {
+      v.modules = "not modules";
+    },
+  ],
+  [
+    "null module",
+    (v) => {
+      v.modules[0] = null;
+    },
+  ],
+  [
+    "wrong MIME",
+    (v) => {
+      v.modules[0].content_type = "text/plain";
+    },
+  ],
+  [
+    "extra module property",
+    (v) => {
+      v.modules[0].content_sha256 = "f".repeat(64);
+    },
+  ],
+  [
+    "missing module bytes",
+    (v) => {
+      delete v.modules[0].content_base64;
+    },
+  ],
+  [
+    "permissive base64 whitespace",
+    (v) => {
+      v.modules[0].content_base64 += "\n";
+    },
+  ],
+  [
+    "base64 garbage",
+    (v) => {
+      v.modules[0].content_base64 = "!!!!";
+    },
+  ],
+  [
+    "oversize base64",
+    (v) => {
+      v.modules[0].content_base64 = "A".repeat(4 * Math.ceil((16 * 1024 * 1024) / 3) + 4);
+    },
+  ],
+  [
+    "retained secret",
+    (v) => {
+      v.bindings.push({ name: "SECRET", type: "secret_text" });
+    },
+  ],
+  [
+    "different verifier",
+    (v) => {
+      v.bindings.find((b) => b.name === "QA_RUN_AUTH").text = "other";
+    },
+  ],
+  [
+    "different DB",
+    (v) => {
+      v.bindings.find((b) => b.name === "DB").id = "9".repeat(32);
+    },
+  ],
+  [
+    "wrong runtime",
+    (v) => {
+      v.compatibility_date = "2000-01-01";
+    },
+  ],
+  [
+    "wrong flags",
+    (v) => {
+      v.compatibility_flags.push("another_flag");
+    },
+  ],
+  [
+    "wrong tag",
+    (v) => {
+      v.annotations["workers/tag"] = "candidate-other";
+    },
+  ],
+  [
+    "other annotation",
+    (v) => {
+      v.annotations["workers/message"] = "other";
+    },
+  ],
+  [
+    "other trigger",
+    (v) => {
+      v.annotations["workers/triggered_by"] = "rollback";
+    },
+  ],
+  [
+    "preview URL",
+    (v) => {
+      v.urls.push("https://example.workers.dev");
+    },
+  ],
+  [
+    "missing URL state",
+    (v) => {
+      delete v.urls;
+    },
+  ],
+  [
+    "invalid creation",
+    (v) => {
+      v.created_on = "not a date";
+    },
+  ],
+  [
+    "invalid sequence",
+    (v) => {
+      v.number = 0;
+    },
+  ],
+  [
+    "unrequested assets",
+    (v) => {
+      v.assets = { config: { run_worker_first: true } };
+    },
+  ],
+  [
+    "unrequested limits",
+    (v) => {
+      v.limits = { cpu_ms: 50 };
+    },
+  ],
+  [
+    "unrequested placement",
+    (v) => {
+      v.placement = { mode: "smart" };
+    },
+  ],
+  [
+    "container",
+    (v) => {
+      v.containers = [{ class_name: "App" }];
+    },
+  ],
+  [
+    "migration",
+    (v) => {
+      v.migrations = { new_tag: "v1" };
+    },
+  ],
+  [
+    "migration tag",
+    (v) => {
+      v.migration_tag = "v1";
+    },
+  ],
+  [
+    "tail consumer",
+    (v) => {
+      v.tail_consumers = [{ service: "other" }];
+    },
+  ],
+  [
+    "streaming tail",
+    (v) => {
+      v.streaming_tail_consumers = [{ service: "other" }];
+    },
+  ],
+  [
+    "cache enabled",
+    (v) => {
+      v.exports = { default: { type: "worker", cache: { enabled: true } } };
+    },
+  ],
+  [
+    "named export",
+    (v) => {
+      v.exports = { other: { type: "worker", cache: { enabled: false } } };
+    },
+  ],
+  [
+    "package dependencies",
+    (v) => {
+      v.package_dependencies = [];
+    },
+  ],
+  [
+    "unknown top-level field",
+    (v) => {
+      v.unknown = "not ignored";
+    },
+  ],
+])
+  test(`refuses immutable content ${label}`, async () => {
+    const f = fixture();
+    addChunk(f);
+    await refused(
+      {
+        f,
+        contentReply: (v) => {
+          mutate(v);
+          return result(v);
+        },
+      },
+      3,
+    );
+  });
+
+for (const [label, mutate] of [
+  [
+    "missing assets",
+    (v) => {
+      delete v.assets;
+    },
+  ],
+  [
+    "missing config",
+    (v) => {
+      delete v.assets.config;
+    },
+  ],
+  [
+    "asset-first routing",
+    (v) => {
+      v.assets.config.run_worker_first = false;
+    },
+  ],
+  [
+    "redirect config",
+    (v) => {
+      v.assets.config._redirects = "/ /other 302";
+    },
+  ],
+  [
+    "HTML handling",
+    (v) => {
+      v.assets.config.html_handling = "auto-trailing-slash";
+    },
+  ],
+  [
+    "unknown asset field",
+    (v) => {
+      v.assets.other = "not ignored";
+    },
+  ],
+  [
+    "other ticket",
+    (v) => {
+      v.assets.jwt = "other.ticket.value";
+    },
+  ],
+])
+  test(`refuses immutable content ${label} with assets`, async () => {
+    await refused(
+      {
+        f: fixture({ assets: true }),
+        contentReply: (v) => {
+          mutate(v);
+          return result(v);
+        },
+      },
+      5,
+    );
+  });
+
+test("admits remote modules in any order, optional inert provider defaults and matching asset ticket", async () => {
+  const f = fixture({ assets: true });
+  addChunk(f);
+  const s = setup({
+    f,
+    contentReply: (v) => {
+      v.modules.reverse();
+      v.bindings.reverse();
+      v.annotations["workers/triggered_by"] = "upload";
+      v.assets.jwt = TICKET;
+      v.containers = [];
+      v.usage_model = "standard";
+      v.exports = { default: { type: "worker", cache: { enabled: false } } };
+      v.author_email = "fixture@example.com";
+      v.author_id = "fixture-author";
+      v.source = "api";
+      v.startup_time_ms = 1;
+      return result(v);
+    },
+  });
+  const proof = await s.upload();
+  assert.equal(s.calls.length, 5);
+  assert.equal(proof.promotable, false);
+  assert.match(proof.contentSha256, /^[a-f0-9]{64}$/);
+  assert.equal(JSON.stringify(proof).includes(TICKET), false);
+  assert.equal(JSON.stringify(proof).includes("fixture-author"), false);
+});
+
+for (const [label, encoded] of [
+  ["noncanonical pad bits", "/x=="],
+  ["alternate alphabet", "_w=="],
+])
+  test(`refuses immutable module ${label} even when decoded bytes match`, async () => {
+    const f = fixture();
+    f.input.bundle.entries[0].bytes = Buffer.from([255]);
+    addChunk(f);
+    assert.deepEqual(Buffer.from(encoded, "base64"), Buffer.from([255]));
+    await refused(
+      {
+        f,
+        contentReply: (v) => {
+          v.modules.find((m) => m.name === "worker/worker.mjs").content_base64 = encoded;
+          return result(v);
+        },
+      },
+      3,
+    );
+  });
+
+test("content hash is deterministic across remote ordering and rejects changed bytes under the same etag", async () => {
+  const f = fixture({ assets: true });
+  addChunk(f);
+  const first = await setup({ f }).upload();
+  const second = await setup({
+    f,
+    contentReply: (v) => {
+      v.modules.reverse();
+      v.bindings.reverse();
+      return result(v);
+    },
+  }).upload();
+  assert.equal(first.contentSha256, second.contentSha256);
+  assert.equal(first.etag, second.etag);
+  const changed = setup({
+    f,
+    contentReply: (v) => {
+      const module = v.modules.find((m) => m.name === "worker/worker.mjs");
+      const bytes = Buffer.from(module.content_base64, "base64");
+      bytes[0] ^= 1;
+      module.content_base64 = bytes.toString("base64");
+      return result(v);
+    },
+  });
+  await assert.rejects(changed.upload(), ERROR);
+  assert.equal(changed.calls.length, 5);
+});
+
+test("a valid content response larger than the narrow projection cap is admitted", async () => {
+  const f = fixture();
+  f.input.bundle.entries[0].bytes = Buffer.alloc(100_000, "x");
+  addChunk(f);
+  const s = setup({ f });
+  const proof = await s.upload();
+  assert.match(proof.contentSha256, /^[a-f0-9]{64}$/);
+  assert.equal(s.calls.length, 3);
+});
 
 test("asset transport failure never reaches version creation", async () => {
   const s = setup({

@@ -154,9 +154,10 @@ sender must submit the exact constructed metadata/module bytes and bind provider
 readback to the request proof before activation. It must independently establish
 live head/CI/build/producer provenance, asset-ticket provenance, global exclusion,
 dirty occupancy, preview-route disablement, baseline restoration and next-upload
-compatibility. The isolated sender below now joins assets, creation and a narrow
-version binding/runtime readback. Full script/config/code-byte readback,
-version/serving history and installed activation/recovery remain unimplemented. Ordinary
+compatibility. The isolated sender below now joins assets, creation, a narrow
+version binding/runtime readback and immutable module-byte/config readback.
+Persistent Worker settings, stored asset-content verification, version/serving
+history and installed activation/recovery remain unimplemented. Ordinary
 Wrangler upload remains unsuitable because it retains secrets by default; this
 constructor does not make a live candidate safe merely by omitting those secrets.
 
@@ -208,12 +209,13 @@ scope validation, synthetic-data admission, restoration evidence or native
 Security clearance. A failed upload can leave inert content-addressed assets;
 the installed controller must already hold exclusion and durable dirty occupancy
 before calling this mutating adapter. The isolated sender below now connects
-assets to version creation/readback. Trusted build/producer integration, full
-provider/config/code-byte admission, global exclusion and complete verified B and
+assets to version creation and immutable module/config readback. Trusted
+build/producer integration, persistent Worker/asset-content admission, global
+exclusion and complete verified B and
 next-ordinary-upload restoration remain unimplemented. No live use is permitted
 merely because these isolated fixtures pass.
 
-## Trusted version transport and narrow readback (not installed or activated)
+## Trusted version transport and immutable readback (not installed or activated)
 
 [The version adapter](../ci/candidate-staging-version.mjs) owns its installed
 profile and independent pin at construction; invocation accepts only identity,
@@ -226,15 +228,17 @@ prepared forms, URLs, profile overrides or clocks. Only mocked transport has
 exercised this helper; no workflow calls it.
 
 The adapter constructs the explicit-binding form itself, sends exactly one
-version-create POST, then GETs the fixed version endpoint at the returned
-canonical UUID. It never calls deployments, settings, routes or preview APIs,
-selects traffic, invokes candidate code/tooling or retries a partial mutation.
-The provider bearer goes only to fixed same-account API endpoints; asset buckets
-still receive only their session capability. Version responses require bounded
-64-KiB JSON success envelopes, strict UTF-8, no redirect or foreign final URL,
-10-second request signals, a 180-second overall bound and monotonic original
-credential-cutoff checks across the asset and version phases. Any failure yields
-only a fixed redacted error, never a partial receipt.
+version-create POST, then GETs the fixed script-version endpoint at the returned
+canonical UUID and the immutable Worker-version endpoint with `include=modules`.
+It never calls deployments, settings, routes or preview APIs, selects traffic,
+invokes candidate code/tooling or retries a partial mutation. The provider bearer
+goes only to fixed same-account API endpoints; asset buckets still receive only
+their session capability. Metadata responses require bounded 64-KiB JSON success
+envelopes; the module response has a separate 24-MiB ceiling for base64 plus
+bounded paths/configuration from the admitted 16-MiB bundle. Both enforce strict
+UTF-8, no redirect or foreign final URL, 10-second request signals, a shared
+180-second overall bound and monotonic original credential-cutoff checks across
+all phases. Any failure yields only a fixed redacted error, never a partial receipt.
 
 Independent GET admission joins UUID, creation-response etag, candidate tag,
 exact compatibility date/flags and the exact requested binding set. Binding
@@ -246,15 +250,32 @@ or actual provider response outside this projection refuses rather than silently
 ignoring it. The shipped Wrangler version client establishes the endpoint and
 resource layout, not live provider conformance to this stricter contract.
 
-The allowlisted frozen receipt joins the request proof to UUID, etag and a hash
-of the checked version projection, with literal `promotable:false` and
-`readbackScope:version-bindings-and-runtime-only`. It contains no ticket, token,
-verifier JSON, source bytes, serving URL or activation authority. The etag joins
-the two provider observations; it is **not** an independently verified digest of
-the remotely stored module bytes. This GET is not complete script settings,
-asset routing/content, tail/streaming consumer, preview-route disablement,
-serving history, capability scope, synthetic-data or baseline-restoration proof.
-All those checks, installed controller/journal/exclusion wiring, component maps,
+The second GET uses the documented
+[immutable Worker-version API](https://developers.cloudflare.com/api/resources/workers/subresources/beta/subresources/workers/subresources/versions/methods/get/),
+with the same full UUID and fixed staging account/Worker name, never `latest`, a
+UUID prefix, a candidate URL or the mutable script `content/v2`. It requires the
+exact entrypoint and complete module set. Each module has an exact name/MIME and
+canonical standard-base64 encoding; decoded bytes must equal the independently
+admitted pre-await snapshot, not just an etag. Missing/duplicate/extra modules,
+case/path aliases, altered chunks and noncanonical encodings refuse. Module
+order is immaterial. Runtime, bindings and tag are checked again independently.
+Only absent or explicitly inert version defaults are accepted: no containers,
+limits, placement, migrations, extra exports, caching or unrequested fields.
+Any routable version URL refuses. Asset config must be exactly Worker-first;
+headers/redirect/HTML rules refuse. A returned asset ticket must match the one
+submitted, but that comparison is **not** remote asset-content proof. Live
+cross-API conformance and actual disabled-preview state remain unproven.
+
+The allowlisted frozen `two.candidate-version-upload.v2` receipt joins request
+proof to UUID, etag, the script-version projection hash and a second canonical
+module/config hash, with literal `promotable:false` and
+`readbackScope:version-modules-bindings-runtime-and-asset-config`. It contains no
+ticket, token, verifier JSON, source bytes, author metadata, serving URL or
+activation authority. Etag remains a join between observations, not a substitute
+for module comparison. These GETs are not persistent Worker settings, stored
+asset-content, tail/streaming consumer, preview-route disablement, serving
+history, capability scope, synthetic-data or baseline-restoration proof. All
+those checks, installed controller/journal/exclusion wiring, component maps,
 trusted build provenance and native Security admission remain prerequisites to
 any live mutation/selection. This helper's mock green is not live qualification.
 
