@@ -20,7 +20,8 @@
 // signs the member in, consumed (deleted) on the first of /, /join, /profile
 // that renders it — like the legacy session flash.
 import type { Context } from "hono";
-import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { deleteCookie } from "hono/cookie";
+import { getJourneyCookie, setJourneyCookie } from "./journey-cookie";
 import type { Env } from "./env";
 import { safeNext } from "./join/service";
 import { expiredWriteBounce } from "./write-recovery";
@@ -55,7 +56,7 @@ export const deleteOpts = { ...cookieOpts };
 export async function rememberLoginNext(c: Ctx, raw: string | undefined): Promise<void> {
   const next = safeNext(raw);
   if (next) {
-    await setSignedCookie(c, LOGIN_NEXT_COOKIE, next, c.env.SESSION_SECRET, {
+    await setJourneyCookie(c, LOGIN_NEXT_COOKIE, next, c.env.SESSION_SECRET, {
       ...cookieOpts,
       maxAge: JOURNEY_TTL_SECONDS,
     });
@@ -81,7 +82,7 @@ export async function bounceToLogin(c: Ctx): Promise<Response> {
     // rejected value also clears a stale intended cookie so the callback
     // cannot honor another journey's return.
     if (safeNext(dest)) {
-      await setSignedCookie(c, LOGIN_INTENDED_COOKIE, dest, c.env.SESSION_SECRET, {
+      await setJourneyCookie(c, LOGIN_INTENDED_COOKIE, dest, c.env.SESSION_SECRET, {
         ...cookieOpts,
         maxAge: JOURNEY_TTL_SECONDS,
       });
@@ -102,8 +103,8 @@ export async function bounceToLogin(c: Ctx): Promise<Response> {
  */
 export async function consumeLoginReturn(c: Ctx): Promise<string | null> {
   const [rawNext, rawIntended] = await Promise.all([
-    getSignedCookie(c, c.env.SESSION_SECRET, LOGIN_NEXT_COOKIE),
-    getSignedCookie(c, c.env.SESSION_SECRET, LOGIN_INTENDED_COOKIE),
+    getJourneyCookie(c, c.env.SESSION_SECRET, LOGIN_NEXT_COOKIE),
+    getJourneyCookie(c, c.env.SESSION_SECRET, LOGIN_INTENDED_COOKIE),
   ]);
   deleteCookie(c, LOGIN_NEXT_COOKIE, deleteOpts);
   deleteCookie(c, LOGIN_INTENDED_COOKIE, deleteOpts);
@@ -118,7 +119,7 @@ export type JoinResult = "added" | "already_member";
 
 /** Flash the one-shot join confirmation onto the callback's redirect response. */
 export async function recordJoinResult(c: Ctx, result: JoinResult): Promise<void> {
-  await setSignedCookie(c, JOIN_RESULT_COOKIE, result, c.env.SESSION_SECRET, {
+  await setJourneyCookie(c, JOIN_RESULT_COOKIE, result, c.env.SESSION_SECRET, {
     ...cookieOpts,
     maxAge: JOURNEY_TTL_SECONDS,
   });
@@ -127,7 +128,7 @@ export async function recordJoinResult(c: Ctx, result: JoinResult): Promise<void
 /** Read without consuming: HEAD has no visible body, so leaves the flash pending. */
 export async function readJoinResult(c: Ctx): Promise<JoinResult | null> {
   if (c.req.method !== "GET") return null;
-  const value = await getSignedCookie(c, c.env.SESSION_SECRET, JOIN_RESULT_COOKIE);
+  const value = await getJourneyCookie(c, c.env.SESSION_SECRET, JOIN_RESULT_COOKIE);
   return value === "added" || value === "already_member" ? value : null;
 }
 

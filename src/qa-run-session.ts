@@ -162,6 +162,16 @@ export function createQaRunSessionBoundary(store: SessionStore, request: QaRunSe
       return alive && sameRun(await active(), context.verifier.q);
     },
 
+    // Logout may arrive after the presented predecessor's grace elapsed.
+    // The current-run liveness cookie can still retire that lineage; this is
+    // not authentication and never resolves an identity or grants authority.
+    async revokeStatus(status: string): Promise<boolean> {
+      const context = await active();
+      if (!context || !qaRunNamespaceMatches(status, "status", context.verifier.q)) return false;
+      await store.revokeLineage(status);
+      return true;
+    },
+
     async revoke(token: string, everywhere = false): Promise<boolean> {
       const admitted = await admitToken(token);
       if (!admitted) return false;

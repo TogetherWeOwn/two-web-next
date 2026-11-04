@@ -347,6 +347,8 @@ exactly once.
 | `src/qa.ts` | auth |
 | `src/qa-run-auth.ts` | auth |
 | `src/qa-run-session.ts` | auth |
+| `src/session-admission.ts` | auth |
+| `src/journey-cookie.ts` | auth |
 | `src/recovery-outcome.ts` | entry |
 | `src/recovery-hono.tsx` | entry |
 | `src/release-tag.ts` | observability |

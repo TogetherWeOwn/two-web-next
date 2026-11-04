@@ -1,9 +1,15 @@
 import type { Context, Next } from "hono";
-import { deleteCookie, generateSignedCookie, getSignedCookie } from "hono/cookie";
+import { deleteCookie, generateCookie, generateSignedCookie, getSignedCookie } from "hono/cookie";
+import { qaRunContext, qaRunCookieTtl, qaRunNamespaceMatches } from "./qa-run-auth";
+import {
+  qaRunConfigured,
+  qaRunSessionsFor,
+  readSessionCookie,
+  uniqueCookie,
+} from "./session-admission";
 import { exceptionClass } from "./alerts";
 import { safeRequestId } from "./request-log";
 import { hashToken, isValidSessionToken, SESSION_TTL_SECONDS, type SessionStore } from "./sessions";
-import { SESSION_COOKIE } from "./session-cookie";
 
 export const AUTH_STATUS_COOKIE = "__Host-two_session_status";
 const OPTIONS = {
@@ -35,8 +41,34 @@ export async function prepareAuthStatus(
   tokenHash: string,
   knownKey?: string | null,
 ): Promise<(() => void) | null> {
+  if (qaRunConfigured(c.env)) {
+    const context = await qaRunContext(c.env.QA_RUN_AUTH, c.req.url, c.env.APP_URL);
+    if (!context) return null;
+    const key = knownKey === undefined ? await store.statusHash(tokenHash) : knownKey;
+    if (
+      !key ||
+      !qaRunNamespaceMatches(key, "status", context.verifier.q) ||
+      !(await qaRunSessionsFor(c.req.raw, c.env, store).isActive(key))
+    )
+      return null;
+    return () => {
+      // Attachment may follow a buffered render. Never stamp an already-expired
+      // probe with the original (longer) preparation-time Max-Age.
+      const ttl = qaRunCookieTtl(context);
+      if (ttl === null) return;
+      c.header(
+        "set-cookie",
+        generateCookie(AUTH_STATUS_COOKIE, key, {
+          ...OPTIONS,
+          maxAge: Math.min(SESSION_TTL_SECONDS, ttl),
+        }),
+        { append: true },
+      );
+      c.set("authStatusEnabled", true);
+    };
+  }
   const key = knownKey === undefined ? await store.statusHash(tokenHash) : knownKey;
-  if (!key) return null;
+  if (!key || key.startsWith("q1p.")) return null;
   const cookie = await generateSignedCookie(AUTH_STATUS_COOKIE, key, c.env.SESSION_SECRET, OPTIONS);
   return () => {
     c.header("set-cookie", cookie, { append: true });
@@ -59,8 +91,24 @@ export async function authStatus(c: Ctx, storeFor: () => Promise<SessionStore>):
   c.header("cache-control", "no-store, private");
   c.header("vary", "Cookie");
   try {
+    if (qaRunConfigured(c.env)) {
+      const context = await qaRunContext(c.env.QA_RUN_AUTH, c.req.url, c.env.APP_URL);
+      if (!context) return c.json({ authenticated: false });
+      const key = uniqueCookie(c.req.raw, AUTH_STATUS_COOKIE);
+      const token = await readSessionCookie(c);
+      if (key && qaRunNamespaceMatches(key, "status", context.verifier.q)) {
+        return c.json({
+          authenticated: await qaRunSessionsFor(c.req.raw, c.env, await storeFor()).isActive(key),
+        });
+      }
+      return c.json({
+        authenticated: token
+          ? !!(await qaRunSessionsFor(c.req.raw, c.env, await storeFor()).read(token))
+          : false,
+      });
+    }
     const key = await getSignedCookie(c, c.env.SESSION_SECRET, AUTH_STATUS_COOKIE);
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+    const token = await readSessionCookie(c);
     if (typeof key === "string" && /^[a-f0-9]{64}$/.test(key)) {
       return c.json({ authenticated: await (await storeFor()).isActive(key) });
     }

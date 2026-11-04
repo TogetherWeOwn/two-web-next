@@ -1,7 +1,7 @@
 // RSVP member writes: PUT/DELETE /events/:key/rsvp, the POST /e/:key/rsvp
 // HTML adapter and the 405 fallback. Split out of src/events/routes.tsx;
 // behavior unchanged.
-import { getSignedCookie } from "hono/cookie";
+import { readSessionCookie } from "../session-admission";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { dbFor } from "../admin/db";
 import { requestBodyLimit } from "../body-limit";
@@ -11,8 +11,6 @@ import { jsonRefusal } from "../json-refusal";
 import { acceptsJson } from "../media-type";
 import { RSVP_HONEY_FIELD, loginUrl, rsvpHoneyFilled } from "../islands/contracts";
 import { renderHtmlOutcome } from "../html-outcome";
-import { SESSION_COOKIE } from "../session-cookie";
-import { isValidSessionToken } from "../sessions";
 import { expiredWriteBounce } from "../write-recovery";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { dispatchRsvpSync, isRsvpStatus, withdrawRsvp, writeRsvp, type RsvpAnswer } from "./rsvp";
@@ -41,8 +39,8 @@ async function member(c: Ctx, readFragmentSession: SessionReader): Promise<Sessi
   if (!session) {
     // Recover only a signed, well-formed dead bearer; unknown guests keep
     // the bare refusal. JSON-only even for header-less callers: no false 200.
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-    if (isValidSessionToken(token)) return expiredWriteBounce(c, true);
+    const token = await readSessionCookie(c);
+    if (token) return expiredWriteBounce(c, true);
     return jsonRefusal(c, "unauthenticated", 401);
   }
   if (!session.member) return jsonRefusal(c, "forbidden", 403);

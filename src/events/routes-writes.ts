@@ -2,7 +2,7 @@
 // publish/cancel/rsvp-pause/rsvp-reopen transitions and the duplicate copy
 // action. Split out of src/events/routes.tsx; behavior unchanged.
 import type { Context, MiddlewareHandler } from "hono";
-import { getSignedCookie } from "hono/cookie";
+import { readSessionCookie } from "../session-admission";
 import { dbFor } from "../admin/db";
 import {
   NotFoundError,
@@ -32,8 +32,6 @@ import {
   type Ctx,
   type SessionReader,
 } from "./routes-shared";
-import { SESSION_COOKIE } from "../session-cookie";
-import { isValidSessionToken } from "../sessions";
 
 async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Session | Response> {
   // Non-rotating: concurrent writes with one cookie must all authenticate.
@@ -47,8 +45,8 @@ async function moderator(c: Ctx, readFragmentSession: SessionReader): Promise<Se
   // bare unauthenticated refusal the admission pins assert.
   const session = await readFragmentSession(c);
   if (!session) {
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-    if (isValidSessionToken(token)) return expiredWriteBounce(c, true);
+    const token = await readSessionCookie(c);
+    if (token) return expiredWriteBounce(c, true);
     return jsonRefusal(c, "unauthenticated", 401);
   }
   if (!session.moderator) return jsonRefusal(c, "forbidden", 403);

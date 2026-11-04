@@ -3,6 +3,8 @@ import { readdirSync, readFileSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
+import { parse } from "@babel/parser";
+import * as t from "@babel/types";
 import {
   JOURNEY_TTL_SECONDS as JOIN_JOURNEY_TTL_SECONDS,
   STATE_TTL_SECONDS as JOIN_STATE_TTL_SECONDS,
@@ -275,7 +277,9 @@ function importEntries(text: string): ImportEntry[] {
 // from there under the same name. A same-named local constant anywhere else is a
 // shadow, not the pin.
 function pinnedLifetimeInFile(where: string, fileText: string, snippet: string): boolean {
-  const name = snippet.match(/maxAge:\s*(\w+)/)?.[1];
+  // A dynamic lease may shorten a pinned lifetime, never extend it. The
+  // canonical import/origin checks below still apply to the clamp's ceiling.
+  const name = snippet.match(/maxAge:\s*(?:Math\.min\(\s*)?(\w+)/)?.[1];
   if (name === undefined || !PINNED_COOKIE_LIFETIMES.includes(name)) return false;
   const origins = PINNED_COOKIE_ORIGINS[name] ?? [];
   if (origins.includes(where))
@@ -321,20 +325,53 @@ function withoutCookieDeletions(text: string): string {
     return text;
   return text.replace(
     /\bgenerateCookie\(\s*\w+\s*,\s*(?:""|'')\s*,\s*\{\s*(?:\.\.\.\w+\s*,\s*)?maxAge:\s*0\s*,?\s*\}\s*\)/g,
-    "",
+    "undefined",
   );
 }
 
 function cookieLifetimeOffenders(file: string, text: string): string[] {
   text = withoutCookieDeletions(text);
   const where = relative(root, file);
-  const expressions = [...text.matchAll(/maxAge:\s*([^,}\n]+)/g)].map((match) => match[1]!.trim());
+  const source = parse(text, {
+    sourceType: "module",
+    plugins: ["typescript", ...(file.endsWith(".tsx") ? ["jsx" as const] : [])],
+  });
+  const expressions: t.Expression[] = [];
+  const visit = (node: t.Node): void => {
+    if (
+      t.isObjectProperty(node) &&
+      !node.computed &&
+      (t.isIdentifier(node.key, { name: "maxAge" }) ||
+        t.isStringLiteral(node.key, { value: "maxAge" })) &&
+      t.isExpression(node.value)
+    )
+      expressions.push(node.value);
+    for (const key of t.VISITOR_KEYS[node.type] ?? []) {
+      const child = (node as unknown as Record<string, unknown>)[key];
+      if (Array.isArray(child)) {
+        for (const item of child) if (t.isNode(item)) visit(item);
+      } else if (t.isNode(child)) visit(child);
+    }
+  };
+  visit(source);
   return [
     ...expressions.flatMap((expr) => {
-      if (!PINNED_COOKIE_LIFETIMES.includes(expr)) return [`${where}: maxAge: ${expr}`];
-      if (!pinnedLifetimeInFile(where, text, `maxAge: ${expr}`))
+      // Admit the complete expression, not a prefix that could hide +86400.
+      const first =
+        t.isCallExpression(expr) &&
+        t.isMemberExpression(expr.callee) &&
+        !expr.callee.computed &&
+        t.isIdentifier(expr.callee.object, { name: "Math" }) &&
+        t.isIdentifier(expr.callee.property, { name: "min" }) &&
+        expr.arguments.length >= 2
+          ? expr.arguments[0]
+          : undefined;
+      const ceiling = t.isIdentifier(expr) ? expr.name : t.isIdentifier(first) ? first.name : "";
+      const snippet = text.slice(expr.start ?? 0, expr.end ?? text.length);
+      if (!PINNED_COOKIE_LIFETIMES.includes(ceiling)) return [`${where}: maxAge: ${snippet}`];
+      if (!pinnedLifetimeInFile(where, text, `maxAge: ${ceiling}`))
         return [
-          `${where}: maxAge: ${expr} must come from its pinned module (${(PINNED_COOKIE_ORIGINS[expr] ?? []).join(" or ")})`,
+          `${where}: maxAge: ${snippet} must come from its pinned module (${(PINNED_COOKIE_ORIGINS[ceiling] ?? []).join(" or ")})`,
         ];
       return [];
     }),
@@ -415,6 +452,40 @@ describe(`privacy policy v${POLICY_VERSION} numbers are pinned to code`, () => {
       floors.at(-1),
       `the latest audit_rows_append_only definition must keep access-log rows ${MEMBER_ACCESS_LOG_RETENTION_DAYS} days`,
     ).toBe(MEMBER_ACCESS_LOG_RETENTION_DAYS * 24);
+  });
+
+  it("admits shorter dynamic leases only below an unchanged canonical pinned ceiling", () => {
+    const file = resolve(root, "src/example.ts");
+    const imports =
+      'import { generateCookie } from "hono/cookie";\nimport { SESSION_TTL_SECONDS } from "./sessions";\n';
+    const call = (expression: string) => `generateCookie(name, value, { maxAge: ${expression} });`;
+    expect(
+      cookieLifetimeOffenders(file, imports + call("Math.min(SESSION_TTL_SECONDS, remaining)")),
+    ).toEqual([]);
+    for (const expression of [
+      "Math.max(SESSION_TTL_SECONDS, remaining)",
+      "Math.min(remaining, SESSION_TTL_SECONDS)",
+      "Math.min(SESSION_TTL_SECONDS + 1, remaining)",
+      "Math.min(SESSION_TTL_SECONDS, remaining) + 86400",
+      "Math.min(SESSION_TTL_SECONDS, remaining) * 2",
+      "(Math.min(SESSION_TTL_SECONDS, remaining), 86400)",
+      "Math.min(SESSION_TTL_SECONDS)",
+      "remaining",
+    ]) {
+      expect(cookieLifetimeOffenders(file, imports + call(expression)).length).toBeGreaterThan(0);
+    }
+    for (const declaration of [
+      "const SESSION_TTL_SECONDS = 999999;",
+      'import { SESSION_TTL_SECONDS } from "./other";',
+      'import { SESSION_TTL_SECONDS as ceiling } from "./sessions";',
+    ]) {
+      expect(
+        cookieLifetimeOffenders(
+          file,
+          declaration + call("Math.min(SESSION_TTL_SECONDS, remaining)"),
+        ).length,
+      ).toBeGreaterThan(0);
+    }
   });
 
   it("gives every cookie lifetime in src a pinned constant", () => {

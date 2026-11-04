@@ -8,7 +8,8 @@
 // this module free of the import cycle — the same pattern as the join router's
 // JoinSessionHooks.
 import { type Context, Hono } from "hono";
-import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { deleteCookie, getSignedCookie } from "hono/cookie";
+import { setJourneyCookie } from "../journey-cookie";
 import { exceptionClass } from "../alerts";
 import { requestBodyLimit } from "../body-limit";
 import { isDatabaseUnavailable } from "../db/errors";
@@ -48,7 +49,7 @@ import {
   rememberLoginNext,
 } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
-import { hashToken, isValidSessionToken, REVOKE_ALL_EXCEPT, type SessionStore } from "../sessions";
+import { hashToken, REVOKE_ALL_EXCEPT, type SessionStore } from "../sessions";
 import {
   AUTH_THROTTLE_PER_MINUTE,
   WRITE_THROTTLE_PER_MINUTE,
@@ -64,6 +65,14 @@ import {
   recoveryLanding,
 } from "../write-recovery";
 import { SESSION_COOKIE } from "../session-cookie";
+import { qaRunContext, qaRunCredentialMatches } from "../qa-run-auth";
+import {
+  QaRunSessionRefused,
+  qaRunConfigured,
+  qaRunSessionsFor,
+  readSessionCookie,
+  uniqueCookie,
+} from "../session-admission";
 
 export { SESSION_COOKIE };
 const STATE_COOKIE = "__Host-two_oauth_state";
@@ -159,7 +168,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // Return journey (legacy login_next): a safe ?next= rides the
     // OAuth round trip in a signed cookie; a hostile value leaves no trace.
     await rememberLoginNext(c, c.req.query("next"));
-    await setSignedCookie(c, STATE_COOKIE, state, c.env.SESSION_SECRET, {
+    await setJourneyCookie(c, STATE_COOKIE, state, c.env.SESSION_SECRET, {
       path: "/",
       secure: true,
       httpOnly: true,
@@ -170,6 +179,8 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
   });
 
   app.get("/auth/discord/callback", async (c) => {
+    // Qualification has no real OAuth authority, even with copied secrets.
+    if (qaRunConfigured(c.env)) return c.notFound();
     // Clears the state cookie and issues the session on success: every outcome is
     // per-visitor, so a shared cache must never keep one.
     c.header("cache-control", "no-store, private");
@@ -322,7 +333,7 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     // precedence: explicit next, then intended page, then notice.
     if (join !== "joined" && join !== "already_member") {
       if (returnTo) {
-        await setSignedCookie(c, LOGIN_INTENDED_COOKIE, returnTo, c.env.SESSION_SECRET, {
+        await setJourneyCookie(c, LOGIN_INTENDED_COOKIE, returnTo, c.env.SESSION_SECRET, {
           path: "/",
           secure: true,
           httpOnly: true,
@@ -347,20 +358,27 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     throttle("logout", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       // The app-wide same-origin guard runs before throttling or session storage.
-      const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+      const token = await readSessionCookie(c);
       // No bearer, or a correctly-signed but malformed bearer: nothing to
       // revoke — clear cookies and leave without touching session storage
       // (stays 303 when the store is down; main #239 pins the authoritative
       // 503 only for a well-formed presented token whose revocation fails).
       // A malformed hash could never match a live row, so revoking it is
       // useless work that would 503 a sign-out that must always clear.
-      if (isValidSessionToken(token)) {
+      if (token) {
         try {
           const store = await hooks.storeFor(c);
-          await store.revoke(await hashToken(token));
-          const statusHash = await getSignedCookie(c, c.env.SESSION_SECRET, AUTH_STATUS_COOKIE);
-          if (typeof statusHash === "string" && /^[a-f0-9]{64}$/.test(statusHash)) {
-            await store.revokeLineage(statusHash);
+          if (qaRunConfigured(c.env)) {
+            const boundary = qaRunSessionsFor(c.req.raw, c.env, store);
+            await boundary.revoke(token);
+            const status = uniqueCookie(c.req.raw, AUTH_STATUS_COOKIE);
+            if (status) await boundary.revokeStatus(status);
+          } else {
+            await store.revoke(await hashToken(token));
+            const statusHash = await getSignedCookie(c, c.env.SESSION_SECRET, AUTH_STATUS_COOKIE);
+            if (typeof statusHash === "string" && /^[a-f0-9]{64}$/.test(statusHash)) {
+              await store.revokeLineage(statusHash);
+            }
           }
         } catch (err) {
           // Authoritative, not best-effort: a failed revocation must not clear
@@ -409,11 +427,11 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       // at the edge.
       c.header("cache-control", "no-store, private");
       // The app-wide same-origin guard runs before throttling or session storage.
-      const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+      const token = await readSessionCookie(c);
       // No bearer, or a correctly-signed but malformed bearer: nothing to
       // resolve — clear cookies and leave without touching session storage
       // (stays 303 when the store is down, like POST /logout).
-      if (!isValidSessionToken(token)) {
+      if (!token) {
         deleteCookie(c, SESSION_COOKIE, {
           path: "/",
           secure: true,
@@ -427,7 +445,9 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       try {
         const store = await hooks.storeFor(c);
         const hash = await hashToken(token);
-        const session = await store.get(hash);
+        const session = qaRunConfigured(c.env)
+          ? await qaRunSessionsFor(c.req.raw, c.env, store).read(token)
+          : await store.get(hash);
         // Dead bearer (expired, unknown, revoked, past the absolute cap):
         // the acting member cannot be resolved from it, so no sweep runs —
         // clear cookies and land signed-out (idempotent 303, never 503).
@@ -478,7 +498,13 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
   app.post(
     "/auth/qa/:identity",
     async (c, next) => {
-      if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
+      if (qaRunConfigured(c.env)) {
+        if (
+          c.req.header("origin") !== c.env.APP_URL ||
+          !(await qaRunContext(c.env.QA_RUN_AUTH, c.req.url, c.env.APP_URL))
+        )
+          return c.notFound();
+      } else if (!qaEnabled(c.env.APP_URL, c.env.QA_AUTH_TOKEN)) return c.notFound();
       await next();
     },
     // Identity/token gate BEFORE the throttle (S4): unauthenticated probes 404
@@ -499,7 +525,12 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
       const presented = c.req.header(QA_HEADER) ?? "";
       const client = clientKey(c);
       if (presented && !takeQaAttempt(client)) return c.notFound();
-      const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
+      const context = qaRunConfigured(c.env)
+        ? await qaRunContext(c.env.QA_RUN_AUTH, c.req.url, c.env.APP_URL)
+        : null;
+      const ok = qaRunConfigured(c.env)
+        ? !!context && (await qaRunCredentialMatches(context, presented))
+        : await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
       if (!ok) return c.notFound();
       if (presented) refundQaAttempt(client);
       c.set("qaFixture", fixture);
@@ -513,13 +544,18 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     async (c) => {
       const fixture = c.get("qaFixture");
       const store = await hooks.storeFor(c);
-      await hooks.issueSession(c, store, {
-        userId: fixture.discordId,
-        username: fixture.username,
-        avatar: null,
-        member: true,
-        moderator: fixture.moderator,
-      });
+      try {
+        await hooks.issueSession(c, store, {
+          userId: fixture.discordId,
+          username: fixture.username,
+          avatar: null,
+          member: true,
+          moderator: fixture.moderator,
+        });
+      } catch (err) {
+        if (err instanceof QaRunSessionRefused) return c.notFound();
+        throw err;
+      }
       return c.body(null, 204);
     },
   );

@@ -1,5 +1,6 @@
 import type { Context, Next } from "hono";
-import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { deleteCookie } from "hono/cookie";
+import { getJourneyCookie, setJourneyCookie } from "./journey-cookie";
 import { canonicalEventKey, eventKeyAllowed } from "./events/keys";
 import { MAX_RETURN_DESTINATION_BYTES, safeNext } from "./join/service";
 import { acceptsJson, isJsonMediaType } from "./media-type";
@@ -84,7 +85,7 @@ export async function expiredWriteBounce(c: Ctx, jsonOnly = false): Promise<Resp
   // the landing below never mints one on a mere visit (an attacker link
   // cannot pre-arm a false restored banner). JSON callers keep the 401 with
   // no cookie: they handle recovery themselves, never via the banner.
-  await setSignedCookie(c, EXPIRED_WRITE_COOKIE, `pending|${next}`, c.env.SESSION_SECRET, OPTIONS);
+  await setJourneyCookie(c, EXPIRED_WRITE_COOKIE, `pending|${next}`, c.env.SESSION_SECRET, OPTIONS);
   return c.redirect(recoveryUrl(next), 303);
 }
 
@@ -102,7 +103,7 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
     const limited = await throttleGuard(c, "login-recover", AUTH_THROTTLE_PER_MINUTE);
     if (limited) return limited;
   }
-  await setSignedCookie(c, INTENDED_COOKIE, next, c.env.SESSION_SECRET, OPTIONS);
+  await setJourneyCookie(c, INTENDED_COOKIE, next, c.env.SESSION_SECRET, OPTIONS);
   // No pending| here: only a genuine expired-write bounce arms the notice
   // (expiredWriteBounce above), so a bare link visit can never pre-arm a
   // false restored banner on the visitor's next login. The retry link below
@@ -129,7 +130,7 @@ export async function recoveryLanding(c: Ctx): Promise<Response> {
 
 /** Every terminal callback clears the pending notice, including denial/failure. */
 export async function consumeExpiredWrite(c: Ctx): Promise<string | null> {
-  const raw = await getSignedCookie(c, c.env.SESSION_SECRET, EXPIRED_WRITE_COOKIE);
+  const raw = await getJourneyCookie(c, c.env.SESSION_SECRET, EXPIRED_WRITE_COOKIE);
   deleteCookie(c, EXPIRED_WRITE_COOKIE, {
     path: "/",
     secure: true,
@@ -141,7 +142,13 @@ export async function consumeExpiredWrite(c: Ctx): Promise<string | null> {
 
 export async function flashExpiredWrite(c: Ctx, next: string | null): Promise<void> {
   if (!next) return;
-  await setSignedCookie(c, EXPIRED_WRITE_COOKIE, `restored|${next}`, c.env.SESSION_SECRET, OPTIONS);
+  await setJourneyCookie(
+    c,
+    EXPIRED_WRITE_COOKIE,
+    `restored|${next}`,
+    c.env.SESSION_SECRET,
+    OPTIONS,
+  );
 }
 
 /**
@@ -154,7 +161,7 @@ export async function flashExpiredWrite(c: Ctx, next: string | null): Promise<vo
  */
 export async function reflashPendingExpiredWrite(c: Ctx, next: string | null): Promise<void> {
   if (!next) return;
-  await setSignedCookie(c, EXPIRED_WRITE_COOKIE, `pending|${next}`, c.env.SESSION_SECRET, OPTIONS);
+  await setJourneyCookie(c, EXPIRED_WRITE_COOKIE, `pending|${next}`, c.env.SESSION_SECRET, OPTIONS);
 }
 
 /** Consume only an actual visible document, after all inner access/audit guards. */
@@ -167,7 +174,7 @@ export async function expiredWriteBanner(c: Ctx, next: Next): Promise<void> {
     !c.res.headers.get("content-type")?.includes("text/html")
   )
     return;
-  const raw = await getSignedCookie(c, c.env.SESSION_SECRET, EXPIRED_WRITE_COOKIE);
+  const raw = await getJourneyCookie(c, c.env.SESSION_SECRET, EXPIRED_WRITE_COOKIE);
   const destination =
     typeof raw === "string" && raw.startsWith("restored|") ? safeNext(raw.slice(9)) : null;
   if (!destination) return;

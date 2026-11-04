@@ -27,6 +27,7 @@ import { inviteDestination } from "../invite";
 import { recordJoinResult } from "../return-journey";
 import { parseModeratorRoleIds, recomputeModerator } from "../roles";
 import { hashToken } from "../sessions";
+import { qaRunConfigured } from "../session-admission";
 import { safeRequestId } from "../request-log";
 import { finishJoin, liveBotAdd, recordAttempt, safeNext, sanitizeSource } from "./service";
 import {
@@ -47,6 +48,7 @@ export function registerJoinCallbackRoutes(
   render: JoinRender,
 ) {
   app.get("/join/callback", async (c) => {
+    if (qaRunConfigured(c.env)) return c.notFound();
     // Inbound length bound, decided before the shared join throttle spend:
     // the query is synchronously readable (no async body read), so the gate
     // costs no throttle INSERT of its own. A non-error oversized hit still

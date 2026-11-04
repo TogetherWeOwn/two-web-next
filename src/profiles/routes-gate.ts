@@ -3,7 +3,14 @@
 // recorded in that file's header. registerGate must run before any profile
 // route is registered: the middleware only covers routes added after it.
 import type { Next } from "hono";
-import { generateSignedCookie, getSignedCookie } from "hono/cookie";
+import { generateSignedCookie } from "hono/cookie";
+import { qaRunContext } from "../qa-run-auth";
+import {
+  qaRunConfigured,
+  qaRunSessionCookie,
+  qaRunSessionsFor,
+  readSessionCookie,
+} from "../session-admission";
 import { sessionStoreFor } from "../admin/guard";
 import { prepareAuthStatus } from "../auth-status";
 import { alertRequestError } from "../alerts";
@@ -13,13 +20,7 @@ import { bufferedMemberText, memberReadBoundary } from "../member-reads";
 import { bounceToLogin, takeJoinResult } from "../return-journey";
 import { refreshSessionRoles, roleRecheckConfigFor } from "../session-role-refresh";
 import { SESSION_COOKIE } from "../session-cookie";
-import {
-  hashToken,
-  isValidSessionToken,
-  newSessionToken,
-  SESSION_TTL_SECONDS,
-  type SessionStore,
-} from "../sessions";
+import { hashToken, newSessionToken, SESSION_TTL_SECONDS, type SessionStore } from "../sessions";
 import { requestRoute, safeRequestId } from "../request-log";
 import type { Ctx, ProfileApp, ProfileDeps, Viewer } from "./routes-shared";
 import type { ProfileStores } from "./routes-stores";
@@ -56,31 +57,55 @@ export function memberGate(deps: ProfileDeps) {
   return async (c: Ctx, next: Next) => {
     const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
     c.header("cache-control", "private, no-store");
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+    const token = await readSessionCookie(c);
     // Guest: record where they were headed (legacy url.intended), then into
     // the site OAuth flow — the callback returns them here after sign-in.
     // Malformed bearers are guests too, with zero store reads (shape-checked
     // before any hash/store call).
-    if (!isValidSessionToken(token)) return bounceToLogin(c);
+    if (!token) return bounceToLogin(c);
     let viewer: Viewer | null = null;
     let rotatedSession: {
       sessions: SessionStore;
       tokenHash: string;
       sessionCookie: string;
       attachStatus: (() => void) | null;
+      qualificationToken?: string;
     } | null = null;
     try {
       const sessions = deps.sessionStore ?? (await sessionStoreFor(c));
       if (!sessions) throw new Error("no session store");
       const tokenHash = await hashToken(token);
-      let row = await sessions.get(tokenHash);
+      const qualification = qaRunConfigured(c.env)
+        ? qaRunSessionsFor(c.req.raw, c.env, sessions)
+        : null;
+      let row = qualification ? await qualification.read(token) : await sessions.get(tokenHash);
       // Mid-session role recheck before the member decision
       // (src/session-role-refresh.ts): refreshed bits authorize below, and
       // a row that stopped being live during the refresh reads as guest.
-      if (row)
+      if (row && !qualification)
         row = await refreshSessionRoles(sessions, tokenHash, row, roleRecheckConfigFor(c.env));
       if (row) {
-        if (row.member && c.req.method === "GET") {
+        if (row.member && c.req.method === "GET" && qualification) {
+          const grant = await qualification.rotate(token);
+          if (grant) {
+            row = grant.row;
+            const cookie = await qaRunSessionCookie(c.req.raw, c.env, grant);
+            if (!cookie) return bounceToLogin(c);
+            const replacementHash = await hashToken(grant.token);
+            const attachStatus = await prepareAuthStatus(c, sessions, replacementHash);
+            rotatedSession = {
+              sessions,
+              tokenHash: replacementHash,
+              sessionCookie: cookie,
+              attachStatus,
+              qualificationToken: grant.token,
+            };
+          } else {
+            row = await qualification.read(token);
+            if (!row) return bounceToLogin(c);
+          }
+        }
+        if (row.member && c.req.method === "GET" && !qualification) {
           // get() also admits short predecessor grace; only a current bearer
           // has a status key and can rotate. Grace reads never mint or refresh.
           const statusKey = await sessions.statusHash(tokenHash);
@@ -157,11 +182,29 @@ export function memberGate(deps: ProfileDeps) {
     c.set("viewerId", viewer.id);
     c.set("viewer", viewer);
     await next();
+    if (
+      qaRunConfigured(c.env) &&
+      !(await qaRunContext(c.env.QA_RUN_AUTH, c.req.url, c.env.APP_URL))
+    )
+      return bounceToLogin(c);
     // Another tab may rotate the fresh bearer while the route is rendering.
     // Never let a slower response restore a token that is no longer live.
     if (rotatedSession) {
       try {
-        if (
+        if (rotatedSession.qualificationToken) {
+          const boundary = qaRunSessionsFor(c.req.raw, c.env, rotatedSession.sessions);
+          if (
+            !(await boundary.read(rotatedSession.qualificationToken)) ||
+            !(await boundary.status(rotatedSession.qualificationToken))
+          )
+            return bounceToLogin(c);
+          const cookie = await qaRunSessionCookie(c.req.raw, c.env, {
+            token: rotatedSession.qualificationToken,
+          });
+          if (!cookie) return bounceToLogin(c);
+          c.header("set-cookie", cookie, { append: true });
+          rotatedSession.attachStatus?.();
+        } else if (
           (await rotatedSession.sessions.get(rotatedSession.tokenHash)) &&
           (await rotatedSession.sessions.statusHash(rotatedSession.tokenHash))
         ) {

@@ -1,6 +1,6 @@
 // Qualification credentials are observable by candidate code. This verifier
 // bounds honest admission; independent staging resource containment is still
-// required. No route uses this module until the complete session adapter lands.
+// required. Runtime admission is not evidence of live resource containment.
 import { STAGING_APP_URL } from "./qa";
 
 export const QA_RUN_ORIGIN = STAGING_APP_URL;
@@ -184,6 +184,17 @@ export async function qaRunContext(
   )
     return null;
   return { verifier, now, deadline };
+}
+
+// Synchronous post-render attachment cannot reparse metadata asynchronously.
+// It still uses the same high-water clock and the original immutable deadline.
+export function qaRunCookieTtl(context: QaRunContext): number | null {
+  const now = runtimeClock();
+  return now === null ||
+    now < context.verifier.issuedAt - QA_RUN_CLOCK_MARGIN_SECONDS ||
+    now >= context.deadline
+    ? null
+    : Math.max(0, Math.floor(context.deadline - now));
 }
 
 export function qaRunNamespaceMatches(

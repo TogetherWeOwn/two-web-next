@@ -28,7 +28,14 @@
 // trust a role bit from the cookie: the moderator decision is the
 // server-side row bit only.
 
-import { generateSignedCookie, getSignedCookie } from "hono/cookie";
+import { generateSignedCookie } from "hono/cookie";
+import { qaRunContext } from "../qa-run-auth";
+import {
+  qaRunConfigured,
+  qaRunSessionCookie,
+  qaRunSessionsFor,
+  readSessionCookie,
+} from "../session-admission";
 import type { Context, Next } from "hono";
 import postgres from "postgres";
 import type { Env } from "../env";
@@ -40,7 +47,6 @@ import {
   createMemorySessionStore,
   createPostgresSessionStore,
   hashToken,
-  isValidSessionToken,
   newSessionToken,
   SESSION_TTL_SECONDS,
   type DbSessionRow,
@@ -107,12 +113,12 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     next: Next,
   ) => {
     const expiresAt = new Date(Date.now() + SESSION_TTL_SECONDS * 1000);
-    const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
+    const token = await readSessionCookie(c);
     // Guest: into the site Discord OAuth flow, like everyone else. There is
     // no panel login page. The bounce records the page they asked for
     // (legacy url.intended) so the callback returns them to it. Malformed
     // bearers are guests too, with zero store reads.
-    if (!isValidSessionToken(token)) return bounceToLogin(c);
+    if (!token) return bounceToLogin(c);
 
     // A bare SessionStore keeps working as the single override (guard pins).
     const isStore = (o: unknown): o is SessionStore =>
@@ -134,24 +140,48 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       store: SessionStore;
       tokenHash: string;
       sessionCookie: string;
+      qualificationToken?: string;
     } | null = null;
     try {
       const resolved = sessionOverride ?? (await sessionStoreFor(c));
       if (!resolved) throw new Error("admin needs a session store; refusing to decide without one");
       const tokenHash = await hashToken(token);
-      const storedRow = await resolved.get(tokenHash);
+      const qualification = qaRunConfigured(c.env)
+        ? qaRunSessionsFor(c.req.raw, c.env, resolved)
+        : null;
+      const storedRow = qualification
+        ? await qualification.read(token)
+        : await resolved.get(tokenHash);
       // Mid-session role recheck before the moderator decision (see the
       // header): refreshed bits, a signed-in non-moderator, or — when the
       // row stopped being live during the refresh — an expired guest.
-      const row = storedRow
-        ? await refreshSessionRoles(resolved, tokenHash, storedRow, roleRecheckConfigFor(c.env))
-        : null;
+      const row =
+        storedRow && !qualification
+          ? await refreshSessionRoles(resolved, tokenHash, storedRow, roleRecheckConfigFor(c.env))
+          : storedRow;
       // Signed in, not a moderator: 403, not a login loop (TOG-54).
       if (row?.moderator) {
         actor = { id: row.userId, username: row.username };
         actorRow = row;
       } else if (!row) expiredGuest = true;
-      if (actor && actorRow && c.req.method === "GET") {
+      if (actor && actorRow && c.req.method === "GET" && qualification) {
+        const grant = await qualification.rotate(token);
+        if (grant) {
+          actorRow = grant.row;
+          actor = { id: grant.row.userId, username: grant.row.username };
+          const cookie = await qaRunSessionCookie(c.req.raw, c.env, grant);
+          if (!cookie) return bounceToLogin(c);
+          const replacementHash = await hashToken(grant.token);
+          attachStatus = await prepareAuthStatus(c, resolved, replacementHash);
+          rotatedSession = {
+            store: resolved,
+            tokenHash: replacementHash,
+            sessionCookie: cookie,
+            qualificationToken: grant.token,
+          };
+        } else if (!(await qualification.read(token))) return bounceToLogin(c);
+      }
+      if (actor && actorRow && c.req.method === "GET" && !qualification) {
         // get() also admits short predecessor grace; only a current bearer
         // has a status key and can rotate. Grace reads never mint or refresh.
         const statusKey = await resolved.statusHash(tokenHash);
@@ -241,7 +271,21 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
       // Withholding it would strand the moderator on a dying predecessor.
       if (rotatedSession) {
         try {
-          if (
+          if (rotatedSession.qualificationToken) {
+            const boundary = qaRunSessionsFor(c.req.raw, c.env, rotatedSession.store);
+            if (
+              !(await boundary.read(rotatedSession.qualificationToken)) ||
+              !(await boundary.status(rotatedSession.qualificationToken))
+            )
+              return bounceToLogin(c);
+            const cookie = await qaRunSessionCookie(c.req.raw, c.env, {
+              token: rotatedSession.qualificationToken,
+            });
+            if (!cookie) return bounceToLogin(c);
+            c.header("set-cookie", cookie, { append: true });
+            if (c.res.status === 200 && c.res.headers.get("content-type")?.includes("text/html"))
+              attachStatus?.();
+          } else if (
             (await rotatedSession.store.get(rotatedSession.tokenHash)) &&
             (await rotatedSession.store.statusHash(rotatedSession.tokenHash))
           ) {
@@ -262,6 +306,11 @@ export function adminGuard(overrides?: AdminOverrides | SessionStore) {
     } else {
       await next();
     }
+    if (
+      qaRunConfigured(c.env) &&
+      !(await qaRunContext(c.env.QA_RUN_AUTH, c.req.url, c.env.APP_URL))
+    )
+      return bounceToLogin(c);
     // Never let the edge cache an authenticated panel response. A downstream
     // refusal that already set a no-store cache-control (throttle 429,
     // body-cap 413, malformed 400, unavailable 503) keeps its own spelling,

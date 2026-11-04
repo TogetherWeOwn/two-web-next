@@ -19,6 +19,15 @@ import {
   type Sql,
 } from "./sessions";
 import { refreshSessionRoles, roleRecheckConfigFor } from "./session-role-refresh";
+import { QA_IDENTITIES } from "./qa";
+import { qaRunContext } from "./qa-run-auth";
+import {
+  QaRunSessionRefused,
+  qaRunConfigured,
+  qaRunSessionCookie,
+  qaRunSessionsFor,
+  readSessionCookie,
+} from "./session-admission";
 import { databaseOptions, databaseUrl, withPerRequestStatementBound } from "./db/connection";
 import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
@@ -323,6 +332,8 @@ async function issueSession(
     moderator: boolean;
   },
 ): Promise<void> {
+  if (qaRunConfigured(c.env) && !(await qaRunContext(c.env.QA_RUN_AUTH, c.req.url, c.env.APP_URL)))
+    throw new QaRunSessionRefused();
   // N6 (TOG-9898): refresh the durable roster row on every sign-in — the
   // legacy updateOrCreate on the Discord id. The /join/callback reaches here
   // through the JoinSessionHooks mount below, and the staging QA seam calls
@@ -351,6 +362,26 @@ async function issueSession(
       request_id: c.get("requestId"),
       exception: (err as Error)?.constructor?.name ?? "unknown",
     });
+  }
+  if (qaRunConfigured(c.env)) {
+    const identity = Object.entries(QA_IDENTITIES).find(
+      ([, fixture]) =>
+        row.userId === fixture.discordId &&
+        row.username === fixture.username &&
+        row.avatar === null &&
+        row.member === true &&
+        row.moderator === fixture.moderator,
+    )?.[0];
+    if (!identity) throw new QaRunSessionRefused();
+    const boundary = qaRunSessionsFor(c.req.raw, c.env, store);
+    const prior = await readSessionCookie(c);
+    const grant = await boundary.issue(identity, prior ?? "");
+    if (!grant) throw new QaRunSessionRefused();
+    await enableAuthStatus(c, store, await hashToken(grant.token));
+    const cookie = await qaRunSessionCookie(c.req.raw, c.env, grant);
+    if (!cookie) throw new QaRunSessionRefused();
+    c.header("set-cookie", cookie, { append: true });
+    return;
   }
   const token = newSessionToken();
   const tokenHash = await hashToken(token);
@@ -414,10 +445,35 @@ async function readSession(
   c: Context<{ Bindings: Env }>,
   rotateToken = true,
 ): Promise<Session | null> {
-  const token = await getSignedCookie(c, c.env.SESSION_SECRET, SESSION_COOKIE);
-  if (!isValidSessionToken(token)) return null;
+  const token = await readSessionCookie(c);
+  if (!token) return null;
   // Anonymous public pages must not depend on session storage or its startup DDL.
   const store = await storeFor(c);
+  if (qaRunConfigured(c.env)) {
+    const boundary = qaRunSessionsFor(c.req.raw, c.env, store);
+    let row = await boundary.read(token);
+    if (!row) return null;
+    if (rotateToken) {
+      const grant = await boundary.rotate(token);
+      if (grant) {
+        await enableAuthStatus(c, store, await hashToken(grant.token));
+        const cookie = await qaRunSessionCookie(c.req.raw, c.env, grant);
+        if (!cookie) return null;
+        c.header("set-cookie", cookie, { append: true });
+        row = grant.row;
+      } else {
+        row = await boundary.read(token);
+        if (!row) return null;
+      }
+    }
+    return {
+      id: row.userId,
+      username: row.username,
+      avatar: row.avatar,
+      member: row.member,
+      moderator: row.moderator,
+    };
+  }
   const tokenHash = await hashToken(token);
   const storedRow = await store.get(tokenHash);
   if (!storedRow) return null;

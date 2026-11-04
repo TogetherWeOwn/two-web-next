@@ -3,7 +3,8 @@
 // Throttle, then 302 to Discord with identify+guilds.join. Issues the journey
 // (ten-minute state + optional source/next cookies) before redirecting.
 import type { Hono } from "hono";
-import { deleteCookie, setSignedCookie } from "hono/cookie";
+import { deleteCookie } from "hono/cookie";
+import { setJourneyCookie } from "../journey-cookie";
 import { authorizeUrl } from "../discord";
 import type { Env } from "../env";
 import { hashToken } from "../sessions";
@@ -67,7 +68,7 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
     // another journey's return target or attribution. Mirrors
     // rememberLoginNext for the auth flow.
     if (source) {
-      await setSignedCookie(c, JOIN_SOURCE_COOKIE, source, c.env.SESSION_SECRET, {
+      await setJourneyCookie(c, JOIN_SOURCE_COOKIE, source, c.env.SESSION_SECRET, {
         path: "/",
         secure: true,
         httpOnly: true,
@@ -83,7 +84,7 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
       });
     }
     if (next) {
-      await setSignedCookie(c, JOIN_NEXT_COOKIE, next, c.env.SESSION_SECRET, {
+      await setJourneyCookie(c, JOIN_NEXT_COOKIE, next, c.env.SESSION_SECRET, {
         path: "/",
         secure: true,
         httpOnly: true,
@@ -98,7 +99,7 @@ export function registerJoinStartRoutes(app: Hono<{ Bindings: Env }>, hooks: Joi
         sameSite: "Lax",
       });
     }
-    await setSignedCookie(c, JOIN_STATE_COOKIE, state, c.env.SESSION_SECRET, {
+    await setJourneyCookie(c, JOIN_STATE_COOKIE, state, c.env.SESSION_SECRET, {
       path: "/",
       secure: true,
       httpOnly: true,

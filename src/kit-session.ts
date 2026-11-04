@@ -30,7 +30,14 @@
 // never reported as a logout, so Kit renders "unknown" instead of flipping a
 // member to logged-out). The auth-status probe cookie is deliberately never
 // accepted here: it proves liveness only and is not a login token.
-import { generateSignedCookie } from "hono/cookie";
+import { generateCookie, generateSignedCookie } from "hono/cookie";
+import { qaRunContext } from "./qa-run-auth";
+import {
+  qaRunConfigured,
+  qaRunSessionCookie,
+  qaRunSessionsFor,
+  readSessionToken,
+} from "./session-admission";
 import { parseSigned } from "hono/utils/cookie";
 import { exceptionClass } from "./alerts";
 import { AUTH_STATUS_COOKIE } from "./auth-status";
@@ -38,6 +45,7 @@ import type { Env } from "./env";
 import { storeForEnv } from "./index";
 import type { KitEventsSession } from "./kit-events";
 import { safeNext } from "./join/service";
+import { readJourneyCookie } from "./journey-cookie";
 import {
   JOIN_RESULT_COOKIE,
   LOGIN_INTENDED_COOKIE,
@@ -87,6 +95,7 @@ export type KitLocals = KitRequestSession & KitReturnJourney;
 export type RequestSessionDeps = {
   sessionSecret: string;
   store: SessionStore;
+  qaRun?: Pick<Env, "APP_URL" | "QA_RUN_AUTH">;
   /** Mid-session role recheck inputs (src/session-role-refresh.ts). Required
    * so no caller gets login-only bits by forgetting them: the production
    * bridges always pass a config, and a test double that deliberately wants
@@ -120,14 +129,22 @@ export async function resolveRequestSession(
   request: Request,
   deps: RequestSessionDeps,
 ): Promise<KitRequestSession> {
-  const cookies = await verifiedCookies(request, deps.sessionSecret);
-  if (!cookies) return UNKNOWN;
-  const raw = cookies[SESSION_COOKIE];
-  if (!isValidSessionToken(raw)) return GUEST;
-  const tokenHash = await hashToken(raw);
+  const qualification =
+    deps.qaRun && qaRunConfigured(deps.qaRun)
+      ? { ...deps.qaRun, SESSION_SECRET: deps.sessionSecret }
+      : null;
+  const cookies = qualification ? null : await verifiedCookies(request, deps.sessionSecret);
+  if (!qualification && !cookies) return UNKNOWN;
+  const raw = qualification
+    ? await readSessionToken(request, qualification)
+    : cookies?.[SESSION_COOKIE];
+  if (qualification ? !raw : !isValidSessionToken(raw)) return GUEST;
+  const tokenHash = await hashToken(raw as string);
   let row;
   try {
-    row = await deps.store.get(tokenHash);
+    row = qualification
+      ? await qaRunSessionsFor(request, qualification, deps.store).read(raw as string)
+      : await deps.store.get(tokenHash);
   } catch (err) {
     // Fail closed to "unknown", never to a false logout: callers render the
     // session state as indeterminate (like Hono's sessionUnavailable guest
@@ -141,7 +158,7 @@ export async function resolveRequestSession(
   // (src/session-role-refresh.ts): the refresh absorbs its own failures, so
   // it runs outside the store-outage classification above; only a row that
   // stopped being live during the refresh changes the decision, to guest.
-  if (deps.roleRecheck) {
+  if (!qualification && deps.roleRecheck) {
     const refreshed = await refreshSessionRoles(deps.store, tokenHash, row, deps.roleRecheck);
     if (!refreshed) return GUEST;
     row = refreshed;
@@ -204,8 +221,21 @@ function expiredWriteOf(value: string | false | undefined): string | null {
 export async function readReturnJourney(
   request: Request,
   sessionSecret: string,
+  env?: Env,
 ): Promise<KitReturnJourney> {
-  const cookies = await verifiedCookies(request, sessionSecret);
+  const cookies =
+    env && qaRunConfigured(env)
+      ? Object.fromEntries(
+          await Promise.all(
+            [
+              LOGIN_NEXT_COOKIE,
+              LOGIN_INTENDED_COOKIE,
+              JOIN_RESULT_COOKIE,
+              EXPIRED_WRITE_COOKIE,
+            ].map(async (name) => [name, (await readJourneyCookie(request, env, name)) ?? false]),
+          ),
+        )
+      : await verifiedCookies(request, sessionSecret);
   if (!cookies) return NO_JOURNEY;
   const next = cookies[LOGIN_NEXT_COOKIE];
   const intended = cookies[LOGIN_INTENDED_COOKIE];
@@ -245,6 +275,7 @@ export function kitEventsSessionFor(
     try {
       const decision = await resolveRequestSession(request, {
         sessionSecret: env.SESSION_SECRET,
+        qaRun: env,
         store: await storeForEnv(env),
         roleRecheck: roleRecheckConfigFor(env),
       });
@@ -273,7 +304,7 @@ export function kitEventsSessionFor(
 export function kitEventsJourneyFor(
   env: Env,
 ): (request: Request) => Promise<"added" | "already_member" | null> {
-  return async (request) => (await readReturnJourney(request, env.SESSION_SECRET)).joinResult;
+  return async (request) => (await readReturnJourney(request, env.SESSION_SECRET, env)).joinResult;
 }
 
 export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<KitLocals> {
@@ -283,6 +314,7 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
         try {
           return await resolveRequestSession(event.request, {
             sessionSecret: env.SESSION_SECRET,
+            qaRun: env,
             store: await storeForEnv(env),
             roleRecheck: roleRecheckConfigFor(env),
           });
@@ -297,7 +329,7 @@ export function kitSessionBridge(env: Env): (event: HookEventLike) => Promise<Ki
           return UNKNOWN;
         }
       })(),
-      readReturnJourney(event.request, env.SESSION_SECRET),
+      readReturnJourney(event.request, env.SESSION_SECRET, env),
     ]);
     return { ...session, ...journey };
   };
@@ -328,7 +360,15 @@ export function kitEventDetailRotationFor(
   return async (event) => {
     const locals = event.locals as Partial<KitLocals> | undefined;
     const bits = locals?.status === "authenticated" ? locals.session : null;
-    if (!bits || !env.SESSION_SECRET) return null;
+    if (!bits) return null;
+    if (qaRunConfigured(env)) {
+      const token = await readSessionToken(event.request, env);
+      if (!token) return null;
+      const boundary = qaRunSessionsFor(event.request, env, await storeForEnv(env));
+      const grant = await boundary.rotate(token);
+      return grant ? qaRunSessionCookie(event.request, env, grant) : null;
+    }
+    if (!env.SESSION_SECRET) return null;
     // verifiedCookies never throws (a malformed header resolves to no
     // cookies); an unverifiable bearer simply does not rotate.
     const cookies = await verifiedCookies(event.request, env.SESSION_SECRET);
@@ -383,7 +423,16 @@ export function kitAdminRenewalFor(env: Env): (event: HookEventLike) => Promise<
   return async (event) => {
     const locals = event.locals as Partial<KitLocals> | undefined;
     const bits = locals?.status === "authenticated" ? locals.session : null;
-    if (!bits?.moderator || !env.SESSION_SECRET) return null;
+    if (!bits?.moderator) return null;
+    if (qaRunConfigured(env)) {
+      const token = await readSessionToken(event.request, env);
+      if (!token) return null;
+      const boundary = qaRunSessionsFor(event.request, env, await storeForEnv(env));
+      if (!(await boundary.read(token))?.moderator) return null;
+      const grant = await boundary.rotate(token);
+      return grant ? qaRunSessionCookie(event.request, env, grant) : null;
+    }
+    if (!env.SESSION_SECRET) return null;
     // verifiedCookies never throws (a malformed header resolves to no
     // cookies); an unverifiable bearer simply does not renew.
     const cookies = await verifiedCookies(event.request, env.SESSION_SECRET);
@@ -443,15 +492,26 @@ export function kitAuthStatusCookieFor(
     const locals = event.locals as Partial<KitLocals> | undefined;
     const admin = /^\/admin(?:\/|$)/.test(event.url.pathname) && locals?.session?.moderator;
     const member = releasedMemberDocument && locals?.session?.member === true;
-    if (
-      event.request.method !== "GET" ||
-      locals?.status !== "authenticated" ||
-      (!admin && !member) ||
-      !env.SESSION_SECRET
-    )
+    if (event.request.method !== "GET" || locals?.status !== "authenticated" || (!admin && !member))
       return null;
 
     try {
+      if (qaRunConfigured(env)) {
+        const token = await readSessionToken(event.request, env);
+        if (!token) return null;
+        const boundary = qaRunSessionsFor(event.request, env, await storeForEnv(env));
+        const key = await boundary.status(token);
+        const context = await qaRunContext(env.QA_RUN_AUTH, event.request.url, env.APP_URL);
+        if (!key || !context) return null;
+        return generateCookie(AUTH_STATUS_COOKIE, key, {
+          ...AUTH_STATUS_OPTIONS,
+          maxAge: Math.min(
+            SESSION_TTL_SECONDS,
+            Math.max(0, Math.floor(context.deadline - context.now)),
+          ),
+        });
+      }
+      if (!env.SESSION_SECRET) return null;
       const cookies = await verifiedCookies(event.request, env.SESSION_SECRET);
       const token = cookies?.[SESSION_COOKIE];
       if (!isValidSessionToken(token)) return null;

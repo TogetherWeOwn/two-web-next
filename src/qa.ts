@@ -69,7 +69,7 @@ export async function qaTokenMatches(
   configured: string | undefined,
   presented: string,
 ): Promise<boolean> {
-  if (!configured) return false;
+  if (!configured || presented.startsWith("qa1.")) return false;
   if (presented.length > MAX_QA_PRESENTED_TOKEN_LENGTH) return false;
   const [a, b] = await Promise.all([sha256(configured), sha256(presented)]);
   const x = new Uint8Array(a);

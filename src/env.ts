@@ -46,6 +46,9 @@ export type Env = AgentEventsEnv & {
   BOT_DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
+  // Public per-run verifier only; a present invalid value disables QA fallback.
+  // Never provision the bearer or a signing/minting key in this binding.
+  QA_RUN_AUTH?: string;
   // Optional runtime-only bot control bearer for the read-only operator panel.
   // Unset/short values leave it dark; never provisioned by checked-in config.
   OPS_CONTROL_TOKEN?: string;
