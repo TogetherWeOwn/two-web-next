@@ -2,6 +2,7 @@
 // Exclusion, dirty occupancy and complete restorable B are controller prerequisites.
 import { candidateSha256 } from "./candidate-staging-admission.mjs";
 import { createCandidateAssetUploader } from "./candidate-staging-assets.mjs";
+import { createCandidateSettingsReader } from "./candidate-staging-settings.mjs";
 import {
   prepareCandidateAssetInput,
   prepareCandidateWebUpload,
@@ -294,6 +295,22 @@ export function createCandidateVersionUploader({
           lastNow = time;
           return time;
         }
+        const settingsReader = createCandidateSettingsReader({
+          token,
+          profile: installedProfile,
+          profileSha256,
+          signal: deadline,
+          fetchImpl,
+          clock: currentTime,
+        });
+        const observationInput = {
+          identity: input.identity,
+          bundle: input.bundle,
+          verifier: input.verifier,
+        };
+        // No asset/version mutation before explicit persistent sink/preview
+        // admission. Both observations share the original overall deadline.
+        const before = await settingsReader.observe(observationInput);
         const assetsTicket = await createCandidateAssetUploader({
           token,
           fetchImpl,
@@ -334,17 +351,28 @@ export function createCandidateVersionUploader({
           metadata,
           input.bundle.entries,
         );
+        const after = await settingsReader.observe(observationInput);
+        requireEvidence(
+          before.q === after.q &&
+            before.bundleRootSha256 === after.bundleRootSha256 &&
+            before.profileSha256 === after.profileSha256 &&
+            before.settingsSha256 === after.settingsSha256 &&
+            before.observedAt <= after.observedAt,
+        );
         currentTime();
-        // No URL or activation authority. Immutable version bytes/config are
-        // checked, not persistent Worker settings, stored assets or serving.
+        // No URL or activation authority. Point-in-time persistent settings
+        // checks are not continuous exclusion, stored assets or serving proof.
         return Object.freeze({
           ...request.proof,
-          schema: "two.candidate-version-upload.v2",
+          schema: "two.candidate-version-upload.v3",
           versionId: uploaded.id,
           etag: uploaded.resources.script.etag,
-          readbackScope: "version-modules-bindings-runtime-and-asset-config",
+          readbackScope: "version-modules-bindings-runtime-assets-and-persistent-settings",
           readbackSha256,
           contentSha256,
+          settingsSha256: after.settingsSha256,
+          settingsObservedBeforeAt: before.observedAt,
+          settingsObservedAfterAt: after.observedAt,
         });
       } catch {
         // Provider exceptions and bodies may contain secrets or asset tickets.

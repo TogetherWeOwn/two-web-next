@@ -211,9 +211,10 @@ readback to the request proof before activation. It must independently establish
 live head/CI/build/producer provenance, asset-ticket provenance, global exclusion,
 dirty occupancy, preview-route disablement, baseline restoration and next-upload
 compatibility. The isolated sender below now joins assets, creation, a narrow
-version binding/runtime readback and immutable module-byte/config readback.
-Persistent Worker settings, stored asset-content verification, version/serving
-history and installed activation/recovery remain unimplemented. Ordinary
+version binding/runtime readback, immutable module-byte/config readback and
+point-in-time persistent settings/subdomain admission before and after upload.
+Stored asset-content verification, version/serving history, continuous exclusion
+and installed activation/recovery remain unimplemented. Ordinary
 Wrangler upload remains unsuitable because it retains secrets by default; this
 constructor does not make a live candidate safe merely by omitting those secrets.
 
@@ -265,9 +266,9 @@ scope validation, synthetic-data admission, restoration evidence or native
 Security clearance. A failed upload can leave inert content-addressed assets;
 the installed controller must already hold exclusion and durable dirty occupancy
 before calling this mutating adapter. The isolated sender below now connects
-assets to version creation and immutable module/config readback. Trusted
-build/producer integration, persistent Worker/asset-content admission, global
-exclusion and complete verified B and
+assets to version creation and immutable module/config readback, fenced by the
+point-in-time settings observations below. Trusted build/producer integration,
+stored asset-content admission, global exclusion and complete verified B and
 next-ordinary-upload restoration remain unimplemented. No live use is permitted
 merely because these isolated fixtures pass.
 
@@ -286,8 +287,11 @@ exercised this helper; no workflow calls it.
 The adapter constructs the explicit-binding form itself, sends exactly one
 version-create POST, then GETs the fixed script-version endpoint at the returned
 canonical UUID and the immutable Worker-version endpoint with `include=modules`.
-It never calls deployments, settings, routes or preview APIs, selects traffic,
-invokes candidate code/tooling or retries a partial mutation. The provider bearer
+It never writes deployments, settings or routes, selects traffic, invokes
+candidate code/tooling or retries a partial mutation. Its settings reader below
+GETs persistent settings and subdomain flags before any asset/version request,
+then repeats those GETs after module readback; it compares their canonical digests
+and withholds a receipt on either refusal or mismatch. The provider bearer
 goes only to fixed same-account API endpoints; asset buckets still receive only
 their session capability. Metadata responses require bounded 64-KiB JSON success
 envelopes; the module response has a separate 24-MiB ceiling for base64 plus
@@ -322,18 +326,62 @@ headers/redirect/HTML rules refuse. A returned asset ticket must match the one
 submitted, but that comparison is **not** remote asset-content proof. Live
 cross-API conformance and actual disabled-preview state remain unproven.
 
-The allowlisted frozen `two.candidate-version-upload.v2` receipt joins request
-proof to UUID, etag, the script-version projection hash and a second canonical
-module/config hash, with literal `promotable:false` and
-`readbackScope:version-modules-bindings-runtime-and-asset-config`. It contains no
-ticket, token, verifier JSON, source bytes, author metadata, serving URL or
-activation authority. Etag remains a join between observations, not a substitute
-for module comparison. These GETs are not persistent Worker settings, stored
-asset-content, tail/streaming consumer, preview-route disablement, serving
-history, capability scope, synthetic-data or baseline-restoration proof. All
-those checks, installed controller/journal/exclusion wiring, component maps,
-trusted build provenance and native Security admission remain prerequisites to
-any live mutation/selection. This helper's mock green is not live qualification.
+The allowlisted frozen `two.candidate-version-upload.v3` receipt joins request
+proof to UUID, etag, the script-version projection hash, a second canonical
+module/config hash and a persistent settings/subdomain digest with before/after
+observation times. Its literal `promotable:false` and
+`readbackScope:version-modules-bindings-runtime-assets-and-persistent-settings`
+convey no activation authority. It contains no ticket, token, verifier JSON,
+source bytes, author metadata or serving URL. Etag remains a join between
+observations, not a substitute for module comparison. This helper's mock green
+is not live qualification; its installed callers, component maps, stored assets,
+serving history, capability scope, synthetic-data admission, continuous exclusion
+and complete restoration remain prerequisites to any live mutation/selection.
+
+## Persistent settings observations (not installed or activated)
+
+[The read-only observer](../ci/candidate-staging-settings.mjs) uses the same
+installed profile/pin, full descriptor/Q, original verifier cutoff and inert
+bundle admission as the uploader. It constructs only same-account, fixed-Worker
+`script-settings` and `subdomain` GETs. No candidate URL, method, profile, clock or
+prepared request is accepted. The bearer never reaches candidate code or a
+response-selected endpoint. Each operation has a 30-second overall signal,
+10-second request signals, 64-KiB strict UTF-8 JSON success-envelope limits and
+monotonic clock/cutoff checks before and after each read. A version upload's
+before/after observations also share that uploader's original 180-second signal;
+neither an observation nor a post-upload check restarts the credential lifetime.
+
+The pinned shipped provider client's
+[script settings](https://github.com/cloudflare/cloudflare-typescript/blob/v5.2.0/src/resources/workers/scripts/settings.ts)
+and [subdomain](https://github.com/cloudflare/cloudflare-typescript/blob/v5.2.0/src/resources/workers/scripts/subdomain.ts)
+APIs establish endpoint/field layout, not live conformance or containment. The
+observer's safety envelope is intentionally stricter than those optional fields:
+require explicit `logpush:false`, empty tags and tail consumers, explicit disabled
+observability/logs with zero sampling, disabled invocation/persistence and empty
+log destinations. Require both `enabled:false` and `previews_enabled:false` for
+workers.dev. Missing fields, null/default-shaped responses, unknown settings
+(including any streaming-tail field), enabled sinks or previews and malformed
+responses refuse. No omitted value is interpreted as a safe provider default.
+Actual API conformance to this exact envelope has not been established; refusal
+must be resolved with evidence, not by silently supplying missing fields.
+
+The frozen observation receipt includes only Q, bundle/profile hashes, the
+canonical settings/subdomain digest, observation time and literal
+`promotable:false`. It is not an activation token or independent baseline proof.
+The uploader checks an initial observation before any mutation and repeats it
+after immutable content readback. A refused final observation withholds the
+receipt but does not undo an already-created inert version or imply a clean
+journal. The independently trusted controller must retain dirty occupancy and
+restore B on uncertainty.
+
+Two matching point-in-time observations are **not continuous state proof**:
+concurrent change-and-reversion can escape them without enforced global
+exclusion. These two endpoints do not enumerate account/zone routes, custom
+domains, active tail sessions, all component settings or serving history; no
+complete mutable-state admission or restoration is claimed. No workflow invokes
+the observer/uploader, no setting was changed, and no live request was made to
+qualify these mocked fixtures. Installed authority, exclusion, complete B and
+next-ordinary-upload restoration and native Security admission remain required.
 
 ## Durable occupancy journal and recovery boundary
 

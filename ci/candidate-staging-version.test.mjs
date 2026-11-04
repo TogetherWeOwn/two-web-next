@@ -84,10 +84,16 @@ function setup({
   uploadReply,
   readReply,
   contentReply,
+  settingsReply,
   clock = () => NOW,
   onFetch,
+  onSettingsFetch,
 } = {}) {
+  // Retain phase-local counters for the existing asset/version refusal cases;
+  // trace records the full ordering, including every settings GET.
   const calls = [];
+  const settingsCalls = [];
+  const trace = [];
   let metadata;
   let versionForm;
   const uploader = createCandidateVersionUploader({
@@ -96,6 +102,30 @@ function setup({
     profileSha256: f.profileSha256,
     clock,
     fetchImpl: async (url, options) => {
+      trace.push({ url, ...options });
+      if (url.endsWith("/script-settings") || url.endsWith("/subdomain")) {
+        settingsCalls.push({ url, ...options });
+        if (onSettingsFetch) await onSettingsFetch(settingsCalls.length, f);
+        const value = url.endsWith("/script-settings")
+          ? {
+              logpush: false,
+              tags: [],
+              tail_consumers: [],
+              observability: {
+                enabled: false,
+                head_sampling_rate: 0,
+                logs: {
+                  enabled: false,
+                  head_sampling_rate: 0,
+                  invocation_logs: false,
+                  persist: false,
+                  destinations: [],
+                },
+              },
+            }
+          : { enabled: false, previews_enabled: false };
+        return settingsReply ? settingsReply(value, settingsCalls.length) : result(value);
+      }
       calls.push({ url, ...options });
       if (onFetch) await onFetch(calls.length, f);
       if (url.endsWith("/assets-upload-session")) {
@@ -153,7 +183,7 @@ function setup({
       return readReply ? readReply(value) : result(value);
     },
   });
-  return { calls, f, upload: () => uploader.upload(f.input) };
+  return { calls, settingsCalls, trace, f, upload: () => uploader.upload(f.input) };
 }
 
 async function refused(options, expectedCalls) {
@@ -167,6 +197,23 @@ for (const assets of [false, true])
     const s = setup({ f: fixture({ assets }) });
     const proof = await s.upload();
     assert.equal(s.calls.length, assets ? 5 : 3);
+    assert.equal(s.settingsCalls.length, 4);
+    assert.equal(s.trace.length, s.calls.length + 4);
+    assert.deepEqual(
+      s.trace.slice(0, 2).map((c) => c.url),
+      [`${BASE}/script-settings`, `${BASE}/subdomain`],
+    );
+    assert.deepEqual(
+      s.trace.slice(-2).map((c) => c.url),
+      [`${BASE}/script-settings`, `${BASE}/subdomain`],
+    );
+    for (const call of s.settingsCalls) {
+      assert.equal(call.method, "GET");
+      assert.equal(call.redirect, "error");
+      assert.deepEqual(call.headers, { Authorization: `Bearer ${TOKEN}` });
+      assert.equal("body" in call, false);
+      assert.ok(call.signal instanceof AbortSignal && !call.signal.aborted);
+    }
     const [post, get, content] = s.calls.slice(-3);
     assert.equal(
       content.url,
@@ -204,15 +251,21 @@ for (const assets of [false, true])
       Buffer.from(await post.body.get("worker/worker.mjs").arrayBuffer()),
       s.f.input.bundle.entries.at(-1).bytes,
     );
-    assert.equal(proof.schema, "two.candidate-version-upload.v2");
+    assert.equal(proof.schema, "two.candidate-version-upload.v3");
     assert.equal(proof.promotable, false);
     assert.equal(proof.versionId, VERSION);
     assert.equal(proof.etag, ETAG);
     assert.equal(proof.q, s.f.input.identity.q);
     assert.equal(proof.bundleRootSha256, s.f.input.bundle.rootSha256);
-    assert.equal(proof.readbackScope, "version-modules-bindings-runtime-and-asset-config");
+    assert.equal(
+      proof.readbackScope,
+      "version-modules-bindings-runtime-assets-and-persistent-settings",
+    );
     assert.match(proof.readbackSha256, /^[a-f0-9]{64}$/);
     assert.match(proof.contentSha256, /^[a-f0-9]{64}$/);
+    assert.match(proof.settingsSha256, /^[a-f0-9]{64}$/);
+    assert.equal(proof.settingsObservedBeforeAt, NOW);
+    assert.equal(proof.settingsObservedAfterAt, NOW);
     assert.ok(Object.isFrozen(proof) && Object.isFrozen(proof.build));
     for (const sensitive of [TOKEN, TICKET, s.f.input.verifier, "never execute candidate"])
       assert.equal(JSON.stringify(proof).includes(sensitive), false);
@@ -1082,4 +1135,179 @@ test("original deadline is shared with assets and cannot restart at version uplo
     },
     2,
   );
+});
+
+for (const assets of [false, true])
+  for (const [label, phase, mutate] of [
+    [
+      "initial Logpush sink",
+      1,
+      (v) => {
+        v.logpush = true;
+      },
+    ],
+    [
+      "initial preview enabled",
+      2,
+      (v) => {
+        v.previews_enabled = true;
+      },
+    ],
+    [
+      "post-upload Logpush drift",
+      3,
+      (v) => {
+        v.logpush = true;
+      },
+    ],
+    [
+      "post-upload tail drift",
+      3,
+      (v) => {
+        v.tail_consumers = [{ service: "other" }];
+      },
+    ],
+    [
+      "post-upload preview drift",
+      4,
+      (v) => {
+        v.previews_enabled = true;
+      },
+    ],
+    [
+      "post-upload unknown state",
+      4,
+      (v) => {
+        v.other = false;
+      },
+    ],
+  ])
+    test(`refuses ${label} (${assets ? "assets" : "module-only"})`, async () => {
+      const s = setup({
+        f: fixture({ assets }),
+        settingsReply: (v, n) => {
+          if (n === phase) mutate(v);
+          return result(v);
+        },
+      });
+      await assert.rejects(s.upload(), ERROR);
+      assert.equal(s.settingsCalls.length, phase);
+      assert.equal(s.calls.length, phase <= 2 ? 0 : assets ? 5 : 3);
+      assert.equal(
+        s.trace.some((c) => /deployments|production/.test(c.url)),
+        false,
+      );
+    });
+
+for (const phase of [1, 2, 3, 4])
+  test(`settings transport failure in phase ${phase} never returns version evidence`, async () => {
+    const s = setup({
+      settingsReply: (v, n) => {
+        if (n === phase) throw new Error(TOKEN);
+        return result(v);
+      },
+    });
+    await assert.rejects(s.upload(), ERROR);
+    assert.equal(s.settingsCalls.length, phase);
+    assert.equal(s.calls.length, phase <= 2 ? 0 : 3);
+  });
+
+test("input is snapshotted before pre-upload settings observation", async () => {
+  const f = fixture({ assets: true });
+  const original = Buffer.from(f.input.bundle.entries.at(-1).bytes);
+  const q = f.input.identity.q;
+  const root = f.input.bundle.rootSha256;
+  const s = setup({
+    f,
+    onSettingsFetch: (n) => {
+      if (n !== 1) return;
+      f.profile.accountId = "3".repeat(32);
+      f.input.bundle.entries.at(-1).bytes.fill(0);
+      f.input.bundle.build.runAttempt = "2";
+      f.input.identity.q = "0".repeat(64);
+      f.input.verifier = "replaced";
+    },
+  });
+  const proof = await s.upload();
+  assert.equal(proof.q, q);
+  assert.equal(proof.bundleRootSha256, root);
+  assert.equal(proof.build.runAttempt, "1");
+  assert.equal(s.settingsCalls.length, 4);
+  assert.deepEqual(
+    Buffer.from(await s.calls.at(-3).body.get("worker/worker.mjs").arrayBuffer()),
+    original,
+  );
+  assert.ok(s.settingsCalls.every((c) => c.url.startsWith(BASE)));
+});
+
+for (const phase of [2, 4])
+  test(`settings phase ${phase} cannot restart the original credential lifetime`, async () => {
+    let now = NOW;
+    const s = setup({
+      clock: () => now,
+      onSettingsFetch: (n) => {
+        if (n === phase) now = NOW + 1470;
+      },
+    });
+    await assert.rejects(s.upload(), ERROR);
+    assert.equal(s.settingsCalls.length, phase);
+    assert.equal(s.calls.length, phase === 2 ? 0 : 3);
+  });
+
+for (const phase of [1, 2, 3, 4])
+  test(`uploader deadline aborts a pending settings request in phase ${phase}`, async (t) => {
+    const original = AbortSignal.timeout;
+    const overall = new AbortController();
+    t.mock.method(AbortSignal, "timeout", (ms) => (ms === 180_000 ? overall.signal : original(ms)));
+    const entered = Promise.withResolvers();
+    const release = Promise.withResolvers();
+    let response;
+    const s = setup({
+      settingsReply: (v, n) => {
+        if (n !== phase) return result(v);
+        response = result(v);
+        entered.resolve(s.settingsCalls.at(-1).signal);
+        return release.promise;
+      },
+    });
+    const pending = s.upload();
+    const signal = await Promise.race([
+      entered.promise,
+      pending.then(
+        () => {
+          throw new Error("Settings phase was not reached");
+        },
+        () => {
+          throw new Error("Settings phase was not reached");
+        },
+      ),
+    ]);
+    assert.equal(signal.aborted, false);
+    overall.abort(new Error(TOKEN));
+    const abortedDuringRequest = signal.aborted;
+    // Always release the mock so a failing assertion cannot strand the test.
+    release.resolve(response);
+    await assert.rejects(pending, ERROR);
+    assert.equal(abortedDuringRequest, true);
+    assert.equal(s.settingsCalls.length, phase);
+  });
+
+test("final settings observation cannot outlive the uploader's shared deadline", async (t) => {
+  const original = AbortSignal.timeout;
+  const overall = new AbortController();
+  const bounds = [];
+  t.mock.method(AbortSignal, "timeout", (ms) => {
+    bounds.push(ms);
+    return ms === 180_000 ? overall.signal : original(ms);
+  });
+  const s = setup({
+    onSettingsFetch: (n) => {
+      if (n === 4) overall.abort(new Error(TOKEN));
+    },
+  });
+  await assert.rejects(s.upload(), ERROR);
+  assert.equal(s.settingsCalls.length, 4);
+  assert.equal(s.calls.length, 3);
+  assert.equal(bounds.filter((ms) => ms === 180_000).length, 1);
+  assert.equal(bounds.filter((ms) => ms === 30_000).length, 2);
 });
