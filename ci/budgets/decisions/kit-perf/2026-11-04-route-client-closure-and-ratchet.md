@@ -111,6 +111,338 @@ The endpoint-only rows have zero bytes/files in both groups. Exact initial
 ceilings live in `ci/budgets/kit-routes.json`, with strict runtime validation
 and the editor-facing `ci/kit-route-budget.schema.json`.
 
+This snapshot is the immutable measured admission anchor, not the mutable live
+budget. Do not update or reset it to admit a new route: that would invalidate
+historical replay. This lower-only implementation deliberately refuses new
+routes, even when source, build evidence and live budget all include them.
+Admission requires a separate reviewed, measured transition/migration
+implementation that retains this anchor and the complete ordered history; no
+such transition is implemented or authorized here. The automatic ratchet cannot
+admit routes, change file caps or reset the anchor. Existing ceilings must not rise.
+
+## Initial approved route plan
+
+```json
+{
+  "version": 1,
+  "scope": "kit-immutable-route-closure-v1",
+  "routes": {
+    "/": {
+      "js": {
+        "maxRawBytes": 150528,
+        "maxGzipBytes": 58624,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/[...path]": {
+      "js": {
+        "maxRawBytes": 0,
+        "maxGzipBytes": 0,
+        "maxFiles": 0
+      },
+      "css": {
+        "maxRawBytes": 0,
+        "maxGzipBytes": 0,
+        "maxFiles": 0
+      }
+    },
+    "/about": {
+      "js": {
+        "maxRawBytes": 139264,
+        "maxGzipBytes": 54272,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin": {
+      "js": {
+        "maxRawBytes": 145920,
+        "maxGzipBytes": 57344,
+        "maxFiles": 21
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 3
+      }
+    },
+    "/admin/activity-log": {
+      "js": {
+        "maxRawBytes": 146432,
+        "maxGzipBytes": 57856,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/events": {
+      "js": {
+        "maxRawBytes": 154112,
+        "maxGzipBytes": 60416,
+        "maxFiles": 23
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/events/[key]": {
+      "js": {
+        "maxRawBytes": 156160,
+        "maxGzipBytes": 60416,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/events/new": {
+      "js": {
+        "maxRawBytes": 153088,
+        "maxGzipBytes": 59136,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/featured": {
+      "js": {
+        "maxRawBytes": 147456,
+        "maxGzipBytes": 57856,
+        "maxFiles": 21
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/featured/[id]": {
+      "js": {
+        "maxRawBytes": 148480,
+        "maxGzipBytes": 58112,
+        "maxFiles": 21
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/featured/new": {
+      "js": {
+        "maxRawBytes": 144896,
+        "maxGzipBytes": 56576,
+        "maxFiles": 21
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/join-attempts": {
+      "js": {
+        "maxRawBytes": 147456,
+        "maxGzipBytes": 58368,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/join-attempts/[id]": {
+      "js": {
+        "maxRawBytes": 145408,
+        "maxGzipBytes": 57344,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/auth/recover": {
+      "js": {
+        "maxRawBytes": 137728,
+        "maxGzipBytes": 53248,
+        "maxFiles": 17
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/e/[key]": {
+      "js": {
+        "maxRawBytes": 171008,
+        "maxGzipBytes": 65024,
+        "maxFiles": 21
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/events": {
+      "js": {
+        "maxRawBytes": 0,
+        "maxGzipBytes": 0,
+        "maxFiles": 0
+      },
+      "css": {
+        "maxRawBytes": 0,
+        "maxGzipBytes": 0,
+        "maxFiles": 0
+      }
+    },
+    "/events/past": {
+      "js": {
+        "maxRawBytes": 143872,
+        "maxGzipBytes": 55808,
+        "maxFiles": 17
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/faq": {
+      "js": {
+        "maxRawBytes": 140288,
+        "maxGzipBytes": 54528,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/hotzones": {
+      "js": {
+        "maxRawBytes": 142336,
+        "maxGzipBytes": 55296,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/hotzones/[signal]": {
+      "js": {
+        "maxRawBytes": 141824,
+        "maxGzipBytes": 55296,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/join": {
+      "js": {
+        "maxRawBytes": 141312,
+        "maxGzipBytes": 54784,
+        "maxFiles": 17
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/leaderboards/members": {
+      "js": {
+        "maxRawBytes": 144384,
+        "maxGzipBytes": 56320,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/members/[user]": {
+      "js": {
+        "maxRawBytes": 159232,
+        "maxGzipBytes": 60928,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/privacy": {
+      "js": {
+        "maxRawBytes": 138752,
+        "maxGzipBytes": 54016,
+        "maxFiles": 17
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/profile": {
+      "js": {
+        "maxRawBytes": 159232,
+        "maxGzipBytes": 60928,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/rules": {
+      "js": {
+        "maxRawBytes": 140288,
+        "maxGzipBytes": 54528,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    }
+  }
+}
+```
+
 ## Automation boundary and step semantics
 
 The dedicated push-to-main workflow has no PR, workflow-run or manual-input
@@ -139,10 +471,19 @@ Its machine-verifiable block includes main's original budget files and every
 ordered draft measurement/result, including earlier updates. The writer binds
 that replayed result to the live draft files before appending an update. Histories
 must remain below 100 proposals and 2 MiB; the writer refuses excess before any
-write. The client allocation test oracle replays these measured decisions from
-the unchanged initial aggregate ceilings; it rejects missing/tampered evidence,
-unproven earlier decreases, disconnected decreases and re-raises.
-Route-only decisions do not advance the aggregate chain. Existing historical
+write. The shipping route gate and client allocation tests replay these measured
+decisions from the unchanged initial aggregate ceilings **and the complete initial
+route snapshot above**, including raw/gzip/file caps, route inventory, version
+and scope. A pinned regression digest independently protects that measured
+snapshot. Every decision's full base must equal the preceding approved plan;
+filename/SHA sort order is not chronology. Route-only decisions advance the same
+complete-plan chain even though aggregate values stay unchanged. Forks,
+unsupported base resets, missing/tampered evidence, unproven earlier decreases,
+disconnected decreases and re-raises fail closed. The shipping route gate binds
+the complete live route budget to the final replay result before accepting any
+build; a hand-edited raw/gzip/file cap cannot silently replace that result.
+New route admission is explicit reviewed work, never inferred from matching
+source/build/live-budget entries and never performed by the automatic writer. Existing historical
 client byte fixtures retain their original pinned allocations, and separate
 current-plan cases prove exact-fit and one-unit-over enforcement of raw/gzip/file
 ceilings for both JS and CSS. Count fixtures use minimal bodies and verify the
@@ -162,8 +503,39 @@ Run the full compatibility proof with:
 node --test ci/check-kit-route-perf.test.mjs ci/kit-client-ratchet.test.mjs ci/check-kit-perf.test.mjs ci/budget-fragments.test.mjs ci/kit-parity-ci-wiring.test.mjs
 ```
 
-There is no auto-merge; marking the draft ready must trigger normal CI/reviews
-and the exact-head production merge confirmation.
+## Generated-draft promotion and exact-head checks
+
+There is no auto-merge. GitHub suppresses workflow runs for create/update events
+caused by this workflow's repository `GITHUB_TOKEN`; those events are **not**
+evidence of PR checks. That restriction is about the actor causing each event,
+not a permanent property of a PR originally opened by that actor. See GitHub's
+[triggering a workflow from a workflow documentation](https://docs.github.com/en/actions/how-tos/writing-workflows/choosing-when-your-workflow-runs/triggering-a-workflow#triggering-a-workflow-from-a-workflow).
+
+Supported path, for both a new generated draft and any later automated updates:
+
+1. Leave the PR as a draft throughout measurement and automated updates. The
+   writer never marks it ready and refuses updates to a ready PR.
+2. After the last update, inspect its latest head SHA. An independently
+   authenticated maintainer marks it ready in the GitHub UI or with
+   `gh pr ready <number>` using an **existing authorized independent identity**,
+   not the writer's repository token. No credential, token scope or setting
+   change is part of this path.
+3. This independently originated `ready_for_review` event is subscribed by
+   `.github/workflows/ci.yml`, `e2e.yml` and `pr-gates.yml`, so the normal CI,
+   e2e, PR-lint and secret gates can run for the current head. Prior draft runs,
+   including a scope-skipped e2e result, cannot stand in for the ready-head gates.
+4. Verify every required check and review on that exact SHA, answer findings,
+   then obtain the normal exact-head production merge confirmation. If a check
+   or review does not appear, stop and diagnose its actor/event configuration;
+   do not waive it, merge, or count an older-head result. If another update is
+   needed after promotion, return it to draft first; writer ownership/history
+   checks remain in force, and repeat independent promotion and exact-head
+   verification after the last permitted update.
+
+Fixture coverage asserts draft creation, draft updates, ready-PR refusal, all
+three `ready_for_review` subscriptions, and these generated-body instructions.
+This is source/fixture evidence, **not a live promotion experiment**; no test PR,
+new identity, setting change or credential was created to validate the path.
 
 Read-only capability inspection on 2026-11-04 returned
 `default_workflow_permissions: read` and

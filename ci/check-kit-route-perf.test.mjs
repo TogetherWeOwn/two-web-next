@@ -5,6 +5,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
+import { INITIAL_CLIENT_BUDGET } from "./client-ratchet-approval.mjs";
+import { CLIENT_FILES, measuredDecision, propose } from "./kit-client-ratchet.mjs";
 import {
   checkRoutes,
   measureRoutes,
@@ -95,7 +97,13 @@ function fixture(t) {
   }
   const saveBudget = () => put(ROUTE_BUDGET, budget);
   saveBudget();
-  return { root, put, manifest, evidence, budget, save, saveBudget };
+  const approveBudget = () =>
+    put(
+      "ci/budgets/decisions/kit-perf/2026-11-04-route-client-closure-and-ratchet.md",
+      `## Initial approved route plan\n\n\`\`\`json\n${JSON.stringify(budget)}\n\`\`\`\n`,
+    );
+  approveBudget();
+  return { root, put, manifest, evidence, budget, save, saveBudget, approveBudget };
 }
 
 test("route cost includes bootstrap/static/dynamic/shared/errors/CSS once, not all navigation leaves", (t) => {
@@ -135,11 +143,108 @@ for (const [metric, field] of [
       const f = fixture(t);
       f.budget.routes["/"][kind][field] -= 1;
       f.saveBudget();
+      f.approveBudget(); // Test the measured breach, not an unsupported policy edit.
       assert.equal(checkRoutes(f.root).exitCode, 1);
     });
 }
 
+for (const kind of ["js", "css"])
+  for (const metric of ["maxRawBytes", "maxGzipBytes", "maxFiles"])
+    for (const delta of [-1, 1])
+      test(`unsupported ${kind} ${metric} change (${delta}) refuses route enforcement`, (t) => {
+        const f = fixture(t);
+        assert.equal(checkRoutes(f.root).exitCode, 0);
+        f.budget.routes["/"][kind][metric] += delta;
+        f.saveBudget();
+        const result = checkRoutes(f.root);
+        assert.equal(result.exitCode, 2);
+        assert.match(result.error, /approved route plan/);
+      });
+
+for (const kind of ["js", "css"])
+  for (const metric of ["maxRawBytes", "maxGzipBytes", "maxFiles"])
+    test(`a live ${kind} ${metric} edit after a legitimate route-only decrease fails closed`, (t) => {
+      const f = fixture(t);
+      for (const route of Object.values(f.budget.routes))
+        for (const k of ["js", "css"]) {
+          route[k].maxRawBytes += 8192;
+          route[k].maxGzipBytes += 4096;
+        }
+      f.approveBudget();
+      f.saveBudget();
+      const base = {
+        [CLIENT_FILES[0]]: { $comment: "fixture", client: { js: INITIAL_CLIENT_BUDGET.js } },
+        [CLIENT_FILES[1]]: { $comment: "fixture", client: { css: INITIAL_CLIENT_BUDGET.css } },
+        [ROUTE_BUDGET]: f.budget,
+      };
+      const measurement = checkRoutes(f.root);
+      assert.equal(measurement.exitCode, 0);
+      for (const k of ["js", "css"]) {
+        measurement.aggregate[k].rawBytes = INITIAL_CLIENT_BUDGET[k].maxRawBytes;
+        measurement.aggregate[k].gzipBytes = INITIAL_CLIENT_BUDGET[k].maxGzipBytes;
+      }
+      const report = { version: 1, sha: "a".repeat(40), measurement };
+      const result = propose(report, base);
+      assert.ok(result.changes.length > 0);
+      assert.ok(result.changes.every((change) => change.id !== "aggregate"));
+      f.put(
+        "ci/budgets/decisions/kit-perf/auto-client-ratchet-aaaaaaaaaaaa.md",
+        measuredDecision(report, base, result),
+      );
+      f.put(ROUTE_BUDGET, result.files[ROUTE_BUDGET]);
+      assert.equal(checkRoutes(f.root).exitCode, 0);
+      const ceiling = result.files[ROUTE_BUDGET].routes["/"][kind];
+      ceiling[metric] += metric === "maxRawBytes" ? 512 : metric === "maxGzipBytes" ? 256 : 1;
+      assert.ok(
+        ceiling[metric] <= base[ROUTE_BUDGET].routes["/"][kind][metric] || metric === "maxFiles",
+      );
+      f.put(ROUTE_BUDGET, result.files[ROUTE_BUDGET]);
+      const rejected = checkRoutes(f.root);
+      assert.equal(rejected.exitCode, 2);
+      assert.match(rejected.error, /approved route plan/);
+    });
+
+test("new source, built and live-budget route still requires explicit admission", (t) => {
+  const f = fixture(t);
+  f.put("web/src/routes/new/+page.svelte", "new");
+  f.evidence.routes.push({ id: "/new", page: f.evidence.routes[0].page });
+  f.budget.routes["/new"] = f.budget.routes["/"];
+  f.save();
+  f.saveBudget();
+  const result = checkRoutes(f.root);
+  assert.equal(result.exitCode, 2);
+  assert.match(result.error, /approved route plan/);
+});
+
+test("missing initial approved route evidence fails closed", (t) => {
+  const f = fixture(t);
+  rmSync(
+    join(f.root, "ci/budgets/decisions/kit-perf/2026-11-04-route-client-closure-and-ratchet.md"),
+  );
+  assert.equal(checkRoutes(f.root).exitCode, 2);
+});
+
 const invalid = {
+  "malformed initial plan": (f) =>
+    f.put(
+      "ci/budgets/decisions/kit-perf/2026-11-04-route-client-closure-and-ratchet.md",
+      "no evidence",
+    ),
+  "ambiguous initial plan": (f) => {
+    const path = "ci/budgets/decisions/kit-perf/2026-11-04-route-client-closure-and-ratchet.md";
+    const text = readFileSync(join(f.root, path), "utf8");
+    f.put(path, text + text);
+  },
+  "symlink initial plan": (f) => {
+    const path = join(
+      f.root,
+      "ci/budgets/decisions/kit-perf/2026-11-04-route-client-closure-and-ratchet.md",
+    );
+    rmSync(path);
+    symlinkSync(join(f.root, ROUTE_BUDGET), path);
+  },
+  "unproven decision": (f) =>
+    f.put("ci/budgets/decisions/kit-perf/auto-client-ratchet-aaaaaaaaaaaa.md", "no evidence"),
   "new source route": (f) => f.put("web/src/routes/new/+page.svelte", "new"),
   "new server-only page route": (f) => f.put("web/src/routes/new/+page.server.ts", "new"),
   "new layout-reset page route": (f) => f.put("web/src/routes/new/+page@.svelte", "new"),

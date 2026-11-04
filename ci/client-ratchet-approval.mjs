@@ -1,44 +1,71 @@
-// Test oracle for generated decreases. Historical allocations remain pinned;
-// current aggregate ceilings must follow a replayable measured-decision chain.
+// Replay the complete measured client plan. Route-only decisions advance the
+// same chain as aggregate decisions; neither can fork or reset the other.
 import assert from "node:assert/strict";
-import { readFileSync, readdirSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { CLIENT_FILES, parseDecision, replayDecision } from "./kit-client-ratchet.mjs";
+import { ROUTE_BUDGET, validateRouteBudget } from "./kit-route-budget.mjs";
 
 export const INITIAL_CLIENT_BUDGET = {
   js: { maxRawBytes: 261632, maxGzipBytes: 104448, maxFiles: 55 },
   css: { maxRawBytes: 3072, maxGzipBytes: 1280, maxFiles: 4 },
 };
-const client = (files) => ({
-  js: files[CLIENT_FILES[0]].client.js,
-  css: files[CLIENT_FILES[1]].client.css,
+export const INITIAL_ROUTE_DECISION =
+  "ci/budgets/decisions/kit-perf/2026-11-04-route-client-closure-and-ratchet.md";
+const plan = (files) => ({
+  client: {
+    js: files[CLIENT_FILES[0]].client.js,
+    css: files[CLIENT_FILES[1]].client.css,
+  },
+  routeBudget: validateRouteBudget(files[ROUTE_BUDGET]),
 });
-const same = isDeepStrictEqual;
 
-export function approvedClientBudget(root) {
+function readDecision(root, path) {
+  let current = root;
+  for (const part of path.split("/")) {
+    current = join(current, part);
+    assert.ok(!lstatSync(current).isSymbolicLink(), "symlink decision evidence");
+  }
+  const stat = lstatSync(current);
+  assert.ok(
+    stat.isFile() && stat.size <= 2 * 1024 * 1024,
+    "invalid or oversized decision evidence",
+  );
+  return readFileSync(current, "utf8");
+}
+
+export function initialRouteBudget(root) {
+  const text = readDecision(root, INITIAL_ROUTE_DECISION);
+  const matches = [...text.matchAll(/## Initial approved route plan\n\n```json\n([\s\S]*?)\n```/g)];
+  assert.equal(matches.length, 1, "missing or ambiguous initial approved route plan");
+  return validateRouteBudget(JSON.parse(matches[0][1]));
+}
+
+export function approvedClientPlan(root) {
   const dir = join(root, "ci/budgets/decisions/kit-perf");
   const pending = readdirSync(dir)
     .filter((name) => /^auto-client-ratchet-[a-f0-9]{12}\.md$/.test(name))
     .sort()
     .map((name) => {
-      const text = readFileSync(join(dir, name), "utf8");
+      const text = readDecision(root, `ci/budgets/decisions/kit-perf/${name}`);
       const evidence = parseDecision(text);
       const { base } = evidence;
       const result = replayDecision(evidence);
-      return { name, before: client(base), after: client(result.files) };
+      return { name, before: plan(base), after: plan(result.files) };
     });
-  let approved = structuredClone(INITIAL_CLIENT_BUDGET);
+  let approved = {
+    client: structuredClone(INITIAL_CLIENT_BUDGET),
+    routeBudget: initialRouteBudget(root),
+  };
   while (pending.length) {
-    // Route-only proposals do not advance aggregate state. Consume them before
-    // a lowering from that same state, regardless of source-SHA filename order.
-    let index = pending.findIndex(
-      (record) => same(record.before, approved) && same(record.after, approved),
-    );
-    if (index < 0) index = pending.findIndex((record) => same(record.before, approved));
+    const index = pending.findIndex((record) => isDeepStrictEqual(record.before, approved));
     assert.ok(index >= 0, "measured client decisions do not extend the approved ceiling chain");
     const [record] = pending.splice(index, 1);
     approved = record.after;
   }
   return approved;
 }
+
+export const approvedClientBudget = (root) => approvedClientPlan(root).client;
+export const approvedRouteBudget = (root) => approvedClientPlan(root).routeBudget;

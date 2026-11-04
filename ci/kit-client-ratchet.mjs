@@ -6,12 +6,11 @@ import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
-  checkRoutes,
   ROUTE_BUDGET,
   ROUTE_SCOPE,
   targetBytes,
   validateRouteBudget,
-} from "./check-kit-route-perf.mjs";
+} from "./kit-route-budget.mjs";
 
 export const BRANCH = "ci/client-budget-ratchet";
 export const TITLE = "ci(perf): lower measured client budget ceilings";
@@ -147,7 +146,10 @@ Propose lower client ceilings from a trusted main build. No product or served by
 ## Verification
 
 - Credential-free main build passed aggregate, served-asset and route checks before publishing its measurement.
-- This draft does not auto-merge. Marking it ready must run the normal exact-head checks and reviews.
+- Repository-token create/update events do not trigger PR checks. All automated updates stay draft-only.
+- After the last update, an independently authenticated maintainer must mark this draft ready (GitHub UI or existing authorized CLI identity, never this workflow's repository token).
+- Verify the normal CI, e2e, PR-lint/security checks and required reviews on that exact generated head before merge. If they are absent, stop; do not bypass or substitute older-head results.
+- This draft does not auto-merge. The writer refuses further updates once it is ready.
 
 ## Attestation
 
@@ -359,7 +361,7 @@ export function githubApi(token) {
   };
 }
 
-if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+async function main() {
   assert.equal(process.env.GITHUB_REF, "refs/heads/main");
   assert.equal(process.env.GITHUB_EVENT_NAME, "push");
   assert.equal(process.env.GITHUB_REPOSITORY, "TogetherWeOwn/two-web-next");
@@ -368,6 +370,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   const [mode, path] = process.argv.slice(2);
   if (mode === "measure") {
     assert.ok(!process.env.GH_TOKEN && !process.env.GITHUB_TOKEN, "measurement must be token-free");
+    const { checkRoutes } = await import("./check-kit-route-perf.mjs");
     const measurement = checkRoutes();
     assert.equal(measurement.exitCode, 0, "route gate must pass before measurement");
     writeFileSync(path, json({ version: 1, sha: process.env.GITHUB_SHA, measurement }), {
@@ -389,4 +392,11 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
       ),
     );
   }
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error);
+    process.exitCode = 1;
+  });
 }

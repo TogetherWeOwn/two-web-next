@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   cpSync,
   mkdirSync,
@@ -15,7 +16,13 @@ import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { parse } from "yaml";
 import { ROUTE_BUDGET, ROUTE_SCOPE } from "./check-kit-route-perf.mjs";
-import { approvedClientBudget, INITIAL_CLIENT_BUDGET } from "./client-ratchet-approval.mjs";
+import {
+  approvedClientBudget,
+  approvedRouteBudget,
+  initialRouteBudget,
+  INITIAL_CLIENT_BUDGET,
+  INITIAL_ROUTE_DECISION,
+} from "./client-ratchet-approval.mjs";
 import {
   assertLowerOnly,
   BRANCH,
@@ -337,6 +344,7 @@ function shippingFixture(smallCss = false) {
   // Pin the pre-ratchet anchor even when this test runs in a generated PR.
   files[CLIENT_FILES[0]].client.js = structuredClone(INITIAL_CLIENT_BUDGET.js);
   files[CLIENT_FILES[1]].client.css = structuredClone(INITIAL_CLIENT_BUDGET.css);
+  files[ROUTE_BUDGET] = initialRouteBudget(repo);
   const measured = (ceiling, kind) => ({
     rawBytes: Math.floor(ceiling.maxRawBytes / 2),
     gzipBytes: Math.floor(ceiling.maxGzipBytes / 2),
@@ -371,6 +379,10 @@ function decisionRoot(t) {
   );
   t.after(() => rmSync(root, { recursive: true, force: true }));
   mkdirSync(join(root, "ci/budgets/decisions/kit-perf"), { recursive: true });
+  cpSync(
+    new URL(`../${INITIAL_ROUTE_DECISION}`, import.meta.url),
+    join(root, INITIAL_ROUTE_DECISION),
+  );
   return root;
 }
 function saveDecision(root, f, previous = f.files, result = propose(f.report, f.files, previous)) {
@@ -426,6 +438,21 @@ for (const smallCss of [false, true])
     assert.match(result.stdout, /# fail 0/);
   });
 
+test("initial measured route admission remains pinned independently of the live budget", () => {
+  const repo = fileURLToPath(new URL("../", import.meta.url));
+  const initial = initialRouteBudget(repo);
+  assert.equal(Object.keys(initial.routes).length, 26);
+  assert.equal(initial.routes["/admin"].js.maxRawBytes, 145920);
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(initial)).digest("hex"),
+    "38eb8669ed3145d33b86658d1923845029782dff1441fafed27a611d2a7e8207",
+  );
+  assert.deepEqual(
+    JSON.parse(readFileSync(join(repo, ROUTE_BUDGET), "utf8")),
+    approvedRouteBudget(repo),
+  );
+});
+
 test("decision oracle replays successive lowerings and refuses a re-raise or missing evidence", (t) => {
   const root = decisionRoot(t);
   const f = shippingFixture();
@@ -449,7 +476,7 @@ test("decision oracle replays successive lowerings and refuses a re-raise or mis
   assert.throws(() => approvedClientBudget(root), /missing or ambiguous/);
 });
 
-test("route-only decisions precede aggregate lowerings independent of SHA filename order", (t) => {
+test("route-only then mixed decisions replay full state independent of SHA filename order", (t) => {
   const root = decisionRoot(t);
   const routeOnly = shippingFixture();
   routeOnly.report.sha = next;
@@ -458,10 +485,47 @@ test("route-only decisions precede aggregate lowerings independent of SHA filena
     routeOnly.report.measurement.aggregate[kind].gzipBytes =
       INITIAL_CLIENT_BUDGET[kind].maxGzipBytes;
   }
+  const first = propose(routeOnly.report, routeOnly.files);
   saveDecision(root, routeOnly);
+  assert.deepEqual(approvedClientBudget(root), INITIAL_CLIENT_BUDGET);
+  assert.deepEqual(approvedRouteBudget(root), first.files[ROUTE_BUDGET]);
   const f = shippingFixture();
+  f.files = first.files;
+  for (const route of Object.values(f.report.measurement.routes))
+    for (const kind of ["js", "css"]) {
+      route[kind].rawBytes = Math.floor(route[kind].rawBytes / 2);
+      route[kind].gzipBytes = Math.floor(route[kind].gzipBytes / 2);
+    }
+  const mixed = propose(f.report, f.files);
+  assert.ok(mixed.changes.some((change) => change.id === "aggregate"));
+  assert.ok(mixed.changes.some((change) => change.id !== "aggregate"));
   saveDecision(root, f);
   assert.equal(approvedClientBudget(root).js.maxRawBytes, 250368);
+  assert.deepEqual(approvedRouteBudget(root), mixed.files[ROUTE_BUDGET]);
+});
+
+for (const metric of ["maxRawBytes", "maxGzipBytes", "maxFiles"])
+  test(`a decision cannot reset an approved route ${metric} through its base`, (t) => {
+    const root = decisionRoot(t);
+    const f = shippingFixture();
+    f.files[ROUTE_BUDGET].routes["/admin"].js[metric] += 1;
+    saveDecision(root, f);
+    assert.throws(() => approvedClientBudget(root), /approved ceiling chain/);
+    assert.throws(() => approvedRouteBudget(root), /approved ceiling chain/);
+  });
+
+test("two route-only forks cannot be flattened into an unchanged aggregate chain", (t) => {
+  const root = decisionRoot(t);
+  const f = shippingFixture();
+  for (const kind of ["js", "css"]) {
+    f.report.measurement.aggregate[kind].rawBytes = INITIAL_CLIENT_BUDGET[kind].maxRawBytes;
+    f.report.measurement.aggregate[kind].gzipBytes = INITIAL_CLIENT_BUDGET[kind].maxGzipBytes;
+  }
+  saveDecision(root, f);
+  f.report.sha = next;
+  f.report.measurement.routes["/admin"].js.rawBytes -= 1024;
+  saveDecision(root, f);
+  assert.throws(() => approvedClientBudget(root), /approved ceiling chain/);
 });
 
 test("decision oracle rejects an unproven earlier draft decrease", (t) => {
@@ -480,6 +544,22 @@ test("decision oracle rejects tampered result bytes even when they remain below 
   result.files[CLIENT_FILES[0]].client.js.maxRawBytes += 512;
   saveDecision(root, f, f.files, result);
   assert.throws(() => approvedClientBudget(root), /invalid proposal/);
+});
+
+test("generated drafts require independent ready promotion and all normal workflow subscriptions", () => {
+  for (const file of ["ci.yml", "e2e.yml", "pr-gates.yml"]) {
+    const workflow = parse(
+      readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8"),
+    );
+    assert.ok(workflow.on.pull_request.types.includes("ready_for_review"), file);
+  }
+  const body = prBody(sha);
+  assert.match(body, /Repository-token create\/update events do not trigger PR checks/);
+  assert.match(body, /independently authenticated maintainer/);
+  assert.match(body, /never this workflow's repository token/);
+  assert.match(body, /exact generated head/);
+  assert.match(body, /If they are absent, stop/);
+  assert.match(body, /writer refuses further updates once it is ready/);
 });
 
 test("ratchet workflow is trusted-main-only with credential-free measurement and a separate bounded writer", () => {

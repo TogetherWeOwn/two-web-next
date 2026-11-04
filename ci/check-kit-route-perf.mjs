@@ -13,41 +13,24 @@ import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
-export const ROUTE_BUDGET = "ci/budgets/kit-routes.json";
-export const ROUTE_SCOPE = "kit-immutable-route-closure-v1";
+import { approvedRouteBudget } from "./client-ratchet-approval.mjs";
+import {
+  ROUTE_BUDGET,
+  ROUTE_SCOPE,
+  targetBytes,
+  validateRouteBudget,
+} from "./kit-route-budget.mjs";
+export { ROUTE_BUDGET, ROUTE_SCOPE, targetBytes, validateRouteBudget };
 export const OUTPUT = "web/.svelte-kit/output";
 const NODE_KEY = /^\.svelte-kit\/generated\/build\/client-optimized\/nodes\/(\d+)\.js$/;
-const METRICS = ["maxRawBytes", "maxGzipBytes", "maxFiles"];
 const object = (v) => v !== null && typeof v === "object" && !Array.isArray(v);
 const sha256 = (v) => createHash("sha256").update(v).digest("hex");
-export const targetBytes = (measured, step) => Math.ceil((measured * 1.25) / step) * step;
 const sorted = (values) => [...values].sort();
 const same = (a, b) => assert.deepEqual(sorted(a), sorted(b), "inventory mismatch");
 
 function keys(value, expected) {
   assert.ok(object(value), "expected object");
   same(Object.keys(value), expected);
-}
-
-export function validateRouteBudget(budget) {
-  keys(budget, ["version", "scope", "routes"]);
-  assert.equal(budget.version, 1, "unsupported budget version");
-  assert.equal(budget.scope, ROUTE_SCOPE, "unsupported scope");
-  assert.ok(object(budget.routes) && Object.keys(budget.routes).length > 0, "empty routes");
-  for (const [id, route] of Object.entries(budget.routes)) {
-    assert.ok(id.startsWith("/") && !/[\u0000-\u001f]/.test(id), "invalid route id");
-    keys(route, ["js", "css"]);
-    for (const kind of ["js", "css"]) {
-      keys(route[kind], METRICS);
-      for (const metric of METRICS) {
-        assert.ok(
-          Number.isSafeInteger(route[kind][metric]) && route[kind][metric] >= 0,
-          "invalid ceiling",
-        );
-      }
-    }
-  }
-  return budget;
 }
 
 function read(root, path) {
@@ -269,6 +252,11 @@ export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
 export function checkRoutes(root = resolve(import.meta.dirname, "..")) {
   try {
     const budget = validateRouteBudget(JSON.parse(read(root, ROUTE_BUDGET)));
+    assert.deepEqual(
+      budget,
+      approvedRouteBudget(root),
+      "live budget differs from approved route plan",
+    );
     const measurement = measureRoutes(root);
     same(Object.keys(measurement.routes), Object.keys(budget.routes));
     const breaches = [];
