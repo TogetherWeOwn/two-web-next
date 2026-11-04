@@ -135,6 +135,18 @@ for (const [name, mutate] of Object.entries({
     f.report.measurement.aggregate.js.files = 6;
     f.report.measurement.aggregate.js.assets = Array(6).fill("_app/immutable/test.js");
   },
+  "non-immutable route asset": (f) => {
+    f.report.measurement.routes["/"].js.assets = ["_app/env.js"];
+  },
+  "aggregate asset outside _app": (f) => {
+    f.report.measurement.aggregate.js.assets = ["public/island.js"];
+  },
+  "aggregate path traversal": (f) => {
+    f.report.measurement.aggregate.js.assets = ["_app/../outside.js"];
+  },
+  "aggregate backslash": (f) => {
+    f.report.measurement.aggregate.js.assets = ["_app/runtime\\\\outside.js"];
+  },
   "server substitution": (f) => {
     f.files[CLIENT_FILES[0]].server = { js: {} };
   },
@@ -265,6 +277,18 @@ test("full fixture path creates one stable draft, allowlisted files and measured
   assert.equal(writes[2].body.base, "main");
   assert.ok(!JSON.stringify(writes).includes('"force"'));
   assert.ok(!writes.some((c) => c.path.includes("/merge")));
+});
+
+test("deterministic metadata distinguishes runtime execution from tooling authorship", async () => {
+  const s = server();
+  await publish(s);
+  const message = s.calls.find((call) => call.path === "/graphql").body.variables.input.message;
+  assert.match(message.body, /No model is invoked at runtime/);
+  assert.match(message.body, /tooling authorship/);
+  assert.ok(message.body.endsWith("Co-Authored-By: Claude Code <noreply@anthropic.com>"));
+  assert.match(prBody(sha), /No model is invoked at runtime/);
+  assert.match(prBody(sha), /tooling was authored with Claude Code assistance/);
+  assert.match(prBody(sha), /Generated with \[Claude Code\]/);
 });
 
 test("an existing unchanged bot draft updates atomically, without duplicate PRs or body replacement", async () => {

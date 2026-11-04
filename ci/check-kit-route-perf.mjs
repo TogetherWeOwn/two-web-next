@@ -13,6 +13,7 @@ import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { gzipSync } from "node:zlib";
 
+import { KIT_CLIENT_DIR } from "./bundle-inventory.mjs";
 import { approvedRouteBudget } from "./client-ratchet-approval.mjs";
 import {
   ROUTE_BUDGET,
@@ -158,10 +159,16 @@ export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
   for (const file of entries) assert.ok(bootstrap.includes(file), "unaccounted entry");
   for (const file of bootstrap) assert.ok(byFile.has(file), "missing bootstrap file");
   for (const css of list(evidence.stylesheets)) assets.add(assetPath(css));
-  const actual = walk(root, `${OUTPUT}/client/_app/immutable`)
+  // Aggregate lowering must use the shipping gate's complete _app inventory,
+  // including non-immutable runtime files. Route closure remains graph-backed
+  // and immutable-only; do not silently label runtime files as route costs.
+  const aggregateAssets = walk(root, KIT_CLIENT_DIR)
     .filter((p) => /\.(js|css)$/.test(p))
     .map((p) => relative(join(root, OUTPUT, "client"), join(root, p)).replaceAll("\\", "/"));
-  same(actual, [...assets]);
+  same(
+    aggregateAssets.filter((p) => p.startsWith("_app/immutable/")),
+    [...assets],
+  );
 
   assert.ok(Array.isArray(evidence.routes) && evidence.routes.length > 0, "empty route evidence");
   const sourceRoutes = new Map();
@@ -187,8 +194,8 @@ export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
     "duplicate route",
   );
   const fileMetrics = new Map(
-    [...assets].sort().map((file) => {
-      const bytes = read(root, `${OUTPUT}/client/${assetPath(file)}`);
+    aggregateAssets.map((file) => {
+      const bytes = read(root, `${OUTPUT}/client/${file}`);
       return [file, { rawBytes: bytes.length, gzipBytes: gzipSync(bytes).length }];
     }),
   );
@@ -245,7 +252,7 @@ export function measureRoutes(root = resolve(import.meta.dirname, "..")) {
     version: 1,
     scope: ROUTE_SCOPE,
     routes,
-    aggregate: { js: summarize(assets, "js"), css: summarize(assets, "css") },
+    aggregate: { js: summarize(aggregateAssets, "js"), css: summarize(aggregateAssets, "css") },
   };
 }
 

@@ -60,6 +60,16 @@ quality gates. Missing/extra source, built or budget routes; unowned JS/CSS;
 missing chunks; symlinks; malformed lists/indexes and orphan graph chunks refuse
 enforcement (exit 2), rather than returning pass. A measured breach exits 1.
 
+Aggregate ratchet input is a different scope: every `.js` and `.css` file under
+`KIT_CLIENT_DIR` (`web/.svelte-kit/output/client/_app`), exactly the inventory
+enforced by `ci/check-kit-perf.mjs`, not only manifest-owned immutable files.
+Non-immutable runtime assets contribute raw bytes, per-file gzip bytes and file
+counts to the aggregate, but are not attributed to a route without graph evidence.
+The strict walk/read still refuses symlinks and incomplete evidence. Regression
+fixtures add non-immutable JS and CSS separately, verify unchanged route closures,
+apply the actual generated fragments and pass the shipping aggregate checker with
+identical byte/count measurements. No aggregate or served enforcement is removed.
+
 REA angle: source-first inspection of SvelteKit's shipped manifest generation
 and the actual Vite build, instead of inventing entry-file proxy costs or
 filesystem-parent approximations to layout/error inheritance.
@@ -546,3 +556,36 @@ test capability**. If GitHub refuses PR creation, an operator must inspect the
 repository's Actions “Allow GitHub Actions to create and approve pull requests”
 setting and the existing workflow identity; this workflow does not change that
 setting, acquire credentials, bypass required checks or substitute a token.
+
+## Recovery for a closed-unmerged generated draft
+
+If a generated draft is closed without merging, its `ci/client-budget-ratchet`
+branch can remain. Repository `delete_branch_on_merge=true` (observed read-only)
+only deletes branches of merged PRs, so it does not remove this one. The writer
+then sees no open PR and an existing ref, and refuses to adopt it. That refusal
+is intentional and stays. This section records a reviewed manual procedure.
+No orphan branch was deleted, adopted or reset, and no repository setting changed.
+Read-only capability inspection is not cleanup authorization.
+
+1. Inspect the closed PR's provenance: author, base, title/body as generated,
+   close reason and timestamp. Confirm it was never merged.
+2. Record the branch's current head SHA as the immutable expected head. Every
+   later step names this SHA; nothing is decided from the branch name alone.
+3. Prove the head from the PR and commit data, not from reachability. Squash
+   merges make reachability from `main` meaningless. Require bot-authored,
+   signed commits, a diff limited to the allowlisted client budget files plus the
+   generated decision, and a replay of that decision that matches the files.
+4. Confirm no open PR uses the branch as head or base.
+5. Archive the evidence: PR number and URL, expected head SHA, commit list,
+   diff and replay result. Keep it where reviewers can retrieve it.
+6. Obtain explicit approval from a person authorized to clean up branches.
+   Approval is for that archived head SHA.
+7. Delete only with a compare-and-delete bound to the expected head. Re-read
+   the ref first. A later run may then create a fresh branch and draft.
+
+Stop, delete nothing and escalate if the head changed since step 2 (head race),
+any proof in step 3 fails or cannot be established, the branch has a human
+commit or author, an open PR exists, or approval is missing. Never delete
+blindly, never force-push or reset the branch to make the writer proceed, and
+never treat "reachable from main" as proof. The fixture proves refusal of orphan
+or human refs; this recovery path is documentation only and was not exercised.

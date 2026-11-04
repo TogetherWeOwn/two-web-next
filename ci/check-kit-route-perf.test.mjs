@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { gzipSync } from "node:zlib";
 import { INITIAL_CLIENT_BUDGET } from "./client-ratchet-approval.mjs";
+import { measure as measureKit } from "./check-kit-perf.mjs";
 import { CLIENT_FILES, measuredDecision, propose } from "./kit-client-ratchet.mjs";
 import {
   checkRoutes,
@@ -132,6 +133,55 @@ test("route cost includes bootstrap/static/dynamic/shared/errors/CSS once, not a
   assert.deepEqual(report.routes["/api"].js, { rawBytes: 0, gzipBytes: 0, files: 0, assets: [] });
   assert.deepEqual(measureRoutes(root), measureRoutes(root));
 });
+
+for (const kind of ["js", "css"])
+  test(`non-immutable ${kind} is included in aggregate ratchets and passes the shipping gate`, (t) => {
+    const f = fixture(t);
+    const before = checkRoutes(f.root);
+    const asset = `_app/runtime/extra.${kind}`;
+    const bytes = Array.from({ length: kind === "js" ? 128 : 16 }, (_, i) => hash(String(i))).join(
+      "",
+    );
+    f.put(`${OUTPUT}/client/${asset}`, bytes);
+    const measurement = checkRoutes(f.root);
+    assert.equal(measurement.exitCode, 0);
+    // The graph-backed route scope stays immutable-only; aggregate scope is all _app JS/CSS.
+    assert.deepEqual(measurement.routes, before.routes);
+    const value = measurement.aggregate[kind];
+    assert.equal(value.rawBytes, before.aggregate[kind].rawBytes + Buffer.byteLength(bytes));
+    assert.equal(value.gzipBytes, before.aggregate[kind].gzipBytes + gzipSync(bytes).length);
+    assert.equal(value.files, before.aggregate[kind].files + 1);
+    assert.ok(value.assets.includes(asset));
+    const base = {
+      [CLIENT_FILES[0]]: { $comment: "fixture", client: { js: INITIAL_CLIENT_BUDGET.js } },
+      [CLIENT_FILES[1]]: { $comment: "fixture", client: { css: INITIAL_CLIENT_BUDGET.css } },
+      [ROUTE_BUDGET]: f.budget,
+    };
+    const report = { version: 1, sha: "a".repeat(40), measurement };
+    const result = propose(report, base);
+    assert.ok(result.changes.some((change) => change.id === "aggregate" && change.kind === kind));
+    // Apply the actual generated fragments, not independently reconstructed ceilings.
+    for (const path of CLIENT_FILES) f.put(path, result.files[path]);
+    f.put("ci/budgets/kit/worker.json", {
+      worker: { "_worker.js": { maxRawBytes: 4096, maxGzipBytes: 4096 } },
+    });
+    f.put("ci/budgets/kit/server.json", {
+      server: { js: { maxRawBytes: 4096, maxGzipBytes: 4096, maxFiles: 5 } },
+    });
+    f.put("ci/budgets/kit/startup.json", { startup: { maxMs: 30000 } });
+    f.put("web/.svelte-kit/cloudflare/_worker.js", "worker");
+    const shipping = measureKit(f.root);
+    assert.equal(shipping.code, 0, JSON.stringify(shipping));
+    for (const k of ["js", "css"]) {
+      const enforced = shipping.groups.find((group) => group.id === `kit.client.${k}`).checks[0];
+      for (const metric of ["rawBytes", "gzipBytes", "files"])
+        assert.equal(measurement.aggregate[k][metric], enforced[metric]);
+      assert.equal(
+        result.files[CLIENT_FILES[k === "js" ? 0 : 1]].client[k].maxFiles,
+        INITIAL_CLIENT_BUDGET[k].maxFiles,
+      );
+    }
+  });
 
 for (const [metric, field] of [
   ["raw", "maxRawBytes"],
@@ -333,6 +383,12 @@ const invalid = {
     const p = join(f.root, OUTPUT, "client/_app/immutable/shared.js");
     rmSync(p);
     symlinkSync("runtime.js", p);
+  },
+  "non-immutable symlink asset": (f) => {
+    symlinkSync("immutable/shared.js", join(f.root, OUTPUT, "client/_app/env.js"));
+  },
+  "non-immutable symlink directory": (f) => {
+    symlinkSync("immutable", join(f.root, OUTPUT, "client/_app/runtime"));
   },
   "symlink evidence": (f) => {
     const p = join(f.root, OUTPUT, "client-route-evidence.json");
