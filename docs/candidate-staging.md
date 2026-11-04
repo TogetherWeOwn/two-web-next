@@ -154,8 +154,9 @@ sender must submit the exact constructed metadata/module bytes and bind provider
 readback to the request proof before activation. It must independently establish
 live head/CI/build/producer provenance, asset-ticket provenance, global exclusion,
 dirty occupancy, preview-route disablement, baseline restoration and next-upload
-compatibility. Independent binding/config readback, version/serving history,
-transport and activation/recovery integration remain unimplemented. Ordinary
+compatibility. The isolated sender below now joins assets, creation and a narrow
+version binding/runtime readback. Full script/config/code-byte readback,
+version/serving history and installed activation/recovery remain unimplemented. Ordinary
 Wrangler upload remains unsuitable because it retains secrets by default; this
 constructor does not make a live candidate safe merely by omitting those secrets.
 
@@ -206,10 +207,56 @@ Client protocol fixtures and hash joins are not provider readback, capability
 scope validation, synthetic-data admission, restoration evidence or native
 Security clearance. A failed upload can leave inert content-addressed assets;
 the installed controller must already hold exclusion and durable dirty occupancy
-before calling this mutating adapter. Trusted build/producer integration,
-provider version sender/readback, global exclusion and complete verified B and
+before calling this mutating adapter. The isolated sender below now connects
+assets to version creation/readback. Trusted build/producer integration, full
+provider/config/code-byte admission, global exclusion and complete verified B and
 next-ordinary-upload restoration remain unimplemented. No live use is permitted
 merely because these isolated fixtures pass.
+
+## Trusted version transport and narrow readback (not installed or activated)
+
+[The version adapter](../ci/candidate-staging-version.mjs) owns its installed
+profile and independent pin at construction; invocation accepts only identity,
+admitted bundle and public verifier. It validates bounds and snapshots the full
+identity, build metadata and module/asset bytes before its first await. Caller
+mutation cannot change the account, profile, original expiry or uploaded code
+between asset and version operations. It creates its own asset transport and
+consumes its completion ticket internally: callers cannot inject tickets,
+prepared forms, URLs, profile overrides or clocks. Only mocked transport has
+exercised this helper; no workflow calls it.
+
+The adapter constructs the explicit-binding form itself, sends exactly one
+version-create POST, then GETs the fixed version endpoint at the returned
+canonical UUID. It never calls deployments, settings, routes or preview APIs,
+selects traffic, invokes candidate code/tooling or retries a partial mutation.
+The provider bearer goes only to fixed same-account API endpoints; asset buckets
+still receive only their session capability. Version responses require bounded
+64-KiB JSON success envelopes, strict UTF-8, no redirect or foreign final URL,
+10-second request signals, a 180-second overall bound and monotonic original
+credential-cutoff checks across the asset and version phases. Any failure yields
+only a fixed redacted error, never a partial receipt.
+
+Independent GET admission joins UUID, creation-response etag, candidate tag,
+exact compatibility date/flags and the exact requested binding set. Binding
+order may differ; unknown types, retained secrets, duplicates, missing values,
+extra fields/resources and unrequested runtime fields refuse. The deliberately
+narrow response contract currently accepts only `script`, `script_runtime` and
+`bindings` resources, with just compatibility date/flags under runtime; a future
+or actual provider response outside this projection refuses rather than silently
+ignoring it. The shipped Wrangler version client establishes the endpoint and
+resource layout, not live provider conformance to this stricter contract.
+
+The allowlisted frozen receipt joins the request proof to UUID, etag and a hash
+of the checked version projection, with literal `promotable:false` and
+`readbackScope:version-bindings-and-runtime-only`. It contains no ticket, token,
+verifier JSON, source bytes, serving URL or activation authority. The etag joins
+the two provider observations; it is **not** an independently verified digest of
+the remotely stored module bytes. This GET is not complete script settings,
+asset routing/content, tail/streaming consumer, preview-route disablement,
+serving history, capability scope, synthetic-data or baseline-restoration proof.
+All those checks, installed controller/journal/exclusion wiring, component maps,
+trusted build provenance and native Security admission remain prerequisites to
+any live mutation/selection. This helper's mock green is not live qualification.
 
 ## Durable occupancy journal and recovery boundary
 
