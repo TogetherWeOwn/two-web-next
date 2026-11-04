@@ -80,6 +80,52 @@ extra-field types are accepted, as inert metadata. Unsupported archive features
 refuse rather than being interpreted by another extractor. This is not yet a
 trusted build producer, artifact downloader or provenance attestation.
 
+## Durable occupancy journal and recovery boundary
+
+[The journal](../ci/candidate-staging-occupancy.mjs) implements a narrow GitHub
+Deployment transport, exercised only with local HTTP fixtures. It creates a
+non-production, non-transient `candidate-staging-occupancy` record at trusted T
+before the caller may mutate staging. The immutable payload joins Q, C, T,
+controller run/attempt and a digest-pinned baseline restoration artifact. That
+artifact's declared expiry must retain at least fourteen days at creation.
+The caller must independently verify the artifact exists, its retention and
+contents, and that exact B is restorable **before** calling `begin`.
+
+No status means dirty. Failure, cancellation, timeout, expiry and lock release
+never imply clean. All actors must call `assertClear` while holding the same
+external staging exclusion. A complete journal scan checks all records in that
+environment, not just the current run or successful records. Missing/malformed
+records, unexpected author/App identities, incomplete pages, duplicate IDs and
+unsupported status ordering refuse. Both deployment and status histories require
+an observed terminal short/empty page, bounded to 500 rows each. A sixth empty
+sentinel is required at exactly 500. At capacity, creation refuses before POST,
+so it cannot strand an unreadable record 501. Exceeding the read bound refuses;
+records are not silently pruned or deleted. All calls have ten-second request
+deadlines, 2 MiB JSON limits, and a shared sixty-second deadline per journal
+operation. A caller cancellation signal can shorten but never remove that bound.
+There is no alternate-credential retry, including after a lost write response.
+
+`begin` reads back its immutable record and the complete dirty set before
+returning. A competing record or replayed Q refuses. Recovery requires sole
+unresolved ownership, reacquired external exclusion, an idempotent trusted
+baseline restore, and independent provider-state, smoke and next-upload evidence.
+It rechecks exclusion between phases. A previously cleaned or superseded session
+cannot restore an old B over a later run. Failed restore/verification leaves the
+record dirty; status-write uncertainty requires readback, not a blind retry.
+`markRestored` binds a fresh allowlisted proof to Q, deployment ID and the original
+baseline digest, writes only a non-promoting status (`auto_inactive: false`), and
+verifies both that exact status and absence of any other dirty occupancy.
+
+This is **not** an installed lock, a provider restore adapter or proof of the
+baseline contents. The restore, verify and exclusion adapters must be installed
+trusted code, never candidate callbacks. A pinned GitHub creator/App is a minimum
+transport check, not independent controller provenance: other writers sharing
+that principal must be contained before use. The source/run provenance, recovery
+artifact producer/download/admission, provider observations, next-upload comparison,
+complete published recovery receipt and normal-actor workflow wiring remain
+required. A digest-shaped proof supplied by a candidate is never sufficient.
+No live journal API or provider operation was used to qualify this helper.
+
 ## Required caller boundaries — still not installed
 
 The controller must establish the provenance of its installed source, complete
