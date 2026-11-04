@@ -83,9 +83,10 @@ runs:
       run: |
         set -euo pipefail
         TARGET="$(npx wrangler deployments list --env production --name "$WORKER_NAME" --json \
-          | node "${{ github.action_path }}/gradual-promote.mjs" --capture-rollback-target)"
+          | node "$ACTION_PATH/gradual-promote.mjs" --capture-rollback-target)"
         echo "target=$TARGET" >> "$GITHUB_OUTPUT"
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
         CLOUDFLARE_ACCOUNT_ID: ${{ inputs.account-id }}
@@ -96,9 +97,10 @@ runs:
       run: |
         set -euo pipefail
         ID="$(npx wrangler versions list --env production --name "$WORKER_NAME" --json \
-          | node "${{ github.action_path }}/gradual-promote.mjs" --resolve-tag "$VERSION_TAG")"
+          | node "$ACTION_PATH/gradual-promote.mjs" --resolve-tag "$VERSION_TAG")"
         echo "id=$ID" >> "$GITHUB_OUTPUT"
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
@@ -109,10 +111,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mapfile -t SPEC < <(node "${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 5 "$PREV_VERSION")
+        mapfile -t SPEC < <(node "$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 5 "$PREV_VERSION")
         npx wrangler versions deploy --env production --name "$WORKER_NAME" \
           "${SPEC[0]}" --version-tag "${SPEC[1]}" --yes
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
@@ -159,8 +162,9 @@ runs:
       # version exactly like a failed smoke gate.
       if: inputs.error-rate-gate == 'true'
       shell: bash
-      run: node "${{ github.action_path }}/error-rate-gate.mjs"
+      run: node "$ACTION_PATH/error-rate-gate.mjs"
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
@@ -198,10 +202,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mapfile -t SPEC < <(node "${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 50 "$PREV_VERSION")
+        mapfile -t SPEC < <(node "$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 50 "$PREV_VERSION")
         npx wrangler versions deploy --env production --name "$WORKER_NAME" \
           "${SPEC[0]}" --version-tag "${SPEC[1]}" --yes
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
@@ -241,8 +246,9 @@ runs:
       id: error-rate-50
       if: inputs.error-rate-gate == 'true'
       shell: bash
-      run: node "${{ github.action_path }}/error-rate-gate.mjs"
+      run: node "$ACTION_PATH/error-rate-gate.mjs"
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}
@@ -279,10 +285,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        mapfile -t SPEC < <(node "${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION")
+        mapfile -t SPEC < <(node "$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION")
         npx wrangler versions deploy --env production --name "$WORKER_NAME" \
           --version-tag "${SPEC[1]}" --yes
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         VERSION_TAG: ${{ inputs.version-tag }}
         PREV_VERSION: ${{ steps.rollback-target.outputs.target }}
@@ -342,8 +349,9 @@ runs:
       id: error-rate-100
       if: inputs.error-rate-gate == 'true'
       shell: bash
-      run: node "${{ github.action_path }}/error-rate-gate.mjs"
+      run: node "$ACTION_PATH/error-rate-gate.mjs"
       env:
+        ACTION_PATH: ${{ github.action_path }}
         WORKER_NAME: ${{ inputs.worker-name }}
         NEW_VERSION: ${{ steps.promoted-version.outputs.id }}
         CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}

@@ -35,8 +35,8 @@ const TARGETS: CaptureTarget[] = [
     workflow: ".github/workflows/deploy-production.yml",
     stepName: "Capture pre-promote dead-letter baseline",
     host: "togetherweown.com/up",
-    sink: "env",
-    outputKey: "SMOKE_FAILED_BASELINE",
+    sink: "output",
+    outputKey: "failed",
   },
   {
     workflow: ".github/workflows/rollback-production.yml",
@@ -182,9 +182,7 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(sinkOf(run)).toContain(`${target.outputKey}=3`);
     expect(run.output).toContain("dead-letter baseline: 3");
     expect(run.output).not.toContain("::warning::");
-    if (target.sink === "env") {
-      expect(run.stepEnv).toContain("SMOKE_ALLOW_MISSING_BASELINE=1");
-    }
+    expect(run.stepEnv).toBe("");
   });
 
   it("retries unreadable baselines until one reads", () => {
@@ -220,9 +218,7 @@ describe.each(TARGETS)("$stepName ($workflow)", (target) => {
     expect(sinkOf(run)).not.toContain(`${target.outputKey}=0`);
     expect(run.output).toContain("::warning::dead-letter baseline unreadable");
     expect(run.output).toContain("dead-letter baseline: unknown");
-    if (target.sink === "env") {
-      expect(run.stepEnv).toContain("SMOKE_ALLOW_MISSING_BASELINE=1");
-    }
+    expect(run.stepEnv).toBe("");
   });
 
   it("tolerates a node crash on one attempt without failing the deploy", () => {

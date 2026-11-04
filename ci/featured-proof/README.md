@@ -2,12 +2,10 @@
 
 This is the bounded offline CI lane authorized by [TOG-11003](/TOG/issues/TOG-11003), following [TOG-10986](/TOG/issues/TOG-10986). The installed GitHub company-bot connection `73e50cff-255d-4fc3-9ec1-8553a8984cfd` successfully listed this repository's workflows; the documented project-scoped git credential helper successfully read `main` before implementation. Neither the stopped `gh` shim nor runtime-tools transport is used. No connection, credential, paid runner or capacity provisioning is involved.
 
-Both capture jobs run on `[self-hosted, two-selfhosted]` while the repository is private and on GitHub-hosted `ubuntu-latest` while it is public, because the org runner group refuses public repositories ([TOG-12326](/TOG/issues/TOG-12326)). Both retain their digest-pinned browser job container, isolating browser execution from the runner host. No additional capacity is requested.
+Both capture jobs run on standard GitHub-hosted `ubuntu-latest`, with no self-hosted or larger runner. Both retain their digest-pinned browser job container, isolating browser execution from the runner host. No additional capacity is requested.
 
-Runner routing update: `pull_request` runs of this workflow (the
-`current-source` job included) now always use GitHub-hosted
-`ubuntu-latest`, in both visibilities. The visibility routing above now
-applies to manual dispatches only. See `docs/private-flip-checklist.md`.
+Every job of this workflow, `pull_request` runs and the `current-source` job
+included, uses `ubuntu-latest`. See `docs/private-flip-checklist.md`.
 
 ## Current-source PR proof
 
@@ -22,10 +20,10 @@ PR source changes run this new job automatically. Manual `workflow_dispatch` ret
 ## Frozen-input invocation and containment
 
 - Service/repository: GitHub Actions, `TogetherWeOwn/two-web-next`.
-- Entry point: `.github/workflows/featured-offline-proof.yml`, job `capture` on the visibility-routed runner above, in the pinned browser job container.
+- Entry point: `.github/workflows/featured-offline-proof.yml`, job `capture` on the explicit hosted runner above, in the pinned browser job container.
 - Runs on an explicitly authorized `workflow_dispatch`; PR changes use the separate current-source job above. No automatic main/deployment job is added.
 - Browser image: `mcr.microsoft.com/playwright:v1.58.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d`. The public MCR manifest resolved this digest on 2026-09-30; amd64 manifest is `sha256:65cefd09a5e943921ecd3a6e5414c603db2eb161e9eb48f2e2ccc63486dc7dc0`.
-- Matching `playwright@1.58.2` npm module is installed **only inside the CI container**, under `RUNNER_TEMP`, with scripts/browser downloads disabled. No root app dependency changes, host installs or browser installs.
+- Matching `playwright@1.58.2` npm module is installed **only inside the CI container**, under `RUNNER_TEMP`, with scripts/browser downloads disabled. The workflow copies the reviewed `runtime/package.json` and `runtime/package-lock.json` there and uses `npm ci --ignore-scripts --no-audit --no-fund`, preserving the image/module version match and integrity-pinned transitive dependencies. No root app dependency changes, host installs or browser installs.
 - The guard executes the unchanged driver as `node capture-featured-proof.cjs <fixture-directory> <new-output-directory>`. The workflow invokes the guard with `node ci/featured-proof/run-capture.cjs ci/featured-proof/fixtures "$PROOF_OUTPUT"`.
 - Driver uses direct `setContent`, offline contexts, JavaScript disabled, service workers blocked and all routed requests aborted. It never starts an app/server, uses a DB/deployed endpoint, clicks a link or submits a form.
 - Guard independently fails on changed driver/fixtures, incomplete reports/PNGs, failed states or any recorded attempted request. It keeps driver reports/partial captures on failure and adds a failure report if the driver could not create one. Artifact upload runs even on failure.

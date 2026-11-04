@@ -1,0 +1,9 @@
+{
+  "name": "featured-proof-runtime",
+  "private": true,
+  "version": "1.0.0",
+  "description": "Isolated JavaScript runtime matching the pinned Playwright proof container",
+  "dependencies": {
+    "playwright": "1.58.2"
+  }
+}

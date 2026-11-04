@@ -430,11 +430,8 @@ describe("source-managed moderator deployment preflight", () => {
 });
 
 describe("staging smoke workflow safety", () => {
-  it("routes runners by repo visibility with a job-private container", () => {
-    // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-    expect(smoke).toContain(
-      `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`,
-    );
+  it("runs on explicit GitHub-hosted Linux with a job-private container", () => {
+    expect(smoke).toContain("    runs-on: ubuntu-latest\n");
     expect(smoke).toContain("image: node:24-bookworm");
     expect(smoke.split("ubuntu-latest")).toHaveLength(2);
   });
@@ -540,12 +537,12 @@ describe("production deployment preserves configured triggers", () => {
     expect(action).not.toContain("node ci/gradual-promote.mjs");
     for (const percentage of [5, 50]) {
       expect(action).toContain(
-        '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" ' +
+        '"$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" ' +
           `${percentage} "$PREV_VERSION"`,
       );
     }
     expect(action).toContain(
-      '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION"',
+      '"$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION"',
     );
     expect(action).toContain("npx wrangler versions deploy --env production");
     expect(workflow).not.toContain("wrangler triggers deploy");

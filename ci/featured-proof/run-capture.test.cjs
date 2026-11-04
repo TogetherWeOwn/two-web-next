@@ -39,11 +39,10 @@ test('both capture jobs route runners by repo visibility and event, and retain t
   for (const job of ['capture', 'current-source']) {
     const block = workflow.split(`  ${job}:\n`)[1]?.split(/\n  [a-z-]+:\n/)[0];
     assert.ok(block, `${job} exists`);
-    // Self-hosted only for non-PR events while private; pull_request and
-    // merge_group runs always stay GitHub-hosted (runner separation).
-    assert.ok(block.includes(`runs-on: \${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`));
+    // Explicit standard GitHub-hosted Linux for every event.
+    assert.ok(block.includes('runs-on: ubuntu-latest\n'));
     assert.match(block, /image: mcr\.microsoft\.com\/playwright:v1\.58\.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d/);
-    assert.equal(block.split('ubuntu-latest').length - 1, 1, 'ubuntu-latest only as the hosted fallback');
+    assert.equal(block.split('ubuntu-latest').length - 1, 1, 'ubuntu-latest only as the runs-on label');
   }
 });
 

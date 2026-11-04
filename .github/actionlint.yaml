@@ -1,8 +1,5 @@
 # Tier 0 workflow lint (pipeline review 2026-10-10). CI/workflow-logic findings were the
 # largest deterministic bucket of Paperclip Review findings (REPORT-20261009, bucket C).
-self-hosted-runner:
-  labels:
-    - two-selfhosted
 paths:
   .github/workflows/**/*.{yml,yaml}:
     ignore:

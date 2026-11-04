@@ -27,9 +27,7 @@ concurrency:
 jobs:
   bootstrap:
     name: bootstrap
-    # The org's two-selfhosted runner group refuses public repos:
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     environment: staging
     steps:

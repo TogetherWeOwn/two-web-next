@@ -22,11 +22,10 @@ on:
   schedule:
     - cron: "17 14 * * *"
 
-# Both gate jobs need Actions read to GET the private repository's Environment.
+# Both gate jobs read exact-SHA workflow evidence and Environment protection.
 permissions:
   contents: read
-  actions: read
-
+  actions: read # Read exact-SHA CI/staging runs and production Environment protection.
 concurrency:
   group: deploy-production
   cancel-in-progress: false
@@ -50,9 +49,7 @@ jobs:
       rollback_version_id: ${{ steps.rollback-target.outputs.version_id }}
       rollback_commit: ${{ steps.rollback-target.outputs.commit }}
       started_at: ${{ steps.start.outputs.started_at }}
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Record when this promotion attempt started
@@ -170,8 +167,7 @@ jobs:
     # production comparison runs in regression below.
     needs: preflight
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     # Secrets preflight: any job reading staging Cloudflare secrets must bind
     # the staging Environment (fail-closed without it). Repo-level names keep
@@ -214,8 +210,7 @@ jobs:
     # (1% floor). GET-only, no auth, no writes.
     needs: [preflight, staging-soak]
     if: needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true'
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 25
     # The production Environment binding stays as the reviewer checkpoint
     # before the deploy job (and still supplies the production account id),
@@ -297,9 +292,7 @@ jobs:
     outputs:
       promoted_version_id: ${{ steps.gradual.outputs.promoted-version-id }}
       verify_outcome: ${{ steps.verify.outcome }}
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     # 30 minutes: the gradual stages now also soak and judge the new
     # version's live error rate (worst case about 4 extra minutes a stage).
     timeout-minutes: 30
@@ -420,9 +413,10 @@ jobs:
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
       - name: Capture pre-promote dead-letter baseline
+        id: dead-letter-baseline
         # Read-only GET before the central gradual-promote action runs: that
         # action's stage smokes execute this repo's bin/smoke.mjs in this job,
-        # so SMOKE_FAILED_BASELINE published here via $GITHUB_ENV scopes every
+        # so the output passed explicitly to the action and verification scopes every
         # stage gate to growth past the retained queue_failed_jobs count (the
         # count is database-wide, never version-scoped). Retried, then an
         # unreadable /up leaves the baseline empty and the stage smokes skip
@@ -437,8 +431,7 @@ jobs:
             if [ "$i" -lt 5 ]; then sleep 5; fi
           done
           if [ -z "$baseline" ]; then echo "::warning::dead-letter baseline unreadable after 5 attempts; promote smokes will skip the dead-letter gate on history"; fi
-          echo "SMOKE_FAILED_BASELINE=$baseline" >> "$GITHUB_ENV"
-          echo "SMOKE_ALLOW_MISSING_BASELINE=1" >> "$GITHUB_ENV"
+          echo "failed=$baseline" >> "$GITHUB_OUTPUT"
           echo "dead-letter baseline: ${baseline:-unknown}"
       # Gradual promotion lives in the shared central composite action
       # (TogetherWeOwn/.github/actions/gradual-promote, pinned below): 5% ->
@@ -448,6 +441,9 @@ jobs:
       # stays above.
       - name: Gradual promotion 5-50-100 with automatic rollback
         id: gradual
+        env:
+          SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
+          SMOKE_ALLOW_MISSING_BASELINE: "1"
         uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06
         with:
           worker-name: two-web-next-production
@@ -497,6 +493,8 @@ jobs:
           echo "::error::post-promotion public-route smoke failed; promoted candidate ${PROMOTED_VERSION_ID:-unknown} remains live at 100%; release will not tag; recorded restoration target ${PREV_VERSION:-unknown} - auto-rollback restores it with the rollback-production workflow"
           exit 1
         env:
+          SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}
+          SMOKE_ALLOW_MISSING_BASELINE: "1"
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
           PREV_VERSION: ${{ steps.gradual.outputs.rollback-version-id }}
       - name: Record successful production promotion
@@ -551,8 +549,7 @@ jobs:
     # the promoted version serves and needs watching.
     if: >-
       !cancelled() && needs.deploy-production.outputs.verify_outcome == 'success'
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 45
     # No Environment binding, deliberately: this job must start watching the
     # moment promotion reaches 100%, with no second approval in reviewer
@@ -657,8 +654,7 @@ jobs:
         release,
       ]
     if: ${{ always() && needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true' }}
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # Tip checkout, like the preflight checks. Setup steps stay non-fatal:

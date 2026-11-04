@@ -9,11 +9,7 @@ name: backup-bootstrap-selftest
 # `backup-bootstrap` aggregator below reports the conclusion. No ruleset
 # change here: requiring the aggregator is a human-admin step.
 #
-# Runner separation: pull_request runs always use GitHub-hosted runners, so
-# code that has not landed on main never runs on the self-hosted fleet. The
-# `runs-on` expressions below reach that fleet only for non-PR events (here:
-# main pushes) while the repository is private; see
-# docs/private-flip-checklist.md.
+# Runs on standard GitHub-hosted ubuntu-latest in this public repo.
 on:
   pull_request:
   push:
@@ -22,8 +18,7 @@ on:
 permissions:
   contents: read
   # The scope job lists the PR's changed files via the API.
-  pull-requests: read
-
+  pull-requests: read # List changed PR files for the trusted scope classifier.
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
@@ -33,9 +28,7 @@ jobs:
   # Pushes to main and any doubt always count as relevant (fail closed).
   scope:
     name: scope
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
       relevant: ${{ steps.scope.outputs.relevant }}
@@ -95,12 +88,11 @@ jobs:
         run: bash ci/path-scope.sh --selftest
 
   bootstrap-selftest:
+    name: bootstrap-selftest
     needs: scope
     if: needs.scope.outputs.relevant == 'true'
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
-    container: python:3.13-bookworm
+    runs-on: ubuntu-latest
+    container: python:3.13-bookworm@sha256:3856e3e7bf4d0ba061501a84ed2eb0d429663307c0f54f191dc4de03c7081c3e
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -118,9 +110,7 @@ jobs:
     name: backup-bootstrap
     needs: [scope, bootstrap-selftest]
     if: always()
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - name: Report the required-check conclusion

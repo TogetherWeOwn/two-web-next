@@ -640,8 +640,7 @@ that belongs to the other guild — role IDs are guild-scoped, so a production
 pair in the staging config matches nobody while looking configured.
 
 The live smoke runs manually via the `staging-smoke` workflow in a job container
-(`[self-hosted, two-selfhosted]` while the repo is private, GitHub-hosted while
-public; TOG-12326). It posts a real announcement to a throwaway channel and
+(standard GitHub-hosted `ubuntu-latest`). It posts a real announcement to a throwaway channel and
 creates a real staging event. Dispatch only after
 the existing staging isolation/HMAC prerequisites and independent review clear.
 Pass `--announcement-only` (workflow input `announcement_only`) to run only

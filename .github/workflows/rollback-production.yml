@@ -88,8 +88,7 @@ on:
 # Both gate jobs need Actions read to GET the private repository's Environment.
 permissions:
   contents: read
-  actions: read
-
+  actions: read # Read deployment evidence and production Environment protection.
 concurrency:
   group: rollback-${{ inputs.environment }}
   cancel-in-progress: false
@@ -97,9 +96,7 @@ concurrency:
 jobs:
   preflight:
     name: rollback-preflight
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -138,9 +135,7 @@ jobs:
       action: ${{ steps.guard.outputs.action }}
       mutation: ${{ steps.rollback.outcome }}
       smoke: ${{ steps.rollback-smoke.outcome }}
-    # The org's two-selfhosted runner group refuses public repos (TOG-12326):
-    # GitHub-hosted while public, the self-hosted fleet while private.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 15
     # Shared Worker mutation lock per environment: production shares the
     # static non-cancelling group with the promotion job, staging shares the
@@ -315,8 +310,7 @@ jobs:
     # continue-on-error. Staging drills do not notify.
     needs: [preflight, rollback-production]
     if: ${{ always() && inputs.environment == 'production' }}
-    # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
-    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       # Setup steps stay non-fatal: a checkout or Node setup failure after a

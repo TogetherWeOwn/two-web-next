@@ -25,6 +25,12 @@ on:
 permissions:
   contents: read
 
+# This namespace is distinct from every caller's concurrency group. Calls and
+# standalone runs measuring the same origin never cancel a running measurement.
+concurrency:
+  group: web-quality-origin-${{ inputs.origin || 'https://next.togetherweown.com' }}
+  cancel-in-progress: false
+
 jobs:
   quality:
     name: quality
