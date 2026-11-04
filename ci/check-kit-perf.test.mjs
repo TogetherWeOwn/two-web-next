@@ -1029,6 +1029,18 @@ function shippingServerGzipCases() {
         axis: "gzip",
         bytes: 341995,
       },
+      {
+        name: "server gzip combined Ember measurement",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 341997,
+      },
+      {
+        name: "server gzip repeated combined Ember measurement",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 341993,
+      },
       { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 342272 },
       {
         name: "server gzip one byte over",

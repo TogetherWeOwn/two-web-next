@@ -58,10 +58,46 @@ artifact identities:
 - Frozen inspectable measurement JSON SHA256:
   `7d8e82848340d340013108eba2f0bf0f269175798dde97fb758b9d6ebf49e9db`.
 
+### Actual combined candidate
+
+A separate native isolated workspace started at allocation commit
+`0dd9f7d4b8a346a061786005e597c349c7bd653a` (tree
+`a6c15a80aad46dfc92fabcffa8a979992d87f935`) and normally merged the frozen
+migration for measurement only. Local integration commit
+`aeea2b6064572206cbe4cca15b3176b143270fe2` has tree
+`77d8f9579ef2f1531321ea8894bd36a4399dd00e`, exactly the conflict-free
+`git merge-tree --write-tree` result. Its delta from frozen is only the four
+allocation paths; all runtime, lock and build inputs otherwise match frozen.
+This local integration is not the allocation PR head.
+
+Both roots were freshly lock-installed before each of two clean builds, using
+the same commands and tool versions above. Both actual canonical checker runs
+exited 0 with every group passing:
+
+| Group | Combined run 1 raw / gzip | Combined run 2 raw / gzip | Files |
+| --- | ---: | ---: | ---: |
+| Worker | 2551 / 1219 | 2551 / 1219 | 1 |
+| Server JS | 1222251 / 341993 | 1222249 / 341997 | 116 |
+| Client JS | 261348 / 104378 | 261348 / 104378 | 54 |
+| Client CSS | 3068 / 1189 | 3068 / 1189 | 2 |
+
+The combined measurement JSON SHA256 is
+`ba2ffaaa95d49dba94331ea4ef3f8b3d83bed202b39abf250772ea3bca7ee87e`;
+complete evidence archive SHA256 is
+`52c0f7fae766530451270dd8b51fccc1a9a096bc6f6c4e635180268587dbbfb5`.
+They retain both complete 173-row canonical inventories, 465-file generated
+inventories, installed dependency identities and command receipts. Only the
+same two generated version/global-bearing chunks vary from frozen. Read-only
+normalization reproduces the prior full-file hashes exactly; no normalized
+content was supplied to the checker. The shorter derived global in combined
+run 2 explains the two-raw-byte decrease. Across all fresh runs, the observed
+server maxima are 1222251 raw and 341997 gzip, leaving 405 and 275 bytes.
+
 ### Historical one-byte discrepancy
 
 The supplied 1222249 raw and 341994/341995 gzip totals are **historical**, not
-fresh runs. Fresh canonical upper bounds are 1222251 raw and 341996 gzip.
+fresh runs. Fresh frozen upper bounds are 1222251 raw and 341996 gzip;
+the later actual combined runs reach 341997 gzip as recorded above.
 The fresh frozen gzip difference is exactly one byte in
 `server/chunks/internal.js` (18086 -> 18085 gzip bytes). Its generated build
 version changed from `1793764044628` to `1793764082377`. Only it and
@@ -78,7 +114,7 @@ version was pinned, stripped or rewritten to obtain a passing measurement.
 | Server dimension | Old ceiling | New ceiling | Fresh worst | Remaining margin |
 | --- | ---: | ---: | ---: | ---: |
 | Raw bytes | 1220608 | 1222656 | 1222251 | 405 |
-| Per-file gzip bytes | 341248 | 342272 | 341996 | 276 |
+| Per-file gzip bytes | 341248 | 342272 | 341997 | 275 |
 | Files | 126 | 126 | 116 | 10 |
 
 The complete pinned Ember token/theme/font integration accounts for runtime
@@ -90,9 +126,10 @@ bounded server allocation.
 
 Raw +2048 is the least 512-byte-aligned increase covering the fresh 1643-byte
 deficit: +1536 still rejects by 107. Gzip +768 is the least 256-byte-aligned
-cover, but leaves only 20 bytes on the fresh worst run (21 on the historical
-341995 figure). The deliberate +1024 allocation leaves 276 fresh bytes (277
-on that historical figure). It is **not the mathematical minimum**, and takes
+cover, but leaves only 19 bytes on the fresh combined worst run (20 on the
+fresh frozen worst, 21 on the historical 341995 figure). The deliberate +1024
+allocation leaves 275 fresh combined bytes (276 on fresh frozen, 277 on that
+historical figure). It is **not the mathematical minimum**, and takes
 no additional 25% headroom.
 
 ## Enforcement, unchanged gates and undo
