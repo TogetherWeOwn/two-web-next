@@ -21,13 +21,24 @@ on:
 
 permissions:
   contents: read
+  deployments: read
 
 concurrency:
-  group: staging-importer-dryrun
+  group: >-
+    ${{ github.ref == 'refs/heads/main' &&
+    (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') &&
+    'staging-application-exclusive' || format('staging-rejected-staging-importer-dryrun-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
+  staging-occupancy:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    uses: ./.github/workflows/staging-occupancy-clear.yml
+
   dryrun:
+    needs: staging-occupancy
     name: dryrun
     # Public repo: standard GitHub-hosted runners only — never paid larger
     # runners or Blacksmith.

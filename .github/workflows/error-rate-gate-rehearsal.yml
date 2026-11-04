@@ -20,13 +20,24 @@ on:
 
 permissions:
   contents: read
+  deployments: read
 
 concurrency:
-  group: error-rate-gate-rehearsal
+  group: >-
+    ${{ github.ref == 'refs/heads/main' &&
+    (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') &&
+    'staging-application-exclusive' || format('staging-rejected-error-rate-gate-rehearsal-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
+  staging-occupancy:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    uses: ./.github/workflows/staging-occupancy-clear.yml
+
   rehearsal:
+    needs: staging-occupancy
     name: error-rate-gate-rehearsal
     # The org's two-selfhosted runner group refuses public repos:
     # GitHub-hosted while public, the self-hosted fleet while private.

@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
 import YAML from "yaml";
@@ -292,6 +293,132 @@ test("non-push CI completions never acquire deploy's shared group", () => {
     assert.equal(evaluate(w.jobs["deploy-staging"].if, github), false);
   }
 });
+
+// These pins preserve every pre-existing leaf job (including its command,
+// secret, scope, timeout, runner and reporting conditions). Only the new root
+// prerequisite is removed before comparison; census keeps its scope dependency.
+const AUXILIARY = [
+  [
+    "staging-smoke",
+    "internal-action-smoke",
+    "928d7b9f72d0eadd459c70056baba5b36be0ed62e7cd660dc612ddf0fd1e6b9a",
+  ],
+  [
+    "staging-role-bootstrap",
+    "bootstrap",
+    "ee19b564541bf62cee2f2f4851a334139ce6918adff480a25880c5eec6ac7501",
+  ],
+  [
+    "staging-importer-dryrun",
+    "dryrun",
+    "3eda652b2790897dab2efe4e83ddb3f8cd9a3cd68fd06b5b2232e7d28e40e075",
+  ],
+  [
+    "staging-catalog-preflight",
+    "preflight",
+    "f7b7cfcb81d303358d57f4d58767e3f102953d62fe3694f968d5eba868f05bb3",
+  ],
+  ["staging-census", "scope", "75b7ffca980c596626d1bf3aef29653f0d5179f7cfab7b5bd808a71cb355cd7d"],
+  [
+    "explore-staging",
+    "explore",
+    "ebcc55d7ac61e977204eaa15295ea85f2f901b30e6ffa004ae8f07d36afd13cd",
+  ],
+  [
+    "error-rate-gate-rehearsal",
+    "rehearsal",
+    "b0268f57eb97ad9d807059f1705d6b67916d3572248ebbf727dae1e6c4d290c4",
+  ],
+];
+
+for (const [name, root, baseline] of AUXILIARY) {
+  test(`${name}: continuous exclusion and read-only guard precede the unchanged job graph`, () => {
+    const w = workflow(name);
+    assert.deepEqual(w.permissions, { contents: "read", deployments: "read" });
+    assert.equal(w.concurrency["cancel-in-progress"], false);
+    assert.ok(
+      Object.keys(w.on).every((event) => ["workflow_dispatch", "schedule"].includes(event)),
+    );
+    assert.ok(Object.hasOwn(w.on, "workflow_dispatch"));
+    guardJob(w.jobs["staging-occupancy"]);
+    assert.equal(w.jobs["staging-occupancy"].concurrency, undefined);
+    assert.equal(w.jobs["staging-occupancy"].needs, undefined);
+    assert.equal(w.jobs["staging-occupancy"].with, undefined);
+    needs(w.jobs[root], "staging-occupancy");
+    const originalJobs = structuredClone(w.jobs);
+    delete originalJobs["staging-occupancy"];
+    delete originalJobs[root].needs;
+    for (const job of Object.values(originalJobs)) assert.equal(job.concurrency, undefined);
+    assert.equal(createHash("sha256").update(JSON.stringify(originalJobs)).digest("hex"), baseline);
+    if (name === "staging-census") {
+      needs(w.jobs.census, "scope");
+      assert.equal(w.jobs.census.if, "needs.scope.outputs.relevant == 'true'");
+    }
+  });
+
+  for (const event of ["workflow_dispatch", "schedule"]) {
+    test(`${name}: main ${event} holds the shared group throughout the guard and leaves`, () => {
+      const w = workflow(name);
+      const github = eventContext(event);
+      assert.equal(evaluate(w.concurrency.group, github), EXCLUSIVE);
+      assert.equal(evaluate(w.jobs["staging-occupancy"].if, github), true);
+    });
+  }
+
+  for (const [label, mutate] of [
+    [
+      "topic dispatch",
+      (g) => {
+        g.ref = "refs/heads/topic";
+      },
+    ],
+    [
+      "tag dispatch",
+      (g) => {
+        g.ref = "refs/tags/main";
+      },
+    ],
+    [
+      "non-main schedule",
+      (g) => {
+        g.event_name = "schedule";
+        g.ref = "refs/heads/topic";
+      },
+    ],
+    [
+      "PR event",
+      (g) => {
+        g.event_name = "pull_request";
+      },
+    ],
+    [
+      "privileged PR event",
+      (g) => {
+        g.event_name = "pull_request_target";
+      },
+    ],
+    [
+      "push event",
+      (g) => {
+        g.event_name = "push";
+      },
+    ],
+    [
+      "workflow completion",
+      (g) => {
+        g.event_name = "workflow_run";
+      },
+    ],
+  ]) {
+    test(`${name}: ${label} cannot displace eligible work or reach the guard's dependent jobs`, () => {
+      const w = workflow(name);
+      const github = eventContext();
+      mutate(github);
+      assert.equal(evaluate(w.concurrency.group, github), `staging-rejected-${name}-900`);
+      assert.equal(evaluate(w.jobs["staging-occupancy"].if, github), false);
+    });
+  }
+}
 
 test("occupancy source closure resolves only Node builtins and its three explicitly checked out files", () => {
   for (const path of CLOSURE) {

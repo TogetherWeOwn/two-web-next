@@ -472,16 +472,47 @@ put it in a prerequisite job, so a failed guard skips the entire probe/test job,
 including steps with `!cancelled()` failure-reporting conditions. Only
 `deployments:read` is added; there is no new write-capable journal principal.
 
-**Incomplete exclusion:** staging rollback/drills, migration/backup, role and
-import/catalog/census tools, scheduled guest/browser/analytics probes, rehearsal
-and the production workflow's staging-soak observer are not fenced yet. Pre-install
-in-flight runs, console writers and other-repository actors are not contained by
-these changes. Source/environment protection, complete actor coverage, independent
-principal/data admission and drain evidence remain required before any candidate
-mutation. A short list of fenced workflows must not be presented as global
-exclusion. The candidate controller, build sandbox, authoritative producer channel,
-activation and verified B/next-upload recovery are still uninstalled/inactive.
-No live journal or staging request has exercised these workflow changes.
+### Auxiliary staging-only actors
+
+Seven additional workflows hold the same whole-workflow exclusion and require
+that read-only reusable guard before any of their original jobs can run:
+
+| Workflow | Existing operation (unchanged) |
+| --- | --- |
+| `staging-smoke` | Real staging bot internal-action smoke |
+| `staging-role-bootstrap` | Fixed staging role existence check and constant DDL |
+| `staging-importer-dryrun` | Counts-only importer and verification dry run |
+| `staging-catalog-preflight` | Read-only staging catalog transaction |
+| `staging-census` | Scope verdict, then counts-only session census |
+| `explore-staging` | Scheduled or dispatched guest browser exploration |
+| `error-rate-gate-rehearsal` | Staging live analytics and simulated refusal |
+
+Main-only dispatch/schedule eligibility is checked both before entering the
+shared group and on the guard job. Rejected refs/events use unique per-run groups
+and skip the dependent job graph; they cannot displace eligible pending work.
+Existing trigger sets are unchanged (only the explorer is scheduled). Census
+keeps its original scope/relevance condition: the guard precedes scope, not a
+parallel path around it. Original commands, inputs, secrets, targets, timeouts,
+runner choices and even failure-reporting step conditions are pinned unchanged
+by regression tests. Guard failure skips each entire dependent job, including
+its `!cancelled()` artifact step. No inherited-lock input or new write principal
+is added. These actors' former distinct groups had no other workflow callers;
+the shared non-cancelling interval replaces their per-tool serialization.
+
+**Incomplete exclusion:** staging rollback/drills, migration/backup, mixed-origin
+guest/browser/analytics probes and the production workflow's staging-soak
+observer are not fenced yet. The isolated `gradual-promote-proof` harness targets
+its own synthetic Worker, not this application's staging Worker; its generated
+`env.production` names that synthetic target and is not production deployment
+configuration. Shared account/capability admission is still required separately.
+Pre-install in-flight runs, console writers and other-repository actors are not
+contained by these changes. Source/environment protection, complete actor
+coverage, independent principal/data admission and drain evidence remain required
+before any candidate mutation. A short list of fenced workflows must not be
+presented as global exclusion. The candidate controller, build sandbox,
+authoritative producer channel, activation and verified B/next-upload recovery
+are still uninstalled/inactive. No live journal or staging request has exercised
+these workflow changes.
 
 ## Required caller boundaries — still not installed
 

@@ -30,16 +30,27 @@ on:
 
 permissions:
   contents: read
+  deployments: read
 
 concurrency:
-  group: staging-census
+  group: >-
+    ${{ github.ref == 'refs/heads/main' &&
+    (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') &&
+    'staging-application-exclusive' || format('staging-rejected-staging-census-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
+  staging-occupancy:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    uses: ./.github/workflows/staging-occupancy-clear.yml
+
   # Change-scope gate: only dispatches whose revision touches the
   # census inputs run the query below. A forced dispatch and any doubt
   # always count as relevant (fail closed).
   scope:
+    needs: staging-occupancy
     name: scope
     # The org's two-selfhosted runner group refuses public repos:
     # GitHub-hosted while public, the self-hosted fleet while private.

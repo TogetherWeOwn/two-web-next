@@ -17,13 +17,24 @@ on:
 
 permissions:
   contents: read
+  deployments: read
 
 concurrency:
-  group: explore-staging
+  group: >-
+    ${{ github.ref == 'refs/heads/main' &&
+    (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule') &&
+    'staging-application-exclusive' || format('staging-rejected-explore-staging-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
+  staging-occupancy:
+    if: >-
+      github.ref == 'refs/heads/main' &&
+      (github.event_name == 'workflow_dispatch' || github.event_name == 'schedule')
+    uses: ./.github/workflows/staging-occupancy-clear.yml
+
   explore:
+    needs: staging-occupancy
     name: explore
     runs-on: ubuntu-latest
     timeout-minutes: 30
