@@ -378,9 +378,12 @@ test("the staging drill rolls back and forward through rollback-production.yml",
   assert.match(verdict, /if: \$\{\{ always\(\) \}\}/);
   assert.match(verdict, /"\$ROLLBACK_ACTION" != rollback/);
   assert.match(verdict, /"\$RESTORE_ACTION" != rollback/);
-  // The plan waits for an idle staging lane, bounded.
-  assert.match(workflow, /node ci\/rollback-target\.mjs --staging-busy/);
-  assert.match(workflow, /for i in \$\(seq 1 30\)/);
+  // Continuous exclusion replaces the busy poll: queued deploy/e2e runs now
+  // wait behind the drill, so polling their busy state would self-deadlock.
+  assert.doesNotMatch(workflow, /node ci\/rollback-target\.mjs --staging-busy/);
+  assert.match(workflow, /'staging-application-exclusive'/);
+  assert.match(workflow, /needs: staging-occupancy/);
+  for (const leg of [rollback, restore]) assert.match(leg, /staging_lock_inherited: true/);
   // Only staging (repo-level) credentials, never production ones.
   assert.ok(!/secrets\.PRODUCTION_/.test(workflow));
 });

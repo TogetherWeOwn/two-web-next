@@ -4,6 +4,7 @@ import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
+import YAML from "yaml";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 import {
   AUTOMATIC_PROMOTION_EVENTS,
@@ -1097,13 +1098,21 @@ test("shared production mutation lock never nests at workflow level nor leaks in
   // nests the shared job-level group.
   for (const [label, workflow, expected] of [
     ["deploy-production.yml", deploy, "deploy-production"],
-    ["rollback-production.yml", rollback, "rollback-${{ inputs.environment }}"],
+    ["rollback-production.yml", rollback, "rollback-production"],
   ]) {
     const header = workflow.slice(0, workflow.indexOf("\njobs:"));
-    assert.ok(
-      header.includes(`\nconcurrency:\n  group: ${expected}\n  cancel-in-progress: false\n`),
-      `${label} keeps its own non-cancelling workflow-level group`,
-    );
+    const concurrency = YAML.parse(header, { uniqueKeys: true }).concurrency;
+    assert.equal(concurrency["cancel-in-progress"], false);
+    for (const ref of ["refs/heads/main", "refs/heads/topic"]) {
+      const group = concurrency.group.startsWith("${{")
+        ? new Function("inputs", "github", "format", `return ${concurrency.group.slice(3, -2)}`)(
+            { environment: "production", staging_lock_inherited: true },
+            { ref, run_id: "900" },
+            (template, value) => template.replace("{0}", value),
+          )
+        : concurrency.group;
+      assert.equal(group, expected, `${label} keeps its original production workflow group`);
+    }
     assert.ok(
       !header.includes(sharedMutationGroup),
       `${label} must not nest the shared mutation lock at workflow level`,

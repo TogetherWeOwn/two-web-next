@@ -421,6 +421,131 @@ for (const [name, root, baseline] of AUXILIARY) {
   }
 }
 
+test("staging rollback acquires whole-workflow exclusion or inherits it without nesting the legacy mutation key", () => {
+  const w = workflow("rollback-production");
+  assert.equal(w.permissions.deployments, "read");
+  assert.equal(w.concurrency["cancel-in-progress"], false);
+  assert.deepEqual(w.on.workflow_call.inputs.staging_lock_inherited, {
+    description: "The trusted caller holds staging-application-exclusive for this entire call",
+    type: "boolean",
+    default: false,
+  });
+  assert.equal(w.on.workflow_dispatch.inputs.staging_lock_inherited, undefined);
+  const job = w.jobs["rollback-production"];
+  assert.deepEqual(job.concurrency, {
+    group:
+      "${{ inputs.environment == 'staging' && 'deploy-staging' || 'production-worker-mutation' }}",
+    "cancel-in-progress": false,
+  });
+  const steps = job.steps.slice(0, 3);
+  trustedCheckout(steps[0]);
+  assert.equal(steps[0].with.path, ".staging-occupancy-control");
+  assert.equal(steps[1].uses, NODE);
+  assert.deepEqual(steps[1].with, { "node-version": 24 });
+  assert.equal(steps[2].run, "node .staging-occupancy-control/ci/candidate-staging-clear.mjs");
+  assert.deepEqual(steps[2].env, { GITHUB_TOKEN: "${{ github.token }}" });
+  for (const step of steps) {
+    assert.equal(step["continue-on-error"], undefined);
+    assert.equal(evaluate(step.if, eventContext(), { environment: "staging" }), true);
+    assert.equal(evaluate(step.if, eventContext(), { environment: "production" }), false);
+    assert.doesNotMatch(step.if, /always\(|cancelled\(|failure\(/);
+  }
+  const original = structuredClone(w);
+  delete original.permissions.deployments;
+  delete original.on.workflow_call.inputs.staging_lock_inherited;
+  original.concurrency.group = "rollback-${{ inputs.environment }}";
+  delete original.jobs.preflight.if;
+  original.jobs["rollback-production"].steps.splice(0, 3);
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(original)).digest("hex"),
+    "798b24b8f6baa522c5a607c16db2e67a737141e2f3aa775a9efd871a95d5c4df",
+  );
+  for (const step of original.jobs["rollback-production"].steps)
+    assert.doesNotMatch(step.if ?? "", /always\(|cancelled\(|failure\(/);
+});
+
+for (const inherited of [false, true]) {
+  for (const ref of ["refs/heads/main", "refs/heads/topic", "refs/tags/main"]) {
+    test(`rollback: ref ${ref}, inherited=${inherited}, selects only the eligible staging group`, () => {
+      const w = workflow("rollback-production");
+      const github = { ...eventContext(), ref };
+      const inputs = { environment: "staging", staging_lock_inherited: inherited };
+      assert.equal(evaluate(w.jobs.preflight.if, github, inputs), ref === "refs/heads/main");
+      assert.equal(
+        evaluate(w.concurrency.group, github, inputs),
+        ref !== "refs/heads/main"
+          ? "staging-rejected-rollback-900"
+          : inherited
+            ? "staging-inherited-rollback-900"
+            : EXCLUSIVE,
+      );
+      inputs.environment = "production";
+      assert.equal(evaluate(w.concurrency.group, github, inputs), "rollback-production");
+      assert.equal(evaluate(w.jobs.preflight.if, github, inputs), true);
+    });
+  }
+}
+
+test("drill holds exclusion across plan, rollback, restoration and verdict without waiting on work queued behind itself", () => {
+  const w = workflow("staging-rollback-drill");
+  assert.equal(w.permissions.deployments, "read");
+  assert.equal(w.concurrency["cancel-in-progress"], false);
+  for (const event of ["schedule", "workflow_dispatch"]) {
+    assert.equal(evaluate(w.concurrency.group, eventContext(event)), EXCLUSIVE);
+    assert.equal(evaluate(w.jobs["staging-occupancy"].if, eventContext(event)), true);
+    const rejected = { ...eventContext(event), ref: "refs/heads/topic" };
+    assert.equal(evaluate(w.concurrency.group, rejected), "staging-rejected-drill-900");
+    assert.equal(evaluate(w.jobs["staging-occupancy"].if, rejected), false);
+  }
+  guardJob(w.jobs["staging-occupancy"]);
+  needs(w.jobs.plan, "staging-occupancy");
+  for (const name of ["rollback", "restore"]) {
+    assert.equal(w.jobs[name].uses, "./.github/workflows/rollback-production.yml");
+    assert.equal(w.jobs[name].with.environment, "staging");
+    assert.equal(w.jobs[name].with.staging_lock_inherited, true);
+    assert.equal(w.jobs[name].concurrency, undefined);
+  }
+  assert.doesNotMatch(JSON.stringify(w), /--staging-busy|seq 1 30|sleep 60/);
+  assert.equal(w.jobs.restore.if, "${{ !cancelled() && needs.plan.result == 'success' }}");
+  const original = structuredClone(w);
+  delete original.permissions.deployments;
+  original.concurrency.group = "staging-rollback-drill";
+  delete original.jobs["staging-occupancy"];
+  delete original.jobs.plan.needs;
+  delete original.jobs.rollback.with.staging_lock_inherited;
+  delete original.jobs.restore.with.staging_lock_inherited;
+  // Baseline excludes only the obsolete point-in-time busy poll, now replaced
+  // by the continuous parent lock. Every actual plan/rollback/restore gate stays.
+  assert.equal(
+    createHash("sha256").update(JSON.stringify(original)).digest("hex"),
+    "8c790a16e2a3fa9b42aca39ac3751a4237119c8571e93972a24339aa7a37db2d",
+  );
+});
+
+test("only the continuously locked drill inherits staging rollback exclusion; production caller stays unchanged", () => {
+  const callers = [];
+  for (const filename of readdirSync(ROOT).filter((name) => name.endsWith(".yml"))) {
+    const w = workflow(filename.slice(0, -4));
+    for (const [id, job] of Object.entries(w.jobs ?? {})) {
+      if (job.uses !== "./.github/workflows/rollback-production.yml") continue;
+      callers.push(`${filename}:${id}`);
+      if (job.with.environment === "staging") {
+        assert.equal(filename, "staging-rollback-drill.yml");
+        assert.equal(evaluate(w.concurrency.group, eventContext()), EXCLUSIVE);
+        assert.equal(job.with.staging_lock_inherited, true);
+      } else {
+        assert.equal(job.with.environment, "production");
+        assert.equal(job.with.staging_lock_inherited, undefined);
+      }
+    }
+  }
+  assert.deepEqual(callers, [
+    "deploy-production.yml:auto-rollback",
+    "staging-rollback-drill.yml:rollback",
+    "staging-rollback-drill.yml:restore",
+  ]);
+});
+
 const DATABASE_ACTORS = [
   ["db-migrate", "migrate", "c9b939ed2f60e16b8d6e8277e8f3e7a8ed144b42b838dd290ff3912e89804a7f"],
   ["db-backup", "backup", "a3aeaab7f2cbbc30f13ca5f3fcc61cac329feef10a7888d26d305ce245ea955a"],

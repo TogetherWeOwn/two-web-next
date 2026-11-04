@@ -28,7 +28,7 @@ permissions:
 
 # Eligible deploys share the global staging interval. Rejected completions and
 # non-main dispatches use their own group and cannot replace a pending deploy.
-# Retain the legacy job-level lock until staging rollback also migrates.
+# Retain the legacy job-level mutation lock alongside staging rollback's.
 concurrency:
   group: >-
     ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||

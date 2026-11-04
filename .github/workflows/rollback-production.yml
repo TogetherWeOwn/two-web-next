@@ -45,6 +45,10 @@ on:
         required: false
         type: string
         default: ""
+      staging_lock_inherited:
+        description: The trusted caller holds staging-application-exclusive for this entire call
+        type: boolean
+        default: false
       rollback_commit:
         description: "Commit associated with the Worker Version being restored; empty sends sha null"
         required: false
@@ -89,14 +93,22 @@ on:
 permissions:
   contents: read
   actions: read
+  deployments: read
 
+# Staging acquires continuous exclusion unless its trusted drill caller holds it.
+# Keep production's original outer group and both legacy job mutation keys.
 concurrency:
-  group: rollback-${{ inputs.environment }}
+  group: >-
+    ${{ inputs.environment == 'production' && 'rollback-production' ||
+    (inputs.environment == 'staging' && github.ref == 'refs/heads/main' &&
+    (inputs.staging_lock_inherited && format('staging-inherited-rollback-{0}', github.run_id) ||
+    'staging-application-exclusive')) || format('staging-rejected-rollback-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
   preflight:
     name: rollback-preflight
+    if: inputs.environment != 'staging' || github.ref == 'refs/heads/main'
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
@@ -157,6 +169,28 @@ jobs:
       name: ${{ inputs.environment }}
       url: ${{ inputs.environment == 'staging' && 'https://next.togetherweown.com' || 'https://togetherweown.com' }}
     steps:
+      - name: Read installed staging occupancy tooling
+        if: inputs.environment == 'staging'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .staging-occupancy-control
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            ci/candidate-staging-clear.mjs
+            ci/candidate-staging-occupancy.mjs
+            ci/candidate-staging-admission.mjs
+      - name: Set up staging occupancy runtime
+        if: inputs.environment == 'staging'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Refuse unresolved candidate occupancy
+        if: inputs.environment == 'staging'
+        run: node .staging-occupancy-control/ci/candidate-staging-clear.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Roll back from the scripts commit that passed preflight, not a newer main head.

@@ -435,8 +435,8 @@ No live journal API or provider operation was used to qualify this helper.
 The ordinary deploy, staging-e2e, ZAP and origin-quality workflows now share
 `staging-application-exclusive`, with `cancel-in-progress:false`. Deploy holds
 it for its whole workflow, including staging mutations and smoke. Its existing
-job-level `deploy-staging` lock is retained so mutual exclusion with the not-yet-
-migrated staging rollback path is not lost. Staging-e2e holds the global key at
+job-level `deploy-staging` lock is retained, preserving legacy mutual exclusion
+with the staging rollback mutation job. Staging-e2e holds the global key at
 workflow level through scope, public/authenticated journeys and both reusable
 children. Failed/cancelled/skipped/foreign/non-main completion events and non-main
 dispatches select distinct rejected-run groups **before** concurrency admission,
@@ -522,8 +522,37 @@ There are no in-repository reusable callers of these database workflows; a new
 staging caller must not already hold the same shared key (that would deadlock).
 No caller-supplied inherited-lock bypass is introduced.
 
-**Incomplete exclusion:** staging rollback/drills and mixed-origin
-guest/browser/analytics probes and the production workflow's staging-soak
+### Staging rollback and rollback drill
+
+Standalone main staging rollback holds the shared key for its entire workflow.
+Its mutation job retains the legacy `deploy-staging` key and runs the same trusted
+three-step read-only occupancy check before its original checkout, dependencies,
+credentials, provider reads or rollback. Preflight remains a credential-free
+GitHub gate. Non-main staging refs use per-run rejected groups and cannot run
+preflight or the dependent mutation job. Production keeps its original outer
+`rollback-production` group, inner `production-worker-mutation` key, gates,
+steps and notification path; all new guard steps skip on production.
+
+The staging drill holds one continuous interval across its plan, both reusable
+rollback legs, restoration and final verdict. The read-only occupancy prerequisite
+precedes the plan; each leg rechecks occupancy before its existing operations.
+Both calls pass the reusable-only `staging_lock_inherited:true`, selecting a
+per-run callee group rather than recursively acquiring the parent's shared key.
+That input is unavailable on manual dispatch, defaults to false and is not an
+ownership certificate. In-repository callers are exhaustively pinned: only the
+continuously locked drill inherits staging exclusion; the production automatic
+rollback caller does not pass it and is unchanged.
+
+The drill's former thirty-minute `--staging-busy` poll is removed: queued deploys
+and journeys now wait behind its own shared key, so waiting for those queued runs
+would self-deadlock. Continuous exclusion replaces that point-in-time busy check,
+not the original version/ref/CI/secret/identity-smoke gates. The restored-version
+guard and the requirement that traffic move in both legs remain unchanged.
+Original workflow graphs are hash-pinned after removing only the new fence and
+that obsolete poll. No production workflow or target selector is changed.
+
+**Incomplete exclusion:** mixed-origin guest/browser/analytics probes and the
+production workflow's staging-soak
 observer are not fenced yet. The isolated `gradual-promote-proof` harness targets
 its own synthetic Worker, not this application's staging Worker; its generated
 `env.production` names that synthetic target and is not production deployment
