@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { describe, test } from "node:test";
 import {
   cpuLimits,
@@ -111,10 +112,9 @@ describe("cpuLimits hierarchy", () => {
     const r = run(fixture("/a", [rootLevel, lvl("/a", "800000 100000\n")]));
     assert.equal(r.effectiveCpuCount, 4);
   });
-  test("root membership is a single-level hierarchy", () => {
-    const r = run(fixture("/", [rootLevel]));
-    assert.equal(r.hierarchy.length, 1);
-    assert.equal(r.quotaState, "verified-unlimited");
+  test("root membership cannot establish visible container ancestry", () => {
+    assert.throws(() => run(fixture("/", [rootLevel])), invalid);
+    assert.throws(() => run(fixture("/", [lvl("/", "max 100000\n")])), invalid);
   });
   test("missing cpu.max is accepted when the parent cpu controller is disabled", () => {
     const files = fixture("/a", [{ ...rootLevel, enabled: "cpuset\n" }, lvl("/a", undefined)]);
@@ -134,7 +134,10 @@ describe("cpuLimits hierarchy", () => {
       );
   });
   test("missing cpuset at the root or under an enabled parent is rejected", () => {
-    assert.throws(() => run(fixture("/", [lvl("/", undefined, null)])), invalid);
+    assert.throws(
+      () => run(fixture("/a", [lvl("/", undefined, null), lvl("/a", "max 100000\n")])),
+      invalid,
+    );
     assert.throws(() => run(fixture("/a", [rootLevel, lvl("/a", "max 100000\n", null)])), invalid);
   });
   test("missing cpuset is accepted when the parent cpuset controller is disabled", () => {
@@ -178,6 +181,36 @@ describe("cpuLimits membership, mount, depth and bounds", () => {
   test("rejects cgroup v1 or hybrid membership", () => {
     for (const m of ["1:cpu:/a\n0::/a\n", "12:cpu:/a\n", "0::a\n", "0::/a b\n", "0::/a/../b\n"])
       assert.throws(() => run(fixture("/a", lv, { "/proc/self/cgroup": m })), invalid, m);
+  });
+  test("malformed membership is rejected within a bounded subprocess", () => {
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import assert from "node:assert/strict";
+         const { cpuLimits } = await import(process.argv[1]);
+         assert.throws(() => cpuLimits(() => process.argv[2]),
+           /Invalid or unavailable startup runner provenance/);`,
+        new URL("./worker-startup-runner.mjs", import.meta.url).href,
+        `0::/${"-".repeat(128)}!`,
+      ],
+      { timeout: 2000, maxBuffer: 16384 },
+    );
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr.toString());
+    assert.equal(result.signal, null);
+  });
+  test("valid punctuation in non-root cgroup components is preserved", () => {
+    const path = "/system.slice/docker-a_0.@:b.scope";
+    const levels = [
+      lvl("/", undefined),
+      lvl("/system.slice", "100000 100000\n"),
+      lvl(path, "max 100000\n"),
+    ];
+    const r = run(fixture(path, levels));
+    assert.equal(r.quotaCores, 1);
+    assert.equal(r.hierarchy[2].path, path);
   });
   test("rejects overlong membership", () => {
     assert.throws(

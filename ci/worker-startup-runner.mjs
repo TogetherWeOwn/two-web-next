@@ -76,14 +76,14 @@ export function parseQuota(text) {
 }
 export function cpuLimits(readFile = read) {
   const membership = readFile("/proc/self/cgroup").trim();
-  requireValue(membership.length <= 4096 && /^0::\/(?:[\w.@:-]+\/?)*$/.test(membership));
+  requireValue(membership.length <= 4096 && membership.startsWith("0::/"));
   const group = membership.slice(3);
+  // Root membership can hide ancestor quotas in a private cgroup namespace.
   requireValue(
-    group === "/" ||
-      group
-        .split("/")
-        .slice(1)
-        .every((part) => part && part !== "." && part !== ".."),
+    group
+      .split("/")
+      .slice(1)
+      .every((part) => /^[\w.@:-]+$/.test(part) && part !== "." && part !== ".."),
   );
   const mounts = readFile("/proc/self/mountinfo")
     .trim()

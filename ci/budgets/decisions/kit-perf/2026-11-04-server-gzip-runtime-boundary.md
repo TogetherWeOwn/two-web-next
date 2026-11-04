@@ -105,9 +105,13 @@ and effective cpuset are recorded alongside process CPU affinity. Effective
 quota is the tightest ancestor quota, and effective CPU count is bounded by
 both quota and affinity. Unlimited is explicit and verified, not inferred from
 a missing file: absent per-cgroup limits require proof that the parent's
-controller is disabled (the hierarchy root has no parent quota). Subtree mounts,
-unknown/malformed quota/cpuset/controller/affinity evidence, cgroup v1 and missing
-required files fail closed. Reads are capped at 16 KiB and ancestry at 64 levels;
+controller is disabled (the hierarchy root has no parent quota). Root process
+membership is rejected: a private cgroup namespace can otherwise hide ancestor
+quotas behind a seemingly complete root mount. Membership is parsed component by
+component without nested regex repetition, so bounded malformed paths cannot
+trigger exponential backtracking. Subtree mounts, unknown/malformed
+quota/cpuset/controller/affinity evidence, cgroup v1 and missing required files
+fail closed. Reads are capped at 16 KiB and ancestry at 64 levels;
 runner facts must still match after profiling. Local and CI observations are not
 interchangeable trends.
 This is not per-thread CPU, an authoritative Cloudflare measurement, or proof of
