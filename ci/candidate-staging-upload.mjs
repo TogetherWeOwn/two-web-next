@@ -30,7 +30,7 @@ function matches(pattern, value) {
   return typeof value === "string" && pattern.test(value);
 }
 
-function identitySnapshot(input) {
+export function identitySnapshot(input) {
   const value = structuredClone(input);
   requireEvidence(
     keys(value, "descriptor,q,ciRunId,ciRunAttempt") &&
@@ -59,7 +59,7 @@ function identitySnapshot(input) {
   return identity;
 }
 
-function profileSnapshot(input, expectedDigest) {
+export function profileSnapshot(input, expectedDigest) {
   const profile = structuredClone(input);
   requireEvidence(
     keys(profile, "schema,accountId,scriptName,bindings") &&

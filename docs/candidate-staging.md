@@ -383,6 +383,60 @@ the observer/uploader, no setting was changed, and no live request was made to
 qualify these mocked fixtures. Installed authority, exclusion, complete B and
 next-ordinary-upload restoration and native Security admission remain required.
 
+## Persistent settings lifecycle (mock-qualified, not installed)
+
+[The lifecycle helper](../ci/candidate-staging-settings-lifecycle.mjs) adds a
+narrow settings snapshot/seal/restore transport, using the same installed
+profile and complete descriptor/Q admission as the uploader. It has no workflow
+caller and grants no version-selection, activation, clean-journal or release
+authority. All tests use local mocked HTTP; no live settings were changed.
+
+The canonical, deeply frozen snapshot binds Q, the installed profile digest,
+capture time and explicit script-settings/subdomain values. Its digest must be
+pinned through the independently authenticated recovery-artifact channel. This is
+only a **settings component**, not the complete B/provider baseline digest or
+proof that the artifact was retained. Nonempty tags, tail consumers and log
+destinations, unknown fields, omitted/default/null values and unsupported
+observability components refuse. The supported subset preserves explicit
+boolean flags and sampling rates in [0,1], including B's enabled logging and
+workers.dev flags, without copying arbitrary provider JSON into a PATCH.
+
+`seal` first re-reads and compares B's current settings against the pinned
+snapshot, then PATCHes explicit disabled script sinks and POSTs both subdomain
+flags disabled. It validates write responses, independently GETs the settings
+and performs a final combined readback. `restore` replays only the admitted,
+pinned B component and performs the same write/readback comparisons. Restore is
+idempotent and does not need a still-live QA credential; recovery after the
+fixed QA expiry cannot renew that credential.
+
+Every provider request is preceded and followed by mandatory **trusted installed**
+exclusion and, for seal/restore, dirty-baseline ownership adapters. The latter
+must verify the outer recovery manifest/journal's live ownership and its binding
+to this exact settings snapshot digest, not just accept a digest-shaped string.
+Restore additionally requires independent B-serving admission at each guard,
+**before re-enabling any log or preview sink**. These adapters receive the phase,
+Q, profile/snapshot digests and the operation's cancellation signal. Candidate
+callbacks, caller booleans, an unverified B version ID or a candidate-generated
+snapshot are not authorization. These trusted adapters remain to be installed.
+
+Requests use only fixed same-account staging endpoints: GET/PATCH
+`script-settings` and GET/POST `subdomain`. They share a 60-second operation
+signal and 10-second request bounds; parent cancellation reaches every request
+and adapter. Responses reuse the observer's 64-KiB strict UTF-8 JSON/status/origin
+checks. Clock rollback, future capture times, lost ownership, B-serving drift,
+partial writes, failed readback and uncertain responses withhold the receipt.
+There is no write retry, automatic rollback or automatic clean status. A failure
+can leave staging partially changed: retain durable dirty occupancy and use
+trusted full recovery, never infer clean from a thrown exception.
+
+Receipts contain only phase, Q, profile/snapshot/state digests, time and literal
+`promotable:false`. They establish only point-in-time component comparisons under
+the supplied adapters. Complete provider/capability/component and stored-asset
+admission, actual global exclusion, recovery artifact provenance, serving/history
+fencing and verified B/latest-upload restoration remain required. In particular,
+restoring these mutable settings or selecting B does not remove a latest-uploaded
+candidate or repair the ordinary uploader's binding inheritance.
+
 ## Durable occupancy journal and recovery boundary
 
 [The journal](../ci/candidate-staging-occupancy.mjs) implements a narrow GitHub

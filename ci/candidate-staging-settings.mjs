@@ -62,7 +62,7 @@ function admitSubdomain(value) {
   return [false, false];
 }
 
-async function boundedResult(response, url) {
+export async function boundedResult(response, url) {
   requireEvidence(response.body);
   const reader = response.body.getReader();
   try {
