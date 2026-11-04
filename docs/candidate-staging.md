@@ -80,6 +80,37 @@ extra-field types are accepted, as inert metadata. Unsupported archive features
 refuse rather than being interpreted by another extractor. This is not yet a
 trusted build producer, artifact downloader or provenance attestation.
 
+## Immutable artifact download and bundle admission
+
+[The artifact reader](../ci/candidate-staging-artifact.mjs) connects the read-only
+GitHub metadata reader, bounded archive decoder and bundle predicate. The caller
+supplies an immutable build/artifact selection and a producer receipt obtained
+**separately from trusted tooling**, not from the downloaded archive. Inputs are
+snapshotted before the first request. The reader checks the same-repo live PR and
+complete artifact listing/detail before download and again afterward; a moved
+head or deleted/expired/replaced artifact refuses the result.
+
+Only the fixed repository artifact-ID ZIP endpoint receives the GitHub bearer.
+Its single manual 302 may target only `productionresultssa<number>.blob.core.windows.net`
+or the legacy `pipelines.actions.githubusercontent.com`, over HTTPS with no URL
+credentials, non-default port or fragment. Other storage origins require a
+reviewed adapter update, not a wildcard or alternate credential. The signed URL
+is used once with a newly constructed request: no Authorization, cookies or
+referrer, no cache and no second redirect. No signed URL is returned or logged.
+Each request has a ten-second deadline; all metadata/download/readback work shares
+a sixty-second deadline, which caller cancellation can shorten but not replace.
+The binary stream is limited to 16 MiB after decoding, rejects truncation and
+unsupported content types/statuses, and is closed on failure. SHA-256 precedes ZIP
+decoding and the independent per-file/root join. Only inert buffers and bounded
+selection/digest observations are returned; errors discard API, URL and code text.
+
+This is not a trusted build producer or a provenance attestation. Its metadata
+reads cannot independently establish build-attempt freshness, workflow source,
+CI completion, sandbox containment or the producer receipt's authority. Installed
+controller admission must establish those separately. It supplies no filesystem
+extraction, module execution, version upload, global lock or live qualification.
+Only mocked HTTP fixtures have exercised this path.
+
 ## Durable occupancy journal and recovery boundary
 
 [The journal](../ci/candidate-staging-occupancy.mjs) implements a narrow GitHub
@@ -135,9 +166,10 @@ matching hashes alone do not attest source provenance. CI dispatch/workflow
 source provenance and baseline execution ledgers also need independent checks.
 
 The bundle predicate is **not an archive parser**; the separate decoder above
-provides that bounded byte boundary. The controller still needs to connect the
-immutable artifact download and independently attested producer to decoding and
-bundle admission. No credential-bearing tool may discover candidate package,
+provides that bounded byte boundary. The artifact reader connects download,
+decoding and bundle admission, but the installed controller must still supply
+independently attested producer evidence and verified build-attempt freshness.
+No credential-bearing tool may discover candidate package,
 configuration, plugin or script files. No raw credential belongs in the bundle,
 receipt, workflow output, argument list or cache.
 
