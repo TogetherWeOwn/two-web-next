@@ -17,6 +17,7 @@ import { gzipSync } from "node:zlib";
 import { loadBundleBudgets, loadKitBudget } from "./budget-fragments.mjs";
 import { run as runBundle } from "./check-bundle-budget.mjs";
 import { run as runKit } from "./check-kit-perf.mjs";
+import { approvedClientBudget } from "./client-ratchet-approval.mjs";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -217,7 +218,7 @@ const SHIPPING_CLIENT_JS_ALLOCATIONS = [
   [261632, 104448],
 ];
 
-function assertShippingKitBudget(actual) {
+function assertShippingKitBudget(actual, approvedClient) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
@@ -229,9 +230,12 @@ function assertShippingKitBudget(actual) {
     `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536, 1219584, 1220608`,
   );
   const clientJs = actual?.client?.js;
-  const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
-    ([raw, clientGzip]) => clientJs?.maxRawBytes === raw && clientJs?.maxGzipBytes === clientGzip,
-  ) ?? [SHIPPING_KIT_BUDGET.client.js.maxRawBytes, SHIPPING_KIT_BUDGET.client.js.maxGzipBytes];
+  const [maxRawBytes, maxGzipBytes] = approvedClient
+    ? [approvedClient.js.maxRawBytes, approvedClient.js.maxGzipBytes]
+    : (SHIPPING_CLIENT_JS_ALLOCATIONS.find(
+        ([raw, clientGzip]) =>
+          clientJs?.maxRawBytes === raw && clientJs?.maxGzipBytes === clientGzip,
+      ) ?? [SHIPPING_KIT_BUDGET.client.js.maxRawBytes, SHIPPING_KIT_BUDGET.client.js.maxGzipBytes]);
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
     server: {
@@ -239,13 +243,14 @@ function assertShippingKitBudget(actual) {
     },
     client: {
       ...SHIPPING_KIT_BUDGET.client,
+      ...(approvedClient && { css: approvedClient.css }),
       js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes, maxGzipBytes },
     },
   });
 }
 
 test("kit fragments aggregate to an admitted shipping allocation", () => {
-  assertShippingKitBudget(loadKitBudget(repoRoot));
+  assertShippingKitBudget(loadKitBudget(repoRoot), approvedClientBudget(repoRoot));
 });
 
 test("shipping oracle admits the measured 335360 server gzip allocation", () => {

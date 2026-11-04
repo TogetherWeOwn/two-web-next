@@ -135,6 +135,33 @@ GraphQL `createCommitOnBranch` uses `expectedHeadOid` to reject human branch
 races atomically, with no retry, force push or main write. A newer main build
 makes an old measurement a no-op. Missing permissions fail without fallback.
 Each proposal carries the complete measurement and Undo in a generated decision.
+Its machine-verifiable block includes main's original budget files and every
+ordered draft measurement/result, including earlier updates. The writer binds
+that replayed result to the live draft files before appending an update. Histories
+must remain below 100 proposals and 2 MiB; the writer refuses excess before any
+write. The client allocation test oracle replays these measured decisions from
+the unchanged initial aggregate ceilings; it rejects missing/tampered evidence,
+unproven earlier decreases, disconnected decreases and re-raises.
+Route-only decisions do not advance the aggregate chain. Existing historical
+client byte fixtures retain their original pinned allocations, and separate
+current-plan cases prove exact-fit and one-unit-over enforcement of raw/gzip/file
+ceilings for both JS and CSS. Count fixtures use minimal bodies and verify the
+count diagnostic independently if gzip framing makes a file cap unreachable.
+No historical case or assertion is removed.
+
+The writer fixture publishes through a fake GitHub API, applies the exact
+base64-generated draft files to a disposable fixture tree, and runs both existing
+fragment/checker suites there. Its representative decreases are JS 261632/104448
+→ 250368/100096 B and CSS 3072/1280 → 1536/768 B, with file caps unchanged.
+A second fixture proves both JS and CSS can decrease to 512/256 B with the same
+55-file / 4-file caps, including count evidence when gzip framing also binds.
+Those are synthetic test measurements, not proposed changes to today's budgets.
+Run the full compatibility proof with:
+
+```sh
+node --test ci/check-kit-route-perf.test.mjs ci/kit-client-ratchet.test.mjs ci/check-kit-perf.test.mjs ci/budget-fragments.test.mjs ci/kit-parity-ci-wiring.test.mjs
+```
+
 There is no auto-merge; marking the draft ready must trigger normal CI/reviews
 and the exact-head production merge confirmation.
 

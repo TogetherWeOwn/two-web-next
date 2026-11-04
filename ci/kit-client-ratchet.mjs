@@ -174,10 +174,45 @@ risk_tier: T1
 
 ## Notes for reviewers (optional)
 
-Undo: revert this PR's budget changes through a reviewed PR; automation never raises ceilings.
+Undo: revert this PR's budget changes and generated decision through a reviewed PR; automation never raises ceilings.
+
+## Model Used
+
+Not applicable: deterministic budget automation.
 
 🤖 Generated with [Claude Code](https://claude.com/claude-code)
 `;
+
+export function replayDecision(evidence) {
+  keys(evidence, ["version", "base", "history"]);
+  assert.equal(evidence.version, 1);
+  assert.ok(
+    Array.isArray(evidence.history) && evidence.history.length > 0 && evidence.history.length < 100,
+    "missing or excessive proposal history",
+  );
+  let result = { files: evidence.base };
+  for (const entry of evidence.history) {
+    keys(entry, ["report", "result"]);
+    const expected = propose(entry.report, evidence.base, result.files);
+    assert.deepEqual(entry.result, expected, "invalid proposal history");
+    assert.ok(expected.changes.length > 0, "empty proposal");
+    result = expected;
+  }
+  return result;
+}
+
+export function parseDecision(text) {
+  const matches = [...text.matchAll(/## Machine-verifiable proposal\n\n```json\n([\s\S]*?)\n```/g)];
+  assert.equal(matches.length, 1, "missing or ambiguous measured decision");
+  const evidence = JSON.parse(matches[0][1]);
+  replayDecision(evidence);
+  return evidence;
+}
+
+export function measuredDecision(report, base, result, history = []) {
+  const evidence = { version: 1, base, history: [...history, { report, result }] };
+  return `# Measured lower-only client ratchet\n\nSource main: ${report.sha}\n\nRaw step: 512 B. Gzip step: 256 B. Target = ceil(measured × 1.25 / step) × step. Lower only when current minus target is strictly greater than one step. File counts do not ratchet. Existing lower draft values never rise.\n\nUndo: revert this PR's client budget changes and generated decision through a reviewed PR; automation never raises ceilings.\n\n## Latest changes and headroom shortfalls\n\n\`\`\`json\n${json({ changes: result.changes, shortfalls: result.shortfalls })}\`\`\`\n\n## Machine-verifiable proposal\n\n\`\`\`json\n${json(evidence)}\`\`\`\n`;
+}
 
 export async function publish({ api, report, repository }) {
   assert.equal(repository, "TogetherWeOwn/two-web-next", "unexpected repository");
@@ -205,6 +240,7 @@ export async function publish({ api, report, repository }) {
   let head = report.sha;
   let firstSha = report.sha;
   let previous = base;
+  let history = [];
   if (prs.length) {
     const pr = prs[0];
     assert.ok(
@@ -244,13 +280,22 @@ export async function publish({ api, report, repository }) {
       );
     same(await load(firstSha), base); // newer human/main ceiling revision wins
     previous = await load(head);
+    const saved = await api("GET", `${prefix}/contents/${decisionPath(firstSha)}?ref=${head}`);
+    assert.equal(saved.encoding, "base64");
+    assert.ok(saved.size <= 2 * 1024 * 1024, "oversized decision");
+    const evidence = parseDecision(Buffer.from(saved.content, "base64").toString("utf8"));
+    same(evidence.base, base);
+    same(replayDecision(evidence).files, previous);
+    history = evidence.history;
   }
   const proposal = propose(report, base, previous);
   if (!proposal.changes.length) return { status: "no-lowering", shortfalls: proposal.shortfalls };
   const additions = CLIENT_FILES.filter(
     (p) => JSON.stringify(proposal.files[p]) !== JSON.stringify(previous[p]),
   ).map((path) => ({ path, contents: Buffer.from(json(proposal.files[path])).toString("base64") }));
-  const decision = `# Measured lower-only client ratchet\n\nSource main: ${report.sha}\n\nRaw step: 512 B. Gzip step: 256 B. Target = ceil(measured × 1.25 / step) × step. Lower only when current minus target is strictly greater than one step. File counts do not ratchet. Existing lower draft values never rise.\n\nUndo: revert this PR's client budget changes through a reviewed PR; automation never raises ceilings.\n\n## Latest changes and headroom shortfalls\n\n\`\`\`json\n${json({ changes: proposal.changes, shortfalls: proposal.shortfalls })}\`\`\`\n\n## Complete measured route and aggregate evidence\n\n\`\`\`json\n${json(report)}\`\`\`\n`;
+  const decision = measuredDecision(report, base, proposal, history);
+  assert.ok(Buffer.byteLength(decision) <= 2 * 1024 * 1024, "oversized decision");
+  parseDecision(decision); // validate the extended history before any writes
   additions.push({
     path: decisionPath(firstSha),
     contents: Buffer.from(decision).toString("base64"),
