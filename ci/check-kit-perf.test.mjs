@@ -433,7 +433,9 @@ const SHIPPING_BUDGET_BYTES = Buffer.from(
 // 340039; 339968 rejects by 70 and 71), and the moderator row-names
 // 340736 ceiling on top of that (two builds 340593 and 340594; 340224
 // rejects by 369 and 370), and the QA-token throttle 341248 ceiling on
-// top of that (two builds, both 341055; 340736 rejects by 319).
+// top of that (two builds, both 341055; 340736 rejects by 319), and the
+// explicitly bounded Ember 342272 ceiling (frozen builds 341996/341995;
+// 341248 rejects by 748/747). See the dated decision for build identities.
 // Fixture lengths below are fixed literals
 // selected by this mapping, never `cap` or `cap + 1`; any other loaded
 // ceiling fails the allocation control and the three server-gzip cases, so
@@ -466,10 +468,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = {
   340224: { intervalBytes: 340039, exactBytes: 340224, overBytes: 340225 },
   340736: { intervalBytes: 340594, exactBytes: 340736, overBytes: 340737 },
   341248: { intervalBytes: 341055, exactBytes: 341248, overBytes: 341249 },
+  342272: { intervalBytes: 341996, exactBytes: 342272, overBytes: 342273 },
 };
 const SHIPPING_SERVER_GZIP_UNSUPPORTED =
   `unsupported server gzip allocation ${String(SHIPPING_SERVER_GZIP_CAP)}: ` +
-  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339968, 340224, 340736, 341248`;
+  `expected one of 334080, 335104, 335360, 335616, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339968, 340224, 340736, 341248, 342272`;
 
 test("shipping budget: server gzip allocation is explicitly approved", () => {
   assert.ok(
@@ -535,6 +538,23 @@ test("shipping budget: client gzip allocation is explicitly approved", () => {
     SHIPPING_CLIENT_GZIP_UNSUPPORTED,
   );
 });
+const SHIPPING_SERVER_RAW_CAP = JSON.parse(SHIPPING_BUDGET_BYTES.toString("utf8")).server.js
+  .maxRawBytes;
+const SHIPPING_SERVER_RAW_ALLOCATIONS = {
+  1220608: { intervalBytes: 1220482, exactBytes: 1220608, overBytes: 1220609 },
+  1222656: { intervalBytes: 1222251, exactBytes: 1222656, overBytes: 1222657 },
+};
+const SHIPPING_SERVER_RAW_UNSUPPORTED =
+  `unsupported server raw allocation ${String(SHIPPING_SERVER_RAW_CAP)}: ` +
+  `expected one of 1220608, 1222656`;
+
+test("shipping budget: server raw allocation is explicitly approved", () => {
+  assert.ok(
+    Object.hasOwn(SHIPPING_SERVER_RAW_ALLOCATIONS, String(SHIPPING_SERVER_RAW_CAP)),
+    SHIPPING_SERVER_RAW_UNSUPPORTED,
+  );
+});
+
 const SHIPPING_GROUPS = ["kit.worker", "kit.server.js", "kit.client.js", "kit.client.css"];
 const SHIPPING_BASES = {
   "kit.worker": WORKER_BODY,
@@ -995,6 +1015,31 @@ function shippingServerGzipCases() {
       },
     ];
   }
+  if (SHIPPING_SERVER_GZIP_CAP === 342272) {
+    return [
+      {
+        name: "server gzip newly allowed interval",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 341996,
+      },
+      {
+        name: "server gzip repeated Ember measurement",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 341995,
+      },
+      { name: "server gzip exact ceiling", group: "kit.server.js", axis: "gzip", bytes: 342272 },
+      {
+        name: "server gzip one byte over",
+        group: "kit.server.js",
+        axis: "gzip",
+        bytes: 342273,
+        ceiling: 342272,
+        breach: true,
+      },
+    ];
+  }
   return [
     { name: "server gzip newly allowed interval", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
     { name: "server gzip exact ceiling", unsupported: SHIPPING_SERVER_GZIP_UNSUPPORTED },
@@ -1255,26 +1300,43 @@ function shippingClientGzipCases() {
     { name: "client gzip one byte over", unsupported: SHIPPING_CLIENT_GZIP_UNSUPPORTED },
   ];
 }
+function shippingServerRawCases() {
+  const allocation = SHIPPING_SERVER_RAW_ALLOCATIONS[SHIPPING_SERVER_RAW_CAP];
+  if (!allocation) {
+    return [
+      { name: "server raw newly allowed interval", unsupported: SHIPPING_SERVER_RAW_UNSUPPORTED },
+      { name: "server raw exact ceiling", unsupported: SHIPPING_SERVER_RAW_UNSUPPORTED },
+      { name: "server raw one byte over", unsupported: SHIPPING_SERVER_RAW_UNSUPPORTED },
+    ];
+  }
+  return [
+    {
+      name: "server raw newly allowed interval",
+      group: "kit.server.js",
+      axis: "raw",
+      bytes: allocation.intervalBytes,
+    },
+    {
+      name: "server raw exact ceiling",
+      group: "kit.server.js",
+      axis: "raw",
+      bytes: allocation.exactBytes,
+    },
+    {
+      name: "server raw one byte over",
+      group: "kit.server.js",
+      axis: "raw",
+      bytes: allocation.overBytes,
+      ceiling: allocation.exactBytes,
+      breach: true,
+    },
+  ];
+}
 for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of [
   ...shippingClientRawCases(),
   ...shippingServerGzipCases(),
   ...shippingClientGzipCases(),
-  // QA-token throttle on the moderator row-names: 1220482 raw; the previous 1219584 cap rejects.
-  {
-    name: "server raw newly allowed interval",
-    group: "kit.server.js",
-    axis: "raw",
-    bytes: 1220482,
-  },
-  { name: "server raw exact ceiling", group: "kit.server.js", axis: "raw", bytes: 1220608 },
-  {
-    name: "server raw one byte over",
-    group: "kit.server.js",
-    axis: "raw",
-    bytes: 1220609,
-    ceiling: 1220608,
-    breach: true,
-  },
+  ...shippingServerRawCases(),
   {
     name: "Worker raw one byte over",
     group: "kit.worker",
