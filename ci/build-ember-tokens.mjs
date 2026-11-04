@@ -77,7 +77,7 @@ export const ROLES = [
     `tracking-${name}`,
     `tracking-${name}`,
   ]),
-  ...["display", "accent", "data"].map((name) => [`font-${name}`, `font-${name}`]),
+  ...["display", "ui", "accent", "data"].map((name) => [`font-${name}`, `font-${name}`]),
   ...["regular", "medium", "display", "semibold"].map((name) => [
     `font-weight-${name}`,
     `font-weight-${name}`,
@@ -155,8 +155,9 @@ export function roleDeclarations(kit, roles = ROLES) {
     const value = kit.base.get(`--two-${source}`);
     if (value === undefined) throw new Error(`missing kit role --two-${source}`);
     // Preserve the measured local fallback without inventing a kit font role.
-    const resolved =
-      alias === "font-display" ? value.replace(/,/, ', "Mona Sans Fallback",') : value;
+    const resolved = /^font-(display|ui)$/.test(alias)
+      ? value.replace(/,/, ', "Mona Sans Fallback",')
+      : value;
     return [alias, source, resolved];
   });
 }
@@ -200,9 +201,16 @@ export function generate(root = ROOT) {
     /^(g\d$|t\d$|hair\d$|ember$|on-accent$|accent-hi$|border$|live|echo|ok|danger|warn|focus-)/.test(
       alias,
     );
-  const shared = ([alias]) => /^(font-size-|tracking-)/.test(alias);
+  const shared = ([alias]) =>
+    /^(font-size-|font-weight-|font-width-|line-height-|tracking-|space-\d+$|radius-)/.test(alias);
+  const display = roles.find(([name]) => name === "font-display")[2];
   const declarations = (selected) =>
-    selected.map(([alias, , value]) => `--${alias}:${value};`).join("");
+    selected
+      .map(([alias, , value]) => {
+        // Share equal pinned stacks, but follow either role if the kit diverges.
+        return `--${alias}:${alias === "font-ui" && value === display ? "var(--font-display)" : value};`;
+      })
+      .join("");
   const facade = `.base-theme{${hooks("")}${aliases}color-scheme:dark;${declarations(roles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}}`;
   const reduced = roles
     .filter(([, source]) => kit.reduced.has(`--two-${source}`))
@@ -235,16 +243,10 @@ export function generate(root = ROOT) {
     if (alias.startsWith("line-height-")) return alias.replace("line-height-", "leading-");
     return alias;
   };
-  // Kit's utility namespaces differ from the shared Hono sheet's aliases.
-  // Bridge renamed roles without duplicating their pinned values.
-  const kitSharedRoles = roles
-    .filter(([alias]) => utility(alias) !== alias)
-    .map(([alias]) => `--${alias}:var(--${utility(alias)});`)
-    .join("");
-  const kitCss = `/* GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs. */\n@theme static{${kitColors.map(([alias, source]) => `--color-lobby-${alias}:${get(source)};`).join("")}${roles.map(([alias, , value]) => `--${utility(alias)}:${value};`).join("")}--font-sans:var(--font-display);}\n.base-theme{${hooks("", true)}${aliases}${kitSharedRoles}}\n${schedule}{${hooks("schedule-", true)}${aliases}}\n@media(prefers-reduced-motion:reduce){:root{${roles
-    .filter(([, source]) => kit.reduced.has(`--two-${source}`))
-    .map(([alias, source]) => `--${utility(alias)}:${kit.reduced.get(`--two-${source}`)};`)
-    .join("")}}}\n`;
+  // Tailwind emits utility roles on demand. Shared author sheets already expose
+  // every type/space/motion alias; keep only their missing foundation here.
+  // Forcing every utility plus a second alias bridge duplicates those bytes.
+  const kitCss = `/* GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs. */\n@theme{${kitColors.map(([alias, source]) => `--color-lobby-${alias}:${get(source)};`).join("")}${roles.map(([alias, , value]) => `--${utility(alias)}:${value};`).join("")}--font-sans:var(--font-ui);}\n.base-theme{${hooks("", true)}${aliases}${declarations(roles.filter(foundation))}}\n${schedule}{${hooks("schedule-", true)}}\n`;
   const validation = transformSync(kitCss, { loader: "css", logLevel: "silent" });
   if (validation.warnings.length) throw new Error("invalid generated Kit stylesheet");
   // The catastrophic fallback must render without fonts or stylesheet fetches.

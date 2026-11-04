@@ -6,8 +6,8 @@ import type { Page } from "@playwright/test";
 import { LEAF_CRITICAL_CSS_SHA256 } from "../src/leaf-critical-css";
 import { pageShellFixture } from "../test/helpers/page-shells";
 
-const DISPLAY_700_PATH = "/fonts/display-latin-700.woff2";
-const DISPLAY_700_BYTES = readFileSync(resolve("public", DISPLAY_700_PATH.slice(1)));
+const UI_FONT_PATH = "/fonts/mona-sans-latin-var.woff2";
+const UI_FONT_BYTES = readFileSync(resolve("public", UI_FONT_PATH.slice(1)));
 
 type FontSwapMetrics = {
   linesBefore: number;
@@ -45,13 +45,13 @@ async function captureFontSwap(
 
   let releaseFont!: () => void;
   const fontBytes = new Promise<Buffer>((resolveFont) => {
-    releaseFont = () => resolveFont(DISPLAY_700_BYTES);
+    releaseFont = () => resolveFont(UI_FONT_BYTES);
   });
   let signalFontRequest!: () => void;
   const fontRequested = new Promise<void>((resolveRequest) => {
     signalFontRequest = resolveRequest;
   });
-  await page.route(`**${DISPLAY_700_PATH}`, async (route) => {
+  await page.route(`**${UI_FONT_PATH}`, async (route) => {
     signalFontRequest();
     await route.fulfill({ body: await fontBytes, contentType: "font/woff2" });
   });
@@ -69,7 +69,7 @@ async function captureFontSwap(
     () => (globalThis as any).performance.getEntriesByName("first-contentful-paint").length > 0,
   );
   expect(
-    await page.evaluate(() => (globalThis as any).document.fonts.check("700 48px Display")),
+    await page.evaluate(() => (globalThis as any).document.fonts.check('700 48px "Mona Sans"')),
   ).toBe(false);
 
   const linesBefore = await lineCount(page);
@@ -84,7 +84,7 @@ async function captureFontSwap(
     );
   });
   expect(
-    await page.evaluate(() => (globalThis as any).document.fonts.check("700 48px Display")),
+    await page.evaluate(() => (globalThis as any).document.fonts.check('700 48px "Mona Sans"')),
   ).toBe(true);
 
   return {
@@ -124,7 +124,7 @@ async function homepageFixture() {
   return { html, csp };
 }
 
-test("homepage mobile Display font swap preserves hero layout after FCP", async ({ page }) => {
+test("homepage mobile Mona Sans font swap preserves hero layout after FCP", async ({ page }) => {
   const { html, csp } = await homepageFixture();
 
   for (const width of [340, 360, 390, 412]) {

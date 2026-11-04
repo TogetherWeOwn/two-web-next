@@ -4,7 +4,7 @@ The homepage retains its existing centered composition, uppercase display typogr
 
 The homepage, `/about`, `/faq`, `/rules`, `/privacy`, the `/join` landing, the community schedule (`/events`, `/events/past`), event detail/cancelled pages and branded error/OAuth recovery shells opt into the stylesheet through `Layout.theme`. The homepage and four content leaves (`/about`, `/faq`, `/rules`, `/privacy`) render it as a single generated inline `<style>` block (`src/leaf-critical-css.ts`, git-ignored build output regenerated on every install after adapter validation) allowlisted in `style-src` by its sha256 hash instead of a render-blocking stylesheet request; other themed routes keep the external stylesheet. They share the presentational `SiteHeader` and `SiteFooter`; error/recovery composition uses `RecoveryShell` without reading sessions or requiring a database. The content leaves use compact information navigation with a current-page indicator and readable policy text; Join uses a split content/preview layout that stacks on mobile. The 404 keeps optional event suggestions and labelled GET search below the centered status hero. The maintenance header and primary action link directly to the configured Discord invite, not OAuth. Member profiles opt into the base tokens through `theme="profile"` with layout details in the separate `profile-theme.css` sheet; the schedule does the same through `theme="schedule"` and `schedule-theme.css`, and event pages through `theme="event"` and `event-theme.css`. Other routes, including admin, retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
 
-## Ember Hours token migration (two-design-kit v0.2.0)
+## Ember Hours token migration (two-design-kit v0.2.3)
 
 `ci/build-ember-tokens.mjs` generates both consumer adapters from the exact
 vendored `vendor/design-kit/tokens.css` at `VERSION`. Its value-free mapping
@@ -14,15 +14,18 @@ No palette or type values are copied into consumer source files.
 
 The generated `public/theme-tokens.css` is the compact operator-hook facade,
 including palette, state and focus roles. The generated `public/styles.css`
-composes scoped type-scale and tracking roles with readable `assets/styles.css`;
-`public/theme.css` composes the remaining roles with `assets/theme.css` rules.
-All three existing sheets use the locked esbuild and retain their original raw
-and gzip ceilings, without an extra request or changes to unthemed legacy pages.
-Kit imports the
-generated `web/src/ember-theme.css` from `app.css`: a static `@theme` plus
-unlayered hook mappings. Kit keeps its existing surface/raised distinction
-rather than adopting Hono's page/surface mapping. The three-file critical
-bundle, CSP hash and external/inline route selection stay unchanged.
+composes scoped type-scale, tracking, numeric spacing and radius roles with
+readable `assets/styles.css`; `public/theme.css` composes the remaining roles
+with `assets/theme.css` rules. All three existing sheets use the locked esbuild
+and retain their original raw and gzip ceilings, without an extra request or
+changes to unthemed legacy pages. Kit imports the generated
+`web/src/ember-theme.css` from `app.css`: demand-driven `@theme` definitions,
+unlayered hook mappings and foundation aliases. The shared author aliases for
+type, space, family and motion come from the already-served `styles.css` and
+`theme.css`, instead of a duplicate bridge that forces unused utilities into the
+client bundle. Kit keeps its existing surface/raised distinction rather than
+adopting Hono's page/surface mapping. The three-file critical-bundle mechanism,
+CSP hashing and external/inline route selection stay unchanged.
 
 Explicit `build:assets` and root `build:leaf-css` regenerate the tracked
 adapters. Root postinstall/predev and Kit postinstall/prebuild run the adapter
@@ -34,7 +37,8 @@ written by those lifecycle hooks. The leaf generator stays pure Node builtins
 snapshots; the adapter requires installed esbuild. Two independent checks
 run in `npm run check`: `ci/check-design-kit-drift.mjs` verifies tag bytes,
 and `ci/check-ember-token-sync.mjs` regenerates and compares **all bytes of
-all four adapters**, including reduced-motion rules. `build:assets:check`
+all six artifacts**, including reduced-motion rules, fallback HTML and its
+matching CSP style hash. `build:assets:check`
 also checks those artifacts. A kit update is VERSION + exact re-vendor +
 regeneration, never manual literal edits.
 
@@ -94,9 +98,12 @@ type, spacing, radius and motion groups. Names otherwise drop the kit's
 in both stacks. Existing button transitions consume the generated duration
 and ease only under `no-preference`; focus width/offset come from kit roles.
 
-`--font-display` preserves the kit family order and inserts the measured
-local Mona fallback once; theme font rules share this hook. The migration
-preserves existing layouts, body sizes and the system-font content leaves;
+`--font-display` and the distinct v0.2.3 `--font-ui` role preserve the kit family
+order and insert the measured local Mona fallback once. Body text consumes
+`--font-ui`; headings and existing display rules retain `--font-display`. Equal
+pinned stacks share an alias to save bytes, but generation keeps the UI role
+independent if the upstream stacks diverge. Kit's `font-sans` consumes the UI
+role. The migration preserves existing layouts, body sizes and the system-font content leaves;
 it does not add a serif phrase, state badge or gradient to existing content.
 Future surfaces consume the generated roles rather than inventing styles.
 The gradient remains restricted to logo/Now/bot marks; echo violet must

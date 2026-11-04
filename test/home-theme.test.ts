@@ -284,14 +284,9 @@ describe("homepage theme", () => {
     expect(tokens).toMatch(/--focus-offset:\s*3px/);
     expect(source).not.toContain("@import");
     expect(source).not.toContain("https://");
-    // Scoping every display text rule away from the content leaves (late
-    // font swap became mobile LCP) raised the cap from 12000: it costs
-    // ~600 bytes of :not(.content-theme) guards. The Ember Hours migration
-    // adds the four kit §2 @font-face blocks (variable Mona Sans, its
-    // local-metric fallback, optional serif and mono) plus the ember focus
-    // and forced-colors rules. Keep the existing 14025 B cap on the actual
-    // served sheet, including its generated kit interaction/layout roles.
-    expect(Buffer.byteLength(css, "utf8")).toBeLessThan(14025);
+    // Keep the original strict ceiling, including generated kit roles.
+    // Shared type roles also ship in styles.css under its unchanged budget.
+    expect(Buffer.byteLength(css, "utf8")).toBeLessThan(13000);
   });
 
   it("uses the kit hover and on-accent roles for the primary button", () => {

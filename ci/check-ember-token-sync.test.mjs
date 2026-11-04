@@ -104,7 +104,7 @@ test("Hono exposes each role once across the existing three-sheet bundle", () =>
     assert.equal([...css.matchAll(new RegExp(`--${alias}:`, "g"))].length, 1, alias);
   }
   const styles = outputs.get("public/styles.css");
-  assert.match(styles, /\.base-theme\{--font-size-hero:/);
+  assert.match(styles, /\.base-theme\{[^}]*--font-size-hero:/);
   assert.ok(!outputs.get("public/theme.css").includes("--font-size-hero:"));
   assert.ok(!outputs.get("public/theme-tokens.css").includes("--font-size-hero:"));
 });
@@ -124,7 +124,7 @@ test("every required role group resolves from the kit", () => {
     radius: /^radius-/,
     fontSize: /^font-size-/,
     tracking: /^tracking-/,
-    family: /^font-(display|accent|data)$/,
+    family: /^font-(display|ui|accent|data)$/,
     weight: /^font-weight-/,
     width: /^font-width-/,
     lineHeight: /^line-height-/,
@@ -394,13 +394,31 @@ test("both stacks use the kit UI family and Hono body metrics", () => {
   const hono = outputs.get("public/theme.css");
   assert.match(
     hono,
-    /font:var\(--font-size-body\)\/var\(--line-height-body\) var\(--font-display\)/,
+    /font:var\(--font-size-body\)\/var\(--line-height-body\) system-ui,sans-serif/,
   );
-  assert.match(outputs.get("web/src/ember-theme.css"), /--font-sans:var\(--font-display\)/);
+  assert.match(hono, /\.base-theme:not\(\.content-theme\)\{font-family:var\(--font-ui\)/);
+  assert.equal(realKit().base.get("--two-font-ui"), realKit().base.get("--two-font-display"));
+  assert.match(outputs.get("web/src/ember-theme.css"), /--font-sans:var\(--font-ui\)/);
 });
 
-test("Kit bridges the shared sheet's renamed semantic roles without copying values", () => {
-  const css = generate(ROOT).get("web/src/ember-theme.css");
+test("equal UI/display stacks share bytes but divergent pinned roles remain independent", () => {
+  assert.match(generate(ROOT).get("public/theme.css"), /--font-ui:var\(--font-display\)/);
+  withScratch((root) => {
+    mutateKit(root, (css) => css.replace(/--two-font-ui:[^;]+;/, "--two-font-ui:system-ui;"));
+    const output = generate(root).get("public/theme.css");
+    assert.match(output, /--font-ui:system-ui/);
+    assert.ok(!output.includes("--font-ui:var(--font-display)"));
+  });
+});
+
+test("Kit exposes utility roles and reuses the served sheets' semantic aliases", () => {
+  const outputs = generate(ROOT);
+  const css = outputs.get("web/src/ember-theme.css");
+  const served = [css, outputs.get("public/styles.css"), outputs.get("public/theme.css")].join(
+    "\n",
+  );
+  assert.ok(!css.includes("@theme static"), "unused utilities are not forced into the bundle");
+  for (const [alias] of ROLES) assert.ok(served.includes(`--${alias}:`), alias);
   for (const [alias, utility] of [
     ["focus-ring", "color-focus-ring"],
     ["focus-ring-on-accent", "color-focus-ring-on-accent"],
@@ -409,7 +427,8 @@ test("Kit bridges the shared sheet's renamed semantic roles without copying valu
     ["font-size-body", "text-body"],
     ["line-height-body", "leading-body"],
   ]) {
-    assert.ok(css.includes(`--${alias}:var(--${utility});`), alias);
+    assert.ok(css.includes(`--${utility}:`), `${utility} remains available to Tailwind`);
+    assert.ok(served.includes(`--${alias}:`), `${alias} remains available to author rules`);
   }
 });
 

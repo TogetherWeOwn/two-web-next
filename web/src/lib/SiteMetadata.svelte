@@ -76,9 +76,9 @@ const themeStylesheet = $derived(
   {:else}
     <link rel="stylesheet" href="/styles.css" />
     <link rel="preload" href="/fonts/mona-sans-latin-var.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
-    <!-- Kit token source is web/src/app.css (Tailwind v4 @theme, Ember Hours),
-      not public/theme-tokens.css, which stays Hono-only outside the inlined
-      leaf block above. -->
+    <!-- Kit's generated @theme supplies utilities and foundation aliases;
+      styles.css and theme.css supply shared type, space and motion aliases.
+      theme-tokens.css stays Hono-only outside the inlined leaf block. -->
     <link rel="stylesheet" href="/theme.css" />
   {/if}
   {#if themeStylesheet}<link rel="stylesheet" href={themeStylesheet} />{/if}

@@ -4,7 +4,7 @@
  * underline from every content link (WCAG 1.4.1: colour alone distinguishes
  * them) and zeroes paragraph margins on the archive page. Import only the
  * theme and utilities layers the shell uses. */
-@layer theme, base, components, utilities;
+@layer theme, utilities;
 @import "tailwindcss/theme.css" layer(theme);
 @import "tailwindcss/utilities.css" layer(utilities) source(none);
 /* Generated @theme and unlayered operator hooks from the pinned kit CSS.
@@ -15,6 +15,9 @@
  * Head-only metadata has no utility classes and also stays out of detection. */
 @source "./**/*.svelte";
 @source not "./lib/SiteMetadata.svelte";
+/* Prose, attributes and the relative leaderboard scope produce these false
+ * candidates, never classes. kit-tailwind-sources.test.ts guards that boundary. */
+@source not inline("visible relative static block hidden table");
 
 /* The join-attempts audit page keeps the Hono viewer's `filters` form class
  * for markup parity, but Tailwind v4 lifts a `filter` candidate from that
