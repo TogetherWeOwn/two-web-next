@@ -51,6 +51,34 @@ function contract(name: string, make: () => SessionStore | Promise<SessionStore>
       expect(await store.isActive(s.tokenHash)).toBe(true);
     });
 
+    it("persists an explicit run-qualified liveness key through create and rotation", async () => {
+      const original = row();
+      const statusHash = `q1p.${"a".repeat(64)}.${await hashToken(original.tokenHash)}`;
+      await store.create({ ...original, statusHash });
+      expect(await store.statusHash(original.tokenHash)).toBe(statusHash);
+      expect(await store.isActive(statusHash)).toBe(true);
+      expect(await store.isActive(statusHash.replace("a".repeat(64), "b".repeat(64)))).toBe(false);
+      const successor = row();
+      expect(await store.rotate(original.tokenHash, successor)).toBe(true);
+      expect(await store.statusHash(successor.tokenHash)).toBe(statusHash);
+      await store.revokeLineage(statusHash);
+      expect(await store.get(original.tokenHash)).toBeNull();
+      expect(await store.get(successor.tokenHash)).toBeNull();
+      expect(await store.isActive(statusHash)).toBe(false);
+    });
+
+    it("persists a new qualified liveness key on fresh replacement", async () => {
+      const original = row();
+      await store.create(original);
+      const replacement = row();
+      const statusHash = `q1p.${"b".repeat(64)}.${await hashToken(replacement.tokenHash)}`;
+      await store.replace(original.tokenHash, { ...replacement, statusHash });
+      expect(await store.get(original.tokenHash)).toBeNull();
+      expect(await store.statusHash(replacement.tokenHash)).toBe(statusHash);
+      expect(await store.isActive(statusHash)).toBe(true);
+      expect(await store.isActive(original.tokenHash)).toBe(false);
+    });
+
     it("preserves the status key across repeated and no-op rotation without reviving old login tokens", async () => {
       // Moderator steps down across the chain, never up: rotation carries
       // the least-privileged combination of caller and source bits.

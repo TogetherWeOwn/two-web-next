@@ -61,11 +61,13 @@ export type DbSessionRow = {
 
 export type SessionStore = {
   journeys: OAuthJourneyStore;
-  create: (session: DbSessionRow & { tokenHash: string; expiresAt: Date }) => Promise<void>;
+  create: (
+    session: DbSessionRow & { tokenHash: string; expiresAt: Date; statusHash?: string },
+  ) => Promise<void>;
   /** Fresh authentication: revoke the supplied prior token and insert atomically. */
   replace: (
     oldTokenHash: string,
-    replacement: DbSessionRow & { tokenHash: string; expiresAt: Date },
+    replacement: DbSessionRow & { tokenHash: string; expiresAt: Date; statusHash?: string },
   ) => Promise<void>;
   get: (tokenHash: string) => Promise<DbSessionRow | null>;
   /** Mid-session role recheck (SESSION_ROLE_RECHECK_SECONDS): true when the
@@ -208,9 +210,10 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
           where predecessor_hash = ${oldTokenHash} or successor_hash = ${oldTokenHash}
           returning 1
         )
-        insert into web_sessions (token_hash, user_id, username, avatar, member, moderator, expires_at)
+        insert into web_sessions (token_hash, user_id, username, avatar, member, moderator, expires_at, status_hash)
         values (${replacement.tokenHash}, ${replacement.userId}, ${replacement.username},
-          ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt})`;
+          ${replacement.avatar}, ${replacement.member}, ${replacement.moderator}, ${replacement.expiresAt},
+          ${replacement.statusHash ?? null})`;
     },
     async create(s) {
       // A reused hash stops being a grace predecessor once it is live again:
@@ -219,7 +222,7 @@ export function createPostgresSessionStore(sql: Sql): SessionStore {
           delete from web_session_grace where predecessor_hash = ${s.tokenHash} returning 1
         )
         insert into web_sessions (token_hash, status_hash, user_id, username, avatar, member, moderator, expires_at)
-        values (${s.tokenHash}, ${s.tokenHash}, ${s.userId}, ${s.username}, ${s.avatar}, ${s.member}, ${s.moderator}, ${s.expiresAt})
+        values (${s.tokenHash}, ${s.statusHash ?? s.tokenHash}, ${s.userId}, ${s.username}, ${s.avatar}, ${s.member}, ${s.moderator}, ${s.expiresAt})
         on conflict (token_hash) do update set
           status_hash = excluded.status_hash,
           user_id = excluded.user_id, username = excluded.username, avatar = excluded.avatar,
@@ -542,7 +545,7 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
       rows.set(replacement.tokenHash, {
         ...replacement,
         expiresAt: replacement.expiresAt.getTime(),
-        statusHash: replacement.tokenHash,
+        statusHash: replacement.statusHash ?? replacement.tokenHash,
         createdAt: clock(),
         rolesCheckedAt: clock(),
       });
@@ -555,7 +558,7 @@ export function createMemorySessionStore(clock: () => number = Date.now): Sessio
       rows.set(s.tokenHash, {
         ...s,
         expiresAt: s.expiresAt.getTime(),
-        statusHash: s.tokenHash,
+        statusHash: s.statusHash ?? s.tokenHash,
         createdAt: prior?.createdAt ?? clock(),
         // The bits a create installs were just derived by its caller (fresh
         // login), mirroring the Postgres on-conflict restamp.
