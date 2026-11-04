@@ -639,7 +639,7 @@ test("kit checker fits a fragment tree exactly at its ceilings", (t) => {
 
 test("kit checker breach against a fragment ceiling exits 1", (t) => {
   const root = kitFixture(t, {
-    "server.json": { server: { js: { maxRawBytes: 999999, maxGzipBytes: 1, maxFiles: 4 } } },
+    "server.json": { server: { js: { maxRawBytes: 1, maxGzipBytes: 999999, maxFiles: 4 } } },
   });
   assert.equal(runKit(root, sink), 1);
 });
