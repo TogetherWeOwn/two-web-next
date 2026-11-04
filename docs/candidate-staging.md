@@ -499,7 +499,30 @@ its `!cancelled()` artifact step. No inherited-lock input or new write principal
 is added. These actors' former distinct groups had no other workflow callers;
 the shared non-cancelling interval replaces their per-tool serialization.
 
-**Incomplete exclusion:** staging rollback/drills, migration/backup, mixed-origin
+### Mixed-target database actors
+
+`db-migrate` and `db-backup` retain their existing non-cancelling workflow-level
+`web-migrate-${{ inputs.target }}` and `db-backup` groups. Their single staging
+job additionally holds `staging-application-exclusive` from before its first
+step until every database/backup operation completes. Only exact staging targets
+on main acquire that shared group; backup's omitted target still means staging.
+Non-main staging and unknown targets cannot run the job or displace a pending
+member of the shared group. Production uses a separate per-run job group, skips
+all three new guard steps and keeps its original operations and legacy lock.
+
+The guard checks out only the same immutable three-file source closure, sets up
+Node 24 without dependency caching/install, and performs its read-only journal
+check before the original checkout, provisioning probe or dependency install.
+Migration's original shell-only ref/enable/hold gate still runs first, before
+any checkout. Guard failure prevents all original downstream steps through
+implicit success conditions; none has an explicit status-function override.
+Original triggers, environment bindings, holds, selectors, commands, secret
+mapping and timeouts are hash-pinned unchanged. Only deployments-read is added.
+There are no in-repository reusable callers of these database workflows; a new
+staging caller must not already hold the same shared key (that would deadlock).
+No caller-supplied inherited-lock bypass is introduced.
+
+**Incomplete exclusion:** staging rollback/drills and mixed-origin
 guest/browser/analytics probes and the production workflow's staging-soak
 observer are not fenced yet. The isolated `gradual-promote-proof` harness targets
 its own synthetic Worker, not this application's staging Worker; its generated

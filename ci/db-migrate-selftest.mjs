@@ -7,6 +7,7 @@ import { fileURLToPath } from "node:url";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 import postgres from "postgres";
+import YAML from "yaml";
 import { drizzle } from "drizzle-orm/postgres-js";
 import { migrate } from "drizzle-orm/postgres-js/migrator";
 import {
@@ -162,12 +163,10 @@ test("the workflow's actual shell gate denies disabled production and non-main r
     new URL("../.github/workflows/db-migrate.yml", import.meta.url),
     "utf8",
   );
-  const gate = workflow.match(/        run: \|\n([\s\S]*?)\n      - uses:/)?.[1];
-  assert.ok(gate, "workflow gate must be present before checkout");
-  const script = gate
-    .split("\n")
-    .map((line) => line.slice(10))
-    .join("\n");
+  const gate = YAML.parse(workflow, { uniqueKeys: true }).jobs.migrate.steps[0];
+  assert.ok(gate.run, "workflow gate must be present before checkout");
+  assert.match(gate.name, /^Ref and production enable gate/);
+  const script = gate.run;
   for (const flag of ["", "false", "TRUE"]) {
     const result = spawnSync("bash", ["-c", script], {
       env: {
@@ -192,6 +191,21 @@ test("the workflow's actual shell gate denies disabled production and non-main r
     }).status,
     0,
   );
+  // Actions equality ignores case; the original shell gate must still reject
+  // malformed/case-variant targets before a checkout or any database operation.
+  for (const target of ["Production", "STAGING", " staging ", "preview"]) {
+    const result = spawnSync("bash", ["-c", script], {
+      env: {
+        ...process.env,
+        ...mainEnv,
+        MIGRATION_TARGET: target,
+        PRODUCTION_DEPLOY_ENABLED: "true",
+      },
+      encoding: "utf8",
+    });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unknown migration target/);
+  }
   assert.equal(
     spawnSync("bash", ["-c", script], {
       env: { ...process.env, ...mainEnv, GITHUB_REF: "refs/heads/topic" },

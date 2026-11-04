@@ -20,8 +20,9 @@ function workflow(name) {
 }
 
 // Evaluate only expressions from these reviewed workflow fixtures, never API or
-// dispatch text. The operators used here are shared with JavaScript; format is
-// the sole Actions function in these group expressions.
+// dispatch text. Fixtures use canonical-case strings: JavaScript equality is
+// case-sensitive, unlike Actions. This is not a general Actions evaluator.
+// format is the sole Actions function in these group expressions.
 function evaluate(expression, github, inputs = {}) {
   const source = expression.startsWith("${{") ? expression.slice(3, -2) : expression;
   return new Function("github", "inputs", "format", `return ${source}`)(
@@ -419,6 +420,112 @@ for (const [name, root, baseline] of AUXILIARY) {
     });
   }
 }
+
+const DATABASE_ACTORS = [
+  ["db-migrate", "migrate", "c9b939ed2f60e16b8d6e8277e8f3e7a8ed144b42b838dd290ff3912e89804a7f"],
+  ["db-backup", "backup", "a3aeaab7f2cbbc30f13ca5f3fcc61cac329feef10a7888d26d305ce245ea955a"],
+];
+
+for (const [name, leaf, baseline] of DATABASE_ACTORS) {
+  const start = name === "db-migrate" ? 1 : 0;
+  test(`${name}: full-job staging exclusion precedes every original database operation`, () => {
+    const w = workflow(name);
+    const job = w.jobs[leaf];
+    assert.equal(w.permissions.deployments, "read");
+    assert.equal(job.concurrency["cancel-in-progress"], false);
+    const steps = job.steps.slice(start, start + 3);
+    assert.equal(steps[0].name, "Read installed staging occupancy tooling");
+    trustedCheckout(steps[0]);
+    assert.equal(steps[0].with.path, ".staging-occupancy-control");
+    assert.equal(steps[1].uses, NODE);
+    assert.deepEqual(steps[1].with, { "node-version": 24 });
+    assert.equal(steps[2].name, "Refuse unresolved candidate occupancy");
+    assert.equal(steps[2].run, "node .staging-occupancy-control/ci/candidate-staging-clear.mjs");
+    assert.deepEqual(steps[2].env, { GITHUB_TOKEN: "${{ github.token }}" });
+    for (const step of steps) {
+      assert.equal(step["continue-on-error"], undefined);
+      assert.doesNotMatch(step.if, /always\(|cancelled\(|failure\(/);
+      assert.equal(evaluate(step.if, eventContext(), { target: "staging" }), true);
+      assert.equal(evaluate(step.if, eventContext(), { target: "production" }), false);
+    }
+    // Remove only the new fence: the entire original parsed workflow, including
+    // trigger set, legacy lock, production gates and every leaf step, is pinned.
+    const original = structuredClone(w);
+    delete original.permissions.deployments;
+    delete original.jobs[leaf].if;
+    delete original.jobs[leaf].concurrency;
+    original.jobs[leaf].steps.splice(start, 3);
+    assert.equal(createHash("sha256").update(JSON.stringify(original)).digest("hex"), baseline);
+    if (name === "db-migrate") {
+      assert.match(job.steps[0].name, /^Ref and production enable gate/);
+      assert.doesNotMatch(job.steps[0].run, /node |npm |wrangler|https?:\/\//);
+    }
+    for (const step of original.jobs[leaf].steps) {
+      assert.doesNotMatch(step.if ?? "", /always\(|cancelled\(|failure\(/);
+    }
+  });
+
+  for (const event of ["workflow_dispatch", ...(name === "db-backup" ? ["schedule"] : [])]) {
+    test(`${name}: main ${event} stages under one shared lock, with no nested legacy key`, () => {
+      const w = workflow(name);
+      const job = w.jobs[leaf];
+      const github = eventContext(event);
+      for (const target of ["staging", ...(name === "db-backup" ? ["", undefined] : [])]) {
+        const inputs = { target };
+        assert.equal(evaluate(job.if, github, inputs), true);
+        assert.equal(evaluate(job.concurrency.group, github, inputs), EXCLUSIVE);
+        for (const step of job.steps.slice(start, start + 3))
+          assert.equal(evaluate(step.if, github, inputs), true);
+      }
+      assert.notEqual(w.concurrency.group, EXCLUSIVE);
+      assert.equal(w.concurrency["cancel-in-progress"], false);
+    });
+  }
+
+  for (const ref of ["refs/heads/main", "refs/heads/topic", "refs/tags/main"]) {
+    test(`${name}: production on ${ref} keeps its existing path outside staging admission`, () => {
+      const w = workflow(name);
+      const job = w.jobs[leaf];
+      const github = { ...eventContext(), ref };
+      const inputs = { target: "production" };
+      assert.equal(evaluate(job.if, github, inputs), true);
+      assert.equal(evaluate(job.concurrency.group, github, inputs), `staging-unlocked-${name}-900`);
+      for (const step of job.steps.slice(start, start + 3))
+        assert.equal(evaluate(step.if, github, inputs), false);
+    });
+  }
+
+  for (const [label, ref, target] of [
+    ["topic staging", "refs/heads/topic", "staging"],
+    ["tag staging", "refs/tags/main", "staging"],
+    ["unknown target", "refs/heads/main", "preview"],
+    ["unknown target with spaces", "refs/heads/main", " staging "],
+  ]) {
+    test(`${name}: ${label} cannot displace the shared group or run database steps`, () => {
+      const job = workflow(name).jobs[leaf];
+      const github = { ...eventContext(), ref };
+      const inputs = { target };
+      assert.equal(evaluate(job.if, github, inputs), false);
+      assert.equal(evaluate(job.concurrency.group, github, inputs), `staging-unlocked-${name}-900`);
+    });
+  }
+}
+
+test("database actors have no staging reusable callers that could reacquire their parent's shared lock", () => {
+  const calls = [];
+  for (const filename of readdirSync(ROOT).filter((name) => name.endsWith(".yml"))) {
+    for (const [id, job] of Object.entries(workflow(filename.slice(0, -4)).jobs ?? {})) {
+      if (
+        ["./.github/workflows/db-migrate.yml", "./.github/workflows/db-backup.yml"].includes(
+          job.uses,
+        )
+      ) {
+        calls.push(`${filename}:${id}`);
+      }
+    }
+  }
+  assert.deepEqual(calls, []);
+});
 
 test("occupancy source closure resolves only Node builtins and its three explicitly checked out files", () => {
   for (const path of CLOSURE) {

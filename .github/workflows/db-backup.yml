@@ -42,6 +42,7 @@ on:
 
 permissions:
   contents: read
+  deployments: read
 
 concurrency:
   group: db-backup
@@ -50,6 +51,16 @@ concurrency:
 jobs:
   backup:
     name: backup
+    if: >-
+      inputs.target == 'production' ||
+      ((inputs.target || 'staging') == 'staging' && github.ref == 'refs/heads/main')
+    # Preserve the legacy workflow lock across targets. Only the staging job
+    # joins shared application exclusion; production keeps its original steps.
+    concurrency:
+      group: >-
+        ${{ (inputs.target || 'staging') == 'staging' && github.ref == 'refs/heads/main' &&
+        'staging-application-exclusive' || format('staging-unlocked-db-backup-{0}', github.run_id) }}
+      cancel-in-progress: false
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
@@ -62,6 +73,28 @@ jobs:
       BACKUP_TARGET: ${{ inputs.target || 'staging' }}
       BRANCH: ${{ inputs.branch || (inputs.target == 'production' && 'production' || 'staging') }}
     steps:
+      - name: Read installed staging occupancy tooling
+        if: (inputs.target || 'staging') == 'staging'
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .staging-occupancy-control
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            ci/candidate-staging-clear.mjs
+            ci/candidate-staging-occupancy.mjs
+            ci/candidate-staging-admission.mjs
+      - name: Set up staging occupancy runtime
+        if: (inputs.target || 'staging') == 'staging'
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Refuse unresolved candidate occupancy
+        if: (inputs.target || 'staging') == 'staging'
+        run: node .staging-occupancy-control/ci/candidate-staging-clear.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
