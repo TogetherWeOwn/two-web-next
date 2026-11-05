@@ -15,6 +15,7 @@ import {
   sql,
   type SQL,
 } from "drizzle-orm";
+import type { AnyPgColumn } from "drizzle-orm/pg-core";
 import type { Db } from "../db/index";
 import { containsControlCharacters } from "../admin/validation-shared";
 import {
@@ -1110,29 +1111,98 @@ function warnEgressCapacity(surface: "sitemap" | "feed", returned: number): void
   }
 }
 
+/**
+ * SQL-side stored-text admission for collection egress. The events text
+ * columns carry no schema length limit, so one pathological stored value
+ * could otherwise force the Worker to fetch and serialize unbounded bytes
+ * even under the row cap. Each feed/sitemap text input is admitted only up
+ * to a finite UTF-8 byte budget derived from the established write maxima
+ * (Unicode code points in `parseEventForm`/`validateFields`, at most 4
+ * UTF-8 bytes each): title/game 100, description 1000, location 255,
+ * organizer name 500, timezone 64. Server-minted event keys are 26-char
+ * ULIDs; 256 bytes leaves generous room for legacy/demo keys. A field over
+ * its budget transfers as NULL and the row marker refuses the whole row —
+ * oversized bytes never cross from the database and valid text is never
+ * truncated. Selected text per row is therefore at most 8,332 bytes for a
+ * feed row and 256 for a sitemap row, plus under 1 KiB of scalar/date
+ * columns, times the 1,000-row cap. Limits, refusal code and operator
+ * next steps: docs/runbook-logs.md, "Export omission warnings".
+ */
+const EGRESS_EVENT_KEY_MAX_BYTES = 256;
+const EGRESS_TITLE_MAX_BYTES = 400;
+const EGRESS_GAME_MAX_BYTES = 400;
+const EGRESS_DESCRIPTION_MAX_BYTES = 4000;
+const EGRESS_TIMEZONE_MAX_BYTES = 256;
+const EGRESS_LOCATION_MAX_BYTES = 1020;
+const EGRESS_ORGANIZER_MAX_BYTES = 2000;
+
+/** Finite selected-text ceiling per feed row (scalar columns excluded). */
+export const FEED_EGRESS_TEXT_BYTES_PER_ROW =
+  EGRESS_EVENT_KEY_MAX_BYTES +
+  EGRESS_TITLE_MAX_BYTES +
+  EGRESS_GAME_MAX_BYTES +
+  EGRESS_DESCRIPTION_MAX_BYTES +
+  EGRESS_TIMEZONE_MAX_BYTES +
+  EGRESS_LOCATION_MAX_BYTES +
+  EGRESS_ORGANIZER_MAX_BYTES;
+/** Finite selected-text ceiling per sitemap row: the event key alone. */
+export const SITEMAP_EGRESS_TEXT_BYTES_PER_ROW = EGRESS_EVENT_KEY_MAX_BYTES;
+
+/** True (in SQL) when a stored text value exceeds its egress byte budget. */
+const storedTextOver = (column: AnyPgColumn, maxBytes: number) =>
+  sql`coalesce(octet_length(${column}), 0) > ${maxBytes}`;
+
+/** The stored value when it fits its byte budget, NULL when it does not. */
+const admittedText = <T extends string | null>(column: AnyPgColumn, maxBytes: number) =>
+  sql<T>`case when ${storedTextOver(column, maxBytes)} then null else ${column} end`;
+
+function warnEgressTextRefusal(surface: "sitemap" | "feed", skipped: number): void {
+  if (skipped > 0) {
+    console.warn("Event egress read refused oversized stored text.", {
+      surface,
+      skipped,
+      code: "stored-text-oversized",
+    });
+  }
+}
+
 export async function sitemapEvents(
   db: Db,
 ): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {
+  // Minimal sitemap projection: the entry key plus the date columns the
+  // poison-window guard needs. No other stored text is ever fetched here,
+  // and an oversized key arrives only as the refusal marker.
   const rows = await db
-    .select()
+    .select({
+      eventKey: admittedText<string>(events.eventKey, EGRESS_EVENT_KEY_MAX_BYTES),
+      startsAt: events.startsAt,
+      endsAt: events.endsAt,
+      updatedAt: events.updatedAt,
+      textRefused: sql<number>`case when ${storedTextOver(
+        events.eventKey,
+        EGRESS_EVENT_KEY_MAX_BYTES,
+      )} then 1 else 0 end`,
+    })
     .from(events)
     .where(eq(events.status, "published"))
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
   warnEgressCapacity("sitemap", rows.length);
+  const admitted = rows.filter((r) => r.textRefused !== 1);
+  warnEgressTextRefusal("sitemap", rows.length - admitted.length);
   // One poison row (unrenderable window, or an updatedAt outside the JS Date
   // range) must not empty the sitemap via the route's static fallback:
   // skip it in JS and log the count. The guard lives in JS (not SQL) because
   // SQL cannot see a timestamp that is finite in PostgreSQL but out of range
   // in JS. A DB failure still rejects here; the route degrades to the static
   // entries instead.
-  const renderable = rows.filter(
+  const renderable = admitted.filter(
     (r) =>
       isRenderableEventWindow(r) &&
       r.updatedAt instanceof Date &&
       Number.isFinite(r.updatedAt.getTime()),
   );
-  const skipped = rows.length - renderable.length;
+  const skipped = admitted.length - renderable.length;
   if (skipped > 0) {
     console.warn("sitemapEvents skipped unrenderable rows.", { skipped });
   }
@@ -1143,16 +1213,71 @@ export async function sitemapEvents(
   }));
 }
 
+/**
+ * Collection-egress projection returned by `listFeed`: only the fields the
+ * ICS/RSS/Markdown builders and the read guards consume. Deliberately
+ * narrower than the stored record — unused text (joining details,
+ * accessibility notes, sync bookkeeping, …) is never fetched for feeds,
+ * and a projected row must never be treated as a complete stored event.
+ */
+export type FeedEvent = Pick<
+  typeof events.$inferSelect,
+  | "id"
+  | "eventKey"
+  | "title"
+  | "game"
+  | "description"
+  | "startsAt"
+  | "endsAt"
+  | "timezone"
+  | "location"
+  | "organizer_name"
+  | "status"
+  | "updatedAt"
+  | "icsSequence"
+>;
+
 /** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. An optional game narrows to one stored game in the same SQL WHERE, before the cap. */
 export async function listFeed(
   db: Db,
   statuses: ("published" | "cancelled")[],
   now = new Date(),
   game: string | null = null,
-): Promise<Array<typeof events.$inferSelect>> {
+): Promise<FeedEvent[]> {
   const gameClause = gameCondition(game);
+  const textRefused = sql<number>`case when ${storedTextOver(
+    events.eventKey,
+    EGRESS_EVENT_KEY_MAX_BYTES,
+  )} or ${storedTextOver(events.title, EGRESS_TITLE_MAX_BYTES)} or ${storedTextOver(
+    events.game,
+    EGRESS_GAME_MAX_BYTES,
+  )} or ${storedTextOver(events.description, EGRESS_DESCRIPTION_MAX_BYTES)} or ${storedTextOver(
+    events.timezone,
+    EGRESS_TIMEZONE_MAX_BYTES,
+  )} or ${storedTextOver(events.location, EGRESS_LOCATION_MAX_BYTES)} or ${storedTextOver(
+    events.organizer_name,
+    EGRESS_ORGANIZER_MAX_BYTES,
+  )} then 1 else 0 end`;
   const rows = await db
-    .select()
+    .select({
+      id: events.id,
+      eventKey: admittedText<string>(events.eventKey, EGRESS_EVENT_KEY_MAX_BYTES),
+      title: admittedText<string>(events.title, EGRESS_TITLE_MAX_BYTES),
+      game: admittedText<string | null>(events.game, EGRESS_GAME_MAX_BYTES),
+      description: admittedText<string | null>(events.description, EGRESS_DESCRIPTION_MAX_BYTES),
+      startsAt: events.startsAt,
+      endsAt: events.endsAt,
+      timezone: admittedText<string>(events.timezone, EGRESS_TIMEZONE_MAX_BYTES),
+      location: admittedText<string | null>(events.location, EGRESS_LOCATION_MAX_BYTES),
+      organizer_name: admittedText<string | null>(
+        events.organizer_name,
+        EGRESS_ORGANIZER_MAX_BYTES,
+      ),
+      status: events.status,
+      updatedAt: events.updatedAt,
+      icsSequence: events.icsSequence,
+      textRefused,
+    })
     .from(events)
     .where(
       and(
@@ -1165,14 +1290,33 @@ export async function listFeed(
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
   warnEgressCapacity("feed", rows.length);
+  // Saturation is measured on the raw capped result, before refusal: a
+  // refused row still occupies its slot and is never refilled by a later
+  // row (the read stays a single bounded SELECT).
+  const admitted = rows.filter((r) => r.textRefused !== 1);
+  warnEgressTextRefusal("feed", rows.length - admitted.length);
   // Feed builders stringify date parts without throwing, so without this the
   // export would serve corrupt `NaN` instants instead of failing loudly.
-  const renderable = rows.filter(isRenderableEventWindow);
-  const skipped = rows.length - renderable.length;
+  const renderable = admitted.filter(isRenderableEventWindow);
+  const skipped = admitted.length - renderable.length;
   if (skipped > 0) {
     console.warn("listFeed skipped unrenderable rows.", { skipped });
   }
-  return renderable;
+  return renderable.map((r) => ({
+    id: r.id,
+    eventKey: r.eventKey,
+    title: r.title,
+    game: r.game,
+    description: r.description,
+    startsAt: r.startsAt,
+    endsAt: r.endsAt,
+    timezone: r.timezone,
+    location: r.location,
+    organizer_name: r.organizer_name,
+    status: r.status,
+    updatedAt: r.updatedAt,
+    icsSequence: r.icsSequence,
+  }));
 }
 
 export async function getEventRow(db: Db, key: string): Promise<typeof events.$inferSelect | null> {

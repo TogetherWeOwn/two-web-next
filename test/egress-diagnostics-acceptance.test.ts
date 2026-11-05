@@ -17,7 +17,6 @@
 // Drizzle query generation run over a local pg-proxy transport. The fixture
 // honors the emitted scope/order/LIMIT; it is not a PostgreSQL integration
 // proof. No ICS builder is invoked: timestamp validation is a separate slice.
-import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -27,6 +26,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { listFeed, sitemapEvents } from "../src/events/reads";
 import { registerSeoLeaves } from "../src/seo-leaves";
+import { projectEventRowValues } from "./helpers/pg-proxy-event-projection";
 
 vi.mock("../src/admin/db", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/admin/db")>();
@@ -98,22 +98,24 @@ function limitOf(query: Query): number | undefined {
   return match[2] === undefined ? Number(query.params[Number(match[1]) - 1]) : Number(match[2]);
 }
 
+// The egress reads now select an explicit projection (byte-admitted text
+// columns plus a refusal marker), and pg-proxy maps result rows to selected
+// fields positionally. Model that emitted projection instead of returning
+// full stored rows; the invalid-Date sentinel below stays this fixture's
+// own finite-in-PostgreSQL spelling.
+const encodeEgressValue = (value: unknown) =>
+  value instanceof Date
+    ? Number.isFinite(value.getTime())
+      ? value.toISOString()
+      : "280000-01-01 00:00:00+00"
+    : value;
+
 // Model only the clauses this read owns, using the actual emitted SQL/binds.
 // A finite PostgreSQL year 280000 becomes an invalid JS Date on decoding;
 // it still passes the database's isfinite/upcoming predicate. Do not call
 // toISOString on that fixture before the real mapper/guard sees it.
 function fixture(input: Row[], failure?: { error: unknown }) {
   const seen: Query[] = [];
-  const columns = Object.keys(getTableColumns(events)) as (keyof Row)[];
-  const encode = (event: Row) =>
-    columns.map((column) => {
-      const value = event[column];
-      return value instanceof Date
-        ? Number.isFinite(value.getTime())
-          ? value.toISOString()
-          : "280000-01-01 00:00:00+00"
-        : value;
-    });
   const db = drizzle(async (sql, params) => {
     if (/^set\s/i.test(sql)) return { rows: [] };
     const query = { sql, params: [...params] };
@@ -150,7 +152,9 @@ function fixture(input: Row[], failure?: { error: unknown }) {
     }
     const limit = limitOf(query);
     if (limit !== undefined) output = output.slice(0, limit);
-    return { rows: output.map(encode) };
+    return {
+      rows: output.map((event) => projectEventRowValues(sql, params, event, encodeEgressValue)),
+    };
   });
   Object.assign(db, {
     transaction: async (run: (tx: Db) => Promise<unknown>) => run(db as unknown as Db),
@@ -434,7 +438,24 @@ describe("window omission diagnostics are independent of builder timestamp/SEQUE
     ]);
     const output = await listFeed(source.db, ["published", "cancelled"], NOW);
     expect(output.map((entry) => entry.eventKey)).toEqual([key(2), key(5)]);
-    expect(output).toEqual([row(2), row(5)]);
+    // The feed read returns its egress projection, not the stored record:
+    // every projected field of the surviving rows is preserved exactly.
+    const feedRow = (event: Row) => ({
+      id: event.id,
+      eventKey: event.eventKey,
+      title: event.title,
+      game: event.game,
+      description: event.description,
+      startsAt: event.startsAt,
+      endsAt: event.endsAt,
+      timezone: event.timezone,
+      location: event.location,
+      organizer_name: event.organizer_name,
+      status: event.status,
+      updatedAt: event.updatedAt,
+      icsSequence: event.icsSequence,
+    });
+    expect(output).toEqual([feedRow(row(2)), feedRow(row(5))]);
     expectQuery(source.seen, "feed", ["published", "cancelled"]);
     expect(logs).toEqual([[FEED_SKIP, { skipped: 3 }]]);
   });

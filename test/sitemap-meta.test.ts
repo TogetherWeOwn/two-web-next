@@ -31,6 +31,7 @@ import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { JOIN_INTRO } from "../src/pages";
+import { projectEventRowValues } from "./helpers/pg-proxy-event-projection";
 
 const APP_URL = "https://next.example.test";
 const SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -108,6 +109,11 @@ function harness(rows: EventRow[]) {
       }
       if (/"ends_at" </.test(sql)) out = out.filter((r) => r.endsAt < new Date());
       else if (/"ends_at" >=/.test(sql)) out = out.filter((r) => r.endsAt >= new Date());
+      // The sitemap/feed egress reads select a byte-admitted projection;
+      // pg-proxy maps positionally, so model that emitted shape for them.
+      if (sql.includes("octet_length")) {
+        return { rows: out.map((row) => projectEventRowValues(sql, params, row)) };
+      }
       return { rows: out.map(encode) };
     }
     throw new Error(`Unexpected sitemap-meta fixture query: ${sql}`);

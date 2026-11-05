@@ -103,7 +103,8 @@ const toMdEvent = (e: {
   endsAt: Date;
   timezone: string;
   location: string | null;
-  capacity: number | null;
+  /** Absent on collection feed rows, which never render a lineup. */
+  capacity?: number | null;
   status: string;
   goingCount?: number | null;
   goingOccupancy?: number | null;
@@ -114,6 +115,7 @@ const toMdEvent = (e: {
   join_instructions?: string | null;
 }): MdEvent => ({
   ...e,
+  capacity: e.capacity ?? null,
   goingCount: e.goingCount ?? null,
   // Feed rows carry no counts, so the full signal stays off there; the
   // detail row carries both aggregates from withGoing.

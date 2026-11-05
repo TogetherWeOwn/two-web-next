@@ -7,6 +7,31 @@ import { rssXml as xml } from "./rss-xml";
 
 type EventRow = typeof events.$inferSelect;
 
+/**
+ * The stored fields a VEVENT actually reads. Builders take this narrowed
+ * projection (a stored row still satisfies it) so the collection egress
+ * read never has to fetch, or pretend to be, a complete stored record.
+ */
+export type IcsEventRow = Pick<
+  EventRow,
+  | "eventKey"
+  | "title"
+  | "description"
+  | "startsAt"
+  | "endsAt"
+  | "location"
+  | "organizer_name"
+  | "status"
+  | "updatedAt"
+  | "icsSequence"
+>;
+
+/** The stored fields an RSS item actually reads; see `IcsEventRow`. */
+export type RssEventRow = Pick<
+  EventRow,
+  "eventKey" | "title" | "description" | "startsAt" | "endsAt" | "organizer_name" | "status"
+>;
+
 export const SITE_NAME = "Together We Own";
 
 /** Feed `?game=` scope bound: 100 Unicode code points, like stored-game validation. */
@@ -77,7 +102,7 @@ const FEED_HOST_PLACEHOLDER = "noreply@example.invalid";
 const ICS_ORGANIZER_PLACEHOLDER = `mailto:${FEED_HOST_PLACEHOLDER}`;
 
 /** Trimmed public host, or undefined when blank/missing (emit no property). */
-function feedHost(e: EventRow): string | undefined {
+function feedHost(e: Pick<EventRow, "organizer_name">): string | undefined {
   const name = e.organizer_name?.trim();
   return name ? name : undefined;
 }
@@ -116,7 +141,8 @@ function fold(line: string): string {
 // slash must never leak a doubled `//` into emitted URLs (TOG-11225).
 const feedBase = (appUrl: string) => stripTrailingSlash(appUrl);
 
-const pageUrl = (e: EventRow, appUrl: string) => `${feedBase(appUrl)}/e/${e.eventKey}`;
+const pageUrl = (e: Pick<EventRow, "eventKey">, appUrl: string) =>
+  `${feedBase(appUrl)}/e/${e.eventKey}`;
 
 export class IcsSequenceRangeError extends RangeError {
   constructor() {
@@ -161,7 +187,7 @@ function icsSequence(sequence: bigint): string {
   return (shifted < 0n ? 0n : shifted).toString();
 }
 
-function vevent(e: EventRow, appUrl: string): string[] {
+function vevent(e: IcsEventRow, appUrl: string): string[] {
   const host = new URL(appUrl).host || "localhost";
   const stamp = icsInstant(e.updatedAt);
   const seq = icsSequence(e.icsSequence);
@@ -209,7 +235,7 @@ function calendar(inner: string[], game: string | null = null): string {
 export const eventIcs = (e: EventRow, appUrl: string): string => calendar(vevent(e, appUrl));
 
 export const eventsIcsCollection = (
-  rows: EventRow[],
+  rows: IcsEventRow[],
   appUrl: string,
   game: string | null = null,
 ): string => {
@@ -251,7 +277,7 @@ export const eventsIcsCollection = (
   return calendar(inner, game);
 };
 
-export function latestWireUpdatedAt(rows: EventRow[]): Date {
+export function latestWireUpdatedAt(rows: Pick<EventRow, "updatedAt">[]): Date {
   const latest = rows.reduce<Date | undefined>(
     (selected, row) =>
       isWireInstant(row.updatedAt) && (!selected || row.updatedAt > selected)
@@ -268,7 +294,7 @@ export function latestWireUpdatedAt(rows: EventRow[]): Date {
 export const RSS_CANCELLED_TITLE_PREFIX = "Cancelled: ";
 export const RSS_CANCELLED_NOTE = "This event has been cancelled.";
 
-export function eventsRss(rows: EventRow[], appUrl: string, lastBuild: Date): string {
+export function eventsRss(rows: RssEventRow[], appUrl: string, lastBuild: Date): string {
   const base = feedBase(appUrl);
   const renderable = rows.filter((e) => isWireInstant(e.startsAt) && isWireInstant(e.endsAt));
   const skipped = rows.length - renderable.length;
@@ -328,7 +354,9 @@ const q = (v: string) =>
     (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`,
   );
 
-export function googleCalendarUrl(e: EventRow): string {
+export function googleCalendarUrl(
+  e: Pick<EventRow, "title" | "description" | "startsAt" | "endsAt" | "location">,
+): string {
   const params: [string, string][] = [
     ["action", "TEMPLATE"],
     ["text", e.title],
