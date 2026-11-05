@@ -3,6 +3,7 @@ import test from "node:test";
 import { candidateIdentity, candidateSha256 } from "./candidate-staging-admission.mjs";
 import { prepareCandidateBaselineUpload } from "./candidate-staging-baseline-upload.mjs";
 import { createCandidateBaselineAssetUploader } from "./candidate-staging-assets.mjs";
+import { createCandidateBaselineVersionUploader } from "./candidate-staging-baseline-version.mjs";
 
 const VERSION = "11111111-2222-3333-4444-555555555555";
 const ERROR = "Candidate recovery refused: baseline request";
@@ -1163,3 +1164,327 @@ test("supports bounded public vars but never controls in their text", () => {
   repin(input);
   refusal(input);
 });
+
+const B_PRIME = "66666666-7777-8888-9999-aaaaaaaaaaaa";
+const VERSION_ERROR = "Candidate recovery refused: baseline version";
+
+for (const consumeAt of [2, 3]) {
+  test(`B-prime refuses an asset capability consumed by post-asset guard ${consumeAt}`, async () => {
+    let now;
+    let s;
+    let postSessionSeals = 0;
+    s = recoveryVersionSetup({
+      assets: true,
+      clock: () => now,
+      mutateResponse(value, count) {
+        if (count === 1)
+          value.jwt = `fixture.${Buffer.from(JSON.stringify({ exp: now + 31 })).toString("base64url")}.signature`;
+      },
+      failGuard(name) {
+        if (s.calls.length === 1 && name === "sealed") {
+          postSessionSeals++;
+          if (postSessionSeals === consumeAt) now += 32;
+        }
+      },
+    });
+    now = s.input.now;
+    await assert.rejects(s.uploader.upload(s.options), { message: VERSION_ERROR });
+    assert.equal(postSessionSeals, consumeAt);
+    assert.equal(s.calls.length, 1);
+    assert.equal(s.calls[0].url.endsWith("/assets-upload-session"), true);
+  });
+}
+
+function recoveryVersionSetup({
+  assets = false,
+  sourceMap = false,
+  failGuard,
+  mutateResponse,
+  beforeFetch,
+  clock,
+  signal,
+} = {}) {
+  const input = fixture({ assets });
+  input.profile.bindings = input.baseline.bindings.filter((item) => item.type === "hyperdrive");
+  input.profileSha256 = hash(input.profile);
+  input.baseline.profileSha256 = input.profileSha256;
+  repin(input);
+  if (sourceMap) {
+    const bytes = Buffer.from('{"version":3,"sources":[]}');
+    input.files.push({ path: "_worker.js.map", kind: "module", bytes });
+    input.baseline.files.push({
+      path: "_worker.js.map",
+      kind: "module",
+      contentType: "application/source-map",
+      size: bytes.length,
+      sha256: candidateSha256(bytes),
+    });
+    input.baseline.files.sort((a, b) => sort(`${a.kind}:${a.path}`, `${b.kind}:${b.path}`));
+    repin(input);
+  }
+  const options = {
+    baseline: input.baseline,
+    baselineSha256: input.baselineSha256,
+    files: input.files,
+  };
+  const calls = [];
+  const guards = [];
+  const base = `https://api.cloudflare.com/client/v4/accounts/${input.profile.accountId}/workers/workers/two-web-next/versions`;
+  const version = structuredClone({
+    id: B_PRIME,
+    number: 42,
+    created_on: new Date(input.now * 1000).toISOString(),
+    main_module: input.baseline.mainModule,
+    modules: input.files
+      .filter((file) => file.kind === "module")
+      .map((file) => ({
+        name: file.path,
+        content_type: input.baseline.files.find((record) => record.path === file.path).contentType,
+        content_base64: file.bytes.toString("base64"),
+      })),
+    bindings: structuredClone(input.baseline.bindings),
+    compatibility_date: input.baseline.compatibilityDate,
+    compatibility_flags: input.baseline.compatibilityFlags,
+    placement: input.baseline.placement,
+    annotations: { ...input.baseline.annotations, "workers/triggered_by": "upload" },
+    ...(assets ? { assets: { config: input.baseline.assets } } : {}),
+  });
+  const guard = (name) => async (context, deadline) => {
+    guards.push(name);
+    assert.ok(Object.isFrozen(context));
+    assert.equal(context.phase, "restore-baseline-version");
+    assert.equal(context.q, input.identity.q);
+    assert.equal(context.baselineVersionId, VERSION);
+    assert.equal(context.baselineSha256, input.baselineSha256);
+    assert.ok(deadline instanceof AbortSignal);
+    if (failGuard) await failGuard(name, context, guards.length);
+  };
+  const config = {
+    token: "fixture-provider-bearer",
+    identity: input.identity,
+    profile: input.profile,
+    profileSha256: input.profileSha256,
+    assertExclusive: guard("exclusive"),
+    requireDirty: guard("dirty"),
+    admitBaseline: guard("baseline"),
+    assertSealed: guard("sealed"),
+    signal,
+    clock: clock ?? (() => input.now),
+    fetchImpl: async (url, request) => {
+      calls.push({ url, ...request });
+      if (beforeFetch) await beforeFetch(url, request, calls.length);
+      let result;
+      if (url === `${base}?deploy=false`) {
+        result = { id: version.id, number: version.number, created_on: version.created_on };
+      } else if (
+        url === `${base}/${B_PRIME}?include=modules` ||
+        url === `${base}/latest?include=modules`
+      ) {
+        result = structuredClone(version);
+      } else {
+        const jwt = `fixture.${Buffer.from(JSON.stringify({ exp: input.now + 600 })).toString("base64url")}.signature`;
+        result = { jwt, buckets: [] };
+      }
+      if (mutateResponse) result = mutateResponse(result, calls.length, url) ?? result;
+      return new Response(JSON.stringify({ success: true, errors: [], result }), {
+        headers: { "content-type": "application/json" },
+      });
+    },
+  };
+  const uploader = createCandidateBaselineVersionUploader(config);
+  return { input, options, calls, guards, config, uploader, base };
+}
+
+for (const assets of [false, true]) {
+  test(`B-prime joins guarded transport to immutable and latest upload, assets=${assets}`, async () => {
+    const s = recoveryVersionSetup({ assets });
+    const result = await s.uploader.upload(s.options);
+    assert.ok(Object.isFrozen(result));
+    assert.equal(result.recoveryScope, "immutable-code-config-and-latest-upload-only");
+    assert.equal(result.promotable, false);
+    assert.equal(result.baselineVersionId, VERSION);
+    assert.equal(result.versionId, B_PRIME);
+    const post = s.calls.find((call) => call.url === `${s.base}?deploy=false`);
+    const metadata = JSON.parse(post.body);
+    assert.equal(post.method, "POST");
+    assert.equal(post.credentials, "omit");
+    assert.equal(post.redirect, "error");
+    assert.equal(post.cache, "no-store");
+    assert.deepEqual(metadata.placement, s.input.baseline.placement);
+    for (const name of ["SESSION_SECRET", "DISCORD_CLIENT_SECRET", "QA_AUTH_TOKEN", "SIGNING_KEY"])
+      assert.deepEqual(
+        metadata.bindings.find((b) => b.name === name),
+        {
+          name,
+          type: "inherit",
+          version_id: VERSION,
+        },
+      );
+    assert.deepEqual(
+      s.calls.slice(-2).map((call) => [call.method, call.url]),
+      [
+        ["GET", `${s.base}/${B_PRIME}?include=modules`],
+        ["GET", `${s.base}/latest?include=modules`],
+      ],
+    );
+    assert.equal(JSON.stringify(result).includes("fixture"), false);
+    assert.equal(Object.hasOwn(result, "jwt"), false);
+    assert.ok(s.guards.length > 20);
+  });
+}
+
+test("B-prime preserves the exact source map in the internal JSON transport", async () => {
+  const s = recoveryVersionSetup({ sourceMap: true });
+  await s.uploader.upload(s.options);
+  const module = JSON.parse(s.calls[0].body).modules.find((item) => item.name === "_worker.js.map");
+  assert.equal(module.content_type, "application/source-map");
+  assert.equal(
+    Buffer.from(module.content_base64, "base64").toString(),
+    '{"version":3,"sources":[]}',
+  );
+});
+
+for (const field of [
+  "id",
+  "number",
+  "created_on",
+  "main_module",
+  "modules",
+  "bindings",
+  "compatibility_date",
+  "compatibility_flags",
+  "placement",
+  "annotations",
+  "assets",
+]) {
+  for (const step of [2, 3]) {
+    test(`B-prime rejects changed ${field} at readback ${step}`, async () => {
+      const s = recoveryVersionSetup({
+        mutateResponse(value, count) {
+          if (count === step) value[field] = null;
+        },
+      });
+      await assert.rejects(s.uploader.upload(s.options), { message: VERSION_ERROR });
+      assert.equal(s.calls.length, step);
+    });
+  }
+}
+
+for (const name of ["exclusive", "dirty", "baseline", "sealed"]) {
+  test(`B-prime refuses absent ${name} admission before all requests`, async () => {
+    const s = recoveryVersionSetup({
+      failGuard(check) {
+        if (check === name) throw new Error("private-binding-value");
+      },
+    });
+    await assert.rejects(s.uploader.upload(s.options), { message: VERSION_ERROR });
+    assert.equal(s.calls.length, 0);
+  });
+}
+
+test("B-prime uses copied baseline bytes throughout asynchronous guards", async () => {
+  let s;
+  let changed = false;
+  s = recoveryVersionSetup({
+    failGuard() {
+      if (!changed) {
+        changed = true;
+        s.options.files[0].bytes.fill(0);
+        s.options.baseline.placement.region = "foreign";
+      }
+    },
+  });
+  const result = await s.uploader.upload(s.options);
+  assert.equal(result.versionId, B_PRIME);
+  const sent = JSON.parse(s.calls[0].body);
+  assert.equal(sent.placement.region, "aws:us-east-1");
+  assert.equal(
+    sent.modules[0].content_base64,
+    Buffer.from('throw new Error("do not execute B")').toString("base64"),
+  );
+});
+
+test("B-prime never retries a lost version POST response", async () => {
+  const s = recoveryVersionSetup({
+    beforeFetch() {
+      throw new Error("lost-private-response");
+    },
+  });
+  await assert.rejects(s.uploader.upload(s.options), { message: VERSION_ERROR });
+  assert.equal(s.calls.length, 1);
+});
+
+test("B-prime rejects another latest UUID even with identical B configuration", async () => {
+  const s = recoveryVersionSetup({
+    mutateResponse(value, count) {
+      if (count === 3) value.id = "bbbbbbbb-cccc-dddd-eeee-ffffffffffff";
+    },
+  });
+  await assert.rejects(s.uploader.upload(s.options), { message: VERSION_ERROR });
+});
+
+for (const [field, value] of [
+  ["id", VERSION],
+  ["id", "latest"],
+  ["number", 0],
+  ["number", "42"],
+  ["created_on", "invalid"],
+  ["created_on", "2020-01-01T00:00:00Z"],
+  ["created_on", "2999-01-01T00:00:00Z"],
+]) {
+  test(`B-prime refuses invalid POST identity ${field}=${value}`, async () => {
+    const s = recoveryVersionSetup({
+      mutateResponse(result, count) {
+        if (count === 1) result[field] = value;
+      },
+    });
+    await assert.rejects(s.uploader.upload(s.options), { message: VERSION_ERROR });
+    assert.equal(s.calls.length, 1);
+  });
+}
+
+test("B-prime binding property order is immaterial but secret names stay exact", async () => {
+  const s = recoveryVersionSetup({
+    mutateResponse(value, count) {
+      if (count > 1)
+        value.bindings = value.bindings
+          .map((item) => Object.fromEntries(Object.entries(item).reverse()))
+          .reverse();
+    },
+  });
+  const result = await s.uploader.upload(s.options);
+  assert.equal(result.versionId, B_PRIME);
+});
+
+test("B-prime refuses altered bytes before any installed guard or provider request", async () => {
+  const s = recoveryVersionSetup();
+  s.options.files[0].bytes[0] ^= 1;
+  await assert.rejects(s.uploader.upload(s.options), { message: VERSION_ERROR });
+  assert.equal(s.calls.length, 0);
+  assert.equal(s.guards.length, 0);
+});
+
+for (const initial of [-1, Number.NaN, 253402300800]) {
+  test(`B-prime rejects invalid initial observation clock ${initial}`, async () => {
+    let count = 0;
+    const s = recoveryVersionSetup({ clock: () => (count++ === 0 ? initial : 1793833600) });
+    await assert.rejects(s.uploader.upload(s.options), { message: VERSION_ERROR });
+    assert.equal(s.calls.length, 0);
+  });
+}
+
+for (const phase of ["before", "after-post", "after-immutable"]) {
+  test(`B-prime respects cancellation ${phase} without restoring clean state`, async () => {
+    const controller = new AbortController();
+    const s = recoveryVersionSetup({
+      signal: controller.signal,
+      beforeFetch(_url, _request, count) {
+        if ((phase === "after-post" && count === 1) || (phase === "after-immutable" && count === 2))
+          controller.abort();
+      },
+    });
+    if (phase === "before") controller.abort();
+    await assert.rejects(s.uploader.upload(s.options), { message: VERSION_ERROR });
+    assert.equal(s.calls.length, phase === "before" ? 0 : phase === "after-post" ? 1 : 2);
+  });
+}

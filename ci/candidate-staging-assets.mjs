@@ -41,6 +41,12 @@ function jwtClaims(jwt, now) {
   return claims;
 }
 
+// Expiry is a safety hint only; authority still comes from the authenticated
+// upload response. The version sender rechecks it after its asynchronous guards.
+export function candidateAssetCapabilityExpiry(jwt, now) {
+  return jwtClaims(jwt, now).exp;
+}
+
 async function boundedResult(response) {
   requireEvidence(response.body);
   const reader = response.body.getReader();

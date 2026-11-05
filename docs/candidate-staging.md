@@ -749,8 +749,8 @@ runtime, tag and placement, not mutable script settings/tails/subdomain policy.
 Asset-bearing B additionally requires a completion ticket joined to Q, B's
 manifest digest and its exact asset-record root. This is a shape/integrity check,
 not signature/provenance verification. The guarded recovery asset transport below
-creates that session from the admitted B bytes; a future version sender must
-consume its ticket internally. The candidate uploader retains its fixed QA expiry;
+creates that session from the admitted B bytes; the guarded version sender below
+consumes its ticket internally. The candidate uploader retains its fixed QA expiry;
 recovery asset transport does not issue, replace or renew QA credentials.
 Module-only B requires a null ticket and no assets config/binding. Asset policy
 is explicitly Worker-first. The JSON body contains an asset capability and module
@@ -803,6 +803,53 @@ artifacts. Existing candidate uploads retain the fixed verifier deadline.
 This is mock-qualified transport, not authenticated baseline production,
 continuous exclusion, stored-asset readback, complete B-prime recovery or native
 Security clearance. No workflow calls it and no live asset upload has run.
+
+## B-prime transport and latest-upload observation (not installed)
+
+[The version recovery transport](../ci/candidate-staging-baseline-version.mjs)
+connects the strict constructor and guarded recovery asset sender to a fixed
+Workers JSON `POST` with `deploy=false`. Profile/identity are installation inputs;
+callers supply only the original-B manifest, independent digest and inert files.
+All files are bounded, copied and rehashed before the first asynchronous guard.
+No caller endpoint, prepared request, verifier, asset ticket or clock is accepted.
+The asset completion capability and secret-inheritance request body remain private.
+Its expiry hint is revalidated after the final asynchronous pre-POST guards with
+the existing 30-second margin; a guard cannot spend the remaining capability
+lifetime and still send the version body. Claims are not signature verification.
+
+Every asset/version request requires exclusion, authenticated dirty ownership,
+complete original-B admission and sealed-sink checks before and after the response.
+These must be trusted installed adapters: a successful mock callback is not their
+implementation. A whole-operation 180-second deadline encloses the existing
+120-second asset limit, 10-second request limits and caller/parent cancellation.
+Recovery does not mint or renew the expired candidate QA credential. Lost POST
+responses are not retried, and no error carries provider/binding/capability text.
+
+The sender requires a new full UUID, positive version number and bounded creation
+time from the upload. It then independently reads that exact immutable version
+with `include=modules`. The original-B reader's strict shared projection compares
+all supported modules/source maps, runtime, placement, original tag, secret names
+and types, explicit non-secret bindings and asset configuration against B. Only
+the new UUID and observation time may differ. Secret bindings inherit **only from
+original B's UUID** in the request; a readback does not reveal their secret values.
+
+Finally, a separate `latest?include=modules` GET must identify the same B-prime UUID,
+version number, creation time and baseline-equivalent content/config. `latest` is
+an observation only, never an inheritance source or retry fallback. A competing
+upload at another UUID refuses even if it has identical bytes. This is a bounded
+point-in-time observation under exclusion, not a guarantee about future writers.
+The public frozen receipt says `immutable-code-config-and-latest-upload-only`,
+contains digests/identities only, and is non-promotable.
+
+This sender does **not** select traffic, restore mutable settings, prove provider
+stored-asset content, read secret values, prove ordinary-uploader inheritance,
+clear the journal or establish complete restoration. Provider schema/targeted
+placement conformance and installed adapter authority remain unobserved. The
+[provider version schema](https://developers.cloudflare.com/api/typescript/resources/workers/subresources/beta/subresources/workers/subresources/versions/methods/get/)
+documents code/sourcemap inclusion and asset configuration, but does not establish
+a per-file static-asset content/hash readback channel. Retained local bytes plus
+that configuration are not such a channel. Unsupported response shapes refuse;
+no workflow invokes this sender and no live recovery/upload is claimed.
 
 ## Durable occupancy journal and recovery boundary
 

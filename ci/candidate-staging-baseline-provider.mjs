@@ -47,7 +47,7 @@ function freeze(value) {
   return value;
 }
 
-async function contentResult(response, url) {
+export async function readCandidateBaselineVersionResult(response, url) {
   requireEvidence(response.body);
   const reader = response.body.getReader();
   try {
@@ -93,7 +93,16 @@ async function contentResult(response, url) {
   }
 }
 
-function admitVersion(value, retained, run, installed, profileSha256, now) {
+// Shared strict projection for original B and B-prime. This comparison is not
+// stored-asset, baseline provenance, serving or recovery authority by itself.
+export function candidateBaselineVersionSnapshot(
+  value,
+  retained,
+  run,
+  installed,
+  profileSha256,
+  now,
+) {
   requireEvidence(
     keys(
       value,
@@ -331,9 +340,9 @@ export function createCandidateBaselineProviderReader({
           cache: "no-store",
           signal: AbortSignal.any([deadline, AbortSignal.timeout(10_000)]),
         });
-        const content = await contentResult(response, url);
+        const content = await readCandidateBaselineVersionResult(response, url);
         await guard();
-        const baseline = admitVersion(
+        const baseline = candidateBaselineVersionSnapshot(
           content,
           retained,
           run,
