@@ -236,42 +236,61 @@ export async function materializeMissingInstances(
         .where(eq(events.parentEventId, parent.id))
     ).map((r) => r.i),
   );
-  let created = 0;
-  for (const [index, when] of wanted) {
-    if (index === 1 || existing.has(index)) continue;
-    const [child] = await db
-      .insert(events)
-      .values({
-        eventKey: newEventKey(),
-        title: parent.title,
-        game: parent.game,
-        description: parent.description,
-        accessibilityNotes: parent.accessibilityNotes,
-        startsAt: when.startsAt,
-        endsAt: when.endsAt,
-        timezone: parent.timezone,
-        location: parent.location,
-        organizer_name: parent.organizer_name,
-        join_url: parent.join_url,
-        join_instructions: parent.join_instructions,
-        capacity: parent.capacity,
-        status: "draft",
-        createdBy: parent.createdBy,
-        parentEventId: parent.id,
-        recurrenceIndex: index,
-      })
-      .returning();
-    if (!child) throw new Error("child event insert returned no row");
-    await audit(db, {
-      subjectType: "Event",
-      subjectId: child.eventKey,
-      causerId,
-      description: `created event ${child.title}`,
-      properties: dirty({} as Record<string, unknown>, child),
-    });
-    created++;
+  const pending = [...wanted]
+    .filter(([index]) => index !== 1 && !existing.has(index))
+    .map(([index, when]) => ({
+      eventKey: newEventKey(),
+      title: parent.title,
+      game: parent.game,
+      description: parent.description,
+      accessibilityNotes: parent.accessibilityNotes,
+      startsAt: when.startsAt,
+      endsAt: when.endsAt,
+      timezone: parent.timezone,
+      location: parent.location,
+      organizer_name: parent.organizer_name,
+      join_url: parent.join_url,
+      join_instructions: parent.join_instructions,
+      capacity: parent.capacity,
+      status: "draft" as const,
+      createdBy: parent.createdBy,
+      parentEventId: parent.id,
+      recurrenceIndex: index,
+    }));
+  if (pending.length === 0) return 0;
+  // One INSERT and one audit INSERT, sequential on the caller's transaction
+  // (max:1 forbids parallel statements). The series is bounded by `occurrences`.
+  const children = await db.insert(events).values(pending).returning();
+  // RETURNING order is unspecified: pair each row with what was submitted by
+  // its recurrence index, and refuse any missing, duplicate or foreign row
+  // before an audit could be written for incomplete coverage.
+  const submitted = new Map(pending.map((p) => [p.recurrenceIndex, p.eventKey]));
+  const seen = new Set<number>();
+  for (const child of children) {
+    const index = child.recurrenceIndex;
+    if (
+      index === null ||
+      seen.has(index) ||
+      submitted.get(index) !== child.eventKey ||
+      child.parentEventId !== parent.id
+    )
+      throw new Error("child event insert returned an unexpected row");
+    seen.add(index);
   }
-  return created;
+  if (seen.size !== pending.length) throw new Error("child event insert returned too few rows");
+  await db.insert(activityLog).values(
+    children
+      .sort((a, b) => a.recurrenceIndex! - b.recurrenceIndex!)
+      .map((child) => ({
+        logName: "default",
+        subjectType: "Event",
+        subjectId: child.eventKey,
+        causerId,
+        description: `created event ${child.title}`,
+        properties: dirty({} as Record<string, unknown>, child),
+      })),
+  );
+  return children.length;
 }
 
 /**
