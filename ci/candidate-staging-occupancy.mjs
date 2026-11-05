@@ -171,9 +171,13 @@ export function createCandidateStagingJournal({
     );
   }
 
-  async function request(signal, path, method = "GET", body) {
+  async function request(signal, path, method = "GET", body, readBudget) {
     try {
       signal.throwIfAborted();
+      if (readBudget) {
+        requireEvidence(method === "GET" && readBudget.remaining > 0, "read-budget");
+        readBudget.remaining--;
+      }
       const response = await fetchImpl(`${BASE}${path}`, {
         method,
         headers: {
@@ -217,13 +221,13 @@ export function createCandidateStagingJournal({
     return row;
   }
 
-  async function arrayPages(path, query, signal) {
+  async function arrayPages(path, query, signal, readBudget) {
     const rows = [];
     // These endpoints have no total_count. Require a terminal short/empty page,
     // including a sixth sentinel after exactly 500 rows; never follow links.
     for (let page = 1; page <= 6; page++) {
       const params = new URLSearchParams({ ...query, per_page: "100", page: String(page) });
-      const result = await request(signal, `${path}?${params}`);
+      const result = await request(signal, `${path}?${params}`, "GET", undefined, readBudget);
       requireEvidence(
         Array.isArray(result) && result.length <= 100 && rows.length + result.length <= 500,
         "array-list",
@@ -240,8 +244,8 @@ export function createCandidateStagingJournal({
     throw new Error("Candidate occupancy refused: array-pages");
   }
 
-  async function clean(row, signal, expected) {
-    const statuses = await arrayPages(`/deployments/${row.id}/statuses`, {}, signal);
+  async function clean(row, signal, expected, readBudget) {
+    const statuses = await arrayPages(`/deployments/${row.id}/statuses`, {}, signal, readBudget);
     let previous = Infinity;
     for (const status of statuses) {
       requireEvidence(
@@ -271,13 +275,13 @@ export function createCandidateStagingJournal({
     return true;
   }
 
-  async function inspect(signal) {
-    const rows = (await arrayPages("/deployments", { environment: ENVIRONMENT }, signal)).map(
-      record,
-    );
+  async function inspect(signal, readBudget) {
+    const rows = (
+      await arrayPages("/deployments", { environment: ENVIRONMENT }, signal, readBudget)
+    ).map(record);
     const dirty = [];
     for (const row of rows) {
-      if (!(await clean(row, signal))) dirty.push(row);
+      if (!(await clean(row, signal, undefined, readBudget))) dirty.push(row);
     }
     return { rows, dirty };
   }
@@ -287,9 +291,9 @@ export function createCandidateStagingJournal({
     return (await inspect(signal ? AbortSignal.any([signal, deadline]) : deadline)).dirty;
   }
 
-  async function requireDirty(id, signal = AbortSignal.timeout(60_000)) {
+  async function requireDirty(id, signal = AbortSignal.timeout(60_000), readBudget) {
     requireEvidence(matches(ID, id), "deployment-id");
-    const dirty = await unresolved(signal);
+    const dirty = readBudget ? (await inspect(signal, readBudget)).dirty : await unresolved(signal);
     requireEvidence(dirty.length === 1 && String(dirty[0].id) === id, "recovery-ownership");
     return dirty[0];
   }
@@ -307,9 +311,16 @@ export function createCandidateStagingJournal({
     unresolved,
     read,
     requireDirty,
-    bindRecovery({ deploymentId, identity, expectedPayload } = {}) {
+    bindRecovery({ deploymentId, identity, expectedPayload, maxReadRequests } = {}) {
       try {
         requireEvidence(matches(ID, deploymentId), "deployment-id");
+        requireEvidence(
+          maxReadRequests === undefined ||
+            (Number.isSafeInteger(maxReadRequests) &&
+              maxReadRequests > 0 &&
+              maxReadRequests <= 3006),
+          "read-budget",
+        );
         const run = identitySnapshot(identity);
         const expected = structuredClone(expectedPayload);
         payload(expected);
@@ -336,7 +347,13 @@ export function createCandidateStagingJournal({
               AbortSignal.timeout(60_000),
             ]);
             deadline.throwIfAborted();
-            const row = await requireDirty(deploymentId, deadline);
+            // A budget exhaustion refuses the entire observation, never admits
+            // a truncated deployment/status listing as complete ownership.
+            const row = await requireDirty(
+              deploymentId,
+              deadline,
+              maxReadRequests === undefined ? undefined : { remaining: maxReadRequests },
+            );
             requireEvidence(payloadKey(row.payload) === expectedKey, "bound-payload");
             deadline.throwIfAborted();
             return Object.freeze({

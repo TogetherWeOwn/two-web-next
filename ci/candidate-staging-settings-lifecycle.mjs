@@ -151,6 +151,18 @@ export function admitCandidateSettingsSnapshot(raw, expected, q, profileSha256) 
   return freeze(canonical);
 }
 
+// Reuse the same canonical disabled state as seal(), rather than accepting a
+// caller's sealed flag or only checking one of the persistent sinks.
+export function admitCandidateSealedSettingsSnapshot(raw, expected, q, profileSha256) {
+  const snapshot = admitCandidateSettingsSnapshot(raw, expected, q, profileSha256);
+  requireEvidence(
+    digest(snapshot.settings) === digest(sealedSettings()) &&
+      snapshot.subdomain.enabled === false &&
+      snapshot.subdomain.previews_enabled === false,
+  );
+  return snapshot;
+}
+
 export function createCandidateSettingsLifecycle({
   token,
   identity,

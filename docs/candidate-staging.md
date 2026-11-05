@@ -39,6 +39,49 @@ Installed source/exclusion admission and independent durable retention remain
 prerequisites; passing a callback or hashing the state does not establish them.
 No workflow invokes this capture and no activation clearance is implied.
 
+## Traffic and settings recovery composition (not installed)
+
+[The partial recovery transaction](../ci/candidate-staging-recovery.mjs) connects
+original-B traffic restoration and settings restoration to the real journal-bound
+component guard. Ownership is checkpointed, **not continuously observed**: real
+journal scans occur at entry, immediately before and after every mutation, after
+traffic restoration and at completion. Nested read-only checks validate a private
+typed checkpoint bound to the owner/state/mutation epoch, plus fresh exclusion
+and baseline admission, instead of recursively rescanning the full journal.
+Mutation dispatch invalidates that checkpoint until a successful authenticated
+post-mutation scan. A replacement that appears and disappears wholly between
+checkpoints is not detected; continuous installed exclusion remains mandatory.
+Each complete ownership scan is capped at 64 actual GitHub GET requests, including
+deployment and status pagination, so the nine-checkpoint transaction uses at most
+576 journal GETs. Budget exhaustion refuses the entire observation, never accepts
+truncated history. An oversized initial journal therefore refuses before any
+provider request; later growth stays dirty on refusal. Normal journal readers
+retain their existing 500-row limits. Safe admitted history retention/compaction
+or a compact authenticated owner channel remains a prerequisite for oversized
+history; this helper deletes nothing and does not prove available account quota
+or budget the independently supplied baseline/exclusion adapters.
+Independently retained snapshots are fixed before any request; callers cannot
+supply a replacement target version, restore deployment or sealed
+flag to `restore()`. Installed complete-B admission and exclusion remain required
+adapters, not facts established by a matching hash.
+
+The transaction independently reads every persistent sink and subdomain flag and
+requires the same canonical disabled state written by `seal()`. It restores
+original B's traffic through POST/exact/list readback before restoring settings.
+The resulting deployment ID stays private to the transaction. Each settings
+restore request is fenced by independent list/exact/list serving observation at
+that exact deployment, not merely the same version UUID. Final serving reads
+bracket the final settings readback, followed by fresh dirty-journal ownership.
+The operation shares one three-minute deadline, propagates cancellation, refuses
+concurrent calls and never retries an uncertain mutation or clears occupancy.
+
+Its non-promotable receipt says `baseline-traffic-and-settings-only`. It does
+**not** prove stored assets, B-prime/latest-upload inheritance, complete recovery,
+synthetic principals/data, continuous global exclusion or native zero-idle
+controls. It does not automatically seal an unsafe initial state, and a failure
+after settings restoration remains dirty for independently admitted recovery.
+No workflow invokes it and no live recovery or activation clearance is claimed.
+
 ## Implemented predicates
 
 - `candidateIdentity` accepts only a PR number, exact lowercase head SHA, and

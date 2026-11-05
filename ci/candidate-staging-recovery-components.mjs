@@ -182,6 +182,7 @@ export function createCandidateRecoveryComponentGuard({
   files,
   settings,
   serving,
+  maxReadRequests,
   clock = () => Math.floor(Date.now() / 1000),
 } = {}) {
   try {
@@ -213,7 +214,12 @@ export function createCandidateRecoveryComponentGuard({
     };
     const stateSha256 = digest(canonical);
     requireEvidence(expected?.baseline?.stateSha256 === stateSha256);
-    const owner = journal.bindRecovery({ deploymentId, identity: run, expectedPayload: expected });
+    const owner = journal.bindRecovery({
+      deploymentId,
+      identity: run,
+      expectedPayload: expected,
+      ...(maxReadRequests === undefined ? {} : { maxReadRequests }),
+    });
     const b = structuredClone(baseline);
     let lastNow = clock();
     const createdAt = Date.parse(expected.createdAt);
