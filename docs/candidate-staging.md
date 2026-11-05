@@ -585,9 +585,10 @@ runtime, tag and placement, not mutable script settings/tails/subdomain policy.
 
 Asset-bearing B additionally requires a completion ticket joined to Q, B's
 manifest digest and its exact asset-record root. This is a shape/integrity check,
-not signature/provenance verification. A future trusted recovery sender must
-create that session from the admitted B assets and consume its ticket internally;
-the candidate asset uploader is not a recovery adapter and cannot renew QA expiry.
+not signature/provenance verification. The guarded recovery asset transport below
+creates that session from the admitted B bytes; a future version sender must
+consume its ticket internally. The candidate uploader retains its fixed QA expiry;
+recovery asset transport does not issue, replace or renew QA credentials.
 Module-only B requires a null ticket and no assets config/binding. Asset policy
 is explicitly Worker-first. The JSON body contains an asset capability and module
 bytes: never log, persist or publish it. Only the frozen digest/identity proof is
@@ -602,13 +603,43 @@ not silently dropping placement or switching to `latest` inheritance. All curren
 tests are offline fixtures, not cross-API conformance or live recovery evidence.
 
 The installed authenticated original-B manifest producer/download/channel,
-complete immutable B/provider/component/stored-asset admission, guarded asset and
-version sender, independent B-prime module/config/assets readback, B-prime traffic
+complete immutable B/provider/component/stored-asset admission, installed guarded
+asset/version senders, independent B-prime module/config/assets readback, B-prime traffic
 selection and latest-upload/ordinary-uploader inheritance verification remain
 required. Recovery must run under exclusion and authenticated dirty occupancy,
 leave occupancy dirty on uncertainty, and restore mutable sinks only after
 independently admitted baseline code serves. This helper supplies none of those
 adapters, no activation authority and no complete recovery receipt.
+
+## B recovery assets (mock-qualified, not installed)
+
+`createCandidateBaselineAssetUploader` in [the asset transport](../ci/candidate-staging-assets.mjs)
+reuses the existing fixed-endpoint session/bulk/single protocol, rather than
+running Wrangler or candidate tooling during recovery. Both the asset transport
+and B-prime constructor use the same copied-byte original-B manifest admission.
+The transport uploads only asset records, retaining their exact public paths,
+and returns an in-memory ticket joined to Q, the baseline digest and asset root.
+It never uploads a Worker version, selects traffic or marks occupancy clean.
+
+Every provider request requires trusted installed exclusion, dirty-baseline
+ownership and authenticated original-B admission **before and after** its
+response. Those adapters receive the frozen Q/profile/baseline/asset-root context
+and enclosing abort signal; they remain installation prerequisites, not supplied
+by a candidate artifact. Guard failure or cancellation emits only a fixed error,
+with no retry, ticket or provider details. Cached assets still require both
+session guards; module-only B makes no provider request and returns no ticket.
+
+Recovery can run after candidate QA expiry without renewing that credential or
+accepting a caller verifier/clock/ticket/endpoint. It has a separate 120-second
+operation deadline, 10-second request bounds and parent cancellation propagation;
+provider asset capabilities must still pass their own expiry/bucket checks. The
+API bearer stays at session creation, asset capabilities only at the fixed upload
+endpoints. Tickets and request bodies are private transport state, never public
+artifacts. Existing candidate uploads retain the fixed verifier deadline.
+
+This is mock-qualified transport, not authenticated baseline production,
+continuous exclusion, stored-asset readback, complete B-prime recovery or native
+Security clearance. No workflow calls it and no live asset upload has run.
 
 ## Durable occupancy journal and recovery boundary
 

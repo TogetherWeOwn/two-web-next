@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { candidateIdentity, candidateSha256 } from "./candidate-staging-admission.mjs";
 import { prepareCandidateBaselineUpload } from "./candidate-staging-baseline-upload.mjs";
+import { createCandidateBaselineAssetUploader } from "./candidate-staging-assets.mjs";
 
 const VERSION = "11111111-2222-3333-4444-555555555555";
 const ERROR = "Candidate recovery refused: baseline request";
@@ -104,6 +105,208 @@ function binding(input, name) {
 function refusal(input) {
   assert.throws(() => prepareCandidateBaselineUpload(input), { message: ERROR });
 }
+
+function assetSetup({
+  input = fixture(),
+  failGuard,
+  signal,
+  single = false,
+  cached = false,
+  onFetch,
+  clock,
+} = {}) {
+  const { assetsTicket: _ticket, now, ...options } = input;
+  const calls = [];
+  const guards = [];
+  const jwt = `fixture.${Buffer.from(JSON.stringify({ exp: now + 600, wrangler_single_asset_uploads: single })).toString("base64url")}.signature`;
+  const guard = (name) => async (context, deadline) => {
+    guards.push(name);
+    assert.ok(Object.isFrozen(context));
+    assert.equal(context.q, input.identity.q);
+    assert.equal(context.profileSha256, input.profileSha256);
+    assert.equal(context.baselineSha256, input.baselineSha256);
+    assert.equal(
+      context.assetRootSha256,
+      hash(input.baseline.files.filter((f) => f.kind === "asset")),
+    );
+    assert.equal(context.phase, "restore-baseline-assets");
+    assert.ok(deadline instanceof AbortSignal);
+    if (failGuard?.(name, guards.length)) throw new Error("private-provider-detail");
+  };
+  const config = {
+    token: "fixture-provider-bearer",
+    clock: clock ?? (() => now),
+    signal,
+    assertExclusive: guard("exclusive"),
+    requireDirty: guard("dirty"),
+    admitBaseline: guard("baseline"),
+    fetchImpl: async (url, request) => {
+      calls.push({ url, ...request });
+      if (onFetch) return onFetch(url, request, calls.length, jwt);
+      const hashes =
+        calls.length === 1
+          ? Object.values(JSON.parse(request.body).manifest).map((v) => v.hash)
+          : [];
+      return new Response(
+        JSON.stringify({
+          success: true,
+          errors: [],
+          result: {
+            jwt,
+            ...(calls.length === 1 ? { buckets: cached ? [] : [hashes] } : {}),
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      );
+    },
+  };
+  return {
+    input,
+    options,
+    config,
+    calls,
+    guards,
+    jwt,
+    upload: () => createCandidateBaselineAssetUploader(config).upload(options),
+  };
+}
+
+for (const single of [false, true])
+  test(`B recovery assets integrate with pinned request after QA expiry (${single ? "single" : "bulk"})`, async () => {
+    const f = assetSetup({ single });
+    const ticket = await f.upload();
+    assert.deepEqual(Object.keys(ticket).sort(), ["assetRootSha256", "baselineSha256", "jwt", "q"]);
+    assert.equal(ticket.baselineSha256, f.input.baselineSha256);
+    assert.equal(ticket.jwt, f.jwt);
+    assert.ok(Object.isFrozen(ticket));
+    const r = prepareCandidateBaselineUpload({ ...f.input, assetsTicket: ticket });
+    assert.equal(JSON.parse(r.body).assets.jwt, ticket.jwt);
+    assert.equal(
+      JSON.parse(r.body).bindings.find((b) => b.name === "SESSION_SECRET").version_id,
+      VERSION,
+    );
+    assert.equal(f.calls.length, 2);
+    assert.equal(
+      f.calls[0].url,
+      `https://api.cloudflare.com/client/v4/accounts/${"1".repeat(32)}/workers/scripts/two-web-next/assets-upload-session`,
+    );
+    assert.equal(f.calls[0].headers.Authorization, "Bearer fixture-provider-bearer");
+    assert.equal(f.calls[1].headers.Authorization, `Bearer ${ticket.jwt}`);
+    assert.equal(
+      f.calls.every((c) => c.redirect === "error" && c.signal instanceof AbortSignal),
+      true,
+    );
+    const uploaded = single
+      ? Buffer.from(await f.calls[1].body.arrayBuffer())
+      : Buffer.from(await [...f.calls[1].body.values()][0].text(), "base64");
+    assert.deepEqual(uploaded, f.input.files.find((v) => v.kind === "asset").bytes);
+    assert.deepEqual(
+      f.guards,
+      Array.from({ length: 4 }, () => ["exclusive", "dirty", "baseline"]).flat(),
+    );
+  });
+
+for (let checkpoint = 1; checkpoint <= 12; checkpoint++)
+  test(`recovery asset guard failure ${checkpoint} refuses without retry or ticket`, async () => {
+    const f = assetSetup({ failGuard: (_name, n) => n === checkpoint });
+    await assert.rejects(f.upload(), { message: "Candidate assets refused: transport" });
+    assert.equal(f.calls.length, checkpoint <= 3 ? 0 : checkpoint <= 9 ? 1 : 2);
+    assert.equal(f.guards.length, checkpoint);
+  });
+
+for (const name of ["assertExclusive", "requireDirty", "admitBaseline"])
+  test(`recovery assets require installed ${name} adapter`, () => {
+    const f = assetSetup();
+    delete f.config[name];
+    assert.throws(() => createCandidateBaselineAssetUploader(f.config), {
+      message: "Candidate assets refused: transport",
+    });
+    assert.equal(f.calls.length, 0);
+  });
+
+test("module-only B needs no provider asset session or ticket", async () => {
+  const f = assetSetup({ input: fixture({ assets: false }) });
+  assert.equal(await f.upload(), null);
+  assert.equal(f.calls.length, 0);
+});
+
+test("cached B assets still require post-session baseline admission", async () => {
+  const f = assetSetup({ cached: true });
+  assert.equal((await f.upload()).jwt, f.jwt);
+  assert.equal(f.calls.length, 1);
+  assert.deepEqual(f.guards, ["exclusive", "dirty", "baseline", "exclusive", "dirty", "baseline"]);
+});
+
+test("pre-aborted recovery never reaches provider", async () => {
+  const f = assetSetup({ signal: AbortSignal.abort("private-cancel-reason") });
+  await assert.rejects(f.upload(), { message: "Candidate assets refused: transport" });
+  assert.equal(f.calls.length, 0);
+});
+
+test("cancellation inside admission reaches every nested adapter and prevents request", async () => {
+  const abort = new AbortController();
+  const f = assetSetup({ signal: abort.signal });
+  f.config.requireDirty = async (_c, signal) => {
+    abort.abort();
+    assert.equal(signal.aborted, true);
+  };
+  await assert.rejects(f.upload(), { message: "Candidate assets refused: transport" });
+  assert.equal(f.calls.length, 0);
+  assert.deepEqual(f.guards, ["exclusive"]);
+});
+
+test("mutated baseline bytes refuse before provider or guard", async () => {
+  const f = assetSetup();
+  f.options.files.find((v) => v.kind === "asset").bytes[0] ^= 1;
+  await assert.rejects(f.upload(), { message: "Candidate assets refused: transport" });
+  assert.equal(f.calls.length, 0);
+  assert.equal(f.guards.length, 0);
+});
+
+test("expired provider asset capability refuses, independent of expired QA credential", async () => {
+  const f = assetSetup({
+    onFetch: (_url, _request, _n) =>
+      new Response(
+        JSON.stringify({
+          success: true,
+          errors: [],
+          result: {
+            jwt: `fixture.${Buffer.from(JSON.stringify({ exp: fixture().now + 30 })).toString("base64url")}.signature`,
+            buckets: [],
+          },
+        }),
+        { headers: { "content-type": "application/json" } },
+      ),
+  });
+  await assert.rejects(f.upload(), { message: "Candidate assets refused: transport" });
+  assert.equal(f.calls.length, 1);
+});
+
+for (const single of [false, true])
+  for (const elapsed of [570, 601])
+    test(`recovery rechecks asset capability after slow admission (${single}/${elapsed})`, async () => {
+      let time = fixture().now;
+      const f = assetSetup({
+        single,
+        clock: () => time,
+        failGuard: (_name, n) => {
+          if (n === 9) time += elapsed;
+          return false;
+        },
+      });
+      await assert.rejects(f.upload(), { message: "Candidate assets refused: transport" });
+      // Session creation is the only request: never send the stale capability.
+      assert.equal(f.calls.length, 1);
+      assert.equal(f.guards.length, 9);
+    });
+
+for (const key of ["verifier", "assetsTicket", "url", "now"])
+  test(`recovery asset upload refuses caller ${key}`, async () => {
+    const f = assetSetup();
+    f.options[key] = "untrusted";
+    await assert.rejects(f.upload(), { message: "Candidate assets refused: transport" });
+    assert.equal(f.calls.length, 0);
+  });
 
 test("constructs B-prime only at the Workers endpoint with immediate deployment disabled", () => {
   const input = fixture();

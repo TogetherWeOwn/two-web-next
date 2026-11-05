@@ -2,6 +2,7 @@
 // discovers config, executes Wrangler, selects a version or restores staging.
 import { createRequire } from "node:module";
 import { extname } from "node:path";
+import { prepareCandidateBaselineAssetInput } from "./candidate-staging-baseline-upload.mjs";
 import { prepareCandidateAssetInput } from "./candidate-staging-upload.mjs";
 
 // Use already locked dependencies, never packages inside candidate output.
@@ -84,10 +85,15 @@ async function boundedResult(response) {
   }
 }
 
-export function createCandidateAssetUploader({
+function createAssetUploader({
   token,
   fetchImpl = fetch,
   clock = () => Math.floor(Date.now() / 1000),
+  prepareInput,
+  optionKeys,
+  guard,
+  signal,
+  recovery = false,
 } = {}) {
   requireEvidence(
     typeof token === "string" &&
@@ -104,11 +110,10 @@ export function createCandidateAssetUploader({
         requireEvidence(
           options !== null &&
             typeof options === "object" &&
-            Object.keys(options).sort().join(",") ===
-              "bundle,identity,profile,profileSha256,verifier",
+            Object.keys(options).sort().join(",") === optionKeys,
         );
         const now = clock();
-        const input = prepareCandidateAssetInput({ ...options, now });
+        const input = prepareInput({ ...options, now });
         const manifest = Object.create(null);
         const lookup = new Map();
         for (const entry of input.entries) {
@@ -134,19 +139,40 @@ export function createCandidateAssetUploader({
         }
         // No assets means no provider session and no implicit asset retention.
         if (input.entries.length === 0) return null;
-        const deadline = AbortSignal.timeout(120_000);
+        const deadline = AbortSignal.any([
+          ...(signal ? [signal] : []),
+          AbortSignal.timeout(120_000),
+        ]);
+        const context = Object.freeze({
+          phase: recovery ? "restore-baseline-assets" : "candidate-assets",
+          q: input.q,
+          profileSha256: options.profileSha256,
+          ...(recovery ? { baselineSha256: input.baselineSha256 } : {}),
+          assetRootSha256: input.assetRootSha256,
+        });
         let lastNow = now;
         function currentTime() {
           const time = clock();
           requireEvidence(
-            Number.isSafeInteger(time) && time >= lastNow && time < input.expiresAt - 30,
+            Number.isSafeInteger(time) &&
+              time >= 0 &&
+              time >= lastNow &&
+              (recovery || time < input.expiresAt - 30),
           );
           deadline.throwIfAborted();
           lastNow = time;
           return time;
         }
-        async function post(path, bearer, body, contentType) {
+        async function check() {
           currentTime();
+          if (guard) await guard(context, deadline);
+          currentTime();
+        }
+        async function post(path, bearer, body, contentType, expiresAt) {
+          await check();
+          // Admission may consume the capability's remaining lifetime. Recheck
+          // after all asynchronous guards, immediately before sending it.
+          if (expiresAt !== undefined) requireEvidence(expiresAt > currentTime() + 30);
           const response = await fetchImpl(`${BASE}/${input.accountId}/${path}`, {
             method: "POST",
             headers: {
@@ -158,7 +184,7 @@ export function createCandidateAssetUploader({
             signal: AbortSignal.any([deadline, AbortSignal.timeout(10_000)]),
           });
           const result = await boundedResult(response);
-          currentTime();
+          await check();
           return result;
         }
         const session = await post(
@@ -200,6 +226,7 @@ export function createCandidateAssetUploader({
               session.jwt,
               new Blob([entry.bytes]),
               entry.type,
+              claims.exp,
             );
           } else {
             const form = new FormData();
@@ -211,7 +238,13 @@ export function createCandidateAssetUploader({
                 digest,
               );
             }
-            result = await post("workers/assets/upload?base64=true", session.jwt, form);
+            result = await post(
+              "workers/assets/upload?base64=true",
+              session.jwt,
+              form,
+              undefined,
+              claims.exp,
+            );
           }
           if (result.jwt !== undefined) {
             jwtClaims(result.jwt, currentTime());
@@ -224,7 +257,9 @@ export function createCandidateAssetUploader({
         // directly to the exact version constructor; never log or serialize it.
         return Object.freeze({
           q: input.q,
-          bundleRootSha256: input.bundleRootSha256,
+          ...(recovery
+            ? { baselineSha256: input.baselineSha256 }
+            : { bundleRootSha256: input.bundleRootSha256 }),
           assetRootSha256: input.assetRootSha256,
           jwt: completion,
         });
@@ -232,6 +267,50 @@ export function createCandidateAssetUploader({
         // Never forward provider errors, URL, bearer, response text or file data.
         throw new Error("Candidate assets refused: transport");
       }
+    },
+  });
+}
+
+export function createCandidateAssetUploader(options = {}) {
+  return createAssetUploader({
+    token: options.token,
+    fetchImpl: options.fetchImpl,
+    clock: options.clock,
+    prepareInput: prepareCandidateAssetInput,
+    optionKeys: "bundle,identity,profile,profileSha256,verifier",
+  });
+}
+
+// The guards must be installed trusted adapters, not candidate functions or
+// caller assertions. A digest alone does not authenticate a baseline manifest.
+export function createCandidateBaselineAssetUploader({
+  token,
+  fetchImpl,
+  clock,
+  assertExclusive,
+  requireDirty,
+  admitBaseline,
+  signal,
+} = {}) {
+  requireEvidence(
+    [assertExclusive, requireDirty, admitBaseline].every((fn) => typeof fn === "function") &&
+      (signal === undefined || signal instanceof AbortSignal),
+  );
+  return createAssetUploader({
+    token,
+    fetchImpl,
+    clock,
+    signal,
+    recovery: true,
+    prepareInput: prepareCandidateBaselineAssetInput,
+    optionKeys: "baseline,baselineSha256,files,identity,profile,profileSha256",
+    async guard(context, deadline) {
+      await assertExclusive(context, deadline);
+      deadline.throwIfAborted();
+      await requireDirty(context, deadline);
+      deadline.throwIfAborted();
+      await admitBaseline(context, deadline);
+      deadline.throwIfAborted();
     },
   });
 }

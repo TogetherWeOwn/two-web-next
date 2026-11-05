@@ -142,13 +142,10 @@ function filesSnapshot(input) {
   });
 }
 
-export function prepareCandidateBaselineUpload(options) {
+function baselineInput(options) {
   try {
     requireEvidence(
-      keys(
-        options,
-        "identity,profile,profileSha256,baseline,baselineSha256,files,assetsTicket,now",
-      ),
+      keys(options, "identity,profile,profileSha256,baseline,baselineSha256,files,now"),
     );
     const run = identitySnapshot(options.identity);
     const installed = profileSnapshot(options.profile, options.profileSha256);
@@ -228,8 +225,53 @@ export function prepareCandidateBaselineUpload(options) {
     requireEvidence(
       hasAssets === bindings.some((v) => v.type === "assets") && hasAssets === (b.assets !== null),
     );
-    const assetRootSha256 = digest(assets);
-    const ticket = structuredClone(options.assetsTicket);
+    return {
+      run,
+      installed,
+      b: canonical,
+      bindings,
+      records,
+      supplied,
+      hasAssets,
+      assetRootSha256: digest(assets),
+    };
+  } catch {
+    throw new Error(ERROR);
+  }
+}
+
+// Shared copied-byte admission for recovery assets and the B-prime version body.
+// Recovery is deliberately independent of the expired candidate QA verifier.
+export function prepareCandidateBaselineAssetInput(options) {
+  const input = baselineInput(options);
+  return {
+    q: input.run.q,
+    accountId: input.installed.accountId,
+    scriptName: input.installed.scriptName,
+    baselineSha256: options.baselineSha256,
+    assetRootSha256: input.assetRootSha256,
+    entries: input.records
+      .filter((f) => f.kind === "asset")
+      .map((f) => ({
+        path: `assets/${f.path}`,
+        bytes: input.supplied.get(`asset:${f.path}`),
+      })),
+  };
+}
+
+export function prepareCandidateBaselineUpload(options) {
+  try {
+    requireEvidence(
+      keys(
+        options,
+        "identity,profile,profileSha256,baseline,baselineSha256,files,assetsTicket,now",
+      ),
+    );
+    const { assetsTicket, ...rest } = options;
+    const { run, installed, b, bindings, records, supplied, hasAssets, assetRootSha256 } =
+      baselineInput(rest);
+    const canonical = b;
+    const ticket = structuredClone(assetsTicket);
     if (hasAssets) {
       requireEvidence(
         keys(ticket, "q,baselineSha256,assetRootSha256,jwt") &&
