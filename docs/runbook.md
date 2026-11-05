@@ -57,7 +57,7 @@ follow its linked legacy-origin readiness precondition, which still applies.
 | Discord rate limiting (sync backoff, `rate_limited` bot sync refusal) | [Queue containment, drain and failed-job replay](#queue-containment-drain-and-failed-job-replay) | `GET /up` queue envelope plus `sync_retry_code` per [runbook-alerts.md](runbook-alerts.md); `rate_limited` is a retryable bot refusal under backoff, not a database outage; read the retry-cause table before touching delivery; do not purge or replay | DevOps & Reliability Engineer |
 | Bad deploy: need the rollback pointer | [Deploy and record the rollback pointer](#deploy-and-record-the-rollback-pointer) | `npx wrangler deployments status --name two-web-next --json` and `GET /up` `revision.version_id`; `wrangler deployments` wins on disagreement; do not roll back from this table | DevOps & Reliability Engineer; Director of Engineering for the rollback decision |
 | Database or Hyperdrive outage (configured DB unreachable, private 500/503 per the route table) | [Neon / Hyperdrive outage behavior](#neon--hyperdrive-outage-behavior) | `GET /up`, which measures the selected `DATABASE_URL` else `DB.connectionString`; never substitute another backend or credential | Director of Engineering and the authorized custodian; through the Director to CISO if a leak is suspected |
-| Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Local `bash ci/db-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/db-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
+| Backup and restore (verify archives, plan recovery) | [Backups and restore drill](#backups-and-restore-drill) | Read exact-head Actions `check` evidence for `ci/db-backup-selftest.sh` (no secrets, no network) first; remote `BACKUP_BUCKET=two-web-next-backups BACKUP_JURISDICTION=eu BACKUP_PREFIX=neon WRANGLER_BIN= bash bin/db-backup.sh check staging` re-downloads every manifest archive locally, needs the Cloudflare API token and separate approval; keep dumps inside approved EU custody; never `rotate` or restore without separate approval | DevOps & Reliability Engineer; live-data recovery needs CEO approval via the Director and the authorized custodian |
 
 Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
 (historical cutover import record),
@@ -75,12 +75,14 @@ are not incident entries; read those sections directly when that work is authori
   Respect existing deployment, receiver/HMAC and isolation holds. A green
   workflow or an always-200 endpoint does not release them.
 - Never test, probe or verify database behavior against staging or production
-  databases. Full database verification uses a fresh, run-owned disposable
-  database (`two_web_next_tog<digits>`) on `agent-testdb` with the migrated
-  schema; follow the canonical setup in
-  [README Database and migrations](../README.md#database-and-migrations).
-  Fixture-only `npm run check:offline` and focused isolated-schema tests remain
-  allowed without the full database; CI uses its disposable Postgres service.
+  databases. Full suites and CI gates run only through GitHub Actions against
+  its disposable Postgres service. Push the PR branch, use a draft while
+  incomplete, and cite run/job URLs for the exact head SHA. Local execution is
+  limited to focused reproduction of one failing test, using local fixtures or
+  a fresh run-owned disposable database (`two_web_next_tog<digits>`) on
+  `agent-testdb`; follow [the verification policy](../CONTRIBUTING.md#verify-a-change-with-github-actions)
+  and [safe database setup](../README.md#database-and-migrations).
+  `npm run check:offline` is a CI mirror, not a permitted local workaround.
   Do not send synthetic writes or authenticated smoke actions to live services
   as a substitute for those tests.
 - On an authentication/ownership/permission failure, **stop**. Do not try a
@@ -116,8 +118,6 @@ Install development tools even when the shell defaults to production mode:
 (
   set -euo pipefail
   npm ci --include=dev
-  # Fixture-only check: limited evidence, not database acceptance.
-  npm run check:offline
 )
 ```
 
@@ -134,14 +134,17 @@ reports success as **limited evidence**, not a substitute for exact-head CI with
 service-container DB coverage. Appending flags to the full shell-chain `check`
 script sends them to its final cutover command, not the earlier Vitest command.
 
-Full `npm run check`, coverage thresholds and required CI gates are unchanged.
-Full database verification must use a fresh, run-owned `two_web_next_tog<digits>`
-database on `agent-testdb` with the migrated schema, never the shared
-`two_web_next` database nor a live service; follow the canonical setup in
-[README Database and migrations](../README.md#database-and-migrations).
-Fixture-only `npm run check:offline` is limited evidence, not database
-acceptance, and focused isolated-schema tests remain allowed. Required CI runs
-the complete suite on its disposable Postgres service.
+Full `npm run check`, coverage thresholds and required CI gates are unchanged;
+only their execution location changes to GitHub Actions. The `check:offline`
+behavior above documents its limitations, not permission to run it locally.
+Use exact-head Actions run/job links, with observed conclusions and skips, as
+CI evidence for reviewers and the Release Manager. Heavy builds for a permitted
+single-test reproduction use only the guarded `boat` PATH wrapper, `--no-env`,
+a gitleaks-clean source-only export and verified cleanup. Never bypass its
+sizing/budget/security controls; fallback does not authorize a full suite/CI
+mirror or a heavy raw-host run. Defer to Actions or route the actual prerequisite
+if the focused/local limit cannot be met. Required checks, review and exact-head
+production approval still apply.
 
 ## A moderator lost their role
 
@@ -237,12 +240,14 @@ real-clock expiry test is a last-resort failure at expiry, not a 90-day warning.
    behavior. Never replace the pin with a rolling clock or disable the test to
    clear an expired date. Update the current pin and 90-day trigger above in the
    same PR. Leave contacts, policy URL, route and headers unchanged.
-4. Follow [the PR contract](../CONTRIBUTING.md). Run the fixture-only test, the
-   smoke suite, and the link check below; record the results and verify the two
+4. Follow [the PR contract](../CONTRIBUTING.md). Push the PR branch and obtain
+   the fixture, smoke and link-check evidence from GitHub Actions, not a local
+   suite. Record exact-head run/job URLs and scope skips, and verify the two
    dates above against the source pin and `expiry - 90 × 24 hours` in UTC.
    The required checks under that contract, including `CodeRabbit` and
    `Devin Review`, must pass on the exact head before the PR merges. No
-   database is needed:
+   database is needed. These are existing Actions checks (`ci.yml`'s `check`
+   and `docs-links` jobs), not commands to run on the shared host:
 
    ```sh
    env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB npx --no-install vitest run test/security-txt.test.ts
@@ -543,8 +548,12 @@ set `STAGING_MIGRATION_HOLD` back to `true` (re-hold); revert the PR only for
 code changes. `db-migrate.yml` stays dispatchable by hand. Never couple
 production apply to a Worker deploy or enable that by merging schema SQL.
 
-**Local/CI proof (no Neon/API calls):** `npm run db:migrate:selftest` uses only
-`agent-testdb` (`agent_test`, empty password) or the Actions Postgres service.
+**Actions proof (no Neon/API calls):** `ci.yml`'s `check` job runs
+`npm run db:migrate:selftest` against the disposable Actions Postgres service,
+unless a draft or docs-scope fast-pass skips it; a skip is not proof. Push the
+PR branch and cite its exact-head job URL showing that step executed and succeeded; do not run the full migration
+selftest locally. Any local reproduction is limited to one failing test against
+approved fixtures or the disposable test service.
 It creates UUID-owned test databases, uses stub Environment URLs, and drops only
 those databases in `finally`. CI supplies `MIGRATION_TEST_DATABASE_URL` for its
 throwaway Postgres. It proves production refusal (including the actual workflow
@@ -1489,8 +1498,10 @@ requires a recorded, authorized staging schema/rollback action, not weakening th
 probe or running migrations through `/up`.
 
 Tests use offline fixtures or owned schemas on agent-testdb/CI Postgres. Authorized
-staging E2E is allowed after verifying the staging target/binding; never use
-production DBs or credentials for tests. The contract is [src/up.ts](../src/up.ts):
+staging E2E runs through Actions after verifying the staging target/binding; never
+use production DBs or credentials for tests. The contract is [src/up.ts](../src/up.ts).
+The commands below describe Actions coverage, not a local regression suite;
+link the exact-head `check` job, and locally reproduce only one failing case:
 
 ```bash
 env -u DATABASE_URL -u CLOUDFLARE_HYPERDRIVE_LOCAL_CONNECTION_STRING_DB \
@@ -2012,17 +2023,14 @@ attach them to evidence cards.
 
 ### Safe local drill (no R2, Neon, staging or production)
 
-First exercise the actual backup script through the existing stub harness:
-
-```bash
-: "${PAPERCLIP_RUN_SCRATCH_DIR:?Use the run-owned scratch directory}"
-TMPDIR="$PAPERCLIP_RUN_SCRATCH_DIR" bash ci/db-backup-selftest.sh
-```
-
-This tests upload/manifest proof, 7/4 retention, password hygiene and missing
-object failure entirely locally. Its fake `pg_dump` payload is **not** a
-Postgres archive; this is not a restore test. The following separate real
-custom-format round-trip proves `pg_dump`/`pg_restore` on a synthetic fixture
+First read the exact-head Actions `check` job's evidence for the existing
+`bash ci/db-backup-selftest.sh` stub harness. Push the PR branch to obtain it;
+do not mirror the full harness locally. This tests upload/manifest proof, 7/4
+retention, password hygiene and missing object failure using only fixtures in
+Actions. Its fake `pg_dump` payload is **not** a
+Postgres archive; this is not a restore test. The following separate operational
+drill needs its own authorization, is not a PR verification command, and does
+not authorize a local suite/CI mirror. Its real custom-format round-trip proves `pg_dump`/`pg_restore` on a synthetic fixture
 schema only. It never dumps or drops the rest of `two_web_next`; it deliberately
 stops if its schema already exists. Use an authorized test-container executor if
 this workspace has no PostgreSQL clients/network access. No host installation

@@ -14,11 +14,14 @@ the previously untested pure input invariants.
 
 ## Reproduction and CI budget
 
+Verify with GitHub Actions: push the PR branch, keep the PR draft while
+incomplete, mark it ready when complete, and cite the exact-head run and job
+URLs (`ci.yml`, `check` -> `ci-ok`). Policy: [Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions). Do not run
+`npm run check` or the whole property file locally. To reproduce one failing
+property, run only that test with fixtures only (no `DATABASE_URL`, `REDIS_URL`):
+
 ```sh
-npm ci --include=dev
-# Unset inherited DB/service bindings; these properties only use local fixtures.
-env -u DATABASE_URL -u REDIS_URL timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts --pool=threads
-env -u DATABASE_URL -u REDIS_URL npm run check
+env -u DATABASE_URL -u REDIS_URL timeout 10s node node_modules/vitest/vitest.mjs run test/admin-validation.property.test.ts -t "<failing test name>" --pool=threads
 ```
 
 The DB-free `check` lane runs fixture-only proofs, not live SQL or browser
@@ -36,7 +39,7 @@ and counterexample on failure. CI runs the suite under a whole-process `timeout
 launches Vitest directly with an isolated thread worker to avoid npm and fork
 startup overhead on shared self-hosted runners; the seed, run count, examples,
 assertions and whole-process budget are unchanged. `npm run test:admin-properties`
-remains available for untimed local reproduction. The first passing local run on
+exists but runs the whole file; CI owns that run. The first passing local run on
 Node 24.21.0 / Vitest 5.0.2 took **1.58 s**.
 
 On 2026-10-01, [TOG-10853](/TOG/issues/TOG-10853)'s required

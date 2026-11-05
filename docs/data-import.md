@@ -271,13 +271,15 @@ The historical, non-actionable cutover record is
 
 ## Tests
 
-```sh
-# Focused two-schema CLI/database fixture; guard runs before driver construction.
-DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
-  npm test -- test/import-verify.test.ts
+Verify with GitHub Actions: push the PR branch, keep the PR draft while
+incomplete, mark it ready when complete, and cite the exact-head run and job
+URLs (`ci.yml`, `check` -> `ci-ok`). Policy: [Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions). Do not run
+`npm run check` or whole test files locally. To reproduce one failing test, run
+only that test against the disposable test service:
 
-# Full repo check without an inherited DB URL (live suites skip explicitly).
-env -u DATABASE_URL npm run check
+```sh
+DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
+  npm test -- test/import-verify.test.ts -t "<failing test name>"
 ```
 
 The focused fixture owns randomly named legacy/Next schemas, loads synthetic
