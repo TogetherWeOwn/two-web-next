@@ -680,7 +680,10 @@ older pass for the same SHA. Consequently, its newest eligible candidate can
 be older than the commit production currently serves. Staging eligibility is
 not proof of forward ancestry.
 
-After `/up` live-SHA capture, `deploy-production` runs
+Initial `/up` live-SHA capture makes at most three reads, two seconds apart,
+stopping on the first valid 40-hex commit. Exhausted or invalid reads leave
+live identity unknown; they never bypass default ancestry admission.
+After capture, `deploy-production` runs
 `node ci/production-deploy-gate.mjs --check-ancestry` from the trusted
 **workflow-head** checkout, before candidate checkout, migration checks or any
 promotion side effects. For `workflow_run`, `schedule`, and manual dispatch

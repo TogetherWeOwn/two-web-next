@@ -1137,7 +1137,11 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       }
       const origin =
         (process.env.PRODUCTION_ORIGIN ?? PRODUCTION_ORIGIN).trim() || PRODUCTION_ORIGIN;
-      const live = await readLiveProductionCommit({ origin });
+      let live = null;
+      for (let attempt = 0; attempt < 3 && !live; attempt += 1) {
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+        live = await readLiveProductionCommit({ origin });
+      }
       const already = isAlreadyLive(deploySha, live);
       console.log(
         already

@@ -510,6 +510,138 @@ function runGuardThenSentinel(env, stub) {
   }
 }
 
+// Exercise the live-output handoff as well as admission, without real network.
+function runLiveAdmission(
+  event,
+  sequence,
+  { target = NEWER, comparison = compareBody(LIVE) } = {},
+) {
+  const dir = mkdtempSync(join(tmpdir(), "live-admission-"));
+  const output = join(dir, "output");
+  const log = join(dir, "fetches");
+  const checkedOut = join(dir, "checked-out");
+  const deployed = join(dir, "deployed");
+  try {
+    const result = spawnSync(
+      "bash",
+      [
+        "-e",
+        "-c",
+        `"$NODE" --import ./ci/test-fetch-stub.mjs ci/production-deploy-gate.mjs --already-live
+source "$GITHUB_OUTPUT"
+export LIVE_SHA="$live_sha"
+"$NODE" --import ./ci/test-fetch-stub.mjs ci/production-deploy-gate.mjs --check-ancestry
+if [ "$already_live" != true ]; then
+  touch "$CHECKED_OUT"
+  touch "$DEPLOYED"
+fi`,
+      ],
+      {
+        env: {
+          ...process.env,
+          ...envFor(event, target, "", { MIGRATIONS_APPLIED: "true" }),
+          NODE: process.execPath,
+          PRODUCTION_ORIGIN: "https://stub.invalid",
+          GITHUB_OUTPUT: output,
+          FETCH_STUB_LOG: log,
+          CHECKED_OUT: checkedOut,
+          DEPLOYED: deployed,
+          FETCH_STUB_JSON: JSON.stringify([
+            { match: "/up", sequence },
+            { match: "/compare/", body: comparison },
+          ]),
+        },
+        encoding: "utf8",
+        timeout: 20_000,
+      },
+    );
+    return {
+      ...result,
+      written: readFileSync(output, "utf8"),
+      calls: readFileSync(log, "utf8").trim().split("\n"),
+      checkedOut: existsSync(checkedOut),
+      deployed: existsSync(deployed),
+    };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+const liveBody = (commit) => ({ body: { revision: { commit } } });
+const upCalls = (result) => result.calls.filter((url) => url.endsWith("/up"));
+const compareCalls = (result) => result.calls.filter((url) => url.includes("/compare/"));
+
+test("live identity admission retries a transient failure before checking recovered ancestry", () => {
+  for (const event of [...AUTOMATIC, "workflow_dispatch"]) {
+    const result = runLiveAdmission(event, [{ fail: true }, liveBody(LIVE)]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(upCalls(result).length, 2, event);
+    assert.equal(result.written, `already_live=false\nlive_sha=${LIVE}\n`);
+    assert.deepEqual(compareCalls(result), [expectedUrl(LIVE, NEWER)]);
+    assert.equal(result.checkedOut, true, event);
+    assert.equal(result.deployed, true, event);
+  }
+});
+
+test("live identity admission retries malformed identities through the third read", () => {
+  const result = runLiveAdmission("schedule", [liveBody("bad"), liveBody(null), liveBody(LIVE)]);
+  assert.equal(result.status, 0, result.stderr);
+  assert.equal(upCalls(result).length, 3);
+  assert.equal(result.written, `already_live=false\nlive_sha=${LIVE}\n`);
+  assert.deepEqual(compareCalls(result), [expectedUrl(LIVE, NEWER)]);
+  assert.equal(result.deployed, true);
+});
+
+test("live identity admission exhausts three invalid reads before refusing checkout and deployment", () => {
+  for (const event of [...AUTOMATIC, "workflow_dispatch"]) {
+    for (const sequence of [[{ fail: true }], [liveBody("bad"), liveBody(null), { body: {} }]]) {
+      const result = runLiveAdmission(event, sequence);
+      assert.equal(result.status, 1, result.stderr);
+      assert.equal(upCalls(result).length, 3, event);
+      assert.equal(result.written, "already_live=false\nlive_sha=\n");
+      assert.match(result.stderr, /known full 40-hex live production SHA/);
+      assert.deepEqual(compareCalls(result), []);
+      assert.equal(result.checkedOut, false, event);
+      assert.equal(result.deployed, false, event);
+    }
+  }
+});
+
+test("live identity admission stops reading after the first valid identity", () => {
+  for (const event of [...AUTOMATIC, "workflow_dispatch"]) {
+    const result = runLiveAdmission(event, [liveBody(LIVE), { fail: true }]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(upCalls(result).length, 1, event);
+    assert.equal(result.written, `already_live=false\nlive_sha=${LIVE}\n`);
+    assert.deepEqual(compareCalls(result), [expectedUrl(LIVE, NEWER)]);
+    assert.equal(result.deployed, true, event);
+  }
+  const equal = runLiveAdmission("schedule", [liveBody(LIVE), { fail: true }], { target: LIVE });
+  assert.equal(equal.status, 0, equal.stderr);
+  assert.equal(upCalls(equal).length, 1);
+  assert.equal(equal.written, `already_live=true\nlive_sha=${LIVE}\n`);
+  assert.deepEqual(compareCalls(equal), []);
+  assert.equal(equal.checkedOut, false);
+  assert.equal(equal.deployed, false);
+});
+
+test("a recovered live identity still refuses a backward candidate before checkout", () => {
+  const result = runLiveAdmission("workflow_run", [{ fail: true }, liveBody(LIVE)], {
+    target: OLDER,
+    comparison: compareBody(LIVE, {
+      status: "behind",
+      ahead_by: 0,
+      behind_by: 2,
+      total_commits: 0,
+    }),
+  });
+  assert.equal(result.status, 1, result.stderr);
+  assert.equal(upCalls(result).length, 2);
+  assert.deepEqual(compareCalls(result), [expectedUrl(LIVE, OLDER)]);
+  assert.equal(result.checkedOut, false);
+  assert.equal(result.deployed, false);
+});
+
 const behindStub = [
   {
     match: "/compare/",
