@@ -694,6 +694,15 @@ unavailable evidence also fails closed. No candidate checkout or downstream
 deployment runs after that refusal. The guard does not search for a different
 candidate or change staging skip policy.
 
+After rollback-target capture, the same workflow-head guard runs again with
+`LIVE_SHA` bound to the **recorded rollback commit**, still before candidate
+checkout. This closes the window where production changes between the first
+live read and rollback capture: admission against an earlier ancestor is not
+sufficient. The deploy job retains the shared production mutation lock and
+requires that recorded version to remain the single 100% deployment before
+mutation, covering changes after capture. A failed second ancestry lookup
+also refuses promotion; it never falls back to the first proof.
+
 Only `workflow_dispatch` with a nonblank, full SHA matching the resolved
 candidate selects the separate explicit redeploy/recovery route. That input
 is not authorization: retain current Release Manager approval, independent

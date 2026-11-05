@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, existsSync, readFileSync } from "node:fs";
+import { mkdtempSync, existsSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -10,6 +10,7 @@ import {
   stagingQualitySteps,
 } from "./production-deploy-gate.mjs";
 import { resolvePromotionSha } from "./resolve-promotion-sha.mjs";
+import { checkRollbackTarget, liveVersion } from "./rollback-target.mjs";
 
 // Promotion ancestry guard: production must never be promoted to a commit that
 // is behind (or diverged from) the commit it already serves. All network is
@@ -484,25 +485,29 @@ test("incident: the resolver picks the older passing candidate and the guard ref
 function runGuardThenSentinel(env, stub) {
   const dir = mkdtempSync(join(tmpdir(), "ancestry-chain-"));
   const sentinel = join(dir, "deployed");
-  const result = spawnSync(
-    "bash",
-    [
-      "-e",
-      "-c",
-      `"$NODE" --import ./ci/test-fetch-stub.mjs ci/production-deploy-gate.mjs --check-ancestry\ntouch "$SENTINEL"`,
-    ],
-    {
-      env: {
-        ...process.env,
-        NODE: process.execPath,
-        SENTINEL: sentinel,
-        FETCH_STUB_JSON: JSON.stringify(stub),
-        ...env,
+  try {
+    const result = spawnSync(
+      "bash",
+      [
+        "-e",
+        "-c",
+        `"$NODE" --import ./ci/test-fetch-stub.mjs ci/production-deploy-gate.mjs --check-ancestry\ntouch "$SENTINEL"`,
+      ],
+      {
+        env: {
+          ...process.env,
+          NODE: process.execPath,
+          SENTINEL: sentinel,
+          FETCH_STUB_JSON: JSON.stringify(stub),
+          ...env,
+        },
+        encoding: "utf8",
       },
-      encoding: "utf8",
-    },
-  );
-  return { ...result, deployed: existsSync(sentinel) };
+    );
+    return { ...result, deployed: existsSync(sentinel) };
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 const behindStub = [
@@ -605,16 +610,16 @@ const preflightSteps = stepBlocks(jobBlock("preflight"));
 const ancestryIndex = preflightSteps.findIndex((step) => step.includes("--check-ancestry"));
 const indexOfStep = (needle) => preflightSteps.findIndex((step) => step.includes(needle));
 
-test("deploy-production runs --check-ancestry exactly once, as a preflight step", () => {
+test("deploy-production runs --check-ancestry for initial and recorded live commits in preflight", () => {
   assert.equal(
     preflightSteps.filter((step) => step.includes("--check-ancestry")).length,
-    1,
-    "exactly one ancestry step in preflight",
+    2,
+    "initial admission plus rollback-snapshot admission in preflight",
   );
   assert.equal(
     workflow.split("--check-ancestry").length - 1,
-    1,
-    "the flag is not used outside the single preflight step",
+    2,
+    "both guards run before leaving workflow-head preflight",
   );
   assert.ok(ancestryIndex >= 0);
   assert.match(
@@ -681,6 +686,115 @@ test("the ancestry step is conditioned only on a nonempty candidate", () => {
   const conditions = [...step.matchAll(/^ {8}if: (.*)$/gm)].map((m) => m[1].trim());
   assert.deepEqual(conditions, ["steps.target.outputs.sha != ''"]);
   assert.ok(!/already_live/.test(step.split("run:")[0]), "not skipped by already_live");
+});
+
+const recordedAncestryIndex = preflightSteps.findIndex(
+  (step) =>
+    step.includes("--check-ancestry") && step.includes("steps.rollback-target.outputs.commit"),
+);
+
+test("recorded-live ancestry is a hard workflow-head gate after capture and before candidate checkout", () => {
+  const rollback = indexOfStep("--check-target");
+  const candidateCheckout = preflightSteps.findIndex(
+    (step) =>
+      step.startsWith("uses: actions/checkout") && step.includes("steps.target.outputs.sha }}"),
+  );
+  assert.ok(recordedAncestryIndex > rollback, "re-admit against the captured rollback commit");
+  assert.ok(recordedAncestryIndex < candidateCheckout, "still runs from workflow-head source");
+  const step = preflightSteps[recordedAncestryIndex];
+  assert.match(step, /run: node ci\/production-deploy-gate\.mjs --check-ancestry\n/);
+  assert.match(step, /LIVE_SHA: \$\{\{ steps\.rollback-target\.outputs\.commit \}\}/);
+  assert.match(step, /DEPLOY_SHA: \$\{\{ steps\.target\.outputs\.sha \}\}/);
+  assert.match(step, /INPUT_SHA: \$\{\{ inputs\.sha \}\}/);
+  assert.match(step, /GITHUB_EVENT_NAME: \$\{\{ github\.event_name \}\}/);
+  assert.match(step, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  assert.match(
+    step,
+    /if: steps\.target\.outputs\.sha != '' && steps\.live\.outputs\.already_live != 'true'\n/,
+  );
+  assert.ok(!/continue-on-error|always\(\)|failure\(\)|cancelled\(\)/.test(step));
+  assert.ok(!/MIGRATIONS_APPLIED|migrations_applied/.test(step));
+  const deploy = jobBlock("deploy-production");
+  assert.match(deploy, /if \[ "\$live" != "\$ROLLBACK_VERSION_ID" \]; then/);
+  assert.match(
+    deploy,
+    /ROLLBACK_VERSION_ID: \$\{\{ needs\.preflight\.outputs\.rollback_version_id \}\}/,
+  );
+  assert.match(deploy, /group: production-worker-mutation/);
+});
+
+test("interleaving: a recovery to a descendant before rollback capture cannot reach deployment", async () => {
+  // A -> B -> C. Initially A serves and B is admitted; a recovery can restore C
+  // before rollback capture. Locked version freshness alone then accepts C.
+  for (const event of [...AUTOMATIC, "workflow_dispatch"]) {
+    for (const [capturedCommit, explicit] of [
+      [LIVE, false],
+      [NEWER, false],
+      [NEWER, true],
+    ]) {
+      if (explicit && event !== "workflow_dispatch") continue;
+      const env = envFor(event, MIDDLE, LIVE, { INPUT_SHA: explicit ? MIDDLE : "" });
+      const initial = await checkPromotionAncestry(env, {
+        fetchImpl: compareOk(compareBody(LIVE)).fetchImpl,
+      });
+      assert.equal(initial, explicit ? "explicit" : "ahead");
+      const versionId = "11111111-1111-4111-8111-111111111111";
+      const captured = await checkRollbackTarget({
+        origin: "https://production.example",
+        repository: "o/r",
+        targetSha: MIDDLE,
+        token: "fixture-only",
+        fetchImpl: async (url) => {
+          const parsed = new URL(url);
+          if (parsed.pathname === "/up") {
+            return okJson({ revision: { version_id: versionId, commit: capturedCommit } });
+          }
+          assert.ok(parsed.pathname.endsWith("/contents/drizzle/meta/_journal.json"));
+          assert.ok([MIDDLE, capturedCommit].includes(parsed.searchParams.get("ref")));
+          return okJson({
+            encoding: "base64",
+            content: Buffer.from(
+              JSON.stringify({ entries: [{ tag: "1000_a", when: 1000 }] }),
+            ).toString("base64"),
+          });
+        },
+      });
+      assert.equal(captured.commit, capturedCommit);
+      assert.equal(
+        liveVersion([
+          {
+            created_on: "2026-11-05T00:00:00Z",
+            versions: [{ version_id: versionId, percentage: 100 }],
+          },
+        ]),
+        captured.versionId,
+        "the locked freshness check accepts the captured version even after A -> C",
+      );
+      assert.ok(recordedAncestryIndex >= 0, "workflow must re-admit the recorded commit");
+      const relation = compareBody(
+        captured.commit,
+        captured.commit === LIVE
+          ? {}
+          : {
+              status: "behind",
+              ahead_by: 0,
+              behind_by: 1,
+              total_commits: 0,
+            },
+      );
+      const result = runGuardThenSentinel({ ...env, LIVE_SHA: captured.commit }, [
+        { match: "/compare/", body: relation },
+      ]);
+      const shouldDeploy = capturedCommit === LIVE || explicit;
+      assert.equal(result.status === 0, shouldDeploy, result.stderr);
+      assert.equal(
+        result.deployed,
+        shouldDeploy,
+        `${event}: captured=${capturedCommit}, explicit=${explicit}`,
+      );
+      if (!shouldDeploy) assert.match(result.stderr, /not a verified forward descendant/);
+    }
+  }
 });
 
 test("downstream deploy jobs depend on preflight with no always() bypass", () => {
