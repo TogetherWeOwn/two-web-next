@@ -393,7 +393,8 @@ for (const [name, mutate] of [
   [
     "duplicate key",
     (i) => {
-      i.verifier = i.verifier.replace("{", '{"q":"bad",');
+      assert.ok(i.verifier.startsWith("{"));
+      i.verifier = '{"q":"bad",' + i.verifier.slice(1);
     },
   ],
   [

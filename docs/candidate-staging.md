@@ -670,6 +670,41 @@ or clean-journal authority from it. The tests are inert mock transport/parser
 fixtures; their execution does not establish live provider or artifact ZIP
 conformance.
 
+### Retained-byte/provider/serving join (not controller-integrated)
+
+[The baseline provider reader](../ci/candidate-staging-baseline-provider.mjs)
+connects the real retained-artifact reader to the fixed immutable Workers version
+endpoint with `include=modules`, and brackets that read with two list/exact/list
+serving observations. It requires original B's full UUID, the same deployment and
+complete observed history on both sides, the producer's original source tag,
+exact module names/types/decoded bytes (including the optional source map), the
+reviewed runtime and targeted placement, and the supported explicit binding and
+Worker-first asset configuration. Unknown state refuses instead of being omitted.
+Hyperdrive IDs and configured public Discord IDs must match the independently
+installed **baseline** profile. This pins B's resources; a candidate's separately
+admitted synthetic resources are not a substitute for B's pin. The recovery
+constructor revalidates the resulting canonical manifest and files.
+
+GitHub and provider bearers stay on their separate fixed API origins. The trusted
+exclusion adapter is mandatory before/after artifact retrieval, around every
+serving request and around the immutable content request. The operation combines
+caller/parent cancellation with a 180-second overall bound, ten-second provider
+request bounds, monotonic clocks and a 24-MiB decoded JSON cap. Returned buffers
+are copied inert data; errors discard source, bindings, provider messages and
+capabilities. The source manifest, installed contract/profile and selection are
+snapshotted, not followed across asynchronous work.
+
+The non-promotable result deliberately says
+`immutable-code-config-and-serving-only`. **It is not complete original-B
+admission or mutation authority.** Asset configuration is not stored asset-content
+verification, and two serving observations are not continuous global exclusion.
+The installed source closure, component/capability/synthetic-data checks,
+authenticated dirty-journal join, stored assets and complete recovery still have
+to be admitted. No workflow calls this reader, and no live provider conformance,
+activation, journal cleanup or Security clearance is claimed by its mock fixtures.
+In particular, unsupported targeted-placement responses refuse; this reader does
+not establish that the provider accepts the targeted-placement recovery upload.
+
 ## B-prime request construction (offline, not installed)
 
 [The baseline constructor](../ci/candidate-staging-baseline-upload.mjs) prepares

@@ -446,6 +446,35 @@ test("preserves additional baseline modules as inert bytes, including header con
   assert.equal(body.modules.find((m) => m.name === "math.wasm").content_base64, "AGFzbQ==");
 });
 
+for (const name of ["_worker.js.map", "renamed.map", "chunks/_worker.js.map"]) {
+  test(`source-map recovery admits only the exact retained path ${name}`, () => {
+    const input = fixture({ assets: false });
+    const bytes = Buffer.from('{"version":3,"sources":[],"mappings":""}');
+    input.files.push({ path: name, kind: "module", bytes });
+    input.baseline.files.push({
+      path: name,
+      kind: "module",
+      contentType: "application/source-map",
+      size: bytes.length,
+      sha256: candidateSha256(bytes),
+    });
+    input.baseline.files.sort((a, b) => sort(`${a.kind}:${a.path}`, `${b.kind}:${b.path}`));
+    repin(input);
+    if (name !== "_worker.js.map") {
+      refusal(input);
+    } else {
+      const body = JSON.parse(prepareCandidateBaselineUpload(input).body);
+      const module = body.modules.find((value) => value.name === name);
+      assert.equal(module.content_type, "application/source-map");
+      assert.equal(module.content_base64, bytes.toString("base64"));
+      assert.equal(
+        body.bindings.find((value) => value.name === "SESSION_SECRET").version_id,
+        VERSION,
+      );
+    }
+  });
+}
+
 for (const target of [
   "two-web-next-production",
   "two-web-kit-preview",

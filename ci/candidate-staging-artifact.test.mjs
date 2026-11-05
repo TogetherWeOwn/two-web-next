@@ -279,7 +279,9 @@ test("happy path rechecks PR and artifact, downloads once and returns inert byte
   // Candidate worker bytes are data only: nothing ran, imported or evaluated.
   assert.equal(globalThis.__candidateArtifactExecuted, undefined);
   const text = JSON.stringify(result);
-  assert.ok(!text.includes(SAS) && !text.includes("blob.core.windows.net"));
+  assert.ok(!text.includes(SAS));
+  assert.doesNotMatch(text, /https?:\/\//);
+  assert.doesNotMatch(text, /blob\.core\.windows\.net/);
 });
 
 test("API requests carry the fixed origin, bearer, version, manual redirect and a deadline", async (t) => {

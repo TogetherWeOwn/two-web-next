@@ -54,7 +54,7 @@ function path(value) {
   );
 }
 
-function bindingsSnapshot(input) {
+export function candidateBaselineBindingsSnapshot(input) {
   requireEvidence(Array.isArray(input) && input.length > 0 && input.length <= 64);
   const names = new Set();
   const bindings = [];
@@ -122,7 +122,8 @@ function filesSnapshot(input) {
           ? f.contentType === null
           : ["application/javascript+module", "application/wasm", "text/plain"].includes(
               f.contentType,
-            )),
+            ) ||
+            (f.path === "_worker.js.map" && f.contentType === "application/source-map")),
     );
     names.add(`${f.kind}:${f.path.toLowerCase()}`);
     size += f.size;
@@ -179,7 +180,7 @@ function baselineInput(options) {
         (b.assets === null ||
           (keys(b.assets, "run_worker_first") && b.assets.run_worker_first === true)),
     );
-    const bindings = bindingsSnapshot(b.bindings);
+    const bindings = candidateBaselineBindingsSnapshot(b.bindings);
     const records = filesSnapshot(b.files);
     requireEvidence(records.some((f) => f.kind === "module" && f.path === b.mainModule));
     const canonical = {

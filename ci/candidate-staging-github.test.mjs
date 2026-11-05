@@ -587,7 +587,7 @@ for (const [label, make] of [
     await assert.rejects(reader(fetchImpl).verifyPullRequest(f.identity), (error) => {
       assert.equal(error.message, "Candidate GitHub refused: request-evidence");
       assert.ok(!error.message.includes(TOKEN));
-      assert.ok(!error.message.includes("api.github.com"));
+      assert.equal(String(error), "Error: Candidate GitHub refused: request-evidence");
       assert.equal(error.cause, undefined);
       return true;
     });
@@ -1494,7 +1494,7 @@ test("installed source failures redact credentials, URLs and source text", async
   await assert.rejects(verifySources(world), (error) => {
     assert.ok(!error.message.includes(TOKEN));
     assert.ok(!error.message.includes("secret"));
-    assert.ok(!error.message.includes("api.github.com"));
+    assert.equal(String(error), "Error: Candidate GitHub refused: installed-file-digest");
     assert.match(String(error), REFUSED);
     return true;
   });
