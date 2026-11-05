@@ -29,13 +29,26 @@ function rate(value) {
   return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 1;
 }
 
+function tailSnapshot(value) {
+  // Only the installed staging tail is restorable; never admit production,
+  // environment/dispatch selectors, streaming tails or arbitrary consumers.
+  requireEvidence(
+    empty(value) ||
+      (Array.isArray(value) &&
+        value.length === 1 &&
+        keys(value[0], "service") &&
+        value[0].service === "two-web-next-alerts"),
+  );
+  return value.length === 0 ? [] : [{ service: "two-web-next-alerts" }];
+}
+
 function settingsSnapshot(value) {
   requireEvidence(
     keys(value, "logpush,observability,tags,tail_consumers") &&
       typeof value.logpush === "boolean" &&
-      empty(value.tags) &&
-      empty(value.tail_consumers),
+      empty(value.tags),
   );
+  const tails = tailSnapshot(value.tail_consumers);
   const o = value.observability;
   requireEvidence(
     keys(o, "enabled,head_sampling_rate,logs") &&
@@ -51,12 +64,12 @@ function settingsSnapshot(value) {
       typeof l.persist === "boolean" &&
       empty(l.destinations),
   );
-  // Unsupported external consumers/destinations and unknown fields refuse,
-  // rather than being dropped from B or replayed into a privileged PATCH.
+  // Unsupported consumers/destinations and unknown fields refuse, rather than
+  // being dropped from B or replayed into a privileged PATCH.
   return {
     logpush: value.logpush,
     tags: [],
-    tail_consumers: [],
+    tail_consumers: tails,
     observability: {
       enabled: o.enabled,
       head_sampling_rate: o.head_sampling_rate,

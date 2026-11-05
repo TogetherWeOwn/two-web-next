@@ -395,11 +395,21 @@ The canonical, deeply frozen snapshot binds Q, the installed profile digest,
 capture time and explicit script-settings/subdomain values. Its digest must be
 pinned through the independently authenticated recovery-artifact channel. This is
 only a **settings component**, not the complete B/provider baseline digest or
-proof that the artifact was retained. Nonempty tags, tail consumers and log
-destinations, unknown fields, omitted/default/null values and unsupported
-observability components refuse. The supported subset preserves explicit
-boolean flags and sampling rates in [0,1], including B's enabled logging and
-workers.dev flags, without copying arbitrary provider JSON into a PATCH.
+proof that the artifact was retained. The tail list accepts only empty or the
+single exact `{service:"two-web-next-alerts"}` consumer already declared by the
+[staging Kit configuration](../web/wrangler.staging.jsonc). The
+[pinned provider tail schema](https://github.com/cloudflare/cloudflare-typescript/blob/v5.2.0/src/resources/workers/scripts/tail.ts#L86-L121)
+defines its service and optional environment/namespace selectors; this helper
+rejects those selectors, production/foreign services, duplicates, aliases and
+unknown fields instead of replaying them. Sealing always removes every tail;
+restoring the independently pinned snapshot restores only its original list,
+after independent B-serving checks before and after every provider call.
+Nonempty tags and log destinations, omitted/default/null values and unsupported
+observability components (including streaming tails) still refuse. The supported
+subset preserves explicit boolean flags and sampling rates in [0,1], including
+B's enabled logging and workers.dev flags, without copying arbitrary provider
+JSON into a PATCH. This restores a component; it does not attest the tail
+Worker's own code/configuration, active sessions, capabilities or containment.
 
 `seal` first re-reads and compares B's current settings against the pinned
 snapshot, then PATCHes explicit disabled script sinks and POSTs both subdomain

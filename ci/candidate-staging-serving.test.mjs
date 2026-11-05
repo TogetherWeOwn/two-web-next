@@ -646,7 +646,7 @@ test("settings restore invokes independent serving reader before enabling any si
   const settings = {
     logpush: true,
     tags: [],
-    tail_consumers: [],
+    tail_consumers: [{ service: "two-web-next-alerts" }],
     observability: {
       enabled: true,
       head_sampling_rate: 1,
@@ -680,12 +680,17 @@ test("settings restore invokes independent serving reader before enabling any si
     },
   });
   const captured = await lifecycle.snapshot();
+  await lifecycle.seal(captured.snapshot, captured.snapshotSha256);
+  assert.equal(writes, 2);
+  assert.deepEqual(state.settings.tail_consumers, []);
   s.state.deployments.unshift(row(D2, V2, NOW - 10));
   await assert.rejects(lifecycle.restore(captured.snapshot, captured.snapshotSha256), {
     message: "Candidate settings refused: lifecycle",
   });
-  assert.equal(writes, 0);
+  assert.equal(writes, 2);
+  assert.deepEqual(state.settings.tail_consumers, []);
   s.state.deployments[0].versions[0].version_id = V1;
   await lifecycle.restore(captured.snapshot, captured.snapshotSha256);
-  assert.equal(writes, 2);
+  assert.equal(writes, 4);
+  assert.deepEqual(state.settings.tail_consumers, [{ service: "two-web-next-alerts" }]);
 });

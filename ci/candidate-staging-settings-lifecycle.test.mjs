@@ -63,10 +63,21 @@ function result(value, init = {}) {
   });
 }
 
-function setup({ f = fixture(), onCall, onGuard, reply, clock = () => NOW, signal } = {}) {
+function setup({
+  f = fixture(),
+  onCall,
+  onGuard,
+  reply,
+  clock = () => NOW,
+  signal,
+  baselineSettings = settings(),
+} = {}) {
   const calls = [];
   const guards = [];
-  const state = { settings: settings(), subdomain: { enabled: true, previews_enabled: true } };
+  const state = {
+    settings: baselineSettings,
+    subdomain: { enabled: true, previews_enabled: true },
+  };
   let bound;
   let serving = true;
   const guard = (name) => async (context, deadline) => {
@@ -242,6 +253,101 @@ test("candidate still serving refuses before re-enabling any B sink", async () =
   assert.equal(s.calls.length, count);
   assert.equal(s.state.settings.logpush, false);
 });
+
+function tailedSettings() {
+  return { ...settings(), tail_consumers: [{ service: "two-web-next-alerts" }] };
+}
+
+test("snapshots, seals and restores only the exact installed staging tail without extending recovery authority", async () => {
+  const original = tailedSettings();
+  const s = setup({ baselineSettings: original });
+  const b = await s.capture();
+  assert.deepEqual(b.snapshot.settings, original);
+  deepFrozen(b);
+  original.tail_consumers[0].service = "mutated-after-capture";
+  assert.deepEqual(b.snapshot.settings.tail_consumers, [{ service: "two-web-next-alerts" }]);
+  original.tail_consumers[0].service = "two-web-next-alerts";
+  await s.api.seal(b.snapshot, b.snapshotSha256);
+  assert.deepEqual(s.state.settings.tail_consumers, []);
+  const count = s.calls.length;
+  s.setServing(false);
+  await assert.rejects(s.api.restore(b.snapshot, b.snapshotSha256), ERROR);
+  assert.equal(s.calls.length, count);
+  assert.deepEqual(s.state.settings.tail_consumers, []);
+  s.setServing(true);
+  const restored = await s.api.restore(b.snapshot, b.snapshotSha256);
+  assert.deepEqual(s.state.settings, tailedSettings());
+  assert.equal(restored.promotable, false);
+  assert.equal(restored.phase, "restore");
+  assert.equal(restored.snapshotSha256, b.snapshotSha256);
+  assert.equal(restored.stateSha256, candidateSha256(JSON.stringify(s.state)));
+  assert.equal(JSON.stringify(restored).includes("two-web-next-alerts"), false);
+  for (let n = count; n <= s.calls.length; n++) {
+    assert.ok(s.guards.some((g) => g.calls === n && g.name === "serving"));
+    assert.ok(s.guards.some((g) => g.calls === n && g.name === "dirty"));
+  }
+  assert.deepEqual(await s.api.restore(b.snapshot, b.snapshotSha256), restored);
+});
+
+test("tail changes after the independently pinned snapshot refuse sealing before mutation", async () => {
+  const s = setup({ baselineSettings: tailedSettings() });
+  const b = await s.capture();
+  s.state.settings.tail_consumers = [];
+  await assert.rejects(s.api.seal(b.snapshot, b.snapshotSha256), ERROR);
+  assert.ok(s.calls.every((c) => c.method === "GET"));
+});
+
+for (const phase of ["seal", "restore"])
+  for (const index of phase === "seal" ? [5, 6, 8] : [3, 4, 6])
+    test(`${phase} refuses a lost or retained tail at response ${index} with no later mutation`, async () => {
+      const s = setup({
+        baselineSettings: tailedSettings(),
+        reply: (v, n) => {
+          if (n === index)
+            v.tail_consumers = phase === "seal" ? [{ service: "two-web-next-alerts" }] : [];
+          return result(v);
+        },
+      });
+      const b = await s.capture();
+      await assert.rejects(s.api[phase](b.snapshot, b.snapshotSha256), ERROR);
+      const finalSettings = phase === "seal" ? 8 : 6;
+      assert.equal(s.calls.length, index === finalSettings ? index + 1 : index);
+      assert.ok(s.calls.slice(index).every((c) => c.method === "GET"));
+    });
+
+for (const bad of [
+  null,
+  {},
+  [null],
+  Array(1),
+  [{ service: "two-web-next-alerts-production" }],
+  [{ service: "two-web-next-alerts", environment: "production" }],
+  [{ service: "two-web-next-alerts", environment: "" }],
+  [{ service: "two-web-next-alerts", namespace: "staging" }],
+  [{ service: "two-web-next-alerts", namespace: null }],
+  [{ service: "two-web-next-alerts", extra: true }],
+  [{ service: "TWO-WEB-NEXT-ALERTS" }],
+  [{ service: "two-web-next-alerts/" }],
+  [{ service: "two-web-next-alerts​" }],
+  [{ service: "two-web-next-alerts" }, { service: "two-web-next-alerts" }],
+]) {
+  test(`snapshot refuses unadmitted tail ${JSON.stringify(bad)}`, async () => {
+    const s = setup({ baselineSettings: { ...settings(), tail_consumers: bad } });
+    await assert.rejects(s.capture(), ERROR);
+    assert.equal(s.calls.length, 1);
+  });
+  for (const phase of ["seal", "restore"])
+    test(`${phase} refuses unadmitted tail ${JSON.stringify(bad)} even with a recomputed pin`, async () => {
+      const s = setup();
+      const b = await s.capture();
+      const changed = structuredClone(b.snapshot);
+      changed.settings.tail_consumers = bad;
+      const pin = candidateSha256(JSON.stringify(changed));
+      s.bind(pin);
+      await assert.rejects(s.api[phase](changed, pin), ERROR);
+      assert.equal(s.calls.length, 2);
+    });
+}
 
 test("baseline drift between snapshot and seal refuses without mutation", async () => {
   const s = setup();
