@@ -297,10 +297,15 @@ binding isolation before any remote mutation.
 
 1. Require green `ci-ok`, `e2e-ok`, `gitleaks`, `pr-lint`, `CodeRabbit` and
    `Devin Review` on the exact head SHA, with every review finding fixed or
-   answered with evidence, and the owner's approval through
-   `request_confirmation` on the card (this merge deploys production). The
-   agent that did the work then squash-merges. Record the merged SHA and
-   intended target.
+   answered with evidence, and fresh per-PR exact-head Release Manager
+   `request_confirmation` on a child card assigned and addressed to the Release
+   Manager (this merge deploys production). Apply the
+   [staging or artifact-identical evidence contract](../CONTRIBUTING.md#artifact-identical-merge-evidence)
+   and its retained safeguards. Any push requires a new exact-head confirmation.
+   When native review stages apply, the final-stage reviewer squash-merges the
+   exact reviewed and confirmed head before closing the task; otherwise the
+   author merges. Pin the merge to that SHA. Record the confirmation, pinned
+   squash SHA and intended target in the release log.
 2. Before release, capture the current deployment and its **version ID** (not
    its deployment ID) as the known-good rollback pointer. The following are
    remote metadata reads, not database probes; approved Cloudflare credentials

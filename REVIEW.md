@@ -24,9 +24,16 @@ changes never qualify, including deploy/release workflows, Wrangler/Worker
 configuration, Dockerfiles, migrations, package manifests and lockfiles.
 
 Require both head SHAs and both bundle/image hashes on the fresh confirmation
-card. Compare actual deployed artifacts, including all deployed assets, not a
-partial bundle, source-tree equality, a file label or PR title. The Release
-Manager must verify and record the classification and both hashes in the decision.
+card, with the build/hash commands and complete artifact scope required by
+[CONTRIBUTING.md](CONTRIBUTING.md#artifact-identical-merge-evidence).
+Compare actual deployed artifacts, including Worker modules, every deployed
+static asset and the tail Worker, not a partial bundle, source-tree equality,
+a file label or PR title. Before using the exception to merge, recheck that the
+recorded `main` SHA is current. An advance requires a renewed complete-artifact
+comparison and fresh Release Manager confirmation against the new `main` SHA,
+or full exact-head staging qualification; it does not require restacking an
+otherwise mergeable PR. The Release Manager must verify and record the
+classification and both hashes in the decision.
 A mismatch, non-qualifying diff or incomplete proof retains full exact-head
 staging qualification. Do not demand it solely because the head lacks staging
 when all conditions are verified; do not infer that a docs/test-only label proves

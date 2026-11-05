@@ -94,7 +94,12 @@ For production-deploying `main` in `TogetherWeOwn/two-web-next` and
    both bundle/image hashes on the confirmation card, with the build and hash
    commands and artifact scope so the comparison can be verified. A file label,
    identical source tree or title is not artifact proof. Missing or partial
-   evidence does not qualify.
+   evidence does not qualify. Before using this exception to merge, recheck that
+   the recorded `main` SHA is still current. If `main` advanced, repeat the
+   complete-artifact comparison against the new `main` SHA and obtain fresh
+   Release Manager confirmation recording the new comparison, or supply full
+   exact-head staging qualification. This does not require merging `main` into
+   or rebasing the PR branch when it remains mergeable.
 3. **Exact-head gates pass.** Required CI and Devin Review pass on the exact PR
    head, with every finding fixed or answered with evidence. Required checks,
    rulesets and native review stages still apply.
