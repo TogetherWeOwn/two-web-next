@@ -542,6 +542,74 @@ normal-uploader inheritance verification, actual installed adapters and independ
 live containment/recovery admission remain required. The mock tests make no live
 provider request or traffic change. Production workflows/configuration stay unchanged.
 
+## B-prime request construction (offline, not installed)
+
+[The baseline constructor](../ci/candidate-staging-baseline-upload.mjs) prepares
+an inert JSON request for a new B-prime version. It makes no provider request,
+reads no secret, selects no traffic and grants no journal-cleaning authority.
+Restoring original B traffic alone leaves the candidate as the latest uploaded
+version, so the ordinary uploader could still inherit its missing secrets and
+leftover QA verifier. This constructor is one part of repairing that state,
+not proof that the state has been repaired.
+
+The input is an original-B web-component manifest, its **independently pinned**
+canonical digest, and separately obtained module/asset buffers. The manifest
+binds Q, the installed staging-profile digest, B's full UUID, capture time,
+entrypoint, runtime, placement, original build tag, explicit binding inventory,
+asset policy and sorted file records. Every supplied byte is copied and rehashed
+against those records; missing/extra/replaced files, path/case aliases, sparse
+arrays, unsupported fields/types and aggregate bounds refuse. File limits remain
+4096 entries and 16 MiB total decoded module plus asset content. Module bytes
+are only base64-encoded as data, never imported, executed or resolved.
+
+The supported subset preserves the current staging compatibility date/flag,
+original 40-hex build tag and targeted `aws:us-east-1` placement. Public text
+bindings are restricted to the eight names in the staging Kit configuration;
+Hyperdrive names are only DB/BOT_DB and queue producers only the two fixed
+staging names. Unsupported retained variables/components refuse; they must not
+be silently dropped when producing the manifest. No service/production target,
+extra runtime policy or `QA_RUN_AUTH` binding can enter this request. A matching
+profile or baseline hash proves identity, **not** account/resource scope,
+synthetic-data isolation, completeness or original-B provenance.
+
+Only secret binding **names and types** are admitted. Secret text, key material,
+renames and caller-provided inheritance sources refuse. Construction replaces
+each secret record with `{name,type:"inherit",version_id:<original B UUID>}`;
+non-secret bindings are explicit. There is no `latest` fallback or implicit
+binding retention. The
+[pinned Workers API contract](https://github.com/cloudflare/cloudflare-typescript/blob/v5.2.0/src/resources/workers/beta/workers/versions.ts#L1366-L1390)
+supports the full version pin. The classic script endpoint does not, so the
+request targets only `/workers/workers/two-web-next/versions?deploy=false`, never
+the classic upload endpoint or immediate deployment. The body carries B's modules,
+runtime, tag and placement, not mutable script settings/tails/subdomain policy.
+
+Asset-bearing B additionally requires a completion ticket joined to Q, B's
+manifest digest and its exact asset-record root. This is a shape/integrity check,
+not signature/provenance verification. A future trusted recovery sender must
+create that session from the admitted B assets and consume its ticket internally;
+the candidate asset uploader is not a recovery adapter and cannot renew QA expiry.
+Module-only B requires a null ticket and no assets config/binding. Asset policy
+is explicitly Worker-first. The JSON body contains an asset capability and module
+bytes: never log, persist or publish it. Only the frozen digest/identity proof is
+public; it explicitly says `inert-baseline-request-only` and `promotable:false`.
+
+The pinned SDK defines the Workers JSON create/modules/assets/inherit shape;
+the shipped Wrangler 4.156.1 parser establishes targeted placement conversion
+from the staging configuration. That older SDK's placement type lists only smart
+mode: **targeted placement acceptance by this Workers endpoint is unobserved**,
+not inferred from the classic client's behavior. Refusal needs provider evidence,
+not silently dropping placement or switching to `latest` inheritance. All current
+tests are offline fixtures, not cross-API conformance or live recovery evidence.
+
+The installed authenticated original-B manifest producer/download/channel,
+complete immutable B/provider/component/stored-asset admission, guarded asset and
+version sender, independent B-prime module/config/assets readback, B-prime traffic
+selection and latest-upload/ordinary-uploader inheritance verification remain
+required. Recovery must run under exclusion and authenticated dirty occupancy,
+leave occupancy dirty on uncertainty, and restore mutable sinks only after
+independently admitted baseline code serves. This helper supplies none of those
+adapters, no activation authority and no complete recovery receipt.
+
 ## Durable occupancy journal and recovery boundary
 
 [The journal](../ci/candidate-staging-occupancy.mjs) implements a narrow GitHub
