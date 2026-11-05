@@ -18,6 +18,8 @@
 // session is unavailable (never a false logout, never a guest render of
 // member state), and every database failure is a 503 before bytes.
 import { dbFor } from "../admin/db";
+import { savedEventReview } from "../admin/event-saved-review";
+import { renderSavedEventReviewHtml } from "../admin/pages/event-form-review";
 import { alertRequestError, exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import type { Env } from "../env";
@@ -36,7 +38,7 @@ import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
-import { formatElapsedDuration, formatEventWhen, isValidZone } from "./date-format";
+import { formatElapsedDuration, formatEventWhen, instantIso, isValidZone } from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
@@ -126,6 +128,8 @@ export interface KitEventDetailSeries {
 }
 
 export interface KitEventDetailModel {
+  /** Moderator-only escaped leaves; the member rendering is shared unchanged. */
+  review?: { banner: string; actions: string; rsvp: string };
   eventKey: string;
   title: string;
   game: string | null;
@@ -388,6 +392,15 @@ export async function resolveKitEventDetail(
       return { kind: "unavailable", status: 503, headers };
     }
     if (event) {
+      const wantsReview = new URLSearchParams(search).get("review") === "1";
+      if (wantsReview && (session.status === "unknown" || !session.session?.moderator)) {
+        const status = session.status === "unknown" ? 503 : 403;
+        const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
+        setHeaders(headers);
+        return status === 503
+          ? { kind: "unavailable", status, headers }
+          : { kind: "forbidden", status, headers };
+      }
       // Cancelled before any session-gated read: the 410 stays
       // viewer-independent, so a store outage or a rotated cookie can never
       // turn the static cancellation into a 500. The outcome carries the #838
@@ -395,7 +408,7 @@ export async function resolveKitEventDetail(
       // resolveEventState), so the route-level error page renders the branded
       // cancellation instead of the generic shell. A failing alternatives
       // lookup degrades to an empty list, never an outage.
-      if (event.status === "cancelled") {
+      if (event.status === "cancelled" && !wantsReview) {
         let related: EventLink[] = [];
         try {
           related = await store.relatedFn(db, event);
@@ -525,7 +538,8 @@ export async function resolveKitEventDetail(
             : null;
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
-      const robots = event.status === "draft" || event.status === "past" ? NOINDEX : null;
+      const review = wantsReview ? savedEventReview(event, now) : null;
+      const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
         vary: "Cookie",
@@ -537,6 +551,11 @@ export async function resolveKitEventDetail(
         status: 200,
         headers,
         model: {
+          ...(review ? { review: {
+            banner: renderSavedEventReviewHtml(review),
+            actions: renderSavedEventReviewHtml(review, "actions"),
+            rsvp: renderSavedEventReviewHtml(review, "rsvp"),
+          } } : {}),
           eventKey: event.eventKey,
           title: event.title,
           game: event.game,
@@ -580,7 +599,7 @@ export async function resolveKitEventDetail(
           endsWhenText: formatEventWhen(event.endsAt, event.timezone),
           durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
-          timeDatetime: event.startsAt.toISOString(),
+          timeDatetime: instantIso(event.startsAt),
           attendees,
           attendeesPaging,
           answer,
@@ -611,7 +630,7 @@ export async function resolveKitEventDetail(
           viewerMember: member,
           viewerModerator: viewer?.moderator === true,
           viewerUsername: viewer?.username ?? null,
-          endsAt: event.endsAt.toISOString(),
+          endsAt: instantIso(event.endsAt),
           jsonLd: eventJsonLd(event, appUrl),
           siteJsonLd: siteJsonLd(appUrl),
         },

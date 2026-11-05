@@ -13,8 +13,14 @@ export const fmt = (d: Date, tz: string): string => {
   }
 };
 
+/** Empty for an unreadable stored instant; never substitute the render clock. */
+export function instantIso(instant: Date): string {
+  return Number.isFinite(instant.getTime()) ? instant.toISOString() : "";
+}
+
 /** Detail wall time shared by HTML, Kit and Markdown; ISO on a bad zone. */
 export function formatEventWhen(instant: Date, timezone: string): string {
+  if (!instantIso(instant)) return "Time unavailable";
   try {
     return new Intl.DateTimeFormat("en-GB", {
       weekday: "long",

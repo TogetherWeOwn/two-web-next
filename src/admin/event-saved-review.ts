@@ -1,61 +1,57 @@
-// Read-only advice from the persisted row, never from retained form values.
-// Publication still judges status, end time and location under its row lock.
+// Review uses only the persisted detail projection, never retained editor input.
+import { instantIso } from "../events/date-format";
+
 export type SavedEventReviewRow = {
   eventKey: string;
   status: string;
   location: string | null;
+  startsAt: Date;
   endsAt: Date;
-  // The real store always supplies this; narrower read-model fixtures may not.
-  // Missing provenance must not be replaced with the rendering clock.
   updatedAt?: Date;
 };
 
 export function savedEventReview(row: SavedEventReviewRow, now: Date) {
+  const editHref = `/admin/events/${encodeURIComponent(row.eventKey)}`;
   const corrections: { message: string; href: string; label: string }[] = [];
-  // Corrections are publication advice, so only drafts get them: a published
-  // event that legitimately ended, or a terminally cancelled one, must not be
-  // told to fix fields in order to publish.
   if (row.status === "draft") {
     if (!row.location?.trim()) {
       corrections.push({
-        message: "The saved location is blank. Add a location before publishing.",
-        href: "#f-location",
+        message: "Location is blank. Add a location and save.",
+        href: `${editHref}#f-location`,
         label: "Edit location",
       });
     }
-    // Equality is allowed by the publication guard, unlike the live-RSVP boundary.
-    if (!Number.isFinite(row.endsAt.getTime())) {
+    for (const [field, date] of [["start", row.startsAt], ["end", row.endsAt]] as const) {
+      if (!instantIso(date)) {
+        corrections.push({
+          message: `The saved ${field} time can't be read. Fix the ${field} time and save.`,
+          href: `${editHref}#f-${field === "start" ? "starts" : "ends"}-at`,
+          label: `Edit ${field} time`,
+        });
+      }
+    }
+    if (row.endsAt.getTime() < now.getTime()) {
       corrections.push({
-        message: "The saved end time is unavailable. Correct its dates before publishing.",
-        href: "#f-ends-at",
-        label: "Edit end time",
-      });
-    } else if (row.endsAt.getTime() < now.getTime()) {
-      corrections.push({
-        message: "The saved event has already ended. Update its dates before publishing.",
-        href: "#f-ends-at",
+        message: "This event has already ended. Fix the end time and save.",
+        href: `${editHref}#f-ends-at`,
         label: "Edit end time",
       });
     }
   }
   return {
-    href: `/events/${encodeURIComponent(row.eventKey)}`,
-    updatedAt:
-      row.updatedAt && Number.isFinite(row.updatedAt.getTime())
-        ? row.updatedAt.toISOString()
-        : null,
+    href: `/e/${encodeURIComponent(row.eventKey)}?review=1`,
+    editHref,
+    updatedAt: row.updatedAt ? instantIso(row.updatedAt) || null : null,
     guidance:
-      row.status === "cancelled"
-        ? "This saved event is cancelled. Cancellation is terminal; it cannot be republished."
+      row.status === "draft"
+        ? "This is a draft. Only moderators can see this page."
         : row.status === "published"
-          ? "This saved event is already published. Saving edits updates the published record."
-          : row.status === "past"
-            ? "This saved event is past. Past events have ended and cannot be published as-is."
-            : row.status !== "draft"
-              ? "This saved event is not a draft and cannot be published as-is."
-              : corrections.length === 0
-                ? "The saved draft is ready for the current publication checks."
-                : "The saved draft needs corrections before publishing.",
+          ? "This event is already published. This is what members see now."
+          : row.status === "cancelled"
+            ? "This event is cancelled. Members don't see it in listings."
+            : row.status === "past"
+              ? "This event has ended and cannot be published as-is."
+              : "This event is not a draft and cannot be published as-is.",
     corrections,
   };
 }

@@ -3,46 +3,70 @@
 import type { FC } from "hono/jsx";
 import type { SavedEventReview } from "../event-saved-review";
 
-// Reuse the escaped Hono leaf on Kit's server-only editor rather than
-// duplicating its static prose and control flow in a generated client module.
-export function renderSavedEventReviewHtml(review: SavedEventReview): string {
-  return String(<EventReviewSection review={review} />);
+type ReviewPart = "banner" | "actions" | "rsvp";
+
+// Kit consumes escaped server-rendered leaves; member content stays in its detail renderer.
+export function renderSavedEventReviewHtml(
+  review: SavedEventReview,
+  part: ReviewPart = "banner",
+): string {
+  return String(<EventReviewSection review={review} part={part} />);
 }
 
-export const EventReviewSection: FC<{ review: SavedEventReview }> = ({ review }) => (
-  <section aria-label="Saved event review">
-    <h2>Review the saved event</h2>
-    <p>
-      <a href={review.href}>Review saved event</a> on its detail page. Drafts remain visible only to
-      moderators.
-    </p>
-    <p>
-      {review.updatedAt ? (
-        <>
-          Saved record last updated: <time datetime={review.updatedAt}>{review.updatedAt}</time>{" "}
-          (UTC). This is an update time, not an immutable revision or a preview check time.
-        </>
-      ) : (
-        "Saved record update time is unavailable."
-      )}
-    </p>
-    <p>
-      Review and the separate Publish action use only the saved record. Unsaved edits are not
-      included in either. Save successfully, then review again before publishing.
-    </p>
-    <p>{review.guidance}</p>
-    {review.corrections.length > 0 ? (
-      <ul>
-        {review.corrections.map((issue) => (
-          <li>
-            {issue.message} <a href={issue.href}>{issue.label}</a> and Save.
-          </li>
-        ))}
-      </ul>
-    ) : null}
-    <p class="hint">
-      Advice reflects the saved record when this page rendered, not permission to publish. The
-      server rechecks the current saved record when Publish runs.
-    </p>
-  </section>
-);
+export const EventReviewSection: FC<{ review: SavedEventReview; part?: ReviewPart }> = ({
+  review,
+  part = "banner",
+}) => {
+  if (part === "rsvp") {
+    return (
+      <>
+        <button type="button" class="btn" disabled aria-describedby="preview-rsvp-hint">
+          RSVP
+        </button>
+        <p id="preview-rsvp-hint">RSVP is disabled in preview.</p>
+      </>
+    );
+  }
+  if (part === "actions") {
+    return (
+      <div class="actions" data-testid="event-review-actions">
+        <a class="btn" href={review.editHref}>Back to edit</a>
+      </div>
+    );
+  }
+  const needsCorrections = review.corrections.length > 0;
+  return (
+    <section
+      class="notice"
+      aria-label="Preview — moderator only"
+      role={needsCorrections ? "alert" : "status"}
+      data-testid="event-review"
+    >
+      <p>
+        <strong>
+          {needsCorrections ? "Fix these before publishing" : "Preview — as members will see it"}
+        </strong>
+      </p>
+      <p>{review.guidance}</p>
+      <p>
+        {review.updatedAt ? (
+          <>
+            Saved record last updated: <time datetime={review.updatedAt}>{review.updatedAt}</time>{" "}
+            (UTC).
+          </>
+        ) : (
+          "Saved record update time is unavailable."
+        )}
+      </p>
+      {needsCorrections ? (
+        <ul>
+          {review.corrections.map((issue) => (
+            <li>
+              {issue.message} <a href={issue.href}>{issue.label}</a>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+};

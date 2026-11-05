@@ -172,6 +172,7 @@ const lineup = $derived(
   <nav class="event-back" aria-label="Event calendar">
     <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
   </nav>
+  {#if model.viewerModerator && model.review}{@html model.review.banner}{/if}
   <section class="event-hero" aria-label="Event overview">
     <p class="event-kicker">{model.game ?? "Community event"}</p>
     {#if model.isDraft}
@@ -179,6 +180,9 @@ const lineup = $derived(
     {/if}
     {#if model.isPast}
       <p class="notice" data-testid="event-past">Past event</p>
+    {/if}
+    {#if model.status === "cancelled"}
+      <p class="notice" role="status" data-testid="event-cancelled">Cancelled</p>
     {/if}
     {#if model.isOngoing}
       <p class="notice" data-testid={EVENT_ONGOING_TESTID}>{ONGOING_COPY}</p>
@@ -199,7 +203,7 @@ const lineup = $derived(
     <div>
       <dt>Starts</dt>
       <dd>
-        <time datetime={model.timeDatetime}>{model.whenText} ({model.zoneLabel})</time>
+        <time datetime={model.timeDatetime || undefined}>{model.whenText} ({model.zoneLabel})</time>
       </dd>
       <dd class="event-device-timezone" data-event-device-timezone>
         <button type="button" hidden data-testid="event-device-timezone-starts-button">Show in my device timezone</button>
@@ -209,7 +213,7 @@ const lineup = $derived(
     <div>
       <dt>Ends</dt>
       <dd>
-        <time datetime={model.endsAt}>{model.endsWhenText} ({model.zoneLabel})</time>
+        <time datetime={model.endsAt || undefined}>{model.endsWhenText} ({model.zoneLabel})</time>
       </dd>
       <dd class="event-device-timezone" data-event-device-timezone>
         <button type="button" hidden data-testid="event-device-timezone-ends-button">Show in my device timezone</button>
@@ -295,6 +299,9 @@ const lineup = $derived(
     </div>
   </dl>
   <div class="event-rsvp">
+    {#if model.viewerModerator && model.review}
+      {@html model.review.rsvp}
+    {:else}
     <section
       data-island={RSVP_BUTTON_ISLAND}
       data-event-key={model.eventKey}
@@ -362,6 +369,7 @@ const lineup = $derived(
         </form>
       {/if}
     </section>
+    {/if}
   </div>
   <div class="event-detail-grid">
     <div>
@@ -562,4 +570,5 @@ const lineup = $derived(
       </section>
     {/if}
   </div>
+  {#if model.viewerModerator && model.review}{@html model.review.actions}{/if}
 </Shell>

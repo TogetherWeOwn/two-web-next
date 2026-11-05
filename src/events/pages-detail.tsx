@@ -22,7 +22,9 @@ import type {
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-import { formatElapsedDuration, formatEventWhen as fmtWithOffset } from "./date-format";
+import { formatElapsedDuration, formatEventWhen as fmtWithOffset, instantIso } from "./date-format";
+import { EventReviewSection } from "../admin/pages/event-form-review";
+import type { SavedEventReview } from "../admin/event-saved-review";
 
 const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now }) => {
   const availability = eventLinkAvailability(event, now);
@@ -92,6 +94,7 @@ export const EventPage: FC<{
   attendeePage?: number;
   /** Rooted .md alternate path (A2), e.g. `/e/<key>.md`. */
   markdownAlternate?: string;
+  review?: SavedEventReview;
 }> = ({
   e,
   neighbors,
@@ -111,7 +114,9 @@ export const EventPage: FC<{
   returnTo,
   attendeePage = 1,
   markdownAlternate,
+  review: requestedReview,
 }) => {
+  const review = session?.moderator ? requestedReview : undefined;
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
@@ -129,11 +134,12 @@ export const EventPage: FC<{
       session={session}
       loginReturnTo={path}
       description={e.description || "An event at Together We Own."}
-      robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
+      robots={review || e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
       markdownAlternate={markdownAlternate}
       siteJsonLd={siteJsonLd}
       backLink={archiveReturnLink(archive)}
     >
+      {review ? <EventReviewSection review={review} /> : null}
       <section class="event-hero" aria-label="Event overview">
         <p class="event-kicker">{e.game || "Community event"}</p>
         {e.status === "draft" ? (
@@ -163,7 +169,7 @@ export const EventPage: FC<{
         <div>
           <dt>Starts</dt>
           <dd>
-            <time datetime={e.startsAt.toISOString()}>
+            <time datetime={instantIso(e.startsAt) || undefined}>
               {fmtWithOffset(e.startsAt, e.timezone)} (
               {isValidZone(e.timezone) ? e.timezone : "UTC"})
             </time>
@@ -182,7 +188,7 @@ export const EventPage: FC<{
         <div>
           <dt>Ends</dt>
           <dd>
-            <time datetime={e.endsAt.toISOString()}>
+            <time datetime={instantIso(e.endsAt) || undefined}>
               {fmtWithOffset(e.endsAt, e.timezone)} ({isValidZone(e.timezone) ? e.timezone : "UTC"})
             </time>
           </dd>
@@ -199,8 +205,8 @@ export const EventPage: FC<{
             <dd
               class="event-device-timezone"
               data-event-time-from-now
-              data-starts-at={e.startsAt.toISOString()}
-              data-ends-at={e.endsAt.toISOString()}
+              data-starts-at={instantIso(e.startsAt) || undefined}
+              data-ends-at={instantIso(e.endsAt) || undefined}
             >
               <button type="button" hidden data-testid="event-time-from-now-button">
                 Show time from now
@@ -293,16 +299,20 @@ export const EventPage: FC<{
         </div>
       </dl>
       <div class="event-rsvp">
-        <RsvpButton
-          e={e}
-          now={now}
-          member={member}
-          answer={answer}
-          waitlistPosition={waitlistPosition}
-          returnTo={returnTo ?? path}
-          attendeePage={attendeePage}
-        />
-        <script src="/islands/rsvp-button.js" defer />
+        {review ? (
+          <EventReviewSection review={review} part="rsvp" />
+        ) : (
+          <RsvpButton
+            e={e}
+            now={now}
+            member={member}
+            answer={answer}
+            waitlistPosition={waitlistPosition}
+            returnTo={returnTo ?? path}
+            attendeePage={attendeePage}
+          />
+        )}
+        {review ? null : <script src="/islands/rsvp-button.js" defer />}
         <script src="/islands/event-device-timezone.js" defer />
         <script src="/islands/event-time-from-now.js" defer />
       </div>
@@ -582,6 +592,7 @@ export const EventPage: FC<{
           </section>
         ) : null}
       </div>
+      {review ? <EventReviewSection review={review} part="actions" /> : null}
     </EventDetailShell>
   );
 };

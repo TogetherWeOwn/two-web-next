@@ -6,7 +6,7 @@ import { savedEventReview } from "../src/admin/event-saved-review";
 import { renderSavedEventReviewHtml } from "../src/admin/pages/event-form-review";
 
 const page = fileURLToPath(
-  new URL("../web/src/routes/admin/events/[key]/+page.svelte", import.meta.url).href,
+  new URL("../web/src/lib/EventDetail.svelte", import.meta.url).href,
 );
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url).href);
 const { compile } = webRequire("svelte/compiler");
@@ -18,6 +18,7 @@ describe("saved-event review server-only presentation", () => {
         eventKey: 'key"><script>',
         status: "draft",
         location: "Hall",
+        startsAt: new Date("2030-01-10T23:00:00Z"),
         endsAt: new Date("2030-01-11T00:00:00Z"),
       },
       new Date("2030-01-10T00:00:00Z"),
@@ -33,7 +34,11 @@ describe("saved-event review server-only presentation", () => {
         },
       ],
     });
-    expect(html).toContain('href="/events/key%22%3E%3Cscript%3E"');
+    expect(renderSavedEventReviewHtml(review, "actions")).toContain('href="/admin/events/key%22%3E%3Cscript%3E"');
+    const rsvp = renderSavedEventReviewHtml(review, "rsvp");
+    expect(rsvp).toContain('disabled="" aria-describedby="preview-rsvp-hint"');
+    expect(rsvp).toContain('id="preview-rsvp-hint">RSVP is disabled in preview.');
+    expect(rsvp).not.toContain("<form");
     expect(html).toContain("&lt;img");
     expect(html).toContain("&lt;svg");
     expect(html).toContain("&lt;script&gt;alert(1)&lt;/script&gt;");
@@ -46,9 +51,9 @@ describe("saved-event review server-only presentation", () => {
       filename: page,
     });
     for (const prose of [
-      "Review the saved event",
-      "Unsaved edits are not included",
-      "Advice reflects the saved record",
+      "Preview — as members will see it",
+      "Saved record last updated",
+      "Fix these before publishing",
     ]) {
       expect(js.code.includes(prose), `client must not carry: ${prose}`).toBe(false);
     }

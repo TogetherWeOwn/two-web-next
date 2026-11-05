@@ -1,60 +1,25 @@
-# Saved-event review: local visual evidence (Hono)
+# Saved-event review evidence
 
-## Design contract
+## Implementation contract
 
-**Audience and job:** moderators checking the persisted event before publication.
-**Primary action:** Save successfully → Review saved event → Publish the saved draft.
+Moderators inspect the persisted member detail rendering, then return to edit
+or publish. Reuse the existing Hono and Kit detail renderers, typography, content
+width, tokens, notices and buttons. Moderator chrome adds a banner above and
+non-sticky actions below; it must not inset or restyle member content.
+References: the existing member detail pages and moderator event editor.
+No new framework, tokens, inline editor, sharing permission or approval workflow.
 
-Reuse the current featured-preview section hierarchy, event Status actions and
-native field anchors. Unlike featured content's checked-at preview, this section
-labels the record's actual update timestamp. There is no new visual direction:
-the current admin shell, typography, paper/ink palette, headings and links remain.
-One native section sits between Save and Status and wraps naturally on mobile.
-No new CSS, framework, token, endpoint, sharing permission or mutation is added.
+Required states: ready draft, corrections needed, unavailable update timestamp,
+unsaved editor changes, non-draft, stale record and publish failure. Correction
+links return to editor fields; RSVP is disabled in preview. Both desktop
+1280×800 and mobile 390×844 need real-app captures opened for visual review.
 
-**Required states:** saved/new, draft/published/cancelled/past, missing location,
-strict before/equal/after-end advice, unsaved edits and rejected saves. Readiness
-is advisory; Publish remains a separate native form, validated under its existing
-server lock. See the [moderator workflow](../../moderator-admin-guide.md#save--review--publish).
+## Historical captures — not evidence for the corrected UI
 
-Kit parity (the same review rendered through the Kit editor's server-only leaf)
-follows in the second PR of this task, with its own captures.
+The six PNGs in this directory show the superseded advisory editor section,
+not the member-detail review mode. They are retained for the before comparison
+only. They do not verify the current candidate, Kit parity or publish-from-view.
 
-## Opened comparisons
-
-Full-page Chromium captures use desktop **1280×800** and mobile **390×844**
-viewports. Every comparison below was opened for visual inspection. All content
-is synthetic. The actual Hono editor response was rendered with the served
-stylesheet; requests were fulfilled locally.
-These images do not claim deployed traffic or a live Publish.
-
-| Editor | Width | Before | After |
-|---|---|---|---|
-| Hono | Desktop | [Before](before-Hono-desktop.png) | [After](after-Hono-desktop.png) |
-| Hono | Mobile | [Before](before-Hono-mobile.png) | [After](after-Hono-mobile.png) |
-
-Required-state captures (after only; the before page has no review section):
-
-| State | Width | After |
-|---|---|---|
-| Ready draft | Desktop | [After](after-ready-Hono-desktop.png) |
-| Ready draft | Mobile | [After](after-ready-Hono-mobile.png) |
-
-## Critique and scope
-
-- The new heading/link follows Save and precedes Status; the primary Save/Publish
-  actions stay distinct. No affordance appears on the new unsaved form.
-- Timestamp and advisory paragraphs wrap within the existing mobile column;
-  no horizontal document overflow was observed at either width.
-- Blank-location guidance has a native link back to its existing input.
-  Published/cancelled/past copy does not imply that another Publish is available.
-- Rejected-save fields retain the attempted input while provenance still identifies
-  the stored record. Non-draft guidance names the terminal state instead of
-  offering publication advice.
-- Existing typography, spacing, navigation and roster layout are retained. No
-  material visual issue was found in the opened local captures. Additional
-  required-state assertions live in the unit tests beside the change.
-
-The current a11y, Lighthouse and public-page visual specifications exercise Hono;
-the Kit editor follows in the second PR. The public-page visual baselines are
-unchanged; CI on the pinned runner remains authoritative for pixel comparisons.
+New screenshots and exact-head GitHub Actions evidence are still pending.
+No current visual, accessibility, performance or CI pass is claimed here.
+The Hono gates do not exercise the Kit route; Kit needs its own screenshots.
