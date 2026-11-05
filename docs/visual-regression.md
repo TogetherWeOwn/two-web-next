@@ -1,5 +1,15 @@
 # Visual regression
 
+Run the visual/CI gates through GitHub Actions by pushing the PR branch, with a
+draft PR while incomplete and ready status only when complete. Cite run/job
+URLs for the exact PR head SHA and record scope-approved skips; local fixture
+screenshots and local transcripts are not CI evidence. Do not run a local
+full-suite/CI mirror. A focused reproduction of one failing test must follow
+[the local limits and guarded Boat build controls](../CONTRIBUTING.md#verify-a-change-with-github-actions),
+including `--no-env`, source-only export and verified cleanup; fallback cannot
+authorize a full suite or heavy raw-host build. The existing CI-only visual
+runner and artifact-acceptance rules below remain unchanged.
+
 `e2e/visual/public-pages.visual.ts` takes full-page screenshots of the routes and
 event states below at desktop (1280×800) and mobile (390×844) widths and compares
 them with the committed baselines in `e2e/visual/__screenshots__/`.

@@ -75,12 +75,14 @@ are not incident entries; read those sections directly when that work is authori
   Respect existing deployment, receiver/HMAC and isolation holds. A green
   workflow or an always-200 endpoint does not release them.
 - Never test, probe or verify database behavior against staging or production
-  databases. Full database verification uses a fresh, run-owned disposable
-  database (`two_web_next_tog<digits>`) on `agent-testdb` with the migrated
-  schema; follow the canonical setup in
-  [README Database and migrations](../README.md#database-and-migrations).
-  Fixture-only `npm run check:offline` and focused isolated-schema tests remain
-  allowed without the full database; CI uses its disposable Postgres service.
+  databases. Full suites and CI gates run only through GitHub Actions against
+  its disposable Postgres service. Push the PR branch, use a draft while
+  incomplete, and cite run/job URLs for the exact head SHA. Local execution is
+  limited to focused reproduction of one failing test, using local fixtures or
+  a fresh run-owned disposable database (`two_web_next_tog<digits>`) on
+  `agent-testdb`; follow [the verification policy](../CONTRIBUTING.md#verify-a-change-with-github-actions)
+  and [safe database setup](../README.md#database-and-migrations).
+  `npm run check:offline` is a CI mirror, not a permitted local workaround.
   Do not send synthetic writes or authenticated smoke actions to live services
   as a substitute for those tests.
 - On an authentication/ownership/permission failure, **stop**. Do not try a
@@ -116,8 +118,6 @@ Install development tools even when the shell defaults to production mode:
 (
   set -euo pipefail
   npm ci --include=dev
-  # Fixture-only check: limited evidence, not database acceptance.
-  npm run check:offline
 )
 ```
 
@@ -134,14 +134,17 @@ reports success as **limited evidence**, not a substitute for exact-head CI with
 service-container DB coverage. Appending flags to the full shell-chain `check`
 script sends them to its final cutover command, not the earlier Vitest command.
 
-Full `npm run check`, coverage thresholds and required CI gates are unchanged.
-Full database verification must use a fresh, run-owned `two_web_next_tog<digits>`
-database on `agent-testdb` with the migrated schema, never the shared
-`two_web_next` database nor a live service; follow the canonical setup in
-[README Database and migrations](../README.md#database-and-migrations).
-Fixture-only `npm run check:offline` is limited evidence, not database
-acceptance, and focused isolated-schema tests remain allowed. Required CI runs
-the complete suite on its disposable Postgres service.
+Full `npm run check`, coverage thresholds and required CI gates are unchanged;
+only their execution location changes to GitHub Actions. The `check:offline`
+behavior above documents its limitations, not permission to run it locally.
+Use exact-head Actions run/job links, with observed conclusions and skips, as
+CI evidence for reviewers and the Release Manager. Heavy builds for a permitted
+single-test reproduction use only the guarded `boat` PATH wrapper, `--no-env`,
+a gitleaks-clean source-only export and verified cleanup. Never bypass its
+sizing/budget/security controls; fallback does not authorize a full suite/CI
+mirror or a heavy raw-host run. Defer to Actions or route the actual prerequisite
+if the focused/local limit cannot be met. Required checks, review and exact-head
+production approval still apply.
 
 ## A moderator lost their role
 

@@ -14,7 +14,7 @@ Guidance for human and AI contributors.
 
 ## The contract
 
-- Work on a branch and open a PR. Never push to `main`.
+- Work on a branch and open a draft PR while work is incomplete. Mark it ready only when complete. Never push to `main`.
 - Name branches `type/short-slug`, for example `fix/sudo-window`.
 - The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
 - Squash-merge only. One PR is one logical change.
@@ -38,17 +38,16 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit
 npm run dev                      # wrangler dev
 npm run format                   # formatting only
-npm run lint                     # read-only Biome gate
-npm run typecheck                # tsc for src and ci
-npm test                         # Vitest
 npm run build:assets             # regenerate minified public/ from assets/ after editing a source
-npm run check                    # lint + types + config drift + tests + smoke
-npx wrangler deploy --dry-run --outdir dist   # bundle check, no deploy
 ```
 
-Run tests only against the disposable test database or local fixtures described in the README, with `DATABASE_URL` set to that URL. Apply migrations with `npm run db:migrate` and validate history with `npm run db:check`. Never point tests, probes, or migrations at a production or staging database. If a credential fails, stop and report it. Do not try another one.
+Full test suites and CI gates run only on **GitHub Actions**. Push the PR branch; use a draft PR while work is incomplete, then mark it ready when complete. The real CI entrypoint is [`.github/workflows/ci.yml`](.github/workflows/ci.yml), with `check` feeding required `ci-ok`. Do not run `npm run check`, unfiltered `npm test`, coverage, `bin/local-ci.sh` or `npm run ci:local` as local full-suite/CI mirrors. Docker, a DB-free lane and Boat are not exceptions. Local execution is limited to focused reproduction of one failing test (for example `npx vitest run test/events.test.ts -t '<exact failing test name>'`), not a directory or all affected files. Docs changes use focused static/diff checks only.
 
-To reproduce CI's Vitest gates with disposable Postgres 17 containers, run `bin/local-ci.sh -- <test files>` for the affected files, then `bin/local-ci.sh -j 8` for the full gate. See "Verify a change before opening a PR" in [CONTRIBUTING.md](CONTRIBUTING.md).
+Heavy builds for an allowed focused reproduction must use the guarded `boat` PATH wrapper with its sizing/budget/security controls, `--no-env`, a gitleaks-clean source-only export preserving input identity, and verified cleanup. Never bypass it. Boat fallback does not authorize a forbidden full suite/CI mirror or heavy raw-host run; defer to Actions or route the actual prerequisite when the focused/local limit cannot be met.
+
+Run focused reproductions only against the disposable test database or local fixtures described in the README, with `DATABASE_URL` set to that URL when needed. Apply migrations with `npm run db:migrate` and validate history with `npm run db:check`. Never point tests, probes, or test migrations at a production or staging database. If a credential fails, stop and report it. Do not try another one.
+
+See [Verify a change with GitHub Actions](CONTRIBUTING.md#verify-a-change-with-github-actions). Cite Actions run/job URLs for the exact PR head SHA, conclusions and scope skips in Verification; local transcripts are not CI evidence for reviewers or the Release Manager. A green draft or docs-only fast-pass does not mean a skipped suite executed. Keep all required checks, review and exact-head production approval gates.
 
 ## UI changes
 
@@ -57,15 +56,15 @@ A user-visible change to a page, component, CSS, typography, navigation, form, o
 1. Write a short design contract before substantial work: audience, screen job, primary action, real content, two or three references (or stated assumptions), layout, typography, tokens, responsive behavior, required states, non-goals.
 2. Build in the stack the route already uses: server-rendered HTML for the current site, Svelte 5 and SvelteKit under `web/`. Do not add a framework because a generator returned one.
 3. Render the real app against local fixtures. Capture desktop (1280×800) and mobile (390×844) screenshots, plus each required state, and open every image. A DOM or accessibility snapshot is not a visual review.
-4. Run the existing gates: `npm run a11y`, `npm run lighthouse`, `npm run lighthouse:quality`, and the visual specs in [docs/visual-regression.md](docs/visual-regression.md). These gates cover the Hono site only: for a `web/` change, the screenshots from step 3 are the visual evidence, and the PR body says the Hono gates did not exercise the Kit route. The visual specs compare reliably only in CI (`browser-smoke` on the pinned runner); accept an intentional diff only through the failure artifact and `node ci/visual-accept.mjs`. Meet each threshold by improving the UI. Loosening any threshold (lowering a score floor, raising a time or pixel budget, adding `skipAudits`), masking more of a page, or regenerating baselines wholesale needs its own PR with a justification.
+4. Run the existing gates on GitHub Actions by pushing the PR branch, not locally: `npm run a11y`, `npm run lighthouse`, `npm run lighthouse:quality`, and the visual specs in [docs/visual-regression.md](docs/visual-regression.md). These gates cover the Hono site only: for a `web/` change, the screenshots from step 3 are the visual evidence, and the PR body says the Hono gates did not exercise the Kit route. The visual specs compare reliably only in CI (`browser-smoke` on the pinned runner); accept an intentional diff only through the failure artifact and `node ci/visual-accept.mjs`. Meet each threshold by improving the UI. Loosening any threshold (lowering a score floor, raising a time or pixel budget, adding `skipAudits`), masking more of a page, or regenerating baselines wholesale needs its own PR with a justification.
 5. Put the evidence in the PR body: the contract, reference links, before/after screenshots at both widths, the commands you ran, and each intentional baseline change. Report only what you opened or ran.
 
 ## Definition of done
 
 - Behavior matches the request.
-- Tests pass locally, and `npm run check` is green.
+- Applicable GitHub Actions gates are green on the exact head SHA, with run/job URLs and honest scope skips recorded. Report any focused local reproduction separately; do not run a local full suite or CI mirror.
 - A UI change carries the evidence listed under UI changes.
 - Every required check is green on the exact head SHA that merges: `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review`. No approving review is required.
 - Every review finding is fixed, or answered with evidence.
-- The agent that did the work merges it. Owner governance (2026-10-31): gate-green PRs merge without owner approval, and only production deploys need the owner, through `request_confirmation` on the card. A merge to `main` here deploys production, so it waits for that approval; so does every other production deploy.
+- The final-stage reviewer merges the pinned, settled head before final approval; the author merges only when the card has no review stage. A merge to `main` here reaches production, even for docs-only changes, so it needs Release Manager exact-head authorization through `request_confirmation` on a child card assigned and addressed to the Release Manager. A new head invalidates it. Every other production deploy keeps that approval gate too.
 - The PR is squash-merged, and the docs it made stale are updated.

@@ -118,11 +118,11 @@ counts for additional rows created manually or by a running recurrence job.
 
 ## Verification
 
-```sh
-npm run check
-# Credential-free unit tests plus DB integration using the configured test service:
-npx vitest run test/seed-staging.test.ts test/seed-staging-guard-parity-acceptance.test.ts
-```
+Verify with GitHub Actions: push the PR branch, keep the PR draft while
+incomplete, mark it ready when complete, and cite the exact-head run and job
+URLs (`ci.yml`, `check` -> `ci-ok`). Policy: [Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions). Do not run
+`npm run check` or the seed test files locally; reproduce a single failing test
+only, against fixtures or the disposable test service.
 
 The tests verify guards without connecting, the fixture mix and QA ID alignment,
 dry-run redaction/no connection, transaction rollback, concurrent applies,

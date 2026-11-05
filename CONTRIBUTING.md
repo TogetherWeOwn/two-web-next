@@ -5,7 +5,8 @@
 The same contract applies to humans and AI agents. [AGENTS.md](AGENTS.md) is the short
 version.
 
-- Work on a branch and open a PR. Never push to `main`. Name branches
+- Work on a branch and open a draft PR while work is incomplete. Mark it ready
+  only when the work is complete. Never push to `main`. Name branches
   `type/short-slug`, for example `fix/sudo-window`. Head branches are deleted when
   the PR merges.
 - The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
@@ -63,12 +64,16 @@ The repository rulesets enforce the following on `main`:
 
 - `pr-conventions`: `pr-lint` must pass.
 
-Who merges (owner decision 2026-10-31): the agent that did the work merges a PR
-once every required check is green and each review finding is fixed or answered
-with evidence. A merge to `main` deploys production (ci, then deploy, then
-e2e-staging, then deploy-production), so it also needs the owner's approval
-through `request_confirmation` on the card. So does every other production
-deploy, such as a manual dispatch or promotion.
+The final-stage reviewer squash-merges the pinned, settled head before approving
+the final native review stage; the author merges only when there is no review
+stage. Every required check must be green and every finding fixed or answered
+with evidence. A merge to `main` reaches production (ci, then deploy, then
+e2e-staging, then deploy-production), including a docs-only merge, so it needs
+the Release Manager's exact-head authorization through `request_confirmation`
+on a child card assigned and addressed to the Release Manager. Any new head
+invalidates that authorization. Every other production deploy, including manual
+dispatch or promotion, keeps the same production approval gate. Actions evidence
+changes where verification runs, not who may authorize or merge a release.
 
 ### Pull-request size labels (advisory)
 
@@ -308,44 +313,77 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # fill in locally; never commit
 npm run dev
 npm run format                   # formatting only; never rewrites lint violations
-npm run lint                     # read-only Biome lint + format gate
-npm run check                    # lint + format + typecheck + config drift + tests
 ```
 
-### Verify a change before opening a PR
+### Verify a change with GitHub Actions
 
-`bin/local-ci.sh` (also `npm run ci:local --`) reproduces the Vitest gates of
-the CI `check` job on any host with Docker. It needs no `.dev.vars` and no
-credentials. Network access is needed only to pull `node:24-bookworm` and
-`postgres:17`, and for `npm ci` to reach the npm registry when the local npm
-cache is cold. Each shard gets its own disposable Postgres 17 container on its
-own Docker network, aliased `agent-testdb` so the `testDatabaseUrl` guard
-accepts it. Nothing is published on host ports. Suites run in the CI job image
-as your user. Containers and networks are removed on exit.
+Full test suites and CI gates run on **GitHub Actions**, not on the shared host.
+Push to the PR branch to run them. Open a **draft PR while work is incomplete**;
+mark it ready only when the work is complete. Do not run `npm run check`,
+`npm run check:offline`, unfiltered `npm test`, `npm run test:coverage`, or the `bin/local-ci.sh` /
+`npm run ci:local` CI mirror locally. A disposable database, a DB-free lane,
+Docker or Boat does not make a local full-suite/CI-mirror run permissible.
+
+This repo's entrypoint is [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+(workflow `ci`, job `check`, required aggregator `ci-ok`), not `check.yml`.
+It also runs the `docs-links`, `node22-compat`, accessibility and performance
+jobs selected by its existing scope rules. Browser journeys report through
+`e2e-ok` in [`.github/workflows/e2e.yml`](.github/workflows/e2e.yml); PR lint and
+secret scanning remain in `pr-gates.yml`. Keep every existing required check,
+security floor, review and release gate.
 
 ```sh
-bin/local-ci.sh -- test/events.test.ts test/event-page.test.ts  # only the affected files
-bin/local-ci.sh -- test/admin                                   # every file matching a filter
-bin/local-ci.sh -j 8                                            # full gate on 8 shards
-bin/local-ci.sh -j 8 --no-coverage --no-static                  # suite only, quicker
+# Keep a workspace-managed local branch; publish only a public-safe ref.
+git push origin HEAD:refs/heads/docs/short-slug
+gh pr create --draft --head docs/short-slug --title "docs: describe the change" --body-file /path/to/pr-body.md
+# Once complete, mark ready to run the existing non-draft gates.
+gh pr ready <pr-number>
+gh pr checks <pr-number>
+gh run list --workflow ci.yml --branch docs/short-slug --json databaseId,headSha,status,conclusion,url
+gh run view <run-id> --json headSha,url,jobs
 ```
 
-- Focused runs apply migrations to a fresh database and run `vitest run` on the
-  given files or filters. Start with the test files beside the code you changed
-  and the files that import it (`git grep -l <module> test/`).
-- A full run does lint, typecheck, migrations, and `vitest run --coverage`
-  split over `-j N` shards (default `nproc / 4` capped at 8; up to 16 explicitly). It then merges the
-  shard reports, so pass counts and coverage thresholds cover the whole suite.
-  Last, it reruns the hotzone suite under `TZ=America/Los_Angeles` and runs Tier-0.
-  Shard logs are in `.local-ci/<run>/logs/`, so concurrent runs never share files.
-- `npm ci` (root and `web/`) runs inside the CI image the first time and again
-  whenever a lockfile changes. `--install` forces it. Each run holds a shared lock
-  on the dependencies while it runs, and an install waits for the exclusive lock, so
-  `npm ci` never replaces `node_modules` under another run in the same checkout.
-- Run the full gate before you open a PR that touches `src/`, `test/` or
-  migrations. Paste the merged `Test Files` / `Tests` lines into Verification.
-- Not covered: the browser journeys (`e2e-ok`), the a11y job, the Kit build and
-  parity gates, and Semgrep. CI still runs them on the PR.
+Use the appropriate `type/short-slug` for the change. The workflow already
+fast-passes heavy steps on drafts and docs-only changes; readiness triggers
+`ready_for_review` and scope still decides what runs. A scope-approved skip is
+not evidence that the skipped suite executed. Do not touch app files or change
+workflow scope merely to force a docs-only PR through the full suite. If a full
+run is needed, use the existing Actions `workflow_dispatch` on the PR branch,
+then verify its SHA; never dispatch a deploy as a test.
+
+In **Verification**, link the Actions run and relevant jobs for the **exact PR
+head SHA**, with the observed conclusions and any scope/draft skips. Include
+`ci-ok`, `check`/`docs-links`, `e2e-ok` and other applicable gate evidence;
+use `gh run view` to confirm `headSha` and copy job URLs. PR-event jobs may check
+out a synthetic merge commit: record the PR head identity as well, not just that
+checkout SHA. A new push invalidates older evidence. Local transcripts and an
+earlier SHA's green run are not CI evidence for reviewers or the Release Manager.
+Where the PR template asks for the `npm run check` result, supply that Actions
+job link and observed result, not a local run. Command inventories in subsystem
+READMEs describe the checks, not permission to mirror CI locally.
+A ready PR must meet all merge gates on its settled head; a green draft is not
+a merge approval.
+
+Local execution is limited to **focused reproduction of one failing test** (or
+one failing crate in repositories that have crates), using only the disposable
+test database or local fixtures in [README.md](README.md). For example, after
+setting the safe test URL and applying its migrations when needed:
+
+```sh
+npx vitest run test/events.test.ts -t '<exact failing test name>'
+```
+
+Do not broaden that reproduction to every affected file, a directory filter,
+coverage or a CI mirror. For docs-only changes, use focused static/diff checks
+such as `git diff --check`, and report what was not run. Heavy builds for an
+allowed focused reproduction use only the guarded `boat` PATH wrapper, with
+its sizing, budget and security controls, `--no-env`, a gitleaks-clean source-only
+export preserving the tested input identity, and box cleanup verified even on
+failure. Never bypass the wrapper or run a heavy build on the raw host. A Boat
+fallback does **not** authorize a full suite/CI mirror or a heavy raw-host run;
+if it cannot meet the focused/local limit, defer to Actions or route the actual
+prerequisite. Record the focused command, tested SHA, result and cleanup, not a
+claim of CI success.
 
 Biome is pinned in `package-lock.json`. `npm run lint` uses the read-only
 [`biome ci`](https://biomejs.dev/reference/cli/#biome-ci) command to enforce both

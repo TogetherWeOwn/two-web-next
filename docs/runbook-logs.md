@@ -81,13 +81,7 @@ improvement nor recovery.
 No query values, SQL, payloads, session/member identifiers or arbitrary labels
 enter this object. It adds no response header, endpoint, reads, cache bypass or
 refresh. Clock failure must not change the original result or rejection.
-Fixture-only check (no live access):
-
-```sh
-env -u DATABASE_URL -u BOT_DATABASE_URL -u LEGACY_DATABASE_URL \
-  -u AUDIT_IMPORT_TEST_DATABASE_URL \
-  npx vitest run test/calendar-phase-timing.acceptance.test.ts
-```
+Verification is the exact-head GitHub Actions run ([Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions)); no live access is needed.
 
 Rollback is a normally reviewed revert of this diagnostic source addition;
 there is no diagnostic data/schema/configuration state to undo.
@@ -225,11 +219,9 @@ converted to the branded 500 shell inside `resolve()`, so no second line
 follows for the same rethrow absent a simultaneous audit failure, which
 carries its own fingerprint.
 
-Agent-runnable fire/silent proof per leg (fixtures only, no `DATABASE_URL`):
-
-```sh
-npx vitest run test/kit-admin-read-code-bug-alerts-acceptance.test.ts test/kit-admin-list-code-bug-alerts.test.ts
-```
+Fire/silent proof per leg (fixtures only, no `DATABASE_URL`) is in
+`test/kit-admin-read-code-bug-alerts-acceptance.test.ts` and
+`test/kit-admin-list-code-bug-alerts.test.ts`. CI runs both ([Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions)); reproduce locally only a single failing test with `npx vitest run <file> -t "<failing test name>"`.
 
 Expected: 13 passed on the acceptance file — each resolver leg's `TypeError`
 emits exactly one `error.alert` and rethrows the same error, while transport
@@ -445,17 +437,15 @@ No bucket suffix, member/Discord ID, IP, Host, URL, header, credential, cookie o
 body is logged. The earlier shared throttle warnings are unchanged and are not
 duplicated by these catches.
 
-Replay the logger-capture, real Hono admission and Kit-forwarding fixtures
-offline, without a database or network:
+The logger-capture, real Hono admission and Kit-forwarding fixtures in
+`test/admission-degradation-observability-acceptance.test.ts` run offline,
+without a database or network, in CI ([Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions)). Reproduce locally only a single failing test with `npx vitest run test/admission-degradation-observability-acceptance.test.ts -t "<failing test name>"`.
 
-```sh
-npx vitest run test/admission-degradation-observability-acceptance.test.ts --reporter=json --outputFile=/tmp/admission-observability.json
-```
-
-The native Vitest JSON summary records named cases, statuses, passed/failed/pending
-counts and failure details. Only zero failures with every named case executed is
-positive evidence. The explicit output path keeps generated reports out of the
-source tree. Repeating this command changes no runtime configuration or data.
+When recording native Vitest JSON evidence, retain named cases, statuses,
+passed/failed/pending counts and failure details. Only zero failures with every
+named case executed is positive evidence. Keep generated reports out of the
+source tree and link the matching exact-head Actions run/job; a focused local
+reproduction does not prove the entire suite.
 
 ### Kit session-bridge and auth-status probe warnings
 
@@ -551,14 +541,9 @@ silently; the 404-path suggestions degrade (`suggestionsFn`) stays silent
 because forged and unknown keys already miss, so warning there would fire
 on probe traffic during an outage.
 
-Agent check (fixtures only, proves fire/silent per branch):
-
-```sh
-env -u DATABASE_URL -u AUDIT_IMPORT_TEST_DATABASE_URL \
-  -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL \
-  npx vitest run test/kit-public-read-503-alerts-acceptance.test.ts \
-  test/kit-public-read-503-alerts-pins.test.ts
-```
+Fire/silent proof per branch (fixtures only) is in
+`test/kit-public-read-503-alerts-acceptance.test.ts` and
+`test/kit-public-read-503-alerts-pins.test.ts`. CI runs both ([Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions)); reproduce locally only a single failing test, with `DATABASE_URL`, `AUDIT_IMPORT_TEST_DATABASE_URL`, `LEGACY_DATABASE_URL` and `BOT_DATABASE_URL` unset.
 
 ### Auth sign-in warnings
 
@@ -1149,21 +1134,16 @@ row), then joining the alert's `request_id` to its `http.request` 302 per
 
 ## Local regression check
 
+Verify with GitHub Actions: push the PR branch, keep the PR draft while
+incomplete, mark it ready when complete, and cite the exact-head run and job
+URLs (`ci.yml`, `check` -> `ci-ok`). Policy: [Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions). Do not run
+the full suite, `npm run check`, or whole test files locally. To reproduce one
+failing test, run only that test with fixtures only:
+
 ```sh
-# Focused request/correlation tests use fixtures only.
 env -u DATABASE_URL -u AUDIT_IMPORT_TEST_DATABASE_URL \
   -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL \
-  npx vitest run test/request-log.test.ts test/request-correlation.test.ts test/alerts.test.ts
-# First create a fresh run-owned database following README's database setup; replace the suffix.
-export TEST_DB=two_web_next_tog1234567890123456
-export DATABASE_URL="postgres://agent_test@agent-testdb:5432/${TEST_DB}"
-export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
-unset LEGACY_DATABASE_URL
-export PGPASSWORD=
-export W1_AGENT_TESTDB=0
-npm run db:migrate
-npm run db:check
-env -u BOT_DATABASE_URL npm run check
+  npx vitest run test/request-log.test.ts -t "<failing test name>"
 ```
 
 Never point tests or probes at staging or production databases.

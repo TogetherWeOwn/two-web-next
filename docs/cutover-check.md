@@ -203,14 +203,16 @@ member data and `discord-auth.conf` as a credential: keep all four files
 out of the repo and delete them after the run:
 `rm app-moderators.txt discord-moderators.txt members.jsonl discord-auth.conf`.
 
-## Local-only verification
+## Verification
 
-```sh
-npm run test:cutover
-npm run check
-```
+Push the PR branch and read the exact-head GitHub Actions run (`ci.yml`, `check`
+-> `ci-ok`); do not run `npm run check` or the cutover suite locally. Keep the PR
+draft while incomplete, mark it ready when complete, and cite the exact-head
+run and job URLs as evidence. Policy: [Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions). Local
+reproduction is limited to one failing test against fixtures or a disposable
+database.
 
-`check` runs the selftest in the required CI job. Selftests use only loopback
+The `check` job runs the selftest (`npm run test:cutover`). Selftests use only loopback
 HTTP/TLS servers, injected DNS stubs, disposable certificates and local files.
 They do not query real domains, follow external redirects, use Discord secrets
 or connect to any database. Vitest also feeds actual Hono-rendered static-leaf
