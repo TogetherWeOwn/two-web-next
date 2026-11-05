@@ -42,18 +42,19 @@ git("config", "user.email", "fixture@example.invalid");
 const before = await fs.readFile(new URL("./before.html", import.meta.url), "utf8");
 const after = await fs.readFile(new URL("./after.html", import.meta.url), "utf8");
 let content = before;
+let readAsset = fs.readFile;
 const server = http.createServer(async (req, res) => {
   try {
     if (req.url === "/font.woff2") {
       res.setHeader("Content-Type", "font/woff2");
       res.end(
-        await fs.readFile(
+        await readAsset(
           path.join(root, "node_modules/@fontsource/inter/files/inter-latin-400-normal.woff2"),
         ),
       );
     } else if (req.url === "/alternate.woff2") {
       res.setHeader("Content-Type", "font/woff2");
-      res.end(await fs.readFile(path.join(root, "public/fonts/display-latin-500.woff2")));
+      res.end(await readAsset(path.join(root, "public/fonts/display-latin-500.woff2")));
     } else if (req.url === "/favicon.ico") {
       res.writeHead(204);
       res.end();
@@ -62,8 +63,9 @@ const server = http.createServer(async (req, res) => {
       res.end(content);
     }
   } catch (e) {
-    res.writeHead(500);
-    res.end(String(e));
+    console.error("Fixture asset read failed", e);
+    res.writeHead(500, { "Content-Type": "text/plain" });
+    res.end("Fixture asset unavailable");
   }
 });
 await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
@@ -105,6 +107,18 @@ const commit = async (html) => {
 };
 let base, head;
 try {
+  const loadAsset = readAsset;
+  const failureMessage = "Fixture asset read failure sentinel";
+  try {
+    readAsset = async () => {
+      throw new Error(failureMessage);
+    };
+    const response = await fetch(`${url}/font.woff2`);
+    assert.equal(response.status, 500);
+    assert.equal(await response.text(), "Fixture asset unavailable");
+  } finally {
+    readAsset = loadAsset;
+  }
   base = await commit(before);
   await capture({ spec, sourceRoot: source, sha: base, url, out: path.join(run, "base") });
   content = after;
