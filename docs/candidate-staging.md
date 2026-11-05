@@ -909,6 +909,36 @@ it returns a non-promotable `dirty-journal-ownership-only` receipt, never a clea
 status. Mock integration connects it to the B-prime version uploader, including
 artifact replacement between ownership checks. This is not workflow installation.
 
+[The component ownership guard](../ci/candidate-staging-recovery-components.mjs)
+connects that journal adapter to the original web-component, settings and serving
+pins. Its canonical `two.candidate-recovery-components.v1` state joins Q, the
+installed profile digest and all three component digests to the independently
+retained journal payload's `baseline.stateSha256`. The web constructor rehashes
+all retained files; the shared settings and serving admissions validate their
+canonical snapshots. Original B's version must match the serving snapshot, and
+all three observations must be no later than journal creation. Retention must remain
+unexpired; monotonic bounded clocks and cancellation are checked on both sides
+of every ownership read. Recovery remains independent of the expired QA verifier.
+
+The guard recognizes only the exact contexts used by recovery assets, the
+B-prime uploader, settings seal/restore, unchanged original-B serving checks and
+original-B traffic restoration. A different component digest, profile, Q,
+asset root, baseline version or phase refuses before the journal read. Each
+accepted call still rescans the actual authenticated sole-dirty journal and
+compares every independently held payload pin. Settings admission is shared
+with the existing lifecycle, not a second looser parser. No file, module, binding,
+provider error or capability appears in the guard's frozen receipt.
+
+This state and receipt explicitly say `web-settings-and-serving-pins-only` and
+`promotable:false`. **They are not a complete recovery state or a journal-cleaning
+proof.** The guard does not implement independent artifact provenance, complete
+provider/component/stored-asset admission, exclusion, B-serving assertion or
+safe ordinary-upload inheritance. It rejects new B-prime serving pins and the
+serving reader's `restored` phase: those need a separate independently verified
+mutation-to-version/deployment join. A matching digest does not manufacture that
+authority. No workflow installs this guard, and its mock integration is not live
+containment or restoration evidence.
+
 Retained-identity validation lives in the builtin-only admission module and is
 re-exported by the upload module for existing callers. The occupancy journal must
 not import upload or build tooling: normal staging guards check out exactly the

@@ -124,6 +124,33 @@ function digest(value) {
   return candidateSha256(JSON.stringify(value));
 }
 
+// Integrity admission is shared with the journal-bound component guard. The
+// expected digest still comes from the independently retained recovery state.
+export function admitCandidateSettingsSnapshot(raw, expected, q, profileSha256) {
+  requireEvidence(typeof expected === "string" && DIGEST.test(expected));
+  const s = structuredClone(raw);
+  requireEvidence(
+    keys(s, "schema,promotable,q,profileSha256,capturedAt,settings,subdomain") &&
+      s.schema === "two.candidate-settings-snapshot.v1" &&
+      s.promotable === false &&
+      s.q === q &&
+      s.profileSha256 === profileSha256 &&
+      Number.isSafeInteger(s.capturedAt) &&
+      s.capturedAt >= 0,
+  );
+  const canonical = {
+    schema: s.schema,
+    promotable: false,
+    q,
+    profileSha256,
+    capturedAt: s.capturedAt,
+    settings: settingsSnapshot(s.settings),
+    subdomain: subdomainSnapshot(s.subdomain),
+  };
+  requireEvidence(digest(canonical) === expected);
+  return freeze(canonical);
+}
+
 export function createCandidateSettingsLifecycle({
   token,
   identity,
@@ -150,34 +177,12 @@ export function createCandidateSettingsLifecycle({
   const { q } = identitySnapshot(identity);
   const base = `https://api.cloudflare.com/client/v4/accounts/${installed.accountId}/workers/scripts/${installed.scriptName}`;
 
-  function admitSnapshot(raw, expected) {
-    requireEvidence(typeof expected === "string" && DIGEST.test(expected));
-    const s = structuredClone(raw);
-    requireEvidence(
-      keys(s, "schema,promotable,q,profileSha256,capturedAt,settings,subdomain") &&
-        s.schema === "two.candidate-settings-snapshot.v1" &&
-        s.promotable === false &&
-        s.q === q &&
-        s.profileSha256 === profileSha256 &&
-        Number.isSafeInteger(s.capturedAt) &&
-        s.capturedAt >= 0,
-    );
-    const canonical = {
-      schema: s.schema,
-      promotable: false,
-      q,
-      profileSha256,
-      capturedAt: s.capturedAt,
-      settings: settingsSnapshot(s.settings),
-      subdomain: subdomainSnapshot(s.subdomain),
-    };
-    requireEvidence(digest(canonical) === expected);
-    return canonical;
-  }
-
   async function operation(phase, snapshot, snapshotSha256, action) {
     try {
-      const baseline = phase === "snapshot" ? null : admitSnapshot(snapshot, snapshotSha256);
+      const baseline =
+        phase === "snapshot"
+          ? null
+          : admitCandidateSettingsSnapshot(snapshot, snapshotSha256, q, profileSha256);
       const deadline = AbortSignal.any([...(signal ? [signal] : []), AbortSignal.timeout(60_000)]);
       let lastNow = clock();
       function currentTime() {
