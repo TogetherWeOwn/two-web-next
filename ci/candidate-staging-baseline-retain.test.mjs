@@ -6,7 +6,6 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
-  readdirSync,
   rmSync,
   symlinkSync,
   writeFileSync,
@@ -332,8 +331,28 @@ test("normal staging workflow retains bytes and independent record, never raw ca
     BASELINE_ARTIFACT_ID: "${{ steps.baseline-artifact.outputs.artifact-id }}",
     BASELINE_ARCHIVE_SHA256: "${{ steps.baseline-artifact.outputs.artifact-digest }}",
   });
-  assert.equal(
-    readdirSync(".github/workflows").filter((name) => name === "candidate-staging.yml").length,
-    0,
+  // The launcher now exists, but only its read-only observation phase is wired.
+  // Retention must not silently activate any candidate mutation or qualification.
+  const launcher = YAML.parse(readFileSync(".github/workflows/candidate-staging.yml", "utf8"));
+  assert.deepEqual(Object.keys(launcher.on), ["workflow_dispatch"]);
+  assert.deepEqual(launcher.permissions, {
+    contents: "read",
+    actions: "read",
+    "pull-requests": "read",
+  });
+  assert.deepEqual(Object.keys(launcher.jobs), ["preflight"]);
+  const preflight = launcher.jobs.preflight;
+  assert.equal(preflight.environment, undefined);
+  assert.equal(preflight.permissions, undefined);
+  assert.equal(preflight.steps.length, 3);
+  assert.deepEqual(
+    preflight.steps.filter((step) => step.run).map((step) => ({ run: step.run, env: step.env })),
+    [
+      {
+        run: "node ci/candidate-staging-preflight.mjs",
+        env: { GITHUB_TOKEN: "${{ github.token }}", CANDIDATE_SELECTION: "${{ toJSON(inputs) }}" },
+      },
+    ],
   );
+  assert.ok(!JSON.stringify(launcher).includes("secrets."));
 });
