@@ -56,9 +56,11 @@ function contractViolations(doc: string): string[] {
     violations.push("missing single-failing-test local limit");
   }
   if (
-    !doc.replace(/\s+/g, " ").includes(
-      "Never test, probe or verify database behavior against staging or production databases",
-    )
+    !doc
+      .replace(/\s+/g, " ")
+      .includes(
+        "Never test, probe or verify database behavior against staging or production databases",
+      )
   ) {
     violations.push("missing staging and production database refusal");
   }
@@ -244,9 +246,9 @@ describe("runbook diagnostic and homepage contract", () => {
     expect(contractViolations(repaired.replace("GitHub Actions", "the shared host"))).toContain(
       "missing Actions-only full-suite disposable-service requirement",
     );
-    expect(contractViolations(repaired.replace("one failing test", "all affected tests"))).toContain(
-      "missing single-failing-test local limit",
-    );
+    expect(
+      contractViolations(repaired.replace("one failing test", "all affected tests")),
+    ).toContain("missing single-failing-test local limit");
     expect(contractViolations(repaired.replace("staging or production", "unapproved"))).toContain(
       "missing staging and production database refusal",
     );

@@ -564,10 +564,12 @@ describe("operator contract", () => {
       violations.push("restored whole-file local receipt recipe");
     }
     if (
-      !text.replace(/\s+/g, " ").includes(
-        "native Vitest JSON evidence, retain named cases, statuses, " +
-          "passed/failed/pending counts and failure details",
-      )
+      !text
+        .replace(/\s+/g, " ")
+        .includes(
+          "native Vitest JSON evidence, retain named cases, statuses, " +
+            "passed/failed/pending counts and failure details",
+        )
     ) {
       violations.push("missing native JSON case and failure evidence");
     }
@@ -617,8 +619,13 @@ describe("operator contract", () => {
   );
 
   it("requires the focused local command but permits full receipts in Actions", () => {
-    const unfiltered = runbook.replace(`${receiptCommand} -t "<failing test name>"`, receiptCommand);
-    expect(receiptViolations(unfiltered)).toContain("missing single-failing-test reproduction command");
+    const unfiltered = runbook.replace(
+      `${receiptCommand} -t "<failing test name>"`,
+      receiptCommand,
+    );
+    expect(receiptViolations(unfiltered)).toContain(
+      "missing single-failing-test reproduction command",
+    );
     const actionsRecipe = `Actions receipt: \`${receiptCommand} --reporter=json\`.`;
     expect(receiptViolations(`${runbook}\n${actionsRecipe}`)).toEqual([]);
   });
