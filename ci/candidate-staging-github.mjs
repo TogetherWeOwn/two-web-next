@@ -127,7 +127,8 @@ async function boundedJson(response) {
   }
 }
 
-export function createCandidateGitHubReader({ token, fetchImpl = fetch } = {}) {
+export function createCandidateGitHubReader({ token, fetchImpl = fetch, signal } = {}) {
+  requireEvidence(signal === undefined || signal instanceof AbortSignal, "abort-signal");
   requireEvidence(
     typeof token === "string" &&
       token.length > 0 &&
@@ -139,6 +140,9 @@ export function createCandidateGitHubReader({ token, fetchImpl = fetch } = {}) {
     // All callers construct repository-local paths from strictly typed IDs or
     // encoded installed paths. There is no public arbitrary-URL request method.
     try {
+      const timeout = AbortSignal.timeout(10_000);
+      const requestSignal = signal ? AbortSignal.any([signal, timeout]) : timeout;
+      requestSignal.throwIfAborted();
       const response = await fetchImpl(`${BASE}${path}`, {
         method: "GET",
         headers: {
@@ -147,9 +151,13 @@ export function createCandidateGitHubReader({ token, fetchImpl = fetch } = {}) {
           "X-GitHub-Api-Version": "2026-03-10",
         },
         redirect: "error",
-        signal: AbortSignal.timeout(10_000),
+        signal: requestSignal,
       });
-      return await boundedJson(response);
+      // Native fetch aborts its body too. Recheck after decoding/cleanup so a
+      // completed response racing cancellation cannot become accepted evidence.
+      const result = await boundedJson(response);
+      requestSignal.throwIfAborted();
+      return result;
     } catch {
       // API/network/parser messages may contain URLs, source or credentials.
       throw new Error("Candidate GitHub refused: request-evidence");

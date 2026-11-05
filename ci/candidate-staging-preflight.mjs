@@ -18,6 +18,7 @@ export async function readCandidatePreflight({
   selection,
   context,
   fetchImpl = fetch,
+  signal = AbortSignal.timeout(120_000),
 } = {}) {
   try {
     // Runner context comes only from the pinned main workflow, not input fields.
@@ -46,11 +47,16 @@ export async function readCandidatePreflight({
       ref: fixed.ref,
       path: PATH,
     });
-    const reader = createCandidateGitHubReader({ token, fetchImpl });
+    // One fixed window spans every request and body; it is never renewed by
+    // successful reads. The workflow's outer timeout remains a separate bound.
+    requireEvidence(signal instanceof AbortSignal);
+    signal.throwIfAborted();
+    const reader = createCandidateGitHubReader({ token, fetchImpl, signal });
     const launcher = await reader.verifyLauncher(identity);
     // Final live-head observation after launcher/attempt admission. Never follow
     // a moved head and never claim the selected CI attempt has been verified.
     await reader.verifyPullRequest(identity);
+    signal.throwIfAborted();
     return Object.freeze({
       schema: "two.candidate-preflight.v1",
       promotable: false,

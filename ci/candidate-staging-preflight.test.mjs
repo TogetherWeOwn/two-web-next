@@ -262,6 +262,79 @@ test("preflight discards network error messages and never returns raw metadata",
   await assert.rejects(readCandidatePreflight(f.options), REFUSED);
 });
 
+for (const signal of [null, false, {}, { aborted: false }, "not-a-signal"]) {
+  test(`preflight refuses invalid cancellation signal ${JSON.stringify(signal)}`, async () => {
+    const f = fixture();
+    f.options.signal = signal;
+    await assert.rejects(readCandidatePreflight(f.options), REFUSED);
+    assert.deepEqual(f.calls, []);
+  });
+}
+
+test("preflight refuses cancellation before any request without exposing the reason", async () => {
+  const f = fixture();
+  f.options.signal = AbortSignal.abort(new Error(`${TOKEN} private-url`));
+  await assert.rejects(readCandidatePreflight(f.options), REFUSED);
+  assert.deepEqual(f.calls, []);
+});
+
+for (let cancelledAt = 1; cancelledAt <= 8; cancelledAt++) {
+  test(`preflight refuses cancellation at request ${cancelledAt} without another request`, async () => {
+    const f = fixture();
+    const controller = new AbortController();
+    f.options.signal = controller.signal;
+    const original = f.options.fetchImpl;
+    f.options.fetchImpl = async (...args) => {
+      const response = await original(...args);
+      if (f.calls.length === cancelledAt) controller.abort(new Error(`${TOKEN} private-url`));
+      return response;
+    };
+    await assert.rejects(readCandidatePreflight(f.options), REFUSED);
+    assert.equal(f.calls.length, cancelledAt);
+  });
+}
+
+test("preflight creates one nonrenewing total deadline and combines every request timeout", async (t) => {
+  const f = fixture();
+  const total = new AbortController();
+  const request = new AbortController();
+  const timeouts = [];
+  t.mock.method(AbortSignal, "timeout", (milliseconds) => {
+    timeouts.push(milliseconds);
+    return milliseconds === 120_000 ? total.signal : request.signal;
+  });
+  const original = f.options.fetchImpl;
+  const signals = [];
+  f.options.fetchImpl = async (url, init) => {
+    signals.push(init.signal);
+    return original(url, init);
+  };
+  const result = await readCandidatePreflight(f.options);
+  assert.equal(result.qualification, false);
+  assert.deepEqual(timeouts, [120_000, ...Array(8).fill(10_000)]);
+  assert.equal(signals.length, 8);
+  for (const signal of signals) assert.equal(signal.aborted, false);
+  total.abort();
+  for (const signal of signals) assert.equal(signal.aborted, true);
+});
+
+test("preflight refuses total deadline expiry at the final response", async (t) => {
+  const f = fixture();
+  const total = new AbortController();
+  const request = new AbortController();
+  t.mock.method(AbortSignal, "timeout", (milliseconds) =>
+    milliseconds === 120_000 ? total.signal : request.signal,
+  );
+  const original = f.options.fetchImpl;
+  f.options.fetchImpl = async (...args) => {
+    const response = await original(...args);
+    if (f.calls.length === 8) total.abort(new DOMException("private-url", "TimeoutError"));
+    return response;
+  };
+  await assert.rejects(readCandidatePreflight(f.options), REFUSED);
+  assert.equal(f.calls.length, 8);
+});
+
 test("read-only workflow pins its builtin-only main closure, no environment or mutation permission", () => {
   const workflow = YAML.parse(readFileSync(new URL(`../${PATH}`, import.meta.url), "utf8"));
   assert.equal(workflow.name, "Candidate read-only admission");

@@ -33,6 +33,12 @@ or moved head, including final drift. The CLI prints only an allowlisted,
 non-promotable `two.candidate-preflight.v1` observation with
 `scope: launcher-and-pr-only` and `qualification: false`. CI IDs are merely
 **selected**, not verified. It emits no canonical deploy/e2e identity or artifact.
+The CLI shares one fixed two-minute evidence-read window across all requests and
+response bodies, inside the workflow's separate three-minute job timeout. It does
+not renew that window after successful reads. Cancellation or timeout, including
+one racing final response decoding/cleanup, refuses without an observation or a
+credential retry. This bounds only read-only preflight, not a qualification use
+window, staging resource expiry or recovery deadline.
 
 This read-only phase deliberately holds no staging exclusion: it accesses no
 staging resource and grants no staging occupancy. It is not the installed full
@@ -159,7 +165,12 @@ GET requests to GitHub's fixed API origin. It has no arbitrary-URL method, does
 not follow API-provided links, refuses redirects and authentication failures
 without retry, and bounds each request to ten seconds and 2 MiB of decoded JSON.
 Errors discard remote messages, URLs and source text. Every response stream is
-closed, including on a size or status refusal.
+closed, including on a size or status refusal. Trusted callers may pass a native
+`AbortSignal`; it is combined with, never substituted for, each ten-second request
+limit. Already-cancelled readers issue no request, and cancellation is rechecked
+after body decoding and cleanup before returning evidence. Callers other than
+preflight still own their complete operation deadline; the optional signal adds
+no authority, retries or lifetime extension.
 
 `verifyCi` obtains full unfiltered run listings before and after explicit
 run/attempt/job reads, validates both observations with the installed contract,

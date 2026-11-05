@@ -149,6 +149,112 @@ test("reader refuses unusable tokens before any request", () => {
   assert.throws(() => createCandidateGitHubReader(), /read-token/);
 });
 
+test("reader refuses invalid cancellation controls before remote access", () => {
+  for (const signal of [null, false, "abort", {}, { aborted: false }]) {
+    assert.throws(
+      () => createCandidateGitHubReader({ token: TOKEN, signal, fetchImpl: () => assert.fail() }),
+      /abort-signal/,
+    );
+  }
+});
+
+for (const operation of ["pull", "ci", "artifact"]) {
+  test(`reader refuses already cancelled ${operation} without any request`, async () => {
+    const f = fixture();
+    const server = api({});
+    const instance = createCandidateGitHubReader({
+      token: TOKEN,
+      signal: AbortSignal.abort(new Error(`${TOKEN} private-url`)),
+      fetchImpl: server.fetchImpl,
+    });
+    const pending =
+      operation === "pull"
+        ? instance.verifyPullRequest(f.identity)
+        : operation === "ci"
+          ? instance.verifyCi(f.identity, f.contract)
+          : instance.readArtifact(f.identity, f.build);
+    await assert.rejects(pending, /^Error: Candidate GitHub refused: request-evidence$/);
+    assert.deepEqual(server.keys(), []);
+  });
+}
+
+for (const source of ["parent", "request-timeout"]) {
+  test(`reader refuses ${source} cancellation racing a complete final body`, async (t) => {
+    const f = fixture();
+    const parent = new AbortController();
+    const timeout = new AbortController();
+    t.mock.method(AbortSignal, "timeout", () => timeout.signal);
+    const server = api({ "": f.repository, "/pulls/42": f.pull });
+    const fetchImpl = async (url, init) => {
+      const response = await server.fetchImpl(url, init);
+      if (url.endsWith("/pulls/42")) {
+        const body = Buffer.from(JSON.stringify(f.pull));
+        let read = false;
+        return {
+          status: 200,
+          redirected: false,
+          headers: response.headers,
+          body: {
+            getReader() {
+              return {
+                async read() {
+                  if (!read) {
+                    read = true;
+                    return { done: false, value: body };
+                  }
+                  return { done: true };
+                },
+                async cancel() {
+                  state.cancelled = true;
+                  (source === "parent" ? parent : timeout).abort(new Error(`${TOKEN} private-url`));
+                },
+                releaseLock() {
+                  state.released = true;
+                },
+              };
+            },
+          },
+        };
+      }
+      return response;
+    };
+    const state = { cancelled: false, released: false };
+    const instance = createCandidateGitHubReader({
+      token: TOKEN,
+      fetchImpl,
+      signal: parent.signal,
+    });
+    await assert.rejects(
+      instance.verifyPullRequest(f.identity),
+      /^Error: Candidate GitHub refused: request-evidence$/,
+    );
+    assert.deepEqual(state, { cancelled: true, released: true });
+    assert.deepEqual(server.keys(), ["", "/pulls/42"]);
+    assert.equal(server.calls.at(-1).init.signal.aborted, true);
+    await assert.rejects(instance.verifyPullRequest(f.identity), REFUSED);
+    assert.deepEqual(server.keys(), ["", "/pulls/42"]);
+  });
+}
+
+test("reader propagates parent cancellation to an in-flight native-style request", async () => {
+  const f = fixture();
+  const controller = new AbortController();
+  let calls = 0;
+  const instance = createCandidateGitHubReader({
+    token: TOKEN,
+    signal: controller.signal,
+    fetchImpl: async (_url, init) => {
+      calls++;
+      return new Promise((_resolve, reject) => {
+        init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        controller.abort(new Error(`${TOKEN} private-url`));
+      });
+    },
+  });
+  await assert.rejects(instance.verifyPullRequest(f.identity), REFUSED);
+  assert.equal(calls, 1);
+});
+
 test("PR check reads repository and PR with fixed origin, auth and no redirects", async (t) => {
   const f = fixture();
   const signal = new AbortController().signal;
