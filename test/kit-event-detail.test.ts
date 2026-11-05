@@ -777,6 +777,37 @@ async function memberHtml(): Promise<string> {
 describe("Kit detail presentation", () => {
   afterEach(() => vi.useRealTimers());
 
+  it("renders identical Kit HTML at different wall times with an explicit display snapshot", async () => {
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html: string[] = [];
+    for (const wall of ["2026-11-05T12:00:00Z", "2110-06-01T09:00:00Z"]) {
+      vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date(wall));
+      const outcome = await resolveKitEventDetail({
+        key: KEY,
+        path: `/e/${KEY}`,
+        search: "",
+        env,
+        session: GUEST,
+        joinResult: null,
+        setHeaders: () => {},
+        store: fakeStore({
+          event: {
+            ...row(),
+            goingCount: 3,
+            startsAt: new Date("2098-12-31T19:00:00Z"),
+            endsAt: new Date("2098-12-31T21:00:00Z"),
+          } as PublicEvent,
+        }),
+        now: new Date("2098-12-31T20:00:00Z"),
+      });
+      if (outcome.kind !== "ok") throw new Error("Expected a rendered fixture");
+      html.push(renderDetail(outcome.model as unknown as Record<string, unknown>));
+      expect(Date.now()).toBe(new Date(wall).getTime());
+    }
+    expect(html[0]).toContain("Happening now");
+    expect(html[0]).toBe(html[1]);
+  });
+
   function freezeRosterClock() {
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(new Date("2030-01-10T21:00:00Z"));

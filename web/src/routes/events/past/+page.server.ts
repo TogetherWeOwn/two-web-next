@@ -1,3 +1,4 @@
+import { renderDate } from "../../../../../src/render-clock";
 import { error } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
@@ -19,7 +20,7 @@ export const csr = false;
 // each pinned by source tests in test/kit-past-events.test.ts — only
 // error(503) proves what Kit sends, since SvelteKit ignores the helper's
 // status:503 Error property.
-export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
+export const load: PageServerLoad = async ({ url, request, locals, setHeaders }) => {
   // Admission stays outside the outage catch: 422 is not a database failure.
   if ([...(url.searchParams.get("q") ?? "")].length > MAX_QUERY_LENGTH) {
     setHeaders({ "cache-control": "private, no-store" });
@@ -28,6 +29,7 @@ export const load: PageServerLoad = async ({ url, locals, setHeaders }) => {
   try {
     const data = await loadPastArchivePage({
       env,
+      now: renderDate(request, env),
       pageParam: url.searchParams.get("page"),
       queryParam: url.searchParams.get("q"),
       setHeaders,

@@ -1,3 +1,4 @@
+import { captureRequest } from "./render-clock";
 import { Hono } from "hono";
 import { alertRequestError } from "./alerts";
 import type { Db } from "./db/index";
@@ -65,6 +66,7 @@ export async function dispatchPastArchiveRequest(
   const htmlRequest = url.pathname === "/events/past";
   const page = normalizePastPage(Number.parseInt(url.searchParams.get("page") ?? "1", 10));
   const eligible =
+    !captureRequest(request, env) &&
     htmlRequest &&
     isAnonCacheEligible({
       method: request.method,
@@ -150,6 +152,7 @@ export interface PastArchiveLoadArgs<Row = never> {
   setHeaders: (headers: Record<string, string>) => void;
   dbForFn: (c: { env: Env }) => Promise<Db | null>;
   listPastFn: PastArchiveListPast<Row>;
+  now?: Date;
   /** Optional correlation ID from the caller (validated inside the alert, omitted otherwise). */
   requestId?: string;
 }
@@ -187,6 +190,7 @@ export async function loadPastArchivePage<Row>({
   setHeaders,
   dbForFn,
   listPastFn,
+  now,
   requestId,
 }: PastArchiveLoadArgs<Row>): Promise<{
   rows: Row[];
@@ -215,8 +219,10 @@ export async function loadPastArchivePage<Row>({
   const page = normalizePastPage(Number.parseInt(pageParam ?? "1", 10));
   try {
     const { rows, hasMore, totalPages } = q
-      ? await listPastFn(db, page, new Date(), q)
-      : await listPastFn(db, page);
+      ? await listPastFn(db, page, now ?? new Date(), q)
+      : now
+        ? await listPastFn(db, page, now)
+        : await listPastFn(db, page);
     setHeaders({
       "cache-control": input.searching ? "private, no-store" : "public, max-age=300",
       "x-two-past-cacheable": String(!input.searching && rows.length > 0),

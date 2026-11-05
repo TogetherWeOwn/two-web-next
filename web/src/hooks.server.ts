@@ -1,3 +1,4 @@
+import { captureRefusal, captureResponse } from "../../src/render-clock";
 import type { Handle } from "@sveltejs/kit/hooks";
 import { env } from "cloudflare:workers";
 import { recordBoardView, recordQueuedBoardView } from "../../src/hotzones/board-log";
@@ -32,8 +33,10 @@ import { honoFetch } from "#lib/server/hono.ts";
 // after the member-read boundary releases a successful GET. Logout and OAuth stay
 // Hono-owned, and a missing secret (the preview Worker sets none) resolves
 // to "unknown" rather than a false logout.
-export const handle: Handle = async ({ event, resolve }) =>
-  dispatchHookRequest(event, {
+export const handle: Handle = async ({ event, resolve }) => {
+  const refusal = captureRefusal(event.request, env);
+  if (refusal) return refusal;
+  const response = await dispatchHookRequest(event, {
     appUrl: env.APP_URL,
     kitRouteArchive: env.KIT_ROUTE_ARCHIVE,
     kitRouteStatic: env.KIT_ROUTE_STATIC,
@@ -76,3 +79,5 @@ export const handle: Handle = async ({ event, resolve }) =>
     afterMemberRead: (event, response) =>
       recordQueuedBoardView(event.locals, response.status, recordBoardView),
   });
+  return captureResponse(event.request, env, response);
+};

@@ -1,3 +1,4 @@
+import { renderDate } from "../../../../../src/render-clock";
 import { error, redirect } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
@@ -33,6 +34,7 @@ export const load: PageServerLoad = async ({
 }) => {
   const outcome = await resolveKitEventDetail({
     key: params.key ?? "",
+    now: renderDate(request, env),
     search: url.search,
     path: url.pathname,
     env,

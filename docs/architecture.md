@@ -300,7 +300,9 @@ exactly once.
 | `src/featured-policy.ts` | content |
 | `src/featured-status.tsx` | content |
 | `src/featured.ts` | content |
+| `src/fixture-origin.ts` | http-guard |
 | `src/freeze-banner.ts` | http-guard |
+| `src/render-clock.ts` | content |
 | `src/headers.ts` | http-guard |
 | `src/home-cache.ts` | content |
 | `src/home-copy.ts` | content |

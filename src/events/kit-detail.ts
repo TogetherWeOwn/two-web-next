@@ -69,8 +69,8 @@ import { waitlistPosition } from "./waitlist";
 export interface KitEventDetailStore {
   dbForFn: (ctx: { env: Env }) => Promise<Db | null>;
   getEventFn: (db: Db, key: string) => Promise<PublicEvent | null>;
-  neighborsFn: (db: Db, event: Pick<PublicEvent, "id">) => Promise<EventNeighbors>;
-  relatedFn: (db: Db, event: Pick<PublicEvent, "id" | "game">) => Promise<EventLink[]>;
+  neighborsFn: (db: Db, event: Pick<PublicEvent, "id">, now?: Date) => Promise<EventNeighbors>;
+  relatedFn: (db: Db, event: Pick<PublicEvent, "id" | "game">, now?: Date) => Promise<EventLink[]>;
   /** Series run read. Optional so existing fakes keep compiling: the resolver
    * falls back to the shared read, which skips standalone events with zero
    * queries and fails open everywhere else. */
@@ -99,6 +99,8 @@ export interface KitEventDetailRequest {
   /** Called exactly once per resolution: SvelteKit throws on a double-set. */
   setHeaders: (headers: Record<string, string>) => void;
   store: KitEventDetailStore;
+  /** Display snapshot only; never used by the session or write paths. */
+  now?: Date;
   /** Optional correlation ID from the caller (validated before logging, omitted otherwise). */
   requestId?: string;
 }
@@ -291,8 +293,8 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
   return {
     dbForFn: ({ env: bound }) => dbFor({ env: bound }),
     getEventFn: (db, key) => getPublicEvent(db, key),
-    neighborsFn: (db, event) => getEventNeighbors(db, event),
-    relatedFn: (db, event) => listRelatedEvents(db, event),
+    neighborsFn: (db, event, now) => getEventNeighbors(db, event, now),
+    relatedFn: (db, event, now) => listRelatedEvents(db, event, now),
     seriesFn: (db, event) => getEventSeriesContext(db, event),
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
@@ -352,6 +354,7 @@ export async function resolveKitEventDetail(
 ): Promise<KitEventDetailOutcome> {
   const { key, search, path, env, session, joinResult, setHeaders, store, requestId } = req;
   const appUrl = env.APP_URL;
+  const now = req.now ?? new Date();
 
   // One canonical key form per event: a valid key in another letter case 301s
   // to the canonical URL before any read, query preserved.
@@ -398,7 +401,7 @@ export async function resolveKitEventDetail(
       if (event.status === "cancelled") {
         let related: EventLink[] = [];
         try {
-          related = await store.relatedFn(db, event);
+          related = await store.relatedFn(db, event, now);
         } catch (err) {
           // The cancelled page still serves with an empty alternatives list;
           // warn once with the exception class so the degrade is visible.
@@ -462,11 +465,11 @@ export async function resolveKitEventDetail(
       // rejecting the whole model. Both reads stay nonSensitive
       // published-only, so no audit row is skipped; viewer reads below stay
       // closed and their throws still reject.
-      const neighborsSettled = store.neighborsFn(db, event).then(
+      const neighborsSettled = store.neighborsFn(db, event, now).then(
         (neighbors) => neighbors,
         (): EventNeighbors => ({ previous: null, next: null }),
       );
-      const relatedSettled = store.relatedFn(db, event).then(
+      const relatedSettled = store.relatedFn(db, event, now).then(
         (related) => related,
         (): EventLink[] => [],
       );
@@ -516,7 +519,6 @@ export async function resolveKitEventDetail(
       // past for non-published rows, or past when endsAt is at or before now.
       // Cancelled returns the gone outcome above, so it never reaches this
       // model. The view renders this verdict verbatim.
-      const now = new Date();
       const rsvpClosed: RsvpClosedReason | null =
         event.status === "draft"
           ? "draft"
