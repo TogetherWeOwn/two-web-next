@@ -1,5 +1,5 @@
 // Independent acceptance. Builder consumes unchanged; this branch is intentionally RED.
-// Offline JSON receipt:
+// Actions JSON receipt (not a local reproduction command):
 // npx vitest run test/admission-degradation-observability-acceptance.test.ts --reporter=json
 //
 // Removing a catch warning, leaking a bucket/error, inventing correlation, changing
@@ -536,6 +536,53 @@ describe("host refusal correlation", () => {
 });
 
 describe("operator contract", () => {
+  const receiptCommand =
+    "npx vitest run test/admission-degradation-observability-acceptance.test.ts";
+  const runbook = readFileSync(new NodeURL("../docs/runbook-logs.md", import.meta.url), "utf8");
+  function receiptViolations(text: string): string[] {
+    const violations: string[] = [];
+    const localRecipes = text.split("\n").filter((line) => line.includes("Reproduce locally"));
+    if (!/run offline,\s+without a database or network, in CI/.test(text)) {
+      violations.push("missing offline Actions receipt location");
+    }
+    if (!text.includes("../CONTRIBUTING.md#verify-a-change-with-github-actions")) {
+      violations.push("missing canonical Actions verification policy");
+    }
+    if (!localRecipes.some((line) => line.includes(`${receiptCommand} -t "<failing test name>"`))) {
+      violations.push("missing single-failing-test reproduction command");
+    }
+    const localCommands = localRecipes.flatMap((line) =>
+      Array.from(line.matchAll(/`([^`]+)`/g), (match) => match[1]!),
+    );
+    if (
+      localCommands.some(
+        (command) =>
+          command.startsWith(receiptCommand) &&
+          !/(?:^|\s)(?:-t|--testNamePattern)(?:\s|=)/.test(command.slice(receiptCommand.length)),
+      )
+    ) {
+      violations.push("restored whole-file local receipt recipe");
+    }
+    if (
+      !text.replace(/\s+/g, " ").includes(
+        "native Vitest JSON evidence, retain named cases, statuses, " +
+          "passed/failed/pending counts and failure details",
+      )
+    ) {
+      violations.push("missing native JSON case and failure evidence");
+    }
+    if (!/Only zero failures with every\s+named case executed is positive evidence/.test(text)) {
+      violations.push("missing executed-case success requirement");
+    }
+    if (!text.includes("link the matching exact-head Actions run/job")) {
+      violations.push("missing exact-head Actions evidence link");
+    }
+    if (!/a focused local\s+reproduction does not prove the entire suite/.test(text)) {
+      violations.push("missing focused-reproduction evidence limit");
+    }
+    return violations;
+  }
+
   it.each([JOIN_CODE, PROFILE_CODE, HOST_CODE])(
     "documents exactly one canonical row for %s with recovery and read-only guidance",
     (code) => {
@@ -554,11 +601,36 @@ describe("operator contract", () => {
         expect(row).toContain("exception");
         expect(row).toContain("throttle");
       }
-      // The replayable offline receipt is native Vitest JSON, not a second logging
-      // implementation or a command that connects to production to manufacture proof.
-      expect(text).toContain(
-        "npx vitest run test/admission-degradation-observability-acceptance.test.ts --reporter=json",
+      // Native JSON receipts execute in Actions; local reproduction is one case.
+      expect(receiptViolations(text)).toEqual([]);
+    },
+  );
+
+  it.each(["", " --reporter=json"])(
+    "rejects appending a whole-file local receipt command with flags '%s'",
+    (flags) => {
+      const localRecipe = `Reproduce locally with \`${receiptCommand}${flags}\`.`;
+      expect(receiptViolations(`${runbook}\n${localRecipe}`)).toContain(
+        "restored whole-file local receipt recipe",
       );
     },
   );
+
+  it("requires the focused local command but permits full receipts in Actions", () => {
+    const unfiltered = runbook.replace(`${receiptCommand} -t "<failing test name>"`, receiptCommand);
+    expect(receiptViolations(unfiltered)).toContain("missing single-failing-test reproduction command");
+    const actionsRecipe = `Actions receipt: \`${receiptCommand} --reporter=json\`.`;
+    expect(receiptViolations(`${runbook}\n${actionsRecipe}`)).toEqual([]);
+  });
+
+  it("rejects receipt guidance without native failure details or executed-case evidence", () => {
+    expect(receiptViolations(runbook.replace("counts and failure details", "counts"))).toContain(
+      "missing native JSON case and failure evidence",
+    );
+    expect(receiptViolations(runbook.replace("Only zero failures", "Any result"))).toContain(
+      "missing executed-case success requirement",
+    );
+    const noActions = runbook.replace("link the matching exact-head Actions run/job", "keep a log");
+    expect(receiptViolations(noActions)).toContain("missing exact-head Actions evidence link");
+  });
 });
