@@ -90,6 +90,39 @@ export function candidateIdentity(selection, launcher) {
   });
 }
 
+// Revalidate a retained identity without depending on upload/build tooling. The
+// sparse normal-staging guard shares this builtin-only admission closure.
+export function identitySnapshot(input) {
+  const value = structuredClone(input);
+  requireEvidence(
+    keys(value, "descriptor,q,ciRunId,ciRunAttempt") &&
+      Array.isArray(value.descriptor) &&
+      value.descriptor.length === 12,
+    "identity-shape",
+  );
+  const d = value.descriptor;
+  const identity = candidateIdentity(
+    { prNumber: d[3], headSha: d[4], ciRunId: value.ciRunId, ciRunAttempt: value.ciRunAttempt },
+    {
+      repositoryId: d[1],
+      repository: d[2],
+      controllerSha: d[5],
+      launcherSha: d[6],
+      checkoutSha: d[5],
+      runId: d[7],
+      runAttempt: d[8],
+      event: "workflow_dispatch",
+      ref: "refs/heads/main",
+      path: ".github/workflows/candidate-staging.yml",
+    },
+  );
+  requireEvidence(
+    JSON.stringify(d) === JSON.stringify(identity.descriptor) && value.q === identity.q,
+    "identity-mismatch",
+  );
+  return identity;
+}
+
 function repositoryMatches(repository, id) {
   return (
     apiInteger(repository?.id, id) &&

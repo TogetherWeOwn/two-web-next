@@ -6,6 +6,14 @@ not a deploy command, an installed controller, live qualification evidence, or
 permission to expose staging resources to candidate code. The existing staging
 and production deployment selectors remain separate and unchanged.
 
+The [zero-idle-runtime-cost policy and source inventory](runbook.md#staging-and-preview-zero-idle-runtime-cost)
+are also activation prerequisites. The installer must bind trusted on-demand
+startup/readiness, a bounded use window and native cleanup/expiry to its tested
+SHA/environment across all participating runtimes. Existing crons, probes,
+Durable Objects and database compute are not admitted by a sleeping Worker or
+by qualification fixture success. No runtime shutdown or cost exception is
+claimed by this incomplete source implementation.
+
 ## Implemented predicates
 
 - `candidateIdentity` accepts only a PR number, exact lowercase head SHA, and
@@ -900,6 +908,15 @@ foreign context, substitution or cancellation refuses. The adapter only GETs;
 it returns a non-promotable `dirty-journal-ownership-only` receipt, never a clean
 status. Mock integration connects it to the B-prime version uploader, including
 artifact replacement between ownership checks. This is not workflow installation.
+
+Retained-identity validation lives in the builtin-only admission module and is
+re-exported by the upload module for existing callers. The occupancy journal must
+not import upload or build tooling: normal staging guards check out exactly the
+clear CLI, journal and admission files, not the full installer. The closure test
+retains that exact allowlist; a separate subprocess fixture copies only those
+three files into a fresh dependency-free directory and exercises mocked clear
+and refusal reads with an empty environment. No additional checkout paths,
+credentials or candidate execution are needed to validate a retained identity.
 
 This journal is **not** a lock, a provider restore adapter or proof of the
 baseline contents. The core workflow fencing below is only a partial actor map,

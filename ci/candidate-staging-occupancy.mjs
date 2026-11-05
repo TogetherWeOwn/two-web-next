@@ -1,7 +1,6 @@
 // Durable dirty-before-mutation journal, not a lock or a deployment capability.
 // Installed callers must hold the shared staging exclusion throughout recovery.
-import { candidateSha256 } from "./candidate-staging-admission.mjs";
-import { identitySnapshot } from "./candidate-staging-upload.mjs";
+import { candidateSha256, identitySnapshot } from "./candidate-staging-admission.mjs";
 
 const BASE = "https://api.github.com/repos/TogetherWeOwn/two-web-next";
 const ENVIRONMENT = "candidate-staging-occupancy";

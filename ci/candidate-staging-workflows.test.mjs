@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { readFileSync, readdirSync } from "node:fs";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { test } from "node:test";
+import { pathToFileURL } from "node:url";
 import YAML from "yaml";
 
 const ROOT = new URL("../.github/workflows/", import.meta.url);
@@ -834,6 +838,59 @@ test("the production-only RUM reader stays outside application staging fencing u
   const source = readFileSync(new URL("./rum-check.mjs", import.meta.url), "utf8");
   assert.match(source, /siteTag: \$site/);
   assert.doesNotMatch(source, /next\.togetherweown\.com|workers\/scripts/);
+});
+
+test("the sparse staging guard executes with exactly its checked-out closure and no dependencies", () => {
+  const root = mkdtempSync(join(tmpdir(), "candidate-staging-sparse-"));
+  try {
+    mkdirSync(join(root, "ci"));
+    for (const path of CLOSURE)
+      copyFileSync(new URL(`../${path}`, import.meta.url), join(root, path));
+    const result = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "--eval",
+        `
+          import assert from "node:assert/strict";
+          const { assertNormalStagingClear } = await import(process.argv[1]);
+          let calls = 0;
+          let rows = [];
+          const options = {
+            token: "fixture-only",
+            context: {
+              actions: "true", event: "workflow_dispatch", ref: "refs/heads/main",
+              repository: "TogetherWeOwn/two-web-next", runAttempt: "1", runId: "123",
+              sha: "a".repeat(40),
+              workflowRef: "TogetherWeOwn/two-web-next/.github/workflows/staging-smoke.yml@refs/heads/main",
+            },
+            fetchImpl: async (url, init) => {
+              calls++;
+              assert.equal(url, "https://api.github.com/repos/TogetherWeOwn/two-web-next/deployments?environment=candidate-staging-occupancy&per_page=100&page=1");
+              assert.equal(init.method, "GET");
+              assert.equal(init.headers.Authorization, "Bearer fixture-only");
+              assert.equal(init.redirect, "error");
+              return Response.json(rows);
+            },
+          };
+          await assertNormalStagingClear(options);
+          assert.equal(calls, 1);
+          rows = [{}];
+          await assert.rejects(assertNormalStagingClear(options), {
+            message: "Staging occupancy guard refused",
+          });
+          assert.equal(calls, 2);
+        `,
+        pathToFileURL(join(root, CLOSURE[0])).href,
+      ],
+      { cwd: root, env: {}, encoding: "utf8", timeout: 10_000, maxBuffer: 64 * 1024 },
+    );
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, "");
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 });
 
 test("occupancy source closure resolves only Node builtins and its three explicitly checked out files", () => {

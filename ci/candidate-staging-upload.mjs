@@ -2,10 +2,11 @@
 // The installed controller must independently admit the profile's capabilities,
 // asset-ticket provenance, dirty occupancy, exact head and restorable baseline.
 import {
-  candidateIdentity,
   candidateSha256,
+  identitySnapshot,
   safeBundlePath,
 } from "./candidate-staging-admission.mjs";
+export { identitySnapshot } from "./candidate-staging-admission.mjs";
 
 const HEX = /^[a-f0-9]{64}$/;
 const RESOURCE = /^[a-f0-9]{32}$/;
@@ -28,35 +29,6 @@ function keys(value, names) {
 
 function matches(pattern, value) {
   return typeof value === "string" && pattern.test(value);
-}
-
-export function identitySnapshot(input) {
-  const value = structuredClone(input);
-  requireEvidence(
-    keys(value, "descriptor,q,ciRunId,ciRunAttempt") &&
-      Array.isArray(value.descriptor) &&
-      value.descriptor.length === 12,
-  );
-  const d = value.descriptor;
-  const identity = candidateIdentity(
-    { prNumber: d[3], headSha: d[4], ciRunId: value.ciRunId, ciRunAttempt: value.ciRunAttempt },
-    {
-      repositoryId: d[1],
-      repository: d[2],
-      controllerSha: d[5],
-      launcherSha: d[6],
-      checkoutSha: d[5],
-      runId: d[7],
-      runAttempt: d[8],
-      event: "workflow_dispatch",
-      ref: "refs/heads/main",
-      path: ".github/workflows/candidate-staging.yml",
-    },
-  );
-  requireEvidence(
-    JSON.stringify(d) === JSON.stringify(identity.descriptor) && value.q === identity.q,
-  );
-  return identity;
 }
 
 export function profileSnapshot(input, expectedDigest) {

@@ -9,6 +9,7 @@ import {
   candidateIdentity,
   candidateSha256,
   completeCandidatePages,
+  identitySnapshot,
   safeBundlePath,
 } from "./candidate-staging-admission.mjs";
 import { deploymentTarget } from "./staging-deploy-gate.mjs";
@@ -32,6 +33,68 @@ test("admission fixtures execute in required CI and the local complete check", (
   assert.equal(matches[0]["continue-on-error"], undefined);
   assert.ok(workflow.jobs["ci-ok"].needs.includes("check"));
 });
+
+test("retained identity admission is shared with upload tooling and snapshots mutable inputs", async () => {
+  const { identitySnapshot: uploadIdentity } = await import("./candidate-staging-upload.mjs");
+  assert.equal(uploadIdentity, identitySnapshot);
+  const value = structuredClone(fixture().identity);
+  const admitted = identitySnapshot(value);
+  assert.deepEqual(admitted, value);
+  assert.ok(Object.isFrozen(admitted));
+  assert.ok(Object.isFrozen(admitted.descriptor));
+  value.descriptor[4] = "d".repeat(40);
+  value.q = "e".repeat(64);
+  assert.deepEqual(admitted, fixture().identity);
+});
+
+for (const [index, value] of [
+  [0, "two.qa.run.v2"],
+  [1, "0"],
+  [2, "attacker/two-web-next"],
+  [3, "01"],
+  [4, "A".repeat(40)],
+  [5, "main"],
+  [6, "c".repeat(39)],
+  [7, "0"],
+  [8, "1\n"],
+  [9, "production"],
+  [10, "https://togetherweown.com"],
+  [11, "ordinary-login"],
+]) {
+  test(`retained identity refuses descriptor field ${index} even with a recomputed Q`, () => {
+    const identity = structuredClone(fixture().identity);
+    identity.descriptor[index] = value;
+    identity.q = candidateSha256(JSON.stringify(identity.descriptor));
+    assert.throws(() => identitySnapshot(identity));
+  });
+}
+
+for (const mutate of [
+  (v) => {
+    v.q = "e".repeat(64);
+  },
+  (v) => {
+    v.ciRunId = "0";
+  },
+  (v) => {
+    v.ciRunAttempt = "1\n";
+  },
+  (v) => {
+    v.descriptor.push("extra");
+  },
+  (v) => {
+    delete v.descriptor[9];
+  },
+  (v) => {
+    v.extra = true;
+  },
+]) {
+  test(`retained identity refuses malformed input ${String(mutate)}`, () => {
+    const identity = structuredClone(fixture().identity);
+    mutate(identity);
+    assert.throws(() => identitySnapshot(identity));
+  });
+}
 
 for (const suffix of ["\n", "\r", "\r\n"]) {
   for (const path of ["worker/chunks/app.mjs", "assets/app.css"]) {

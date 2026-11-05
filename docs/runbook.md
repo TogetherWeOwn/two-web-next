@@ -27,6 +27,55 @@ to 2026-10-12 00:52 UTC and is closed; the section remains the watch
 procedure. On a pager storm follow its Sev-1 path (contain, then the
 production rollback workflow).
 
+## Staging and preview: zero idle runtime cost
+
+Standing policy, effective **2026-11-05**: staging and preview must run on demand
+or scale to zero when idle, with **no recurring always-on runtime charge**. This
+applies to every participating runtime, not just the application Worker. A
+sleeping container does not establish that databases, Durable Objects, alarms,
+scheduled Workers or Stream inputs are idle or unbilled. Production is outside
+this policy change; do not disable production schedules, monitoring or readiness.
+
+Before a qualification or e2e pipeline uses staging, its trusted tooling must
+start the admitted resources and verify readiness bound to the tested SHA and
+environment. Retain the startup/readiness evidence, a bounded active-use window,
+and native stop/scale-to-zero plus native cleanup/expiry evidence covering
+success, failure, timeout and cancellation. Cleanup steps alone do not prove
+expiry after cancellation. Use existing platform/pipeline controls, not host
+timers or a new scheduler. Missing native controls are a real activation
+prerequisite; never claim that a resource will sleep without that evidence.
+
+During idle periods, alarms, probes, schedules and keep-alive must not resurrect
+resources or sustain recurring runtime charges. Preserve every required health,
+security and qualification check during authorized active use. Sleeping never
+permits fewer authenticated cases, skipped checks, weaker thresholds, longer QA
+credentials or reduced restoration evidence. CI remains on GitHub Actions, with
+exact-head evidence, native Security/QA and release gates unchanged.
+
+### Source inventory, not a deployed compliance receipt
+
+The existing [qualification installer](candidate-staging.md) owns this staging
+integration. The following records checked-in declarations only; no live
+provider state, billing, stop capability or exception is attested here.
+
+| Runtime or wake source | Checked-in evidence | Remaining admission evidence |
+| --- | --- | --- |
+| Staging web and Kit preview Workers | Root and `web/` Wrangler configs; staging web crons are empty | Bound requests, startup/readiness and idle behavior, including all external callers |
+| Jobs staging and preview Workers | `wrangler.jobs.jsonc` declares queue consumers and recurring crons in both targets | Bounded activation and native shutdown/expiry for schedules, consumers, in-flight work and external producers; current declarations alone do not meet the policy |
+| Staging Tail Worker and Durable Object | `tail/wrangler.jsonc` declares a one-minute probe cron and `ALERT_AGGREGATOR`; `tail/worker.ts` probes the configured staging origin | Native bounded probe/aggregation activation and idle cessation; no alarm API calls were found in the checked-in Tail source, but live alarms and other callers remain unverified |
+| Database compute and Hyperdrive | Staging web, Kit preview and jobs configs bind Hyperdrive; root config documents a PlanetScale staging backend | All bound backend compute must support the bounded active window and idle scale-to-zero, or carry the explicit exception below; a binding ID proves neither scope nor billing |
+| Scheduled Actions callers | `explore-staging.yml` and `db-backup.yml` contain recurring staging calls; origin watches also invoke staging | Admit the complete caller set and ensure no out-of-window wake; concurrency fencing alone does not establish a use window |
+| Containers and Stream inputs | No deployment declaration found in the reviewed root, web, jobs and Tail Wrangler configs | Provider-side inventory is still required; absence from these configs is not estate-wide absence |
+
+Existing schedules shown elsewhere in this runbook are historical/current-source
+procedures, **not an always-on exception**. No recurring-cost exception or live
+shutdown is recorded by this inventory. If an applicable runtime cannot meet the
+policy, route that concrete prerequisite before claiming rollout. Any always-on
+exception is an owner **Money:** decision, recorded on a card with explicit owner
+authorization, authorization date, resource/environment scope, recurring cost and
+expiry or review date. This policy authorizes no spend, credential creation or
+rotation, security weakening, production change or deployment.
+
 **First responder index.** Match the symptom, open the section, run the first
 read-only diagnostic, then escalate. Every diagnostic below is a read; do not
 mutate, purge, roll back, migrate, rotate or restore from this table.
