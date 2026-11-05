@@ -63,12 +63,65 @@ The repository rulesets enforce the following on `main`:
 
 - `pr-conventions`: `pr-lint` must pass.
 
-Who merges (owner decision 2026-10-31): the agent that did the work merges a PR
-once every required check is green and each review finding is fixed or answered
-with evidence. A merge to `main` deploys production (ci, then deploy, then
-e2e-staging, then deploy-production), so it also needs the owner's approval
-through `request_confirmation` on the card. So does every other production
-deploy, such as a manual dispatch or promotion.
+Who merges: when native review stages apply, the final-stage reviewer
+squash-merges the exact reviewed head before closing the task; without a review
+stage, the author merges. Every required check must be green on that head and
+every review finding must be fixed or answered with evidence. Pin the merge to
+that SHA; do not approve a final stage and leave an open PR for the author.
+
+A merge to `main` reaches production through CI, staging deploy, e2e-staging and
+automatic production promotion, so it needs a fresh Release Manager
+`request_confirmation` for that PR's exact head on a child confirmation card
+assigned and addressed to the Release Manager. Every other production deploy,
+including manual dispatch or promotion, also needs Release Manager confirmation.
+Any push changes the head and requires a new exact-head confirmation. Record the
+confirmation and pinned squash SHA in the release log.
+
+### Artifact-identical merge evidence
+
+For production-deploying `main` in `TogetherWeOwn/two-web-next` and
+`TogetherWeOwn/two-bot-next`, exact-head staging qualification is not required
+**only when all three conditions hold**:
+
+1. **Qualifying actual diff.** The diff contains only tests (`test/`, `e2e/`,
+   `*.test.*`, fixtures), docs (`docs/`, `*.md`), or CI unrelated to build,
+   deploy, release or promotion. Deploy/release workflows, Wrangler/Worker
+   configuration, Dockerfiles, migrations, package manifests and lockfiles are
+   excluded. Any runtime, dependency or deployment change is outside this rule,
+   regardless of its filename, directory or PR title.
+2. **Byte-identical production artifact.** Compare the complete production build
+   artifacts for the exact PR head and current `main`. Record both head SHAs and
+   both bundle/image hashes on the confirmation card, with the build and hash
+   commands and artifact scope so the comparison can be verified. A file label,
+   identical source tree or title is not artifact proof. Missing or partial
+   evidence does not qualify.
+3. **Exact-head gates pass.** Required CI and Devin Review pass on the exact PR
+   head, with every finding fixed or answered with evidence. Required checks,
+   rulesets and native review stages still apply.
+
+Use the existing production build/deployment definitions, not a substitute
+bundle: here `.github/workflows/deploy-production.yml` builds with
+`npx wrangler deploy --dry-run --env production --outdir dist-production` and
+uploads the production Worker through Wrangler. The comparison must cover the
+Worker modules **and every deployed static asset** from the configured `public/`
+asset directory, plus the tail Worker and any other artifacts the production
+path deploys. A hash of a Worker entry file or `dist-production` alone that omits
+deployed assets is not sufficient. This policy does not add a pipeline or a new artifact format.
+
+The Release Manager verifies and records the classification and both hashes in
+each artifact-identical decision. A non-qualifying diff, hash mismatch, or
+incomplete/unverifiable comparison retains the full exact-head staging
+requirement. The exception changes only the staging evidence required for a
+qualifying merge confirmation; it does not waive a red deterministic gate,
+change the deployment workflows, or permit a pipeline skip/no-op. Existing
+production deployment gates continue to run unchanged.
+
+Incident, freeze and hold safeguards, identity/capability holds, required checks,
+review gates, fresh per-PR exact-head Release Manager confirmation, the pinned
+merge and release-log recording all remain. Previously rejected requests stay
+historical rejections, not retroactive approvals: qualifying candidates must
+supply the hashes and be freshly submitted for exact-head confirmation. This
+rule is not production permission for any PR, including a PR documenting it.
 
 ### Pull-request size labels (advisory)
 

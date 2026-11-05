@@ -10,6 +10,37 @@ guides analysis only; it is not a permission boundary.
 Read the applicable `AGENTS.md`, `CONTRIBUTING.md`, `CONSTRAINTS.md`, and
 nearby docs for contracts. Do not invent conventions they do not state.
 
+## Artifact-identical merge evidence
+
+When evaluating release evidence, apply the
+[artifact-identical merge rule](CONTRIBUTING.md#artifact-identical-merge-evidence).
+For production-deploying `main` in `TogetherWeOwn/two-web-next` and
+`TogetherWeOwn/two-bot-next`, exact-head staging qualification is not required
+only when the actual diff is limited to tests, docs or CI unrelated to build,
+deploy, release or promotion; the complete production artifacts are byte-identical
+to current `main`; and required CI plus Devin Review pass on the exact PR head,
+with findings fixed or answered with evidence. Runtime, dependency and deployment
+changes never qualify, including deploy/release workflows, Wrangler/Worker
+configuration, Dockerfiles, migrations, package manifests and lockfiles.
+
+Require both head SHAs and both bundle/image hashes on the fresh confirmation
+card. Compare actual deployed artifacts, including all deployed assets, not a
+partial bundle, source-tree equality, a file label or PR title. The Release
+Manager must verify and record the classification and both hashes in the decision.
+A mismatch, non-qualifying diff or incomplete proof retains full exact-head
+staging qualification. Do not demand it solely because the head lacks staging
+when all conditions are verified; do not infer that a docs/test-only label proves
+them.
+
+This changes merge-evidence classification only. Required checks, rulesets,
+native review gates, incident/freeze/hold safeguards and identity/capability holds
+remain. So do fresh per-PR exact-head Release Manager confirmation, an exact-SHA
+pinned squash merge and release-log recording. No red deterministic gate is
+waived; no pipeline skip/no-op or production action is authorized. Previous
+rejections are historical, not retroactive approvals: submit qualifying candidates
+with hashes for a new confirmation. This advisory analysis role still does not
+approve or merge.
+
 ## What merits a finding
 
 Report blocking defects only: concrete correctness, security, privacy,
