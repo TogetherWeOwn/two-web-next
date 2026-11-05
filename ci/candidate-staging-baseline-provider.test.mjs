@@ -9,6 +9,11 @@ import {
   prepareCandidateBaselineAssetInput,
   prepareCandidateBaselineUpload,
 } from "./candidate-staging-baseline-upload.mjs";
+import { createCandidateStagingJournal } from "./candidate-staging-occupancy.mjs";
+import {
+  createCandidateRecoveryComponentGuard,
+  createCandidateRecoveryComponentReader,
+} from "./candidate-staging-recovery-components.mjs";
 
 // Synthetic values; none may ever appear in a diagnostic or a result.
 const CF_TOKEN = "fixture-cloudflare-bearer-not-a-secret";
@@ -473,9 +478,9 @@ function build({ withAsset = false, fileSet } = {}) {
   return p;
 }
 
-function redacted(error, label = "") {
+function redacted(error, label = "", message = REFUSED) {
   assert.ok(error instanceof Error, label);
-  assert.equal(error.message, REFUSED, label);
+  assert.equal(error.message, message, label);
   assert.equal(error.cause, undefined, label);
   const text = `${error.stack}${JSON.stringify(Object.getOwnPropertyNames(error))}`;
   for (const secret of [
@@ -1595,4 +1600,850 @@ test("every refusal carries one fixed message and no cause", async () => {
   const error = await refuses(p, "dirty provider body");
   assert.equal(Object.getOwnPropertyNames(error).includes("cause"), false);
   assert.equal(Object.keys(error).length, 0);
+});
+
+// ------------------------------------------------- recovery component reader
+// Composes the world's fetch with script-settings and subdomain routes. The
+// existing GitHub, storage and deployment fixtures are reused unchanged.
+const RECOVERY_REFUSED = "Candidate recovery refused: component ownership";
+const FINAL_PHASE = "capture-recovery-components";
+const SETTINGS = {
+  logpush: true,
+  tags: [],
+  tail_consumers: [{ service: "two-web-next-alerts" }],
+  observability: {
+    enabled: true,
+    head_sampling_rate: 1,
+    logs: {
+      enabled: true,
+      head_sampling_rate: 1,
+      invocation_logs: true,
+      persist: true,
+      destinations: [],
+    },
+  },
+};
+const SUBDOMAIN = { enabled: true, previews_enabled: false };
+const SETTINGS_KINDS = ["cf-settings", "cf-subdomain"];
+const RECOVERY_CF_KINDS = [
+  ...SETTINGS_KINDS,
+  ...LISTS,
+  ...SETTINGS_KINDS,
+  "cf-list",
+  "cf-exact",
+  "cf-list",
+];
+
+function recoveryWorld(options) {
+  const p = build(options);
+  p.settings = structuredClone(SETTINGS);
+  p.subdomain = structuredClone(SUBDOMAIN);
+  p.settingsReads = 0;
+  p.onSettings = null;
+  p.settingsReply = null;
+  const inner = p.fetchImpl;
+  p.fetchImpl = async (url, init) => {
+    const path = url.startsWith(`${SCRIPT}/`) ? url.slice(SCRIPT.length + 1) : "";
+    if (path !== "script-settings" && path !== "subdomain") return inner(url, init);
+    const kind = path === "subdomain" ? "cf-subdomain" : "cf-settings";
+    p.calls.push({ url, init, kind });
+    p.events.push(`fetch:${kind}`);
+    const n = ++p.settingsReads;
+    if (p.onSettings) await p.onSettings(n, path, p);
+    const body = structuredClone(path === "subdomain" ? p.subdomain : p.settings);
+    return p.settingsReply ? p.settingsReply(n, path, body) : result(body);
+  };
+  p.recoveryReader = (extra) => createCandidateRecoveryComponentReader(p.options(extra));
+  p.capture = (extra, operation) => p.recoveryReader(extra).capture(p.selection, operation);
+  return p;
+}
+
+async function recoveryRefuses(p, label, extra, operation) {
+  let error;
+  try {
+    await p.capture(extra, operation);
+  } catch (caught) {
+    error = caught;
+  }
+  assert.ok(error, `${label}: expected a refusal`);
+  redacted(error, label, RECOVERY_REFUSED);
+  return error;
+}
+
+test("recovery reader is frozen, exposes only capture and refuses unusable options", () => {
+  const p = recoveryWorld();
+  const reader = p.recoveryReader();
+  assert.equal(Object.isFrozen(reader), true);
+  assert.deepEqual(Object.keys(reader), ["capture"]);
+  const text = JSON.stringify(reader) + String(reader.capture) + Object.getOwnPropertyNames(reader);
+  assert.ok(!text.includes(CF_TOKEN) && !text.includes(GH_TOKEN));
+  const bad = (extra, label) =>
+    assert.throws(
+      () => createCandidateRecoveryComponentReader(p.options(extra)),
+      (error) => redacted(error, label, RECOVERY_REFUSED),
+      label,
+    );
+  bad({ assertExclusive: undefined }, "missing guard");
+  bad({ assertExclusive: 7 }, "bad guard");
+  bad({ clock: null }, "null clock");
+  bad({ clock: 7 }, "bad clock");
+  bad({ signal: {} }, "signal object");
+  bad({ sourceManifestBytes: new Uint8Array(p.sourceManifest) }, "Uint8Array manifest");
+  bad({ sourceManifestBytes: undefined }, "missing manifest");
+  bad({ identity: null }, "null identity");
+  bad({ profileSha256: "0".repeat(64) }, "wrong profile digest");
+  bad({ profile: { ...p.profile, extra: true } }, "extra profile field");
+  assert.throws(
+    () => createCandidateRecoveryComponentReader(),
+    (error) => redacted(error, "no options", RECOVERY_REFUSED),
+  );
+  assert.deepEqual(p.calls, []);
+  assert.deepEqual(p.guards, []);
+});
+
+test("recovery capture is GET-only and joins settings, provider and serving pins", async () => {
+  const p = recoveryWorld();
+  const r = await p.capture();
+
+  // Independent provider observation through the unmodified provider reader.
+  const q = recoveryWorld();
+  const provider = await q.observe();
+
+  assert.equal(Object.isFrozen(r), true);
+  assert.equal(Object.isFrozen(r.state), true);
+  assert.deepEqual(Object.keys(r).sort(), [
+    "baseline",
+    "capturedAt",
+    "files",
+    "profileSha256",
+    "promotable",
+    "provenance",
+    "q",
+    "schema",
+    "scope",
+    "serving",
+    "settings",
+    "state",
+    "stateSha256",
+  ]);
+  assert.equal(r.schema, "two.candidate-recovery-component-capture.v1");
+  assert.equal(r.promotable, false);
+  assert.equal(r.scope, "web-settings-and-serving-pins-only");
+  assert.equal(r.q, p.identity.q);
+  assert.equal(r.profileSha256, p.profileSha256);
+  assert.equal(r.capturedAt, NOW);
+  assert.deepEqual(r.provenance, provider.provenance);
+  assert.deepEqual(r.baseline, provider.baseline);
+  assert.deepEqual(r.files, provider.files);
+  assert.deepEqual(r.serving, provider.serving);
+  assert.deepEqual(r.settings, {
+    schema: "two.candidate-settings-snapshot.v1",
+    promotable: false,
+    q: p.identity.q,
+    profileSha256: p.profileSha256,
+    capturedAt: NOW,
+    settings: SETTINGS,
+    subdomain: SUBDOMAIN,
+  });
+  // Narrow scope: no asset root, resource set, exclusion or cleanup authority.
+  assert.deepEqual(r.state, {
+    schema: "two.candidate-recovery-components.v1",
+    promotable: false,
+    scope: "web-settings-and-serving-pins-only",
+    q: p.identity.q,
+    profileSha256: p.profileSha256,
+    baselineSha256: provider.baselineSha256,
+    settingsSha256: candidateSha256(JSON.stringify(r.settings)),
+    servingSha256: provider.servingSha256,
+  });
+  assert.equal(r.stateSha256, candidateSha256(JSON.stringify(r.state)));
+  assert.ok(!/asset(Root|Ticket)|dirty|cleanup|exclusion|resource/i.test(JSON.stringify(r.state)));
+
+  // Request order: settings, artifacts + provider, settings again, serving.
+  assert.deepEqual(
+    p.cf().map((c) => c.kind),
+    RECOVERY_CF_KINDS,
+  );
+  assert.deepEqual(p.kinds().slice(0, 2), SETTINGS_KINDS);
+  assert.deepEqual(
+    p.cf().map((c) => c.url),
+    [
+      `${SCRIPT}/script-settings`,
+      `${SCRIPT}/subdomain`,
+      `${SCRIPT}/deployments`,
+      `${SCRIPT}/deployments/${D1}`,
+      `${SCRIPT}/deployments`,
+      VERSION_URL,
+      `${SCRIPT}/deployments`,
+      `${SCRIPT}/deployments/${D1}`,
+      `${SCRIPT}/deployments`,
+      `${SCRIPT}/script-settings`,
+      `${SCRIPT}/subdomain`,
+      `${SCRIPT}/deployments`,
+      `${SCRIPT}/deployments/${D1}`,
+      `${SCRIPT}/deployments`,
+    ],
+  );
+  for (const call of p.calls) {
+    assert.ok((call.init?.method ?? "GET") === "GET", `${call.kind} ${call.url}`);
+    assert.equal(call.init?.body, undefined);
+  }
+  for (const call of p.cf().filter((c) => SETTINGS_KINDS.includes(c.kind))) {
+    assert.equal(call.init.method, "GET");
+    assert.equal(call.init.redirect, "error");
+    assert.deepEqual(call.init.headers, { Authorization: `Bearer ${CF_TOKEN}` });
+    assert.ok(call.init.signal instanceof AbortSignal && !call.init.signal.aborted);
+  }
+
+  // Every exclusion check carries the fixed run identity, and the final one
+  // follows the last request.
+  for (const g of p.guards) {
+    assert.equal(g.context.q, p.identity.q);
+    assert.equal(g.context.profileSha256, p.profileSha256);
+  }
+  assert.deepEqual(
+    [...new Set(p.guards.map((g) => g.context.phase))].sort(),
+    ["baseline-provider", "capture", "snapshot", FINAL_PHASE].sort(),
+  );
+  assert.equal(p.guards.filter((g) => g.context.phase === FINAL_PHASE).length, 1);
+  assert.equal(p.events.at(-1), `guard:${FINAL_PHASE}`);
+  assert.equal(p.events.at(-2).startsWith("guard:"), true);
+  assert.equal(p.events.indexOf(`guard:${FINAL_PHASE}`), p.events.length - 1);
+  assert.equal(p.guards[0].calls, 0);
+  for (const [index, event] of p.events.entries()) {
+    if (event.startsWith("fetch:cf-")) {
+      assert.ok(p.events[index - 1].startsWith("guard:"), `before ${index}`);
+      assert.ok(p.events[index + 1].startsWith("guard:"), `after ${index}`);
+    }
+  }
+  const text = JSON.stringify(r);
+  for (const secret of [CF_TOKEN, GH_TOKEN, SAS]) {
+    assert.ok(!text.includes(secret), secret);
+  }
+  assert.doesNotMatch(text, /https?:\/\//);
+});
+
+test("recovery capture pins are accepted by the journal-bound component guard", async () => {
+  const p = recoveryWorld();
+  const r = await p.capture();
+  const bound = [];
+  const seen = [];
+  const journal = {
+    bindRecovery(input) {
+      bound.push(input);
+      return async (context, signal) => {
+        seen.push(context);
+        assert.ok(signal instanceof AbortSignal);
+        return { deploymentId: D3 };
+      };
+    },
+  };
+  const expectedPayload = {
+    createdAt: iso(NOW + 5),
+    baseline: { stateSha256: r.stateSha256, expiresAt: iso(NOW + 3600) },
+  };
+  const make = (extra = {}) =>
+    createCandidateRecoveryComponentGuard({
+      journal,
+      deploymentId: D3,
+      identity: p.identity,
+      profile: p.profile,
+      profileSha256: p.profileSha256,
+      expectedPayload,
+      state: r.state,
+      baseline: r.baseline,
+      files: r.files,
+      settings: r.settings,
+      serving: r.serving,
+      clock: () => NOW + 10,
+      ...extra,
+    });
+  const guard = make();
+  assert.equal(bound.length, 1);
+  assert.equal(bound[0].deploymentId, D3);
+  const { q, profileSha256 } = { q: p.identity.q, profileSha256: p.profileSha256 };
+  const settingsSha256 = r.state.settingsSha256;
+  const servingSha256 = r.state.servingSha256;
+  const owner = await guard({ phase: "seal", q, profileSha256, snapshotSha256: settingsSha256 });
+  assert.equal(owner.deploymentId, D3);
+  assert.equal(owner.stateSha256, r.stateSha256);
+  assert.equal(owner.promotable, false);
+  assert.equal(owner.scope, "web-settings-and-serving-pins-only");
+  await guard({ phase: "restore", q, profileSha256, snapshotSha256: settingsSha256 });
+  await guard({
+    phase: "unchanged",
+    q,
+    profileSha256,
+    snapshotSha256: servingSha256,
+    restoreDeploymentId: null,
+  });
+  await guard({
+    phase: "restore-baseline-traffic",
+    q,
+    profileSha256,
+    snapshotSha256: servingSha256,
+    baseline: r.serving,
+  });
+  const assets = prepareCandidateBaselineAssetInput({
+    identity: p.identity,
+    profile: p.profile,
+    profileSha256: p.profileSha256,
+    baseline: r.baseline,
+    baselineSha256: r.state.baselineSha256,
+    files: r.files,
+    now: NOW + 10,
+  });
+  await guard({
+    phase: "restore-baseline-version",
+    q,
+    profileSha256,
+    baselineSha256: r.state.baselineSha256,
+    assetRootSha256: assets.assetRootSha256,
+    baselineVersionId: VERSION,
+  });
+  assert.equal(seen.length, 5);
+
+  // A state that is not the retained pin, or settings from another capture, refuse.
+  const other = recoveryWorld();
+  other.settings.logpush = false;
+  const drifted = await other.capture();
+  assert.notEqual(drifted.stateSha256, r.stateSha256);
+  assert.equal(drifted.state.baselineSha256, r.state.baselineSha256);
+  assert.equal(drifted.state.servingSha256, r.state.servingSha256);
+  assert.throws(
+    () => make({ settings: drifted.settings }),
+    (error) => error.message === RECOVERY_REFUSED,
+  );
+  assert.throws(
+    () => make({ state: { ...r.state, settingsSha256: drifted.state.settingsSha256 } }),
+    (error) => error.message === RECOVERY_REFUSED,
+  );
+});
+
+test("recovery capture pins bind to a real journal's sole dirty ownership", async () => {
+  const p = recoveryWorld();
+  const r = await p.capture();
+  const environment = "candidate-staging-occupancy";
+  const journalToken = "fixture-journal-bearer-not-a-secret";
+  // Independent expectation: the digest is rebuilt here from the documented
+  // state field order, not read from the capture's own stateSha256.
+  const independentState = candidateSha256(
+    JSON.stringify({
+      schema: "two.candidate-recovery-components.v1",
+      promotable: false,
+      scope: "web-settings-and-serving-pins-only",
+      q: p.identity.q,
+      profileSha256: p.profileSha256,
+      baselineSha256: candidateSha256(JSON.stringify(r.baseline)),
+      settingsSha256: candidateSha256(JSON.stringify(r.settings)),
+      servingSha256: candidateSha256(JSON.stringify(r.serving)),
+    }),
+  );
+  assert.equal(r.stateSha256, independentState);
+  const expectedPayload = {
+    schema: "two.candidate-occupancy.v1",
+    q: p.identity.q,
+    controllerSha: p.identity.descriptor[5],
+    headSha: p.identity.descriptor[4],
+    runId: p.identity.descriptor[7],
+    runAttempt: p.identity.descriptor[8],
+    createdAt: iso(NOW + 5),
+    baseline: {
+      artifactId: p.selection.artifactId,
+      archiveSha256: p.selection.archiveSha256,
+      stateSha256: independentState,
+      expiresAt: iso(NOW + 5 + 15 * 86400),
+    },
+  };
+  const rows = [
+    {
+      id: 1,
+      creator: { id: 7 },
+      performed_via_github_app: { id: 8 },
+      environment,
+      task: "candidate-staging-occupancy-v1",
+      ref: expectedPayload.controllerSha,
+      sha: expectedPayload.controllerSha,
+      production_environment: false,
+      transient_environment: false,
+      payload: structuredClone(expectedPayload),
+    },
+  ];
+  const net = [];
+  const touched = [];
+  const real = createCandidateStagingJournal({
+    token: journalToken,
+    creatorId: "7",
+    appId: "8",
+    fetchImpl: async (url, request) => {
+      net.push({ url, ...request });
+      return Response.json(/\/statuses\?/.test(url) ? [] : rows);
+    },
+  });
+  const journal = new Proxy(real, {
+    get(target, key) {
+      touched.push(key);
+      return target[key];
+    },
+  });
+  const make = (extra = {}) =>
+    createCandidateRecoveryComponentGuard({
+      journal,
+      deploymentId: "1",
+      identity: p.identity,
+      profile: p.profile,
+      profileSha256: p.profileSha256,
+      expectedPayload,
+      state: r.state,
+      baseline: r.baseline,
+      files: r.files,
+      settings: r.settings,
+      serving: r.serving,
+      clock: () => NOW + 10,
+      ...extra,
+    });
+  const guard = make();
+  assert.equal(net.length, 0);
+  const base = { q: p.identity.q, profileSha256: p.profileSha256 };
+  const owner = await guard(
+    { phase: "seal", ...base, snapshotSha256: r.state.settingsSha256 },
+    new AbortController().signal,
+  );
+  assert.deepEqual(owner, {
+    schema: "two.candidate-recovery-component-owner.v1",
+    promotable: false,
+    scope: "web-settings-and-serving-pins-only",
+    q: p.identity.q,
+    deploymentId: "1",
+    stateSha256: independentState,
+  });
+  const unchanged = await guard({
+    phase: "unchanged",
+    ...base,
+    snapshotSha256: r.state.servingSha256,
+    restoreDeploymentId: null,
+  });
+  assert.equal(unchanged.stateSha256, independentState);
+  // Only authenticated GET reads reached the journal; nothing was marked clean.
+  assert.ok(net.length >= 4);
+  for (const call of net) {
+    assert.equal(call.method, "GET");
+    assert.equal("body" in call, false);
+    assert.equal(call.headers.Authorization, `Bearer ${journalToken}`);
+  }
+  assert.ok(touched.every((key) => key === "bindRecovery"));
+
+  // A journal row pinned to a different state does not own this capture.
+  rows[0].payload.baseline.stateSha256 = "0".repeat(64);
+  await assert.rejects(
+    guard({ phase: "seal", ...base, snapshotSha256: r.state.settingsSha256 }),
+    (error) => error.message === RECOVERY_REFUSED && error.cause === undefined,
+  );
+});
+
+test("recovery capture refuses settings or subdomain drift across the provider read", async () => {
+  const reference = await recoveryWorld().capture();
+  // Drift lands in the second snapshot, whichever endpoint it affects.
+  for (const [at, field] of [
+    [3, "settings"],
+    [4, "subdomain"],
+  ]) {
+    const p = recoveryWorld();
+    p.onSettings = (n) => {
+      if (n === at) {
+        if (field === "settings") p.settings.observability.logs.persist = false;
+        else p.subdomain.enabled = false;
+      }
+    };
+    await recoveryRefuses(p, `drift at settings read ${at}`);
+    assert.equal(p.events.includes(`guard:${FINAL_PHASE}`), false);
+    // Both reads of the second snapshot run; serving is never captured after.
+    assert.equal(p.settingsReads, 4);
+    assert.equal(p.cf().length, 2 + 7 + 2);
+  }
+  // Drift while the provider reads is caught by the second snapshot.
+  for (const field of ["settings", "subdomain"]) {
+    const p = recoveryWorld();
+    p.hook = (n) => {
+      if (n === 1) {
+        if (field === "settings") p.settings.tail_consumers = [];
+        else p.subdomain.previews_enabled = true;
+      }
+    };
+    await recoveryRefuses(p, `drift during provider (${field})`);
+    assert.equal(p.events.includes(`guard:${FINAL_PHASE}`), false);
+  }
+  // Stable but different settings yield different pins, not a refusal.
+  const changed = recoveryWorld();
+  changed.settings.logpush = false;
+  changed.subdomain.enabled = false;
+  const r = await changed.capture();
+  assert.notEqual(r.state.settingsSha256, reference.state.settingsSha256);
+  assert.equal(r.state.baselineSha256, reference.state.baselineSha256);
+  assert.equal(r.state.servingSha256, reference.state.servingSha256);
+});
+
+test("recovery capture refuses unsupported or malformed settings and subdomain bodies", async () => {
+  const mutations = [
+    ["unknown settings field", "script-settings", (b) => void (b.extra = true)],
+    ["tags present", "script-settings", (b) => void (b.tags = ["x"])],
+    ["foreign tail", "script-settings", (b) => void (b.tail_consumers = [{ service: "other" }])],
+    [
+      "logs destination",
+      "script-settings",
+      (b) => void b.observability.logs.destinations.push("d"),
+    ],
+    ["bad rate", "script-settings", (b) => void (b.observability.head_sampling_rate = 2)],
+    ["unknown subdomain field", "subdomain", (b) => void (b.extra = true)],
+    ["non-boolean subdomain", "subdomain", (b) => void (b.enabled = "yes")],
+  ];
+  for (const [label, path, mutate] of mutations) {
+    const p = recoveryWorld();
+    mutate(path === "subdomain" ? p.subdomain : p.settings);
+    await recoveryRefuses(p, label);
+    assert.equal(p.events.includes(`guard:${FINAL_PHASE}`), false, label);
+  }
+});
+
+test("recovery capture refuses a serving replacement that lands after the settings bracket", async () => {
+  for (const [label, replacement] of [
+    ["same version, new deployment", row(D2, VERSION, NOW - 50)],
+    ["new version, new deployment", row(D3, OTHER, NOW - 50)],
+  ]) {
+    const p = recoveryWorld();
+    p.onSettings = (n) => {
+      if (n === 4) p.deployments.unshift(structuredClone(replacement));
+    };
+    await recoveryRefuses(p, label);
+    assert.equal(p.settingsReads, 4, label);
+    // The serving capture ran against the replacement and the join caught it.
+    assert.equal(p.cf().length, 2 + 7 + 2 + 3, label);
+    assert.equal(p.events.includes(`guard:${FINAL_PHASE}`), false, label);
+  }
+});
+
+test("recovery capture refuses provider and serving failures without a receipt", async () => {
+  const dirty = recoveryWorld();
+  dirty.version.extra = `private upstream ${CF_TOKEN}`;
+  await recoveryRefuses(dirty, "dirty provider body");
+  assert.equal(dirty.settingsReads, 2, "after-snapshot never runs");
+  assert.equal(dirty.events.includes(`guard:${FINAL_PHASE}`), false);
+
+  const missing = recoveryWorld();
+  missing.selection.artifactId = "999";
+  await recoveryRefuses(missing, "unretained artifact");
+  assert.deepEqual(
+    missing.cf().map((c) => c.kind),
+    SETTINGS_KINDS,
+  );
+
+  // Serving moves between its own captures.
+  const moving = recoveryWorld();
+  moving.hook = (n, kind) => {
+    if (n === 9 && kind === "cf-exact") moving.deployments.unshift(row(D2, VERSION, NOW - 50));
+  };
+  await recoveryRefuses(moving, "serving drift in the final capture");
+  assert.equal(moving.events.includes(`guard:${FINAL_PHASE}`), false);
+});
+
+test("recovery capture refuses unusable settings responses and never retries", async () => {
+  const replies = [
+    ["http 500", () => new Response("{}", { status: 500 })],
+    [
+      "success false",
+      () =>
+        new Response(JSON.stringify({ success: false, errors: [{ code: 1 }], result: {} }), {
+          headers: { "content-type": "application/json" },
+        }),
+    ],
+    ["not json", () => new Response("{}", { headers: { "content-type": "text/plain" } })],
+    ["no body", () => new Response(null, { status: 200 })],
+    [
+      "thrown diagnostic",
+      () => {
+        throw new Error(`private upstream ${CF_TOKEN} ${GH_TOKEN} ${SAS}`);
+      },
+    ],
+    ["rejected diagnostic", () => Promise.reject(new Error(`private upstream ${CF_TOKEN}`))],
+  ];
+  for (let at = 1; at <= 4; at++) {
+    for (const [label, reply] of replies) {
+      const p = recoveryWorld();
+      let seen;
+      p.settingsReply = (n, path, body) => {
+        if (n !== at) return result(body);
+        seen = p.calls.length;
+        return reply();
+      };
+      await recoveryRefuses(p, `${label} at settings read ${at}`);
+      assert.equal(p.calls.length, seen, `${label} at ${at}: no request after failure`);
+      assert.equal(p.settingsReads, at, `${label} at ${at}: not retried`);
+      assert.equal(p.events.includes(`guard:${FINAL_PHASE}`), false);
+    }
+  }
+});
+
+test("recovery exclusion failure at any guard, including the final one, stops all requests", async () => {
+  const counter = recoveryWorld();
+  await counter.capture();
+  const total = counter.guards.length;
+  assert.ok(total > EXPECTED_GUARDS, `expected many guards, saw ${total}`);
+  assert.equal(counter.guards.at(-1).context.phase, FINAL_PHASE);
+  for (let at = 1; at <= total; at++) {
+    for (const mode of ["throw", "reject"]) {
+      if (mode === "reject" && at % 5 !== 0 && at !== total) continue;
+      const p = recoveryWorld();
+      let seen;
+      p.onGuard = (n) => {
+        if (n !== at) return undefined;
+        seen = p.calls.length;
+        const error = new Error(`private upstream ${CF_TOKEN}`);
+        if (mode === "throw") throw error;
+        return Promise.reject(error);
+      };
+      await recoveryRefuses(p, `guard ${at} ${mode}`);
+      assert.equal(p.calls.length, seen, `guard ${at} ${mode}: no request after failure`);
+      assert.equal(p.guards.length, at, `guard ${at} ${mode}`);
+    }
+  }
+});
+
+test("recovery operation cancel at any guard, including the final one, refuses", async () => {
+  const counter = recoveryWorld();
+  await counter.capture();
+  const total = counter.guards.length;
+  for (let at = 1; at <= total; at++) {
+    const p = recoveryWorld();
+    const controller = new AbortController();
+    let seen;
+    p.onGuard = (n) => {
+      if (n === at) {
+        seen = p.calls.length;
+        controller.abort();
+      }
+    };
+    await recoveryRefuses(p, `cancel at guard ${at}`, undefined, controller.signal);
+    assert.equal(p.calls.length, seen, `cancel at guard ${at}`);
+    assert.equal(p.guards.length, at, `cancel at guard ${at}`);
+  }
+});
+
+test("recovery constructor signal cancels a hung or completed exclusion check", async () => {
+  const counter = recoveryWorld();
+  await counter.capture();
+  const total = counter.guards.length;
+  for (const at of [3, Math.floor(total / 2), total]) {
+    const p = recoveryWorld();
+    const controller = new AbortController();
+    p.onGuard = (n, context, deadline) => {
+      if (n !== at) return undefined;
+      setImmediate(() => controller.abort());
+      return new Promise((resolve, reject) => {
+        deadline.addEventListener(
+          "abort",
+          () => reject(new Error(`private upstream ${GH_TOKEN}`)),
+          {
+            once: true,
+          },
+        );
+      });
+    };
+    await recoveryRefuses(p, `hung guard ${at}`, { signal: controller.signal });
+    assert.equal(p.guards.length, at);
+  }
+  // The final guard may complete normally; cancelling inside it still refuses.
+  const p = recoveryWorld();
+  const controller = new AbortController();
+  p.onGuard = (n, context) => {
+    if (context.phase === FINAL_PHASE) controller.abort();
+  };
+  await recoveryRefuses(p, "abort inside final guard", { signal: controller.signal });
+  assert.equal(p.guards.at(-1).context.phase, FINAL_PHASE);
+});
+
+test("recovery cancel inside an in-flight settings or provider request refuses", async () => {
+  for (let at = 1; at <= 4; at++) {
+    const p = recoveryWorld();
+    const controller = new AbortController();
+    p.settingsReply = (n, path, body) => {
+      if (n === at) controller.abort();
+      return result(body);
+    };
+    await recoveryRefuses(p, `abort during settings read ${at}`, undefined, controller.signal);
+    assert.equal(p.settingsReads, at);
+    assert.equal(p.events.includes(`guard:${FINAL_PHASE}`), false);
+  }
+  for (const at of [1, 4, 8, 10]) {
+    const p = recoveryWorld();
+    const controller = new AbortController();
+    p.hook = (n) => {
+      if (n === at) controller.abort();
+    };
+    await recoveryRefuses(p, `abort during Cloudflare request ${at}`, undefined, controller.signal);
+    assert.equal(p.events.includes(`guard:${FINAL_PHASE}`), false);
+  }
+});
+
+test("recovery pre-aborted signals and bad operation signals refuse before any request", async () => {
+  for (const where of ["constructor", "operation"]) {
+    const p = recoveryWorld();
+    const controller = new AbortController();
+    controller.abort();
+    if (where === "constructor") await recoveryRefuses(p, where, { signal: controller.signal });
+    else await recoveryRefuses(p, where, undefined, controller.signal);
+    assert.deepEqual(p.calls, [], where);
+    assert.deepEqual(p.guards, [], where);
+  }
+  for (const bad of [{}, "x", 7, null]) {
+    const p = recoveryWorld();
+    await recoveryRefuses(p, `operation signal ${String(bad)}`, undefined, bad);
+    assert.deepEqual(p.calls, []);
+    assert.deepEqual(p.guards, []);
+  }
+});
+
+test("recovery caller input mutation cannot change the captured join", async () => {
+  const reference = await recoveryWorld().capture();
+  const p = recoveryWorld();
+  const callerIdentity = structuredClone(p.identity);
+  const reader = p.recoveryReader({ identity: callerIdentity });
+  p.profile.accountId = "3".repeat(32);
+  p.profile.scriptName = "elsewhere";
+  p.profile.bindings.length = 0;
+  callerIdentity.q = "mutated";
+  callerIdentity.descriptor[2] = "elsewhere/repo";
+  p.contract.job = "foreign-job";
+  p.contract.path = ".github/workflows/foreign.yml";
+  p.sourceManifest.fill(0);
+  const selection = structuredClone(p.selection);
+  p.onGuard = (n) => {
+    if (n === 2) selection.runId = "999";
+  };
+  p.hook = (n) => {
+    if (n === 1) selection.versionId = OTHER;
+  };
+  const r = await reader.capture(selection);
+  assert.equal(r.stateSha256, reference.stateSha256);
+  assert.deepEqual(r.state, reference.state);
+  assert.deepEqual(r.provenance, reference.provenance);
+  assert.equal(r.q, reference.q);
+  assert.ok(p.cf().every((c) => c.url.startsWith(SCRIPT) || c.url === VERSION_URL));
+
+  // A returned capture is frozen and cannot reach retained state or a later capture.
+  r.files[0].bytes.fill(0);
+  assert.throws(() => {
+    r.files.length = 0;
+  }, TypeError);
+  assert.throws(() => {
+    "use strict";
+    r.state.q = "mutated";
+  }, TypeError);
+  assert.throws(() => {
+    "use strict";
+    r.settings.settings.logpush = false;
+  }, TypeError);
+  const second = await reader.capture(p.selection);
+  assert.equal(second.files[0].bytes.toString(), SENTINEL);
+  assert.equal(second.stateSha256, reference.stateSha256);
+});
+
+test("recovery caller input mutation of a selection read after construction is isolated", async () => {
+  const p = recoveryWorld();
+  const reader = p.recoveryReader();
+  const selection = structuredClone(p.selection);
+  const pending = reader.capture(selection);
+  selection.artifactId = "999";
+  selection.versionId = OTHER;
+  const r = await pending;
+  assert.equal(r.provenance.artifactId, p.selection.artifactId);
+  assert.equal(r.baseline.versionId, VERSION);
+});
+
+test("recovery capture accepts a monotonic advancing clock and stamps the receipt", async () => {
+  const p = recoveryWorld();
+  let t = NOW;
+  const r = await p.capture({ clock: () => t++ });
+  assert.ok(r.settings.capturedAt >= NOW);
+  assert.ok(r.settings.capturedAt >= r.baseline.capturedAt);
+  assert.ok(r.serving.observedAt >= r.settings.capturedAt);
+  assert.ok(r.capturedAt >= r.serving.observedAt);
+});
+
+test("recovery capture refuses a clock that rolls back at any sampled call, including the last", async () => {
+  const counter = recoveryWorld();
+  let total = 0;
+  await counter.capture({ clock: () => (total++, NOW) });
+  assert.ok(total > 40, `expected many clock reads, saw ${total}`);
+  for (const at of [
+    2,
+    3,
+    4,
+    5,
+    8,
+    13,
+    21,
+    34,
+    Math.floor(total / 2),
+    total - 2,
+    total - 1,
+    total,
+  ]) {
+    const p = recoveryWorld();
+    let n = 0;
+    await recoveryRefuses(p, `rollback at clock read ${at}`, {
+      clock: () => (++n === at ? NOW - 1 : NOW),
+    });
+  }
+  // A rollback on the very last read must not be rescued by the finished guards.
+  const last = recoveryWorld();
+  let reads = 0;
+  await recoveryRefuses(last, "rollback on the final clock read", {
+    clock: () => (++reads === total ? NOW - 1 : NOW),
+  });
+  assert.equal(last.guards.at(-1).context.phase, FINAL_PHASE);
+});
+
+test("recovery capture refuses a bad initial or later clock value before any request", async () => {
+  const values = [Number.NaN, -1, NOW + 0.5, "1793819000", null, undefined, 253402300800, Infinity];
+  for (const value of values) {
+    const first = recoveryWorld();
+    await recoveryRefuses(first, `initial clock ${String(value)}`, {
+      clock: () => value,
+    });
+    assert.deepEqual(first.calls, [], `initial clock ${String(value)}`);
+    assert.deepEqual(first.guards, [], `initial clock ${String(value)}`);
+    for (const at of [2, 9]) {
+      const p = recoveryWorld();
+      let n = 0;
+      await recoveryRefuses(p, `clock ${String(value)} at ${at}`, {
+        clock: () => (++n === at ? value : NOW),
+      });
+    }
+  }
+  const throwing = recoveryWorld();
+  await recoveryRefuses(throwing, "clock throws", {
+    clock: () => {
+      throw new Error(`private upstream ${CF_TOKEN}`);
+    },
+  });
+  assert.deepEqual(throwing.calls, []);
+  assert.deepEqual(throwing.guards, []);
+});
+
+test("recovery refusals carry one fixed message, no cause and no provider text", async () => {
+  const p = recoveryWorld();
+  p.settings.extra = `private upstream ${CF_TOKEN}`;
+  p.version.bindings.push({ name: "X", type: "secret_text", text: `private upstream ${GH_TOKEN}` });
+  const error = await recoveryRefuses(p, "dirty settings body");
+  assert.equal(Object.getOwnPropertyNames(error).includes("cause"), false);
+  assert.equal(Object.keys(error).length, 0);
+  assert.equal(error.message, RECOVERY_REFUSED);
+
+  const q = recoveryWorld();
+  q.onGuard = () => {
+    throw Object.assign(new Error(`private upstream ${CF_TOKEN}`), { cause: new Error(GH_TOKEN) });
+  };
+  const failed = await recoveryRefuses(q, "guard failure with cause");
+  assert.equal(failed.cause, undefined);
+  assert.deepEqual(q.calls, []);
 });

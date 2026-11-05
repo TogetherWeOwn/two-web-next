@@ -14,6 +14,31 @@ Durable Objects and database compute are not admitted by a sleeping Worker or
 by qualification fixture success. No runtime shutdown or cost exception is
 claimed by this incomplete source implementation.
 
+## Read-only recovery component capture (not installed)
+
+`createCandidateRecoveryComponentReader` in the
+[recovery component module](../ci/candidate-staging-recovery-components.mjs)
+connects the actual retained-artifact/provider reader, settings lifecycle and
+serving reader before dirty-journal creation. It captures settings before and
+after authenticated baseline observation, refuses settings/subdomain drift,
+and then rechecks the same serving deployment, version and complete bounded
+history. No candidate bytes execute and every remote request is read-only.
+
+The resulting canonical state pins the original-B byte manifest, settings and
+serving snapshots together. Its `stateSha256` is consumable by the existing
+journal-bound component guard once that state is independently retained and
+joined to the actual journal payload. Input snapshots, a shared three-minute
+operation deadline, monotonic clocks and cancellation surround the complete
+capture; child operations cannot extend that deadline. Diagnostics are fixed.
+
+This is point-in-time `web-settings-and-serving-pins-only` evidence, **not**
+complete baseline admission or an installed authority. It supplies no stored-asset
+readback, synthetic-resource/principal proof, global exclusion, artifact publisher,
+dirty-journal creation, B-prime mutation join, recovery completion or cleanup.
+Installed source/exclusion admission and independent durable retention remain
+prerequisites; passing a callback or hashing the state does not establish them.
+No workflow invokes this capture and no activation clearance is implied.
+
 ## Implemented predicates
 
 - `candidateIdentity` accepts only a PR number, exact lowercase head SHA, and

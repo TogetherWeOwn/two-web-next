@@ -1,9 +1,16 @@
 // Joins web/settings/serving component pins to sole dirty-journal ownership.
 // Not complete baseline admission, exclusion, B-prime serving or cleanup authority.
 import { candidateSha256, identitySnapshot } from "./candidate-staging-admission.mjs";
+import { createCandidateBaselineProviderReader } from "./candidate-staging-baseline-provider.mjs";
 import { prepareCandidateBaselineAssetInput } from "./candidate-staging-baseline-upload.mjs";
-import { admitCandidateServingSnapshot } from "./candidate-staging-serving.mjs";
-import { admitCandidateSettingsSnapshot } from "./candidate-staging-settings-lifecycle.mjs";
+import {
+  admitCandidateServingSnapshot,
+  createCandidateServingReader,
+} from "./candidate-staging-serving.mjs";
+import {
+  admitCandidateSettingsSnapshot,
+  createCandidateSettingsLifecycle,
+} from "./candidate-staging-settings-lifecycle.mjs";
 import { profileSnapshot } from "./candidate-staging-upload.mjs";
 
 const ERROR = "Candidate recovery refused: component ownership";
@@ -20,6 +27,144 @@ function keys(value, names) {
     !Array.isArray(value) &&
     Object.keys(value).sort().join(",") === names.split(",").sort().join(",")
   );
+}
+
+// Read-only assembly before the dirty journal is created. These component pins
+// still lack stored-asset, complete resource/capability and installed exclusion
+// admission; they must not authorize candidate mutation or journal cleanup.
+export function createCandidateRecoveryComponentReader({
+  token,
+  githubToken,
+  identity,
+  profile,
+  profileSha256,
+  installedContract,
+  sourceManifestBytes,
+  assertExclusive,
+  signal,
+  fetchImpl = fetch,
+  clock = () => Math.floor(Date.now() / 1000),
+} = {}) {
+  try {
+    requireEvidence(
+      typeof assertExclusive === "function" &&
+        typeof clock === "function" &&
+        (signal === undefined || signal instanceof AbortSignal) &&
+        Buffer.isBuffer(sourceManifestBytes) &&
+        sourceManifestBytes.length > 0 &&
+        sourceManifestBytes.length <= 64 * 1024,
+    );
+    const run = identitySnapshot(identity);
+    profileSnapshot(profile, profileSha256);
+    const fixed = {
+      token,
+      githubToken,
+      identity: run,
+      profile: structuredClone(profile),
+      profileSha256,
+      installedContract: structuredClone(installedContract),
+      sourceManifestBytes: Buffer.from(sourceManifestBytes),
+      fetchImpl,
+    };
+    const refuseMutation = async () => {
+      throw new Error(ERROR);
+    };
+    return Object.freeze({
+      async capture(selection, operationSignal) {
+        try {
+          requireEvidence(operationSignal === undefined || operationSignal instanceof AbortSignal);
+          const selected = structuredClone(selection);
+          const deadline = AbortSignal.any([
+            ...(signal ? [signal] : []),
+            ...(operationSignal ? [operationSignal] : []),
+            AbortSignal.timeout(180_000),
+          ]);
+          let lastNow = clock();
+          function currentTime() {
+            deadline.throwIfAborted();
+            const now = clock();
+            requireEvidence(
+              Number.isSafeInteger(lastNow) &&
+                lastNow >= 0 &&
+                lastNow <= 253402300799 &&
+                Number.isSafeInteger(now) &&
+                now >= lastNow &&
+                now <= 253402300799,
+            );
+            lastNow = now;
+            return now;
+          }
+          async function guard(context, childSignal) {
+            currentTime();
+            const active = AbortSignal.any([deadline, ...(childSignal ? [childSignal] : [])]);
+            active.throwIfAborted();
+            await assertExclusive(context, active);
+            active.throwIfAborted();
+            currentTime();
+          }
+          const options = {
+            ...fixed,
+            assertExclusive: guard,
+            requireDirty: refuseMutation,
+            assertBaselineServing: refuseMutation,
+            signal: deadline,
+            clock: currentTime,
+          };
+          currentTime();
+          const settingsReader = createCandidateSettingsLifecycle(options);
+          const before = await settingsReader.snapshot();
+          const provider = await createCandidateBaselineProviderReader(options).observe(selected, {
+            signal: deadline,
+          });
+          const after = await settingsReader.snapshot();
+          requireEvidence(
+            digest({ settings: before.snapshot.settings, subdomain: before.snapshot.subdomain }) ===
+              digest({ settings: after.snapshot.settings, subdomain: after.snapshot.subdomain }),
+          );
+          const serving = await createCandidateServingReader(options).capture(deadline);
+          requireEvidence(
+            serving.snapshot.deploymentId === provider.serving.deploymentId &&
+              serving.snapshot.versionId === provider.serving.versionId &&
+              serving.snapshot.historySha256 === provider.serving.historySha256,
+          );
+          const state = Object.freeze({
+            schema: "two.candidate-recovery-components.v1",
+            promotable: false,
+            scope: "web-settings-and-serving-pins-only",
+            q: run.q,
+            profileSha256,
+            baselineSha256: provider.baselineSha256,
+            settingsSha256: after.snapshotSha256,
+            servingSha256: serving.snapshotSha256,
+          });
+          await guard(
+            Object.freeze({ phase: "capture-recovery-components", q: run.q, profileSha256 }),
+          );
+          const capturedAt = currentTime();
+          deadline.throwIfAborted();
+          return Object.freeze({
+            schema: "two.candidate-recovery-component-capture.v1",
+            promotable: false,
+            scope: state.scope,
+            q: run.q,
+            profileSha256,
+            provenance: provider.provenance,
+            state,
+            stateSha256: digest(state),
+            baseline: provider.baseline,
+            files: provider.files,
+            settings: after.snapshot,
+            serving: serving.snapshot,
+            capturedAt,
+          });
+        } catch {
+          throw new Error(ERROR);
+        }
+      },
+    });
+  } catch {
+    throw new Error(ERROR);
+  }
 }
 
 // All inputs are installed controller state, not candidate-supplied callbacks or
