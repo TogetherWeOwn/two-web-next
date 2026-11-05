@@ -549,8 +549,9 @@ code changes. `db-migrate.yml` stays dispatchable by hand. Never couple
 production apply to a Worker deploy or enable that by merging schema SQL.
 
 **Actions proof (no Neon/API calls):** `ci.yml`'s `check` job runs
-`npm run db:migrate:selftest` against the disposable Actions Postgres service.
-Push the PR branch and cite its exact-head job URL; do not run the full migration
+`npm run db:migrate:selftest` against the disposable Actions Postgres service,
+unless a draft or docs-scope fast-pass skips it; a skip is not proof. Push the
+PR branch and cite its exact-head job URL showing that step executed and succeeded; do not run the full migration
 selftest locally. Any local reproduction is limited to one failing test against
 approved fixtures or the disposable test service.
 It creates UUID-owned test databases, uses stub Environment URLs, and drops only

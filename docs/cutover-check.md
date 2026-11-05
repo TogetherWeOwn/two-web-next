@@ -212,7 +212,7 @@ run and job URLs as evidence. Policy: [Verify a change with GitHub Actions](../C
 reproduction is limited to one failing test against fixtures or a disposable
 database.
 
-The `check` job runs the selftest (`npm run test:cutover`). Selftests use only loopback
+The `check` job runs the selftest (`npm run test:cutover`) only when its heavy steps run; a draft or docs-scope fast-pass or skip is not executed-suite evidence, so confirm the exact-head step ran and succeeded. Selftests use only loopback
 HTTP/TLS servers, injected DNS stubs, disposable certificates and local files.
 They do not query real domains, follow external redirects, use Discord secrets
 or connect to any database. Vitest also feeds actual Hono-rendered static-leaf

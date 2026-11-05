@@ -262,9 +262,11 @@ ordinary-login versus join endpoints and attribution parameters. Unsent search
 drafts and failed, superseded or invalid fragments do not install new destinations;
 replacement links and zones are admitted together without replacing the search input.
 
-The `check` job in Actions runs asset/config drift checks and the Wrangler
-bundle dry-run. Push the PR branch for those CI gates; do not mirror them on
-the shared host. Regenerating reviewed `public/` assets after a source edit
+In Actions, the `bundle-budget` job owns the `public/` asset drift check
+(`node ci/minify-assets.mjs --check`) and bundle budgets; the `check` job owns the
+configuration drift check and the scoped Wrangler dry-runs. Docs-only and draft
+runs skip those heavy steps, so a green skip is not proof they ran. Push the PR
+branch for those CI gates; do not mirror them on the shared host. Regenerating reviewed `public/` assets after a source edit
 still uses `npm run build:assets`. Any heavy build for a focused failing-test
 reproduction follows the guarded Boat procedure in CONTRIBUTING, not a raw-host
 Wrangler/Kit build. A dry-run bundle does not deploy, but is still a build.

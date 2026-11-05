@@ -64,7 +64,7 @@ The repository rulesets enforce the following on `main`:
 
 - `pr-conventions`: `pr-lint` must pass.
 
-The final-stage reviewer squash-merges the pinned, settled head before approving
+**Who merges.** The final-stage reviewer squash-merges the pinned, settled head before approving
 the final native review stage; the author merges only when there is no review
 stage. Every required check must be green and every finding fixed or answered
 with evidence. A merge to `main` reaches production (ci, then deploy, then
@@ -344,8 +344,11 @@ gh run view <run-id> --json headSha,url,jobs
 ```
 
 Use the appropriate `type/short-slug` for the change. The workflow already
-fast-passes heavy steps on drafts and docs-only changes; readiness triggers
-`ready_for_review` and scope still decides what runs. A scope-approved skip is
+fast-passes heavy steps on drafts and scope-approved docs-only changes;
+readiness triggers `ready_for_review` and scope still decides what runs.
+`ci/change-scope.sh` refuses the docs-only fast-pass when a test, gate or build
+reads changed Markdown, so a prose-only diff can still run the full suites in
+Actions. A scope-approved skip is
 not evidence that the skipped suite executed. Do not touch app files or change
 workflow scope merely to force a docs-only PR through the full suite. If a full
 run is needed, use the existing Actions `workflow_dispatch` on the PR branch,

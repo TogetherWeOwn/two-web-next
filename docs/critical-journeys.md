@@ -92,7 +92,9 @@ synchronization.
   complete) and cite the exact-head GitHub Actions run and job URLs; do not run
   `npm run check` locally. Policy: [Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions).
   The `check` job runs fixture and disposable-service SQL checks, not live
-  database verification or the Playwright journeys. Featured-unpublish SQL cases use
+  database verification or the Playwright journeys, and only when its heavy steps
+  run: a draft or docs-scope fast-pass skips them and is not executed-suite
+  evidence. Confirm the relevant step ran and succeeded on the exact head. Featured-unpublish SQL cases use
   the existing integration gate in `test/admin.test.ts`; six registration and
   rendering cases remain ungated in the two featured-unpublish suites. No new
   conditional skip is added. Full SQL verification runs in CI against its
