@@ -634,6 +634,42 @@ admission and the controller remain unqualified. Existing mock reader passes and
 local dry-run compatibility do not establish a successful live producer run,
 recovery retention, activation clearance or native Security approval.
 
+### Authenticated retained-byte reader (not controller-integrated)
+
+`readBaseline` in [the artifact reader](../ci/candidate-staging-artifact.mjs) joins
+both retained channels through the installation-pinned baseline producer contract.
+It independently verifies the exact payload and producer artifact IDs, names,
+digests, repository, source revision and successful first producer attempt before
+retrieval, then repeats those observations after decoding. An intervening rerun,
+missing/expired artifact, skipped step or mismatched source refuses. The selection
+and source bytes are copied before asynchronous work. Older producer revisions
+and reruns remain refused, not inferred from artifact names.
+
+Both archives use the existing bounded fixed-origin download transport. The API
+bearer never reaches signed storage; redirects there refuse. The shared in-memory
+ZIP decoder keeps its existing integrity, resource, link, duplicate and path
+checks. It now has separate fixed profiles: candidate bundles still require
+`worker/worker.mjs`; baseline payloads allow only `baseline.json` and flat numbered
+files; the producer channel allows only `producer.json`. No archive writes to
+disk, executes code or chooses the decoder's path policy.
+
+The reader validates the exact retained manifest/source schema, sorted unique
+logical module/asset paths, sequential entry names, sizes, byte hashes and byte
+root. It admits the emitter's `_worker.js` and optional source-map types, not
+arbitrary module names or content types. The independent producer bytes must equal
+the canonical record joining the payload artifact/digest, manifest digest, root,
+version and producer identity. A self-consistent manifest found in the payload is
+not that separate producer record.
+
+The result is explicitly `authenticated-retained-bytes-only`, non-promotable and
+bound to the qualification identity. This is **not complete original-B admission**:
+immutable provider/config/source-map/assets comparison, actual serving state,
+complete source-closure authority, installed exclusion/journal joins and verified
+recovery remain required. No qualification workflow calls it or gains activation
+or clean-journal authority from it. The tests are inert mock transport/parser
+fixtures; their execution does not establish live provider or artifact ZIP
+conformance.
+
 ## B-prime request construction (offline, not installed)
 
 [The baseline constructor](../ci/candidate-staging-baseline-upload.mjs) prepares
@@ -973,14 +1009,24 @@ compatibility. A pass must be withheld on any missing proof, drift, interrupted
 run, failed restoration or incomplete sanitizer. Candidate evidence must remain
 non-promotable and cannot replace normal main staging/production receipts.
 
-## Local verification
+## Verification
 
-```sh
-npm run test:candidate-staging
-```
+The [candidate fixture workflow](../.github/workflows/candidate-staging-fixtures.yml)
+runs `node --test ci/candidate-staging-*.test.mjs` on the exact PR head, including
+drafts. It uses a credential-free checkout and an ephemeral hosted runner. The
+existing lockfile supplies YAML/esbuild/Wrangler fixture dependencies with all
+lifecycle scripts disabled; no database, provider token or deployment is needed.
+The install requires native npm support for the three-day release-age setting
+and refuses unsupported clients rather than claiming that an ignored setting
+protects the install. Existing locked releases are not retrospectively audited by
+that resolution control. No script exception or dependency update is introduced.
+This allows implementation verification on Actions without marking incomplete
+work ready or relaxing the normal draft/full-CI scope gates.
 
-This fixture-only suite is included in the local complete check and in the
-required CI `check` job. A wiring test asserts those invocations and the `ci-ok`
-dependency. Fixtures are refusal/provenance proofs, not live containment or
-application acceptance. Repository-wide disposable-DB verification follows
-[Contributing](../CONTRIBUTING.md#verify-a-change-before-opening-a-pr).
+This fixture-only suite also remains in the complete check and required CI
+`check` job. A wiring test asserts those invocations and the `ci-ok` dependency.
+Full suites and CI gates run on GitHub Actions; local execution is limited to
+focused reproduction of one failing test or crate. Record exact-head Actions
+run/job links and conclusions, not historical local transcripts, as CI evidence.
+Fixtures are refusal/provenance proofs, not live containment or application
+acceptance. Final full-suite and security/release gates remain mandatory.

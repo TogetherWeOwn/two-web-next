@@ -26,7 +26,7 @@ function extras(bytes) {
   }
 }
 
-export function decodeCandidateArchive(archive, expectedSha256) {
+function decodeArchive(archive, expectedSha256, allowedPath, requiredPath) {
   requireEvidence(
     Buffer.isBuffer(archive) &&
       archive.length >= 22 &&
@@ -95,7 +95,7 @@ export function decodeCandidateArchive(archive, expectedSha256) {
       "entry-name-encoding",
     );
     const path = name.toString("ascii");
-    requireEvidence(safeBundlePath(path) && !paths.has(path.toLowerCase()), "entry-path");
+    requireEvidence(allowedPath(path) && !paths.has(path.toLowerCase()), "entry-path");
     paths.add(path.toLowerCase());
     total += size;
     requireEvidence(total <= MAX_BYTES, "expanded-size");
@@ -114,7 +114,7 @@ export function decodeCandidateArchive(archive, expectedSha256) {
     });
     offset = next;
   }
-  requireEvidence(offset === end && paths.has("worker/worker.mjs"), "central-completeness");
+  requireEvidence(offset === end && paths.has(requiredPath), "central-completeness");
   entries.sort((left, right) => left.localOffset - right.localOffset);
   const files = [];
   let cursor = 0;
@@ -183,4 +183,20 @@ export function decodeCandidateArchive(archive, expectedSha256) {
   }
   requireEvidence(cursor === centralOffset, "local-completeness");
   return files;
+}
+
+export function decodeCandidateArchive(archive, expectedSha256) {
+  return decodeArchive(archive, expectedSha256, safeBundlePath, "worker/worker.mjs");
+}
+
+// Fixed retention profiles, not caller-defined paths or a filesystem extractor.
+export function decodeBaselineArchive(archive, expectedSha256, channel) {
+  requireEvidence(["payload", "producer"].includes(channel), "baseline-channel");
+  const required = channel === "payload" ? "baseline.json" : "producer.json";
+  return decodeArchive(
+    archive,
+    expectedSha256,
+    (path) => path === required || (channel === "payload" && /^file-[0-9]{4}$/.test(path)),
+    required,
+  );
 }

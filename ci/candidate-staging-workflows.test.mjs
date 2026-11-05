@@ -78,6 +78,43 @@ function needs(job, id) {
   assert.doesNotMatch(job.if ?? "", /always\(|cancelled\(|failure\(/);
 }
 
+test("draft qualification fixtures run on the exact head without deployment capabilities or install hooks", () => {
+  const w = workflow("candidate-staging-fixtures");
+  assert.deepEqual(Object.keys(w.on), ["pull_request", "workflow_dispatch"]);
+  assert.deepEqual(w.on.pull_request.types, [
+    "opened",
+    "synchronize",
+    "reopened",
+    "ready_for_review",
+  ]);
+  assert.deepEqual(w.permissions, { contents: "read" });
+  assert.deepEqual(Object.keys(w.jobs), ["fixtures"]);
+  const job = w.jobs.fixtures;
+  assert.equal(job["runs-on"], "ubuntu-latest");
+  assert.equal(job["timeout-minutes"], 10);
+  assert.equal(job.environment, undefined);
+  assert.equal(job.if, undefined);
+  assert.equal(job.steps.length, 4);
+  const [checkout, node, install, run] = job.steps;
+  assert.equal(checkout.uses, CHECKOUT);
+  assert.equal(checkout.with.ref, "${{ github.event.pull_request.head.sha || github.sha }}");
+  assert.equal(checkout.with["persist-credentials"], false);
+  assert.equal(node.uses, NODE);
+  assert.equal(node.with["node-version"], 24);
+  assert.deepEqual(install.env, {
+    NPM_CONFIG_IGNORE_SCRIPTS: "true",
+    NPM_CONFIG_MIN_RELEASE_AGE: "3",
+  });
+  assert.match(install.run, /npm ci --include=dev --ignore-scripts/);
+  assert.match(install.run, /env -u NPM_CONFIG_MIN_RELEASE_AGE npm config list --long/);
+  assert.equal(run.run, "git rev-parse HEAD\nnode --test ci/candidate-staging-*.test.mjs\n");
+  for (const step of job.steps) {
+    assert.equal(step.if, undefined);
+    assert.equal(step["continue-on-error"], undefined);
+    assert.doesNotMatch(JSON.stringify(step), /secrets\.|github\.token|CLOUDFLARE_|DATABASE_URL/);
+  }
+});
+
 test("normal guard workflow is read-only, reusable only, and inherits rather than reacquiring exclusion", () => {
   const w = workflow("staging-occupancy-clear");
   assert.deepEqual(Object.keys(w.on), ["workflow_call"]);

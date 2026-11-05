@@ -273,7 +273,14 @@ export function createCandidateGitHubReader({ token, fetchImpl = fetch } = {}) {
             ) &&
             new Set(contract.steps).size === contract.steps.length &&
             matches(DIGEST, contract.sourceManifestSha256) &&
-            keys(selection, "runId,runAttempt,artifactId,archiveSha256,versionId") &&
+            (keys(selection, "runId,runAttempt,artifactId,archiveSha256,versionId") ||
+              (keys(
+                selection,
+                "runId,runAttempt,artifactId,archiveSha256,versionId,producerArtifactId,producerArchiveSha256",
+              ) &&
+                matches(INTEGER, selection.producerArtifactId) &&
+                selection.producerArtifactId !== selection.artifactId &&
+                matches(DIGEST, selection.producerArchiveSha256))) &&
             matches(INTEGER, selection.runId) &&
             // Artifact metadata has no run_attempt. Until there is an independently
             // authenticated per-attempt channel, reruns are ambiguous, not latest.
@@ -348,22 +355,31 @@ export function createCandidateGitHubReader({ token, fetchImpl = fetch } = {}) {
           "baseline-jobs",
         );
         const artifacts = await pages(`${runPath}/artifacts`, "artifacts");
-        const found = artifacts.filter((row) => apiInteger(row.id, selection.artifactId));
-        requireEvidence(found.length === 1, "baseline-artifact-missing");
-        const artifact = await get(`/actions/artifacts/${selection.artifactId}`);
-        const name = `candidate-baseline-${selection.runId}-1-${selection.versionId}`;
-        for (const value of [found[0], artifact]) {
-          requireEvidence(
-            apiInteger(value.id, selection.artifactId) &&
-              value.name === name &&
-              value.expired === false &&
-              value.digest === `sha256:${selection.archiveSha256}` &&
-              apiInteger(value.workflow_run?.id, selection.runId) &&
-              apiInteger(value.workflow_run?.repository_id, identity.descriptor[1]) &&
-              apiInteger(value.workflow_run?.head_repository_id, identity.descriptor[1]) &&
-              value.workflow_run?.head_sha === identity.descriptor[5],
-            "baseline-artifact-provenance",
-          );
+        const channels = [[selection.artifactId, selection.archiveSha256, "candidate-baseline"]];
+        if (selection.producerArtifactId)
+          channels.push([
+            selection.producerArtifactId,
+            selection.producerArchiveSha256,
+            "candidate-baseline-producer",
+          ]);
+        for (const [id, sha256, prefix] of channels) {
+          const found = artifacts.filter((row) => apiInteger(row.id, id));
+          requireEvidence(found.length === 1, "baseline-artifact-missing");
+          const artifact = await get(`/actions/artifacts/${id}`);
+          const name = `${prefix}-${selection.runId}-1-${selection.versionId}`;
+          for (const value of [found[0], artifact]) {
+            requireEvidence(
+              apiInteger(value.id, id) &&
+                value.name === name &&
+                value.expired === false &&
+                value.digest === `sha256:${sha256}` &&
+                apiInteger(value.workflow_run?.id, selection.runId) &&
+                apiInteger(value.workflow_run?.repository_id, identity.descriptor[1]) &&
+                apiInteger(value.workflow_run?.head_repository_id, identity.descriptor[1]) &&
+                value.workflow_run?.head_sha === identity.descriptor[5],
+              "baseline-artifact-provenance",
+            );
+          }
         }
         // Re-read the current attempt after jobs/artifacts; a rerun started while
         // reading is refusal even if the old attempt and archive were successful.
@@ -380,6 +396,12 @@ export function createCandidateGitHubReader({ token, fetchImpl = fetch } = {}) {
           artifactId: selection.artifactId,
           archiveSha256: selection.archiveSha256,
           versionId: selection.versionId,
+          ...(selection.producerArtifactId
+            ? {
+                producerArtifactId: selection.producerArtifactId,
+                producerArchiveSha256: selection.producerArchiveSha256,
+              }
+            : {}),
         });
       } catch {
         throw new Error("Candidate GitHub refused: baseline-producer");

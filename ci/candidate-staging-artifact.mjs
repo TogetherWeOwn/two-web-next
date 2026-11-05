@@ -4,8 +4,10 @@ import {
   admitCandidateBundle,
   candidateIdentity,
   candidateSha256,
+  safeBundlePath,
 } from "./candidate-staging-admission.mjs";
-import { decodeCandidateArchive } from "./candidate-staging-archive.mjs";
+import { decodeBaselineArchive, decodeCandidateArchive } from "./candidate-staging-archive.mjs";
+import { baselineProducerRecord } from "./candidate-staging-baseline-retain.mjs";
 import { createCandidateGitHubReader } from "./candidate-staging-github.mjs";
 
 const BASE = "https://api.github.com/repos/TogetherWeOwn/two-web-next";
@@ -156,6 +158,104 @@ async function archiveBytes(response) {
   }
 }
 
+function baselineBytes(identity, contract, selected, payload, recordEntries) {
+  requireEvidence(recordEntries.length === 1, "baseline-producer-entries");
+  const producerBytes = recordEntries[0].bytes;
+  const manifestBytes = payload.find((file) => file.path === "baseline.json")?.bytes;
+  requireEvidence(
+    producerBytes.length <= 16384 &&
+      manifestBytes?.length > 0 &&
+      manifestBytes.length <= 1024 * 1024,
+    "baseline-manifest-size",
+  );
+  const manifest = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(manifestBytes));
+  requireEvidence(
+    keys(manifest, "schema,promotable,scope,producer,versionId,mainModule,files,rootSha256") &&
+      manifest.schema === "two.staging-baseline-retention.v1" &&
+      manifest.promotable === false &&
+      manifest.scope === "retained-bytes-only" &&
+      manifest.versionId === selected.versionId &&
+      manifest.mainModule === "_worker.js" &&
+      Array.isArray(manifest.files) &&
+      manifest.files.length > 0 &&
+      manifest.files.length < 4096 &&
+      manifest.files.length + 1 === payload.length &&
+      matches(DIGEST, manifest.rootSha256) &&
+      candidateSha256(JSON.stringify(manifest.files)) === manifest.rootSha256,
+    "baseline-manifest",
+  );
+  const source = manifest.producer;
+  requireEvidence(
+    keys(source, "repository,repositoryId,sourceSha,workflowSha,runId,runAttempt,event") &&
+      source.repository === identity.descriptor[2] &&
+      source.repositoryId === identity.descriptor[1] &&
+      source.sourceSha === identity.descriptor[5] &&
+      source.workflowSha === identity.descriptor[5] &&
+      source.runId === selected.runId &&
+      source.runAttempt === "1" &&
+      source.event === contract.event,
+    "baseline-source",
+  );
+  const entries = new Map(payload.map((file) => [file.path, file.bytes]));
+  const names = new Set();
+  const files = [];
+  let previous = "";
+  for (const [index, file] of manifest.files.entries()) {
+    requireEvidence(
+      keys(file, "kind,path,contentType,size,sha256,entry") &&
+        typeof file.path === "string" &&
+        Number.isSafeInteger(file.size) &&
+        file.size >= 0 &&
+        matches(DIGEST, file.sha256) &&
+        file.entry === `file-${String(index).padStart(4, "0")}` &&
+        (file.kind === "module"
+          ? (file.path === "_worker.js" && file.contentType === "application/javascript+module") ||
+            (file.path === "_worker.js.map" && file.contentType === "application/source-map")
+          : file.kind === "asset" &&
+            file.contentType === null &&
+            safeBundlePath(`assets/${file.path}`)),
+      "baseline-file",
+    );
+    const key = `${file.kind}:${file.path}`;
+    requireEvidence(key > previous && !names.has(key.toLowerCase()), "baseline-file-order");
+    previous = key;
+    names.add(key.toLowerCase());
+    const bytes = entries.get(file.entry);
+    requireEvidence(
+      Buffer.isBuffer(bytes) &&
+        bytes.length === file.size &&
+        candidateSha256(bytes) === file.sha256,
+      "baseline-file-digest",
+    );
+    files.push(
+      Object.freeze({
+        kind: file.kind,
+        path: file.path,
+        contentType: file.contentType,
+        bytes: Buffer.from(bytes),
+      }),
+    );
+    Object.freeze(file);
+  }
+  requireEvidence(names.has("module:_worker.js"), "baseline-main-module");
+  const producer = baselineProducerRecord({
+    manifestBytes,
+    artifactId: selected.artifactId,
+    archiveSha256: selected.archiveSha256,
+  });
+  // The trusted producer emits one canonical JSON record on its separate channel.
+  // Do not accept an archive-local producer claim or a self-consistent wrong join.
+  requireEvidence(
+    producerBytes.equals(Buffer.from(JSON.stringify(producer))),
+    "baseline-producer-join",
+  );
+  Object.freeze(manifest.producer);
+  Object.freeze(manifest.files);
+  Object.freeze(manifest);
+  Object.freeze(producer.producer);
+  return { manifest, producer, files: Object.freeze(files) };
+}
+
 export function createCandidateArtifactReader({ token, fetchImpl = fetch } = {}) {
   requireEvidence(
     typeof token === "string" &&
@@ -164,6 +264,38 @@ export function createCandidateArtifactReader({ token, fetchImpl = fetch } = {})
       !/[\s\x00-\x1f\x7f]/.test(token),
     "read-token",
   );
+  async function download(build, request) {
+    const redirect = await request(`${BASE}/actions/artifacts/${build.artifactId}/zip`, {
+      method: "GET",
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2026-03-10",
+      },
+      redirect: "manual",
+      credentials: "omit",
+      cache: "no-store",
+    });
+    let location;
+    try {
+      requireEvidence(redirect.status === 302 && !redirect.redirected, "download-redirect");
+      location = signedLocation(redirect.headers.get("location"));
+    } finally {
+      await closeResponse(redirect);
+    }
+    // Never forward the API bearer to signed storage, including across redirects.
+    const response = await request(location, {
+      method: "GET",
+      headers: { Accept: "application/zip, application/octet-stream" },
+      redirect: "error",
+      credentials: "omit",
+      referrerPolicy: "no-referrer",
+      cache: "no-store",
+    });
+    const archive = await archiveBytes(response);
+    requireEvidence(candidateSha256(archive) === build.archiveSha256, "archive-digest");
+    return archive;
+  }
   return Object.freeze({
     // `producer` is obtained separately from installed trusted build tooling,
     // never from this archive. This joins evidence; it does not establish that
@@ -185,35 +317,7 @@ export function createCandidateArtifactReader({ token, fetchImpl = fetch } = {})
         const github = createCandidateGitHubReader({ token, fetchImpl: request });
         await github.verifyPullRequest(identity);
         const artifact = await github.readArtifact(identity, build);
-        const redirect = await request(`${BASE}/actions/artifacts/${build.artifactId}/zip`, {
-          method: "GET",
-          headers: {
-            Authorization: `Bearer ${token}`,
-            Accept: "application/vnd.github+json",
-            "X-GitHub-Api-Version": "2026-03-10",
-          },
-          redirect: "manual",
-          credentials: "omit",
-          cache: "no-store",
-        });
-        let location;
-        try {
-          requireEvidence(redirect.status === 302 && !redirect.redirected, "download-redirect");
-          location = signedLocation(redirect.headers.get("location"));
-        } finally {
-          await closeResponse(redirect);
-        }
-        // Build a new request, not a spread of the authenticated API request.
-        const response = await request(location, {
-          method: "GET",
-          headers: { Accept: "application/zip, application/octet-stream" },
-          redirect: "error",
-          credentials: "omit",
-          referrerPolicy: "no-referrer",
-          cache: "no-store",
-        });
-        const archive = await archiveBytes(response);
-        requireEvidence(candidateSha256(archive) === build.archiveSha256, "archive-digest");
+        const archive = await download(build, request);
         const files = decodeCandidateArchive(archive, build.archiveSha256);
         const bundle = admitCandidateBundle(identity, build, artifact, producer, files);
         // Neither a signed URL nor an earlier metadata read is a lease. Fail if
@@ -230,6 +334,69 @@ export function createCandidateArtifactReader({ token, fetchImpl = fetch } = {})
       } catch {
         // Fetch, stream and parser diagnostics can contain a SAS, token or code.
         throw new Error("Candidate artifact refused: evidence");
+      }
+    },
+
+    // Retained-byte authority only. Provider/config/serving/asset admission and
+    // installed exclusion/journal ownership are still mandatory before mutation.
+    async readBaseline(input, installedContract, selected, sourceManifestBytes, { signal } = {}) {
+      try {
+        const identity = snapshotIdentity(input);
+        const contract = structuredClone(installedContract);
+        const selection = structuredClone(selected);
+        const sources = Buffer.isBuffer(sourceManifestBytes)
+          ? Buffer.from(sourceManifestBytes)
+          : null;
+        requireEvidence(
+          keys(
+            selection,
+            "runId,runAttempt,artifactId,archiveSha256,versionId,producerArtifactId,producerArchiveSha256",
+          ),
+          "baseline-selection",
+        );
+        const deadline = AbortSignal.timeout(60_000);
+        const operation = signal ? AbortSignal.any([signal, deadline]) : deadline;
+        async function request(url, init) {
+          operation.throwIfAborted();
+          return fetchImpl(url, {
+            ...init,
+            signal: AbortSignal.any([operation, init.signal ?? AbortSignal.timeout(10_000)]),
+          });
+        }
+        const github = createCandidateGitHubReader({ token, fetchImpl: request });
+        const observation = await github.readBaselineArtifact(
+          identity,
+          contract,
+          selection,
+          sources,
+        );
+        const recordArchive = await download(
+          {
+            artifactId: selection.producerArtifactId,
+            archiveSha256: selection.producerArchiveSha256,
+          },
+          request,
+        );
+        const recordEntries = decodeBaselineArchive(
+          recordArchive,
+          selection.producerArchiveSha256,
+          "producer",
+        );
+        const archive = await download(selection, request);
+        const payload = decodeBaselineArchive(archive, selection.archiveSha256, "payload");
+        const retained = baselineBytes(identity, contract, selection, payload, recordEntries);
+        await github.readBaselineArtifact(identity, contract, selection, sources);
+        operation.throwIfAborted();
+        return Object.freeze({
+          schema: "two.candidate-baseline-bytes.v1",
+          promotable: false,
+          scope: "authenticated-retained-bytes-only",
+          q: identity.q,
+          observation,
+          ...retained,
+        });
+      } catch {
+        throw new Error("Candidate artifact refused: baseline-evidence");
       }
     },
   });
