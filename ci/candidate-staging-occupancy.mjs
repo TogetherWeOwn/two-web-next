@@ -1,6 +1,7 @@
 // Durable dirty-before-mutation journal, not a lock or a deployment capability.
 // Installed callers must hold the shared staging exclusion throughout recovery.
 import { candidateSha256 } from "./candidate-staging-admission.mjs";
+import { identitySnapshot } from "./candidate-staging-upload.mjs";
 
 const BASE = "https://api.github.com/repos/TogetherWeOwn/two-web-next";
 const ENVIRONMENT = "candidate-staging-occupancy";
@@ -307,6 +308,54 @@ export function createCandidateStagingJournal({
     unresolved,
     read,
     requireDirty,
+    bindRecovery({ deploymentId, identity, expectedPayload } = {}) {
+      try {
+        requireEvidence(matches(ID, deploymentId), "deployment-id");
+        const run = identitySnapshot(identity);
+        const expected = structuredClone(expectedPayload);
+        payload(expected);
+        requireEvidence(
+          expected.q === run.q &&
+            expected.headSha === run.descriptor[4] &&
+            expected.controllerSha === run.descriptor[5] &&
+            expected.runId === run.descriptor[7] &&
+            expected.runAttempt === run.descriptor[8],
+          "bound-identity",
+        );
+        const expectedKey = payloadKey(expected);
+        // The trusted controller supplies the independently retained payload,
+        // never one learned from the row this adapter is supposed to verify.
+        // This binds ownership only; baseline contents still need admission.
+        return async (context, signal) => {
+          try {
+            requireEvidence(
+              context?.q === run.q && (signal === undefined || signal instanceof AbortSignal),
+              "bound-context",
+            );
+            const deadline = AbortSignal.any([
+              ...(signal ? [signal] : []),
+              AbortSignal.timeout(60_000),
+            ]);
+            deadline.throwIfAborted();
+            const row = await requireDirty(deploymentId, deadline);
+            requireEvidence(payloadKey(row.payload) === expectedKey, "bound-payload");
+            deadline.throwIfAborted();
+            return Object.freeze({
+              schema: "two.candidate-occupancy-owner.v1",
+              promotable: false,
+              scope: "dirty-journal-ownership-only",
+              q: run.q,
+              deploymentId,
+              payloadSha256: candidateSha256(expectedKey),
+            });
+          } catch {
+            throw new Error("Candidate occupancy refused: bound-ownership");
+          }
+        };
+      } catch {
+        throw new Error("Candidate occupancy refused: bound-ownership");
+      }
+    },
     async begin(input) {
       const signal = AbortSignal.timeout(60_000);
       const value = structuredClone(input);

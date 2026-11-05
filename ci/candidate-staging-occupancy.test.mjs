@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
+import { candidateIdentity } from "./candidate-staging-admission.mjs";
 import {
   createCandidateStagingJournal,
   recoverCandidateStaging,
@@ -126,6 +127,125 @@ async function refuses(operation, pattern = /^Candidate occupancy refused:/) {
     return true;
   });
 }
+
+function boundFixture() {
+  const f = fixture();
+  const identity = candidateIdentity(
+    { prNumber: "42", headSha: "c".repeat(40), ciRunId: "99", ciRunAttempt: "1" },
+    {
+      repositoryId: "1234",
+      repository: "TogetherWeOwn/two-web-next",
+      controllerSha: "b".repeat(40),
+      launcherSha: "f".repeat(40),
+      checkoutSha: "b".repeat(40),
+      runId: "123",
+      runAttempt: "2",
+      event: "workflow_dispatch",
+      ref: "refs/heads/main",
+      path: ".github/workflows/candidate-staging.yml",
+    },
+  );
+  const expectedPayload = { ...input(), q: identity.q };
+  f.state.rows.push(deployment(1, structuredClone(expectedPayload)));
+  const options = { deploymentId: "1", identity: structuredClone(identity), expectedPayload };
+  return { ...f, options, guard: f.journal.bindRecovery(options), context: { q: identity.q } };
+}
+
+test("bound recovery re-reads the real journal and returns ownership only", async () => {
+  const f = boundFixture();
+  const first = await f.guard(f.context);
+  assert.ok(Object.isFrozen(first));
+  assert.equal(first.scope, "dirty-journal-ownership-only");
+  assert.equal(first.promotable, false);
+  assert.equal(first.q, f.context.q);
+  assert.equal(first.deploymentId, "1");
+  assert.match(first.payloadSha256, /^[a-f0-9]{64}$/);
+  const count = f.state.calls.length;
+  assert.ok(count > 0);
+  assert.deepEqual(await f.guard(f.context), first);
+  assert.equal(f.state.calls.length, count * 2);
+  assert.ok(f.state.calls.every((call) => call.method === "GET"));
+});
+
+for (const [field, value] of [
+  ["q", "0".repeat(64)],
+  ["controllerSha", "0".repeat(40)],
+  ["headSha", "0".repeat(40)],
+  ["runId", "124"],
+  ["runAttempt", "3"],
+]) {
+  test(`bound recovery refuses mismatched ${field} before requests`, () => {
+    const f = boundFixture();
+    f.options.expectedPayload[field] = value;
+    assert.throws(() => f.journal.bindRecovery(f.options), {
+      message: "Candidate occupancy refused: bound-ownership",
+    });
+    assert.equal(f.state.calls.length, 0);
+  });
+}
+
+for (const [field, value] of [
+  ["artifactId", "457"],
+  ["archiveSha256", "0".repeat(64)],
+  ["stateSha256", "0".repeat(64)],
+  ["expiresAt", new Date(NOW + 16 * 86400000).toISOString()],
+]) {
+  test(`bound recovery refuses persisted baseline ${field} substitution`, async () => {
+    const f = boundFixture();
+    f.state.rows[0].payload.baseline[field] = value;
+    await refuses(() => f.guard(f.context));
+    assert.ok(f.state.calls.every((call) => call.method === "GET"));
+  });
+}
+
+test("bound recovery refuses changed creation time even with the same Q and baseline", async () => {
+  const f = boundFixture();
+  f.state.rows[0].payload.createdAt = new Date(NOW - 1000).toISOString();
+  await refuses(() => f.guard(f.context));
+});
+
+test("bound recovery snapshots the independently supplied identity and baseline pin", async () => {
+  const f = boundFixture();
+  f.options.identity.descriptor[4] = "0".repeat(40);
+  f.options.expectedPayload.baseline.stateSha256 = "0".repeat(64);
+  f.options.deploymentId = "2";
+  assert.equal((await f.guard(f.context)).deploymentId, "1");
+});
+
+for (const context of [undefined, null, {}, { q: "0".repeat(64) }]) {
+  test(`bound recovery refuses foreign context ${JSON.stringify(context)}`, async () => {
+    const f = boundFixture();
+    await refuses(() => f.guard(context));
+    assert.equal(f.state.calls.length, 0);
+  });
+}
+
+test("bound recovery refuses cancellation before and during journal reads", async () => {
+  for (const during of [false, true]) {
+    const f = boundFixture();
+    const controller = new AbortController();
+    if (during) f.state.intercept = () => controller.abort("private-data");
+    else controller.abort("private-data");
+    await refuses(() => f.guard(f.context, controller.signal));
+    assert.equal(f.state.calls.length, during ? 1 : 0);
+  }
+});
+
+test("bound recovery stops after clean publication and on a new dirty writer", async () => {
+  const f = boundFixture();
+  await f.guard(f.context);
+  f.state.statuses.set(1, [status()]);
+  await refuses(() => f.guard(f.context));
+  f.state.rows.push(deployment(2, { ...input(), q: "0".repeat(64) }));
+  await refuses(() => f.guard(f.context));
+  assert.ok(f.state.calls.every((call) => call.method === "GET"));
+});
+
+test("bound recovery authenticates the journal writer, not only its payload", async () => {
+  const f = boundFixture();
+  f.state.rows[0].creator = { id: 9 };
+  await refuses(() => f.guard(f.context));
+});
 
 test("dirty record is persisted and rediscovered before mutation; original baseline survives caller changes", async () => {
   const { journal, state } = fixture();

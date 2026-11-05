@@ -4,6 +4,7 @@ import { candidateIdentity, candidateSha256 } from "./candidate-staging-admissio
 import { prepareCandidateBaselineUpload } from "./candidate-staging-baseline-upload.mjs";
 import { createCandidateBaselineAssetUploader } from "./candidate-staging-assets.mjs";
 import { createCandidateBaselineVersionUploader } from "./candidate-staging-baseline-version.mjs";
+import { createCandidateStagingJournal } from "./candidate-staging-occupancy.mjs";
 
 const VERSION = "11111111-2222-3333-4444-555555555555";
 const ERROR = "Candidate recovery refused: baseline request";
@@ -1333,6 +1334,65 @@ for (const assets of [false, true]) {
   });
 }
 
+for (const replacement of [false, true]) {
+  test(`B-prime joins actual journal ownership and refuses replacement=${replacement}`, async () => {
+    const s = recoveryVersionSetup();
+    const identity = s.input.identity;
+    const expectedPayload = {
+      schema: "two.candidate-occupancy.v1",
+      q: identity.q,
+      controllerSha: identity.descriptor[5],
+      headSha: identity.descriptor[4],
+      runId: identity.descriptor[7],
+      runAttempt: identity.descriptor[8],
+      createdAt: new Date(s.input.now * 1000).toISOString(),
+      baseline: {
+        artifactId: "456",
+        archiveSha256: "d".repeat(64),
+        stateSha256: "e".repeat(64),
+        expiresAt: new Date((s.input.now + 15 * 86400) * 1000).toISOString(),
+      },
+    };
+    const row = {
+      id: 1,
+      creator: { id: 7 },
+      performed_via_github_app: { id: 8 },
+      environment: "candidate-staging-occupancy",
+      task: "candidate-staging-occupancy-v1",
+      ref: expectedPayload.controllerSha,
+      sha: expectedPayload.controllerSha,
+      production_environment: false,
+      transient_environment: false,
+      payload: structuredClone(expectedPayload),
+    };
+    let reads = 0;
+    const journal = createCandidateStagingJournal({
+      token: "fixture-journal-bearer",
+      creatorId: "7",
+      appId: "8",
+      fetchImpl: async (url, request) => {
+        reads++;
+        assert.equal(request.method, "GET");
+        assert.equal(request.headers.Authorization, "Bearer fixture-journal-bearer");
+        assert.ok(url.startsWith("https://api.github.com/repos/TogetherWeOwn/two-web-next/"));
+        // Simulate a substituted artifact after the initial ownership check.
+        if (replacement && reads === 3) row.payload.baseline.archiveSha256 = "0".repeat(64);
+        return Response.json(url.includes("/statuses?") ? [] : [row]);
+      },
+    });
+    s.config.requireDirty = journal.bindRecovery({ deploymentId: "1", identity, expectedPayload });
+    const uploader = createCandidateBaselineVersionUploader(s.config);
+    if (replacement) {
+      await assert.rejects(uploader.upload(s.options), { message: VERSION_ERROR });
+      assert.equal(s.calls.length, 0);
+    } else {
+      assert.equal((await uploader.upload(s.options)).versionId, B_PRIME);
+      assert.equal(s.calls.length, 3);
+    }
+    assert.ok(reads >= 4);
+  });
+}
+
 test("B-prime preserves the exact source map in the internal JSON transport", async () => {
   const s = recoveryVersionSetup({ sourceMap: true });
   await s.uploader.upload(s.options);
@@ -1399,7 +1459,7 @@ test("B-prime uses copied baseline bytes throughout asynchronous guards", async 
   const sent = JSON.parse(s.calls[0].body);
   assert.equal(sent.placement.region, "aws:us-east-1");
   assert.equal(
-    sent.modules[0].content_base64,
+    sent.modules.find((module) => module.name === "index.js").content_base64,
     Buffer.from('throw new Error("do not execute B")').toString("base64"),
   );
 });

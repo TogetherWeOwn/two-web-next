@@ -887,6 +887,20 @@ record dirty; status-write uncertainty requires readback, not a blind retry.
 baseline digest, writes only a non-promoting status (`auto_inactive: false`), and
 verifies both that exact status and absence of any other dirty occupancy.
 
+`bindRecovery` supplies the recovery helpers' read-only dirty-ownership adapter
+from this actual journal transport rather than an unconditional callback. The
+trusted controller must supply its independently retained expected payload and
+qualification identity; never use a payload learned from the row being checked as
+its own expected pin. Construction joins Q, C, T and the controller run/attempt.
+Each invocation rescans the bounded authenticated journal, requires the pinned
+sole dirty deployment and compares the entire canonical payload, including
+creation time, artifact ID/archive digest, state digest and retention expiry.
+Caller mutation cannot change those pins. Clean publication, another dirty writer,
+foreign context, substitution or cancellation refuses. The adapter only GETs;
+it returns a non-promotable `dirty-journal-ownership-only` receipt, never a clean
+status. Mock integration connects it to the B-prime version uploader, including
+artifact replacement between ownership checks. This is not workflow installation.
+
 This journal is **not** a lock, a provider restore adapter or proof of the
 baseline contents. The core workflow fencing below is only a partial actor map,
 not complete global exclusion. The restore, verify and exclusion adapters must be installed
