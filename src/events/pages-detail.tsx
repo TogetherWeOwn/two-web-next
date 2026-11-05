@@ -134,7 +134,9 @@ export const EventPage: FC<{
       session={session}
       loginReturnTo={path}
       description={e.description || "An event at Together We Own."}
-      robots={review || e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
+      robots={
+        review || e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined
+      }
       markdownAlternate={markdownAlternate}
       siteJsonLd={siteJsonLd}
       backLink={archiveReturnLink(archive)}

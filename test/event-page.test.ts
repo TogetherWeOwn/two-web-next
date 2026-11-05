@@ -77,7 +77,9 @@ function fixture(
         rows: [
           columns.map((key) =>
             row[key] instanceof Date
-              ? Number.isFinite(row[key].getTime()) ? row[key].toISOString() : "infinity"
+              ? Number.isFinite(row[key].getTime())
+                ? row[key].toISOString()
+                : "infinity"
               : row[key],
           ),
         ],
@@ -209,27 +211,37 @@ describe("Event page parity (fixture-only)", () => {
     }
   });
 
-  it.each(["draft", "published", "cancelled"])("restricts %s review to moderators and reuses member detail", async (status) => {
-    const source = fixture({ status });
-    for (const cookie of [undefined, await source.cookie()]) {
-      expect((await source.request(cookie, `${PATH}?review=1`)).status).toBe(403);
-    }
-    const response = await source.request(await source.cookie(true), `${PATH}?review=1`);
-    const html = await response.text();
-    expect(response.status).toBe(200);
-    expect(response.headers.get("cache-control")).toBe("private, no-store");
-    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
-    expect(html.match(/<h1\b/g)).toHaveLength(1);
-    expect(html).toContain('data-testid="event-review"');
-    expect(html).toContain('data-testid="event-venue">The lobby &amp; voice channel');
-    expect(html).toContain('aria-describedby="preview-rsvp-hint"');
-    expect(html).not.toContain('data-rsvp-form');
-    expect(html.indexOf('data-testid="event-review-actions"')).toBeGreaterThan(html.indexOf('class="event-discovery"'));
-    if (status !== "draft") expect(html).not.toContain("Fix these before publishing");
-  });
+  it.each(["draft", "published", "cancelled"])(
+    "restricts %s review to moderators and reuses member detail",
+    async (status) => {
+      const source = fixture({ status });
+      for (const cookie of [undefined, await source.cookie()]) {
+        expect((await source.request(cookie, `${PATH}?review=1`)).status).toBe(403);
+      }
+      const response = await source.request(await source.cookie(true), `${PATH}?review=1`);
+      const html = await response.text();
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expect(html.match(/<h1\b/g)).toHaveLength(1);
+      expect(html).toContain('data-testid="event-review"');
+      expect(html).toContain('data-testid="event-venue">The lobby &amp; voice channel');
+      expect(html).toContain('aria-describedby="preview-rsvp-hint"');
+      expect(html).not.toContain("data-rsvp-form");
+      expect(html.indexOf('data-testid="event-review-actions"')).toBeGreaterThan(
+        html.indexOf('class="event-discovery"'),
+      );
+      if (status !== "draft") expect(html).not.toContain("Fix these before publishing");
+    },
+  );
 
   it("renders corrections and member detail even with unreadable persisted dates", async () => {
-    const source = fixture({ status: "draft", location: " ", startsAt: new Date(NaN), endsAt: new Date(NaN) });
+    const source = fixture({
+      status: "draft",
+      location: " ",
+      startsAt: new Date(NaN),
+      endsAt: new Date(NaN),
+    });
     const response = await source.request(await source.cookie(true), `${PATH}?review=1`);
     const html = await response.text();
     expect(response.status).toBe(200);

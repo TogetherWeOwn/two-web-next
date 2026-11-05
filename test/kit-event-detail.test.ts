@@ -236,29 +236,44 @@ describe("event-detail route ownership", () => {
 });
 
 describe("member-detail review mode", () => {
-  it.each(["draft", "published", "cancelled"])("admits only moderators for %s review", async (status) => {
-    const store = fakeStore({ event: { ...row({ status }), goingCount: 0, goingOccupancy: 0 } });
-    for (const session of [GUEST, memberSession(), UNKNOWN]) {
-      const { outcome } = await resolve(KEY, store, session, null, "?review=1");
-      expect(outcome.kind).toBe(session === UNKNOWN ? "unavailable" : "forbidden");
-    }
-    const { outcome } = await resolve(KEY, store, memberSession(MOD_ID, true), null, "?review=1");
-    expect(outcome.kind).toBe("ok");
-    if (outcome.kind !== "ok") throw new Error(outcome.kind);
-    expect(outcome.headers["x-robots-tag"]).toBe("noindex, nofollow");
-    const { renderDetail } = await buildKitEventDetailBundle();
-    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
-    expect(html.match(/<h1\b/g)).toHaveLength(1);
-    expect(html).toContain('data-testid="event-review"');
-    expect(html).toContain("RSVP is disabled in preview.");
-    expect(html).not.toContain("data-rsvp-form");
-    expect(html.indexOf('data-testid="event-review-actions"')).toBeGreaterThan(html.indexOf('class="event-discovery"'));
-    if (status !== "draft") expect(html).not.toContain("Fix these before publishing");
-  });
+  it.each(["draft", "published", "cancelled"])(
+    "admits only moderators for %s review",
+    async (status) => {
+      const store = fakeStore({ event: { ...row({ status }), goingCount: 0, goingOccupancy: 0 } });
+      for (const session of [GUEST, memberSession(), UNKNOWN]) {
+        const { outcome } = await resolve(KEY, store, session, null, "?review=1");
+        expect(outcome.kind).toBe(session === UNKNOWN ? "unavailable" : "forbidden");
+      }
+      const { outcome } = await resolve(KEY, store, memberSession(MOD_ID, true), null, "?review=1");
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error(outcome.kind);
+      expect(outcome.headers["x-robots-tag"]).toBe("noindex, nofollow");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html.match(/<h1\b/g)).toHaveLength(1);
+      expect(html).toContain('data-testid="event-review"');
+      expect(html).toContain("RSVP is disabled in preview.");
+      expect(html).not.toContain("data-rsvp-form");
+      expect(html.indexOf('data-testid="event-review-actions"')).toBeGreaterThan(
+        html.indexOf('class="event-discovery"'),
+      );
+      if (status !== "draft") expect(html).not.toContain("Fix these before publishing");
+    },
+  );
 
   it("keeps unreadable dates renderable without inventing JSON-LD instants", async () => {
-    const event = { ...row({ status: "draft", startsAt: new Date(NaN), endsAt: new Date(NaN) }), goingCount: 0, goingOccupancy: 0 };
-    const { outcome } = await resolve(KEY, fakeStore({ event }), memberSession(MOD_ID, true), null, "?review=1");
+    const event = {
+      ...row({ status: "draft", startsAt: new Date(NaN), endsAt: new Date(NaN) }),
+      goingCount: 0,
+      goingOccupancy: 0,
+    };
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event }),
+      memberSession(MOD_ID, true),
+      null,
+      "?review=1",
+    );
     if (outcome.kind !== "ok") throw new Error(outcome.kind);
     expect(outcome.model.review?.banner).toContain("Fix these before publishing");
     expect(outcome.model.whenText).toBe("Time unavailable");
@@ -266,7 +281,9 @@ describe("member-detail review mode", () => {
     expect(JSON.parse(outcome.model.jsonLd)).not.toHaveProperty("startDate");
     expect(JSON.parse(outcome.model.jsonLd)).not.toHaveProperty("endDate");
     const { renderDetail } = await buildKitEventDetailBundle();
-    expect(renderDetail(outcome.model as unknown as Record<string, unknown>)).toContain("Time unavailable");
+    expect(renderDetail(outcome.model as unknown as Record<string, unknown>)).toContain(
+      "Time unavailable",
+    );
   });
 });
 

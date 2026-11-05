@@ -23,7 +23,8 @@ describe("saved-event review read model", () => {
   it("retains both corrections and links to the persisted member detail rendering", () => {
     const view = savedEventReview({ ...row, location: " \t ", endsAt: new Date(0) }, now);
     expect(view.corrections.map((issue) => issue.href)).toEqual([
-      `${view.editHref}#f-location`, `${view.editHref}#f-ends-at`,
+      `${view.editHref}#f-location`,
+      `${view.editHref}#f-ends-at`,
     ]);
     expect(view.href).toBe(`/e/${row.eventKey}?review=1`);
     expect(view.corrections[0]?.message).toBe("Location is blank. Add a location and save.");
@@ -45,7 +46,9 @@ describe("saved-event review read model", () => {
     const view = savedEventReview({ ...row, [field]: new Date(Number.NaN) }, now);
     expect(view.corrections).toHaveLength(1);
     expect(view.corrections[0]?.message).toContain("time can't be read");
-    expect(view.corrections[0]?.href).toBe(`${view.editHref}#f-${field === "startsAt" ? "starts" : "ends"}-at`);
+    expect(view.corrections[0]?.href).toBe(
+      `${view.editHref}#f-${field === "startsAt" ? "starts" : "ends"}-at`,
+    );
   });
 
   it("does not crash when the persisted update time is unrenderable", () => {

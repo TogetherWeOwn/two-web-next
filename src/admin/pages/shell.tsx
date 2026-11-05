@@ -87,14 +87,17 @@ export const ErrorPage: FC<{ heading: string; detail?: string; recovery?: Recove
   </Shell>
 );
 
-export const RsvpAction: FC<{ row: EventRow; now?: Date; duplicates?: ReadonlySet<string> }> = ({
+export const RsvpAction: FC<{ row: EventRow; duplicates?: ReadonlySet<string> }> = ({
   row,
-  now = new Date(),
   duplicates = new Set(),
 }) => {
   // An unrenderable end (Invalid Date) is not a live event: every comparison
   // with it is false, so without the finite check it would look unended.
-  if (row.status !== "published" || !Number.isFinite(row.endsAt.getTime()) || row.endsAt <= now)
+  if (
+    row.status !== "published" ||
+    !Number.isFinite(row.endsAt.getTime()) ||
+    row.endsAt <= new Date()
+  )
     return null;
   // §4a: the disambiguator matches the Starts (UTC) cell; unrenderable
   // starts take no suffix. Single-event surfaces pass no duplicates.

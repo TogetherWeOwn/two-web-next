@@ -17,7 +17,10 @@ describe("publication corrections belong only to drafts", () => {
     ["past", "has ended and cannot be published as-is"],
     ["archived", "not a draft and cannot be published as-is"],
   ])("names %s rather than advising publication", (status, guidance) => {
-    for (const row of [degraded, { ...degraded, location: "Hall", endsAt: new Date("2030-01-10T21:00:00Z") }]) {
+    for (const row of [
+      degraded,
+      { ...degraded, location: "Hall", endsAt: new Date("2030-01-10T21:00:00Z") },
+    ]) {
       const view = savedEventReview({ ...row, status }, now);
       expect(view.corrections).toEqual([]);
       expect(view.guidance).toContain(guidance);
@@ -28,7 +31,8 @@ describe("publication corrections belong only to drafts", () => {
   it("control: the same degraded draft still gets both corrections", () => {
     const view = savedEventReview({ ...degraded, status: "draft" }, now);
     expect(view.corrections.map((issue) => issue.href)).toEqual([
-      `${view.editHref}#f-location`, `${view.editHref}#f-ends-at`,
+      `${view.editHref}#f-location`,
+      `${view.editHref}#f-ends-at`,
     ]);
   });
 });

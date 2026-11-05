@@ -21,7 +21,10 @@ export function savedEventReview(row: SavedEventReviewRow, now: Date) {
         label: "Edit location",
       });
     }
-    for (const [field, date] of [["start", row.startsAt], ["end", row.endsAt]] as const) {
+    for (const [field, date] of [
+      ["start", row.startsAt],
+      ["end", row.endsAt],
+    ] as const) {
       if (!instantIso(date)) {
         corrections.push({
           message: `The saved ${field} time can't be read. Fix the ${field} time and save.`,

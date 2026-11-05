@@ -5,9 +5,7 @@ import { describe, expect, it } from "vitest";
 import { savedEventReview } from "../src/admin/event-saved-review";
 import { renderSavedEventReviewHtml } from "../src/admin/pages/event-form-review";
 
-const page = fileURLToPath(
-  new URL("../web/src/lib/EventDetail.svelte", import.meta.url).href,
-);
+const page = fileURLToPath(new URL("../web/src/lib/EventDetail.svelte", import.meta.url).href);
 const webRequire = createRequire(new URL("../web/package.json", import.meta.url).href);
 const { compile } = webRequire("svelte/compiler");
 
@@ -34,7 +32,9 @@ describe("saved-event review server-only presentation", () => {
         },
       ],
     });
-    expect(renderSavedEventReviewHtml(review, "actions")).toContain('href="/admin/events/key%22%3E%3Cscript%3E"');
+    expect(renderSavedEventReviewHtml(review, "actions")).toContain(
+      'href="/admin/events/key%22%3E%3Cscript%3E"',
+    );
     const rsvp = renderSavedEventReviewHtml(review, "rsvp");
     expect(rsvp).toContain('disabled="" aria-describedby="preview-rsvp-hint"');
     expect(rsvp).toContain('id="preview-rsvp-hint">RSVP is disabled in preview.');

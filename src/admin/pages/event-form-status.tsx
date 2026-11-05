@@ -5,14 +5,20 @@ import type { FC } from "hono/jsx";
 import type { EventRow } from "../store";
 import { RsvpAction } from "./shell";
 
-export const EventStatusSection: FC<{ row: EventRow; now?: Date }> = ({ row, now }) => {
+export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
   return (
     <section aria-label="Status">
       <h2>Status: {row.status}</h2>
       <div class="actions rsvp-actions">
         {row.status === "draft" ? (
           <>
-            <a class="btn" href={`/e/${encodeURIComponent(row.eventKey)}?review=1`} data-testid="review-event">Review before publishing</a>
+            <a
+              class="btn"
+              href={`/e/${encodeURIComponent(row.eventKey)}?review=1`}
+              data-testid="review-event"
+            >
+              Review before publishing
+            </a>
             <form method="post" action={`/admin/events/${row.eventKey}/publish`}>
               <button type="submit" class="btn" data-testid="publish-event">
                 Publish
@@ -39,7 +45,7 @@ export const EventStatusSection: FC<{ row: EventRow; now?: Date }> = ({ row, now
             </button>
           </form>
         ) : null}
-        <RsvpAction row={row} now={now} />
+        <RsvpAction row={row} />
       </div>
     </section>
   );

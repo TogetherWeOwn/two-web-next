@@ -211,7 +211,14 @@ export const EventsPage: FC<{
                   <EventFillCell row={r} />
                   <td>
                     {r.status === "draft" ? (
-                      <a class="link" href={`/e/${encodeURIComponent(r.eventKey)}?review=1`} aria-label={`Review ${r.title}${sameTitleSuffix(r.title, eventRowIso(r), duplicates)}`} data-testid="review-event">Review</a>
+                      <a
+                        class="link"
+                        href={`/e/${encodeURIComponent(r.eventKey)}?review=1`}
+                        aria-label={`Review ${r.title}${sameTitleSuffix(r.title, eventRowIso(r), duplicates)}`}
+                        data-testid="review-event"
+                      >
+                        Review
+                      </a>
                     ) : null}
                     {r.status === "draft" ? (
                       <form method="post" action={`/admin/events/${r.eventKey}/publish`}>

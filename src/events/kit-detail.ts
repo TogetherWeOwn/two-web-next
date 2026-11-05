@@ -551,11 +551,15 @@ export async function resolveKitEventDetail(
         status: 200,
         headers,
         model: {
-          ...(review ? { review: {
-            banner: renderSavedEventReviewHtml(review),
-            actions: renderSavedEventReviewHtml(review, "actions"),
-            rsvp: renderSavedEventReviewHtml(review, "rsvp"),
-          } } : {}),
+          ...(review
+            ? {
+                review: {
+                  banner: renderSavedEventReviewHtml(review),
+                  actions: renderSavedEventReviewHtml(review, "actions"),
+                  rsvp: renderSavedEventReviewHtml(review, "rsvp"),
+                },
+              }
+            : {}),
           eventKey: event.eventKey,
           title: event.title,
           game: event.game,

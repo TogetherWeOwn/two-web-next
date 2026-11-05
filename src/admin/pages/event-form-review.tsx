@@ -3,6 +3,19 @@
 import type { FC } from "hono/jsx";
 import type { SavedEventReview } from "../event-saved-review";
 
+export const SavedEventNotice: FC<{ eventKey: string }> = ({ eventKey }) => (
+  <p class="notice" role="status" data-testid="event-saved-review">
+    Saved.{" "}
+    <a href={`/e/${encodeURIComponent(eventKey)}?review=1`}>
+      Review the saved event before publishing
+    </a>
+  </p>
+);
+
+export function renderSavedEventNoticeHtml(eventKey: string): string {
+  return String(<SavedEventNotice eventKey={eventKey} />);
+}
+
 type ReviewPart = "banner" | "actions" | "rsvp";
 
 // Kit consumes escaped server-rendered leaves; member content stays in its detail renderer.
@@ -30,7 +43,9 @@ export const EventReviewSection: FC<{ review: SavedEventReview; part?: ReviewPar
   if (part === "actions") {
     return (
       <div class="actions" data-testid="event-review-actions">
-        <a class="btn" href={review.editHref}>Back to edit</a>
+        <a class="btn" href={review.editHref}>
+          Back to edit
+        </a>
       </div>
     );
   }

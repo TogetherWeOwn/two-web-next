@@ -40,6 +40,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
 <AdminShell title={`Edit ${view.title}`}>
 <section>
   <h1>Edit {view.title}</h1>
+  {#if view.savedNoticeHtml}{@html view.savedNoticeHtml}{/if}
   {#if hasErrors}
     <div class="notice" role="alert" tabindex="-1" data-testid="form-errors" data-admin-validation-summary="">
       <p>Check the highlighted fields and try again.</p>
