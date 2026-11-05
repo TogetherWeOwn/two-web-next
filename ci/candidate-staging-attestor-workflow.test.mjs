@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { readFileSync, readdirSync } from "node:fs";
 import { test } from "node:test";
+import { Script, createContext } from "node:vm";
 import YAML from "yaml";
 
 const read = (path) => readFileSync(new URL(`../${path}`, import.meta.url), "utf8");
@@ -98,6 +99,152 @@ test("only the inert proposal adds the prospective manual mode and secret consum
     /npm|wrangler|curl|upload|deploy|process\.env\.(?:GH_TOKEN|GITHUB_TOKEN)/i,
   );
 });
+
+const inlineImport =
+  "import { prepareAttestation, observeAttestationSubject } from './ci/candidate-staging-attestor.mjs';";
+
+function inlineAttestor() {
+  const run = proposal.jobs[mode].steps.at(-1).run;
+  const match = /^node --input-type=module <<'JS'\n([\s\S]+)\nJS\n$/.exec(run);
+  assert.ok(match, "only the Node heredoc may execute in the subject-bearing step");
+  assert.deepEqual(match[1].match(/^import .+;$/gm), [inlineImport]);
+  assert.doesNotMatch(
+    match[1],
+    /child_process|execFile|spawn|require\s*\(|import\s*\(|getBuiltinModule|process\.(?:binding|dlopen)/,
+  );
+  const helper = read("ci/candidate-staging-attestor.mjs");
+  assert.deepEqual(helper.match(/^import .+;$/gm), ['import { createHash } from "node:crypto";']);
+  assert.doesNotMatch(
+    helper,
+    /child_process|require\s*\(|import\s*\(|process\.|eval\s*\(|new Function/,
+  );
+  return match[1].replace(inlineImport, "");
+}
+
+test("subject-bearing closure has no Git, shell or other child-process consumer", () => {
+  inlineAttestor();
+});
+
+// Run only the inert inline body with mocked helper functions and no real env or
+// network. Poisoned Git/credential inputs must never be read or forwarded. The
+// separate helper suite owns actual preflight/transport/refusal semantics.
+for (const failure of ["none", "prepare", "observe", "context"]) {
+  test(`inert inline ${failure} path does not consume inherited Git or alternate credentials`, async () => {
+    const body = inlineAttestor();
+    const context = { checkoutSha: "b".repeat(40), runId: "777" };
+    const values = {
+      ATTESTOR_CONTEXT: failure === "context" ? "{" : JSON.stringify(context),
+      ATTESTOR_ENVELOPE: "synthetic-envelope",
+      CLOUDFLARE_API_TOKEN: "synthetic-subject-only",
+      GH_TOKEN: "synthetic-alternate-gh",
+      GITHUB_TOKEN: "synthetic-alternate-github",
+      CLOUDFLARE_API_KEY: "synthetic-alternate-provider",
+      GIT_CONFIG_GLOBAL: "/synthetic/credential-helper-config",
+      GIT_CONFIG_SYSTEM: "/synthetic/system-config",
+      GIT_CONFIG_COUNT: "1",
+      GIT_CONFIG_KEY_0: "credential.helper",
+      GIT_CONFIG_VALUE_0: "!synthetic-helper-must-not-execute",
+      GIT_EXEC_PATH: "/synthetic/git-executables",
+      GIT_ASKPASS: "/synthetic/askpass",
+      SSH_ASKPASS: "/synthetic/ssh-askpass",
+      NODE_OPTIONS: "--import=/synthetic/must-not-load.mjs",
+      PATH: "/synthetic/git-and-shell-traps",
+    };
+    const reads = [];
+    const messages = [];
+    const failures = [];
+    const calls = [];
+    const prepared = Object.freeze({ fixture: true });
+    const observation = Object.freeze({ subjectId: "5".repeat(32) });
+    const transport = () => assert.fail("fixtures never call a provider");
+    const process = {
+      env: new Proxy(values, {
+        get(target, key) {
+          reads.push(key);
+          assert.ok(
+            ["ATTESTOR_CONTEXT", "ATTESTOR_ENVELOPE", "CLOUDFLARE_API_TOKEN"].includes(key),
+            `unexpected environment read: ${String(key)}`,
+          );
+          return target[key];
+        },
+        ownKeys() {
+          assert.fail("environment enumeration could expose alternate credentials");
+        },
+      }),
+      exitCode: undefined,
+    };
+    const sandbox = createContext(
+      {
+        process: new Proxy(process, {
+          get(target, key) {
+            assert.ok(["env", "exitCode"].includes(key));
+            return target[key];
+          },
+        }),
+        console: {
+          log: (value) => messages.push(value),
+          error: (value) => failures.push(value),
+        },
+        fetch: transport,
+        AbortSignal: { timeout: (ms) => ({ timeout: ms }) },
+        prepareAttestation: (envelope, actualContext) => {
+          calls.push("prepare");
+          assert.equal(envelope, values.ATTESTOR_ENVELOPE);
+          assert.deepEqual(JSON.parse(actualContext), context);
+          if (failure === "prepare") throw new Error(values.CLOUDFLARE_API_TOKEN);
+          return prepared;
+        },
+        observeAttestationSubject: async (handle, options) => {
+          calls.push("observe");
+          assert.equal(handle, prepared);
+          assert.deepEqual(Object.keys(options), ["subject", "transport", "signal"]);
+          assert.equal(options.subject, values.CLOUDFLARE_API_TOKEN);
+          assert.equal(options.transport, transport);
+          assert.equal(options.signal.timeout, 120000);
+          if (failure === "observe") throw new Error(values.CLOUDFLARE_API_TOKEN);
+          return observation;
+        },
+      },
+      { codeGeneration: { strings: false, wasm: false } },
+    );
+    await new Script(`(async () => {${body}})()`).runInContext(sandbox, { timeout: 1000 });
+    assert.deepEqual(
+      calls,
+      failure === "context" ? [] : failure === "prepare" ? ["prepare"] : ["prepare", "observe"],
+    );
+    assert.deepEqual(
+      reads,
+      failure === "context"
+        ? ["ATTESTOR_CONTEXT"]
+        : failure === "prepare"
+          ? ["ATTESTOR_CONTEXT", "ATTESTOR_ENVELOPE"]
+          : ["ATTESTOR_CONTEXT", "ATTESTOR_ENVELOPE", "CLOUDFLARE_API_TOKEN"],
+    );
+    if (failure === "none") {
+      assert.equal(process.exitCode, undefined);
+      assert.deepEqual(failures, []);
+      assert.equal(messages.length, 1);
+      const receipt = JSON.parse(messages[0]);
+      assert.deepEqual(receipt.context, context);
+      assert.deepEqual(receipt.observation, observation);
+      assert.equal(receipt.operationalAdmission, false);
+      assert.equal(receipt.qualification, false);
+      assert.equal(receipt.promotable, false);
+    } else {
+      assert.equal(process.exitCode, 1);
+      assert.deepEqual(messages, []);
+      assert.deepEqual(failures, ["Staging attestation refused"]);
+    }
+    const output = JSON.stringify({ messages, failures });
+    for (const [key, value] of Object.entries(values)) {
+      // The count "1" also occurs in legitimate schema v1; exact read assertions
+      // above cover that scalar. Credential and helper-path markers stay screened.
+      if (!["ATTESTOR_CONTEXT", "ATTESTOR_ENVELOPE", "GIT_CONFIG_COUNT"].includes(key)) {
+        assert.ok(!output.includes(value), key);
+      }
+    }
+  });
+}
 
 test("proposal concurrency separates attestation but retains ordinary CI groups and cancellation", () => {
   const format = (value, ...args) => value.replace(/\{([0-9]+)\}/g, (_, i) => args[Number(i)]);

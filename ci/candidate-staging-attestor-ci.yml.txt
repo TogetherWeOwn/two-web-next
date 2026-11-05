@@ -1274,14 +1274,11 @@ jobs:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
         run: |
           node --input-type=module <<'JS'
-          import { execFileSync } from 'node:child_process';
           import { prepareAttestation, observeAttestationSubject } from './ci/candidate-staging-attestor.mjs';
           try {
+            // checkoutSha declares the pinned checkout input, not a Git observation.
+            // Actual checkout provenance remains an independent admission obligation.
             const context = JSON.parse(process.env.ATTESTOR_CONTEXT);
-            context.checkoutSha = execFileSync('git', ['rev-parse', '--verify', 'HEAD'], {
-              encoding: 'utf8', timeout: 10000, maxBuffer: 128,
-              stdio: ['ignore', 'pipe', 'ignore'],
-            }).trim();
             const prepared = prepareAttestation(process.env.ATTESTOR_ENVELOPE, JSON.stringify(context));
             const observation = await observeAttestationSubject(prepared, {
               subject: process.env.CLOUDFLARE_API_TOKEN,

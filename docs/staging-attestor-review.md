@@ -48,10 +48,14 @@ wrong repository, moved workflow/checkout SHA, wrong ref/run/job or reruns.
 
 A future adopted invocation must freeze the exact non-main control ref to the
 independently accepted commit, not merely accept a branch name. Native GitHub
-context and the actual checkout SHA are compared with the separately established
-invocation record. These comparisons are not a remote GitHub provenance reader;
-the adopted workflow, protected injection and independent invocation evidence
-must supply that trust. There is no arbitrary endpoint/secret-name input.
+context and the declared pinned checkout input are compared with the separately
+established invocation record. `checkoutSha` is populated from `github.workflow_sha`;
+it is **not an independently measured checkout HEAD**. The unnecessary inline Git
+subprocess has been removed, not moved into another credential-bearing step.
+Actual checkout provenance remains an independent admission obligation. These
+comparisons are not a remote GitHub provenance reader; the adopted workflow,
+protected injection and independent invocation evidence must supply that trust.
+There is no arbitrary endpoint/secret-name input.
 
 The proposed job uses a fresh GitHub-hosted runner, pinned checkout/setup-node,
 one sparse builtin-only helper, no dependency install, candidate checkout/build,
@@ -63,6 +67,18 @@ secret source or endpoint. However, GitHub's native same-name secret fallback
 cannot be detected by this helper: actual continuous environment-entry existence,
 protected injection and precedence are external admission gates, not inferred
 from the absence of fallback code.
+
+The inline Node body imports only the reviewed helper, whose sole import is
+`node:crypto`. Neither launches a child process: no Git executable, inherited
+Git configuration, credential helper, askpass or alternate credential can become
+an extra subprocess consumer from that body. The workflow fixtures enforce the
+single Node heredoc/import closure and exercise its success and refusal paths
+with synthetic subject/alternate credentials and poisoned Git environment paths.
+They execute only the inline body with mocked helper/transport boundaries in a VM;
+no real environment, credential, subprocess or network is used by those fixtures.
+This is not a sandbox or proof of runner/bootstrap isolation: the shell, Node
+startup, pinned Actions and actual protected injection still require independent
+exact-closure admission. No ambient-environment sanitization is claimed.
 
 The mandatory injected transport performs one fixed account-owned-token verify
 GET, with redirect refusal, omitted ambient credentials, no retry, a ten-second
