@@ -1820,7 +1820,12 @@ test("recovery capture is GET-only and joins settings, provider and serving pins
   for (const secret of [CF_TOKEN, GH_TOKEN, SAS]) {
     assert.ok(!text.includes(secret), secret);
   }
-  assert.doesNotMatch(text, /https?:\/\//);
+  // B retains its public APP_URL; provider/storage request URLs stay private.
+  assert.doesNotMatch(
+    text,
+    /https?:\/\/(?:api\.cloudflare\.com|productionresultssa[0-9]+\.blob\.core\.windows\.net|pipelines\.actions\.githubusercontent\.com)(?:[/:?#]|$)/,
+  );
+  assert.equal(r.baseline.bindings.find((binding) => binding.name === "APP_URL").text, ORIGIN);
 });
 
 test("recovery capture pins are accepted by the journal-bound component guard", async () => {
