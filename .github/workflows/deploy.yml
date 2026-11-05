@@ -96,6 +96,17 @@ jobs:
         run: node .staging-occupancy-control/ci/candidate-staging-clear.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
+      - name: Read installed staging baseline retention tooling
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          path: .staging-baseline-control
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            ci/candidate-staging-baseline-retain.mjs
+            ci/candidate-staging-package.mjs
+            ci/candidate-staging-admission.mjs
       - name: Staging admission hold (before dependencies or mutations)
         # Staging-only containment: only exactly "false" releases the direct
         # staging migration path. Absent, "true" and malformed values all hold.
@@ -228,12 +239,21 @@ jobs:
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      - name: Prepare private staging baseline retention
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          root=$(mktemp -d "${RUNNER_TEMP:?}/staging-baseline-XXXXXXXX")
+          mkdir "$root/payload"
+          printf 'BASELINE_RETENTION_ROOT=%s\n' "$root" >> "$GITHUB_ENV"
       - name: Re-verify exact-SHA full CI before Worker deploy
         # Queue creation or the Tail deploy may outlive the accepted CI attempt; this step runs directly before the deploy.
         run: node ci/staging-deploy-gate.mjs
         env:
           GITHUB_TOKEN: ${{ github.token }}
       - name: Deploy to Cloudflare Workers
+        id: baseline-retention
         # The Version is tagged with the CI-verified commit; /up reads the tag
         # back as revision.commit (a full lowercase SHA only). The Kit Worker
         # only produces after the handoff. Deploying the consumer-free config
@@ -242,12 +262,42 @@ jobs:
         # one. The detach step below removes them explicitly before the jobs
         # Worker attaches, so two consumers never exist. Route flags come only
         # from the validated workflow input and default to Hono ownership.
-        run: npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}" --var "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}" --var "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}"
+        shell: bash
+        run: |
+          set -euo pipefail
+          umask 077
+          # --outfile includes an asset capability: never retain the raw form.
+          trap 'rm -f -- "${BASELINE_RETENTION_ROOT:?}/upload.form" "$BASELINE_RETENTION_ROOT/deploy.jsonl"' EXIT
+          npx wrangler deploy --config web/wrangler.staging.jsonc --tag "${DEPLOY_SHA:?}" --var "KIT_ROUTE_ARCHIVE:${{ steps.kit-route-flags.outputs.archive }}" --var "KIT_ROUTE_STATIC:${{ steps.kit-route-flags.outputs.static }}" --outfile "${BASELINE_RETENTION_ROOT:?}/upload.form"
+          env -u CLOUDFLARE_API_TOKEN -u CLOUDFLARE_ACCOUNT_ID -u WRANGLER_OUTPUT_FILE_PATH node .staging-baseline-control/ci/candidate-staging-baseline-retain.mjs retain
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ env.BASELINE_RETENTION_ROOT }}/deploy.jsonl
           # workflow_run's github.sha is main's tip; tag the CI-verified checkout.
           DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      - name: Upload retained staging baseline
+        id: baseline-artifact
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-baseline-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.baseline-retention.outputs.version-id }}
+          path: ${{ env.BASELINE_RETENTION_ROOT }}/payload/*
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
+      - name: Join independent staging baseline producer record
+        run: node .staging-baseline-control/ci/candidate-staging-baseline-retain.mjs producer
+        env:
+          BASELINE_ARTIFACT_ID: ${{ steps.baseline-artifact.outputs.artifact-id }}
+          BASELINE_ARCHIVE_SHA256: ${{ steps.baseline-artifact.outputs.artifact-digest }}
+      - name: Upload independent staging baseline producer record
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: candidate-baseline-producer-${{ github.run_id }}-${{ github.run_attempt }}-${{ steps.baseline-retention.outputs.version-id }}
+          path: ${{ env.BASELINE_RETENTION_ROOT }}/producer.json
+          if-no-files-found: error
+          retention-days: 30
+          compression-level: 6
       - name: Re-verify exact-SHA full CI before detaching web consumers
         # The web deploy may outlive the accepted CI attempt; this step runs directly before the detach.
         run: node ci/staging-deploy-gate.mjs

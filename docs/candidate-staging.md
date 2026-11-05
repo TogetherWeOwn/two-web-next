@@ -571,17 +571,68 @@ provider/settings/component/stored-asset completeness or satisfy recovery
 retention. Those independent joins and continuous exclusion remain mandatory
 before candidate mutation; no workflow calls this adapter yet.
 
-**Concrete current integration refusal:** [normal staging deployment](../.github/workflows/deploy.yml)
-builds and uploads staging Kit, tags the version and probes its revision. It does
-not retain the recoverable module/asset archive or the independent producer record
-required by this reader. A version tag, successful deploy run or local manifest
-hash cannot substitute for that missing channel. The next installed change must
-retain exact staging upload bytes and a provider-version/producer/run/artifact
-join, then compare them with immutable provider and serving observations before
-writing the dirty recovery pin. Existing baseline deployments without that
-record remain ineligible; no live baseline was read to establish this source-level
-refusal. This is unfinished staging pipeline implementation, not a new scope or
-credential authorization wait.
+**Concrete integration refusal:** existing deployments without an independently
+retained recoverable module/asset archive and producer record remain ineligible.
+A version tag, successful deploy run or local manifest hash cannot substitute for
+that missing channel. The staging-only retention wiring below is part of this
+installer, not evidence that an eligible deployed baseline already exists. No
+live baseline was read to establish this source-level refusal. Complete provider,
+serving, artifact and journal joins remain unfinished implementation, not a new
+scope or credential authorization wait.
+
+### Normal staging byte retention (wired, not live-qualified)
+
+[Normal staging deployment](../.github/workflows/deploy.yml) now captures Wrangler's
+actual web upload form using `deploy --outfile`, and its separate JSON-lines deploy
+output using `WRANGLER_OUTPUT_FILE_PATH`. Both live only in a private runner-temp
+directory. The original deploy target, tag, route flags and credential scope stay
+unchanged. Retention tooling and its complete import closure come from the
+workflow-pinned control checkout, not the deployed source checkout, which may
+predate this helper. Both revisions are recorded separately. Retention preserves
+normal deploy reruns and records their explicit attempt; that does not remove the
+reader's independent attempt-1 admission restriction. Production workflows and
+configuration are untouched.
+
+[The bounded sanitizer](../ci/candidate-staging-baseline-retain.mjs) does not run
+retained code. It accepts only the fixed staging Worker/custom-domain deploy
+output and explicitly numbered producer attempts, matching the exact source tag. It
+retains the serialized `_worker.js` module and optional source map with their
+content types and SHA-256 hashes, plus a descriptor-pinned traversal of the Kit
+assets. The shipped adapter's exact `.assetsignore` text is required; arbitrary
+ignore rules and unknown control files refuse rather than invent an asset set.
+Module names, sizes, file counts, form/metadata sizes and aggregate retained bytes
+are bounded. Links, duplicate modules, unsupported types and malformed output
+refuse with one fixed error.
+
+Upload metadata is **never serialized** into the retained artifact. In particular,
+the form's asset JWT, binding values and package metadata are discarded. The raw
+form and deploy output are removed in the sanitizer's `finally` and by the
+deploy shell's `EXIT` trap on success or failure. The sanitizer runs after Wrangler
+with provider credentials explicitly removed from its environment. Hard runner
+termination still relies on destruction of that ephemeral runner; an exit trap
+cannot run after a hard kill. No raw capture or runner-temp wildcard is an artifact
+input.
+
+The first immutable artifact contains only `baseline.json` and flat numbered
+regular files. Its manifest binds repository, source/workflow revisions, run and
+attempt, the Wrangler-reported version UUID, logical module/asset paths, content
+types, sizes and byte hashes. Only after that upload returns its artifact ID and
+archive digest does a separate step assemble and upload `producer.json`, binding
+them to the manifest and byte-root digests. Both uploads use the pinned artifact
+action, fail on absent files and retain for 30 days. Missing or expired evidence
+is a refusal, not a request to use latest. Reruns remain refused by the current
+producer reader; artifact names alone establish no per-attempt authority.
+
+These records say `retained-bytes-only` or `producer-join-only` and
+`promotable:false`. The version ID is an observed CLI result, **not** independent
+provider/serving proof. The installed controller must still authenticate both
+artifact channels and source closure, rehash every byte, compare immutable
+provider code/config/assets and actual serving state, and bind the result to
+exclusion and the dirty journal before candidate mutation. Source-map recovery
+conformance, asset-service ZIP compatibility, stored-asset readback, complete B
+admission and the controller remain unqualified. Existing mock reader passes and
+local dry-run compatibility do not establish a successful live producer run,
+recovery retention, activation clearance or native Security approval.
 
 ## B-prime request construction (offline, not installed)
 
