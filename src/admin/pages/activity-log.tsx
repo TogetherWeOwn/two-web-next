@@ -63,7 +63,7 @@ export const ActivityLogPage: FC<{
               <tr>
                 <th scope="col">Who</th>
                 <th scope="col">What</th>
-                <th scope="col">When</th>
+                <th scope="col">When (UTC)</th>
                 <th scope="col">Subject</th>
               </tr>
             </thead>

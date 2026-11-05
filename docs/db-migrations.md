@@ -217,6 +217,17 @@ runner selftests use disposable Postgres only; this check does not authorize a
 staging or production connection or any live grant, revoke, role, or
 default-ACL change.
 
+The runner also refuses at plan time while any reviewed object (the
+runtime-rights table/sequence census, plus the `drizzle` migration ledger and
+its sequence) is owned by a role the migrator cannot
+act as: an `ALTER` needs ownership in PostgreSQL's sense, so equivalence is
+`pg_has_role(current_user, owner, 'USAGE')` — an inherited group owner passes,
+a non-inherited membership or a foreign owner does not — with a superuser
+migrator exempt. The refusal names the object and its owner before any DDL is
+attempted, instead of surfacing as a masked mid-transaction failure; repairing
+the ownership is an operator action outside the runner, which never changes
+owners or role memberships itself.
+
 ## Audit tables are append-only (deployed-role prerequisite)
 
 `drizzle/1018_audit-immutability.sql` guards `agent_event_audits`,
@@ -278,7 +289,10 @@ with `target: production`, behind the `production` Environment:
   that inherits `pg_read_all_data` and no write, DDL or admin role, on the
   PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
   the pooled `6432` port).
-  Also needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+  Also needs Cloudflare credentials from the bound Environment:
+  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` (staging Environment), or
+  `PRODUCTION_CLOUDFLARE_API_TOKEN` / `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`
+  (production Environment) behind the same `inputs.target` guard.
 - Branch/target correspondence: `branch` must be empty (defaults to `target`),
   equal to `target`, or `test-*`; staging↔production swaps and other overrides
   refuse before provisioning or I/O. Local operators must declare
@@ -322,6 +336,10 @@ nor a data rollback target. Use the reviewed procedures:
   recorded known-good version ID; production uses the `rollback-production`
   workflow. It does not undo migrations, data writes, Discord side effects,
   queue messages or external-resource changes.
+  Promotion therefore refuses a candidate whose new migrations drop, rename,
+  retype or tighten (`SET NOT NULL`) schema the live Worker may use, unless
+  the migration carries a reviewed `-- rollback-safe: <reason>` line
+  ([rollback target](runbook.md#daily-staging-rollback-drill-and-the-promotion-rollback-target)).
 - **Schema and data:** the **Rollback** rules under
   [web schema migrations](runbook.md#neon-web-schema-migrations-separate-operator-action).
   Prefer a reviewed forward repair. An authorized PITR or backup restore

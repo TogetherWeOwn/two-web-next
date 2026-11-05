@@ -19,7 +19,12 @@ export const EventStatusSection: FC<{ row: EventRow; now?: Date }> = ({ row, now
         ) : null}
         {row.status === "draft" || row.status === "published" ? (
           <form method="post" action={`/admin/events/${row.eventKey}/cancel`}>
-            <button type="submit" class="link" data-testid="cancel-event">
+            <button
+              type="submit"
+              class="link"
+              data-testid="cancel-event"
+              aria-label={`Cancel event ${row.title}`}
+            >
               Cancel event
             </button>
           </form>

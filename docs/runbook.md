@@ -145,7 +145,7 @@ the complete suite on its disposable Postgres service.
 
 ## A moderator lost their role
 
-Moderator status is stored on each session at sign-in and read live from that row; role removal does not update existing sessions. First confirm the Discord moderator role has been removed. If the moderator stops visiting pages, the idle session expires within two hours (120 minutes after its last session-refreshing page view); normal browsing can rotate and extend that window. Run this command for immediate invalidation; it does not depend on the member signing out. Use a dry-run first, verify the active-session count, then apply. It revokes only unexpired, not-yet-revoked sessions for that member.
+Moderator status is stored on each session at sign-in and read live from that row. A live session also re-derives its member/moderator flags from Discord: once the stored flags are five minutes old, the next authorizing request refreshes them first, so a removed role stops working on its own within minutes (a failed recheck — an inconclusive Discord lookup, or a session-store failure before the lookup — keeps the stored flags until a later refresh or the session's 24-hour lineage cap). When rechecks are succeeding, worst case the demotion can take close to two five-minute cadences plus the short predecessor grace: a refresh already in flight when the role was removed can read the pre-demotion state, restamp the cadence, and leave the removed role working until the next refresh. When revoking access mid-incident, do not wait for the cadence — use `bin/revoke-sessions.mjs` below for immediacy. First confirm the Discord moderator role has been removed. If the moderator stops visiting pages, the idle session expires within two hours (120 minutes after its last session-refreshing page view); normal browsing can rotate and extend that window. Run this command for immediate invalidation — during an incident, or while Discord lookups are unavailable; it does not depend on the member signing out. Use a dry-run first, verify the active-session count, then apply. It revokes only unexpired, not-yet-revoked sessions for that member.
 
 ```sh
 node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging
@@ -180,7 +180,7 @@ Bounded waits: the command sets its own session `statement_timeout` (10s) and `l
      ```
 
      Each side needs exactly one source (`--*-file` or `--*-ids`, not both). Files hold a JSON array of Discord user IDs or newline/comma separated IDs. Exit 0 = sets match (empty-safe: no moderators on either side is a clean pass), 1 = drift, 2 = usage or malformed input. The report shows at most 20 IDs per side with exact counts; the rest is `…and N more`.
-  2. On drift: `discord-only` IDs hold the Discord role but have no live app session. They carry no excess privilege; they gain the panel at next login (login recomputes the flag). Record the count as information. `app-only` IDs carry the flag in a live session without the Discord role, so revoke each with the command below (dry-run first, verify the active-session count, then apply).
+  2. On drift: `discord-only` IDs hold the Discord role but have no live app session carrying the moderator flag. They carry no excess privilege; they gain the panel at next login (login recomputes the flag, and a live member session re-derives it within five minutes). Record the count as information. `app-only` IDs carry the flag in a live session without the Discord role. An active session drops the flag at its next five-minute role recheck; revoke each with the command below anyway for immediate effect and to cover idle sessions (dry-run first, verify the active-session count, then apply).
   3. For each such Discord snowflake, dry-run first, verify the active-session count, then apply:
 
      ```sh
@@ -573,20 +573,25 @@ Keep required resources/bindings in place; never delete a queue to roll back.
 
 [.github/workflows/rollback-production.yml](../.github/workflows/rollback-production.yml)
 is the one-click production rollback: Actions → `rollback-production` → Run
-workflow, branch `main`, `version_id` set to the recorded known-good Worker
-Version ID. It reuses the same request gate
-(`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED` exactly `true`)
-and the same `production` Environment gate as a deploy. Both preflight and
-the mutation job receive the repository variable `PRODUCTION_AUTO_APPROVE`:
+workflow, branch `main`, `environment` `production` (the default),
+`version_id` set to the recorded known-good Worker Version ID. It reuses the
+same request gate (`workflow_dispatch` on `main`, `PRODUCTION_DEPLOY_ENABLED`
+exactly `true`) and the same `production` Environment gate as a deploy
+(`node ci/production-deploy-gate.mjs --rollback`). Both preflight and the
+mutation job receive the repository variable `PRODUCTION_AUTO_APPROVE`:
 exactly `true` selects automated approval, requiring the main-only Environment
-branch policy, green exact-SHA CI, and successful exact-SHA staging deploy and
-e2e-staging evidence with executed journeys and staging quality checks.
-An absent, false or otherwise non-`true` value selects reviewer mode, which
-requires reviewers with self-review prevented; a reviewer-less Environment is
-refused. Exact-SHA CI remains required in either mode. The workflow uses the
-same production-only Cloudflare credentials as a deploy, then runs
-`wrangler rollback <version_id> --name two-web-next-production` followed by
-the same `/up` smoke. This approval-mode selection applies only to the Worker
+branch policy and green exact-SHA CI of the checked-out rollback scripts.
+A rollback serves a version production already served, so it never needs
+staging evidence for the checked-out commit and never waits on
+`PRODUCTION_HOLD_UNTIL`. An absent, false or otherwise non-`true` value
+selects reviewer mode, which requires reviewers with self-review prevented; a
+reviewer-less Environment is refused. Exact-SHA CI remains required in either
+mode. The workflow uses the same production-only Cloudflare credentials as a
+deploy, then runs `wrangler rollback <version_id> --name two-web-next-production`
+followed by the same `/up` smoke. The same workflow takes `environment`
+`staging` (Worker `two-web-next`, staging credentials, the `deploy-staging`
+lock); `ci/rollback-target.mjs` is the one map from environment to Worker and
+origin. This approval-mode selection applies only to the Worker
 rollback; it does not change database migration or backup policy. The
 `version_id` input must be a lowercase Worker Version UUID and travels
 inputs → `env:` only, never through
@@ -622,11 +627,97 @@ normal routing, not pinned canary routing. An absent or malformed promoted id
 fails closed before any probe, never by silently omitting verification.
 
 A failed post-promotion public-route verification in `deploy-production`
-blocks the release tag but leaves the promoted version live at 100%: the
-gradual action's automatic rollback only covers failures inside the promotion
-itself, and this step never adds an automatic rollback. The failed step's logs
-print the live promoted candidate plus the recorded pre-promote version ID as
-the restoration target; restore it with this workflow using that ID.
+blocks the release tag. The gradual action's automatic rollback only covers
+failures inside the promotion itself, so the `auto-rollback` job then calls
+this workflow with the recorded pre-promote version ID as the restoration
+target (the rollback target the preflight recorded; the failed step's logs
+print it as `PREV_VERSION`), `expected_current_version_id` set to the promoted
+version, and the promoted commit as the scripts `ref`. After a passed
+verification, the `post-deploy-watch` job (`ci/post-deploy-watch.mjs`) probes
+`/up` every minute for 30 minutes and judges the promoted version's error rate
+every five minutes with the gradual gate's thresholds (5%, 20-request floor).
+Three consecutive readiness misses or a failed error-rate verdict set
+`breach=true`, and `auto-rollback` restores the target the same way. An
+analytics query error only warns; a different live version makes the watch
+stand down. The `release` job tags only after the watch passes with an
+explicit `pass` verdict, so a superseded watch never tags the displaced
+commit. The watch reads only the repo-level read-only analytics token, binds
+no Environment, and needs no approval in either mode. The `auto-rollback`
+call restores through the production Environment binding, so in reviewer
+mode it waits for a reviewer like any other production mutation; in
+auto-approve mode it runs on its own. If `auto-rollback` itself fails (or
+waits on an approval nobody gives), the failure mode is a live promoted
+version, never a silent rollback: restore manually with this workflow using
+the version ID in the failed step's logs.
+
+#### Daily staging rollback drill and the promotion rollback target
+
+[.github/workflows/staging-rollback-drill.yml](../.github/workflows/staging-rollback-drill.yml)
+runs daily at 03:41 UTC (and on dispatch). It waits until no `deploy` or
+`e2e-staging` run is active, records the live staging version and the version
+that served before it, then calls `rollback-production.yml` twice with
+`environment: staging`: back to the previous version, then forward to the
+live one. Each leg passes `expected_current_version_id`, so it moves traffic
+only while the expected version serves, skips when the target already serves,
+and refuses when a newer deploy landed in between. The drill is green only
+when both legs moved traffic and passed the identity smoke.
+
+`deploy-production` refuses to promote while the newest completed drill is
+red (`node ci/rollback-target.mjs --check-drill`), and without a valid
+rollback target (`--check-target`): `/up` must name the live production
+version and its commit, and no migration the candidate adds since that commit
+may drop, rename, retype or tighten (`SET NOT NULL`) anything the live code
+uses. A contract migration that is safe for the live code says why on its own
+line: `-- rollback-safe: <reason>`; reviewers check that note. The deploy job
+then confirms the recorded version is still the single 100% deployment and
+still carries its required secrets before any production mutation.
+
+#### Regression check against production
+
+Before the deploy job, `deploy-production` runs two more gates
+(`ci/production-deploy-gate.mjs`):
+
+- `staging-soak` (staging credentials, under the staging Environment —
+  branch policy only, no reviewers, so it still starts at once) finds the
+  candidate's staging Worker versions by commit tag — every tagged version
+  counts, since a deploy retry tags twice — and sums their Workers
+  invocation errors since the oldest deployed (at most 24 hours). The job
+  only reads (versions list, analytics query) and never mutates, but its
+  token is the staging deploy token, not a read-only credential.
+- `production-regression` (production Environment as the reviewer
+  checkpoint, analytics via the repo-level read-only token) downloads the
+  `staging-passive-ledger-<run>` artifact that `e2e-staging` recorded for the
+  candidate (`bin/smoke.mjs --ledger` and the GET-only guest journeys in
+  `e2e/watch` against staging), runs the same set against the apex with the
+  candidate's checkers, and refuses promotion when a check that passes on
+  production did not pass on staging, or when the staging soak error rate is
+  above 1.5× production's last 24 hours (floor 1%; under 20 staging requests
+  the rate cannot be judged and passes). A candidate without the ledger
+  artifact (an `e2e-staging` run that predates it, or an expired artifact)
+  is refused; roll back with `rollback-production` instead of redeploying it.
+
+Automatic promotion, including an explicit-SHA dispatch, also requires the
+candidate's `e2e-staging` pass to be at least 30 minutes old. In reviewer
+mode the approval stands in for the resolver but not for the soak floor:
+when a staging pass for the candidate exists, it must still have soaked 30
+minutes; a promotion with no staging evidence yet rides on the reviewer's
+approval alone.
+
+#### Deploy notify
+
+The last job of every attempted promotion (`deploy-notify`) and of every
+production rollback (`rollback-notify`) runs `ci/deploy-notify.mjs`. It POSTs
+`{repo, event, outcome, sha, versionId, previousVersionId, runUrl, startedAt,
+finishedAt, reason}` to the Paperclip deploy-verification routine at the repo
+variable `PAPERCLIP_DEPLOY_WEBHOOK_URL`, signed with HMAC-SHA256 over
+`<unix seconds>.<body>` using the repo secret
+`PAPERCLIP_DEPLOY_WEBHOOK_SECRET` (`X-Paperclip-Timestamp`,
+`X-Paperclip-Signature: sha256=<hex>`). The step is `continue-on-error`: a
+Paperclip outage never fails or blocks a deploy or rollback, and an
+unconfigured webhook only warns. Staging drills do not notify. A superseded
+watch reports success with a superseded reason (the promotion went out
+unwatched); a deploy that fails after the verified 100% promotion reports
+failed with the promoted version live and unwatched.
 
 Promotion and rollback mutations to the production Worker serialize on the
 shared `production-worker-mutation` job-level concurrency group

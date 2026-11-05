@@ -33,6 +33,7 @@
     "check:security-pins:selftest": "node ci/check-security-pins.mjs --selftest && node --test ci/check-security-pins.test.mjs",
     "migration:rights": "node ci/migration-runtime-rights.mjs",
     "migration:rights:selftest": "node --test ci/migration-runtime-rights.test.mjs",
+    "migration:ownership:selftest": "node --test ci/migration-ownership.test.mjs",
     "test:smoke": "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/version-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs test/smoke-public-api-acceptance.test.mjs test/promotion-smoke-identity-acceptance.test.mjs test/operator-constants-parity.mjs",
     "gate:selftest": "node ci/require-performance.mjs --selftest",
     "config:check": "node ci/check-config-docs.mjs && node --test ci/check-config-docs-selftest.mjs",
@@ -81,6 +82,8 @@
     "lighthouse:evidence:selftest": "node --test ci/lighthouse-evidence.test.mjs",
     "deps:audit": "node ci/deps-audit.mjs",
     "deps:audit:selftest": "node --test ci/deps-audit.test.mjs",
+    "deps:pins": "node ci/check-dependency-pins.mjs",
+    "deps:pins:selftest": "node ci/check-dependency-pins.mjs --selftest && node --test ci/check-dependency-pins.test.mjs",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
     "db:migrate:selftest": "node --test ci/db-migrate-selftest.mjs",
@@ -123,14 +126,19 @@
     "tsx": "^4.23.15",
     "typescript": "^7.0.2",
     "vitest": "^5.0.2",
-    "wrangler": "^4.152.0",
+    "wrangler": "^4.156.1",
     "yaml": "2.9.1"
   },
   "overrides": {
     "undici": "7.30.1",
     "@lhci/cli": {
       "tmp": "0.2.7",
-      "@puppeteer/browsers": "3.2.3"
+      "@puppeteer/browsers": "3.2.3",
+      "chrome-launcher": "1.2.2",
+      "uuid": "11.1.1"
+    },
+    "@esbuild-kit/core-utils": {
+      "esbuild": "0.28.2"
     },
     "basic-ftp": "6.2.1",
     "sharp": "0.35.5",
