@@ -4,7 +4,7 @@
   "operationalAdmission": false,
   "sourceBase": "197509a52a5cb27cdb12b842b67bbeb0d3a04cc0",
   "files": {
-    "ci/candidate-staging-attestor.mjs": "051c5e81276f06bbe142ae752ec88bda3739fff32e38c43661769b36322f16d1",
+    "ci/candidate-staging-attestor.mjs": "c4969bd2d8f51e711b5b8535f5b18547b3bb8dd53a6a4768b181b3770699839e",
     "ci/candidate-staging-attestor-ci.yml.txt": "7b91e4766fad8175d3be0b87a9ca69ca4b0415013e982a4a6a5b39de29cbd2de",
     ".github/workflows/ci.yml": "0b4325c09e6204565a36b63e4373c4486fe1cdaf18075f0006d6d691dfcf1541",
     ".github/workflows/deploy.yml": "945d4b30a400cb2c3d5f0e3c2fe8df9756691b80514dd0ff63b09988f608c00d",

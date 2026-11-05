@@ -188,13 +188,23 @@ function live(state, signal, now) {
 
 // Settle even when an injected transport/stream ignores AbortSignal. Attach both
 // continuations before checking abort so late rejection cannot be unhandled.
-function bounded(promise, signal) {
+function bounded(promise, signal, discard = null) {
   return new Promise((resolve, reject) => {
     const abort = () => reject(signal.reason);
     Promise.resolve(promise).then(
       (value) => {
         signal.removeEventListener("abort", abort);
-        if (signal.aborted) reject(signal.reason);
+        if (signal.aborted && discard) {
+          // A late response still owns a body after the caller was refused.
+          // Request bounded cleanup; neither its success nor failure can revive
+          // the operation. Both continuations preserve the existing refusal.
+          Promise.resolve()
+            .then(() => discard(value))
+            .then(
+              () => reject(signal.reason),
+              () => reject(signal.reason),
+            );
+        } else if (signal.aborted) reject(signal.reason);
         else resolve(value);
       },
       (error) => {
@@ -265,11 +275,11 @@ export async function observeAttestationSubject(
     requireEvidence(typeof transport === "function" && typeof now === "function");
     requireEvidence(typeof subject === "string" && /^[A-Za-z0-9_-]{20,256}$/.test(subject));
     requireEvidence(!JSON.stringify(state.envelope).includes(subject));
-    live(state, signal, now);
+    const requestStart = live(state, signal, now);
     const combined = AbortSignal.any([
       signal,
       AbortSignal.timeout(10_000),
-      AbortSignal.timeout(time(state.envelope.invocation.expiresAt) - now()),
+      AbortSignal.timeout(time(state.envelope.invocation.expiresAt) - requestStart),
     ]);
     live(state, combined, now);
     const endpoint = `https://api.cloudflare.com/client/v4/accounts/${state.envelope.audience.accountId}/tokens/verify`;
@@ -283,6 +293,7 @@ export async function observeAttestationSubject(
         signal: combined,
       }),
       combined,
+      (late) => cancelBody(late?.body, combined),
     );
     const raw = await body(response, state, combined, now);
     live(state, combined, now);

@@ -765,8 +765,11 @@ test("observeAttestationSubject refuses a response that arrives after cancellati
   await assertRefused(() => observe(handle, transport, { signal: controller.signal }));
 });
 
-test("observeAttestationSubject cancels the body stream when aborted mid-read", async () => {
+test("observeAttestationSubject cancels a response body arriving after cancellation", {
+  timeout: 2000,
+}, async () => {
   const controller = new AbortController();
+  const cancellation = Promise.withResolvers();
   let cancelled = 0;
   const handle = prepare();
   const { transport } = transportOf(() => ({
@@ -775,10 +778,16 @@ test("observeAttestationSubject cancels the body stream when aborted mid-read", 
     headers: new Headers({ "content-type": "application/json" }),
     body: stream([Buffer.from(providerBody())], {
       onPull: () => controller.abort(),
-      onCancel: () => (cancelled += 1),
+      onCancel: () => {
+        cancelled += 1;
+        cancellation.resolve();
+      },
     }),
   }));
   await assertRefused(() => observe(handle, transport, { signal: controller.signal }));
+  // Refusal must not wait for a non-cooperating request. A subsequently delivered
+  // body is still cancelled; wait for that explicit receipt, not an idle delay.
+  await cancellation.promise;
   assert.equal(cancelled, 1);
 });
 
