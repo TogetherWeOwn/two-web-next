@@ -123,6 +123,20 @@ export async function runtime() {
 }
 
 export function validateSpec(s) {
+  exact(s, [
+    "schema",
+    "thresholds",
+    "runtime",
+    "seed",
+    "locale",
+    "timezone",
+    "fixedTime",
+    "fullPage",
+    "style",
+    "routes",
+    "views",
+    ...(Object.hasOwn(s, "blind") ? ["blind"] : []),
+  ]);
   assert.equal(s.schema, "annotated-diff/capture-v0");
   assert.deepEqual(s.thresholds, THRESHOLDS, "Protected thresholds differ");
   assert(s.seed && s.locale && s.timezone && Number.isFinite(Date.parse(s.fixedTime)));
@@ -145,14 +159,39 @@ export function validateSpec(s) {
   );
   assert(new Set(s.views.map((v) => v.id)).size === s.views.length);
   for (const v of s.views) {
+    exact(v, [
+      "id",
+      "route",
+      "theme",
+      "width",
+      "height",
+      "dpr",
+      "anchor",
+      "expectedFont",
+      "masks",
+      ...(Object.hasOwn(v, "fontFamilies") ? ["fontFamilies"] : []),
+    ]);
     assert(/^[a-z0-9-]+$/.test(v.id));
     assert(v.anchor && v.expectedFont && Array.isArray(v.masks));
+    if (v.fontFamilies !== undefined) {
+      assert(
+        v.fontFamilies && !Array.isArray(v.fontFamilies) && typeof v.fontFamilies === "object",
+      );
+      for (const [family, names] of Object.entries(v.fontFamilies))
+        assert(
+          family &&
+            Array.isArray(names) &&
+            names.length > 0 &&
+            names.every((n) => typeof n === "string" && n.trim()),
+        );
+    }
     for (const m of v.masks) {
       exact(m, ["selector", "reason"]);
       assert(m.selector && m.reason);
     }
   }
-  assert(typeof s.style === "string");
+  assert(typeof s.style === "string" && typeof s.fullPage === "boolean");
+  assert(s.blind === undefined || typeof s.blind === "boolean");
 }
 
 // Capture only already-provisioned, clean source checkouts. This tool never creates worktrees.
@@ -209,11 +248,16 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
             assert((await nodes.count()) > 0, "Mask matched nothing");
             for (const node of await nodes.all()) {
               const box = await node.boundingBox();
-              if (box) maskRects.push(rect(box.x, box.y, box.width, box.height));
+              if (box) {
+                const offset = spec.fullPage
+                  ? await page.evaluate(() => ({ x: scrollX, y: scrollY }))
+                  : { x: 0, y: 0 };
+                maskRects.push(rect(box.x + offset.x, box.y + offset.y, box.width, box.height));
+              }
             }
           }
           const dom = await page.evaluate(
-            ({ props, font, masks }) => {
+            ({ props, font, masks, fullPage }) => {
               const nodes = [...document.querySelectorAll("body *")].filter(
                 (e) =>
                   !["SCRIPT", "STYLE", "LINK", "META"].includes(e.tagName) &&
@@ -237,7 +281,27 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
                         .join("")
                         .trim()
                     : e.textContent.trim();
+                  const ancestors = [];
+                  for (let p = e.parentElement; p; p = p.parentElement)
+                    ancestors.push(
+                      p.hasAttribute("data-testid")
+                        ? `[data-testid="${CSS.escape(p.getAttribute("data-testid"))}"]`
+                        : cssPath(p),
+                    );
+                  const parentStyle = getComputedStyle(e.parentElement);
                   return {
+                    ancestors,
+                    flow: {
+                      parent: cssPath(e.parentElement),
+                      position: s.position,
+                      float: s.cssFloat,
+                      transform: s.transform,
+                      translate: s.translate,
+                      rotate: s.rotate,
+                      scale: s.scale,
+                      parent_display: parentStyle.display,
+                      writing_mode: parentStyle.writingMode,
+                    },
                     key: testid ? `testid:${testid}` : `${cssPath(e)}|${text}`,
                     selector: testid ? `[data-testid="${CSS.escape(testid)}"]` : cssPath(e),
                     testid,
@@ -246,7 +310,12 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
                     role: e.getAttribute("role"),
                     name: e.getAttribute("aria-label") || text || testid || e.tagName.toLowerCase(),
                     text,
-                    rect: { x: r.x, y: r.y, w: r.width, h: r.height },
+                    rect: {
+                      x: r.x + (fullPage ? scrollX : 0),
+                      y: r.y + (fullPage ? scrollY : 0),
+                      w: r.width,
+                      h: r.height,
+                    },
                     style: Object.fromEntries(props.map((p) => [p, s.getPropertyValue(p)])),
                   };
                 })
@@ -259,18 +328,17 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
                     (e) => e.style["font-family"].split(",")[0].replaceAll('"', "").trim() === font,
                   ),
                 scrollY,
+                scrollX,
+                coordinate_space: fullPage ? "document" : "viewport",
                 title: document.title,
                 text: elements.map((e) => e.text).join(" "),
                 seed: document.documentElement.dataset.captureSeed || null,
               };
             },
-            { props: STYLES, font: view.expectedFont, masks: view.masks },
+            { props: STYLES, font: view.expectedFont, masks: view.masks, fullPage: spec.fullPage },
           );
-          const fontNodes = dom.elements.filter(
-            (e) =>
-              e.text &&
-              e.style["font-family"].split(",")[0].replaceAll('"', "").trim() === view.expectedFont,
-          );
+          const fontNodes = dom.elements.filter((e) => e.text);
+          dom.font_evidence = [];
           const cdp = await context.newCDPSession(page);
           try {
             await cdp.send("DOM.enable");
@@ -282,15 +350,24 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
                 selector: e.selector,
               });
               const { fonts } = await cdp.send("CSS.getPlatformFontsForNode", { nodeId });
-              if (
-                !fonts.some(
-                  (f) =>
-                    f.glyphCount > 0 &&
-                    f.familyName.replaceAll(" ", "").toLowerCase() ===
-                      view.expectedFont.replaceAll(" ", "").toLowerCase(),
-                )
-              )
-                dom.fonts_loaded = false;
+              const family = e.style["font-family"].split(",")[0].replace(/["']/g, "").trim();
+              const generic =
+                /^(serif|sans-serif|monospace|cursive|fantasy|system-ui|ui-serif|ui-sans-serif|ui-monospace|ui-rounded)$/i.test(
+                  family,
+                );
+              const used = fonts.filter((f) => f.glyphCount > 0);
+              const verified =
+                used.length > 0 &&
+                (generic ||
+                  used.every((f) =>
+                    (view.fontFamilies?.[family] || [family]).some(
+                      (name) =>
+                        f.familyName.replaceAll(" ", "").toLowerCase() ===
+                        name.replaceAll(" ", "").toLowerCase(),
+                    ),
+                  ));
+              dom.font_evidence.push({ selector: e.selector, family, fonts: used, verified });
+              if (!verified) dom.fonts_loaded = false;
             }
             if (!fontNodes.length) dom.fonts_loaded = false;
           } finally {
@@ -472,6 +549,9 @@ export function parity(spec, a, b, probe, images) {
     ![a, b, probe].every(
       (x) =>
         x.fonts_loaded &&
+        x.font_evidence?.length > 0 &&
+        x.font_evidence.every((f) => f.verified) &&
+        x.coordinate_space === (spec.fullPage ? "document" : "viewport") &&
         x.text.trim() &&
         !/^(404|not found|loading|splash)\b/i.test(x.text.trim()) &&
         x.console.every((c) => c.type !== "error") &&
@@ -479,11 +559,13 @@ export function parity(spec, a, b, probe, images) {
     )
   )
     reasons.push("page_state");
-  if (![b, probe].every((x) => x.scrollY === a.scrollY)) reasons.push("scroll");
+  if (![b, probe].every((x) => x.scrollY === a.scrollY && x.scrollX === a.scrollX))
+    reasons.push("scroll");
   if (
     !images.every(
       (x) => x.width === images[0].width && (spec.fullPage || x.height === images[0].height),
-    )
+    ) ||
+    images[2].height !== images[0].height
   )
     reasons.push("image_size");
   let flake = null;
@@ -492,6 +574,22 @@ export function parity(spec, a, b, probe, images) {
     if (flake) reasons.push("flake");
   }
   return { status: reasons.length ? "capture_invalid" : "valid", reasons, flake_regions: flake };
+}
+
+export function parityPair(spec, a, b, baseProbe, headProbe, images) {
+  const base = parity(spec, a, b, baseProbe, [images[0], images[1], images[2]]);
+  const head = parity(spec, b, a, headProbe, [images[1], images[0], images[3]]);
+  const reasons = [...base.reasons, ...head.reasons.map((r) => `candidate_${r}`)];
+  return {
+    status: reasons.length ? "capture_invalid" : "valid",
+    reasons,
+    flake_regions:
+      base.flake_regions === null || head.flake_regions === null
+        ? null
+        : base.flake_regions + head.flake_regions,
+    base_probe: base,
+    candidate_probe: head,
+  };
 }
 
 export function normalizeIntent(input) {
@@ -625,6 +723,7 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
       confidence,
       delta,
       size,
+      text_delta: a && b && a.text !== b.text ? { old: a.text, new: b.text } : null,
       shift: !!(a && b && moved && !size && !delta.length && a.text === b.text),
       change: !a
         ? "added"
@@ -654,7 +753,9 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
         m?.confidence === "high" &&
         (claim.change === "style"
           ? m.before && m.after && m.delta.some((v) => v.prop === d.prop)
-          : m.change === claim.change)
+          : claim.change === "text"
+            ? !!m.text_delta
+            : m.change === claim.change)
           ? verifiedRef(d, hunks, sha)
           : "unresolved",
     }));
@@ -663,7 +764,9 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
       m.confidence === "high" &&
       (claim.change === "style"
         ? m.before && m.after && members.every((d) => m.delta.some((v) => v.prop === d.prop))
-        : m.change === claim.change);
+        : claim.change === "text"
+          ? !!m.text_delta
+          : m.change === claim.change);
     const valid = measured && refs.every((r) => r.code_ref !== "unresolved");
     const derivedSize = new Set();
     if (m?.before && m.after && claim.change === "style") {
@@ -689,7 +792,7 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
     const ownDelta =
       m?.delta.filter(
         (d) =>
-          claim.change !== "style" ||
+          ["added", "removed"].includes(claim.change) ||
           members.some((p) => p.prop === d.prop) ||
           derivedSize.has(d.prop),
       ) || [];
@@ -705,6 +808,8 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
         : { selector: claim.selector, role: null, name: claim.id },
       match_confidence: m?.confidence || "low",
       style_delta: ownDelta,
+      text_delta: m?.text_delta || null,
+      contributors: [],
       token: null,
       code_ref:
         valid && refs.every((r) => same(r.code_ref, refs[0].code_ref))
@@ -723,7 +828,15 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
     };
     items.push(item);
     if (m)
-      candidates.push({ m, item, valid, residual: m.delta.filter((d) => !ownDelta.includes(d)) });
+      candidates.push({
+        m,
+        item,
+        valid,
+        residual: [
+          ...m.delta.filter((d) => !ownDelta.includes(d)),
+          ...(m.text_delta && claim.change !== "text" ? [{ prop: "text" }] : []),
+        ],
+      });
   }
   const shifts = matches.filter((m) => m.shift && m.confidence === "high");
   for (const m of shifts) {
@@ -731,7 +844,25 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
       dy = m.after.rect.y - m.before.rect.y;
     const prior = candidates
       .filter(
-        (c) => c.valid && c.m.size && c.m.before.rect.y + c.m.before.rect.h <= m.before.rect.y,
+        (c) =>
+          c.valid &&
+          !c.residual.length &&
+          c.m.size &&
+          c.m.before.rect.y + c.m.before.rect.h <= m.before.rect.y &&
+          dx === 0 &&
+          dy !== 0 &&
+          c.m.after.rect.h - c.m.before.rect.h === dy &&
+          c.m.after.rect.w === c.m.before.rect.w &&
+          [m.before, m.after, c.m.before, c.m.after].every(
+            (e) =>
+              e.flow &&
+              e.flow.parent === m.before.flow?.parent &&
+              e.flow.position === "static" &&
+              e.flow.float === "none" &&
+              ["transform", "translate", "rotate", "scale"].every((p) => e.flow[p] === "none") &&
+              ["block", "flow-root"].includes(e.flow.parent_display) &&
+              e.flow.writing_mode === "horizontal-tb",
+          ),
       )
       .sort((a, b) => b.m.before.rect.y - a.m.before.rect.y);
     if (
@@ -777,9 +908,9 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
     );
     const best = domless ? null : scores[0]?.m;
     const causes = candidates.filter((c) => c.m === best);
-    const deepest = scores.filter((s) => s.depth === scores[0]?.depth);
+    const contributors = scores.filter((s) => !aggregateAncestor(s.m, best));
     const owners = new Set(
-      deepest.map((s) => {
+      contributors.map((s) => {
         const claims = candidates.filter((c) => c.m === s.m);
         return claims.length === 1 && claims[0].valid && !claims[0].residual.length
           ? claims[0].item.id
@@ -804,6 +935,14 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
           match_confidence:
             ambiguous || best?.confidence === "low" ? "low" : best ? "high" : "none",
           style_delta: deltas,
+          text_delta: best?.text_delta || null,
+          contributors: ambiguous
+            ? contributors.map(({ m }) => ({
+                element: element(m.after || m.before),
+                style_delta: m.delta,
+                text_delta: m.text_delta,
+              }))
+            : [],
           token: null,
           code_ref: "unresolved",
           code_refs: [],
@@ -822,14 +961,25 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
         items.push(u);
       }
       item = unknown.get(key);
+      if (ambiguous)
+        for (const { m } of contributors)
+          if (!item.contributors.some((c) => c.element.selector === m.selector))
+            item.contributors.push({
+              element: element(m.after || m.before),
+              style_delta: m.delta,
+              text_delta: m.text_delta,
+            });
     } else item.status = "explained";
-    const half =
-      best?.change === "added" ? "after" : best?.change === "removed" ? "before" : "both";
+    const presence = ambiguous ? contributors.map((s) => s.m) : best ? [best] : [];
+    const hasBefore = !presence.length || presence.some((m) => m.before);
+    const hasAfter = !presence.length || presence.some((m) => m.after);
+    const half = hasBefore && hasAfter ? "both" : hasBefore ? "before" : "after";
+    const targets = regionTargets(region.bbox_css, ambiguous ? null : best, view);
     const r = {
       ...region,
       half,
-      before: half === "after" ? null : region.bbox_css,
-      after: half === "before" ? null : region.bbox_css,
+      before: half === "after" ? null : targets.before,
+      after: half === "before" ? null : targets.after,
     };
     if (c?.folded) {
       const s = c.item.shifts.find((s) => s.element.selector === best.selector);
@@ -869,16 +1019,60 @@ function element(e) {
   return { selector: e.selector, role: e.role, name: e.name };
 }
 
+function aggregateAncestor(ancestor, descendant) {
+  if (
+    !descendant ||
+    ancestor === descendant ||
+    ancestor.text_delta ||
+    ancestor.shift ||
+    !ancestor.delta.length
+  )
+    return false;
+  return (
+    ["before", "after"].every((h) => {
+      const a = ancestor[h],
+        d = descendant[h];
+      return (
+        a &&
+        d &&
+        d.ancestors?.includes(a.selector) &&
+        a.style["background-color"] === "rgba(0, 0, 0, 0)" &&
+        a.style["box-shadow"] === "none" &&
+        ["top", "right", "bottom", "left"].every(
+          (side) => a.style[`border-${side}-width`] === "0px",
+        )
+      );
+    }) && ancestor.delta.every((d) => ["width", "height"].includes(d.prop))
+  );
+}
+
+export function regionTargets(box, match, view) {
+  const a = match?.before?.rect,
+    b = match?.after?.rect;
+  if (!a || !b || (a.x === b.x && a.y === b.y)) return { before: box, after: box };
+  // Keep raw region ownership, but project its changed patches onto each moved half.
+  const dx = b.x - a.x,
+    dy = b.y - a.y;
+  const pad = THRESHOLDS.dilation + THRESHOLDS.padding;
+  const oldPatch = intersect(box, expand(a, pad));
+  const newPatch = intersect(box, expand(b, pad));
+  const translate = (r, x, y) => ({ ...r, x: r.x + x, y: r.y + y });
+  const join = (patches) => patches.filter((r) => area(r) > 0).reduce(union);
+  const bounds = rect(0, 0, view.width, view.height);
+  return {
+    before: intersect(join([oldPatch, translate(newPatch, -dx, -dy)]), bounds),
+    after: intersect(join([translate(oldPatch, dx, dy), newPatch]), bounds),
+  };
+}
+
 export function validateLabels(items, labels, names) {
   assert(
     Array.isArray(labels) && labels.length === items.length,
     "Labels must preserve every item",
   );
   const seen = new Set();
-  const vocabulary = new Set(
-    "a an the and or to of for from in across view measured change changed update adjust added removed unchanged unclaimed visual image canvas element appearance geometry card border radius padding opacity font family colour color text badge style applies unresolved claim no visible evidence preserve verify unexpected".split(
-      " ",
-    ),
+  const neutral = new Set(
+    "measured visual appearance change changed update adjust preserve verify evidence".split(" "),
   );
   for (const label of labels) {
     exact(label, ["id", "label", "rationale"]);
@@ -886,6 +1080,31 @@ export function validateLabels(items, labels, names) {
     assert(item && !seen.has(label.id), "Unknown or duplicate label");
     seen.add(label.id);
     const facts = canonical([item.style_delta, item.token]);
+    const templates = new Set();
+    const add = (phrase) => {
+      templates.add(phrase.toLowerCase());
+      if (item.element?.name) templates.add(`${item.element.name} ${phrase}`.toLowerCase());
+    };
+    for (const d of item.style_delta) {
+      const aliases = new Set([d.prop, d.prop.replaceAll("-", " ")]);
+      if (/^(padding|margin)-/.test(d.prop)) aliases.add(d.prop.split("-")[0]);
+      if (/^border-.*-radius$/.test(d.prop)) aliases.add("border radius");
+      if (/^border-.*-color$/.test(d.prop)) {
+        aliases.add("border colour");
+        aliases.add("border color");
+      }
+      for (const prop of aliases) {
+        add(`${prop} changed`);
+        add(`${prop} changed from ${d.old} to ${d.new}`);
+      }
+    }
+    if (item.status === "unexplained") add("unclaimed visual change");
+    if (item.status === "unverified_claim") {
+      add("no visible change");
+      add("no visible evidence");
+    }
+    if (item.status !== "unverified_claim" && ["added", "removed", "text"].includes(item.change))
+      add(`${item.change} change`);
     for (const [key, limit] of [
       ["label", 12],
       ["rationale", 25],
@@ -914,12 +1133,13 @@ export function validateLabels(items, labels, names) {
             !text.toLowerCase().includes(name.toLowerCase()),
             `Names another element: ${name}`,
           );
-      const permitted = new Set([
-        ...vocabulary,
-        ...(`${item.element?.name || ""} ${facts}`.toLowerCase().match(/[\p{L}]+/gu) || []),
-      ]);
-      for (const word of text.toLowerCase().match(/[\p{L}]+/gu) || [])
-        assert(permitted.has(word), `Unreconciled wording: ${word}`);
+      const words = text.toLowerCase().split(/\s+/u).filter(Boolean);
+      assert(
+        templates.has(text.toLowerCase()) ||
+          !text ||
+          (item.status !== "unverified_claim" && words.every((w) => neutral.has(w))),
+        "Unreconciled wording: use a fact-bound template or neutral change wording",
+      );
     }
   }
   return true;
@@ -1085,28 +1305,32 @@ export async function compare({ dir, root, intent }) {
       `base/${v.id}.probe.png`,
       `head/${v.id}.json`,
       `head/${v.id}.png`,
+      `head/${v.id}.probe.json`,
+      `head/${v.id}.probe.png`,
     ]),
   ])
     result.capture_inputs.push({ file, sha256: hash(await fs.readFile(path.join(dir, file))) });
   for (const view of a.spec.views) {
-    const [base, head, probe] = await Promise.all(
-      [`base/${view.id}`, `head/${view.id}`, `base/${view.id}.probe`].map((p) =>
-        read(path.join(dir, `${p}.json`)),
+    const [base, head, probe, headProbe] = await Promise.all(
+      [`base/${view.id}`, `head/${view.id}`, `base/${view.id}.probe`, `head/${view.id}.probe`].map(
+        (p) => read(path.join(dir, `${p}.json`)),
       ),
     );
     const images = await Promise.all(
-      [base.image, head.image, probe.image].map((p, i) =>
-        fs.readFile(path.join(dir, i === 1 ? "head" : "base", p)).then(PNG.sync.read),
+      [base.image, head.image, probe.image, headProbe.image].map((p, i) =>
+        fs.readFile(path.join(dir, i % 2 ? "head" : "base", p)).then(PNG.sync.read),
       ),
     );
-    const gate = parity(a.spec, base, head, probe, images);
+    const gate = parityPair(a.spec, base, head, probe, headProbe, images);
     if (
       base.sha !== a.sha ||
       probe.sha !== a.sha ||
       head.sha !== b.sha ||
+      headProbe.sha !== b.sha ||
       !same(base.view, view) ||
       !same(head.view, view) ||
-      !same(probe.view, view)
+      !same(probe.view, view) ||
+      !same(headProbe.view, view)
     ) {
       gate.status = "capture_invalid";
       gate.reasons.push("capture_identity");
@@ -1124,7 +1348,7 @@ export async function compare({ dir, root, intent }) {
       claims,
       hunks,
       b.sha,
-      view,
+      { ...view, height: Math.max(images[0].height, images[1].height) / view.dpr },
     );
     const mask = `${view.id}.mask.png`;
     await fs.writeFile(path.join(dir, mask), diff.mask);
@@ -1227,8 +1451,12 @@ export function segmentsCross(a, b) {
     orient(b[0], b[1], a[0]) * orient(b[0], b[1], a[1]) < 0
   );
 }
+const textFact = (delta, view) =>
+  delta
+    ? ` · text: ${JSON.stringify(view.blind_reverse ? delta.new : delta.old)} → ${JSON.stringify(view.blind_reverse ? delta.old : delta.new)}`
+    : "";
 const facts = (item, view = {}) =>
-  `${item.status.toUpperCase()} · ${item.element?.name || "Image change"} · ${item.style_delta.map((d) => `${d.prop}: ${view.blind_reverse ? d.new : d.old} → ${view.blind_reverse ? d.old : d.new}`).join("; ") || (view.blind && ["added", "removed"].includes(item.change) ? `present in ${(item.change === "added") !== view.blind_reverse ? "B" : "A"} only` : item.change)}${item.token ? ` · ${item.token}` : ""}${item.scope === "global" ? " · applies across the view" : ""}${item.shifts.map((s) => ` · ${s.element.name} shift (${view.blind_reverse ? -s.dx : s.dx}, ${view.blind_reverse ? -s.dy : s.dy}) CSS px`).join("")} · ${
+  `${item.status.toUpperCase()} · ${item.element?.name || "Image change"} · ${item.style_delta.map((d) => `${d.prop}: ${view.blind_reverse ? d.new : d.old} → ${view.blind_reverse ? d.old : d.new}`).join("; ") || (view.blind && ["added", "removed"].includes(item.change) ? `present in ${(item.change === "added") !== view.blind_reverse ? "B" : "A"} only` : item.change)}${textFact(item.text_delta, view)}${(item.contributors || []).map((c) => ` · contributor ${c.element.name}: ${c.style_delta.map((d) => `${d.prop}: ${view.blind_reverse ? d.new : d.old} → ${view.blind_reverse ? d.old : d.new}`).join("; ")}${textFact(c.text_delta, view)}`).join("")}${item.token ? ` · ${item.token}` : ""}${item.scope === "global" ? " · applies across the view" : ""}${item.shifts.map((s) => ` · ${s.element.name} shift (${view.blind_reverse ? -s.dx : s.dx}, ${view.blind_reverse ? -s.dy : s.dy}) CSS px`).join("")} · ${
     [item.code_ref, ...item.code_refs.map((r) => r.code_ref)]
       .filter((r) => r !== "unresolved")
       .map((r) => `${r.file}:${r.line}`)
@@ -1416,7 +1644,22 @@ async function renderView(browser, dir, manifest, view, colours, judge) {
     await page.setContent(
       `<style>@font-face{font-family:Inter;src:url(data:font/woff2;base64,${font})}@font-face{font-family:Inter;src:url(data:font/woff2;base64,${bold});font-weight:700}*{box-sizing:border-box}body{margin:0;background:white;color:black;font:14px/1.6 Inter}h1{font-size:18px;margin:12px 56px}canvas{display:block}ol{margin:16px 56px;padding-left:24px}li{margin:12px 0;overflow-wrap:anywhere}#insets{margin:16px 56px}p{margin:0}</style><h1>${esc(view.id)} · ${esc(view.theme)} · ${view.width}×${view.height}</h1><canvas id="pair" width="${g.width}" height="${g.header + g.pairHeight + 24}"></canvas><div id="insets"></div><ol>${legends}</ol>`,
     );
-    await page.evaluate(() => document.fonts.ready);
+    g.label_fonts = await page.evaluate(async () => {
+      await Promise.all([
+        document.fonts.load("14px Inter"),
+        document.fonts.load("bold 14px Inter"),
+      ]);
+      await document.fonts.ready;
+      return [...document.fonts].map((f) => ({
+        family: f.family,
+        weight: f.weight,
+        status: f.status,
+      }));
+    });
+    assert(
+      g.label_fonts.length === 2 && g.label_fonts.every((f) => f.status === "loaded"),
+      "Label font fallback",
+    );
     const draw = await page.evaluate(
       async ({ g, view, png, colours, base, head, insetItems }) => {
         const canvas = document.getElementById("pair"),
@@ -1497,8 +1740,11 @@ async function renderView(browser, dir, manifest, view, colours, judge) {
           const z = document.createElement("canvas");
           const crop = {
               ...r.bbox_css,
-              w: Math.min(r.bbox_css.w, Math.floor((g.width - 116) / (6 * view.dpr))),
-              h: Math.min(r.bbox_css.h, 80),
+              w: Math.min(
+                Math.max(...[r.before, r.after].filter(Boolean).map((b) => b.w)),
+                Math.floor((g.width - 116) / (6 * view.dpr)),
+              ),
+              h: Math.min(Math.max(...[r.before, r.after].filter(Boolean).map((b) => b.h)), 80),
             },
             pad = 4,
             w = Math.ceil(crop.w * view.dpr),
@@ -1516,8 +1762,8 @@ async function renderView(browser, dir, manifest, view, colours, judge) {
             if (r[half])
               ctx.drawImage(
                 images[half],
-                Math.floor(crop.x * view.dpr),
-                Math.floor(crop.y * view.dpr),
+                Math.floor(r[half].x * view.dpr),
+                Math.floor(r[half].y * view.dpr),
                 w,
                 h,
                 idx * (w * 3 + pad),
@@ -1584,7 +1830,7 @@ export async function render({ dir, author = "unattributed" }) {
       const l = labels.find((l) => l.id === i.id);
       if (view.blind)
         assert(
-          !/\b(before|after|new|old|added|removed)\b/i.test(`${l.label} ${l.rationale}`),
+          !/\b(before|after|new|old|added|removed|from|to)\b|\d/i.test(`${l.label} ${l.rationale}`),
           "Blind wording reveals ordering",
         );
       i.label = l.label;
@@ -1802,23 +2048,30 @@ async function reconcileInputs(dir, manifest, hunks) {
     );
   const claims = normalizeIntent(manifest.intent);
   for (const view of manifest.capture_spec.views) {
-    const [a, b, p] = await Promise.all(
-      [`base/${view.id}.json`, `head/${view.id}.json`, `base/${view.id}.probe.json`].map((file) =>
-        read(path.join(dir, file)),
-      ),
+    const [a, b, p, q] = await Promise.all(
+      [
+        `base/${view.id}.json`,
+        `head/${view.id}.json`,
+        `base/${view.id}.probe.json`,
+        `head/${view.id}.probe.json`,
+      ].map((file) => read(path.join(dir, file))),
     );
     const images = await Promise.all(
-      [`base/${view.id}.png`, `head/${view.id}.png`, `base/${view.id}.probe.png`].map((file) =>
-        fs.readFile(path.join(dir, file)).then(PNG.sync.read),
-      ),
+      [
+        `base/${view.id}.png`,
+        `head/${view.id}.png`,
+        `base/${view.id}.probe.png`,
+        `head/${view.id}.probe.png`,
+      ].map((file) => fs.readFile(path.join(dir, file)).then(PNG.sync.read)),
     );
-    const gate = parity(manifest.capture_spec, a, b, p, images);
+    const gate = parityPair(manifest.capture_spec, a, b, p, q, images);
     captureValid &&=
       gate.status === "valid" &&
       a.sha === manifest.base &&
       p.sha === manifest.base &&
       b.sha === manifest.head &&
-      [a, b, p].every((c) => same(c.view, view));
+      q.sha === manifest.head &&
+      [a, b, p, q].every((c) => same(c.view, view));
     const diff = regions(images[0], images[1], view.dpr, manifest.capture_spec.fullPage);
     const { items } = attribute(
       a.elements,
@@ -1827,7 +2080,7 @@ async function reconcileInputs(dir, manifest, hunks) {
       claims,
       hunks,
       manifest.head,
-      view,
+      { ...view, height: Math.max(images[0].height, images[1].height) / view.dpr },
     );
     const expected = splitView({
       ...view,

@@ -15,11 +15,14 @@ import {
   normalizeIntent,
   palette,
   parity,
+  parityPair,
+  regionTargets,
   regions,
   segmentsCross,
   segmentHitsRect,
   splitView,
   validateLabels,
+  validateSpec,
 } from "../scripts/annotated-diff/run.mjs";
 
 const png = (width, height, fill = [255, 255, 255], paint = () => null) => {
@@ -134,15 +137,22 @@ describe("validateLabels", () => {
   const items = [
     {
       id: "v#1",
+      status: "explained",
       element: { name: "Card" },
       style_delta: [{ prop: "padding-top", old: "8px", new: "12px" }],
       token: null,
     },
-    { id: "v#2", element: { name: "Badge" }, style_delta: [], token: null },
+    {
+      id: "v#2",
+      status: "unexplained",
+      element: { name: "Badge" },
+      style_delta: [],
+      token: null,
+    },
   ];
   const good = [
     { id: "v#1", label: "Padding changed", rationale: "Card padding changed from 8px to 12px" },
-    { id: "v#2", label: "Unclaimed visual change", rationale: "No visible evidence" },
+    { id: "v#2", label: "Unclaimed visual change", rationale: "Verify measured change" },
   ];
   const names = ["Card", "Badge", "Footer"];
   const withLabel = (patch) => [{ ...good[0], ...patch }, good[1]];
@@ -185,6 +195,68 @@ describe("validateLabels", () => {
     expect(() => validateLabels(items, withLabel({ label: words(13) }), names)).toThrow();
     expect(validateLabels(items, withLabel({ rationale: words(25) }), names)).toBe(true);
     expect(() => validateLabels(items, withLabel({ rationale: words(26) }), names)).toThrow();
+  });
+
+  it("rejects labels that contradict or ignore the measured facts", () => {
+    // Assumption: the validator binds wording to the item's measured style_delta.
+    for (const label of [
+      "Opacity changed",
+      "Padding unchanged",
+      "Padding changed from 12px to 8px",
+      "Border radius changed to 12px",
+    ])
+      expect(() => validateLabels(items, withLabel({ label }), names), label).toThrow();
+    expect(
+      validateLabels(
+        items,
+        withLabel({ label: "Padding changed", rationale: "Card padding changed from 8px to 12px" }),
+        names,
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects unclaimed or no-evidence wording on an explained item", () => {
+    // Assumption: such phrases are only valid for unexplained items.
+    expect(() =>
+      validateLabels(items, withLabel({ label: "Unclaimed visual change" }), names),
+    ).toThrow();
+    expect(() =>
+      validateLabels(items, withLabel({ rationale: "No visible evidence" }), names),
+    ).toThrow();
+  });
+
+  it("rejects no-evidence wording on an unexplained item with observed regions", () => {
+    const withSecond = (patch) => [good[0], { ...good[1], ...patch }];
+    expect(() =>
+      validateLabels(items, withSecond({ rationale: "No visible evidence" }), names),
+    ).toThrow();
+    expect(() =>
+      validateLabels(items, withSecond({ label: "No visible evidence" }), names),
+    ).toThrow();
+  });
+
+  it("limits an unverified item with no deltas to no-change wording", () => {
+    const unverified = [
+      { ...items[0] },
+      {
+        id: "v#2",
+        status: "unverified_claim",
+        element: { name: "Badge" },
+        style_delta: [],
+        token: null,
+      },
+    ];
+    const second = (patch) => [
+      good[0],
+      { id: "v#2", label: "No visible change", rationale: "", ...patch },
+    ];
+    expect(validateLabels(unverified, second(), names)).toBe(true);
+    expect(validateLabels(unverified, second({ rationale: "No visible evidence" }), names)).toBe(
+      true,
+    );
+    expect(() =>
+      validateLabels(unverified, second({ label: "Measured appearance change" }), names),
+    ).toThrow();
   });
 
   it("rejects names of another element", () => {
@@ -284,6 +356,9 @@ describe("parity", () => {
     console: [],
     seed: "seed-1",
     scrollY: 0,
+    scrollX: 0,
+    coordinate_space: "viewport",
+    font_evidence: [{ verified: true }],
     view: { dpr: 1 },
     ...patch,
   });
@@ -315,6 +390,44 @@ describe("parity", () => {
     const r = run(meta(), meta({ sha: "b", scrollY: 40 }), meta());
     expect(r.status).toBe("capture_invalid");
     expect(r.reasons).toContain("scroll");
+  });
+
+  it("flags horizontal scroll mismatches", () => {
+    expect(run(meta(), meta({ sha: "b", scrollX: 10 }), meta()).reasons).toContain("scroll");
+  });
+
+  it("requires verified font evidence and the matching coordinate space", () => {
+    for (const bad of [
+      { font_evidence: [] },
+      { font_evidence: undefined },
+      { font_evidence: [{ verified: true }, { verified: false }] },
+      { coordinate_space: "document" },
+    ]) {
+      expect(
+        run(meta(), meta({ sha: "b", ...bad }), meta()).reasons,
+        JSON.stringify(bad),
+      ).toContain("page_state");
+    }
+  });
+
+  it("allows an unequal head height for fullPage but not an unequal base probe", () => {
+    const full = { seed: "seed-1", fullPage: true };
+    const m = (patch = {}) =>
+      meta({ spec_hash: digest(full), coordinate_space: "document", ...patch });
+    const go = (images) => parity(full, m(), m({ sha: "b" }), m(), images);
+    const grown = go([png(20, 20), png(20, 30), png(20, 20)]);
+    expect(grown.reasons).not.toContain("image_size");
+    expect(grown.status).toBe("valid");
+    const probe = go([png(20, 20), png(20, 20), png(20, 30)]);
+    expect(probe.reasons).toContain("image_size");
+    expect(probe.flake_regions).toBeNull();
+    expect(
+      parity({ ...full, fullPage: false }, m(), m({ sha: "b" }), m(), [
+        png(20, 20),
+        png(20, 20),
+        png(20, 20),
+      ]).reasons,
+    ).toContain("page_state");
   });
 
   it("flags error pages, console errors, missing fonts and wrong seed as page_state", () => {
@@ -651,6 +764,68 @@ describe("geometry and geometryCheck", () => {
     expect(geometryCheck(v)).toBe(false);
   });
 
+  it("swaps actual half origins for both blind_reverse values and keeps moved outlines on their half", () => {
+    const targets = {
+      before: { x: 100, y: 100, w: 50, h: 40 },
+      after: { x: 100, y: 140, w: 50, h: 40 },
+    };
+    const build = (width, height, blind_reverse) => {
+      const v = {
+        id: "v",
+        width,
+        height,
+        blind: true,
+        blind_reverse,
+        regions: [{ id: "r1", bbox_css: targets.before }],
+        items: [],
+      };
+      v.items = [
+        {
+          id: "v#1",
+          n: 1,
+          status: "unexplained",
+          scope: "local",
+          regions: [{ ...v.regions[0], half: "both", ...targets }],
+          style_delta: [],
+        },
+        {
+          id: "v#2",
+          n: 2,
+          status: "unverified_claim",
+          scope: "local",
+          regions: [],
+          style_delta: [],
+        },
+      ];
+      v.geometry = geometry(v);
+      return v;
+    };
+    for (const [width, height] of [
+      [390, 844],
+      [1280, 832],
+    ]) {
+      const fwd = build(width, height, false).geometry;
+      for (const reverse of [false, true]) {
+        const v = build(width, height, reverse);
+        const g = v.geometry;
+        // Slots are fixed; the actual halves swap into them when reversed.
+        const slot = (h) => (reverse ? (h === "before" ? "after" : "before") : h);
+        expect(g.halves.before).toEqual(fwd.halves[slot("before")]);
+        expect(g.halves.after).toEqual(fwd.halves[slot("after")]);
+        expect(g.halves.before).not.toEqual(g.halves.after);
+        if (reverse) expect(g.halves).not.toEqual(fwd.halves);
+        expect(g.marks).toHaveLength(2);
+        for (const m of g.marks) {
+          const o = g.halves[m.half];
+          const t = targets[m.half];
+          expect(m.outline).toEqual({ x: o.x + t.x - 3, y: o.y + t.y - 3, w: t.w + 6, h: t.h + 6 });
+        }
+        expect(g.marks.some((m) => m.item_id === "v#2")).toBe(false);
+        expect(geometryCheck(v)).toBe(true);
+      }
+    }
+  });
+
   it("detects proper segment crossings only", () => {
     const P = (x, y) => ({ x, y });
     expect(segmentsCross([P(0, 0), P(10, 10)], [P(0, 10), P(10, 0)])).toBe(true);
@@ -688,5 +863,532 @@ describe("palette and contrast", () => {
       x === 0 ? [213, 94, 0] : x === 4 ? [0, 114, 178] : x === 8 ? [204, 121, 167] : null,
     );
     expect(() => palette([stripes])).toThrow(/No prescribed badge palette/);
+  });
+});
+
+describe("regionTargets", () => {
+  const view = { width: 400, height: 150 };
+  const box = { x: 100, y: 100, w: 50, h: 50 };
+  const at = (x, y, w = 50, h = 50) => ({ rect: { x, y, w, h } });
+
+  it("projects old and new patches onto the moved before and after halves", () => {
+    expect(
+      regionTargets(box, { before: at(100, 100), after: at(100, 140) }, { ...view, height: 400 }),
+    ).toEqual({
+      before: { x: 100, y: 90, w: 50, h: 60 },
+      after: { x: 100, y: 130, w: 50, h: 60 },
+    });
+  });
+
+  it("clips projected targets to the view", () => {
+    const t = regionTargets(box, { before: at(100, 100), after: at(100, 140) }, view);
+    expect(t.before).toEqual({ x: 100, y: 90, w: 50, h: 60 });
+    expect(t.after).toEqual({ x: 100, y: 130, w: 50, h: 20 });
+  });
+
+  it("keeps the raw box when nothing moved or there is no match", () => {
+    const resized = { before: at(100, 100), after: at(100, 100, 80, 80) };
+    for (const match of [resized, null, { before: null, after: at(1, 1) }]) {
+      const t = regionTargets(box, match, view);
+      expect(t.before).toBe(box);
+      expect(t.after).toBe(box);
+    }
+  });
+});
+
+describe("attribution of moved elements", () => {
+  const view = { id: "v", width: 390, height: 844 };
+  const el = (y, color, text = "Hi") => ({
+    key: "testid:card",
+    selector: "#card",
+    testid: "card",
+    tag: "div",
+    depth: 2,
+    role: null,
+    name: "Card",
+    text,
+    rect: { x: 0, y, w: 100, h: 40 },
+    style: { color },
+  });
+  const region = { id: "r1", bbox_css: { x: 0, y: 0, w: 100, h: 70 } };
+
+  it("gives a moved style change distinct before and after targets", () => {
+    const { items } = attribute([el(0, "red")], [el(30, "blue")], [region], [], [], "h", view);
+    expect(items).toHaveLength(1);
+    expect(items[0].status).toBe("unexplained");
+    expect(items[0].change).toBe("style");
+    const [r] = items[0].regions;
+    expect(r.half).toBe("both");
+    expect(r.before).toEqual({ x: 0, y: 0, w: 100, h: 50 });
+    expect(r.after).toEqual({ x: 0, y: 20, w: 100, h: 60 });
+    expect(r.bbox_css).toEqual(region.bbox_css);
+  });
+
+  it("leaves a pure shift unexplained without a causal preceding resize", () => {
+    const { items } = attribute([el(0, "red")], [el(30, "red")], [region], [], [], "h", view);
+    expect(items).toHaveLength(1);
+    expect(items[0].status).toBe("unexplained");
+    expect(items[0].change).toBe("shift");
+    expect(items[0].shifts).toEqual([]);
+    expect(items[0].regions[0].before).not.toEqual(items[0].regions[0].after);
+  });
+});
+
+describe("attribution audit regressions", () => {
+  const view = { id: "v", width: 390, height: 844 };
+  const hunks = new Map([["a.css", [[2, 3]]]]);
+  const claimOf = (id, selector, prop) =>
+    normalizeIntent([{ id, claim: "c", selector, prop, file: "a.css", line: 2 }]);
+  const node = (testid, depth, rect, style = {}, extra = {}) => ({
+    key: `testid:${testid}`,
+    selector: `#${testid}`,
+    testid,
+    tag: "div",
+    depth,
+    role: null,
+    name: testid,
+    text: "x",
+    rect,
+    style,
+    ...extra,
+  });
+  const itemFor = (items, region) => items.find((i) => i.regions.some((r) => r.id === region.id));
+
+  it("does not let a deeper claimed opacity change hide a shallower sibling in a merged region", () => {
+    const a = png(80, 40);
+    const b = png(80, 40, [255, 255, 255], (x, y) =>
+      square(10, 10, 20)(x, y) || square(35, 10, 20)(x, y) ? [0, 0, 0] : null,
+    );
+    const found = regions(a, b, 1).regions;
+    expect(found).toHaveLength(1);
+    const [region] = found;
+    const left = { x: 10, y: 10, w: 20, h: 20 };
+    const right = { x: 35, y: 10, w: 20, h: 20 };
+    const { items } = attribute(
+      [node("a", 2, left, { color: "red" }), node("b", 3, right, { opacity: "1" })],
+      [node("a", 2, left, { color: "blue" }), node("b", 3, right, { opacity: "0.5" })],
+      [region],
+      claimOf("op", "#b", "opacity"),
+      hunks,
+      "h",
+      view,
+    );
+    expect(itemFor(items, region).status).toBe("unexplained");
+    // One surviving region has exactly one owning item, which lists both contributors.
+    expect(items.filter((i) => i.regions.some((r) => r.id === region.id))).toHaveLength(1);
+    const owner = itemFor(items, region);
+    const selectors = owner.contributors.map((c) => c.element.selector);
+    expect(selectors).toContain("#a");
+    expect(selectors).toContain("#b");
+  });
+
+  it("keeps a text change unexplained when only opacity is claimed and records the text delta", () => {
+    // Assumption: the unexplained item carries text_delta: { old, new }.
+    const r = { x: 0, y: 0, w: 80, h: 20 };
+    const region = { id: "r1", bbox_css: r };
+    const { items } = attribute(
+      [node("status", 2, r, { opacity: "1" }, { text: "Approved" })],
+      [node("status", 2, r, { opacity: "0.5" }, { text: "Denied" })],
+      [region],
+      claimOf("op", "#status", "opacity"),
+      hunks,
+      "h",
+      view,
+    );
+    const item = itemFor(items, region);
+    expect(item.status).toBe("unexplained");
+    expect(item.text_delta).toEqual({ old: "Approved", new: "Denied" });
+  });
+
+  describe("shift folding", () => {
+    const flow = {
+      parent: "#flow",
+      position: "static",
+      parent_display: "block",
+      writing_mode: "horizontal-tb",
+      float: "none",
+      transform: "none",
+      translate: "none",
+      rotate: "none",
+      scale: "none",
+    };
+    const card = (after = false, cardFlow = flow) =>
+      node(
+        "card",
+        2,
+        { x: 0, y: 0, w: 100, h: after ? 48 : 40 },
+        {
+          "padding-top": after ? "16px" : "8px",
+          "padding-bottom": "0px",
+          height: after ? "48px" : "40px",
+        },
+        { flow: cardFlow },
+      );
+    const follower = (name, y, x = 0, f = flow) =>
+      node(name, 2, { x, y, w: 100, h: 20 }, {}, { flow: f });
+    const run = (baseNodes, headNodes, bounds, cardFlow = flow) => {
+      const regs = [
+        { id: "rc", bbox_css: { x: 0, y: 0, w: 100, h: 48 } },
+        ...bounds.map((b, i) => ({ id: `rf${i}`, bbox_css: b })),
+      ];
+      const out = attribute(
+        [card(false, cardFlow), ...baseNodes],
+        [card(true, cardFlow), ...headNodes],
+        regs,
+        claimOf("pad", "#card", "padding-top"),
+        hunks,
+        "h",
+        view,
+      );
+      return { ...out, cause: out.items.find((i) => i.intent_ref === "pad"), regs };
+    };
+
+    it("validates a padding-driven height change", () => {
+      const { cause } = run([], [], []);
+      expect(cause.status).toBe("explained");
+      expect(cause.verification).toEqual({ measured: true, valid: true });
+    });
+
+    it("does not fold an absolutely positioned horizontal shift", () => {
+      const abs = { ...flow, position: "absolute" };
+      const { cause, items } = run(
+        [follower("footer", 50, 0, abs)],
+        [follower("footer", 50, 100, abs)],
+        [{ x: 0, y: 50, w: 200, h: 20 }],
+      );
+      expect(cause.shifts).toEqual([]);
+      expect(
+        items.some((i) => i.status === "unexplained" && i.element?.selector === "#footer"),
+      ).toBe(true);
+    });
+
+    it("folds a same-parent normal-flow vertical shift equal to the height change", () => {
+      const { cause, items } = run(
+        [follower("next", 50)],
+        [follower("next", 58)],
+        [{ x: 0, y: 50, w: 100, h: 28 }],
+      );
+      expect(cause.shifts).toHaveLength(1);
+      expect(cause.shifts[0]).toMatchObject({ dx: 0, dy: 8 });
+      expect(items.some((i) => i.status === "unexplained")).toBe(false);
+    });
+
+    const notFolded = (res, selector = "#next") => {
+      expect(res.cause.shifts).toEqual([]);
+      expect(
+        res.items.some((i) => i.status === "unexplained" && i.element?.selector === selector),
+      ).toBe(true);
+    };
+    const shiftRun = (f, cardFlow = flow) =>
+      run(
+        [follower("next", 50, 0, f)],
+        [follower("next", 58, 0, f)],
+        [{ x: 0, y: 50, w: 100, h: 28 }],
+        cardFlow,
+      );
+
+    it("does not fold when the card is floated", () => {
+      notFolded(shiftRun(flow, { ...flow, float: "left" }));
+    });
+
+    it("does not fold when the follower is floated with its own transform", () => {
+      notFolded(
+        shiftRun(
+          { ...flow, float: "left", transform: "matrix(1, 0, 0, 1, 0, 8)" },
+          { ...flow, float: "left" },
+        ),
+      );
+    });
+
+    it("rejects a normal-flow follower with a transform or individual transform even at the matching dy", () => {
+      for (const patch of [
+        { transform: "matrix(1, 0, 0, 1, 0, 8)" },
+        { translate: "0px 8px" },
+        { rotate: "10deg" },
+        { scale: "2" },
+      ])
+        notFolded(shiftRun({ ...flow, ...patch }));
+    });
+
+    it("rejects a relatively positioned follower or card", () => {
+      notFolded(shiftRun({ ...flow, position: "relative" }));
+      notFolded(shiftRun(flow, { ...flow, position: "relative" }));
+    });
+
+    it("does not fold a shift without flow metadata", () => {
+      const bare = (y) => node("next", 2, { x: 0, y, w: 100, h: 20 });
+      const { cause } = run([bare(50)], [bare(58)], [{ x: 0, y: 50, w: 100, h: 28 }]);
+      expect(cause.shifts).toEqual([]);
+    });
+
+    it("leaves an inconsistent dy unknown", () => {
+      const { cause, items } = run(
+        [follower("next", 50)],
+        [follower("next", 54)],
+        [{ x: 0, y: 50, w: 100, h: 24 }],
+      );
+      expect(cause.shifts).toEqual([]);
+      expect(items.some((i) => i.status === "unexplained" && i.element?.selector === "#next")).toBe(
+        true,
+      );
+    });
+
+    it("leaves a shift under a different parent unknown", () => {
+      const other = { ...flow, parent: "#other" };
+      const { cause, items } = run(
+        [follower("next", 50, 0, other)],
+        [follower("next", 58, 0, other)],
+        [{ x: 0, y: 50, w: 100, h: 28 }],
+      );
+      expect(cause.shifts).toEqual([]);
+      expect(items.some((i) => i.status === "unexplained" && i.element?.selector === "#next")).toBe(
+        true,
+      );
+    });
+  });
+});
+
+describe("parityPair", () => {
+  const spec = { seed: "seed-1", fullPage: false };
+  const meta = (patch = {}) => ({
+    spec_hash: digest(spec),
+    sha: "a",
+    fonts_loaded: true,
+    text: "Welcome home",
+    console: [],
+    seed: "seed-1",
+    scrollY: 0,
+    scrollX: 0,
+    coordinate_space: "viewport",
+    font_evidence: [{ verified: true }],
+    view: { dpr: 1 },
+    ...patch,
+  });
+  const a = () => meta();
+  const b = () => meta({ sha: "b" });
+  const stable = () => [png(40, 40), png(40, 40), png(40, 40), png(40, 40)];
+  const run = (baseProbe = a(), headProbe = b(), images = stable()) =>
+    parityPair(spec, a(), b(), baseProbe, headProbe, images);
+  const flaky = png(40, 40, [255, 255, 255], square(10, 10, 12));
+
+  it("is valid when both probes are stable", () => {
+    const r = run();
+    expect(r.status).toBe("valid");
+    expect(r.reasons).toEqual([]);
+    expect(r.flake_regions).toBe(0);
+  });
+
+  it("flags a pixel flake only in the candidate probe", () => {
+    const r = run(a(), b(), [png(40, 40), png(40, 40), png(40, 40), flaky]);
+    expect(r.status).toBe("capture_invalid");
+    expect(r.reasons).toContain("candidate_flake");
+    expect(r.reasons).not.toContain("flake");
+    expect(r.base_probe.status).toBe("valid");
+    expect(r.candidate_probe.flake_regions).toBeGreaterThan(0);
+    expect(r.flake_regions).toBeGreaterThan(0);
+  });
+
+  it("flags a pixel flake only in the base probe", () => {
+    const r = run(a(), b(), [png(40, 40), png(40, 40), flaky, png(40, 40)]);
+    expect(r.reasons).toContain("flake");
+    expect(r.reasons).not.toContain("candidate_flake");
+  });
+
+  it("flags candidate-probe console errors, missing fonts, scroll and spec mismatches", () => {
+    const cases = [
+      [{ console: [{ type: "error", text: "x" }] }, "candidate_page_state"],
+      [{ fonts_loaded: false }, "candidate_page_state"],
+      [{ scrollY: 40 }, "candidate_scroll"],
+      [{ scrollX: 10 }, "candidate_scroll"],
+      [{ spec_hash: "other" }, "candidate_spec_hash"],
+    ];
+    for (const [patch, reason] of cases) {
+      const r = run(a(), b_(patch));
+      expect(r.status, JSON.stringify(patch)).toBe("capture_invalid");
+      expect(r.reasons, JSON.stringify(patch)).toContain(reason);
+      expect(r.base_probe.status).toBe("valid");
+    }
+    function b_(patch) {
+      return meta({ sha: "b", ...patch });
+    }
+  });
+
+  it("flags a probe whose height differs", () => {
+    const head = run(a(), b(), [png(40, 40), png(40, 40), png(40, 40), png(40, 50)]);
+    expect(head.status).toBe("capture_invalid");
+    expect(head.reasons).toContain("candidate_image_size");
+    expect(head.flake_regions).toBeNull();
+    const base = run(a(), b(), [png(40, 40), png(40, 40), png(40, 50), png(40, 40)]);
+    expect(base.reasons).toContain("image_size");
+  });
+});
+
+describe("merged ambiguous regions and unmeasured claims", () => {
+  const node = (testid, depth, rect, style = {}, text = "x") => ({
+    key: `testid:${testid}`,
+    selector: `#${testid}`,
+    testid,
+    tag: "div",
+    depth,
+    role: null,
+    name: testid,
+    text,
+    rect,
+    style,
+  });
+
+  it("keeps both halves, targets and marks for an existing change merged with a nearby added node", () => {
+    const left = { x: 10, y: 10, w: 20, h: 20 };
+    const added = { x: 35, y: 10, w: 20, h: 20 };
+    const region = { id: "r1", bbox_css: { x: 10, y: 10, w: 45, h: 20 } };
+    const view = { id: "v", width: 390, height: 844, regions: [region] };
+    const { items } = attribute(
+      [node("old", 2, left, { opacity: "1" })],
+      [node("old", 2, left, { opacity: "0.5" }), node("new", 3, added)],
+      [region],
+      [],
+      new Map(),
+      "h",
+      view,
+    );
+    const owner = items.find((i) => i.regions.length);
+    expect(owner.regions).toHaveLength(1);
+    const [r] = owner.regions;
+    expect(r.half).toBe("both");
+    expect(r.before).not.toBeNull();
+    expect(r.after).not.toBeNull();
+    view.items = items;
+    view.geometry = geometry(view);
+    expect(
+      view.geometry.marks
+        .filter((m) => m.region_id === "r1")
+        .map((m) => m.half)
+        .sort(),
+    ).toEqual(["after", "before"]);
+    expect(geometryCheck(view)).toBe(true);
+  });
+
+  it("rejects change wording for unmeasured added, removed and text claims", () => {
+    const names = ["Card"];
+    for (const [change, label] of [
+      ["added", "Added change"],
+      ["removed", "Removed change"],
+      ["text", "Text change"],
+    ]) {
+      const items = [
+        {
+          id: "v#1",
+          status: "unverified_claim",
+          change,
+          element: { name: "Card" },
+          style_delta: [],
+          token: null,
+          verification: { measured: false, valid: false },
+        },
+      ];
+      const one = (patch) => [{ id: "v#1", label: "No visible change", rationale: "", ...patch }];
+      expect(() => validateLabels(items, one({ label }), names), label).toThrow();
+      expect(() => validateLabels(items, one({ rationale: label }), names), label).toThrow();
+      expect(validateLabels(items, one(), names)).toBe(true);
+    }
+  });
+});
+
+describe("validateSpec", () => {
+  const view = (route, theme, width, height) => ({
+    id: `${route}-${theme}-${width}`,
+    route,
+    theme,
+    width,
+    height,
+    dpr: 2,
+    anchor: "main",
+    expectedFont: "Inter",
+    masks: [],
+  });
+  const make = (patch = {}) => ({
+    schema: "annotated-diff/capture-v0",
+    thresholds: { ...THRESHOLDS },
+    runtime: { chromium_sha256: "c", os_image: "o", font_sha256: "f" },
+    seed: "seed-1",
+    locale: "en-US",
+    timezone: "UTC",
+    fixedTime: "2026-01-01T00:00:00Z",
+    fullPage: false,
+    style: "",
+    routes: ["home"],
+    views: ["light", "dark"].flatMap((theme) => [
+      view("home", theme, 390, 844),
+      view("home", theme, 1280, 832),
+    ]),
+    ...patch,
+  });
+  const withView = (i, patch) => {
+    const spec = make();
+    spec.views[i] = { ...spec.views[i], ...patch };
+    return spec;
+  };
+
+  it("accepts a complete four-view spec, with or without blind", () => {
+    expect(() => validateSpec(make())).not.toThrow();
+    expect(make().views).toHaveLength(4);
+    expect(() => validateSpec(make({ blind: true }))).not.toThrow();
+    expect(() => validateSpec(make({ blind: false }))).not.toThrow();
+  });
+
+  it("rejects an invalid blind type", () => {
+    for (const blind of ["yes", 1, null, {}])
+      expect(() => validateSpec(make({ blind })), String(blind)).toThrow();
+  });
+
+  it("rejects unknown top-level fields", () => {
+    expect(() => validateSpec(make({ cookies: [] }))).toThrow();
+  });
+
+  it("rejects a missing or duplicate route, theme or viewport", () => {
+    const spec = make();
+    expect(() => validateSpec(make({ routes: ["home", "home"] }))).toThrow();
+    expect(() => validateSpec(make({ routes: [] }))).toThrow();
+    expect(() => validateSpec(make({ routes: ["home", "about"] }))).toThrow();
+    // Missing theme (dark dropped) and missing viewport (desktop dropped).
+    expect(() =>
+      validateSpec(make({ views: spec.views.filter((v) => v.theme === "light") })),
+    ).toThrow();
+    expect(() =>
+      validateSpec(make({ views: spec.views.filter((v) => v.width === 390) })),
+    ).toThrow();
+    // Duplicate combination replacing another, and duplicate ids.
+    expect(() =>
+      validateSpec(make({ views: [spec.views[0], ...spec.views.slice(0, 3)] })),
+    ).toThrow();
+    expect(() => validateSpec(withView(1, { id: spec.views[0].id }))).toThrow();
+    expect(() => validateSpec(withView(0, { theme: "sepia" }))).toThrow();
+    expect(() => validateSpec(withView(0, { width: 400 }))).toThrow();
+  });
+
+  it("rejects unsupported per-view adapter fields", () => {
+    for (const patch of [{ expectedStatus: 200 }, { persona: "member" }, { isMobile: true }])
+      expect(() => validateSpec(withView(0, patch)), JSON.stringify(patch)).toThrow();
+  });
+
+  it("accepts well-formed fontFamilies aliases and rejects malformed ones", () => {
+    expect(() =>
+      validateSpec(withView(0, { fontFamilies: { Inter: ["Inter", "Inter Variable"] } })),
+    ).not.toThrow();
+    for (const fontFamilies of [
+      [],
+      "Inter",
+      null,
+      { Inter: "Inter" },
+      { Inter: [] },
+      { Inter: [""] },
+      { Inter: ["  "] },
+      { Inter: [1] },
+      { "": ["Inter"] },
+    ])
+      expect(
+        () => validateSpec(withView(0, { fontFamilies })),
+        JSON.stringify(fontFamilies),
+      ).toThrow();
   });
 });

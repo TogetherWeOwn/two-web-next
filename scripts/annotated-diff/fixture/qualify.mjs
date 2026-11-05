@@ -4,6 +4,7 @@ import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PNG } from "pngjs";
 import {
   capture,
   compare,
@@ -91,6 +92,7 @@ const spec = {
       dpr: 2,
       anchor: "#anchor",
       expectedFont: "Inter",
+      fontFamilies: { Rajdhani: ["Rajdhani Medium"] },
       masks: [],
     })),
   ),
@@ -281,3 +283,216 @@ const report = {
 };
 await fs.writeFile(path.join(run, "qualification.json"), JSON.stringify(report, null, 2));
 console.log(`QUALIFICATION ${path.relative(root, run)}`);
+
+// Exercise capture paths that the deliberately compact known-answer page cannot cover.
+const page = (moved = false, fallback = false, comment = "") => `<!doctype html>
+<html data-capture-seed="known-answer"><head><title>Capture paths</title><style>
+@font-face { font-family: Inter; src: url('/font.woff2'); }
+@font-face { font-family: Rajdhani; src: url('/alternate.woff2'); }
+body { margin: 0; min-height: ${moved ? 1950 : 1900}px; background: white; color: black; font: 16px Inter; }
+h1 { position: absolute; top: 20px; left: 40px; }
+#anchor { position: absolute; top: 1000px; left: 0; width: 1px; height: 1px; }
+[data-testid="moving"] { position: absolute; top: 1100px; left: 40px; width: 70px; height: 40px; background: black;
+margin-top: ${moved ? 40 : 0}px;
+}
+[data-testid="type"] { position: absolute; top: 1050px; left: 180px; font-family: ${fallback ? "Missing, Inter" : "Rajdhani"}; }
+#volatile { position: absolute; top: 1250px; left: 40px; width: 80px; height: 30px; background: red; }
+</style></head><body><h1>Capture paths</h1><div id="anchor"></div><div data-testid="moving" aria-label="Swatch"></div><div data-testid="type">Typography</div><div id="volatile">Masked</div><!-- ${comment} --></body></html>`;
+const audits = [];
+await new Promise((resolve) => server.listen(new URL(url).port, "127.0.0.1", resolve));
+try {
+  for (const mode of ["full-page", "viewport", "fallback", "candidate-flake", "zero"]) {
+    const dir = path.join(run, mode);
+    const frozen = {
+      ...spec,
+      fullPage: mode === "full-page",
+      blind: mode === "full-page" || mode === "zero",
+      views: spec.views.map((v) => ({
+        ...v,
+        masks: [{ selector: "#volatile", reason: "Fixture mask" }],
+      })),
+    };
+    const a = page(false, false, `${mode} base`);
+    const b =
+      mode === "zero"
+        ? page(false, false, `${mode} head`)
+        : page(true, mode === "fallback") +
+          (mode === "candidate-flake"
+            ? `<script>const n = +(localStorage.getItem('probe') || 0); localStorage.setItem('probe', n + 1); document.querySelector('[data-testid="moving"]').style.backgroundColor = n ? 'red' : 'black';</script>`
+            : "");
+    content = a;
+    const base = await commit(a);
+    await capture({
+      spec: frozen,
+      sourceRoot: source,
+      sha: base,
+      url,
+      out: path.join(dir, "base"),
+    });
+    content = b;
+    const head = await commit(b);
+    await capture({
+      spec: frozen,
+      sourceRoot: source,
+      sha: head,
+      url,
+      out: path.join(dir, "head"),
+    });
+    const intent =
+      mode === "zero"
+        ? []
+        : [
+            {
+              id: "moving",
+              claim: "Change margin",
+              selector: '[data-testid="moving"]',
+              change: "style",
+              deltas: [
+                {
+                  prop: "margin-top",
+                  file: "index.html",
+                  line: b.split("\n").findIndex((s) => s.startsWith("margin-top:")) + 1,
+                },
+              ],
+            },
+          ];
+    let manifest;
+    if (["fallback", "candidate-flake"].includes(mode)) {
+      await assert.rejects(() => compare({ dir, root: source, intent }), /capture_invalid/);
+      manifest = JSON.parse(await fs.readFile(path.join(dir, "annotated-diff.manifest.json")));
+    } else manifest = await compare({ dir, root: source, intent });
+    for (const v of frozen.views) {
+      const a = JSON.parse(await fs.readFile(path.join(dir, "base", `${v.id}.json`)));
+      const b = JSON.parse(await fs.readFile(path.join(dir, "head", `${v.id}.json`)));
+      assert(a.scrollY > 0 && a.scrollY === b.scrollY);
+      assert.equal(a.coordinate_space, frozen.fullPage ? "document" : "viewport");
+      const old = a.elements.find((e) => e.testid === "moving");
+      const next = b.elements.find((e) => e.testid === "moving");
+      assert.equal(old.rect.y, 1100 - (frozen.fullPage ? 0 : a.scrollY));
+      assert.equal(next.rect.y - old.rect.y, mode === "zero" ? 0 : 40);
+      assert.equal(a.mask_rects[0].y, 1250 - (frozen.fullPage ? 0 : a.scrollY));
+      const image = PNG.sync.read(await fs.readFile(path.join(dir, "base", `${v.id}.png`)));
+      const point = (Math.round((a.mask_rects[0].y + 10) * v.dpr) * image.width + 50 * v.dpr) * 4;
+      assert.deepEqual([...image.data.subarray(point, point + 4)], [0, 0, 0, 255]);
+      assert(a.font_evidence.some((f) => f.family === "Rajdhani" && f.verified));
+      if (mode === "fallback") {
+        assert.equal(b.fonts_loaded, false);
+        assert(b.font_evidence.some((f) => f.family === "Missing" && !f.verified));
+      } else assert.equal(b.fonts_loaded, true);
+      if (frozen.fullPage) {
+        assert.equal(image.height, 1900 * v.dpr);
+        const headImage = PNG.sync.read(await fs.readFile(path.join(dir, "head", `${v.id}.png`)));
+        assert.equal(headImage.height, 1950 * v.dpr);
+        const pixel = (1120 * image.width * v.dpr + 60 * v.dpr) * 4;
+        assert.equal(
+          image.data[pixel],
+          0,
+          "Document-space rect must agree with captured source pixel",
+        );
+      }
+    }
+    if (["fallback", "candidate-flake"].includes(mode)) {
+      assert.equal(manifest.status, "capture_invalid");
+      assert.equal(manifest.views.length, 0);
+      assert(
+        manifest.flake_probe.every((g) =>
+          g.reasons.includes(mode === "fallback" ? "page_state" : "candidate_flake"),
+        ),
+      );
+      if (mode === "candidate-flake")
+        assert(
+          manifest.flake_probe.every(
+            (g) => g.base_probe.status === "valid" && g.candidate_probe.flake_regions > 0,
+          ),
+        );
+      await assert.rejects(() => render({ dir, author: "fixture:deterministic" }));
+      audits.push({ mode, rejected: true });
+      continue;
+    }
+    for (const v of manifest.views) {
+      assert.equal(v.unexplained_count, 0);
+      assert.equal(v.unverified_claims, 0);
+      if (mode === "zero") {
+        assert.equal(v.items.length, 0);
+        assert.equal(v.regions.length, 0);
+      } else {
+        assert.equal(v.items.length, 1);
+        assert(v.items[0].regions.every((r) => r.after.y - r.before.y === 40));
+      }
+    }
+    await fs.writeFile(
+      path.join(dir, "labels.todo.json"),
+      JSON.stringify(
+        manifest.views.flatMap((v) =>
+          v.items.map((i) => ({ id: i.id, label: "Margin changed", rationale: "" })),
+        ),
+      ),
+    );
+    await render({ dir, author: "fixture:deterministic" });
+    const checked = await check({ dir });
+    assert.equal(checked.checks.passed, true, JSON.stringify(checked.checks));
+    for (const v of checked.views) {
+      assert.equal(v.geometry.label_fonts.length, 2);
+      assert(v.geometry.label_fonts.every((f) => f.family === "Inter" && f.status === "loaded"));
+      if (frozen.blind) {
+        assert(v.images.some((i) => i.file === `${v.id}.A.png`));
+        assert(v.images.some((i) => i.file === `${v.id}.B.png`));
+        assert(!v.images.some((i) => /\.(before|after)\.png$/.test(i.file)));
+        const judge = await fs.readFile(path.join(dir, `${v.id}.judge.md`), "utf8");
+        assert(!judge.includes(base.slice(0, 7)) && !judge.includes(head.slice(0, 7)));
+        assert(!/margin-top: 0px/.test(judge) || checked.blind_mapping.A === "base");
+        const sourceHalf = checked.blind_mapping.A;
+        assert.equal(
+          hash(await fs.readFile(path.join(dir, `${v.id}.A.png`))),
+          hash(await fs.readFile(path.join(dir, sourceHalf, `${v.id}.png`))),
+        );
+      }
+      if (mode === "zero") assert.equal(v.geometry.marks.length, 0);
+    }
+    if (mode === "zero") {
+      const manifestPath = path.join(dir, "annotated-diff.manifest.json");
+      const probePath = path.join(dir, "head", `${frozen.views[0].id}.probe.json`);
+      const originalProbe = await fs.readFile(probePath),
+        originalManifest = await fs.readFile(manifestPath);
+      try {
+        const probe = JSON.parse(originalProbe);
+        probe.console.push({ type: "error", text: "Planted candidate probe failure" });
+        await fs.writeFile(probePath, JSON.stringify(probe));
+        assert.equal(
+          (await check({ dir })).checks.capture,
+          false,
+          "Candidate probe bytes must be hash-bound",
+        );
+        const refreshed = JSON.parse(await fs.readFile(manifestPath));
+        refreshed.capture_inputs.find(
+          (i) => i.file === `head/${frozen.views[0].id}.probe.json`,
+        ).sha256 = hash(await fs.readFile(probePath));
+        await fs.writeFile(manifestPath, JSON.stringify(refreshed));
+        assert.equal(
+          (await check({ dir })).checks.capture,
+          false,
+          "Check must independently revalidate candidate probe state, not only its hash",
+        );
+      } finally {
+        await fs.writeFile(probePath, originalProbe);
+        await fs.writeFile(manifestPath, originalManifest);
+      }
+      assert.equal((await check({ dir })).checks.passed, true);
+      audits.push({
+        mode: "candidate-probe-check",
+        hash_bound: true,
+        independently_reconciled: true,
+        restored: true,
+      });
+    }
+    audits.push({
+      mode,
+      checks: checked.checks,
+      manifest_sha256: hash(await fs.readFile(path.join(dir, "annotated-diff.manifest.json"))),
+    });
+  }
+} finally {
+  await new Promise((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
+}
+await fs.writeFile(path.join(run, "capture-path-audit.json"), JSON.stringify(audits, null, 2));
+console.log("CAPTURE_PATH_AUDIT", JSON.stringify(audits));
