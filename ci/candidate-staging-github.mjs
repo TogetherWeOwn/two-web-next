@@ -181,7 +181,7 @@ export function createCandidateGitHubReader({ token, fetchImpl = fetch } = {}) {
     return { repository, pull: request };
   }
 
-  return Object.freeze({
+  const reader = Object.freeze({
     async verifyPullRequest(input) {
       return pull(snapshotIdentity(input));
     },
@@ -243,6 +243,147 @@ export function createCandidateGitHubReader({ token, fetchImpl = fetch } = {}) {
         );
       }
       return artifact;
+    },
+
+    // This observes an independent baseline-producer channel, not a receipt found
+    // inside the candidate archive. The installation pins the source manifest and
+    // exact job/step contract. The retained archive still needs byte/schema and
+    // actual serving/provider admission before it can authorize any mutation.
+    async readBaselineArtifact(input, installedContract, selected, sourceManifestBytes) {
+      try {
+        const identity = snapshotIdentity(input);
+        const contract = structuredClone(installedContract);
+        const selection = structuredClone(selected);
+        const sourceManifest = Buffer.isBuffer(sourceManifestBytes)
+          ? Buffer.from(sourceManifestBytes)
+          : null;
+        requireEvidence(
+          keys(contract, "workflowId,path,event,job,steps,sourceManifestSha256") &&
+            matches(INTEGER, contract.workflowId) &&
+            contract.path === ".github/workflows/deploy.yml" &&
+            ["workflow_run", "workflow_dispatch"].includes(contract.event) &&
+            typeof contract.job === "string" &&
+            contract.job.length > 0 &&
+            contract.job.length <= 128 &&
+            Array.isArray(contract.steps) &&
+            contract.steps.length > 0 &&
+            contract.steps.length <= 128 &&
+            Array.from(contract.steps).every(
+              (step) => typeof step === "string" && step.length > 0 && step.length <= 256,
+            ) &&
+            new Set(contract.steps).size === contract.steps.length &&
+            matches(DIGEST, contract.sourceManifestSha256) &&
+            keys(selection, "runId,runAttempt,artifactId,archiveSha256,versionId") &&
+            matches(INTEGER, selection.runId) &&
+            // Artifact metadata has no run_attempt. Until there is an independently
+            // authenticated per-attempt channel, reruns are ambiguous, not latest.
+            selection.runAttempt === "1" &&
+            matches(INTEGER, selection.artifactId) &&
+            matches(DIGEST, selection.archiveSha256) &&
+            matches(
+              /^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/,
+              selection.versionId,
+            ),
+          "baseline-selection",
+        );
+        const sources = await reader.verifyInstalledSources(
+          identity,
+          sourceManifest,
+          contract.sourceManifestSha256,
+        );
+        requireEvidence(
+          sources.some((source) => source.path === contract.path),
+          "baseline-workflow-source",
+        );
+        const repo = await get("");
+        requireEvidence(
+          apiInteger(repo?.id, identity.descriptor[1]) &&
+            repo.full_name === identity.descriptor[2] &&
+            repo.fork === false &&
+            repo.archived === false,
+          "baseline-repository",
+        );
+        const runPath = `/actions/runs/${selection.runId}`;
+        function admitRun(run) {
+          requireEvidence(
+            apiInteger(run?.id, selection.runId) &&
+              apiInteger(run.run_attempt, selection.runAttempt) &&
+              apiInteger(run.workflow_id, contract.workflowId) &&
+              run.path === contract.path &&
+              run.event === contract.event &&
+              run.head_branch === "main" &&
+              run.head_sha === identity.descriptor[5] &&
+              run.repository?.full_name === identity.descriptor[2] &&
+              apiInteger(run.repository?.id, identity.descriptor[1]) &&
+              apiInteger(run.head_repository?.id, identity.descriptor[1]) &&
+              run.head_repository?.full_name === identity.descriptor[2] &&
+              run.status === "completed" &&
+              run.conclusion === "success",
+            "baseline-run",
+          );
+        }
+        admitRun(await get(runPath));
+        admitRun(await get(`${runPath}/attempts/1`));
+        const jobs = await pages(`${runPath}/attempts/1/jobs`, "jobs");
+        requireEvidence(jobs.length === 1, "baseline-jobs");
+        const job = jobs[0];
+        requireEvidence(
+          Number.isSafeInteger(job?.id) &&
+            job.id > 0 &&
+            apiInteger(job.run_id, selection.runId) &&
+            apiInteger(job.run_attempt, selection.runAttempt) &&
+            job.head_sha === identity.descriptor[5] &&
+            job.name === contract.job &&
+            job.status === "completed" &&
+            job.conclusion === "success" &&
+            Array.isArray(job.steps) &&
+            job.steps.length === contract.steps.length &&
+            contract.steps.every(
+              (name, index) =>
+                job.steps[index]?.name === name &&
+                job.steps[index].number === index + 1 &&
+                job.steps[index].status === "completed" &&
+                job.steps[index].conclusion === "success",
+            ),
+          "baseline-jobs",
+        );
+        const artifacts = await pages(`${runPath}/artifacts`, "artifacts");
+        const found = artifacts.filter((row) => apiInteger(row.id, selection.artifactId));
+        requireEvidence(found.length === 1, "baseline-artifact-missing");
+        const artifact = await get(`/actions/artifacts/${selection.artifactId}`);
+        const name = `candidate-baseline-${selection.runId}-1-${selection.versionId}`;
+        for (const value of [found[0], artifact]) {
+          requireEvidence(
+            apiInteger(value.id, selection.artifactId) &&
+              value.name === name &&
+              value.expired === false &&
+              value.digest === `sha256:${selection.archiveSha256}` &&
+              apiInteger(value.workflow_run?.id, selection.runId) &&
+              apiInteger(value.workflow_run?.repository_id, identity.descriptor[1]) &&
+              apiInteger(value.workflow_run?.head_repository_id, identity.descriptor[1]) &&
+              value.workflow_run?.head_sha === identity.descriptor[5],
+            "baseline-artifact-provenance",
+          );
+        }
+        // Re-read the current attempt after jobs/artifacts; a rerun started while
+        // reading is refusal even if the old attempt and archive were successful.
+        admitRun(await get(runPath));
+        return Object.freeze({
+          schema: "two.candidate-baseline-producer-observation.v1",
+          promotable: false,
+          scope: "producer-metadata-only",
+          q: identity.q,
+          controllerSha: identity.descriptor[5],
+          sourceManifestSha256: contract.sourceManifestSha256,
+          runId: selection.runId,
+          runAttempt: selection.runAttempt,
+          artifactId: selection.artifactId,
+          archiveSha256: selection.archiveSha256,
+          versionId: selection.versionId,
+        });
+      } catch {
+        throw new Error("Candidate GitHub refused: baseline-producer");
+      }
     },
 
     // The expected digest must be anchored by the reviewed installation, outside
@@ -371,4 +512,5 @@ export function createCandidateGitHubReader({ token, fetchImpl = fetch } = {}) {
       return files;
     },
   });
+  return reader;
 }

@@ -542,6 +542,47 @@ normal-uploader inheritance verification, actual installed adapters and independ
 live containment/recovery admission remain required. The mock tests make no live
 provider request or traffic change. Production workflows/configuration stay unchanged.
 
+## Original-B producer observation (mock-qualified, not installed)
+
+`readBaselineArtifact` in [the fixed-origin GitHub reader](../ci/candidate-staging-github.mjs)
+reads a **separate** retained baseline archive, not candidate-provided producer
+metadata. It first verifies the installation-pinned source manifest, including
+`.github/workflows/deploy.yml`, at the controller's exact revision. It joins the
+same-repository main-branch producer run, its explicit first attempt, the complete
+installed job/step contract, the artifact listing and an independent exact-ID
+artifact read. The current run is read again after artifact retrieval, so a new
+attempt during observation refuses. Failed, skipped, cancelled or incomplete
+runs/jobs/steps and missing, foreign, expired or mismatched archives refuse.
+All requests are read-only, repository-local and credentialed only at the fixed
+GitHub API origin. Returned source is never evaluated.
+
+The installed contract, source-manifest digest and version selection must come
+from trusted controller state, not the candidate ZIP. The producer source must
+match the controller revision; older source revisions refuse rather than fall
+back to an unverified deployment. Artifact metadata does not identify its
+`run_attempt`, so this adapter admits **only attempt 1** and refuses reruns. A name
+containing an attempt number is not independent attempt provenance. Supporting
+reruns requires another authenticated channel, not removing that refusal.
+
+The frozen observation is explicitly `producer-metadata-only` and
+`promotable:false`. It does **not** download or admit archive bytes, prove the
+baseline UUID actually serves, attest the source closure's completeness, establish
+provider/settings/component/stored-asset completeness or satisfy recovery
+retention. Those independent joins and continuous exclusion remain mandatory
+before candidate mutation; no workflow calls this adapter yet.
+
+**Concrete current integration refusal:** [normal staging deployment](../.github/workflows/deploy.yml)
+builds and uploads staging Kit, tags the version and probes its revision. It does
+not retain the recoverable module/asset archive or the independent producer record
+required by this reader. A version tag, successful deploy run or local manifest
+hash cannot substitute for that missing channel. The next installed change must
+retain exact staging upload bytes and a provider-version/producer/run/artifact
+join, then compare them with immutable provider and serving observations before
+writing the dirty recovery pin. Existing baseline deployments without that
+record remain ineligible; no live baseline was read to establish this source-level
+refusal. This is unfinished staging pipeline implementation, not a new scope or
+credential authorization wait.
+
 ## B-prime request construction (offline, not installed)
 
 [The baseline constructor](../ci/candidate-staging-baseline-upload.mjs) prepares
