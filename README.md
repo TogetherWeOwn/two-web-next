@@ -164,6 +164,15 @@ Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
 
+### Deterministic capture data
+
+The separate [Ember capture fixture](docs/ember-capture-fixture.md) materializes
+invented data and private local sessions in a disposable owned schema. Its
+manifest declares all 33 frozen route-states. `npm run capture:manifest` is offline;
+`npm run capture:verify` requires the documented explicit loopback/test-DB opt-in,
+proves two clean seeds and cleans up. This is not the legacy e2e seed or Pilot
+capture authorization.
+
 ### Public-payload privacy contract
 
 Run `npm run check:hono-payloads -- --format json` for the fixture-only Hono
