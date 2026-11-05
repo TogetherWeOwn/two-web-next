@@ -437,6 +437,56 @@ fencing and verified B/latest-upload restoration remain required. In particular,
 restoring these mutable settings or selecting B does not remove a latest-uploaded
 candidate or repair the ordinary uploader's binding inheritance.
 
+## Serving-version observation (mock-qualified, not installed)
+
+[The serving reader](../ci/candidate-staging-serving.mjs) supplies a read-only
+component for deployment fencing and the settings lifecycle's independent
+B-serving assertion. It has no workflow caller, traffic-selection API, journal
+cleanup or activation authority. It does not certify complete recovery.
+
+The endpoint layout and latest-first active-deployment contract come from the
+[pinned provider client](https://github.com/cloudflare/cloudflare-typescript/blob/v5.2.0/src/resources/workers/scripts/deployments.ts#L47-L71).
+Each observation GETs the staging Worker's deployment list, GETs the exact full
+UUID of the first deployment, then GETs the list again. The selected deployment
+must have one version at exactly 100%; split/zero-weight extra versions refuse.
+The exact GET must match the list's canonical deployment, and both lists must
+match. Retained history is bounded to 100 unique deployments in nonincreasing
+creation-time order. Historical two-version percentage splits are admitted only
+with distinct version UUIDs and a total of exactly 100. Aliases, unknown fields,
+malformed/future times, changed responses and unsupported shapes refuse.
+
+A frozen non-promotable snapshot binds Q, the pinned staging profile, deployment
+and version UUIDs, a retained-history digest and observation time. Its digest
+must be independently pinned in the authenticated outer recovery manifest;
+the reader does not supply that provenance. `assertUnchanged` checks the exact
+active deployment ID, version ID and retained-history digest. Replacing a version
+and selecting it again under a new deployment ID is still drift, even when the
+version bytes are identical. `assertRestored` instead checks the pinned B version
+against the **controller-pinned restore deployment UUID**, not just any new
+same-version deployment. That restore UUID must come from trusted, independently
+verified controller mutation evidence, never candidate output. Author and
+annotation text is not provenance and does not appear in snapshots.
+
+Every request has trusted installed exclusion admission before and after it;
+non-capture assertions also require dirty-manifest ownership bound to the exact
+snapshot digest. These adapters remain mandatory and are not installed merely
+by importing the helper. A 60-second observation deadline and 10-second request
+bounds combine both the reader's parent signal and the enclosing operation's
+signal. A settings restore adapter must pass its supplied guard signal through
+to `assertRestored`; a fixture integrates these components and refuses restoration
+before any sink-enabling write while the candidate version is selected. Recovery
+can run after QA expiry without renewing the candidate credential.
+
+This is point-in-time control-plane evidence, not a live routed-request smoke,
+complete historical audit, code/config/asset-content readback or proof of
+continuous exclusion. The provider endpoint supplies a retained list, not a
+paginated all-time ledger. A writer capable of deleting/recreating evidence can
+invalidate observational fencing; source-complete actor/drain/capability
+containment is still required. Complete B/provider/latest-upload restoration,
+safe ordinary upload inheritance, actual installed adapters and independent live
+containment/restoration verification remain incomplete. No provider requests or
+traffic changes were made by the mock tests.
+
 ## Durable occupancy journal and recovery boundary
 
 [The journal](../ci/candidate-staging-occupancy.mjs) implements a narrow GitHub
