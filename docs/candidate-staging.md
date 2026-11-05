@@ -487,6 +487,51 @@ safe ordinary upload inheritance, actual installed adapters and independent live
 containment/restoration verification remain incomplete. No provider requests or
 traffic changes were made by the mock tests.
 
+## Baseline traffic restoration (mock-qualified, not installed)
+
+[The traffic restorer](../ci/candidate-staging-restore-traffic.mjs) implements
+only the B traffic-selection step. It is not called by any workflow. Construction
+requires the independently pinned staging profile and installed trusted adapters
+for exclusion, current dirty-manifest ownership, actual B admission and sealed
+persistent sinks. The serving-snapshot integrity helper is shared with the
+read-only observer; a caller-supplied digest is not authenticated B provenance.
+Those adapters must independently bind the snapshot/version to the original
+recovery manifest and remain valid before and after **every** provider call,
+including capture and idempotent recovery. Candidate output is never an adapter.
+
+The [pinned provider create contract](https://github.com/cloudflare/cloudflare-typescript/blob/v5.2.0/src/resources/workers/scripts/deployments.ts#L32-L44)
+accepts `strategy:percentage` and a `versions` array. After a list/exact/list
+observation, the restorer POSTs only the admitted B UUID at 100% to the fixed
+staging script's deployments endpoint. There is no caller-selected endpoint,
+percentage, force option or automatic retry. A provider refusal, including a
+secret-removal conflict, leaves recovery uncertain; it never triggers a blind
+`force=true`. A successful response must identify a new, freshly created
+single-version B deployment. Provider timestamps retain their milliseconds;
+the upper time check compares whole-second buckets with the seconds-valued
+observation clock, while the mutation's lower bound still rejects timestamps
+before its start second. The next second is future, not a grace interval. A
+separate exact GET must match its canonical identity/time/source/traffic, followed
+by the serving reader's independent
+list/exact/list admission of that exact deployment ID and B version.
+
+If B already serves, an idempotent retry writes nothing, but still requires the
+same authenticated dirty baseline and a second list/exact/list observation at
+the exact deployment. A same-version replacement is drift, not success. Every
+operation has a 60-second bound and ten-second provider request bounds, combining
+parent and enclosing-operation cancellation; recovery does not renew QA expiry.
+Failures redact provider/adapter text and emit no receipt or clean status.
+
+Its frozen non-promotable receipt explicitly says `serving-traffic-only`. It
+binds Q, profile, baseline-serving digest, verified deployment/version UUIDs and
+new serving-observation digest. This is **not complete recovery**, routed smoke,
+latest-upload binding repair, settings restoration or a journal-cleaning proof.
+No secret is read or inherited by this step. It cannot construct B-prime: restoring
+B's traffic still leaves any latest-uploaded candidate bindings in place. The
+version-pinned B-prime upload, complete code/config/assets/components verification,
+normal-uploader inheritance verification, actual installed adapters and independent
+live containment/recovery admission remain required. The mock tests make no live
+provider request or traffic change. Production workflows/configuration stay unchanged.
+
 ## Durable occupancy journal and recovery boundary
 
 [The journal](../ci/candidate-staging-occupancy.mjs) implements a narrow GitHub

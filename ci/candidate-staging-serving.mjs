@@ -43,7 +43,7 @@ function digest(value) {
   return candidateSha256(JSON.stringify(value));
 }
 
-function deployment(raw, now) {
+export function candidateDeploymentSnapshot(raw, now) {
   requireEvidence(
     keys(raw, "id,created_on,source,strategy,versions", "annotations,author_email") &&
       uuid(raw.id) &&
@@ -53,7 +53,9 @@ function deployment(raw, now) {
       new Date(raw.created_on).toISOString() ===
         (raw.created_on.includes(".") ? raw.created_on : raw.created_on.replace("Z", ".000Z")) &&
       Date.parse(raw.created_on) >= 0 &&
-      Date.parse(raw.created_on) <= now * 1000 &&
+      // The observation clock has whole-second precision. Keep fractional
+      // provider times in the same bucket; the next second is still future.
+      Math.floor(Date.parse(raw.created_on) / 1000) <= now &&
       text(raw.source, 128) &&
       raw.source.length > 0 &&
       raw.strategy === "percentage" &&
@@ -101,7 +103,7 @@ function history(value, now) {
       value.deployments.length > 0 &&
       value.deployments.length <= 100,
   );
-  const rows = value.deployments.map((row) => deployment(row, now));
+  const rows = value.deployments.map((row) => candidateDeploymentSnapshot(row, now));
   const ids = new Set();
   let previous = Infinity;
   for (const row of rows) {
@@ -112,6 +114,49 @@ function history(value, now) {
   }
   requireEvidence(rows[0].versions.length === 1 && rows[0].versions[0].percentage === 100);
   return rows;
+}
+
+function receipt(q, profileSha256, deploymentId, versionId, historySha256, observedAt) {
+  return {
+    schema: "two.candidate-serving.v1",
+    promotable: false,
+    q,
+    profileSha256,
+    deploymentId,
+    versionId,
+    historySha256,
+    observedAt,
+  };
+}
+
+// A digest is an integrity join, not baseline provenance. Installed callers
+// independently bind this pin to their authenticated dirty recovery manifest.
+export function admitCandidateServingSnapshot(input, expectedSha256, q, profileSha256) {
+  requireEvidence(typeof expectedSha256 === "string" && DIGEST.test(expectedSha256));
+  const s = structuredClone(input);
+  requireEvidence(
+    keys(s, "schema,promotable,q,profileSha256,deploymentId,versionId,historySha256,observedAt") &&
+      s.schema === "two.candidate-serving.v1" &&
+      s.promotable === false &&
+      s.q === q &&
+      s.profileSha256 === profileSha256 &&
+      uuid(s.deploymentId) &&
+      uuid(s.versionId) &&
+      typeof s.historySha256 === "string" &&
+      DIGEST.test(s.historySha256) &&
+      Number.isSafeInteger(s.observedAt) &&
+      s.observedAt >= 0,
+  );
+  const canonical = receipt(
+    q,
+    profileSha256,
+    s.deploymentId,
+    s.versionId,
+    s.historySha256,
+    s.observedAt,
+  );
+  requireEvidence(digest(canonical) === expectedSha256);
+  return freeze(canonical);
 }
 
 export function createCandidateServingReader({
@@ -137,46 +182,12 @@ export function createCandidateServingReader({
   const { q } = identitySnapshot(identity);
   const base = `https://api.cloudflare.com/client/v4/accounts/${installed.accountId}/workers/scripts/${installed.scriptName}`;
 
-  function admitSnapshot(input, expectedSha256) {
-    requireEvidence(typeof expectedSha256 === "string" && DIGEST.test(expectedSha256));
-    const s = structuredClone(input);
-    requireEvidence(
-      keys(
-        s,
-        "schema,promotable,q,profileSha256,deploymentId,versionId,historySha256,observedAt",
-      ) &&
-        s.schema === "two.candidate-serving.v1" &&
-        s.promotable === false &&
-        s.q === q &&
-        s.profileSha256 === profileSha256 &&
-        uuid(s.deploymentId) &&
-        uuid(s.versionId) &&
-        typeof s.historySha256 === "string" &&
-        DIGEST.test(s.historySha256) &&
-        Number.isSafeInteger(s.observedAt) &&
-        s.observedAt >= 0,
-    );
-    const canonical = receipt(s.deploymentId, s.versionId, s.historySha256, s.observedAt);
-    requireEvidence(digest(canonical) === expectedSha256);
-    return canonical;
-  }
-
-  function receipt(deploymentId, versionId, historySha256, observedAt) {
-    return {
-      schema: "two.candidate-serving.v1",
-      promotable: false,
-      q,
-      profileSha256,
-      deploymentId,
-      versionId,
-      historySha256,
-      observedAt,
-    };
-  }
-
   async function observe(phase, snapshot, snapshotSha256, restoreDeploymentId, operationSignal) {
     try {
-      const baseline = phase === "capture" ? null : admitSnapshot(snapshot, snapshotSha256);
+      const baseline =
+        phase === "capture"
+          ? null
+          : admitCandidateServingSnapshot(snapshot, snapshotSha256, q, profileSha256);
       requireEvidence(
         (phase !== "restored" || uuid(restoreDeploymentId)) &&
           (operationSignal === undefined || operationSignal instanceof AbortSignal),
@@ -222,7 +233,10 @@ export function createCandidateServingReader({
       }
       const before = history(await get("deployments"), currentTime());
       const active = before[0];
-      const exact = deployment(await get(`deployments/${active.deploymentId}`), currentTime());
+      const exact = candidateDeploymentSnapshot(
+        await get(`deployments/${active.deploymentId}`),
+        currentTime(),
+      );
       requireEvidence(digest(exact) === digest(active));
       const after = history(await get("deployments"), currentTime());
       requireEvidence(digest(before) === digest(after));
@@ -242,6 +256,8 @@ export function createCandidateServingReader({
       }
       await guard();
       const observed = receipt(
+        q,
+        profileSha256,
         active.deploymentId,
         active.versions[0].versionId,
         historySha256,
