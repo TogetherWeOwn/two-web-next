@@ -14,6 +14,46 @@ Durable Objects and database compute are not admitted by a sleeping Worker or
 by qualification fixture success. No runtime shutdown or cost exception is
 claimed by this incomplete source implementation.
 
+## Read-only launcher phase (not qualification)
+
+The new [main-only dispatch workflow](../.github/workflows/candidate-staging.yml)
+connects the [builtin-only preflight CLI](../ci/candidate-staging-preflight.mjs) to
+actual GitHub launcher and pull-request reads. It checks out exactly the workflow
+revision, with persisted credentials disabled and a three-file dependency closure.
+It does not check out candidate code, install dependencies, bind an environment,
+request deployment/identity-token permissions or use provider/QA credentials.
+Input values enter through JSON in an environment variable, never shell source.
+Only the PR number, exact head and selected CI run/attempt are accepted.
+
+Runner/checkout/workflow identities must agree on main; independently retrieved
+workflow, current run and explicit attempt must match the repository, source,
+path, event and active run identity. A current-run reread refuses reruns during
+admission. Two live PR observations refuse a foreign/fork/closed/merged/retargeted
+or moved head, including final drift. The CLI prints only an allowlisted,
+non-promotable `two.candidate-preflight.v1` observation with
+`scope: launcher-and-pr-only` and `qualification: false`. CI IDs are merely
+**selected**, not verified. It emits no canonical deploy/e2e identity or artifact.
+
+This read-only phase deliberately holds no staging exclusion: it accesses no
+staging resource and grants no staging occupancy. It is not the installed full
+controller, reviewed dependency manifest for all future phases, full-CI proof,
+containment, baseline admission, build/producer, recovery or live qualification.
+No live dispatch is claimed. Subsequent phases still require their independent
+source, authority, admission and native Security/QA gates; a green preflight must
+never substitute for them or authorize a mutation.
+
+### Unresolved immutable stored-asset channel
+
+The shipped Wrangler asset client exposes session creation and asset uploads;
+its completion capability is sent into version creation. No immutable
+version-to-stored-asset manifest/content readback was found in the shipped SDK.
+The provider observer compares `assets.config`, not stored content. A retained
+source hash, an acknowledged upload, a completion capability or an ordinary
+candidate-controlled HTTP response is not independent stored-content proof.
+Do not persist a session/completion capability in recovery artifacts or infer a
+manifest binding from decoded unsigned JWT claims. Complete asset admission
+remains a concrete provider-channel prerequisite, not a successful helper result.
+
 ## Read-only recovery component capture (not installed)
 
 `createCandidateRecoveryComponentReader` in the

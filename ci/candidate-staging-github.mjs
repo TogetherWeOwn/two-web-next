@@ -186,6 +186,59 @@ export function createCandidateGitHubReader({ token, fetchImpl = fetch } = {}) {
       return pull(snapshotIdentity(input));
     },
 
+    // A running main-only launcher is not CI or containment evidence. Read the
+    // explicit attempt and current run: a rerun cannot borrow an older identity.
+    async verifyLauncher(input) {
+      const identity = snapshotIdentity(input);
+      requireEvidence(identity.descriptor[5] === identity.descriptor[6], "launcher-source");
+      const workflow = await get("/actions/workflows/candidate-staging.yml");
+      requireEvidence(
+        Number.isSafeInteger(workflow?.id) &&
+          workflow.id > 0 &&
+          workflow.path === ".github/workflows/candidate-staging.yml" &&
+          workflow.state === "active",
+        "launcher-workflow",
+      );
+      const runPath = `/actions/runs/${identity.descriptor[7]}`;
+      function admitLauncher(run) {
+        requireEvidence(
+          apiInteger(run?.id, identity.descriptor[7]) &&
+            apiInteger(run.run_attempt, identity.descriptor[8]) &&
+            run.workflow_id === workflow.id &&
+            run.path === workflow.path &&
+            run.event === "workflow_dispatch" &&
+            run.head_branch === "main" &&
+            run.head_sha === identity.descriptor[5] &&
+            repositoryMatchesLauncher(run.repository) &&
+            repositoryMatchesLauncher(run.head_repository) &&
+            run.status === "in_progress" &&
+            run.conclusion === null,
+          "launcher-run",
+        );
+      }
+      function repositoryMatchesLauncher(repository) {
+        return (
+          apiInteger(repository?.id, identity.descriptor[1]) &&
+          repository.full_name === identity.descriptor[2] &&
+          repository.fork === false
+        );
+      }
+      admitLauncher(await get(runPath));
+      admitLauncher(await get(`${runPath}/attempts/${identity.descriptor[8]}`));
+      await pull(identity);
+      admitLauncher(await get(runPath));
+      return Object.freeze({
+        schema: "two.candidate-launcher-observation.v1",
+        promotable: false,
+        scope: "launcher-and-pr-only",
+        q: identity.q,
+        workflowId: String(workflow.id),
+        runId: identity.descriptor[7],
+        runAttempt: identity.descriptor[8],
+        controllerSha: identity.descriptor[5],
+      });
+    },
+
     // This must be an installed, independently verified contract, not one parsed
     // from candidate workflow source. A second listing closes the newer-run race
     // during job retrieval; the selected attempt is read explicitly, not latest.

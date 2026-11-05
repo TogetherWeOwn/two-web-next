@@ -1,0 +1,57 @@
+name: Candidate read-only admission
+
+on:
+  workflow_dispatch:
+    inputs:
+      prNumber:
+        description: Same-repository pull request number
+        required: true
+        type: string
+      headSha:
+        description: Exact pull request head SHA
+        required: true
+        type: string
+      ciRunId:
+        description: Selected full-CI run ID (not verified by this preflight)
+        required: true
+        type: string
+      ciRunAttempt:
+        description: Selected full-CI run attempt (not verified by this preflight)
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  actions: read
+  pull-requests: read
+
+concurrency:
+  group: candidate-read-only-admission-${{ github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    name: candidate-read-only-preflight
+    if: github.repository == 'TogetherWeOwn/two-web-next' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            ci/candidate-staging-preflight.mjs
+            ci/candidate-staging-admission.mjs
+            ci/candidate-staging-github.mjs
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      # Builtins only. No candidate source, dependencies, provider/QA credentials,
+      # artifact publishing, journal write or staging access in this phase.
+      - name: Observe main launcher and live same-repo head only
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          CANDIDATE_SELECTION: ${{ toJSON(inputs) }}
+        run: node ci/candidate-staging-preflight.mjs
