@@ -1374,7 +1374,7 @@ test("thrown fetch failures from either backend never leak diagnostics", async (
         (kind === "cf-list" && url === `${SCRIPT}/deployments`) ||
         (kind === "cf-exact" && url.startsWith(`${SCRIPT}/deployments/`)) ||
         (kind === "github" && url.startsWith("https://api.github.com/") && p.calls.length > 3) ||
-        (kind === "storage" && url.includes("blob.core.windows.net"))
+        (kind === "storage" && (url === PAYLOAD_SIGNED || url === PRODUCER_SIGNED))
       ) {
         throw Object.assign(new Error(`private upstream ${CF_TOKEN} ${GH_TOKEN} ${SAS}`), {
           cause: new Error("private upstream cause"),

@@ -31,6 +31,14 @@ function digest(value) {
   return candidateSha256(JSON.stringify(value));
 }
 
+function snapshot(read) {
+  try {
+    return read();
+  } catch {
+    throw new Error(ERROR);
+  }
+}
+
 function freeze(value) {
   if (value && typeof value === "object" && !Buffer.isBuffer(value)) {
     for (const child of Object.values(value)) freeze(child);
@@ -249,13 +257,17 @@ export function createCandidateBaselineProviderReader({
       sourceManifestBytes.length > 0 &&
       sourceManifestBytes.length <= 64 * 1024,
   );
-  const run = identitySnapshot(identity);
-  const installed = profileSnapshot(profile, profileSha256);
-  const fixedIdentity = structuredClone(identity);
-  const fixedProfile = structuredClone(profile);
-  const contract = structuredClone(installedContract);
-  const sources = Buffer.from(sourceManifestBytes);
-  const artifacts = createCandidateArtifactReader({ token: githubToken, fetchImpl });
+  const { run, installed, fixedIdentity, fixedProfile, contract, sources, artifacts } = snapshot(
+    () => ({
+      run: identitySnapshot(identity),
+      installed: profileSnapshot(profile, profileSha256),
+      fixedIdentity: structuredClone(identity),
+      fixedProfile: structuredClone(profile),
+      contract: structuredClone(installedContract),
+      sources: Buffer.from(sourceManifestBytes),
+      artifacts: createCandidateArtifactReader({ token: githubToken, fetchImpl }),
+    }),
+  );
   return Object.freeze({
     async observe(selection, { signal: operationSignal } = {}) {
       try {
@@ -274,6 +286,8 @@ export function createCandidateBaselineProviderReader({
               time >= 0 &&
               time <= 253402300799 &&
               Number.isSafeInteger(lastNow) &&
+              lastNow >= 0 &&
+              lastNow <= 253402300799 &&
               time >= lastNow,
           );
           deadline.throwIfAborted();
