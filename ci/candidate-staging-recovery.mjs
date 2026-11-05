@@ -1,6 +1,14 @@
-// Restore original B traffic before re-enabling its persistent settings. This
-// partial transaction never repairs latest-upload inheritance or clears a journal.
+// Restore original B traffic before re-enabling its persistent settings. The
+// joined variant first uploads B-prime and rechecks latest after restoration.
+// Neither variant admits stored assets/resources or clears a dirty journal.
 import { candidateSha256, identitySnapshot } from "./candidate-staging-admission.mjs";
+import { candidateAssetCapabilityExpiry } from "./candidate-staging-assets.mjs";
+import {
+  candidateBaselineVersionSnapshot,
+  readCandidateBaselineVersionResult,
+} from "./candidate-staging-baseline-provider.mjs";
+import { createCandidateBaselineVersionUploader } from "./candidate-staging-baseline-version.mjs";
+import { prepareCandidateBaselineAssetInput } from "./candidate-staging-baseline-upload.mjs";
 import { createCandidateRecoveryComponentGuard } from "./candidate-staging-recovery-components.mjs";
 import { createCandidateTrafficRestorer } from "./candidate-staging-restore-traffic.mjs";
 import { createCandidateServingReader } from "./candidate-staging-serving.mjs";
@@ -19,6 +27,16 @@ function requireEvidence(condition) {
 // Inputs must come from independently retained controller state. Complete B and
 // exclusion admission remain installed prerequisites, not authority from these pins.
 export function createCandidateTrafficSettingsRecovery(options = {}) {
+  return createRecovery(options, false);
+}
+
+// The installed caller must still admit complete B, stored assets, principals,
+// native idle controls and exclusion. This scoped result cannot clean a journal.
+export function createCandidateBaselineRecovery(options = {}) {
+  return createRecovery(options, true);
+}
+
+function createRecovery(options, restoreLatestUpload) {
   try {
     const {
       token,
@@ -40,21 +58,34 @@ export function createCandidateTrafficSettingsRecovery(options = {}) {
     );
     // Canonical admission bounds byte inputs before copying. This also binds the
     // independently retained component digests to the expected dirty payload.
-    // At most nine complete scans, each capped at 64 actual GitHub GETs.
-    // Oversized history refuses at entry before mutation; it is never truncated.
-    // This is not proof of available account quota or a history-compaction policy.
-    const requireDirty = createCandidateRecoveryComponentGuard({ ...options, maxReadRequests: 64 });
+    // Preserve the 576-GET maximum: traffic/settings allows nine 64-GET scans;
+    // joined recovery allows 24 scans of at most 24 GETs, including asset writes.
+    // Oversized history refuses at entry, never by truncation. This does not
+    // prove available shared quota or admit history compaction.
+    const maxScans = restoreLatestUpload ? 24 : 9;
+    const requireDirty = createCandidateRecoveryComponentGuard({
+      ...options,
+      maxReadRequests: restoreLatestUpload ? 24 : 64,
+    });
     const run = identitySnapshot(options.identity);
     const profile = structuredClone(options.profile);
     const profileSha256 = options.profileSha256;
     const state = structuredClone(options.state);
     const serving = structuredClone(options.serving);
     const settings = structuredClone(options.settings);
+    // The component guard has already bounded and rehashed these inputs. Copy
+    // synchronously before any installed callback can mutate the caller's data.
+    const baseline = restoreLatestUpload ? structuredClone(options.baseline) : null;
+    const files = restoreLatestUpload
+      ? options.files.map((file) => ({ ...file, bytes: Buffer.from(file.bytes) }))
+      : null;
     const ownerDeploymentId = options.deploymentId;
     const ownerStateSha256 = options.expectedPayload.baseline.stateSha256;
     const createdAt = Date.parse(options.expectedPayload.createdAt);
     const expiresAt = Date.parse(options.expectedPayload.baseline.expiresAt);
-    const base = `https://api.cloudflare.com/client/v4/accounts/${profile.accountId}/workers/scripts/${profile.scriptName}`;
+    const accountBase = `https://api.cloudflare.com/client/v4/accounts/${profile.accountId}`;
+    const base = `${accountBase}/workers/scripts/${profile.scriptName}`;
+    const versionsBase = `${accountBase}/workers/workers/${profile.scriptName}/versions`;
     const trafficContext = Object.freeze({
       phase: "restore-baseline-traffic",
       q: run.q,
@@ -82,6 +113,7 @@ export function createCandidateTrafficSettingsRecovery(options = {}) {
           let lastNow = clock();
           let context = trafficContext;
           let epoch = 0;
+          let scans = 0;
           let checkpoint = null;
           function currentTime() {
             deadline.throwIfAborted();
@@ -124,6 +156,8 @@ export function createCandidateTrafficSettingsRecovery(options = {}) {
           async function refreshOwnership(childSignal) {
             const active = activeSignal(childSignal);
             checkpoint = null;
+            requireEvidence(scans < maxScans);
+            scans++;
             const owner = await requireDirty(context, active);
             active.throwIfAborted();
             currentTime();
@@ -153,12 +187,33 @@ export function createCandidateTrafficSettingsRecovery(options = {}) {
                 request.method === "POST") ||
               (context.phase === "restore" &&
                 ((url === `${base}/script-settings` && request.method === "PATCH") ||
-                  (url === `${base}/subdomain` && request.method === "POST")));
-            requireEvidence(allowed);
+                  (url === `${base}/subdomain` && request.method === "POST"))) ||
+              (restoreLatestUpload &&
+                context.phase === "restore-baseline-version" &&
+                request.method === "POST" &&
+                (url === `${versionsBase}?deploy=false` ||
+                  url === `${base}/assets-upload-session` ||
+                  url === `${accountBase}/workers/assets/upload?base64=true` ||
+                  (url.startsWith(`${accountBase}/workers/assets/upload/`) &&
+                    /^[a-f0-9]{32}$/.test(
+                      url.slice(`${accountBase}/workers/assets/upload/`.length),
+                    ))));
+            requireEvidence(allowed && scans + 2 <= maxScans);
             await authority(active);
+            if (context.phase === "restore-baseline-version") await assertSealed();
             // Last awaited authorization before dispatch; no callback can turn
             // cached evidence into mutation authority or substitute an endpoint.
             await refreshOwnership(active);
+            // The outer journal checks can consume an asset capability's margin
+            // after the uploader checked it. Revalidate after those awaits too.
+            if (url === `${versionsBase}?deploy=false`) {
+              const jwt = JSON.parse(request.body).assets?.jwt;
+              if (jwt !== undefined) candidateAssetCapabilityExpiry(jwt, currentTime());
+            } else if (url.startsWith(`${accountBase}/workers/assets/upload`)) {
+              const bearer = request.headers.Authorization;
+              requireEvidence(typeof bearer === "string" && bearer.startsWith("Bearer "));
+              candidateAssetCapabilityExpiry(bearer.slice(7), currentTime());
+            }
             epoch++;
             checkpoint = null;
             let response;
@@ -208,6 +263,33 @@ export function createCandidateTrafficSettingsRecovery(options = {}) {
             );
             await authority();
           }
+          let uploaded = null;
+          if (restoreLatestUpload) {
+            const input = { baseline, baselineSha256: state.baselineSha256, files };
+            const admitted = prepareCandidateBaselineAssetInput({
+              ...input,
+              identity: run,
+              profile,
+              profileSha256,
+              now: currentTime(),
+            });
+            context = Object.freeze({
+              phase: "restore-baseline-version",
+              q: run.q,
+              profileSha256,
+              baselineSha256: state.baselineSha256,
+              baselineVersionId: baseline.versionId,
+              assetRootSha256: admitted.assetRootSha256,
+            });
+            await refreshOwnership(deadline);
+            uploaded = await createCandidateBaselineVersionUploader({
+              ...common,
+              admitBaseline: () => authority(),
+              assertSealed,
+            }).upload(input, deadline);
+            context = trafficContext;
+            await refreshOwnership(deadline);
+          }
           await authority();
           const traffic = await createCandidateTrafficRestorer({
             ...common,
@@ -246,15 +328,77 @@ export function createCandidateTrafficSettingsRecovery(options = {}) {
               subdomain: observedSettings.snapshot.subdomain,
             }) === settingsStateSha256,
           );
+          let latestEvidence = null;
+          if (restoreLatestUpload) {
+            const retained = {
+              manifest: {
+                versionId: uploaded.versionId,
+                mainModule: baseline.mainModule,
+                producer: { sourceSha: baseline.annotations["workers/tag"] },
+              },
+              files: files.map((file) => ({
+                ...file,
+                contentType: baseline.files.find(
+                  (record) => record.kind === file.kind && record.path === file.path,
+                ).contentType,
+              })),
+            };
+            async function readVersion(path) {
+              await authority();
+              const url = `${versionsBase}/${path}?include=modules`;
+              const response = await guardedFetch(url, {
+                method: "GET",
+                headers: { Authorization: `Bearer ${token}`, Accept: "application/json" },
+                redirect: "error",
+                credentials: "omit",
+                cache: "no-store",
+                signal: activeSignal(AbortSignal.timeout(10_000)),
+              });
+              const value = await readCandidateBaselineVersionResult(response, url);
+              await authority();
+              requireEvidence(
+                value.id === uploaded.versionId &&
+                  value.number === uploaded.versionNumber &&
+                  value.created_on === uploaded.versionCreatedAt,
+              );
+              const observed = candidateBaselineVersionSnapshot(
+                value,
+                retained,
+                run,
+                profile,
+                profileSha256,
+                currentTime(),
+              );
+              requireEvidence(
+                digest({
+                  ...observed,
+                  versionId: baseline.versionId,
+                  capturedAt: baseline.capturedAt,
+                }) === state.baselineSha256,
+              );
+              return digest(observed);
+            }
+            const immutableSha256 = await readVersion(uploaded.versionId);
+            const latestSha256 = await readVersion("latest");
+            latestEvidence = {
+              latestVersionId: uploaded.versionId,
+              immutableSha256,
+              latestSha256,
+            };
+          }
           const finalServing = await assertRestored();
           await authority();
           await refreshOwnership(deadline);
           const observedAt = currentTime();
           deadline.throwIfAborted();
           return Object.freeze({
-            schema: "two.candidate-traffic-settings-recovery.v1",
+            schema: restoreLatestUpload
+              ? "two.candidate-baseline-recovery.v1"
+              : "two.candidate-traffic-settings-recovery.v1",
             promotable: false,
-            scope: "baseline-traffic-and-settings-only",
+            scope: restoreLatestUpload
+              ? "baseline-traffic-settings-and-latest-upload-only"
+              : "baseline-traffic-and-settings-only",
             q: run.q,
             profileSha256,
             baselineSha256: state.baselineSha256,
@@ -264,6 +408,7 @@ export function createCandidateTrafficSettingsRecovery(options = {}) {
             versionId: serving.versionId,
             servingSha256: finalServing.snapshotSha256,
             settingsStateSha256,
+            ...(latestEvidence ?? {}),
             observedAt,
           });
         } catch {

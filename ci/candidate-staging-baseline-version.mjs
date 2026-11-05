@@ -231,6 +231,8 @@ export function createCandidateBaselineVersionUploader({
           baselineSha256: input.baselineSha256,
           baselineVersionId: input.baseline.versionId,
           versionId: uploaded.id,
+          versionNumber: uploaded.number,
+          versionCreatedAt: uploaded.created_on,
           requestSha256: request.proof.requestSha256,
           immutableSha256,
           latestSha256,

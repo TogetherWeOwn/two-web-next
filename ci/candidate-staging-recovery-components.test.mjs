@@ -3,7 +3,10 @@ import test from "node:test";
 import { candidateIdentity, candidateSha256 } from "./candidate-staging-admission.mjs";
 import { createCandidateRecoveryComponentGuard } from "./candidate-staging-recovery-components.mjs";
 import { createCandidateStagingJournal } from "./candidate-staging-occupancy.mjs";
-import { createCandidateTrafficSettingsRecovery } from "./candidate-staging-recovery.mjs";
+import {
+  createCandidateBaselineRecovery,
+  createCandidateTrafficSettingsRecovery,
+} from "./candidate-staging-recovery.mjs";
 import { createCandidateSettingsLifecycle } from "./candidate-staging-settings-lifecycle.mjs";
 
 const ERROR = "Candidate recovery refused: component ownership";
@@ -1932,4 +1935,855 @@ test("construction copies caller inputs so later mutation changes nothing", asyn
   const receipt = await api.restore();
   assert.equal(receipt.versionId, VERSION);
   assert.ok(f.p.calls.every((call) => call.url.startsWith(`${BASE}/`)));
+});
+
+// ---- Baseline recovery: B-prime upload, original B traffic/settings, latest upload ----
+
+const BP = "77777777-8888-4999-8aaa-bbbbbbbbbbbb";
+const ROOT = BASE.replace("/workers/scripts/two-web-next", "");
+const VERSIONS = `${ROOT}/workers/workers/two-web-next/versions`;
+const SESSION_URL = `${BASE}/assets-upload-session`;
+const ASSET_UPLOAD_URL = `${ROOT}/workers/assets/upload?base64=true`;
+const TICKET = `fixture.${Buffer.from(JSON.stringify({ exp: NOW + 600 })).toString("base64url")}.signature`;
+const BASELINE_ERROR = "Candidate recovery refused: traffic and settings";
+const SINK_KEYS = ["POST deployments", "PATCH script-settings", "POST subdomain"];
+const VERSION_POST = "POST versions?deploy=false";
+const IMMUTABLE_GET = "GET versions/B-prime";
+const LATEST_GET = "GET versions/latest";
+
+function baselineRefusal(error) {
+  assert.ok(error instanceof Error);
+  assert.equal(error.message, BASELINE_ERROR);
+  assert.equal(error.cause, undefined);
+  for (const secret of [JOURNAL_TOKEN, PROVIDER_TOKEN, TICKET, "private", "execute B"]) {
+    assert.equal(error.message.includes(secret), false);
+  }
+  return true;
+}
+
+// Mock immutable/latest response for the supported B-prime protocol projection.
+function versionFixture(s, id = BP) {
+  return {
+    id,
+    number: 42,
+    created_on: iso(NOW),
+    main_module: s.baseline.mainModule,
+    modules: s.files
+      .filter((file) => file.kind === "module")
+      .map((file) => ({
+        name: file.path,
+        content_type: s.baseline.files.find(
+          (record) => record.kind === "module" && record.path === file.path,
+        ).contentType,
+        content_base64: Buffer.from(file.bytes).toString("base64"),
+      })),
+    bindings: structuredClone(s.baseline.bindings),
+    compatibility_date: s.baseline.compatibilityDate,
+    compatibility_flags: [...s.baseline.compatibilityFlags],
+    placement: structuredClone(s.baseline.placement),
+    annotations: { ...s.baseline.annotations, "workers/triggered_by": "upload" },
+    ...(s.baseline.assets ? { assets: { config: structuredClone(s.baseline.assets) } } : {}),
+  };
+}
+
+function baselineKey(url, request) {
+  if (url === SESSION_URL) return `${request.method} assets-upload-session`;
+  if (url === ASSET_UPLOAD_URL) return `${request.method} assets/upload`;
+  if (url === `${VERSIONS}?deploy=false`) return `${request.method} versions?deploy=false`;
+  if (url === `${VERSIONS}/${BP}?include=modules`) return `${request.method} versions/B-prime`;
+  if (url === `${VERSIONS}/latest?include=modules`) return `${request.method} versions/latest`;
+  if (url.startsWith(`${BASE}/`)) return `${request.method} ${url.slice(BASE.length + 1)}`;
+  return "UNEXPECTED";
+}
+
+function baselineFixture({ assets = true, cached = false, over = {} } = {}) {
+  const s = setup({ assets });
+  // Provider state is independent of the caller's mutable retained input buffers.
+  const providerBaseline = {
+    baseline: structuredClone(s.baseline),
+    files: s.files.map((file) => ({ ...file, bytes: Buffer.from(file.bytes) })),
+  };
+  const p = providerFixture();
+  const b = {
+    calls: [],
+    timeline: [],
+    triggers: [],
+    unexpected: [],
+    mutate: null,
+    latestId: null,
+    journalLists: 0,
+    when(when, action) {
+      b.triggers.push({ when, action, done: false });
+    },
+    count(key) {
+      return b.calls.filter((call) => call.key === key).length;
+    },
+    indexOf(key) {
+      return b.calls.findIndex((call) => call.key === key);
+    },
+    postSettings() {
+      return p.calls.some((call) => call.key === "POST subdomain");
+    },
+    mutations() {
+      return b.timeline.filter((key) => key !== "JOURNAL" && !key.startsWith("GET "));
+    },
+  };
+  async function fetchImpl(url, request) {
+    const key = baselineKey(url, request);
+    const call = {
+      n: b.calls.length + 1,
+      url,
+      key,
+      method: request.method,
+      body: request.body,
+      request,
+    };
+    b.calls.push(call);
+    b.timeline.push(key);
+    for (const trigger of b.triggers) {
+      if (!trigger.done && trigger.when(call)) {
+        trigger.done = true;
+        await trigger.action(call);
+      }
+    }
+    switch (key) {
+      case "POST assets-upload-session":
+        return providerResult({
+          jwt: TICKET,
+          buckets: cached
+            ? []
+            : [Object.values(JSON.parse(request.body).manifest).map((entry) => entry.hash)],
+        });
+      case "POST assets/upload":
+        return providerResult({ jwt: TICKET });
+      case VERSION_POST:
+        return providerResult({ id: BP, number: 42, created_on: iso(NOW) });
+      case IMMUTABLE_GET:
+      case LATEST_GET: {
+        const value = versionFixture(
+          providerBaseline,
+          key === LATEST_GET ? (b.latestId ?? BP) : BP,
+        );
+        b.mutate?.(value, call);
+        return providerResult(value);
+      }
+      case "UNEXPECTED":
+        b.unexpected.push(url);
+        throw new Error(`private-provider-detail ${PROVIDER_TOKEN}`);
+      default:
+        return p.fetch(url, request);
+    }
+  }
+  const f = recoveryFixture({ ...over, fetchImpl }, { s, p });
+  s.net.onRead = async (_count, url) => {
+    if (url.includes("/statuses?")) return;
+    b.journalLists++;
+    b.timeline.push("JOURNAL");
+  };
+  return {
+    ...f,
+    b,
+    create: () => createCandidateBaselineRecovery(f.options),
+    async run(signal) {
+      return createCandidateBaselineRecovery(f.options).restore(signal);
+    },
+  };
+}
+
+// No traffic or sink write may happen: only the upload phase may have mutated.
+function assertNoServingOrSinkWrites(f) {
+  assert.equal(f.p.writes().length, 0);
+}
+
+function assertNoDuplicatePosts(f) {
+  assert.ok(f.b.count(VERSION_POST) <= 1);
+  assert.ok(f.b.count("POST assets-upload-session") <= 1);
+  assert.ok(f.b.count("POST deployments") <= 1);
+  assert.ok(f.b.count("PATCH script-settings") <= 1);
+  assert.ok(f.b.count("POST subdomain") <= 1);
+}
+
+for (const assets of [false, true]) {
+  test(`baseline recovery uploads B-prime then restores original B traffic and settings, assets=${assets}`, async () => {
+    const f = baselineFixture({ assets });
+    const api = f.create();
+    assert.ok(Object.isFrozen(api));
+    assert.deepEqual(Object.keys(api), ["restore"]);
+    assert.equal(f.b.calls.length, 0);
+    assert.equal(f.s.net.calls.length, 0);
+    const receipt = await api.restore(new AbortController().signal);
+    assert.ok(Object.isFrozen(receipt));
+    const { servingSha256, immutableSha256, latestSha256, ...rest } = receipt;
+    assert.match(servingSha256, /^[a-f0-9]{64}$/);
+    assert.notEqual(servingSha256, f.s.state.servingSha256);
+    assert.match(immutableSha256, /^[a-f0-9]{64}$/);
+    // Same immutable B-prime body is observed through both reads.
+    assert.equal(latestSha256, immutableSha256);
+    assert.deepEqual(rest, {
+      schema: "two.candidate-baseline-recovery.v1",
+      promotable: false,
+      scope: "baseline-traffic-settings-and-latest-upload-only",
+      q: f.s.identity.q,
+      profileSha256: f.s.profileSha256,
+      baselineSha256: f.s.state.baselineSha256,
+      baselineServingSha256: f.s.state.servingSha256,
+      settingsSha256: f.s.state.settingsSha256,
+      deploymentId: DR,
+      versionId: VERSION,
+      latestVersionId: BP,
+      settingsStateSha256: hash(originalSinks(f.s)),
+      observedAt: NOW,
+    });
+    // No full-recovery, stored-asset or journal-cleanup claim in the receipt.
+    assert.equal(
+      /clean|clear|complete|stored|full/i.test(JSON.stringify(Object.keys(receipt))),
+      false,
+    );
+    assert.equal(f.b.unexpected.length, 0);
+    assert.deepEqual(f.b.mutations(), [
+      ...(assets ? ["POST assets-upload-session", "POST assets/upload"] : []),
+      VERSION_POST,
+      ...SINK_KEYS,
+    ]);
+    assert.deepEqual(f.p.settings, f.s.settings.settings);
+    assert.deepEqual(f.p.subdomain, f.s.settings.subdomain);
+    assertNoDuplicatePosts(f);
+    assertReadOnlyJournal(f.s);
+  });
+}
+
+test("baseline recovery with cached assets sends the session but no asset bucket upload", async () => {
+  const f = baselineFixture({ assets: true, cached: true });
+  await f.run();
+  assert.equal(f.b.count("POST assets-upload-session"), 1);
+  assert.equal(f.b.count("POST assets/upload"), 0);
+  assert.equal(f.b.count(VERSION_POST), 1);
+});
+
+test("no-assets baseline needs no asset session or upload", async () => {
+  const f = baselineFixture({ assets: false });
+  await f.run();
+  assert.equal(f.b.count("POST assets-upload-session"), 0);
+  assert.equal(f.b.count("POST assets/upload"), 0);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  const phases = new Set(f.g.exclusive.map((context) => context.phase));
+  assert.equal(phases.has("restore-baseline-assets"), false);
+  assert.ok(phases.has("restore-baseline-version"));
+});
+
+test("baseline recovery orders upload before traffic and settings with sinks sealed throughout", async () => {
+  const f = baselineFixture();
+  await f.run();
+  const t = f.b.timeline;
+  const at = (key) => t.indexOf(key);
+  const lastAt = (key) => t.lastIndexOf(key);
+  assert.ok(at("POST assets-upload-session") < at("POST assets/upload"));
+  assert.ok(at("POST assets/upload") < at(VERSION_POST));
+  assert.ok(at(VERSION_POST) < at(IMMUTABLE_GET));
+  assert.ok(at(IMMUTABLE_GET) < at(LATEST_GET));
+  // Original B traffic and settings are restored only after the upload was read back.
+  assert.ok(at(LATEST_GET) < at("POST deployments"));
+  assert.ok(at("POST deployments") < at("PATCH script-settings"));
+  assert.ok(at("PATCH script-settings") < at("POST subdomain"));
+  // The final immutable and latest observations follow the last settings write.
+  assert.ok(lastAt(IMMUTABLE_GET) > at("POST subdomain"));
+  assert.ok(lastAt(LATEST_GET) > at("POST subdomain"));
+  assert.ok(lastAt(IMMUTABLE_GET) < lastAt(LATEST_GET));
+  // Before the version POST the sinks were read sealed and never written.
+  const uploadEnd = at(LATEST_GET);
+  assert.equal(
+    t.slice(0, uploadEnd).some((key) => SINK_KEYS.includes(key)),
+    false,
+  );
+  assert.ok(t.slice(0, at(VERSION_POST)).includes("GET script-settings"));
+  assert.ok(t.slice(0, at(VERSION_POST)).includes("GET subdomain"));
+  // The caller exclusion guard saw the version phase before the traffic phase.
+  const phases = f.g.exclusive.map((context) => context.phase);
+  // Asset subrequests inherit the already-admitted version context and asset root.
+  assert.ok(phases.includes("restore-baseline-version"));
+  assert.ok(
+    phases.indexOf("restore-baseline-version") < phases.indexOf("restore-baseline-traffic"),
+  );
+  assert.ok(phases.indexOf("restore-baseline-traffic") < phases.indexOf("restore"));
+  assert.ok(f.g.baseline.some((context) => context.phase === "restore-baseline-version"));
+});
+
+test("original B stays serving and B-prime is only the latest upload", async () => {
+  const f = baselineFixture();
+  const receipt = await f.run();
+  assert.notEqual(BP, VERSION);
+  assert.equal(receipt.versionId, VERSION);
+  assert.equal(receipt.latestVersionId, BP);
+  assert.equal(f.p.posts().length, 1);
+  assert.deepEqual(JSON.parse(f.p.posts()[0].body), {
+    strategy: "percentage",
+    versions: [{ version_id: VERSION, percentage: 100 }],
+  });
+  assert.equal(f.p.deployments[0].versions[0].version_id, VERSION);
+  assert.equal(JSON.stringify(f.p.deployments).includes(BP), false);
+  // B-prime never appears in any deployment, settings or subdomain request body.
+  for (const call of f.p.writes()) assert.equal(String(call.body).includes(BP), false);
+});
+
+test("baseline recovery POSTs only allowlisted fixed Cloudflare endpoints", async () => {
+  const f = baselineFixture();
+  await f.run();
+  const allowed = new Set([
+    SESSION_URL,
+    ASSET_UPLOAD_URL,
+    `${VERSIONS}?deploy=false`,
+    `${BASE}/deployments`,
+    `${BASE}/script-settings`,
+    `${BASE}/subdomain`,
+  ]);
+  const writes = f.b.calls.filter((call) => call.method !== "GET");
+  assert.equal(writes.length, 6);
+  for (const call of writes) assert.ok(allowed.has(call.url), call.url);
+  for (const call of f.b.calls) {
+    assert.ok(call.url.startsWith("https://api.cloudflare.com/client/v4/accounts/"));
+    assert.equal(call.request.redirect, "error");
+    assert.ok(call.request.signal instanceof AbortSignal);
+    assert.equal(call.url.includes("force"), false);
+    assert.equal(String(call.request.headers.Authorization).includes(JOURNAL_TOKEN), false);
+  }
+  assert.equal(
+    f.b.calls.find((call) => call.key === "POST assets-upload-session").request.headers
+      .Authorization,
+    `Bearer ${PROVIDER_TOKEN}`,
+  );
+  assert.equal(
+    f.b.calls.find((call) => call.key === "POST assets/upload").request.headers.Authorization,
+    `Bearer ${TICKET}`,
+  );
+  assert.equal(
+    f.b.calls.find((call) => call.key === VERSION_POST).request.headers.Authorization,
+    `Bearer ${PROVIDER_TOKEN}`,
+  );
+});
+
+test("baseline recovery takes a fresh journal guard before and after every mutation", async () => {
+  for (const assets of [false, true]) {
+    const f = baselineFixture({ assets });
+    await f.run();
+    const t = f.b.timeline;
+    const indexes = t.flatMap((key, i) =>
+      key !== "JOURNAL" && !key.startsWith("GET ") ? [i] : [],
+    );
+    assert.equal(indexes.length, assets ? 6 : 4);
+    indexes.forEach((index, n) => {
+      const previous = n === 0 ? -1 : indexes[n - 1];
+      const next = n === indexes.length - 1 ? t.length : indexes[n + 1];
+      assert.ok(t.slice(previous + 1, index).includes("JOURNAL"), `before ${t[index]}`);
+      assert.ok(t.slice(index + 1, next).includes("JOURNAL"), `after ${t[index]}`);
+    });
+    // The journal itself is only read.
+    assertReadOnlyJournal(f.s);
+  }
+});
+
+test("baseline recovery bounds ownership scans at 24", async () => {
+  const f = baselineFixture();
+  await f.run();
+  assert.ok(f.b.journalLists > 9);
+  assert.ok(f.b.journalLists <= 24);
+  assert.equal(listReads(f.s), f.b.journalLists);
+});
+
+test("oversized journal read cost refuses baseline recovery at entry without any provider call", async () => {
+  const f = baselineFixture({ over: { maxReadRequests: 3006 } });
+  for (let id = 2; id <= 65; id++) {
+    f.s.net.rows.push(makeRow(id, structuredClone(f.s.expectedPayload)));
+    f.s.net.statuses.set(id, [makeStatus("success", id * 10)]);
+  }
+  await assert.rejects(f.run(), baselineRefusal);
+  // The per-scan GET cap refuses mid-history; never a truncated scan.
+  assert.equal(f.s.net.calls.length, 24);
+  assert.equal(f.b.calls.length, 0);
+});
+
+test("baseline recovery admits copied byte pins at construction", async () => {
+  const tampered = baselineFixture();
+  tampered.s.files[0].bytes[0] ^= 1;
+  assert.throws(() => tampered.create(), baselineRefusal);
+  assert.equal(tampered.b.calls.length, 0);
+  assert.equal(tampered.s.net.calls.length, 0);
+
+  const missing = baselineFixture();
+  missing.s.files.pop();
+  assert.throws(() => missing.create(), baselineRefusal);
+  assert.equal(missing.b.calls.length, 0);
+
+  const f = baselineFixture();
+  const api = f.create();
+  // Later caller mutation of the retained bytes changes nothing sent to B-prime.
+  const original = f.s.files.map((file) => Buffer.from(file.bytes));
+  for (const file of f.s.files) file.bytes.fill(0);
+  f.s.baseline.versionId = OTHER_VERSION;
+  await api.restore();
+  const body = JSON.parse(f.b.calls.find((call) => call.key === VERSION_POST).body);
+  for (const [i, file] of f.s.files.entries()) {
+    if (file.kind !== "module") continue;
+    const sent = body.modules.find((module) => module.name === file.path);
+    assert.deepEqual(Buffer.from(sent.content_base64, "base64"), original[i]);
+  }
+});
+
+test("baseline recovery never mutates the caller's input buffers", async () => {
+  const f = baselineFixture();
+  const buffers = f.s.files.map((file) => file.bytes);
+  const before = f.s.files.map((file) => candidateSha256(file.bytes));
+  await f.run();
+  assert.deepEqual(
+    f.s.files.map((file) => file.bytes),
+    buffers,
+  );
+  f.s.files.forEach((file, i) => {
+    assert.equal(file.bytes, buffers[i]);
+    assert.equal(candidateSha256(file.bytes), before[i]);
+  });
+});
+
+test("mid-upload mutation of caller buffers cannot change the version request", async () => {
+  const f = baselineFixture();
+  const original = f.s.files.map((file) => Buffer.from(file.bytes));
+  f.b.when(
+    (call) => call.key === "POST assets-upload-session",
+    () => {
+      for (const file of f.s.files) file.bytes.fill(0xff);
+    },
+  );
+  await f.run();
+  const body = JSON.parse(f.b.calls.find((call) => call.key === VERSION_POST).body);
+  for (const [i, file] of f.s.files.entries()) {
+    if (file.kind !== "module") continue;
+    const sent = body.modules.find((module) => module.name === file.path);
+    assert.deepEqual(Buffer.from(sent.content_base64, "base64"), original[i]);
+  }
+});
+
+const DRIFT = [
+  [
+    "module bytes",
+    (v) => {
+      v.modules[0].content_base64 = Buffer.from("changed").toString("base64");
+    },
+  ],
+  [
+    "module set",
+    (v) => {
+      v.modules.pop();
+    },
+  ],
+  [
+    "main module",
+    (v) => {
+      v.main_module = "chunks/app.js";
+    },
+  ],
+  [
+    "binding value",
+    (v) => {
+      v.bindings.find((item) => item.name === "DB").id = "9".repeat(32);
+    },
+  ],
+  [
+    "secret binding type",
+    (v) => {
+      v.bindings.find((item) => item.name === "SESSION_SECRET").type = "plain_text";
+    },
+  ],
+  [
+    "compatibility date",
+    (v) => {
+      v.compatibility_date = "2026-09-30";
+    },
+  ],
+  [
+    "placement",
+    (v) => {
+      v.placement.region = "aws:us-west-2";
+    },
+  ],
+  [
+    "source annotation",
+    (v) => {
+      v.annotations["workers/tag"] = "e".repeat(40);
+    },
+  ],
+  [
+    "assets config",
+    (v) => {
+      v.assets.config.run_worker_first = false;
+    },
+  ],
+];
+
+for (const [label, mutate] of DRIFT) {
+  for (const key of [IMMUTABLE_GET, LATEST_GET]) {
+    test(`${label} drift on the upload ${key.slice(4)} read refuses before traffic or settings`, async () => {
+      const f = baselineFixture();
+      f.b.mutate = (value, call) => {
+        if (call.key === key && !f.b.postSettings()) mutate(value);
+      };
+      await assert.rejects(f.run(), baselineRefusal);
+      assertNoServingOrSinkWrites(f);
+      assert.equal(f.b.count(VERSION_POST), 1);
+      assertNoDuplicatePosts(f);
+    });
+  }
+  test(`${label} drift on the final read withholds the receipt without a retry`, async () => {
+    const f = baselineFixture();
+    f.b.mutate = (value) => {
+      if (f.b.postSettings()) mutate(value);
+    };
+    await assert.rejects(f.run(), baselineRefusal);
+    assert.deepEqual(
+      f.p.writes().map((call) => call.key),
+      SINK_KEYS,
+    );
+    assert.equal(f.b.count(VERSION_POST), 1);
+    assertNoDuplicatePosts(f);
+  });
+}
+
+test("a final latest read that names a replacement upload withholds the receipt", async () => {
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === LATEST_GET && f.b.postSettings(),
+    () => {
+      f.b.latestId = "88888888-9999-4aaa-8bbb-cccccccccccc";
+    },
+  );
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assert.deepEqual(
+    f.p.writes().map((call) => call.key),
+    SINK_KEYS,
+  );
+  assert.equal(f.b.count(LATEST_GET), 2);
+});
+
+test("a replacement latest upload during the first upload read refuses before traffic", async () => {
+  const f = baselineFixture();
+  f.b.latestId = "88888888-9999-4aaa-8bbb-cccccccccccc";
+  await assert.rejects(f.run(), baselineRefusal);
+  assertNoServingOrSinkWrites(f);
+  assert.equal(f.b.count(VERSION_POST), 1);
+});
+
+test("a final immutable read of another version withholds the receipt without a retry", async () => {
+  const f = baselineFixture();
+  f.b.mutate = (value) => {
+    if (f.b.postSettings()) value.id = OTHER_VERSION;
+  };
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assertNoDuplicatePosts(f);
+});
+
+test("a pre-aborted operation signal refuses baseline recovery before any provider call", async () => {
+  const f = baselineFixture();
+  const controller = new AbortController();
+  controller.abort("private-reason");
+  await assert.rejects(f.run(controller.signal), baselineRefusal);
+  assert.equal(f.b.calls.length, 0);
+});
+
+test("a non-AbortSignal operation argument is refused before any baseline provider call", async () => {
+  for (const value of [null, "signal", {}, 7]) {
+    const f = baselineFixture();
+    await assert.rejects(f.create().restore(value), baselineRefusal);
+    assert.equal(f.b.calls.length, 0);
+  }
+});
+
+test("cancellation at the asset session stops before the version POST", async () => {
+  const controller = new AbortController();
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === "POST assets-upload-session",
+    () => controller.abort("private-reason"),
+  );
+  await assert.rejects(f.run(controller.signal), baselineRefusal);
+  assert.equal(f.b.count("POST assets-upload-session"), 1);
+  assert.equal(f.b.count(VERSION_POST), 0);
+  assertNoServingOrSinkWrites(f);
+});
+
+test("cancellation after the version POST never retries it and never reaches traffic", async () => {
+  const controller = new AbortController();
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === VERSION_POST,
+    () => controller.abort("private-reason"),
+  );
+  await assert.rejects(f.run(controller.signal), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assertNoServingOrSinkWrites(f);
+});
+
+test("cancellation during the immutable readback never retries or restores", async () => {
+  const controller = new AbortController();
+  const f = baselineFixture({ over: { signal: controller.signal } });
+  f.b.when(
+    (call) => call.key === IMMUTABLE_GET,
+    () => controller.abort(),
+  );
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assertNoServingOrSinkWrites(f);
+});
+
+test("cancellation after the traffic write stops before the sinks and never repeats any POST", async () => {
+  const controller = new AbortController();
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === "POST deployments",
+    () => controller.abort("private-reason"),
+  );
+  await assert.rejects(f.run(controller.signal), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assert.equal(f.p.sinkWrites().length, 0);
+  assertNoDuplicatePosts(f);
+});
+
+test("cancellation before the final readback withholds the receipt after all writes", async () => {
+  const controller = new AbortController();
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === LATEST_GET && f.b.postSettings(),
+    () => controller.abort(),
+  );
+  await assert.rejects(f.run(controller.signal), baselineRefusal);
+  assert.equal(f.p.writes().length, 3);
+  assertNoDuplicatePosts(f);
+});
+
+test("a thrown version POST is uncertain: it is not retried and nothing else is written", async () => {
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === VERSION_POST,
+    () => {
+      throw new Error(`private-provider-detail ${PROVIDER_TOKEN}`);
+    },
+  );
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assert.equal(f.b.count(IMMUTABLE_GET), 0);
+  assertNoServingOrSinkWrites(f);
+});
+
+test("a failed version POST status is not retried and nothing else is written", async () => {
+  const f = baselineFixture();
+  const original = f.options.fetchImpl;
+  f.options.fetchImpl = async (url, request) => {
+    const response = await original(url, request);
+    if (url === `${VERSIONS}?deploy=false`)
+      return new Response(`private-provider-detail ${PROVIDER_TOKEN}`, { status: 500 });
+    return response;
+  };
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assertNoServingOrSinkWrites(f);
+});
+
+test("a lost version POST response followed by a failing readback is never re-sent", async () => {
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === IMMUTABLE_GET,
+    () => {
+      throw new Error(`private-provider-detail ${PROVIDER_TOKEN}`);
+    },
+  );
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assert.equal(f.b.count(IMMUTABLE_GET), 1);
+  assertNoServingOrSinkWrites(f);
+});
+
+test("a thrown asset session or bucket upload is not retried and blocks the version POST", async () => {
+  for (const key of ["POST assets-upload-session", "POST assets/upload"]) {
+    const f = baselineFixture();
+    f.b.when(
+      (call) => call.key === key,
+      () => {
+        throw new Error(`private-provider-detail ${PROVIDER_TOKEN}`);
+      },
+    );
+    await assert.rejects(f.run(), baselineRefusal);
+    assert.equal(f.b.count(key), 1);
+    assert.equal(f.b.count(VERSION_POST), 0);
+    assertNoServingOrSinkWrites(f);
+  }
+});
+
+test("a thrown traffic or settings write after the upload is not retried and leaks nothing", async () => {
+  for (const key of SINK_KEYS) {
+    const f = baselineFixture();
+    f.b.when(
+      (call) => call.key === key,
+      () => {
+        throw new Error(`private-provider-detail ${PROVIDER_TOKEN}`);
+      },
+    );
+    await assert.rejects(f.run(), baselineRefusal);
+    assert.equal(f.b.count(VERSION_POST), 1);
+    assert.equal(f.b.count(key), 1);
+    assertNoDuplicatePosts(f);
+  }
+});
+
+test("journal replacement after the asset session stops before the version POST", async () => {
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === "POST assets-upload-session",
+    () => replaceJournalArtifact(f.s),
+  );
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 0);
+  assertNoServingOrSinkWrites(f);
+  assertReadOnlyJournal(f.s);
+});
+
+test("journal replacement during the version POST stops readback and traffic", async () => {
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === VERSION_POST,
+    () => replaceJournalArtifact(f.s),
+  );
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assert.equal(f.b.count(IMMUTABLE_GET), 0);
+  assertNoServingOrSinkWrites(f);
+});
+
+test("journal replacement during the upload readback stops before traffic and settings", async () => {
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === IMMUTABLE_GET,
+    () => replaceJournalArtifact(f.s),
+  );
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assertNoServingOrSinkWrites(f);
+  assertReadOnlyJournal(f.s);
+});
+
+test("a competing dirty row appearing mid-upload stops before traffic and settings", async () => {
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === VERSION_POST,
+    () => {
+      f.s.net.rows.push(makeRow(2, structuredClone(f.s.expectedPayload)));
+      f.s.net.statuses.set(2, [makeStatus("in_progress", 20)]);
+    },
+  );
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assertNoServingOrSinkWrites(f);
+});
+
+test("journal replacement at the final checkpoint withholds the receipt", async () => {
+  const f = baselineFixture();
+  f.b.when(
+    (call) => call.key === LATEST_GET && f.b.postSettings(),
+    () => replaceJournalArtifact(f.s),
+  );
+  await assert.rejects(f.run(), baselineRefusal);
+  assert.equal(f.p.writes().length, 3);
+  assertNoDuplicatePosts(f);
+});
+
+test("a refused exclusion or baseline admission stops before the version POST", async () => {
+  for (const hook of ["onExclusive", "onBaseline"]) {
+    const f = baselineFixture();
+    f.g[hook] = (context) => {
+      if (context.phase === "restore-baseline-version") throw new Error("private-provider-detail");
+    };
+    await assert.rejects(f.run(), baselineRefusal);
+    assert.equal(f.b.count(VERSION_POST), 0);
+    assertNoServingOrSinkWrites(f);
+  }
+});
+
+test("overlapping baseline restores refuse the second without extra writes", async () => {
+  const f = baselineFixture();
+  const api = f.create();
+  const first = api.restore();
+  await assert.rejects(api.restore(), baselineRefusal);
+  assert.equal((await first).latestVersionId, BP);
+  assert.equal(f.b.count(VERSION_POST), 1);
+  assertNoDuplicatePosts(f);
+});
+
+test("baseline recovery leaks no credential, capability or file data in receipt or errors", async () => {
+  const ok = baselineFixture();
+  const receipt = await ok.run();
+  const text = JSON.stringify(receipt);
+  for (const secret of [JOURNAL_TOKEN, PROVIDER_TOKEN, TICKET, "jwt", "execute B", "body{}"]) {
+    assert.equal(text.includes(secret), false, secret);
+  }
+  const bad = baselineFixture();
+  bad.b.when(
+    (call) => call.key === VERSION_POST,
+    () => {
+      throw new Error(`private-provider-detail ${PROVIDER_TOKEN} ${TICKET}`);
+    },
+  );
+  await assert.rejects(bad.run(), (error) => {
+    baselineRefusal(error);
+    assert.equal(String(error.stack).includes(PROVIDER_TOKEN), false);
+    return true;
+  });
+});
+
+for (const target of ["POST assets/upload", VERSION_POST]) {
+  test(`outer journal checks cannot spend the asset capability margin before ${target}`, async () => {
+    const f = baselineFixture();
+    const previous = target === VERSION_POST ? "POST assets/upload" : "POST assets-upload-session";
+    const originalRead = f.s.net.onRead;
+    let lists = 0;
+    f.s.net.onRead = async (count, url) => {
+      await originalRead(count, url);
+      if (!url.includes("/statuses?") && f.b.count(previous) === 1 && f.b.count(target) === 0) {
+        lists++;
+        // First scan follows the previous POST; second is the last awaited
+        // journal authorization inside guardedFetch, after the uploader's check.
+        if (lists === 2) f.s.now = NOW + 570;
+      }
+    };
+    await assert.rejects(f.run(), baselineRefusal);
+    assert.equal(lists, 2);
+    assert.equal(f.b.count(target), 0);
+    assertNoServingOrSinkWrites(f);
+    assertReadOnlyJournal(f.s);
+  });
+}
+
+for (const field of ["number", "created_on"]) {
+  test(`final version ${field} must still match the actual upload response`, async () => {
+    const f = baselineFixture();
+    f.b.mutate = (value, call) => {
+      if (call.key === LATEST_GET && f.b.postSettings()) {
+        if (field === "number") value.number++;
+        else value.created_on = iso(NOW - 1);
+      }
+    };
+    await assert.rejects(f.run(), baselineRefusal);
+    assert.equal(f.p.writes().length, 3);
+    assertNoDuplicatePosts(f);
+    assertReadOnlyJournal(f.s);
+  });
+}
+
+test("the original traffic and settings recovery stays free of upload and version calls", async () => {
+  assert.notEqual(createCandidateBaselineRecovery, createCandidateTrafficSettingsRecovery);
+  const f = recoveryFixture();
+  const receipt = await f.run();
+  assert.equal(receipt.schema, "two.candidate-traffic-settings-recovery.v1");
+  assert.equal("latestVersionId" in receipt, false);
+  assert.equal(
+    f.p.calls.every((call) => /^(deployments|script-settings|subdomain)/.test(call.path)),
+    true,
+  );
 });
