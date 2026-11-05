@@ -25,6 +25,8 @@ __pycache__/
 src/*-critical-css.ts
 # bin/local-ci.sh scratch output (blob reports, logs, container HOME).
 .local-ci/
+# Annotated comparison captures, synthetic source fixtures and rendered evidence.
+.climb/
 # Claude Code local settings (absolute host paths, per-machine permissions).
 # Never commit; the checked-in .claude/agents/ roles are the shared config.
 .claude/settings.local.json

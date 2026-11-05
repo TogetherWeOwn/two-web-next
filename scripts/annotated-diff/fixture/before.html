@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en" data-capture-seed="known-answer"><head><meta charset="utf-8"><title>Known answer</title>
+<style>
+@font-face { font-family: Inter; src: url('/font.woff2'); }
+* { box-sizing: border-box; }
+body { margin: 0; background: white; color: black; font: 16px/24px Inter; }
+#anchor { position: absolute; top: 0; width: 1px; height: 1px; }
+#flow { position: absolute; left: 30px; top: 30px; width: 140px; }
+[data-testid="card"] {
+  background-color: #dddddd;
+  border-top-left-radius: 22px;
+  border-top-right-radius: 22px;
+  border-bottom-left-radius: 22px;
+  border-bottom-right-radius: 22px;
+  padding-top: 10px;
+  padding-right: 10px;
+  padding-bottom: 10px;
+  padding-left: 10px;
+}
+[data-testid="shifted"] { margin-top: 30px; width: 140px; height: 26px; background: #b8c8e8; }
+[data-testid="opacity"] { position: absolute; top: 190px; left: 30px; width: 330px; height: 110px; background: black; opacity: 0.4; }
+[data-testid="type"] { position: absolute; top: 350px; left: 30px; width: 330px; height: 32px; letter-spacing: 70px; font-family: Inter; }
+[data-testid="border"] { position: absolute; top: 500px; left: 30px; width: 330px; height: 34px; border: 1px solid #777777; }
+[data-testid="unclaimed"] { position: absolute; top: 590px; left: 30px; width: 120px; height: 40px; background: #dddddd; }
+canvas { position: absolute; top: 700px; left: 80px; }
+[data-testid="noop"] { position: absolute; top: 780px; left: 30px; width: 90px; height: 28px; }
+</style></head><body>
+<div id="anchor"></div>
+<div id="flow"><div data-testid="card" aria-label="Panel">Panel</div><div data-testid="shifted" aria-label="Follower">Follower</div></div>
+<div data-testid="opacity" aria-label="Swatch"></div>
+<div data-testid="type" aria-label="Typography">ABCD</div>
+<div data-testid="border" aria-label="Rule"></div>
+<div data-testid="unclaimed" aria-label="Unexpected"></div>
+<canvas data-testid="canvas" width="160" height="30" aria-label="Canvas"></canvas>
+<div data-testid="noop" aria-label="Control">Control</div>
+<script>const c = document.querySelector('canvas').getContext('2d'); c.fillStyle = '#ffffff'; c.fillRect(0, 0, 160, 30); c.fillStyle = '#777777'; c.fillRect(40, 12, 1, 1);</script>
+</body></html>
