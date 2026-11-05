@@ -22,6 +22,10 @@ const MAX_BYTES = 16 * 1024 * 1024;
 const MAX_FILES = 4096;
 const MAX_NODES = 8192;
 const CONTROL = new Set(["_worker.js", "_headers", "_redirects", "_routes.json", ".assetsignore"]);
+const REBUILD_SCHEMA = "two.rebuilt-baseline-manifest.v1";
+const DIGEST = /^[a-f0-9]{64}$/;
+const SHA = /^[a-f0-9]{40}$/;
+const ID = /^[1-9][0-9]{0,15}$/;
 
 function requireEvidence(value) {
   if (!value) throw new Error("Candidate package refused: output");
@@ -136,6 +140,259 @@ export function collectCandidateKitPackage(options) {
     return { files, bytes: total, ignoredControlFiles: ignored };
   } catch {
     throw new Error("Candidate package refused: output");
+  }
+}
+
+function matches(pattern, value) {
+  return typeof value === "string" && pattern.test(value);
+}
+
+function canonicalOutputPath(value) {
+  // A deliberately narrow UTF-8 subset: no normalization, percent decoding or
+  // extension filtering can silently change the deployed path inventory.
+  return (
+    typeof value === "string" &&
+    value.length <= 240 &&
+    /^[A-Za-z0-9_./-]+$/.test(value) &&
+    value.split("/").every((part) => part && part !== "." && part !== ".." && !part.startsWith("."))
+  );
+}
+
+function componentProfile(components) {
+  requireEvidence(Array.isArray(components) && components.length > 0 && components.length <= 32);
+  const seen = new Set();
+  const profile = [];
+  for (const component of components) {
+    requireEvidence(
+      keys(component, "id,mainModule,assets,sourceMaps") &&
+        typeof component.id === "string" &&
+        /^[a-z][a-z0-9-]{0,63}$/.test(component.id) &&
+        !seen.has(component.id) &&
+        canonicalOutputPath(component.mainModule) &&
+        ["none", "empty", "present"].includes(component.assets) &&
+        Array.isArray(component.sourceMaps) &&
+        component.sourceMaps.length <= MAX_FILES,
+    );
+    seen.add(component.id);
+    const maps = [];
+    for (const path of component.sourceMaps) {
+      requireEvidence(canonicalOutputPath(path) && path.endsWith(".map"));
+      maps.push(path);
+    }
+    maps.sort();
+    requireEvidence(new Set(maps.map((path) => path.toLowerCase())).size === maps.length);
+    profile.push(Object.freeze({ ...component, sourceMaps: Object.freeze(maps) }));
+  }
+  profile.sort((a, b) => Buffer.compare(Buffer.from(a.id), Buffer.from(b.id)));
+  return Object.freeze(profile);
+}
+
+// Pure post-sandbox producer seam. `components` and both digests come from the
+// trusted, separately pinned complete recipe/config profile, NOT build output.
+// `files` must be the entire inert output inventory, obtained after destruction
+// of the source sandbox (e.g. collectCandidateKitPackage for the web component).
+// This validates coverage against that profile; it cannot attest enumeration,
+// sandbox destruction, source authentication or the contents behind a digest.
+export function createRebuiltBaselineManifest(options) {
+  try {
+    requireEvidence(
+      keys(options, "components,configDigest,recipeDigest,files") &&
+        matches(DIGEST, options.configDigest) &&
+        matches(DIGEST, options.recipeDigest) &&
+        Array.isArray(options.files) &&
+        options.files.length > 0 &&
+        options.files.length <= MAX_FILES,
+    );
+    const components = componentProfile(options.components);
+    const byId = new Map(components.map((component) => [component.id, component]));
+    const names = new Map();
+    const counts = new Map(components.map((component) => [component.id, { assets: 0, maps: [] }]));
+    const records = [];
+    let total = 0;
+    for (const file of options.files) {
+      requireEvidence(
+        keys(file, "component,kind,path,type,bytes,contentType") &&
+          byId.has(file.component) &&
+          ["module", "source-map", "asset"].includes(file.kind) &&
+          canonicalOutputPath(file.path) &&
+          file.type === "file" &&
+          Buffer.isBuffer(file.bytes) &&
+          (file.kind === "asset"
+            ? file.contentType === null
+            : file.kind === "source-map"
+              ? file.contentType === "application/source-map" && file.path.endsWith(".map")
+              : file.contentType === "application/javascript+module"),
+      );
+      total += file.bytes.length;
+      requireEvidence(total <= MAX_BYTES);
+      // Module and map paths share one namespace; static assets have another.
+      // Check ancestors too: Foo/a and foo/b, or a file replacing a directory,
+      // must not depend on the producer's filesystem case semantics.
+      const namespace = `${file.component}/${file.kind === "asset" ? "asset" : "code"}/`;
+      const parts = file.path.split("/");
+      for (let i = 1; i <= parts.length; i++) {
+        const path = namespace + parts.slice(0, i).join("/");
+        const kind = i === parts.length ? "file" : "directory";
+        const previous = names.get(path.toLowerCase());
+        requireEvidence(
+          !previous || (kind === "directory" && previous.kind === kind && previous.path === path),
+        );
+        names.set(path.toLowerCase(), { path, kind });
+        requireEvidence(names.size <= MAX_NODES);
+      }
+      if (file.kind === "asset") counts.get(file.component).assets++;
+      if (file.kind === "source-map") counts.get(file.component).maps.push(file.path);
+      records.push(
+        Object.freeze({
+          component: file.component,
+          kind: file.kind,
+          path: file.path,
+          size: file.bytes.length,
+          sha256: candidateSha256(file.bytes),
+          contentType: file.contentType,
+        }),
+      );
+    }
+    for (const component of components) {
+      const count = counts.get(component.id);
+      requireEvidence(
+        records.some(
+          (file) =>
+            file.component === component.id &&
+            file.kind === "module" &&
+            file.path === component.mainModule &&
+            file.size > 0,
+        ) &&
+          (component.assets === "present" ? count.assets > 0 : count.assets === 0) &&
+          JSON.stringify(count.maps.sort()) === JSON.stringify(component.sourceMaps),
+      );
+    }
+    records.sort((a, b) => {
+      for (const key of ["component", "path"]) {
+        const order = Buffer.compare(Buffer.from(a[key]), Buffer.from(b[key]));
+        if (order) return order;
+      }
+      return Buffer.compare(Buffer.from(a.kind), Buffer.from(b.kind));
+    });
+    const canonical = `${JSON.stringify([
+      REBUILD_SCHEMA,
+      records.map((file) => [
+        file.component,
+        file.kind,
+        file.path,
+        file.size,
+        file.sha256,
+        file.contentType,
+      ]),
+      options.configDigest,
+      options.recipeDigest,
+    ])}\n`;
+    requireEvidence(
+      Buffer.byteLength(canonical) <= 1024 * 1024 &&
+        total + Buffer.byteLength(canonical) <= MAX_BYTES,
+    );
+    return Object.freeze({
+      schema: REBUILD_SCHEMA,
+      promotable: false,
+      scope: "complete-retained-manifest-only",
+      components,
+      files: Object.freeze(records),
+      configDigest: options.configDigest,
+      recipeDigest: options.recipeDigest,
+      canonical,
+      rootSha256: candidateSha256(canonical),
+      bytes: total,
+    });
+  } catch {
+    throw new Error("Candidate package refused: rebuild-manifest");
+  }
+}
+
+// The wrapper supplies selections/producer records through its protected output
+// channel and artifact metadata through independent GitHub readers. Never call
+// this with archive-local attestations as authority. This pure join deliberately
+// grants NO operational admission: run/job/workflow authentication, retained ZIP
+// validation, sandbox isolation and every F/O control remain external gates.
+export function finalizeRebuiltBaselineProducerReceipt(options) {
+  try {
+    requireEvidence(keys(options, "expected,builds"));
+    const { expected, builds } = options;
+    requireEvidence(
+      keys(expected, "repositoryId,sourceSha,producerSha,components,configDigest,recipeDigest") &&
+        matches(ID, expected.repositoryId) &&
+        matches(SHA, expected.sourceSha) &&
+        matches(SHA, expected.producerSha) &&
+        matches(DIGEST, expected.configDigest) &&
+        matches(DIGEST, expected.recipeDigest) &&
+        Array.isArray(builds) &&
+        builds.length === 2,
+    );
+    const receipts = [];
+    const artifacts = new Set();
+    const jobs = new Set();
+    let manifest;
+    for (const build of builds) {
+      requireEvidence(keys(build, "selection,artifact,producer,files"));
+      const { selection, artifact, producer, files } = build;
+      requireEvidence(
+        keys(selection, "runId,runAttempt,jobId,artifactId,archiveSha256") &&
+          [selection.runId, selection.runAttempt, selection.jobId, selection.artifactId].every(
+            (value) => matches(ID, value),
+          ) &&
+          matches(DIGEST, selection.archiveSha256) &&
+          !artifacts.has(selection.artifactId) &&
+          !jobs.has(selection.jobId),
+      );
+      artifacts.add(selection.artifactId);
+      jobs.add(selection.jobId);
+      const actualId = (value, selected) =>
+        Number.isSafeInteger(value) && String(value) === selected;
+      requireEvidence(
+        actualId(artifact?.id, selection.artifactId) &&
+          artifact.expired === false &&
+          artifact.digest === `sha256:${selection.archiveSha256}` &&
+          actualId(artifact.workflow_run?.id, selection.runId) &&
+          actualId(artifact.workflow_run.repository_id, expected.repositoryId) &&
+          actualId(artifact.workflow_run.head_repository_id, expected.repositoryId) &&
+          artifact.workflow_run.head_sha === expected.producerSha,
+      );
+      const current = createRebuiltBaselineManifest({
+        components: expected.components,
+        configDigest: expected.configDigest,
+        recipeDigest: expected.recipeDigest,
+        files,
+      });
+      requireEvidence(
+        keys(
+          producer,
+          "schema,repositoryId,sourceSha,producerSha,runId,runAttempt,jobId,artifactId,archiveSha256,manifestRoot",
+        ) &&
+          producer.schema === "two.rebuilt-baseline-producer.v1" &&
+          ["repositoryId", "sourceSha", "producerSha"].every(
+            (key) => producer[key] === expected[key],
+          ) &&
+          ["runId", "runAttempt", "jobId", "artifactId", "archiveSha256"].every(
+            (key) => producer[key] === selection[key],
+          ) &&
+          producer.manifestRoot === current.rootSha256 &&
+          (!manifest || manifest.canonical === current.canonical),
+      );
+      manifest = current;
+      receipts.push(Object.freeze({ ...selection }));
+    }
+    return Object.freeze({
+      schema: "two.rebuilt-baseline-pair.v1",
+      promotable: false,
+      scope: "paired-retained-manifests-only",
+      operationalAdmission: false,
+      repositoryId: expected.repositoryId,
+      sourceSha: expected.sourceSha,
+      producerSha: expected.producerSha,
+      builds: Object.freeze(receipts),
+      manifest,
+    });
+  } catch {
+    throw new Error("Candidate package refused: rebuild-pair");
   }
 }
 

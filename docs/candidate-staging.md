@@ -14,6 +14,47 @@ Durable Objects and database compute are not admitted by a sleeping Worker or
 by qualification fixture success. No runtime shutdown or cost exception is
 claimed by this incomplete source implementation.
 
+## Rebuilt baseline producer/manifest seam (not installed)
+
+The approved baseline direction is a trusted pinned rebuild and forward install
+into a fresh disposable target, **not historical stored-content identity**. The
+pure functions in the existing [producer module](../ci/candidate-staging-package.mjs)
+now join the complete inert output inventory to that evidence format:
+
+- `createRebuiltBaselineManifest` requires a separately trusted complete component
+  profile, config digest and recipe/environment digest. It recomputes every raw
+  file size/SHA-256, including uploaded source maps, and requires every named
+  component's nonempty entry module. Each component explicitly declares present,
+  empty or inapplicable static assets and its exact uploaded source-map paths.
+  Unknown/missing components and missing/extra source maps refuse. No extension
+  filter removes deployable files. The existing Kit collector supplies web files;
+  it does not cover jobs or Tail by itself.
+- Canonical root input is compact UTF-8 JSON plus a final LF:
+  `[schema, [[component,kind,path,size,sha256,contentType],...], configDigest, recipeDigest]`.
+  Records sort by UTF-8 component/path, then kind. Paths use a strict ASCII subset
+  of UTF-8; absolute/traversal/encoded/hidden paths, backslashes, case collisions,
+  ancestor collisions, duplicate paths and non-file entries refuse. Existing
+  16 MiB/4096-file/8192-node bounds remain; the canonical manifest also counts
+  against the byte budget. No timestamp stripping or ZIP-metadata equality.
+- `finalizeRebuiltBaselineProducerReceipt` requires two distinct jobs/artifacts,
+  exact pinned source and producer revisions, matching config/recipe digests,
+  run/attempt/job/artifact association and independently read artifact metadata.
+  It recomputes both manifests and compares their full canonical bytes, not just
+  caller-declared roots. Source SHA and producer workflow SHA are distinct pins.
+  Producer records must arrive through the protected trusted output channel,
+  never an attestation inside source-controlled output.
+
+This pure seam performs no build, network request, upload, allocation, routing,
+credential access, journal/settings/DB operation or activation. It returns only
+`paired-retained-manifests-only`, `promotable:false`, `operationalAdmission:false`.
+It does **not** authenticate a caller, enumerate the sandbox, attest destruction,
+verify the profile behind a digest, decode/download an artifact or independently
+verify run/job success. The installed wrapper/readers must establish those facts;
+a forged object cannot supply them. There is no runtime workflow caller yet.
+Fresh-target principal/resource/lifecycle admission, global exclusion, complete
+forward installation, canonical routing, restoration and native zero-idle controls
+still refuse when unknown. Synthetic fixture IDs are not operational inputs.
+
 ## Read-only launcher phase (not qualification)
 
 The new [main-only dispatch workflow](../.github/workflows/candidate-staging.yml)
@@ -48,7 +89,11 @@ No live dispatch is claimed. Subsequent phases still require their independent
 source, authority, admission and native Security/QA gates; a green preflight must
 never substitute for them or authorize a mutation.
 
-### Unresolved immutable stored-asset channel
+### Historical stored-asset reader limitation
+
+This limitation applies to the retained historical-B readers below; it does not
+reopen reverse lookup as a prerequisite for the approved fresh forward-chain
+claim above. Neither route is operationally admitted by a pure manifest join.
 
 The shipped Wrangler asset client exposes session creation and asset uploads;
 its completion capability is sent into version creation. No immutable
@@ -57,8 +102,11 @@ The provider observer compares `assets.config`, not stored content. A retained
 source hash, an acknowledged upload, a completion capability or an ordinary
 candidate-controlled HTTP response is not independent stored-content proof.
 Do not persist a session/completion capability in recovery artifacts or infer a
-manifest binding from decoded unsigned JWT claims. Complete asset admission
-remains a concrete provider-channel prerequisite, not a successful helper result.
+manifest binding from decoded unsigned JWT claims. These historical readers do
+not establish stored-content admission. Fresh forward-chain admission instead
+requires the complete installed trusted producer/controller, admitted disposable
+target and independent serving/restoration evidence, not reverse lookup or a
+successful helper result.
 
 ## Read-only recovery component capture (not installed)
 
