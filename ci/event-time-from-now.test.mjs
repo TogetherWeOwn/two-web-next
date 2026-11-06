@@ -49,7 +49,7 @@ before(async () => {
   const { compile } = webRequire("@tailwindcss/node");
   kitCompiler = await compile(
     readFileSync(new URL("../web/src/app.css", import.meta.url), "utf8"),
-    { base: fileURLToPath(new URL("../web/src/", import.meta.url)) },
+    { base: fileURLToPath(new URL("../web/src/", import.meta.url)), onDependency: () => {} },
   );
   browser = await chromium.launch({ headless: true });
 });

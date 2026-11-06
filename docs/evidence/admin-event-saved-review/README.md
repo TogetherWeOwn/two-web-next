@@ -45,3 +45,9 @@ invalid-date error pin (25,862 passed, 676 skipped in each suite). Corrections
 retain the assertions, freeze the CRUD clock, and scope invalid-date fallback to
 HTML. Corrected-head Actions remain pending. The failed check skipped later Kit
 build/contrast gates; its contrast upload failed because no captures were produced.
+
+At `a20737c6`, [corrected Actions](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42181673722)
+failed lint on one import's formatting before types/tests. Browser setup omitted
+Tailwind's required dependency callback: all 64 cases cancelled, no new captures.
+The import and callback are corrected; verification remains pending. Scope,
+docs-links, bundle-budget and Lighthouse passed; no overall green is claimed.

@@ -22,7 +22,11 @@ import type {
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-import { formatElapsedDuration, formatDetailWhen as fmtWithOffset, instantIso } from "./date-format";
+import {
+  formatElapsedDuration,
+  formatDetailWhen as fmtWithOffset,
+  instantIso,
+} from "./date-format";
 import { EventReviewSection } from "../admin/pages/event-form-review";
 import type { SavedEventReview } from "../admin/event-saved-review";
 
