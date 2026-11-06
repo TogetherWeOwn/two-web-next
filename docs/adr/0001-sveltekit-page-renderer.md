@@ -105,33 +105,39 @@ Source: the Hono router (`src/index.tsx` and the modules it registers) and
 "Kit today" shows the shared manifest. Staging narrows that to the archive and
 static families, and production is all Hono.
 
-**Dates.** No calendar date has an owner acknowledgement yet, so every date
-cell says `unacknowledged`. An amendment to this file adds each date together
-with its acknowledgement link. Nobody may enter a date for another owner.
+**Dates.** Each row's owner acknowledged the row on 2026-11-06. No calendar
+date can be supported yet, so each date cell names the input it waits for. A
+page family's cutover waits for a dated production release plan for that
+family, its rollback end waits for the production acceptance record, and its
+deletion date waits for the recorded rollback end. A non-page family starts
+only after M0 is accepted, and M0 has no date yet. Calendar dates land in later
+amendments to this file once those inputs exist. Nobody may enter a date for
+another owner.
 **Experiment cleanup.** This repository holds no Astro trial or synthetic
-editor artifact at the source commit, so no row has repository cleanup.
-Any artifact outside this repository belongs to the Security Engineer, and its
-cleanup date is `unacknowledged`.
+editor artifact at the source commit. The Security Engineer checked on
+2026-11-06 that no trial artifact exists outside it either: no trial
+environment was allocated, and no pilot code or branch was pushed. No row has
+experiment cleanup.
 
 ### Page families (move to Kit before M0)
 
 | Route family | Methods | Kit today | Owner | Experiment cleanup | Cutover | Rollback end | Deletion date | Acknowledgement |
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| Shell: layout, branded 404/500/error pages | GET (all page paths) | Kit layout and `+error` exist; Hono error handlers serve production | Software Engineer 1 | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Home `/` (bot-log feed and live layer included) | GET | entry off | Software Engineer 1 | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Join and recovery pages `/join`, `/auth/recover` | GET | entries off | Software Engineer 1 | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Profile `/profile`, `/members/:user` | GET | entries off | Software Engineer 1 | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Events list and archive `/events`, `/events/past` | GET | **on** (staging: `/events/past` only) | Software Engineer 2 | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Event detail `/e/:key` (Lifeline included) | GET | entry off (loopback parity fixture only) | Software Engineer 2 | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Member board `/leaderboards/members` (members and ladder slices) | GET | **on** | Software Engineer 2 | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Admin reads `/admin`, `/admin/events`, `/admin/events/new`, `/admin/events/:key`, `/admin/featured`, `/admin/featured/new`, `/admin/featured/:id`, `/admin/activity-log` | GET | entries off | Software Engineer 2 | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Admin join attempts `/admin/join-attempts`, `/admin/join-attempts/:id` | GET | **on** | Software Engineer 2 | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Content leaves `/about`, `/faq` | GET | **on** (staging: static stage) | unassigned | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Content leaves `/privacy`, `/rules` | GET | entries off | unassigned | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Hot zones `/hotzones`, `/hotzones/:signal` | GET | **on** for `/hotzones`, `/hotzones/joins`, `/hotzones/voice`, `/hotzones/games` (exact entries); any other signal value stays on Hono and gets its 404 | unassigned | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
+| Shell: layout, branded 404/500/error pages | GET (all page paths) | Kit layout and `+error` exist; Hono error handlers serve production | Software Engineer 1 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Home `/` (bot-log feed and live layer included) | GET | entry off | Software Engineer 1 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Join and recovery pages `/join`, `/auth/recover` | GET | entries off | Software Engineer 1 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Profile `/profile`, `/members/:user` | GET | entries off | Software Engineer 1 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Events list and archive `/events`, `/events/past` | GET | **on** (staging: `/events/past` only) | Software Engineer 2 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Event detail `/e/:key` (Lifeline included) | GET | entry off (loopback parity fixture only) | Software Engineer 2 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Member board `/leaderboards/members` (members and ladder slices) | GET | **on** | Software Engineer 2 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Admin reads `/admin`, `/admin/events`, `/admin/events/new`, `/admin/events/:key`, `/admin/featured`, `/admin/featured/new`, `/admin/featured/:id`, `/admin/activity-log` | GET | entries off | Software Engineer 2 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Admin join attempts `/admin/join-attempts`, `/admin/join-attempts/:id` | GET | **on** | Software Engineer 2 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Content leaves `/about`, `/faq` | GET | **on** (staging: static stage) | Software Engineer 1 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Content leaves `/privacy`, `/rules` | GET | entries off | Software Engineer 1 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
+| Hot zones `/hotzones`, `/hotzones/:signal` | GET | **on** for `/hotzones`, `/hotzones/joins`, `/hotzones/voice`, `/hotzones/games` (exact entries); any other signal value stays on Hono and gets its 404 | Software Engineer 2 | none (checked 2026-11-06) | pending: dated production release plan | pending: production acceptance | pending: rollback end | owner, 2026-11-06, dependency-bound |
 
-Three page families have no owner in the scope inventory and are marked
-`unassigned`. Each needs an owner before it can get dates.
+The hot zones row covers the list and the valid signal pages only. Any other
+signal value keeps its Hono 404 contract.
 
 ### Non-page contracts (Hono through M0; post-M0 migration is direction only)
 
@@ -141,19 +147,19 @@ migration ships.
 
 | Route family | Methods | Owner | Experiment cleanup | Cutover | Rollback end | Deletion date | Acknowledgement |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| OAuth and session: `/auth/discord`, `/auth/discord/redirect`, `/auth/discord/callback`, `/join/discord`, `/join/callback`, `/auth/status`, `/logout`, `/logout/everywhere`, staging-only `/auth/qa/:identity` | GET (`/auth/*`, `/join/*`); POST (`/logout*`, `/auth/qa/:identity`) | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Event writes: `/events`, `/events/:key`, `/events/:key/{publish,cancel,rsvp-pause,rsvp-reopen,duplicate}` | POST; PATCH (`/events/:key`) | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| RSVP: `/events/:key/rsvp`, `/e/:key/rsvp` | PUT, DELETE, other methods answer 405 (`/events/:key/rsvp`); POST (`/e/:key/rsvp`) | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Profile writes: `/members/:user`; retired directory `/members`, `/members/` (404) | PATCH, POST; GET (404) | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Admin writes: `/admin/events`, `/admin/events/:key`, `/admin/events/:key/{publish,cancel,rsvp-pause,rsvp-reopen,duplicate}`, `/admin/featured`, `/admin/featured/:id`, `/admin/featured/:id/{unpublish,delete}` | POST | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Admin operator endpoints: `/admin/ops-overrides`, `/admin/queue/source-evidence/:id`, `/admin/queue/failed/:id/preview`, `/admin/queue/failed/:id/redispatch` | GET; POST, PUT, PATCH, DELETE, OPTIONS refused (first two); POST (redispatch) | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Legacy redirects: `/login`, `/discord`, `/community`, `/admin/events/create`, `/admin/events/:key/edit`, `/admin/featured-contents`, `/admin/featured-contents/create`, `/admin/featured-contents/:id/edit` (`/admin/events/create` has an exact `enabled: false` manifest entry, so an enabled `/admin/events/:key` cannot capture it) | GET | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Event JSON and feeds: `/events.json`, `/events/:key`, `/events.rss`, `/events.ics`, `/events/:file.ics` | GET | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Public read API: `/api/public/events`, `/api/public/events/:key`, `/api/public/community`, `/api/public/join`, `/openapi.json` | GET | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Machine-readable text: `/llms.txt`, `/about.md`, `/faq.md`, `/rules.md`, `/privacy.md`, `/join.md`, `/events.md`, `/e/:file.md` | GET | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| MCP and agent ingress: `/mcp`, `/api/agent-events` | POST, OPTIONS (`/mcp`); POST (`/api/agent-events`) | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Operations and SEO: `/up`, `/version`, `/csp-reports`, `/__probe/alert`, `/robots.txt`, `/sitemap_index.xml`, `/.well-known/security.txt` | GET; POST (`/csp-reports`, `/__probe/alert`) | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Static assets: `public/` via the `ASSETS` binding (`/islands/*`, stylesheets, fonts, icons) and Kit `/_app/*` | GET | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
+| OAuth and session: `/auth/discord`, `/auth/discord/redirect`, `/auth/discord/callback`, `/join/discord`, `/join/callback`, `/auth/status`, `/logout`, `/logout/everywhere`, staging-only `/auth/qa/:identity` | GET (`/auth/*`, `/join/*`); POST (`/logout*`, `/auth/qa/:identity`) | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| Event writes: `/events`, `/events/:key`, `/events/:key/{publish,cancel,rsvp-pause,rsvp-reopen,duplicate}` | POST; PATCH (`/events/:key`) | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| RSVP: `/events/:key/rsvp`, `/e/:key/rsvp` | PUT, DELETE, other methods answer 405 (`/events/:key/rsvp`); POST (`/e/:key/rsvp`) | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| Profile writes: `/members/:user`; retired directory `/members`, `/members/` (404) | PATCH, POST; GET (404) | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| Admin writes: `/admin/events`, `/admin/events/:key`, `/admin/events/:key/{publish,cancel,rsvp-pause,rsvp-reopen,duplicate}`, `/admin/featured`, `/admin/featured/:id`, `/admin/featured/:id/{unpublish,delete}` | POST | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| Admin operator endpoints: `/admin/ops-overrides`, `/admin/queue/source-evidence/:id`, `/admin/queue/failed/:id/preview`, `/admin/queue/failed/:id/redispatch` | GET; POST, PUT, PATCH, DELETE, OPTIONS refused (first two); POST (redispatch) | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| Legacy redirects: `/login`, `/discord`, `/community`, `/admin/events/create`, `/admin/events/:key/edit`, `/admin/featured-contents`, `/admin/featured-contents/create`, `/admin/featured-contents/:id/edit` (`/admin/events/create` has an exact `enabled: false` manifest entry, so an enabled `/admin/events/:key` cannot capture it) | GET | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| Event JSON and feeds: `/events.json`, `/events/:key`, `/events.rss`, `/events.ics`, `/events/:file.ics` | GET | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| Public read API: `/api/public/events`, `/api/public/events/:key`, `/api/public/community`, `/api/public/join`, `/openapi.json` | GET | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| Machine-readable text: `/llms.txt`, `/about.md`, `/faq.md`, `/rules.md`, `/privacy.md`, `/join.md`, `/events.md`, `/e/:file.md` | GET | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| MCP and agent ingress: `/mcp`, `/api/agent-events` | POST, OPTIONS (`/mcp`); POST (`/api/agent-events`) | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| Operations and SEO: `/up`, `/version`, `/csp-reports`, `/__probe/alert`, `/robots.txt`, `/sitemap_index.xml`, `/.well-known/security.txt` | GET; POST (`/csp-reports`, `/__probe/alert`) | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
+| Static assets: `public/` via the `ASSETS` binding (`/islands/*`, stylesheets, fonts, icons) and Kit `/_app/*` | GET | Engineering Lead | none (checked 2026-11-06) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | after M0 acceptance (no date yet) | owner, 2026-11-06, dependency-bound |
 
 `/up`, `/version`, `/csp-reports`, `/api/*` and `/_app/*` are reserved in
 `route-ownership.ts`. Kit can never claim them while they stay reserved.
@@ -167,5 +173,12 @@ migration ships.
   order. The step that removes Hono starts only after every family has run in
   production for seven days with no rollback. A release that still contains
   Hono stays available as a rollback target for 14 days after that removal.
+- For each page family the order is strict: production cutover, then the
+  acceptance window, then the rollback end, then deletion strictly after the
+  rollback end.
+- Deletion removes only that family's GET HTML handler. POST and 422
+  handling, writes, OAuth and session, and shared helpers that still have other
+  consumers stay. A release that still contains the handler stays available as
+  a whole-release rollback target.
 - These are ordering rules, not dates. Any planning range is only a scenario
   until the owner acknowledges a date.
