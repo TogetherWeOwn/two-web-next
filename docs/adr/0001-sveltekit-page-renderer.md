@@ -53,8 +53,10 @@ above. The decision does not rest on a completed comparison.
   scenarios), its disposable Hyperdrive timings, the productivity comparison
   and candidate-specific visual and performance evidence. None of these
   passed. None of them failed. Nothing here shows that Astro would have lost.
-- The Hyperdrive probe in [`spike/`](../../spike/hyperdrive-semantics/findings.md)
-  remains **not verified**.
+- The separate Hyperdrive semantics probe in
+  [`spike/`](../../spike/hyperdrive-semantics/findings.md) passed 3/3 in its
+  2026-10-01 live staging run. That checks locking and GIN semantics. It is not
+  a renderer comparison, and it is not the trial's timing measurement.
 
 ## Consequences
 
@@ -117,7 +119,7 @@ cleanup date is `unacknowledged`.
 | Admin join attempts `/admin/join-attempts`, `/admin/join-attempts/:id` | GET | **on** | Software Engineer 2 | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
 | Content leaves `/about`, `/faq` | GET | **on** (staging: static stage) | unassigned | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
 | Content leaves `/privacy`, `/rules` | GET | entries off | unassigned | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Hot zones `/hotzones`, `/hotzones/joins`, `/hotzones/voice`, `/hotzones/games` | GET | **on** | unassigned | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
+| Hot zones `/hotzones`, `/hotzones/:signal` | GET | **on** for `/hotzones`, `/hotzones/joins`, `/hotzones/voice`, `/hotzones/games` (exact entries); any other signal value stays on Hono and gets its 404 | unassigned | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
 
 Three page families have no owner in the scope inventory and are marked
 `unassigned`. Each needs an owner before it can get dates.
@@ -136,7 +138,7 @@ migration ships.
 | Profile writes: `/members/:user`; retired directory `/members`, `/members/` (404) | PATCH, POST; GET (404) | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
 | Admin writes: `/admin/events`, `/admin/events/:key`, `/admin/events/:key/{publish,cancel,rsvp-pause,rsvp-reopen,duplicate}`, `/admin/featured`, `/admin/featured/:id`, `/admin/featured/:id/{unpublish,delete}` | POST | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
 | Admin operator endpoints: `/admin/ops-overrides`, `/admin/queue/source-evidence/:id`, `/admin/queue/failed/:id/preview`, `/admin/queue/failed/:id/redispatch` | GET; POST, PUT, PATCH, DELETE, OPTIONS refused (first two); POST (redispatch) | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
-| Legacy redirects: `/login`, `/discord`, `/community`, `/admin/events/create`, `/admin/events/:key/edit`, `/admin/featured-contents`, `/admin/featured-contents/create`, `/admin/featured-contents/:id/edit` | GET | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
+| Legacy redirects: `/login`, `/discord`, `/community`, `/admin/events/create`, `/admin/events/:key/edit`, `/admin/featured-contents`, `/admin/featured-contents/create`, `/admin/featured-contents/:id/edit` (`/admin/events/create` has an exact `enabled: false` manifest entry, so an enabled `/admin/events/:key` cannot capture it) | GET | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
 | Event JSON and feeds: `/events.json`, `/events/:key`, `/events.rss`, `/events.ics`, `/events/:file.ics` | GET | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
 | Public read API: `/api/public/events`, `/api/public/events/:key`, `/api/public/community`, `/api/public/join`, `/openapi.json` | GET | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
 | Machine-readable text: `/llms.txt`, `/about.md`, `/faq.md`, `/rules.md`, `/privacy.md`, `/join.md`, `/events.md`, `/e/:file.md` | GET | Engineering Lead | none in repo | unacknowledged | unacknowledged | unacknowledged | unacknowledged |
