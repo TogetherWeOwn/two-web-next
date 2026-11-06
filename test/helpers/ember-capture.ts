@@ -48,7 +48,11 @@ export function requireCaptureTarget(
   )
     throw new Error("Capture requires an http loopback APP_URL");
   // Reuse without widening either the local fixture validator or the legacy e2e guard.
-  return testDatabaseUrl(input.databaseUrl ?? "", runner);
+  const url = testDatabaseUrl(input.databaseUrl ?? "", runner);
+  // A killed process cannot drop its schema; the caller must own the whole DB/container.
+  if (url.hostname === "agent-testdb" && !/^\/two_web_next_tog[0-9]+$/.test(url.pathname))
+    throw new Error("Capture requires a fresh run-owned disposable test database");
+  return url;
 }
 
 export async function mintCaptureSession(

@@ -74,6 +74,9 @@ describe("ember capture admission", () => {
         "postgres://postgres@agent-testdb:5432/two_web_next",
         "postgres://agent_test@agent-testdb:5433/two_web_next",
         "postgres://agent_test@agent-testdb:5432/live",
+        "postgres://agent_test@agent-testdb:5432/postgres",
+        "postgres://agent_test@agent-testdb:5432/two_web_next",
+        "postgres://agent_test@agent-testdb:5432/w15_tests",
         "postgres://agent_test@agent-testdb:5432/two_web_next?options=anything",
         "postgres://agent_test@agent-testdb:5432/two_web_next#x",
         "postgres://postgres:ci@localhost:5432/postgres",
@@ -174,6 +177,19 @@ describe("ember frozen data and matrix", () => {
       expect(actor.userId).toMatch(/^\d{10,25}$/);
   });
 
+  it("keeps going RSVPs within event capacity while retaining the upcoming reserve", () => {
+    const tables = captureTables();
+    for (const event of tables.events!) {
+      const going = tables.rsvps!.filter(
+        (row) => row.event_id === event.id && row.status === "going",
+      ).length;
+      expect(going).toBeLessThanOrEqual(Number(event.capacity));
+    }
+    expect(tables.events!.find((row) => row.event_key === CAPTURE_KEYS.past)?.capacity).toBe(2);
+    expect(tables.events!.find((row) => row.event_key === CAPTURE_KEYS.upcoming)?.capacity).toBe(1);
+    expect(tables.rsvps!.find((row) => row.id === 2)?.status).toBe("waitlisted");
+  });
+
   it("fails closed for every missing table or row instead of silently shrinking coverage", () => {
     assertCaptureData(captureTables());
     for (const [table, rows] of Object.entries(captureTables())) {
@@ -270,6 +286,20 @@ describe("ember sessions at the frozen instant", () => {
     expect(await store.get(hash)).not.toBeNull();
     now += 1;
     expect(await store.get(hash)).toBeNull();
+  });
+
+  it("derives expiry from the minting clock even when the store clock lags", async () => {
+    const processNow = Date.parse(CAPTURE_INSTANT);
+    const store = createMemorySessionStore(() => processNow - 1000);
+    const create = vi.spyOn(store, "create");
+    const cookie = await mintCaptureSession(store, "member", secret, processNow);
+    const token = (await parseSigned(cookie!, secret))[SESSION_COOKIE] as string;
+    expect(create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        expiresAt: new Date(processNow + SESSION_TTL_SECONDS * 1000),
+      }),
+    );
+    expect(await store.get(await hashToken(token))).toMatchObject(CAPTURE_IDENTITIES.member);
   });
 
   it("refuses unknown personas or weak signing material", async () => {

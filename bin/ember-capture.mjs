@@ -7,7 +7,7 @@ import { parseSigned } from "hono/utils/cookie";
 import { createEmberCapture } from "../test/helpers/ember-capture.ts";
 import { captureManifest } from "../test/helpers/ember-capture-data.ts";
 import { SESSION_COOKIE } from "../src/session-cookie.ts";
-import { hashToken } from "../src/sessions.ts";
+import { hashToken, SESSION_TTL_SECONDS } from "../src/sessions.ts";
 
 const command = process.argv.slice(2);
 try {
@@ -32,13 +32,14 @@ try {
       const secret = randomBytes(32).toString("base64url");
       for (const persona of ["member", "moderator"]) {
         const cookie = await fixture.session(persona, secret);
+        const expiryUpperBound = new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString();
         const parsed = await parseSigned(cookie, secret);
         const token = parsed[SESSION_COOKIE];
         assert.equal(typeof token, "string");
         const rows = await fixture.client`select member, moderator,
           expires_at > now() as unexpired,
           created_at > now() - interval '24 hours' as young,
-          expires_at <= now() + interval '2 hours' as bounded
+          expires_at <= ${expiryUpperBound}::timestamptz as bounded
           from web_sessions where token_hash = ${await hashToken(token)}`;
         assert.equal(rows.length, 1);
         assert.deepEqual(

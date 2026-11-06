@@ -15,12 +15,15 @@ npm run capture:manifest
 npx vitest run test/ember-capture.test.ts
 ```
 
-For SQL verification, explicitly set `DATABASE_URL` to a disposable test database
-allowed by `test/helpers/member-data-db.ts:testDatabaseUrl`. Prefer a fresh
-run-owned numeric `two_web_next_tog<digits>` database on the documented test host.
+For SQL verification, create a fresh run-owned numeric `two_web_next_tog<digits>`
+database on the documented test host and explicitly set `DATABASE_URL` to it.
+Record that database's name privately before invocation, and reserve it for this
+run alone. Capture admission rejects shared `postgres`, `two_web_next` and
+`w15_tests` databases even though the underlying test-fixture guard permits them.
 The existing CI service URL is accepted only under its existing `CI` and
-`GITHUB_ACTIONS` admission conditions. No production/staging targets or credentials
-are permitted. The entry point requires explicit seed opt-in and an HTTP loopback
+`GITHUB_ACTIONS` admission conditions; that service container belongs to the job
+and is disposable as a whole. No production/staging targets or credentials are
+permitted. The entry point requires explicit seed opt-in and an HTTP loopback
 `APP_URL` (the same hostname/protocol boundary as `fixtureManifestFor`, with no
 userinfo, path, query or fragment):
 
@@ -66,10 +69,13 @@ reset, not a blanket schema wipe; recreate the fixture if an adapter introduces
 other writes.
 
 Normal failure during initialization also cleans up. A hard process kill cannot
-run `finally`: dispose the run-owned Postgres container/database. If retaining a
-test database, identify and drop only that run's recorded `w15_<random>` schema
-through the approved test connection; never blanket-drop other fixture schemas.
-Do not deploy these helpers or import them from application code.
+run `finally`: dispose the run-owned Postgres container, or drop only the fresh
+numeric database recorded before invocation through the approved test connection.
+Do not retain or reuse that database after an interrupted run. The CLI does not
+record its random schema name; database/container ownership is the recovery
+handle even if initialization is killed before it returns. Never infer schema
+ownership from a `w15_` prefix or blanket-drop fixture schemas. No cleanup touches
+a shared database. Do not deploy these helpers or import them from application code.
 
 ## Session handling and the two clocks
 
@@ -94,8 +100,11 @@ sessions are issued at the real authentication clock with the existing 120-minut
 TTL, five-minute role recheck, and 24-hour absolute lineage cap. The unit suite
 runs the same memory-session semantics at the frozen instant, including the exact
 expiry and absolute-age boundaries. The SQL verifier proves current real-clock
-role bits and bounded expiry. No live guild/bot role configuration is needed;
-leave bot credentials and live outbound integrations absent. The independent
+role bits and bounded expiry: liveness uses database time, while the upper bound
+uses the minting process clock and the existing session TTL, not a second copy of
+the duration or an assumption that the two clocks are identical. No live guild/bot
+role configuration is needed; leave bot credentials and live outbound integrations
+absent. The independent
 server-render-clock prerequisite and adapter must preserve this separation.
 
 ## Data, IDs and provenance
@@ -112,8 +121,9 @@ concrete member/event/featured/join-detail ID, a paused member state, cancelled
 states, so there are 30 distinct concrete URL strings, not 28.
 
 - Events use exact keys ending `0001`–`0006`: upcoming, past, May, June, paused and
-  cancelled. Four published future rows feed the schedule. The pause flag is
-  `rsvp_open=false`; cancelled remains an explicit 410 prerequisite.
+  cancelled. Four published future rows feed the schedule. The past event has two
+  seats for its two going RSVPs; the upcoming event keeps one seat and a reserve.
+  The pause flag is `rsvp_open=false`; cancelled remains an explicit 410 prerequisite.
 - Users/profiles, going RSVPs and a waitlisted reserve, a published featured row,
   successful/failed joins and an activity row use fixed primary keys and UTC
   timestamps. The all-time leaderboard is derived from these real web tables.

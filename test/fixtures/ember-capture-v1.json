@@ -2,7 +2,7 @@
   "version": 1,
   "seedId": "ember-capture-v1",
   "renderInstant": "2098-12-31T20:00:00.000Z",
-  "dataHash": "293dc5d125e4a55fdbd7dcfb5b8aeba6a69503b8edee6548801531f237f25143",
+  "dataHash": "b131fecff021b82d78c8c47d7f904423a9ca344718bdc5266d0df094202d62ef",
   "bindingsHash": "6f10abfeee876c8fe7fa55cfd1f55d7d9993c464097c34833e2c48af7887e367",
   "hashProvenance": "SHA-256 of canonical UTF-8 JSON: sorted object keys, declared array order, ISO UTC timestamps; seed-owned table columns plus shipped voice/game priors. Excludes session material, schema names and runtime audit writes.",
   "ids": {

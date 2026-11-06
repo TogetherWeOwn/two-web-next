@@ -99,7 +99,7 @@ export function captureTables(): CaptureTables {
     })),
     events: [
       event(1, CAPTURE_KEYS.upcoming, "Capture Community Night", "2099-01-01"),
-      event(2, CAPTURE_KEYS.past, "Capture Past Night", "2098-12-28"),
+      { ...event(2, CAPTURE_KEYS.past, "Capture Past Night", "2098-12-28"), capacity: 2 },
       event(3, CAPTURE_KEYS.may, "Capture May Night", "2099-05-15"),
       event(4, CAPTURE_KEYS.june, "Capture June Night", "2099-06-15"),
       event(5, CAPTURE_KEYS.paused, "Capture Paused Night", "2099-01-02", "published", false),
