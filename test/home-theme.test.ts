@@ -274,6 +274,15 @@ describe("homepage theme", () => {
     expect(css.length).toBeLessThan(13000);
   });
 
+  it("crops the lockup to its mark on narrow screens without shrinking account chrome", () => {
+    const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
+    expect(css).toMatch(
+      /@media \(max-width: 30rem\)\s*\{\s*\.base-theme \.brand img\s*\{\s*width: 50px; height: 50px; object-fit: cover; object-position: left center;\s*\}\s*\}/,
+    );
+    expect(css).toContain(".base-theme .who { max-width: 9rem; }");
+    expect(render()).toContain('src="/logo.svg" width="180" height="50"');
+  });
+
   it("keeps the primary .btn:hover lift on the brand token", () => {
     // The brightness lift is the entire hover affordance: rest and hover
     // share background var(--brand) and color var(--paper), so deleting or

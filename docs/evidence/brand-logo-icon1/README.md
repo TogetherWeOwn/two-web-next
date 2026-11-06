@@ -15,8 +15,11 @@
   (`--color-brand-ember/magenta/violet` in `public/theme-tokens.css`); no raw
   hex in components. The gradient stops ship baked in the artwork, so no
   gradient token was added.
-- **Responsive behavior:** preserve the existing desktop header and the stacked
-  mobile header; the lockup scales with the same slot at both widths.
+- **Responsive behavior:** keep the existing header grid, padding and account
+  chrome. Above 30rem, show the full 180×50 lockup. At or below 30rem, crop its
+  leftmost 50×50 Icon 1 mark with `object-fit: cover` and left alignment; retain
+  the intrinsic image attributes and accessible name. This is the UX-reviewed
+  correction for wrapped guest buttons and clipped member names.
 - **Required states:** guest renders of `/`, `/about`, `/join` at desktop and
   mobile; the 1200×630 share card; the SVG favicon; the 192/512/maskable-512
   icons; the Apple touch icon; the web manifest.
@@ -36,9 +39,11 @@ overflow at these two widths; it did not verify 360px. These captures are not
 pixel-identical outside the header: mobile text and downstream positions also
 differ. They show the artwork swap, not proof of unchanged page geometry.
 Pinned-runner visual comparisons and the narrow-screen review determine which
-layout differences are acceptable.
+layout differences are acceptable. The table below predates the narrow-screen
+correction: its mobile after-images are historical, not the corrected after-state.
+They must be replaced with reviewed post-fix captures before merge.
 
-| Page / viewport | Before | After |
+| Page / viewport | Before | Historical after |
 | --- | --- | --- |
 | Home / desktop | [Before](before-home-desktop.png) | [After](after-home-desktop.png) |
 | Home / mobile | [Before](before-home-mobile.png) | [After](after-home-mobile.png) |
@@ -65,9 +70,22 @@ both passed. They exercise Hono, not Kit.
 The original twelve captures do not exercise Kit. The exact-head
 [browser-smoke failure](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42294753053/job/128157032840)
 contains real Hono and Kit expected/actual/diff images in artifact
-`e2e-failure-42294753053-1`. Its 32 failing visual comparisons remain unaccepted
-pending review. Their existence is not a visual pass, and no new Kit image has
-yet been published or claimed as inspected in this record.
+`e2e-failure-42294753053-1`. The UX review found the 16 desktop changes confined
+to the logo box, but rejected all 16 mobile actuals: eight show wrapped actions
+or overly clipped names, and the others are superseded by the same responsive
+correction. None has been accepted into the baseline set. Fresh post-fix
+artifacts must be reviewed before either acceptance script runs.
+
+`e2e/kit-parity/parity.spec.ts` now captures guest and signed-in header states
+at 360, 390, 768 and 1280px in the existing GitHub Actions fixture stack. These
+are screenshot outputs in `test-results-kit-parity/`, not new golden baselines.
+The added assertions require no page overflow, one-line guest actions, the full
+fixture member name and the approved logo dimensions. The assertions and
+captures are not yet executed. They avoid a duplicate local app build on the
+shared host while exercising the real renderers against disposable fixtures.
+Required Kit publication remains guest `kit-events-index-{desktop,mobile}` and
+signed-in `member-board-default-{desktop,mobile}` from the post-fix artifact;
+Hono captures never substitute for them.
 
 Icon and manifest coverage is by file, not screenshot: `favicon.svg`,
 `public/icons/icon-192.png` (192×192), `icon-512.png` (512×512),

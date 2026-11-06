@@ -1024,6 +1024,84 @@ for (const target of targets) {
     });
   });
 
+  test(`${target.name}: brand header preserves guest and member chrome at narrow widths`, async ({
+    browser,
+  }) => {
+    test.setTimeout(120_000);
+    const states = [
+      ...(target.name === "hono" ? [{ name: "guest-about", path: "/about", member: false }] : []),
+      { name: "guest-events", path: "/events", member: false },
+      { name: "member-board", path: "/leaderboards/members", member: true },
+    ];
+    for (const state of states) {
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+      });
+      try {
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+          return allowed ? route.continue() : route.abort("blockedbyclient");
+        });
+        if (state.member) {
+          const cookie = await memberCookie(target);
+          await context.addCookies([
+            {
+              name: "__Host-two_session",
+              value: cookie.slice(cookie.indexOf("=") + 1),
+              url: target.origin,
+              secure: true,
+              httpOnly: true,
+              sameSite: "Lax",
+            },
+          ]);
+        }
+        const page = await context.newPage();
+        for (const width of [360, 390, 768, 1280]) {
+          await page.setViewportSize({ width, height: width === 1280 ? 800 : 844 });
+          const response = await page.goto(state.path);
+          expect(response?.status()).toBe(200);
+          if (target.name === "kit") {
+            expect(response?.headers()["x-two-renderer"] ?? null).toBe(
+              expectedKitMarker(state.path),
+            );
+          }
+          await page.waitForLoadState("networkidle");
+          await page.screenshot({
+            path: test.info().outputPath(`brand-${target.name}-${state.name}-${width}.png`),
+            animations: "disabled",
+            caret: "hide",
+          });
+          const logo = await page.locator(".brand img").boundingBox();
+          expect(logo?.width).toBe(width <= 480 ? 50 : 180);
+          expect(logo?.height).toBe(50);
+          const chrome = (await page.evaluate(`(() => {
+            const account = document.querySelector('.header-account');
+            const button = account.querySelector('.btn');
+            const who = account.querySelector('.who');
+            const range = document.createRange();
+            if (button) range.selectNodeContents(button);
+            return {
+              overflow: document.documentElement.scrollWidth > window.innerWidth,
+              buttonLines: button ? new Set([...range.getClientRects()].map(r => r.top)).size : 0,
+              nameClipped: who ? who.scrollWidth > who.clientWidth : false
+            };
+          })()`)) as { overflow: boolean; buttonLines: number; nameClipped: boolean };
+          expect(chrome.overflow, `${state.name} @ ${width}: no horizontal overflow`).toBe(false);
+          if (state.member) {
+            await expect(page.locator(".header-account .who")).toHaveText("QA Member");
+            expect(chrome.nameClipped, `${state.name} @ ${width}: full member name`).toBe(false);
+          } else {
+            expect(chrome.buttonLines, `${state.name} @ ${width}: single-line action`).toBe(1);
+          }
+        }
+      } finally {
+        await context.close();
+      }
+    }
+  });
+
   for (const viewport of PARITY_VIEWPORTS) {
     test(`${target.name}: archive ${viewport.name} has no horizontal overflow`, async ({
       browser,
