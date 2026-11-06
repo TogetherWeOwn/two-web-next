@@ -131,8 +131,16 @@ passed. CodeQL and Devin completed successfully, with no new findings at this
 checkpoint. Hono audits still do not exercise Kit.
 [Full check](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188851020)
 and [Node 22 compatibility](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188850755)
-were running when inspected; no full-suite or `ci-ok` pass is claimed.
-These are `b738e122` results, not verification of the later retention change.
+were still running at the 2026-11-06 22:54 UTC inspection. Their live logs
+already report 18 failures in `test/page-shells.test.ts`, all admin-shell
+variants. The new shared SVG/PNG/touch assertions exposed the separate admin
+shell's missing icon declarations. The correction adds those same three links
+to `src/admin/pages/shell.tsx`; no assertion or admin layout is changed.
+The existing route inventory covers ordinary, operational and error admin
+shells. No local reproduction ran because this isolated worktree has no
+installed dependencies; the correction awaits its own Actions run.
+No full-suite or `ci-ok` pass is claimed. These are `b738e122` results, not
+verification of the later retention or admin-head corrections.
 
 ## Fixture and execution boundaries
 
