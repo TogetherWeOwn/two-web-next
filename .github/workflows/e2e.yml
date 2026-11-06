@@ -203,6 +203,21 @@ jobs:
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Build Kit worker
         run: npm run build --prefix web
+      - name: Ember token viewport evidence
+        id: ember-evidence
+        run: >-
+          npx playwright test --config playwright.kit-parity.config.ts
+          e2e/kit-parity/ember-token-evidence.spec.ts
+      - name: Upload Ember viewport evidence
+        if: ${{ always() && steps.ember-evidence.outcome != 'skipped' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: ember-ui-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results-kit-parity/**/ember-*.png
+            test-results-kit-parity/**/ember-*.json
+          if-no-files-found: error
+          retention-days: 7
       - name: Kit visual regression
         run: npx playwright test --config playwright.kit-visual.config.ts
       # Hono visual regression also runs before the mutating journeys.

@@ -1,9 +1,11 @@
 # Ember Hours token and font migration evidence
 
 **Historical capture.** See the [v0.2.3 integration evidence](v0.2.3/README.md)
-for the current design contract, screenshots, verification and remaining gate
-failure. The [earlier integration review fixes](review-fixes/README.md) also
-remain historical. Measurements below do not describe the current adapter.
+for the binding design contract, retained screenshots and verification limits,
+including the separately merged server-only allocation. Fresh combined-head
+Actions and visual acceptance remain required. The [earlier integration review
+fixes](review-fixes/README.md) also remain historical. Measurements below do not
+describe the current adapter.
 
 Captured on 2026-11-03 from the real local applications with disposable fixtures.
 Every image linked below was opened. These are viewport screenshots, not full-page

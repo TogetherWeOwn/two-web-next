@@ -1,5 +1,29 @@
 # Ember Hours v0.2.3 integration evidence
 
+**Historical capture, not combined-head acceptance.** On 2026-11-06, the migration
+incorporated the exact four-file allocation from merged [PR #2042](https://github.com/TogetherWeOwn/two-web-next/pull/2042),
+squash `c141e701a4a15a47c78ab1b913bda2081d817785`, in integration commit
+`d2858449`. The approved Kit server-only ceilings are now **1,222,656 raw /
+342,272 gzip bytes**, with the **126-file cap unchanged**. All client, Worker,
+startup, stylesheet and homepage ceilings remain unchanged. This supersedes the
+extraction prerequisite described in the historical failure section below;
+extraction is an independent follow-up, not part of this migration.
+
+The measurements and opened images below remain evidence of the retained
+`47a0fd8b` candidate, not a passing build or fresh visual review of the combined
+head. Fresh GitHub Actions suite, browser, accessibility, Lighthouse, budget and
+visual-artifact results are required. No local full-suite or CI-mirror rerun is
+authorized. Independent technical/design QA and exact-head production confirmation
+remain separate gates.
+
+The existing Actions browser job now runs
+`e2e/kit-parity/ember-token-evidence.spec.ts` against both actual applications
+before mutating journeys. It captures the 16 viewport/state combinations below
+and uploads PNGs plus SHA/metric receipts as
+`ember-ui-evidence-<run-id>-<attempt>` before later Playwright steps clean the
+output directory. This capture is not a baseline update or UX approval. Its first
+combined-head execution and opening every image remain pending.
+
 Captured on 2026-11-04 from the actual local Hono application and compiled Kit
 Worker using disposable fixtures. All 16 images below were opened individually.
 These are viewport screenshots, not accepted CI visual-regression baselines.
