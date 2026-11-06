@@ -101,14 +101,18 @@ sessions are issued at the real authentication clock with the existing 120-minut
 TTL, five-minute role recheck, and 24-hour absolute lineage cap. The unit suite
 runs the same memory-session semantics at the frozen instant, including the exact
 expiry and absolute-age boundaries. The SQL verifier proves current real-clock
-role bits and bounded expiry: liveness uses database time, while the upper bound
-uses the minting process clock and the existing session TTL, not a second copy of
-the duration or an assumption that the two clocks are identical. It also executes
+role bits and exact expiry: liveness uses database time, while both expiry bounds
+use the same retained process timestamp passed to session minting, plus the existing
+session TTL. Verification requires that timestamp rather than sampling a later
+clock. No tolerance or second copy of the duration is needed because the fixture
+passes the same millisecond timestamp to both operations. The CLI also executes
 that same verification query with a controlled process clock one minute ahead of
 transaction time, temporarily adjusting only the private fixture row's expiry and
-restoring it afterward. A negative control proves a database-clock upper bound
-would reject that row. A unit test substitutes a 37-second canonical TTL and checks
-the real query's bound, detecting a copied two-hour literal without changing app
+restoring it afterward. Negative controls prove a database-clock upper bound
+would reject the skewed row and the real verifier rejects an expiry one millisecond
+shorter or longer than the canonical TTL. Unit tests substitute a 37-second
+canonical TTL, check both query bounds and retain the mint timestamp across delayed
+verification, detecting a copied two-hour literal without changing app
 authentication. No live guild/bot role configuration is needed; leave bot credentials
 and live outbound integrations absent. The independent
 server-render-clock prerequisite and adapter must preserve this separation.

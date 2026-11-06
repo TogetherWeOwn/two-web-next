@@ -200,12 +200,13 @@ export async function createEmberCapture(input: {
       verify,
       resetAndSeed,
       dispose,
-      session: (persona: CapturePersona, secret: string) => {
+      session: (persona: CapturePersona, secret: string, mintedAt = Date.now()) => {
         ensureOpen();
         return mintCaptureSession(
           createPostgresSessionStore(sessionClient as unknown as Sql),
           persona,
           secret,
+          mintedAt,
         );
       },
     };

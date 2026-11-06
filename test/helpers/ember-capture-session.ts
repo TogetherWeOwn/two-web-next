@@ -6,13 +6,15 @@ export async function verifyCaptureSession(
   sql: Sql,
   token: string,
   persona: "member" | "moderator",
-  processNow = Date.now(),
+  mintedAt: number,
 ) {
-  const expiryUpperBound = new Date(processNow + SESSION_TTL_SECONDS * 1000).toISOString();
+  assert.ok(Number.isFinite(mintedAt));
+  const expectedExpiry = new Date(mintedAt + SESSION_TTL_SECONDS * 1000).toISOString();
   const rows = await sql`select member, moderator,
     expires_at > now() as unexpired,
     created_at > now() - interval '24 hours' as young,
-    expires_at <= ${expiryUpperBound}::timestamptz as bounded
+    expires_at <= ${expectedExpiry}::timestamptz as bounded,
+    expires_at >= ${expectedExpiry}::timestamptz as full_ttl
     from web_sessions where token_hash = ${await hashToken(token)}`;
   assert.equal(rows.length, 1);
   assert.deepEqual(
@@ -23,6 +25,7 @@ export async function verifyCaptureSession(
       unexpired: true,
       young: true,
       bounded: true,
+      full_ttl: true,
     },
   );
 }

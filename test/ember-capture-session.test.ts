@@ -16,18 +16,44 @@ const valid = {
   unexpired: true,
   young: true,
   bounded: true,
+  full_ttl: true,
 };
 
 describe("capture session SQL verification", () => {
   it("binds the minting process clock plus the canonical TTL in the actual verification query", async () => {
     const sql = vi.fn().mockResolvedValue([valid]);
     await verifyCaptureSession(sql as unknown as Sql, token, "member", processNow);
-    const [parts, expiryUpperBound, tokenHash] = sql.mock.calls[0]!;
+    const [parts, expiryUpperBound, expiryLowerBound, tokenHash] = sql.mock.calls[0]!;
     expect(parts.join("?")).toContain("expires_at <= ?::timestamptz as bounded");
+    expect(parts.join("?")).toContain("expires_at >= ?::timestamptz as full_ttl");
+    expect(expiryLowerBound).toBe(expiryUpperBound);
     expect(parts.join("?")).toContain("expires_at > now() as unexpired");
     expect(parts.join("?")).toContain("created_at > now() - interval '24 hours' as young");
     expect(expiryUpperBound).toBe("2098-12-31T20:00:37.000Z");
     expect(tokenHash).toBe(await hashToken(token));
+  });
+
+  it("rejects a missing or invalid minting timestamp before querying", async () => {
+    for (const clock of [undefined, Number.NaN, Number.POSITIVE_INFINITY]) {
+      const sql = vi.fn().mockResolvedValue([valid]);
+      await expect(
+        verifyCaptureSession(sql as unknown as Sql, token, "member", clock as number),
+      ).rejects.toThrow();
+      expect(sql).not.toHaveBeenCalled();
+    }
+  });
+
+  it("keeps the retained minting timestamp when verification runs later", async () => {
+    const clock = vi.spyOn(Date, "now").mockReturnValue(processNow + 60_000);
+    try {
+      const sql = vi.fn().mockResolvedValue([valid]);
+      await verifyCaptureSession(sql as unknown as Sql, token, "member", processNow);
+      expect(sql.mock.calls[0]![1]).toBe("2098-12-31T20:00:37.000Z");
+      expect(sql.mock.calls[0]![2]).toBe("2098-12-31T20:00:37.000Z");
+      expect(clock).not.toHaveBeenCalled();
+    } finally {
+      clock.mockRestore();
+    }
   });
 
   it("requires exactly one row with the correct role and every clock predicate", async () => {

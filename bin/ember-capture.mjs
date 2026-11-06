@@ -32,11 +32,12 @@ try {
       const first = fixture.manifest;
       const secret = randomBytes(32).toString("base64url");
       for (const persona of ["member", "moderator"]) {
-        const cookie = await fixture.session(persona, secret);
+        const mintedAt = Date.now();
+        const cookie = await fixture.session(persona, secret, mintedAt);
         const parsed = await parseSigned(cookie, secret);
         const token = parsed[SESSION_COOKIE];
         assert.equal(typeof token, "string");
-        await verifyCaptureSession(fixture.client, token, persona);
+        await verifyCaptureSession(fixture.client, token, persona, mintedAt);
         // Exercise that same SQL query with a controlled one-minute clock skew.
         // Only a private fixture row changes; restore it before leaving the proof.
         const tokenHash = await hashToken(token);
@@ -53,6 +54,14 @@ try {
               from web_sessions where token_hash = ${tokenHash}`;
             assert.equal(control.exceeds_database_bound, true);
             await verifyCaptureSession(sql, token, persona, processNow);
+            for (const offset of [-1, 1]) {
+              const wrongExpiry = new Date(
+                processNow + SESSION_TTL_SECONDS * 1000 + offset,
+              ).toISOString();
+              await sql`update web_sessions set expires_at = ${wrongExpiry}::timestamptz
+                where token_hash = ${tokenHash}`;
+              await assert.rejects(verifyCaptureSession(sql, token, persona, processNow));
+            }
           } finally {
             const originalExpiry = new Date(original.expires_at).toISOString();
             await sql`update web_sessions set expires_at = ${originalExpiry}::timestamptz
