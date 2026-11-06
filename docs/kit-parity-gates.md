@@ -190,7 +190,11 @@ differs before its hook runs (trailing-slash 308, method handling, automatic
 - Goldens live in `test/fixtures/parity/hono-<sha>/`, where `<sha>` is the
   newest commit that changed a runtime input (`src`, `public`, `tail`,
   `drizzle`, `wrangler.jsonc`, `package-lock.json`). `index.json` records the
-  git trees of those inputs and of the harness, plus the coverage map.
+  git trees of those inputs and of the harness, plus the coverage map. To
+  re-record, copy the `route-parity-<sha>` artifact from the `check` job into
+  that directory and run `npx biome format --write` on it; the checks compare
+  parsed JSON, so formatting never changes a result. The committed set was
+  recorded at `b889b30cb8e21f1997897f3761b069da036c85a7`.
 - `test/fixtures/parity/signed-cookies.json` holds `hono/cookie` vectors for
   every cookie `src/` signs (`node ci/parity/signed-cookies.mjs --write`).
 - `npm run check:route-parity` (the `check` job) records pure Hono twice and
