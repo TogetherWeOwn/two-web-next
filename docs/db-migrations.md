@@ -210,6 +210,11 @@ and rights the runtime can reach through any role it is a member of
 membership without `INHERIT`/`SET` still counts because a holder on an
 `ADMIN`-carrying link can re-grant itself `INHERIT`/`SET` link by link,
 and the guard over-approximates a plain membership the same way).
+The `drizzle` schema itself gets the same check: its owner (`nspowner`)
+can drop and recreate the ledger whatever the ledger's own ACLs say, and
+any `nspacl` right (`CREATE` or `USAGE`) for `two_web_app`, `PUBLIC`, or a
+role the runtime is a member of also refuses, because the runtime has no
+reviewed need for the schema.
 Unrelated owners and grantees stay allowed. The runner
 never revokes such a right itself, so an already-exposed ledger stays refused
 until the right is removed outside the runner. The refusal names the offending
