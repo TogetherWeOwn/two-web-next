@@ -70,7 +70,8 @@ for (const twin of ["Hono", "Kit"] as const) {
           await renderCalendar(twin, [scanEvent({ description })], { view: "list" }),
         );
         expect(card).not.toMatch(/<details\b/);
-        if (description) expect(card).toContain(`<p>${description}</p>`);
+        if (description)
+          expect(card).toContain(`<p class="schedule-short-text">${description}</p>`);
       },
     );
 
