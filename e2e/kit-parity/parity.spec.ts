@@ -1026,10 +1026,17 @@ for (const target of targets) {
 
   test(`${target.name}: brand header preserves guest and member chrome at narrow widths`, async ({
     browser,
+    playwright,
   }) => {
     test.setTimeout(120_000);
     const states = [
-      ...(target.name === "hono" ? [{ name: "guest-about", path: "/about", member: false }] : []),
+      ...(target.name === "hono"
+        ? [
+            { name: "guest-home", path: "/", member: false },
+            { name: "guest-about", path: "/about", member: false },
+            { name: "guest-join", path: "/join", member: false },
+          ]
+        : []),
       { name: "guest-events", path: "/events", member: false },
       { name: "member-board", path: "/leaderboards/members", member: true },
     ];
@@ -1097,7 +1104,25 @@ for (const target of targets) {
           }
         }
       } finally {
-        await context.close();
+        try {
+          if (state.member && target.name === "hono") {
+            // Page reads rotate the bearer. Keep the browser's latest jar for
+            // later parity tests and RSVP teardown before closing the browser.
+            const storageState = await context.storageState();
+            expect(
+              storageState.cookies.some((cookie) => cookie.name === "__Host-two_session"),
+            ).toBe(true);
+            const replacement = await playwright.request.newContext({
+              baseURL: target.origin,
+              ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+              storageState,
+            });
+            await api(target).dispose();
+            contexts.set(target.name, replacement);
+          }
+        } finally {
+          await context.close();
+        }
       }
     }
   });
