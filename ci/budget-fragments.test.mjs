@@ -158,9 +158,11 @@ function kitFixture(t, fragments) {
 // 340593 and 340594; 340224 rejects by 369 and 370).
 // 341248 admits the QA-token throttle on top of that (two builds, both
 // 341055; 340736 rejects by 319).
+// 342272 is the bounded Ember allocation (frozen builds 341996 and 341995;
+// 341248 rejects by 748 and 747), not automatic 25% headroom.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
   335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176,
-  338432, 338688, 339968, 340224, 340736, 341248,
+  338432, 338688, 339968, 340224, 340736, 341248, 342272,
 ];
 // Admitted server.js maxRawBytes allocations. The SHIPPING_KIT_BUDGET pin
 // above (1203200) is the historical baseline; 1203968 admits the
@@ -187,9 +189,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // 1219131 and 1219131; 1217536 rejects by 1595).
 // 1220608 admits the QA-token throttle on top of that (two builds 1220482
 // and 1220480; 1219584 rejects by 898 and 896).
+// 1222656 admits the pinned Ember migration (both frozen builds 1222251;
+// 1220608 rejects by 1643), with every other fragment unchanged.
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
   1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536,
-  1219584, 1220608,
+  1219584, 1220608, 1222656,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -221,12 +225,12 @@ function assertShippingKitBudget(actual) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339968, 340224, 340736, 341248`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339968, 340224, 340736, 341248, 342272`,
   );
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536, 1219584, 1220608`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536, 1219584, 1220608, 1222656`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
@@ -429,6 +433,25 @@ test("shipping oracle admits the measured QA-token throttle server allocations t
       js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 261632, maxGzipBytes: 104448 },
     },
   });
+});
+
+test("shipping oracle admits the bounded Ember server allocations together", () => {
+  const plan = {
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1222656, maxGzipBytes: 342272 },
+    },
+  };
+  assertShippingKitBudget(plan);
+  for (const [axis, value] of [
+    ["maxRawBytes", 1222657],
+    ["maxGzipBytes", 342273],
+    ["maxFiles", 127],
+  ]) {
+    const drift = structuredClone(plan);
+    drift.server.js[axis] = value;
+    assert.throws(() => assertShippingKitBudget(drift), `${axis} drift must fail`);
+  }
 });
 
 test("shipping oracle admits the measured 1203968 server raw allocation", () => {
