@@ -70,11 +70,12 @@ current after-state. No actual from run 42294753053 is accepted.
 
 The same-attempt Kit expected images in the failure artifact provide the
 placeholder before-state. Hono captures do not substitute for Kit evidence.
-Kit signed-in 360/768px captures are still missing from this attempt: the new
-capture's cookie setup failed before member navigation. The existing Kit
-member-board visual journey supplies signed-in 390/1280px evidence. A shared
-stylesheet suggests similar narrower behavior, but that is not capture proof.
-The corrected setup must execute and publish the remaining widths on rerun.
+Kit signed-in 360/768px captures are missing from this historical attempt:
+the new capture's cookie setup failed before member navigation. The existing
+Kit member-board visual journey supplies signed-in 390/1280px evidence.
+The corrected setup subsequently passed on `b738e122`, but that successful
+run retained no images. The remaining widths still need retrieval, opening
+and publication from a run with screenshot retention enabled.
 
 ## Named intentional baseline acceptance
 
@@ -109,6 +110,30 @@ were unchanged. No threshold, mask, test skip or asset budget was loosened.
 Acceptance is intentional-diff evidence, not a passing browser gate; the final
 exact head must still pass Actions.
 
+## Actions verification checkpoint
+
+At published head `b738e1222938faea196d640a38dbd4422cb3c4d3`,
+[browser-smoke](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304037907/job/128188837937)
+passed: 17 Kit visual tests, 17 Hono visual tests, 452 critical browser
+journeys, 79 parity tests (zero failed or skipped) and two authenticated
+performance checks. Both renderers' guest/member header tests passed at all
+four widths. The [e2e aggregate](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304037907/job/128192283898)
+also passed. The artifact listing was empty: successful execution proves the
+assertions, not that any screenshot was retrieved or visually reviewed.
+The PNG-retention correction requires another Actions run to close that gap.
+
+The same head's [a11y](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188850887),
+[Lighthouse](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188850735),
+[bundle budget](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188850906),
+[gitleaks](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304375498/job/128190100037)
+and [PR lint](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304375498/job/128189881940)
+passed. CodeQL and Devin completed successfully, with no new findings at this
+checkpoint. Hono audits still do not exercise Kit.
+[Full check](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188851020)
+and [Node 22 compatibility](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188850755)
+were running when inspected; no full-suite or `ci-ok` pass is claimed.
+These are `b738e122` results, not verification of the later retention change.
+
 ## Fixture and execution boundaries
 
 `e2e/kit-parity/parity.spec.ts` captures guest and signed-in headers at 360,
@@ -135,8 +160,9 @@ captures executed. Kit member capture failed because its setup derived a
 secure `__Host-` cookie from the HTTP fixture URL. A repeated-worker RSVP
 teardown also reported 429. The capture setup now preserves the issued cookie
 attributes, like the existing member-board visual journey, and initializes
-Hono's jar even when run alone. The harness correction remains unverified
-until the next Actions run; no green browser gate is claimed.
+Hono's jar even when run alone. Both corrected header tests and the browser
+gate passed on `b738e122`, as recorded above; this does not close the separate
+screenshot-publication gap or establish a final-head full CI pass.
 
 The same head's [check](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178568/job/128172290283)
 and [Node 22 compatibility](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178568/job/128172290299)
