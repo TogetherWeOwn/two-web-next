@@ -293,8 +293,8 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
   return {
     dbForFn: ({ env: bound }) => dbFor({ env: bound }),
     getEventFn: (db, key) => getPublicEvent(db, key),
-    neighborsFn: (db, event, now) => getEventNeighbors(db, event, now),
-    relatedFn: (db, event, now) => listRelatedEvents(db, event, now),
+    neighborsFn: getEventNeighbors,
+    relatedFn: listRelatedEvents,
     seriesFn: (db, event) => getEventSeriesContext(db, event),
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus

@@ -97,7 +97,10 @@ export function registerDetailRoutes(
   });
 
   app.get("/e/:key", async (c) => {
-    const now = renderDate(c.req.raw, c.env);
+    const now =
+      typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true
+        ? renderDate(c.req.raw, c.env)
+        : undefined;
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     let viewer: string | null = null;

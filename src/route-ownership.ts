@@ -1,4 +1,3 @@
-import { fixtureOrigin } from "./fixture-origin";
 // Exact route ownership for the SvelteKit strangler.
 //
 // One method-aware, server-controlled decision per request, made in the Kit
@@ -278,7 +277,15 @@ export function fixtureManifestFor(env: {
   const wantBoard = env.KIT_PARITY_FIXTURE_MEMBER_BOARD === "true";
   const wantDetail = env.KIT_PARITY_FIXTURE_EVENT_DETAIL === "true";
   if (!wantBoard && !wantDetail) return undefined;
-  if (!fixtureOrigin(env.APP_URL)) return undefined;
+  let app: URL;
+  try {
+    app = new URL(env.APP_URL ?? "");
+  } catch {
+    return undefined;
+  }
+  if (app.protocol !== "http:") return undefined;
+  // URL keeps the brackets on an IPv6 hostname ("[::1]").
+  if (!["127.0.0.1", "localhost", "::1", "[::1]"].includes(app.hostname)) return undefined;
   return ROUTE_MANIFEST.map((entry) => {
     if (wantBoard && entry.method === "GET" && entry.path === "/leaderboards/members")
       return { ...entry, enabled: true };

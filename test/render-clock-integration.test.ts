@@ -1,23 +1,20 @@
-import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import type { Env } from "../src/env";
 
-// Model the generated local build's compile-time define. It is captured once
-// at module evaluation, not read from a runtime binding or request header.
+// Model the generated local build's constant at module and request call sites;
+// it is never read from a runtime binding or request header.
 let app: typeof import("../src/index").default;
 let clock: typeof import("../src/render-clock");
 let archive: typeof import("../src/kit-past-events");
 let cache: typeof import("../src/events/anon-cache");
 beforeAll(async () => {
   vi.stubGlobal("__TWO_LOCAL_CAPTURE__", true);
-  try {
-    clock = await import("../src/render-clock");
-    app = (await import("../src/index")).default;
-    archive = await import("../src/kit-past-events");
-    cache = await import("../src/events/anon-cache");
-  } finally {
-    vi.unstubAllGlobals();
-  }
+  clock = await import("../src/render-clock");
+  app = (await import("../src/index")).default;
+  archive = await import("../src/kit-past-events");
+  cache = await import("../src/events/anon-cache");
 });
+afterAll(() => vi.unstubAllGlobals());
 afterEach(() => {
   vi.useRealTimers();
   cache.__resetAnonEventCacheForTests();
@@ -27,6 +24,12 @@ const env = { APP_URL, SSR_CAPTURE_FIXTURE: "true" } as Env;
 const request = (path: string) => new Request(APP_URL + path);
 
 describe("local capture request integration", () => {
+  it("registers the extra capture middleware only in the opted-in build", () => {
+    expect(
+      app.routes.filter((route) => route.method === "ALL" && route.path === "/*"),
+    ).toHaveLength(8);
+  });
+
   it("certifies real Hono static HTML and refuses uncovered document rows", async () => {
     const responses = await Promise.all(
       Array.from({ length: 20 }, (_, i) =>

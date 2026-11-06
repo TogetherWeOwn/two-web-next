@@ -34,7 +34,10 @@ export const load: PageServerLoad = async ({
 }) => {
   const outcome = await resolveKitEventDetail({
     key: params.key ?? "",
-    now: renderDate(request, env),
+    now:
+      typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true
+        ? renderDate(request, env)
+        : undefined,
     search: url.search,
     path: url.pathname,
     env,

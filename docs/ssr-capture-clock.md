@@ -11,24 +11,34 @@ is not evidence that a Worker rendered against the same instant.
 `2098-12-31T20:00:00Z` only when **all** of these hold:
 
 1. The generated local bundle defines `__TWO_LOCAL_CAPTURE__` as boolean `true`.
-   No deployed Wrangler config defines it. A runtime binding cannot supply this
-   compile-time name. The normal Hono and Kit bundles default to live time even
+   The normal Kit SSR build defines it false early and removes capture-only code;
+   an explicitly opted-in local build preserves it for the generated Wrangler
+   config. No deployed Wrangler config defines it true. A runtime binding cannot
+   supply this compile-time name. Normal Hono and Kit bundles use live time even
    if their runtime bindings are misconfigured to look local.
 2. The explicit runtime fixture opt-in `SSR_CAPTURE_FIXTURE` is exactly `true`.
 3. `APP_URL` is a canonical HTTP origin on `127.0.0.1`, `localhost` or `[::1]`,
    with an optional port/trailing slash. HTTPS, credentials, path, query,
    fragment, malformed URLs and alternative numeric host spellings fail closed.
-   The same origin parser underpins `fixtureManifestFor`; no route is promoted.
+   This reuses `fixtureManifestFor`'s explicit-opt-in/HTTP-loopback boundary,
+   with stricter canonical-origin and actual-request checks for capture only.
+   The existing parity-fixture manifest and shipped route ownership are unchanged.
 4. The native `Request.url` origin equals that configured origin, including port.
    A present Host must agree too. Forwarded headers, Origin, cookies and query
    parameters are never eligibility inputs. In particular a deployed URL plus a
    forged local Host cannot qualify.
 5. The method is GET or HEAD. Unsafe methods never receive this display clock.
 
-The generated fixture in `ci/kit-worker-dev.mjs` supplies the build gate and
-runtime opt-in only when its launching process explicitly sets
-`SSR_CAPTURE_FIXTURE=true`. It remains a `--local` Worker bound to the IPv4
-loopback listener, backed only by the existing disposable fixture database.
+The local Kit fixture requires two explicit steps: build with
+`SSR_CAPTURE_FIXTURE=true npm run build --prefix web`, then launch
+`ci/kit-worker-dev.mjs` with `SSR_CAPTURE_FIXTURE=true` and the existing disposable
+fixture database. A normal build cannot be turned into a capture artifact at
+startup: the launcher refuses an artifact missing the capture code, before
+writing config or starting Wrangler. Rebuild normally after local capture work;
+never deploy the opted-in artifact. The generated fixture supplies the late build
+gate and runtime opt-in only when its launching process explicitly sets that
+flag. It remains a `--local` Worker bound to the IPv4 loopback listener, backed
+only by the existing disposable fixture database.
 For a Hono-only fixture build, use the same local-only define and runtime flag
 with the existing test-only local configuration and an explicitly loopback-bound
 Wrangler listener. Never put either setting in a shipped configuration, use a

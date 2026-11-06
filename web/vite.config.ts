@@ -23,6 +23,12 @@ export default defineConfig({
       build: {
         minify: true,
         rolldownOptions: {
+          // Normal artifacts omit capture-only code. Local builds retain the
+          // identifier for the generated loopback Wrangler config to define.
+          transform:
+            process.env.SSR_CAPTURE_FIXTURE === "true"
+              ? {}
+              : { define: { __TWO_LOCAL_CAPTURE__: "false" } },
           output: {
             // Compact server output without rewrites or name mangling; error
             // diagnostics depend on constructor names. Keep licenses and maps.

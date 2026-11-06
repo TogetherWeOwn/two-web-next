@@ -66,7 +66,11 @@ export async function dispatchPastArchiveRequest(
   const htmlRequest = url.pathname === "/events/past";
   const page = normalizePastPage(Number.parseInt(url.searchParams.get("page") ?? "1", 10));
   const eligible =
-    !captureRequest(request, env) &&
+    !(
+      typeof __TWO_LOCAL_CAPTURE__ !== "undefined" &&
+      __TWO_LOCAL_CAPTURE__ === true &&
+      captureRequest(request, env)
+    ) &&
     htmlRequest &&
     isAnonCacheEligible({
       method: request.method,

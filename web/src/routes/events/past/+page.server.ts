@@ -29,7 +29,10 @@ export const load: PageServerLoad = async ({ url, request, locals, setHeaders })
   try {
     const data = await loadPastArchivePage({
       env,
-      now: renderDate(request, env),
+      now:
+        typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true
+          ? renderDate(request, env)
+          : undefined,
       pageParam: url.searchParams.get("page"),
       queryParam: url.searchParams.get("q"),
       setHeaders,

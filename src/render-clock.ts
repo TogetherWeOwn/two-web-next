@@ -1,8 +1,8 @@
+import type {} from "./render-clock-build";
 import { fixtureRequest } from "./fixture-origin";
 
 // Only the generated local fixture build defines this. Runtime bindings and
 // request input cannot turn a shipped Worker into a capture build.
-declare const __TWO_LOCAL_CAPTURE__: boolean;
 const captureBuild = typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true;
 export const SSR_CAPTURE_INSTANT = "2098-12-31T20:00:00Z";
 export const SSR_CAPTURE_HEADER = "x-two-ssr-clock";

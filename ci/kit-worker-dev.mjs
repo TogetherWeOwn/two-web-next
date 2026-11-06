@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
+import { requireCaptureArtifact } from "./kit-capture-build.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
@@ -36,6 +37,10 @@ try {
   throw new Error(
     `kit-worker-dev: built worker missing at ${worker} (run npm run build --prefix web)`,
   );
+}
+
+if (process.env.SSR_CAPTURE_FIXTURE === "true") {
+  requireCaptureArtifact(join(web, ".svelte-kit/output/server"));
 }
 
 const scratch = mkdtempSync(
