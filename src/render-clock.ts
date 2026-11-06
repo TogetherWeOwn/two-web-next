@@ -1,4 +1,4 @@
-import type {} from "./render-clock-build";
+import type {} from "./render-clock-build.d.ts";
 import { fixtureRequest } from "./fixture-origin";
 
 // Only the generated local fixture build defines this. Runtime bindings and
