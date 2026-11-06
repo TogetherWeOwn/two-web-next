@@ -22,7 +22,58 @@ before mutating journeys. It captures the 16 viewport/state combinations below
 and uploads PNGs plus SHA/metric receipts as
 `ember-ui-evidence-<run-id>-<attempt>` before later Playwright steps clean the
 output directory. This capture is not a baseline update or UX approval. Its first
-combined-head execution and opening every image remain pending.
+combined-head execution is recorded below; the local images and measurements in
+later sections remain historical.
+
+## Combined-head Actions evidence and baseline acceptance
+
+[Browser run 42289276465, attempt 1](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42289276465)
+ran at `78830b034c6a0679eec7f19cde161b685938ee59`. All 16 viewport PNGs in
+[artifact 13538448331](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42289276465/artifacts/13538448331)
+were opened individually. Their SHA/metric receipts report Mona Sans, 16px body
+text, 24.8px line height, no horizontal overflow, zero reduced-motion duration
+and the focused skip link's 2px ring with 3px offset.
+
+That browser run finished **failure**, as did
+[CI run 42289269852](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42289269852).
+Hono a11y and Lighthouse jobs passed. Lint stopped the main and Node 22 checks
+before types/tests; the asset selftest failed on a missing scratch-fixture file.
+Critical journeys had six failures: four stale rule-target color pins, one stale
+fallback-shell color pin and the font-swap negative control. The real Mona swap
+passed, but the old 100% bad-metric mutation no longer crossed the unchanged CLS
+or line-count limit. The repair uses a deliberately large 50% mismatch; it does
+not loosen either limit. These repairs await fresh Actions verification.
+
+The failure artifact
+[e2e-failure-42289276465-1](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42289276465/artifacts/13539617300)
+contains 48 expected/actual/diff triples. All triples were opened as labeled
+comparison sheets for implementation inspection. Both acceptance scripts first
+passed a read-only dry run, then copied only those CI actuals into 18 Hono and
+30 Kit-suite baselines:
+
+- Hono, desktop and mobile: `about`, `event`, `event-cancelled`, `event-paused`,
+  `events`, `home`, `past`, `privacy` and `rules` (18).
+- Kit archive `populated` and `out-of-range`, each desktop/mobile (4);
+  Kit events index, desktop/mobile (2).
+- Kit member board `activity`, `default`, `relative` and `season`, each
+  desktop/mobile (8).
+- Member-board viewer: every Hono/Kit × overall/relative × desktop/mobile ×
+  normal/forced-colors combination (16).
+
+Commands: `node ci/visual-accept.mjs --dry-run --format json <artifact-root>`
+and `node ci/kit-visual-accept.mjs --dry-run --format json <artifact-root>`,
+followed by each command without its preview flags. Actual acceptance reported
+18 and 30 baselines respectively, with no collision. No local snapshot
+regeneration, pixel threshold, masking, viewport, fixture or application CSS was
+changed in this repair round.
+
+The intended changes are the generated Ember palette, semantic control colors
+and body/display typography. Resulting text wrapping, document heights and
+scrolled table-row density change with the new metrics. Forced-colors tables
+keep their system-color treatment and viewer outlines. This records artifact
+provenance and implementation inspection, **not independent UX design QA**.
+Fresh exact-head Actions, all required browser states, independent technical and
+UX review, and separate production-merge confirmation remain required.
 
 Captured on 2026-11-04 from the actual local Hono application and compiled Kit
 Worker using disposable fixtures. All 16 images below were opened individually.

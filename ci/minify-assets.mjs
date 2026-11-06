@@ -212,16 +212,10 @@ function selftest() {
     cpSync(join(repoRoot, "assets"), join(scratch, "assets"), { recursive: true });
     cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
     cpSync(join(repoRoot, "vendor"), join(scratch, "vendor"), { recursive: true });
-    mkdirSync(join(scratch, "src"), { recursive: true });
-    copyFileSync(
-      join(repoRoot, "src/ember-fallback-style.ts"),
-      join(scratch, "src/ember-fallback-style.ts"),
-    );
-    mkdirSync(join(scratch, "web/src"), { recursive: true });
-    copyFileSync(
-      join(repoRoot, "web/src/ember-theme.css"),
-      join(scratch, "web/src/ember-theme.css"),
-    );
+    for (const artifact of ARTIFACTS) {
+      mkdirSync(dirname(join(scratch, artifact)), { recursive: true });
+      copyFileSync(join(repoRoot, artifact), join(scratch, artifact));
+    }
     mkdirSync(join(scratch, "ci", "budgets"), { recursive: true });
     cpSync(join(repoRoot, "ci", "budgets", "bundle"), join(scratch, "ci", "budgets", "bundle"), {
       recursive: true,
