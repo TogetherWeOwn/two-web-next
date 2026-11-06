@@ -15,6 +15,7 @@ import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { build } from "esbuild";
+import { parse, type DefaultTreeAdapterMap } from "parse5";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { events } from "../src/db/admin-schema";
@@ -326,16 +327,141 @@ async function renderFixture(view: View, clock: ClockCase) {
   };
 }
 
-// The opening tag carrying a testid, whatever the attribute order. Fails when the
-// testid is absent, sits on the wrong element, or the tag never closes.
-function openingTag(html: string, testid: string, tag: "button" | "p"): string {
-  const at = html.indexOf(`data-testid="${testid}"`);
-  expect(at, `missing testid ${testid}`).toBeGreaterThan(-1);
-  const open = html.lastIndexOf(`<${tag}`, at);
-  expect(open, `testid ${testid} must sit on a <${tag}>`).toBeGreaterThan(-1);
-  const end = html.indexOf(">", open);
-  expect(end, `unclosed <${tag}> for ${testid}`).toBeGreaterThan(at);
-  return html.slice(open, end + 1);
+type ParsedNode = DefaultTreeAdapterMap["node"];
+type ParsedElement = DefaultTreeAdapterMap["element"];
+function descendants(node: ParsedNode): ParsedNode[] {
+  // Template contents are a separate DocumentFragment, not document descendants.
+  return [node, ...("childNodes" in node ? node.childNodes.flatMap(descendants) : [])];
+}
+function isElement(node: ParsedNode): node is ParsedElement {
+  return "tagName" in node;
+}
+function elements(node: ParsedNode): ParsedElement[] {
+  return descendants(node).slice(1).filter(isElement);
+}
+function attribute(node: ParsedElement, name: string): string | undefined {
+  return node.attrs.find((attr) => attr.name === name && !attr.namespace)?.value;
+}
+function text(node: ParsedNode): string {
+  if (node.nodeName === "#text") return (node as DefaultTreeAdapterMap["textNode"]).value;
+  return "childNodes" in node ? node.childNodes.map(text).join("") : "";
+}
+
+function assertStructure(html: string, clock: ClockCase, fresh = true) {
+  const nodes = elements(parse(html, { sourceCodeLocationInfo: true }));
+  // Match the binder's document.querySelectorAll, not a dd-only or row-only census.
+  const mounts = nodes.filter(
+    (node) => attribute(node, "data-event-device-timezone") !== undefined,
+  );
+  expect(
+    mounts.length,
+    "Starts and Ends each carry one actual mount in the whole document",
+  ).toBe(2);
+  const buttons: ParsedElement[] = [];
+  const statuses: ParsedElement[] = [];
+  const times: ParsedElement[] = [];
+  const rows: ParsedElement[] = [];
+  const contracts = [
+    {
+      label: "Starts",
+      instant: startIso(clock),
+      button: STARTS_BUTTON_TESTID,
+      status: STARTS_STATUS_TESTID,
+    },
+    {
+      label: "Ends",
+      instant: clock.instant,
+      button: ENDS_BUTTON_TESTID,
+      status: ENDS_STATUS_TESTID,
+    },
+  ];
+  for (const [index, contract] of contracts.entries()) {
+    const mount = mounts[index]!;
+    expect(mount.tagName, `${contract.label} mount is a dd host`).toBe("dd");
+    const row = mount.parentNode;
+    expect(row?.nodeName, `${contract.label} host belongs to a metadata row`).toBe("div");
+    if (!row || !isElement(row)) throw new Error("Missing metadata row");
+    const list = row.parentNode;
+    expect(list?.nodeName).toBe("dl");
+    if (!list || !isElement(list)) throw new Error("Missing metadata list");
+    expect(attribute(list, "aria-label")).toBe("Event details");
+    if (index > 0)
+      expect(list === rows[0]!.parentNode, "Starts and Ends belong to the same list").toBe(true);
+    const siblings = row.childNodes.filter(isElement);
+    expect(siblings.map((node) => node.tagName)).toEqual(["dt", "dd", "dd"]);
+    expect(text(siblings[0]!).trim()).toBe(contract.label);
+    expect(siblings[2] === mount, "the mount follows its own host-time dd").toBe(true);
+    const terms = elements(list).filter(
+      (node) => node.tagName === "dt" && text(node).trim() === contract.label,
+    );
+    expect(terms.length, `one ${contract.label} row`).toBe(1);
+    const rowTimes = elements(row).filter((node) => node.tagName === "time");
+    expect(rowTimes.length, `one ${contract.label} host time in the binder's parent row`).toBe(1);
+    const time = rowTimes[0]!;
+    expect(time.parentNode === siblings[1], "time belongs to its host-time dd").toBe(true);
+    expect(attribute(time, "datetime")).toBe(contract.instant);
+    if (contract.label === "Ends") expect(text(time)).toBe(clock.hostText);
+
+    const controls = elements(mount);
+    const localButtons = controls.filter((node) => node.tagName === "button");
+    const localStatuses = controls.filter((node) => attribute(node, "role") === "status");
+    expect(localButtons.length).toBe(1);
+    expect(localStatuses.length).toBe(1);
+    const button = localButtons[0]!;
+    const status = localStatuses[0]!;
+    expect(button.parentNode === mount, "button belongs directly to its host").toBe(true);
+    expect(status.parentNode === mount, "status belongs directly to its host").toBe(true);
+    expect(mount.childNodes.filter(isElement).map((node) => node.tagName)).toEqual(["button", "p"]);
+    for (const [testid, control] of [
+      [contract.button, button],
+      [contract.status, status],
+    ] as const) {
+      const matches = nodes.filter((node) => attribute(node, "data-testid") === testid);
+      expect(matches.length, `${testid} occurs exactly once in the whole document`).toBe(1);
+      expect(matches[0] === control, `${testid} belongs to its own ${contract.label} host`).toBe(true);
+    }
+    expect(attribute(button, "type")).toBe("button");
+    expect(text(button).trim()).toBe("Show in my device timezone");
+    expect(status.tagName).toBe("p");
+    expect(attribute(status, "role")).toBe("status");
+    expect(attribute(status, "aria-live")).toBe("polite");
+    if (fresh) {
+      expect(attribute(button, "hidden"), "fresh actions are initially hidden").toBeDefined();
+      expect(
+        status.childNodes.every((node) => node.nodeName === "#text" && text(node).trim() === ""),
+        "fresh render never pre-fills a conversion",
+      ).toBe(true);
+    }
+    expect(nodes.indexOf(time)).toBeLessThan(nodes.indexOf(button));
+    expect(nodes.indexOf(button)).toBeLessThan(nodes.indexOf(status));
+    buttons.push(button);
+    statuses.push(status);
+    times.push(time);
+    rows.push(row);
+  }
+  expect(nodes.indexOf(statuses[0]!)).toBeLessThan(nodes.indexOf(times[1]!));
+  return { mounts, buttons, statuses, times, rows };
+}
+
+type HtmlEdit = { startOffset: number; endOffset: number; replacement: string };
+function elementEdit(node: ParsedElement, replacement: string): HtmlEdit {
+  const location = node.sourceCodeLocation;
+  if (!location) throw new Error("Control requires an element source location");
+  return { startOffset: location.startOffset, endOffset: location.endOffset, replacement };
+}
+function attributeEdit(node: ParsedElement, name: string, replacement = ""): HtmlEdit {
+  const location = node.sourceCodeLocation?.attrs?.[name];
+  if (!location) throw new Error(`Control requires attribute ${name}`);
+  return { startOffset: location.startOffset, endOffset: location.endOffset, replacement };
+}
+function sourceHtml(html: string, node: ParsedElement): string {
+  const location = elementEdit(node, "");
+  return html.slice(location.startOffset, location.endOffset);
+}
+function editedHtml(html: string, edits: HtmlEdit[]): string {
+  for (const edit of [...edits].sort((a, b) => b.startOffset - a.startOffset))
+    html = html.slice(0, edit.startOffset) + edit.replacement + html.slice(edit.endOffset);
+  return html;
 }
 
 for (const view of VIEWS) {
@@ -343,38 +469,102 @@ for (const view of VIEWS) {
     it("serves the Starts and Ends mounts with button/status testids", async () => {
       for (const clock of CASES) {
         const { html } = await renderFixture(view, clock);
-        const mounts = html.match(/data-event-device-timezone/g) ?? [];
-        expect(mounts.length, "Starts and Ends each carry one mount").toBe(2);
-        const startsTime = html.indexOf(`<time datetime="${startIso(clock)}">`);
-        expect(startsTime, "Starts host time missing").toBeGreaterThan(-1);
-        const endsTime = html.indexOf(`<time datetime="${clock.instant}">`);
-        expect(endsTime, "Ends host time missing").toBeGreaterThan(-1);
-        for (const testid of [STARTS_BUTTON_TESTID, ENDS_BUTTON_TESTID]) {
-          const tag = openingTag(html, testid, "button");
-          expect(tag).toContain('type="button"');
-          expect(tag).toContain("hidden");
-          const at = html.indexOf(`data-testid="${testid}"`);
-          const label = html.slice(html.indexOf(">", at) + 1, html.indexOf("</button>", at));
-          expect(label.trim()).toBe("Show in my device timezone");
+        const { mounts, buttons, statuses, times, rows } = assertStructure(html, clock);
+        // Keep the complete real document, including the Kit model script, byte-for-byte
+        // except for explicit source-location edits. Never serialize a reduced subtree.
+        const decoy = sourceHtml(html, mounts[0]!);
+        const serialized = JSON.stringify({ metadata: decoy }).replace(/</g, "\\u003c");
+        const escaped = decoy.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+        const inert = `<script type="application/json">${serialized}</script><!--${decoy}--><p>${escaped}</p><template>${decoy}</template><span data-event-device-timezone-copy></span>`;
+        const bodyEnd = html.lastIndexOf("</body>");
+        expect(bodyEnd, "controls retain the complete document wrapper").toBeGreaterThan(-1);
+        const positive = html.slice(0, bodyEnd) + inert + html.slice(bodyEnd);
+        expect(positive).toContain(serialized);
+        assertStructure(positive, clock);
+
+        const rejects = (name: string, edits: HtmlEdit[]) => {
+          expect(
+            () => assertStructure(editedHtml(html, edits), clock),
+            `${view}: ${clock.name}: ${name}`,
+          ).toThrow();
+        };
+        rejects("a real non-dd mount anywhere in the document", [
+          {
+            startOffset: bodyEnd,
+            endOffset: bodyEnd,
+            replacement: "<span data-event-device-timezone></span>",
+          },
+        ]);
+        rejects(
+          "no real mount attributes",
+          mounts.map((mount) => attributeEdit(mount, "data-event-device-timezone")),
+        );
+        for (const [index, mount] of mounts.entries()) {
+          rejects(`missing mount ${index}`, [attributeEdit(mount, "data-event-device-timezone")]);
+          rejects(`removed mount ${index}`, [elementEdit(mount, "")]);
+          rejects(`duplicated real mount ${index}`, [
+            elementEdit(mount, sourceHtml(html, mount).repeat(2)),
+          ]);
+          for (const control of [buttons[index]!, statuses[index]!]) {
+            const testid = attribute(control, "data-testid")!;
+            rejects(`missing ${testid}`, [elementEdit(control, "")]);
+            rejects(`missing testid ${testid}`, [attributeEdit(control, "data-testid")]);
+            rejects(`duplicated ${testid}`, [
+              elementEdit(control, sourceHtml(html, control).repeat(2)),
+            ]);
+            rejects(`wrong element for ${testid}`, [
+              elementEdit(control, `<span data-testid="${testid}"></span>`),
+            ]);
+            // A duplicate outside either mount must also fail the whole-document census.
+            rejects(`out-of-row duplicate ${testid}`, [
+              elementEdit(
+                rows[index]!,
+                sourceHtml(html, rows[index]!) + sourceHtml(html, control),
+              ),
+            ]);
+          }
+          for (const name of ["type", "hidden"])
+            rejects(`missing button ${name} ${index}`, [attributeEdit(buttons[index]!, name)]);
+          for (const name of ["role", "aria-live"])
+            rejects(`missing status ${name} ${index}`, [attributeEdit(statuses[index]!, name)]);
+          rejects(`wrong button type ${index}`, [
+            attributeEdit(buttons[index]!, "type", 'type="submit"'),
+          ]);
+          rejects(`wrong live mode ${index}`, [
+            attributeEdit(statuses[index]!, "aria-live", 'aria-live="off"'),
+          ]);
+          rejects(`wrong label ${index}`, [
+            elementEdit(
+              buttons[index]!,
+              sourceHtml(html, buttons[index]!).replace(
+                "Show in my device timezone",
+                "Show host time",
+              ),
+            ),
+          ]);
+          rejects(`prefilled status ${index}`, [
+            elementEdit(
+              statuses[index]!,
+              sourceHtml(html, statuses[index]!).replace("</p>", "Already converted</p>"),
+            ),
+          ]);
+          rejects(`missing machine instant ${index}`, [attributeEdit(times[index]!, "datetime")]);
+          rejects(`wrong machine instant ${index}`, [
+            attributeEdit(times[index]!, "datetime", 'datetime="2000-01-01T00:00:00.000Z"'),
+          ]);
         }
-        for (const testid of [STARTS_STATUS_TESTID, ENDS_STATUS_TESTID]) {
-          const tag = openingTag(html, testid, "p");
-          expect(tag).toContain('role="status"');
-          const at = html.indexOf(`data-testid="${testid}"`);
-          const body = html.slice(html.indexOf(">", at) + 1, html.indexOf("</p>", at));
-          expect(body.trim(), "fresh render never pre-fills a conversion").toBe("");
+        for (const [name, pair] of [
+          ["buttons", buttons],
+          ["statuses", statuses],
+          ["mounts", mounts],
+          ["times", times],
+          ["rows", rows],
+        ] as const) {
+          rejects(`cross-wired or reversed ${name}`, [
+            elementEdit(pair[0]!, sourceHtml(html, pair[1]!)),
+            elementEdit(pair[1]!, sourceHtml(html, pair[0]!)),
+          ]);
         }
-        // Sibling order is the binder contract: each time precedes its own mount,
-        // and the Starts mount precedes the Ends block.
-        const startsButton = html.indexOf(STARTS_BUTTON_TESTID);
-        const startsStatus = html.indexOf(STARTS_STATUS_TESTID);
-        const endsButton = html.indexOf(ENDS_BUTTON_TESTID);
-        const endsStatus = html.indexOf(ENDS_STATUS_TESTID);
-        expect(startsTime).toBeLessThan(startsButton);
-        expect(startsButton).toBeLessThan(startsStatus);
-        expect(endsTime).toBeLessThan(endsButton);
-        expect(endsButton).toBeLessThan(endsStatus);
-        expect(startsStatus).toBeLessThan(endsTime);
       }
     });
     it("positive control: no-JS HTML retains both complete host instants with no pre-conversion", async () => {
@@ -495,12 +685,23 @@ describe.skipIf(process.env.A11Y_BROWSER_TESTS !== "true")(
         await route.fulfill({ status: 204 });
       });
       await page.goto(`${ORIGIN}/e/${KEY}`);
-      if (view === "Kit" && javaScriptEnabled)
+      await browserStructure(page, clock, !javaScriptEnabled);
+      if (view === "Kit" && javaScriptEnabled) {
         await page.addScriptTag({ url: `${ORIGIN}/Detail-client.js` });
+        await browserStructure(page, clock);
+      }
       return { page, context, errors };
     }
 
+    async function browserStructure(page: Page, clock: ClockCase, fresh = false) {
+      expect(
+        await page.locator("[data-event-device-timezone]").count(),
+        "the browser document has exactly two real mounts, including after hydration",
+      ).toBe(2);
+      assertStructure(await page.content(), clock, fresh);
+    }
     async function invariant(page: Page, clock: ClockCase) {
+      await browserStructure(page, clock);
       return page.evaluate(
         ({ start, end }: { start: string; end: string }) => {
           const hostStarts = document.querySelector(`time[datetime="${start}"]`);
