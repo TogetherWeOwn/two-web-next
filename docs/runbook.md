@@ -300,8 +300,11 @@ binding isolation before any remote mutation.
    answered with evidence, and fresh per-PR exact-head Release Manager
    `request_confirmation` on a child card assigned and addressed to the Release
    Manager (this merge deploys production). Apply the
-   [staging or artifact-identical evidence contract](../CONTRIBUTING.md#artifact-identical-merge-evidence)
-   and its retained safeguards. Any push requires a new exact-head confirmation.
+   [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence)
+   and its retained safeguards: staging is met by the automatic post-merge,
+   pre-production staging/e2e/soak gate, not a pre-merge staging run or artifact
+   equality. Production promotion still waits for qualification of the resulting
+   exact `main` SHA. Any push requires a new exact-head confirmation.
    When native review stages apply, the final-stage reviewer squash-merges the
    exact reviewed and confirmed head before closing the task; otherwise the
    author merges. Pin the merge to that SHA. Record the confirmation, pinned

@@ -10,43 +10,40 @@ guides analysis only; it is not a permission boundary.
 Read the applicable `AGENTS.md`, `CONTRIBUTING.md`, `CONSTRAINTS.md`, and
 nearby docs for contracts. Do not invent conventions they do not state.
 
-## Artifact-identical merge evidence
+## Merge and production staging evidence
 
 When evaluating release evidence, apply the
-[artifact-identical merge rule](CONTRIBUTING.md#artifact-identical-merge-evidence).
-For production-deploying `main` in `TogetherWeOwn/two-web-next` and
-`TogetherWeOwn/two-bot-next`, exact-head staging qualification is not required
-only when the actual diff is limited to tests, docs or CI unrelated to build,
-deploy, release or promotion; the complete production artifacts are byte-identical
-to current `main`; and required CI plus Devin Review pass on the exact PR head,
-with findings fixed or answered with evidence. Runtime, dependency and deployment
-changes never qualify, including deploy/release workflows, Wrangler/Worker
-configuration, Dockerfiles, migrations, package manifests and lockfiles.
+[merge and production staging contract](CONTRIBUTING.md#merge-and-production-staging-evidence).
+For `TogetherWeOwn/two-web-next` and `TogetherWeOwn/two-bot-next`, the staging
+item is met by the automatic **post-merge, pre-production** staging/e2e/soak
+gate. Do not demand a staging run for an unmerged head, or make artifact equality,
+paired hashes or a comparison to current `main` a merge prerequisite. This is
+not limited to docs/test-only changes and is not proof that staging already ran.
 
-Require both head SHAs and both bundle/image hashes on the fresh confirmation
-card, with the build/hash commands and complete artifact scope required by
-[CONTRIBUTING.md](CONTRIBUTING.md#artifact-identical-merge-evidence).
-Compare actual deployed artifacts, including Worker modules, every deployed
-static asset and the tail Worker, not a partial bundle, source-tree equality,
-a file label or PR title. Before using the exception to merge, recheck that the
-recorded `main` SHA is current. An advance requires a renewed complete-artifact
-comparison and fresh Release Manager confirmation against the new `main` SHA,
-or full exact-head staging qualification; it does not require restacking an
-otherwise mergeable PR. The Release Manager must verify and record the
-classification and both hashes in the decision.
-A mismatch, non-qualifying diff or incomplete proof retains full exact-head
-staging qualification. Do not demand it solely because the head lacks staging
-when all conditions are verified; do not infer that a docs/test-only label proves
-them.
+Before merge, verify passing required CI and Devin Review on the exact PR head,
+with findings fixed or answered with evidence, applicable security reviews and
+native stages complete, and fresh per-PR exact-head Release Manager confirmation
+on a child card assigned and addressed to the Release Manager. Require exact-head
+Actions run/job links and conclusions, migration ledger evidence or "no
+migration", a known-good rollback target and the automatic staging path on the
+confirmation card. A new push needs new confirmation. The final-stage reviewer,
+or author without native stages, must pin the squash merge to the reviewed and
+confirmed head and record the confirmation and squash SHA in the release log.
+An otherwise mergeable PR does not need restacking solely because `main` moved.
 
-This changes merge-evidence classification only. Required checks, rulesets,
-native review gates, incident/freeze/hold safeguards and identity/capability holds
-remain. So do fresh per-PR exact-head Release Manager confirmation, an exact-SHA
-pinned squash merge and release-log recording. No red deterministic gate is
-waived; no pipeline skip/no-op or production action is authorized. Previous
-rejections are historical, not retroactive approvals: submit qualifying candidates
-with hashes for a new confirmation. This advisory analysis role still does not
-approve or merge.
+Distinguish that merge evidence from production qualification: the resulting
+exact `main` SHA still has to pass full CI, staging deploy, staging e2e and soak
+under the existing promotion guard before automatic production promotion.
+Require matching candidate-SHA Actions evidence for promotion, not a PR-head
+pass or a different `main` SHA. Missing or failing post-merge qualification
+holds promotion; it does not create a pre-merge staging requirement.
+
+Required checks, rulesets, review gates, incident/freeze/hold safeguards,
+identity/capability holds, rollback requirements and confirmation for every
+other production deploy remain. No red deterministic gate is waived; no pipeline
+skip/no-op or production action is authorized. Previous rejections remain
+historical, not retroactive approvals: resubmit for a fresh exact-head decision.
+This advisory analysis role still does not approve or merge.
 
 ## What merits a finding
 
