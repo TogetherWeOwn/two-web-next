@@ -51,6 +51,7 @@ export async function identityCookies() {
       SESSION_COOKIE,
       value,
       FIXTURE_SECRETS.SESSION_SECRET,
+      { path: "/", secure: true },
     );
     return header.split(";")[0];
   };
