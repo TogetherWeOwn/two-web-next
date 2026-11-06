@@ -456,7 +456,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       });
       const { model, html } = await renderKit("");
       expect(model.attendeesPaging).toMatchObject({ page: 1, prevHref: null, nextHref: null });
-      expect(html).toContain("Who's going (1)");
+      expect(html).toContain("Who&#39;s going (1)");
       expectNoPager(html);
     });
 

@@ -1011,13 +1011,13 @@ describe("Kit detail presentation", () => {
     expect(html).toContain("This one has been and gone");
     expect(html).toContain('data-testid="event-roster-guest-nudge"');
     expect(html).toContain("2 going");
-    expect(html).toContain("sign in to see who's in");
+    expect(html).toContain("sign in to see who&#39;s in");
   });
 
   it("renders the member contract: attendees with profile links, no join pitch", async () => {
     const html = await memberHtml();
     expect(html).toContain('data-testid="event-attendees"');
-    expect(html).toContain("Who's going (2)");
+    expect(html).toContain("Who&#39;s going (2)");
     expect(html).toContain(">ann<");
     expect(html).toContain('href="/members/100000000000000003"');
     expect(html).toContain('data-testid="event-attendees-refresh"');

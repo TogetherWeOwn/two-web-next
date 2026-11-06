@@ -4,7 +4,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { EventMetadata, withEventDetailHtml } from "../src/events/detail-leaves";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
-import type { PublicEvent } from "../src/events/reads";
+import { ATTENDEE_PAGE_SIZE, type PublicEvent } from "../src/events/reads";
 import type { KitSession } from "../src/kit-session";
 
 const KEY = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -64,7 +64,10 @@ async function resolve(
     relatedFn: async () => [],
     seriesFn: async () => null,
     attendeesFn: vi.fn(async () =>
-      Array.from({ length: 26 }, (_, n) => ({ id: `owner-${n}`, name: `<img src=x>${n}` })),
+      Array.from({ length: ATTENDEE_PAGE_SIZE + 1 }, (_, n) => ({
+        id: `owner-${n}`,
+        name: `<img src=x>${n}`,
+      })),
     ),
     viewerRsvpFn: vi.fn(async () => null),
     waitlistFn: async () => null,
@@ -114,10 +117,11 @@ describe("shared event detail server leaves", () => {
     expect(model.detailHtml.metadata).toContain("&lt;script&gt;host&lt;/script&gt;");
     expect(model.detailHtml.roster).toContain("&lt;img src=x&gt;0");
     expect(model.detailHtml.roster).not.toMatch(/<(?:img|svg|script)\b/);
-    expect(model.detailHtml.roster).not.toContain("owner-25");
+    expect(model.detailHtml.roster).toContain(`owner-${ATTENDEE_PAGE_SIZE - 1}`);
+    expect(model.detailHtml.roster).not.toContain(`owner-${ATTENDEE_PAGE_SIZE}`);
     expect(model.detailHtml.roster).toContain(`href="/e/${KEY}?attendees=3"`);
     expect(model.detailHtml.roster).toContain("event-attendees-current-page");
-    expect(model.detailHtml.roster).not.toContain("Who's going (25)");
+    expect(model.detailHtml.roster).not.toContain("Who&#39;s going (");
     expect(model.detailHtml.rsvp).toContain(`action="/e/${KEY}/rsvp?attendees=2"`);
     expect(model.detailHtml.rsvp).toContain('data-login-url="/join/discord?next=%2Fe%2F');
     expect(model.detailHtml.rsvp).not.toContain("secret");
