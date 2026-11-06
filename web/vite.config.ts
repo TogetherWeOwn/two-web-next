@@ -68,6 +68,13 @@ export default defineConfig({
                   name: "events",
                   test: /\/src\/(?:events\/|kit-(?:past-)?events(?:-html)?\.tsx?$|lib\/Event(?:Detail|Card|Missing|Gone)\.svelte$|routes\/events\/past\/\+page\.svelte$)/,
                 },
+                // The season-aware Hono/Kit hot-zone twins repeat shell and
+                // recovery markup. Co-compress them instead of raising the
+                // server budget for the shared discovery-title helpers.
+                {
+                  name: "hotzones",
+                  test: /\/src\/(?:hotzones\/|kit-hotzones\.ts$|routes\/hotzones\/.*\.svelte$)/,
+                },
               ],
             },
           },
