@@ -80,7 +80,10 @@ for (const target of targets) {
             state,
             metrics,
           };
-          writeFileSync(testInfo.outputPath(`${name}.json`), `${JSON.stringify(receipt, null, 2)}\n`);
+          writeFileSync(
+            testInfo.outputPath(`${name}.json`),
+            `${JSON.stringify(receipt, null, 2)}\n`,
+          );
         });
       });
     }
