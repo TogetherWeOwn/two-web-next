@@ -38,3 +38,8 @@ input outline is absent. These are observations, not visual acceptance. Six real
 Hono route captures (save notice, corrections, cancelled; 360/1280) were also opened.
 The audit failed two published-review attendee-count assertions before axe ran on
 that state. Current-head rerun and independent UX/Security/QA acceptance remain.
+
+The same run's Node 22 suite finished with seven failures: four draft redirect
+expectations, two expired CRUD fixtures, and Markdown's invalid-date error pin.
+Corrections retain the assertions, freeze the CRUD clock, and scope invalid-date
+fallback to HTML. They are local and untested; the coverage job remains unresolved.

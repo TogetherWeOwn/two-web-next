@@ -38,7 +38,13 @@ import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
-import { formatElapsedDuration, formatEventWhen, instantIso, isValidZone } from "./date-format";
+import {
+  formatDetailWhen,
+  formatElapsedDuration,
+  formatEventWhen,
+  instantIso,
+  isValidZone,
+} from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
@@ -599,8 +605,8 @@ export async function resolveKitEventDetail(
               ? googleCalendarUrl(event)
               : null,
           copyLink: pageCanonical,
-          whenText: formatEventWhen(event.startsAt, event.timezone),
-          endsWhenText: formatEventWhen(event.endsAt, event.timezone),
+          whenText: formatDetailWhen(event.startsAt, event.timezone),
+          endsWhenText: formatDetailWhen(event.endsAt, event.timezone),
           durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
           timeDatetime: instantIso(event.startsAt),
