@@ -28,7 +28,7 @@ import {
   formatDetailWhen as fmtWithOffset,
   instantIso,
 } from "./date-format";
-import { EventReviewSection } from "../admin/pages/event-form-review";
+import { EventPublishedNotice, EventReviewSection } from "../admin/pages/event-form-review";
 import type { SavedEventReview } from "../admin/event-saved-review";
 
 const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now }) => {
@@ -100,6 +100,7 @@ export const EventPage: FC<{
   /** Rooted .md alternate path (A2), e.g. `/e/<key>.md`. */
   markdownAlternate?: string;
   review?: SavedEventReview;
+  publishedNotice?: boolean;
 }> = ({
   e,
   neighbors,
@@ -120,6 +121,7 @@ export const EventPage: FC<{
   attendeePage = 1,
   markdownAlternate,
   review: requestedReview,
+  publishedNotice = false,
 }) => {
   const review = session?.moderator ? requestedReview : undefined;
   const path = `/e/${e.eventKey}`;
@@ -147,6 +149,9 @@ export const EventPage: FC<{
       backLink={archiveReturnLink(archive)}
     >
       {review ? <EventReviewSection review={review} /> : null}
+      {publishedNotice && session?.moderator && e.status === "published" && !review ? (
+        <EventPublishedNotice />
+      ) : null}
       <section class="event-hero" aria-label="Event overview">
         <p class="event-kicker">{e.game || "Community event"}</p>
         {e.status === "draft" ? (

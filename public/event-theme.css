@@ -6,6 +6,15 @@
 .event-theme .event-kicker{color: var(--brand);font: 700 1.1rem/1.4 Display, 'Display Fallback', 'Arial Narrow', sans-serif;text-transform: uppercase;letter-spacing: .08em;margin: 0 0 1rem}
 .event-theme .event-hero h1{max-width: 18ch;margin: .5rem auto 0;font-size: clamp(2.75rem, 6vw, 5.5rem);line-height: 1.05;text-wrap: balance;overflow-wrap: anywhere}
 .event-theme .event-hero .notice{display: inline-block;margin: 0 0 1rem}
+.event-theme main > .notice{padding: .75rem 1rem}
+.event-theme main > .notice > :first-child{margin-top: 0}
+.event-theme main > .notice > :last-child{margin-bottom: 0}
+.event-theme [data-testid='event-review-actions'] .actions{display: flex;flex-wrap: wrap;gap: .75rem}
+.event-theme [data-testid='event-review-actions'] form{margin: 0}
+@media (max-width: 40rem) {
+.event-theme [data-testid='event-review-actions'] .actions{flex-direction: column}
+.event-theme [data-testid='event-review-actions'] .btn{width: 100%;text-align: center}
+}
 .event-theme .event-meta{display: grid;grid-template-columns: repeat(auto-fit, minmax(14rem, 1fr));margin: 0 0 1rem;padding: 0;border-block: 1px solid var(--line);background: var(--surface)}
 .event-theme .event-meta > div{min-width: 0;padding: 1.5rem}
 .event-theme .event-meta dt{font: 700 .9rem/1.4 Display, 'Display Fallback', 'Arial Narrow', sans-serif;text-transform: uppercase;color: var(--muted);letter-spacing: .06em;margin-bottom: .5rem}

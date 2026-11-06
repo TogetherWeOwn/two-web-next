@@ -2,6 +2,29 @@ import { describe, expect, it, vi } from "vitest";
 import { eventEditorBrowser as browser } from "./helpers/admin-event-editor";
 
 describe("Admin event editor navigation guard", () => {
+  it("marks review navigation only while edits are unsaved and leaves protection armed", () => {
+    const b = browser({ review: true });
+    const link = b.reviewLink!;
+    link.click();
+    expect(link.href).toBe("https://next.example/e/abc?review=1");
+    const saved = b.values.get("title")!;
+    b.values.set("title", "Unsaved title");
+    link.click({ ctrlKey: true });
+    expect(link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+    expect(b.navigate("unrelated").preventDefault).toHaveBeenCalledOnce();
+    b.values.set("title", saved);
+    link.click();
+    expect(link.href).toBe("https://next.example/e/abc?review=1");
+    expect(b.navigate("unrelated").preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("marks a rejected Save as unsaved even without another keystroke", () => {
+    const b = browser({ review: true, draft: true });
+    b.reviewLink!.click();
+    expect(b.reviewLink!.href).toContain("&unsaved=1");
+    expect(b.navigate("unrelated").preventDefault).toHaveBeenCalledOnce();
+  });
+
   it.each(["search", "sort"] as const)("allows clean roster %s navigation", (kind) => {
     const b = browser();
     expect(b.navigate(kind).preventDefault).not.toHaveBeenCalled();

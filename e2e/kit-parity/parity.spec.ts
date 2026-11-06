@@ -1521,6 +1521,97 @@ function archiveTurnEndsAt(i: number): string {
   return `2024-06-${String(i).padStart(2, "0")}T20:00:00Z`;
 }
 
+test("Kit saved review states at desktop and mobile widths", async ({ browser }) => {
+  test.setTimeout(60_000);
+  const target = targets.find((item) => item.name === "kit")!;
+  const key = "01J00000000000000000000990";
+  const userId = "900000000000000844";
+  const bearer = `two_${randomBytes(32).toString("base64url")}`;
+  const hash = createHash("sha256").update(bearer).digest("hex");
+  const signature = createHmac("sha256", kitFixtureSessionSecret()).update(bearer).digest("base64");
+  const context = await browser.newContext({ baseURL: target.origin, ignoreHTTPSErrors: true });
+  try {
+    await withSessionDb(async (sql) => {
+      await sql`insert into web_sessions (token_hash, status_hash, user_id, username, member, moderator, expires_at)
+        values (${hash}, ${hash}, ${userId}, 'Review fixture', true, true, ${new Date(Date.now() + 7_200_000)})`;
+      await sql`insert into events (event_key, title, description, starts_at, ends_at, location, status)
+        values (${key}, 'Community game night', 'Bring a favourite game and meet the community.',
+          '2099-03-01T18:00:00Z', '2099-03-01T20:00:00Z', 'Community voice', 'draft')`;
+    });
+    await context.addCookies([
+      {
+        name: "__Host-two_session",
+        value: `${bearer}.${signature}`,
+        url: target.origin,
+        secure: true,
+        httpOnly: true,
+        sameSite: "Lax",
+      },
+    ]);
+    await context.route("**/*", (route) =>
+      new URL(route.request().url()).origin === target.origin
+        ? route.continue()
+        : route.abort("blockedbyclient"),
+    );
+    const page = await context.newPage();
+    for (const state of [
+      "ready",
+      "corrections",
+      "stale",
+      "unsaved",
+      "published",
+      "cancelled",
+      "success",
+    ]) {
+      await withSessionDb(async (sql) => {
+        await sql`update events set status = ${state === "published" || state === "success" ? "published" : state === "cancelled" ? "cancelled" : "draft"},
+          location = ${state === "corrections" ? "" : "Community voice"}, updated_at = now() where event_key = ${key}`;
+      });
+      const query =
+        state === "success"
+          ? "published=1"
+          : `review=1${state === "stale" ? "&publish_error=stale" : state === "unsaved" ? "&unsaved=1" : ""}`;
+      const response = await page.goto(`/e/${key}?${query}`);
+      expect(response?.status()).toBe(200);
+      expect(response?.headers()["x-two-renderer"]).toBe(expectedKitMarker(`/e/${key}`));
+      await expect(
+        page.getByRole("heading", { name: "Community game night", exact: true }),
+      ).toBeVisible();
+      if (state === "success") {
+        await expect(page.getByTestId("event-published")).toBeVisible();
+        await expect(page.getByTestId("event-review")).toHaveCount(0);
+      } else {
+        await expect(page.getByTestId("event-review")).toBeVisible();
+        await expect(page.getByRole("button", { name: "RSVP", exact: true })).toBeDisabled();
+        if (state === "published" || state === "cancelled")
+          await expect(page.getByTestId("publish-reviewed-event")).toHaveCount(0);
+        else if (state === "corrections")
+          await expect(page.getByTestId("publish-reviewed-event")).toBeDisabled();
+        else await expect(page.getByTestId("publish-reviewed-event")).toBeEnabled();
+      }
+      if (state === "stale") await expect(page.getByTestId("event-review-error")).toBeFocused();
+      if (state === "unsaved") await expect(page.getByTestId("event-review-unsaved")).toBeVisible();
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await test.info().attach(`kit-review-${state}-${viewport.width}`, {
+          body: await page.screenshot({ fullPage: true }),
+          contentType: "image/png",
+        });
+      }
+    }
+  } finally {
+    await context.close();
+    await withSessionDb(async (sql) => {
+      await sql`delete from events where event_key = ${key}`;
+      await sql`delete from web_session_grace where user_id = ${userId}`;
+      await sql`delete from web_sessions where user_id = ${userId}`;
+    });
+  }
+});
+
 async function seedArchiveTurns(): Promise<void> {
   requireGithubRunner();
   const url = requireTestDatabase(process.env.DATABASE_URL) as string;

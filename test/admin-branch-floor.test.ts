@@ -6,7 +6,7 @@
 // Live suites use an owned synthetic schema on approved disposable Postgres and
 // skip without DATABASE_URL, like test/admin.test.ts. Pure render/guard/parser
 // suites run everywhere with no database.
-import { eq } from "drizzle-orm";
+import { eq, sql } from "drizzle-orm";
 import { Hono } from "hono";
 import { jsx } from "hono/jsx/jsx-runtime";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
@@ -548,6 +548,172 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
     const [after] = await db.select().from(events).where(eq(events.eventKey, row.eventKey));
     expect(after?.rsvpOpen).toBe(false);
     expect((await auditDescriptions(db)).filter((d) => d.includes("paused RSVPs")).length).toBe(1);
+  });
+
+  describe("publish from the review view (reviewed_updated_at)", () => {
+    const stamp = (r: { updatedAt: Date }) => r.updatedAt.toISOString();
+    const reload = async (key: string) =>
+      (await db.select().from(events).where(eq(events.eventKey, key)))[0]!;
+
+    it("publishes the reviewed revision, redirects to the member page, and replays as a no-op", async () => {
+      const row = await seedEvent({ eventKey: "01K00000000000000000000011", location: "Hall" });
+      const form = { review: "1", reviewed_updated_at: stamp(row) };
+      const res = await post(`/events/${row.eventKey}/publish`, form);
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`/e/${row.eventKey}?published=1`);
+      const after = await reload(row.eventKey);
+      expect(after.status).toBe("published");
+      expect(
+        (await auditDescriptions(db)).filter((d) => d.startsWith("published event")).length,
+      ).toBe(1);
+      // The replay carries the now-stale stamp: it is refused, never double-published.
+      const replay = await post(`/events/${row.eventKey}/publish`, form);
+      expect(replay.status).toBe(303);
+      expect(replay.headers.get("location")).toBe(
+        `/e/${row.eventKey}?review=1&publish_error=stale`,
+      );
+      expect(
+        (await auditDescriptions(db)).filter((d) => d.startsWith("published event")).length,
+      ).toBe(1);
+      // Only drafts publish: even a fresh stamp on the now-published row is a
+      // status refusal back to the review view, not an idempotent success.
+      const fresh = await post(`/events/${row.eventKey}/publish`, {
+        review: "1",
+        reviewed_updated_at: stamp(after),
+      });
+      expect(fresh.status).toBe(303);
+      expect(fresh.headers.get("location")).toBe(
+        `/e/${row.eventKey}?review=1&publish_error=status`,
+      );
+      expect(
+        (await auditDescriptions(db)).filter((d) => d.startsWith("published event")).length,
+      ).toBe(1);
+    });
+
+    it("refuses a stale stamp and leaves the row and audit unchanged", async () => {
+      const row = await seedEvent({ eventKey: "01K00000000000000000000012", location: "Hall" });
+      const reviewed = stamp(row);
+      await db
+        .update(events)
+        .set({ title: "Edited after review", updatedAt: new Date(row.updatedAt.getTime() + 5000) })
+        .where(eq(events.eventKey, row.eventKey));
+      const before = await reload(row.eventKey);
+      const res = await post(`/events/${row.eventKey}/publish`, {
+        review: "1",
+        reviewed_updated_at: reviewed,
+      });
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`/e/${row.eventKey}?review=1&publish_error=stale`);
+      expect(await reload(row.eventKey)).toEqual(before);
+      expect(before.status).toBe("draft");
+      expect(await auditDescriptions(db)).toEqual([]);
+    });
+
+    it.each([
+      ["missing", {}],
+      ["empty", { reviewed_updated_at: "" }],
+      ["malformed", { reviewed_updated_at: "not-a-date" }],
+      ["non-canonical", { reviewed_updated_at: "2099-01-01 00:00:00" }],
+    ])("treats a %s token as stale and changes nothing", async (_name, extra) => {
+      const row = await seedEvent({ eventKey: "01K00000000000000000000013", location: "Hall" });
+      const res = await post(`/events/${row.eventKey}/publish`, { review: "1", ...extra });
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`/e/${row.eventKey}?review=1&publish_error=stale`);
+      expect((await reload(row.eventKey)).status).toBe("draft");
+      expect(await auditDescriptions(db)).toEqual([]);
+    });
+
+    it.each([
+      ["location", { location: "  " }, "location"],
+      [
+        "ended",
+        {
+          startsAt: new Date("2020-01-01T20:00:00Z"),
+          endsAt: new Date("2020-01-01T22:00:00Z"),
+        },
+        "ended",
+      ],
+      ["status", { status: "cancelled" }, "status"],
+    ])("returns a %s validation failure to the review view", async (_name, over, code) => {
+      const row = await seedEvent({
+        eventKey: "01K00000000000000000000014",
+        location: "Hall",
+        ...over,
+      });
+      const res = await post(`/events/${row.eventKey}/publish`, {
+        review: "1",
+        reviewed_updated_at: stamp(row),
+      });
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`/e/${row.eventKey}?review=1&publish_error=${code}`);
+      expect((await reload(row.eventKey)).status).toBe(row.status);
+      expect(await auditDescriptions(db)).toEqual([]);
+    });
+
+    it("keeps the direct publish redirect and ignores any stamp without review=1", async () => {
+      const row = await seedEvent({ eventKey: "01K00000000000000000000015", location: "Hall" });
+      const res = await post(`/events/${row.eventKey}/publish`, {
+        reviewed_updated_at: "not-a-date",
+      });
+      expect(res.status).toBe(303);
+      expect(res.headers.get("location")).toBe(`/admin/events/${row.eventKey}`);
+      expect((await reload(row.eventKey)).status).toBe("published");
+    });
+
+    it("compares the stamp only for publication, not cancellation", async () => {
+      const row = await seedEvent({ eventKey: "01K00000000000000000000016", location: "Hall" });
+      await expect(
+        transitionEvent(db, actor, row.eventKey, "cancelled", "ignored"),
+      ).resolves.toMatchObject({ row: { status: "cancelled" } });
+    });
+
+    it("judges the stamp after the row lock: a writer committing during the wait wins", async () => {
+      const row = await seedEvent({ eventKey: "01K00000000000000000000017", location: "Hall" });
+      const reviewed = stamp(row);
+      let release!: () => void;
+      const gate = new Promise<void>((resolve) => (release = resolve));
+      let locked!: () => void;
+      const holding = new Promise<void>((resolve) => (locked = resolve));
+      const writer = db.transaction(async (tx) => {
+        await tx.select().from(events).where(eq(events.eventKey, row.eventKey)).for("update");
+        locked();
+        await gate;
+        await tx
+          .update(events)
+          .set({ title: "Concurrent edit", updatedAt: new Date(row.updatedAt.getTime() + 5000) })
+          .where(eq(events.eventKey, row.eventKey));
+      });
+      await holding;
+      let outcome: unknown;
+      let observed = false;
+      try {
+        const publish = transitionEvent(db, actor, row.eventKey, "published", reviewed).then(
+          () => "published",
+          (err: unknown) => (err instanceof ValidationError ? Object.keys(err.fields) : err),
+        );
+        // Wait until the publisher is blocked on the row lock before committing.
+        for (let i = 0; i < 100 && !observed; i++) {
+          const waiting = await db.execute(
+            sql`select 1 from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()`,
+          );
+          const found = waiting as unknown as { rows?: unknown[]; length?: number };
+          observed = (found.rows ?? found).length! > 0;
+          if (!observed) await new Promise((r) => setTimeout(r, 20));
+        }
+        release();
+        await writer;
+        outcome = await publish;
+      } finally {
+        release();
+        await writer.catch(() => {});
+      }
+      expect(observed).toBe(true);
+      expect(outcome).toEqual(["reviewed_updated_at"]);
+      const after = await reload(row.eventKey);
+      expect(after.status).toBe("draft");
+      expect(after.title).toBe("Concurrent edit");
+      expect(await auditDescriptions(db)).toEqual([]);
+    });
   });
 
   it("fails closed on corrupt data: an unknown stored status throws, row untouched", async () => {

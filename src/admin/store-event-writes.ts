@@ -583,6 +583,7 @@ export async function transitionEvent(
   actor: Actor,
   eventKey: string,
   to: "published" | "cancelled",
+  reviewedUpdatedAt?: string,
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
     await boundModeratorWrite(tx);
@@ -594,8 +595,24 @@ export async function transitionEvent(
       .where(eq(events.eventKey, eventKey))
       .for("update");
     if (!locked) throw new NotFoundError("event");
+    // Review publication must judge the saved revision after every earlier
+    // writer commits, before any transition, audit or write-back can happen.
+    if (
+      to === "published" &&
+      reviewedUpdatedAt !== undefined &&
+      (!Number.isFinite(locked.updatedAt.getTime()) ||
+        reviewedUpdatedAt !== locked.updatedAt.toISOString())
+    ) {
+      throw new ValidationError({ reviewed_updated_at: "The reviewed draft has changed." });
+    }
     const from = toEventStatus(locked.status);
     const target = nextStatus(from, to);
+    if (
+      to === "published" &&
+      (!Number.isFinite(locked.startsAt.getTime()) || !Number.isFinite(locked.endsAt.getTime()))
+    ) {
+      throw new ValidationError({ dates: "The saved event times cannot be read." });
+    }
     // Judge persisted dates only after the lock wait. Equality is still legal
     // for publication (legacy's strict isPast boundary); cancellation is exempt.
     if (to === "published" && locked.endsAt.getTime() < Date.now()) {
