@@ -102,6 +102,7 @@ import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { isEventProjection, projectEventRow } from "./helpers/pg-proxy-event-projection";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -433,7 +434,7 @@ function fakeDb(stored: FakeStored): Db {
       const value = row[key as string];
       return value instanceof Date ? value.toISOString() : (value ?? null);
     });
-  const db = drizzle(async (sql: string) => {
+  const db = drizzle(async (sql: string, params: unknown[]) => {
     if (sql.includes("set_config")) return { rows: [] };
     if (sql.includes('from "featured_contents"')) {
       // The published-base read selects the window bounds, the direct
@@ -484,6 +485,14 @@ function fakeDb(stored: FakeStored): Db {
       if (sql.includes("count(")) return { rows: [[stored.eventsCount]] };
       if (sql.includes('"timezone"') && !sql.includes('"title"')) return { rows: [] };
       if (sql.includes("discord_event_id") && !sql.includes('"title"')) return { rows: [] };
+      if (isEventProjection(sql))
+        return {
+          rows: stored.eventRows.map((row) =>
+            projectEventRow(sql, params, row, (value) =>
+              value instanceof Date ? value.toISOString() : (value ?? null),
+            ),
+          ),
+        };
       return { rows: stored.eventRows.map(toRow) };
     }
     return { rows: [] };
