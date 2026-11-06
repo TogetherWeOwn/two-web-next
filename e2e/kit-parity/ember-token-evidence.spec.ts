@@ -53,7 +53,7 @@ for (const target of targets) {
               fontFamily: style.fontFamily,
               fontSize: style.fontSize,
               lineHeight: style.lineHeight,
-              motionFast: Number.parseFloat(style.getPropertyValue("--motion-fast")),
+              motionFast: Number.parseFloat(style.getPropertyValue("--motion-duration-fast")),
               overflow: browser.document.documentElement.scrollWidth > browser.innerWidth,
               outlineWidth: focus.outlineWidth,
               outlineOffset: focus.outlineOffset,
