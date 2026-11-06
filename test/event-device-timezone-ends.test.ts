@@ -353,10 +353,9 @@ function assertStructure(html: string, clock: ClockCase, fresh = true) {
   const mounts = nodes.filter(
     (node) => attribute(node, "data-event-device-timezone") !== undefined,
   );
-  expect(
-    mounts.length,
-    "Starts and Ends each carry one actual mount in the whole document",
-  ).toBe(2);
+  expect(mounts.length, "Starts and Ends each carry one actual mount in the whole document").toBe(
+    2,
+  );
   const buttons: ParsedElement[] = [];
   const statuses: ParsedElement[] = [];
   const times: ParsedElement[] = [];
@@ -418,7 +417,9 @@ function assertStructure(html: string, clock: ClockCase, fresh = true) {
     ] as const) {
       const matches = nodes.filter((node) => attribute(node, "data-testid") === testid);
       expect(matches.length, `${testid} occurs exactly once in the whole document`).toBe(1);
-      expect(matches[0] === control, `${testid} belongs to its own ${contract.label} host`).toBe(true);
+      expect(matches[0] === control, `${testid} belongs to its own ${contract.label} host`).toBe(
+        true,
+      );
     }
     expect(attribute(button, "type")).toBe("button");
     expect(text(button).trim()).toBe("Show in my device timezone");
@@ -517,10 +518,7 @@ for (const view of VIEWS) {
             ]);
             // A duplicate outside either mount must also fail the whole-document census.
             rejects(`out-of-row duplicate ${testid}`, [
-              elementEdit(
-                rows[index]!,
-                sourceHtml(html, rows[index]!) + sourceHtml(html, control),
-              ),
+              elementEdit(rows[index]!, sourceHtml(html, rows[index]!) + sourceHtml(html, control)),
             ]);
           }
           for (const name of ["type", "hidden"])

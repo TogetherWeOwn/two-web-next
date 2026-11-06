@@ -22,6 +22,7 @@ import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { build } from "esbuild";
+import { parse, type DefaultTreeAdapterMap } from "parse5";
 import type { Browser, BrowserContext, Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { events } from "../src/db/admin-schema";
@@ -390,6 +391,245 @@ async function renderFixture(view: View, range: RangeCase) {
   };
 }
 
+type ParsedNode = DefaultTreeAdapterMap["node"];
+type ParsedElement = DefaultTreeAdapterMap["element"];
+function descendants(node: ParsedNode): ParsedNode[] {
+  // Template contents are a separate DocumentFragment, not document descendants.
+  return [node, ...("childNodes" in node ? node.childNodes.flatMap(descendants) : [])];
+}
+function isElement(node: ParsedNode): node is ParsedElement {
+  return "tagName" in node;
+}
+function elements(node: ParsedNode): ParsedElement[] {
+  return descendants(node).slice(1).filter(isElement);
+}
+function attribute(node: ParsedElement, name: string): string | undefined {
+  return node.attrs.find((attr) => attr.name === name && !attr.namespace)?.value;
+}
+function text(node: ParsedNode): string {
+  if (node.nodeName === "#text") return (node as DefaultTreeAdapterMap["textNode"]).value;
+  return "childNodes" in node ? node.childNodes.map(text).join("") : "";
+}
+function closestElement(node: ParsedElement, tag: string): ParsedElement | undefined {
+  let current: ParsedNode | null = node;
+  while (current) {
+    if (isElement(current) && current.tagName === tag) return current;
+    current = "parentNode" in current ? current.parentNode : null;
+  }
+  return undefined;
+}
+
+function assertStructure(html: string, range: RangeCase) {
+  const nodes = elements(parse(html, { sourceCodeLocationInfo: true }));
+  // Census the complete document exactly as the binder does, regardless of tag or position.
+  const mounts = nodes.filter(
+    (node) => attribute(node, "data-event-chosen-timezone") !== undefined,
+  );
+  expect(mounts.length, "exactly one chosen-range mount per detail page").toBe(1);
+  const mount = mounts[0]!;
+  expect(mount.tagName).toBe("dd");
+  const row = mount.parentNode;
+  expect(row?.nodeName).toBe("div");
+  if (!row || !isElement(row)) throw new Error("Missing chosen metadata row");
+  const list = closestElement(mount, "dl");
+  expect(list, "chosen mount must have the binder's closest dl").toBeDefined();
+  if (!list) throw new Error("Missing chosen metadata list");
+  expect(row.parentNode === list, "chosen row belongs directly to Event details").toBe(true);
+  expect(attribute(list, "aria-label")).toBe("Event details");
+  const lists = nodes.filter(
+    (node) => node.tagName === "dl" && attribute(node, "aria-label") === "Event details",
+  );
+  expect(lists.length, "one Event details list in the whole document").toBe(1);
+  expect(lists[0] === list).toBe(true);
+  const siblings = row.childNodes.filter(isElement);
+  expect(siblings.map((node) => node.tagName)).toEqual(["dt", "dd"]);
+  expect(text(siblings[0]!).trim()).toBe("Compare in another timezone");
+  expect(siblings[1] === mount).toBe(true);
+  expect(attribute(row, "hidden"), "the complete chosen row is initially hidden").toBeDefined();
+
+  const controls = [INPUT_TESTID, EXAMPLES_TESTID, BUTTON_TESTID, STATUS_TESTID].map((testid) => {
+    const matches = nodes.filter((node) => attribute(node, "data-testid") === testid);
+    expect(matches.length, `${testid} occurs exactly once in the whole document`).toBe(1);
+    const control = matches[0]!;
+    expect(control.parentNode === mount, `${testid} belongs directly to the chosen mount`).toBe(
+      true,
+    );
+    return control;
+  });
+  const [input, examples, button, status] = controls as [
+    ParsedElement,
+    ParsedElement,
+    ParsedElement,
+    ParsedElement,
+  ];
+  const local = elements(mount);
+  const labels = local.filter((node) => node.tagName === "label");
+  expect(labels.length, "one actual chosen-input label").toBe(1);
+  const label = labels[0]!;
+  const ordered = [label, input, examples, button, status];
+  const actual = mount.childNodes.filter(isElement);
+  expect(actual.length).toBe(ordered.length);
+  expect(actual.every((node, index) => node === ordered[index]), "chosen controls retain order").toBe(
+    true,
+  );
+  expect(local.filter((node) => node.tagName === "input").length).toBe(1);
+  expect(local.filter((node) => node.tagName === "button").length).toBe(1);
+  expect(local.filter((node) => attribute(node, "role") === "status").length).toBe(1);
+
+  expect(input.tagName).toBe("input");
+  expect(attribute(input, "hidden")).toBeDefined();
+  const max = attribute(input, "maxlength");
+  expect(max, "input must carry a bounded maxlength").toBeDefined();
+  expect(max).toMatch(/^\d+$/);
+  expect(Number(max)).toBeGreaterThanOrEqual(32);
+  expect(Number(max)).toBeLessThanOrEqual(128);
+  expect(Number(max)).toBeLessThanOrEqual(100 + 28);
+  // Native text entry, not a picker widget or remote combobox.
+  expect(attribute(input, "role")).not.toBe("combobox");
+  expect([undefined, "textbox"]).toContain(attribute(input, "role"));
+  expect(["text", "search"]).toContain((attribute(input, "type") ?? "text").toLowerCase());
+  expect(attribute(input, "disabled")).toBeUndefined();
+  expect(attribute(input, "readonly")).toBeUndefined();
+  const id = attribute(input, "id");
+  expect(id, "chosen input must have a unique id").toBeDefined();
+  expect(id?.trim().length).toBeGreaterThan(0);
+  const ids = nodes.filter((node) => attribute(node, "id") === id);
+  expect(ids.length, "chosen input id is globally unique").toBe(1);
+  expect(ids[0] === input).toBe(true);
+  expect(attribute(label, "for"), "chosen label binds to the actual input").toBe(id);
+  const boundLabels = nodes.filter(
+    (node) => node.tagName === "label" && attribute(node, "for") === id,
+  );
+  expect(boundLabels.length, "chosen input has one globally unique label binding").toBe(1);
+  expect(boundLabels[0] === label).toBe(true);
+  expect(text(label), "chosen input must have a visible label").toMatch(/timezone/i);
+
+  expect(examples.tagName).toBe("p");
+  const examplesBody = text(examples);
+  expect(examplesBody.length, "examples stay compact").toBeLessThan(300);
+  expect(examplesBody).toMatch(/Europe\/London|America\/New_York|Asia\/Tokyo/);
+  expect(button.tagName).toBe("button");
+  expect(attribute(button, "type")).toBe("button");
+  expect(attribute(button, "hidden")).toBeDefined();
+  expect(attribute(button, "disabled")).toBeUndefined();
+  expect(text(button).trim()).toMatch(COMPARE);
+  expect(status.tagName).toBe("p");
+  expect(attribute(status, "role")).toBe("status");
+  expect(attribute(status, "aria-live")).toBe("polite");
+  expect(text(status).trim(), "fresh render never pre-fills a comparison").toBe("");
+  expect(
+    status.childNodes.every((node) => node.nodeName === "#text" && text(node).trim() === ""),
+    "fresh status has no hidden or non-text prefill",
+  ).toBe(true);
+
+  const deviceMounts = nodes.filter(
+    (node) => attribute(node, "data-event-device-timezone") !== undefined,
+  );
+  expect(deviceMounts.length, "Starts and Ends device mounts remain globally unique").toBe(2);
+  const times: ParsedElement[] = [];
+  const rows: ParsedElement[] = [];
+  const deviceButtons: ParsedElement[] = [];
+  const deviceStatuses: ParsedElement[] = [];
+  for (const [index, contract] of [
+    { label: "Starts", instant: range.start, hostText: range.hostStart },
+    { label: "Ends", instant: range.end, hostText: range.hostEnd },
+  ].entries()) {
+    const terms = elements(list).filter(
+      (node) => node.tagName === "dt" && text(node).trim() === contract.label,
+    );
+    expect(terms.length, `one ${contract.label} row in the chosen mount's list`).toBe(1);
+    const hostRow = terms[0]!.parentNode;
+    expect(hostRow?.nodeName).toBe("div");
+    if (!hostRow || !isElement(hostRow)) throw new Error("Missing host metadata row");
+    expect(hostRow.parentNode === list).toBe(true);
+    const parts = hostRow.childNodes.filter(isElement);
+    expect(parts.map((node) => node.tagName)).toEqual(["dt", "dd", "dd"]);
+    expect(parts[0] === terms[0]).toBe(true);
+    const hostTimes = elements(hostRow).filter((node) => node.tagName === "time");
+    expect(hostTimes.length, `one ${contract.label} host time in its own row`).toBe(1);
+    const time = hostTimes[0]!;
+    expect(time.parentNode === parts[1]).toBe(true);
+    expect(attribute(time, "datetime")).toBe(contract.instant);
+    expect(text(time)).toBe(contract.hostText);
+    const device = deviceMounts[index]!;
+    expect(device === parts[2], `${contract.label} device mount owns its host row`).toBe(true);
+    const deviceParts = device.childNodes.filter(isElement);
+    expect(deviceParts.map((node) => node.tagName)).toEqual(["button", "p"]);
+    const deviceButton = deviceParts[0]!;
+    const deviceStatus = deviceParts[1]!;
+    for (const [testid, control] of [
+      [`event-device-timezone-${contract.label.toLowerCase()}-button`, deviceButton],
+      [`event-device-timezone-${contract.label.toLowerCase()}-status`, deviceStatus],
+    ] as const) {
+      const matches = nodes.filter((node) => attribute(node, "data-testid") === testid);
+      expect(matches.length, `${testid} occurs exactly once in the whole document`).toBe(1);
+      expect(matches[0] === control, `${testid} belongs to its own host row`).toBe(true);
+    }
+    expect(attribute(deviceButton, "type")).toBe("button");
+    expect(attribute(deviceButton, "hidden")).toBeDefined();
+    expect(text(deviceButton).trim()).toBe("Show in my device timezone");
+    expect(attribute(deviceStatus, "role")).toBe("status");
+    expect(attribute(deviceStatus, "aria-live")).toBe("polite");
+    expect(
+      deviceStatus.childNodes.every((node) => node.nodeName === "#text" && text(node).trim() === ""),
+    ).toBe(true);
+    expect(nodes.indexOf(time)).toBeLessThan(nodes.indexOf(deviceButton));
+    expect(nodes.indexOf(deviceButton)).toBeLessThan(nodes.indexOf(deviceStatus));
+    times.push(time);
+    rows.push(hostRow);
+    deviceButtons.push(deviceButton);
+    deviceStatuses.push(deviceStatus);
+  }
+  // These are exactly closest('dl').querySelectorAll('time[datetime]') in binder order.
+  const binderTimes = elements(list).filter(
+    (node) => node.tagName === "time" && attribute(node, "datetime") !== undefined,
+  );
+  expect(binderTimes.length, "only the independent Starts and Ends host instants").toBe(2);
+  expect(binderTimes[0] === times[0], "binder's first instant is Starts").toBe(true);
+  expect(binderTimes[1] === times[1], "binder's second instant is Ends").toBe(true);
+  expect(nodes.indexOf(deviceStatuses[0]!)).toBeLessThan(nodes.indexOf(times[1]!));
+  expect(nodes.indexOf(deviceStatuses[1]!)).toBeLessThan(nodes.indexOf(mount));
+  expect(nodes.indexOf(input)).toBeLessThan(nodes.indexOf(button));
+  expect(nodes.indexOf(button)).toBeLessThan(nodes.indexOf(status));
+  return {
+    nodes,
+    mount,
+    row,
+    list,
+    label,
+    input,
+    examples,
+    button,
+    status,
+    times,
+    rows,
+    deviceMounts,
+    deviceButtons,
+    deviceStatuses,
+  };
+}
+
+type HtmlEdit = { startOffset: number; endOffset: number; replacement: string };
+function elementEdit(node: ParsedElement, replacement: string): HtmlEdit {
+  const location = node.sourceCodeLocation;
+  if (!location) throw new Error("Control requires an element source location");
+  return { startOffset: location.startOffset, endOffset: location.endOffset, replacement };
+}
+function attributeEdit(node: ParsedElement, name: string, replacement = ""): HtmlEdit {
+  const location = node.sourceCodeLocation?.attrs?.[name];
+  if (!location) throw new Error(`Control requires attribute ${name}`);
+  return { startOffset: location.startOffset, endOffset: location.endOffset, replacement };
+}
+function sourceHtml(html: string, node: ParsedElement): string {
+  const location = elementEdit(node, "");
+  return html.slice(location.startOffset, location.endOffset);
+}
+function editedHtml(html: string, edits: HtmlEdit[]): string {
+  for (const edit of [...edits].sort((a, b) => b.startOffset - a.startOffset))
+    html = html.slice(0, edit.startOffset) + edit.replacement + html.slice(edit.endOffset);
+  return html;
+}
+
 function openingTag(html: string, testid: string, tag: string): string {
   const at = html.indexOf(`data-testid="${testid}"`);
   expect(at, `missing testid ${testid}`).toBeGreaterThan(-1);
@@ -439,68 +679,191 @@ for (const view of VIEWS) {
     it("serves one labelled bounded chosen-zone mount with examples and Compare action", async () => {
       for (const range of CASES) {
         const { html } = await renderFixture(view, range);
-        const mounts = html.match(/data-event-chosen-timezone/g) ?? [];
-        expect(mounts.length, "exactly one chosen-range mount per detail page").toBe(1);
+        const structure = assertStructure(html, range);
+        const { nodes, mount, row, list, label, input, examples, button, status, times, rows } =
+          structure;
+        // Keep the entire fixture and Kit serialization; edit original source locations only.
+        const body = nodes.find((node) => node.tagName === "body");
+        const bodyStart = body?.sourceCodeLocation?.startTag?.endOffset;
+        const bodyEnd = html.lastIndexOf("</body>");
+        expect(bodyStart, "controls retain the complete document wrapper").toBeDefined();
+        expect(bodyEnd).toBeGreaterThan(bodyStart!);
+        const insert = (offset: number, replacement: string): HtmlEdit => ({
+          startOffset: offset,
+          endOffset: offset,
+          replacement,
+        });
+        const decoy = sourceHtml(html, mount);
+        const serialized = JSON.stringify({ metadata: decoy }).replace(/</g, "\\u003c");
+        const escaped = decoy.replace(/&/g, "&amp;").replace(/</g, "&lt;");
+        const inert = `<script type="application/json">${serialized}</script><script>const chosenCopy=${serialized};</script><!--${decoy}--><p>${escaped}</p><template>${decoy}</template><span data-event-chosen-timezone-copy></span>`;
+        const positive = editedHtml(html, [
+          insert(bodyStart!, '<label for="unrelated-zone">Unrelated field</label>'),
+          insert(bodyEnd, inert),
+        ]);
+        expect(positive).toContain(serialized);
+        assertStructure(positive, range);
+        for (const [type, max] of [
+          ["search", 32],
+          [undefined, 128],
+        ] as const) {
+          assertStructure(
+            editedHtml(html, [
+              attributeEdit(input, "type", type ? `type="${type}"` : ""),
+              attributeEdit(input, "maxlength", `maxlength="${max}"`),
+            ]),
+            range,
+          );
+        }
 
-        const inputTag = openingTag(html, INPUT_TESTID, "input");
-        expect(inputTag).toContain("hidden");
-        const max = /maxlength="(\d+)"/.exec(inputTag)?.[1];
-        expect(max, "input must carry a bounded maxlength").toBeDefined();
-        expect(Number(max)).toBeGreaterThanOrEqual(32);
-        expect(Number(max)).toBeLessThanOrEqual(128);
-        expect(Number(max)).toBeLessThanOrEqual(100 + 28);
-        // Native text entry, not a picker widget or remote combobox.
-        expect(inputTag).not.toContain('role="combobox"');
-        if (/type="/.test(inputTag)) expect(inputTag).toMatch(/type="(text|search)"/);
-
-        const labelAt = html.indexOf("<label");
-        expect(labelAt, "chosen input must have a visible label").toBeGreaterThan(-1);
-        const mountAt = html.indexOf("data-event-chosen-timezone");
-        const labelSlice = html.slice(Math.max(0, mountAt - 2000), html.indexOf(INPUT_TESTID));
-        expect(labelSlice).toMatch(/<label[^>]*>.*timezone.*<\/label>/is);
-
-        const examplesAt = html.indexOf(`data-testid="${EXAMPLES_TESTID}"`);
-        expect(examplesAt, "compact examples must be served").toBeGreaterThan(-1);
-        const examplesBody = html.slice(
-          html.indexOf(">", examplesAt) + 1,
-          html.indexOf("</", examplesAt),
-        );
-        expect(examplesBody.length, "examples stay compact").toBeLessThan(300);
-        expect(examplesBody).toMatch(/Europe\/London|America\/New_York|Asia\/Tokyo/);
-
-        const buttonTag = openingTag(html, BUTTON_TESTID, "button");
-        expect(buttonTag).toContain('type="button"');
-        expect(buttonTag).toContain("hidden");
-        const buttonAt = html.indexOf(`data-testid="${BUTTON_TESTID}"`);
-        const buttonLabel = html.slice(
-          html.indexOf(">", buttonAt) + 1,
-          html.indexOf("</button>", buttonAt),
-        );
-        expect(buttonLabel.trim()).toMatch(COMPARE);
-
-        const statusTag = openingTag(html, STATUS_TESTID, "p");
-        expect(statusTag).toContain('role="status"');
-        expect(statusTag).toContain('aria-live="polite"');
-        const statusAt = html.indexOf(`data-testid="${STATUS_TESTID}"`);
-        const statusBody = html.slice(
-          html.indexOf(">", statusAt) + 1,
-          html.indexOf("</p>", statusAt),
-        );
-        expect(statusBody.trim(), "fresh render never pre-fills a comparison").toBe("");
-
-        // Order is the binder contract: host times and device mounts first, then
-        // the single chosen-range mount after the Ends block.
-        const startsTime = html.indexOf(`<time datetime="${range.start}">`);
-        const endsTime = html.indexOf(`<time datetime="${range.end}">`);
-        const endsStatus = html.indexOf("event-device-timezone-ends-status");
-        const chosenInput = html.indexOf(INPUT_TESTID);
-        const chosenButton = html.indexOf(BUTTON_TESTID);
-        const chosenStatus = html.indexOf(STATUS_TESTID);
-        expect(startsTime).toBeGreaterThan(-1);
-        expect(endsTime).toBeGreaterThan(-1);
-        expect(endsStatus).toBeLessThan(chosenInput);
-        expect(chosenInput).toBeLessThan(chosenButton);
-        expect(chosenButton).toBeLessThan(chosenStatus);
+        const rejects = (name: string, edits: HtmlEdit[]) => {
+          expect(
+            () => assertStructure(editedHtml(html, edits), range),
+            `${view}: ${range.name}: ${name}`,
+          ).toThrow();
+        };
+        for (const offset of [bodyStart!, bodyEnd]) {
+          rejects(`real non-dd mount outside the metadata at ${offset}`, [
+            insert(offset, "<span data-event-chosen-timezone></span>"),
+          ]);
+        }
+        rejects("missing mount attribute", [attributeEdit(mount, "data-event-chosen-timezone")]);
+        rejects("removed mount", [elementEdit(mount, "")]);
+        rejects("duplicated real mount", [elementEdit(mount, decoy.repeat(2))]);
+        const rowEnd = row.sourceCodeLocation?.endTag?.startOffset;
+        expect(rowEnd).toBeDefined();
+        for (const control of [input, examples, button, status]) {
+          const testid = attribute(control, "data-testid")!;
+          const original = sourceHtml(html, control);
+          rejects(`missing ${testid}`, [elementEdit(control, "")]);
+          rejects(`missing testid ${testid}`, [attributeEdit(control, "data-testid")]);
+          rejects(`duplicate inside mount ${testid}`, [elementEdit(control, original.repeat(2))]);
+          rejects(`duplicate outside row ${testid}`, [insert(bodyEnd, original)]);
+          rejects(`wrong native element ${testid}`, [
+            elementEdit(control, `<span data-testid="${testid}"></span>`),
+          ]);
+          rejects(`relocated outside mount but inside row ${testid}`, [
+            elementEdit(control, ""),
+            insert(rowEnd!, original),
+          ]);
+          rejects(`relocated outside row ${testid}`, [
+            elementEdit(control, ""),
+            insert(bodyEnd, original),
+          ]);
+        }
+        const inputId = attribute(input, "id")!;
+        rejects("missing chosen label", [elementEdit(label, "")]);
+        rejects("duplicate local label", [elementEdit(label, sourceHtml(html, label).repeat(2))]);
+        rejects("duplicate external label binding", [insert(bodyEnd, sourceHtml(html, label))]);
+        rejects("relocated label", [
+          elementEdit(label, ""),
+          insert(bodyEnd, sourceHtml(html, label)),
+        ]);
+        rejects("missing label binding", [attributeEdit(label, "for")]);
+        rejects("wrong label binding", [attributeEdit(label, "for", 'for="wrong-input"')]);
+        rejects("missing input id", [attributeEdit(input, "id")]);
+        rejects("empty input id", [attributeEdit(input, "id", 'id=""')]);
+        rejects("duplicate external input id", [insert(bodyEnd, `<input id="${inputId}">`)]);
+        rejects("wrong label copy", [
+          elementEdit(label, `<label for="${inputId}">Choose region</label>`),
+        ]);
+        rejects("missing maxlength", [attributeEdit(input, "maxlength")]);
+        for (const max of ["", "31", "129", "64x"]) {
+          rejects(`invalid maxlength ${JSON.stringify(max)}`, [
+            attributeEdit(input, "maxlength", `maxlength="${max}"`),
+          ]);
+        }
+        rejects("non-text native input", [attributeEdit(input, "type", 'type="radio"')]);
+        for (const extra of ['role="combobox"', "disabled", "readonly"]) {
+          rejects(`malformed input ${extra}`, [attributeEdit(input, "hidden", `hidden ${extra}`)]);
+        }
+        for (const control of [row, input, button]) {
+          rejects(`missing initial hiding on ${control.tagName}`, [
+            attributeEdit(control, "hidden"),
+          ]);
+        }
+        rejects("unbounded examples copy", [
+          elementEdit(examples, `<p data-testid="${EXAMPLES_TESTID}">${"x".repeat(300)}</p>`),
+        ]);
+        rejects("missing IANA examples", [
+          elementEdit(examples, `<p data-testid="${EXAMPLES_TESTID}">Choose a region</p>`),
+        ]);
+        rejects("missing Compare button type", [attributeEdit(button, "type")]);
+        rejects("submitting Compare button", [attributeEdit(button, "type", 'type="submit"')]);
+        rejects("wrong Compare copy", [
+          elementEdit(button, sourceHtml(html, button).replace("Compare times", "Show host time")),
+        ]);
+        for (const name of ["role", "aria-live"]) {
+          rejects(`missing status ${name}`, [attributeEdit(status, name)]);
+        }
+        rejects("wrong status role", [attributeEdit(status, "role", 'role="alert"')]);
+        rejects("wrong live mode", [attributeEdit(status, "aria-live", 'aria-live="off"')]);
+        for (const prefill of ["Already converted", "<span></span>"]) {
+          rejects(`prefilled status ${prefill}`, [
+            elementEdit(status, sourceHtml(html, status).replace("</p>", `${prefill}</p>`)),
+          ]);
+        }
+        rejects("wrong Event details list label", [
+          attributeEdit(list, "aria-label", 'aria-label="Other details"'),
+        ]);
+        rejects("chosen row belongs to another closest dl", [
+          elementEdit(row, ""),
+          insert(bodyEnd, `<dl aria-label="Other details">${sourceHtml(html, row)}</dl>`),
+        ]);
+        const listStart = list.sourceCodeLocation?.startTag?.endOffset;
+        expect(listStart).toBeDefined();
+        rejects("decoy instant precedes the binder's host times", [
+          insert(listStart!, '<time datetime="2000-01-01T00:00:00.000Z">Decoy</time>'),
+        ]);
+        for (const [index, time] of times.entries()) {
+          rejects(`removed host instant ${index}`, [elementEdit(time, "")]);
+          rejects(`missing machine instant ${index}`, [attributeEdit(time, "datetime")]);
+          rejects(`wrong machine instant ${index}`, [
+            attributeEdit(time, "datetime", 'datetime="2000-01-01T00:00:00.000Z"'),
+          ]);
+          rejects(`wrong host text ${index}`, [
+            elementEdit(time, `<time datetime="${attribute(time, "datetime")}">Wrong host</time>`),
+          ]);
+          rejects(`removed host row ${index}`, [elementEdit(rows[index]!, "")]);
+          for (const control of [
+            structure.deviceButtons[index]!,
+            structure.deviceStatuses[index]!,
+          ]) {
+            const testid = attribute(control, "data-testid")!;
+            rejects(`missing device ${testid}`, [elementEdit(control, "")]);
+            rejects(`duplicate external device ${testid}`, [
+              insert(bodyEnd, sourceHtml(html, control)),
+            ]);
+          }
+        }
+        rejects("extra real device mount outside the list", [
+          insert(bodyEnd, "<span data-event-device-timezone></span>"),
+        ]);
+        for (const [name, pair] of [
+          ["host instants", times],
+          ["host rows", rows],
+          ["device mounts", structure.deviceMounts],
+          ["device buttons", structure.deviceButtons],
+          ["device statuses", structure.deviceStatuses],
+          ["chosen input and action", [input, button]],
+          ["examples and status", [examples, status]],
+        ] as const) {
+          rejects(`cross-wired or reordered ${name}`, [
+            elementEdit(pair[0]!, sourceHtml(html, pair[1]!)),
+            elementEdit(pair[1]!, sourceHtml(html, pair[0]!)),
+          ]);
+        }
+        rejects("duplicated Starts in place of Ends", [
+          elementEdit(times[1]!, sourceHtml(html, times[0]!)),
+        ]);
+        rejects("swapped machine values without swapping text", [
+          attributeEdit(times[0]!, "datetime", `datetime="${range.end}"`),
+          attributeEdit(times[1]!, "datetime", `datetime="${range.start}"`),
+        ]);
+        rejects("chosen row before Ends", [
+          elementEdit(row, ""),
+          insert(elementEdit(rows[1]!, "").startOffset, sourceHtml(html, row)),
+        ]);
       }
     });
 
