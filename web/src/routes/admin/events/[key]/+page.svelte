@@ -235,6 +235,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
   <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
     <h2>RSVPs ({roster.total})</h2>
     <p class="hint">Save event changes before searching or sorting the roster.</p>
+    <p class="hint">{roster.waitlistHint}</p>
     <p data-testid="roster-range">
       {roster.rangeText}
     </p>
@@ -292,10 +293,14 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
               <tr>
                 <td>{r.member}</td>
                 <td>{r.status}</td>
-                <td>
-                  {#if r.status === "waitlisted" && r.waitlistPosition != null}#{r.waitlistPosition}{:else}—{/if}
-                </td>
                 <td>{r.answeredAt}</td>
+                <td>
+                  {#if r.status === "waitlisted" && r.waitlistPosition != null}
+                    #{r.waitlistPosition}
+                  {:else}
+                    <span aria-hidden="true">—</span><span class="sr-only">Not waitlisted</span>
+                  {/if}
+                </td>
               </tr>
             {/each}
           {/if}

@@ -6,7 +6,8 @@
 // npm run e2e -- e2e/admin-waitlist-order.spec.ts
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { existsSync } from "node:fs";
-import { join, resolve } from "node:path";
+import { resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   compileRosterKit,
   needle,
@@ -19,8 +20,14 @@ import {
 } from "../test/helpers/admin-roster-status";
 
 let kit: RosterKit;
+let kitStyles: string[];
 test.beforeAll(async () => {
   kit = await compileRosterKit();
+  // Use the actual root-layout styles from the Kit build, not test-owned CSS.
+  const node = await import(
+    pathToFileURL(resolve(root, "web/.svelte-kit/output/server/nodes/0.js")).href
+  );
+  kitStyles = node.stylesheets;
 });
 const origin = "http://127.0.0.1:18789";
 
@@ -41,34 +48,99 @@ async function mount(context: BrowserContext, renderer: Renderer) {
       if (url.pathname !== path) return route.fulfill({ status: 404, body: "Not a fixture route" });
       try {
         const response = await readRoster(renderer, rosterDb(), url.search.slice(1), kit);
+        let html = await response.text();
+        if (renderer === "Kit") {
+          const styles = kitStyles
+            .map((href) => `<link rel="stylesheet" href="/${href}">`)
+            .join("");
+          html = html.replace("</head>", () => `${styles}</head>`);
+        }
         return route.fulfill({
           status: response.status,
           headers: { "content-type": "text/html; charset=utf-8" },
-          body: await response.text(),
+          body: html,
         });
       } catch (error) {
         errors.push(String(error));
         return route.fulfill({ status: 500, body: "Fixture rendering failed" });
       }
     }
-    const asset = resolve(root, "public", url.pathname.slice(1));
-    if (
-      asset.startsWith(join(root, "public/")) &&
-      existsSync(asset) &&
-      /\.(?:js|css|svg|woff2|png)$/.test(asset)
-    )
-      return route.fulfill({ path: asset });
+    for (const directory of ["public", "web/.svelte-kit/output/client"]) {
+      const assetRoot = resolve(root, directory);
+      const asset = resolve(assetRoot, url.pathname.slice(1));
+      if (
+        asset.startsWith(assetRoot + sep) &&
+        existsSync(asset) &&
+        /\.(?:js|css|svg|woff2|png)$/.test(asset)
+      )
+        return route.fulfill({ path: asset });
+    }
     return route.fulfill({ status: 404, body: "No external fixture" });
   });
   return { requests, errors };
 }
 
-async function waitlistCells(page: Page) {
+function waitlistCells(page: Page) {
   const section = page.getByTestId("rsvp-roster");
-  return section.locator("tbody tr td:nth-child(3)");
+  return section.locator("tbody tr td:nth-child(4)");
 }
 
 for (const renderer of ["Hono", "Kit"] as const) {
+  for (const viewport of [
+    { width: 1280, height: 800 },
+    { width: 390, height: 844 },
+  ]) {
+    test(`WQ-B03 ${renderer} ${viewport.width}: roster screenshot evidence`, async ({
+      browser,
+    }) => {
+      const info = test.info();
+      const context = await browser.newContext({ viewport });
+      try {
+        const harness = await mount(context, renderer);
+        const page = await context.newPage();
+        const queue = "roster_status=waitlisted&roster_sort=waitlist&roster_order=asc";
+        for (const [state, query] of [
+          ["default", ""],
+          ["sorted", queue],
+          ["filtered-gaps", `${queue}&roster_q=1`],
+          ["page-two", `${queue}&roster_page=2`],
+        ]) {
+          await page.goto(`${origin}${path}?${query}#rsvp-roster`);
+          await expect(page.getByTestId("rsvp-roster")).toBeVisible();
+          await expect(page.getByTestId("roster-table-scroll")).toHaveCSS("overflow-x", "auto");
+          if (state === "default") {
+            await expect(page.locator("#rsvp-roster .sr-only").first()).toHaveCSS(
+              "position",
+              "absolute",
+            );
+          }
+          if (state === "filtered-gaps") {
+            await expect(waitlistCells(page)).toHaveText(
+              Array.from({ length: 105 }, (_, i) => i)
+                .filter((i) => String(i).includes("1"))
+                .map((i) => `#${i + 1}`),
+            );
+          }
+          if (state === "page-two") {
+            await expect(waitlistCells(page)).toHaveText(["#101", "#102", "#103", "#104", "#105"]);
+          }
+          const filename = `waitlist-${renderer}-${viewport.width}-${state}`;
+          await page.screenshot({ path: info.outputPath(`${filename}.png`) });
+          if (viewport.width === 390) {
+            const offset = await page.getByTestId("roster-table-scroll").evaluate((el) => {
+              el.scrollLeft = el.scrollWidth;
+              return el.scrollLeft;
+            });
+            expect(offset).toBeGreaterThan(0);
+            await page.screenshot({ path: info.outputPath(`${filename}-scrolled.png`) });
+          }
+        }
+        expect(harness.errors).toEqual([]);
+      } finally {
+        await context.close();
+      }
+    });
+  }
   for (const javaScriptEnabled of [false, true]) {
     test(`WQ-B01 ${renderer} JS=${javaScriptEnabled}: waitlist ranks render and survive a member search`, async ({
       browser,
@@ -82,8 +154,8 @@ for (const renderer of ["Hono", "Kit"] as const) {
         await expect(section.getByRole("columnheader")).toContainText([
           "Member",
           "Status",
-          "Waitlist",
           "Answered",
+          "Waitlist position",
         ]);
         const cells = waitlistCells(page);
         await expect(cells.first()).toHaveText("#1");
@@ -91,9 +163,11 @@ for (const renderer of ["Hono", "Kit"] as const) {
         await expect(page.getByTestId("roster-range")).toContainText(/1\s*[-–]\s*100 of 105/);
         await section.getByRole("searchbox").fill(needle);
         await section.locator('button[type="submit"]').click();
-        await expect(page.getByTestId("roster-range")).toContainText(/1\s*[-–]\s*100 of 104/);
+        await expect(page.getByTestId("roster-range")).toContainText(/1\s*[-–]\s*100 of 105/);
         await expect(waitlistCells(page).first()).toHaveText("#1");
         await expect(waitlistCells(page).nth(99)).toHaveText("#100");
+        await section.getByRole("link", { name: "Next", exact: true }).click();
+        await expect(waitlistCells(page)).toHaveText(["#101", "#102", "#103", "#104", "#105"]);
         expect(harness.requests.every((r) => r.method === "GET")).toBe(true);
         expect(harness.errors).toEqual([]);
       } finally {
@@ -112,12 +186,14 @@ for (const renderer of ["Hono", "Kit"] as const) {
           `${origin}${path}?roster_status=waitlisted&roster_sort=waitlist&roster_order=desc#rsvp-roster`,
         );
         await expect(waitlistCells(page).first()).toHaveText("#105");
-        await page.getByRole("link", { name: "Sort by waitlist ascending", exact: true }).click();
+        await page
+          .getByRole("link", { name: "Sort by waitlist position ascending", exact: true })
+          .click();
         await expect(page.getByTestId("roster-range")).toContainText(/1\s*[-–]\s*100 of 105/);
         await expect(waitlistCells(page).first()).toHaveText("#1");
         await page.goto(`${origin}${path}?roster_status=going#rsvp-roster`);
         for (const text of await waitlistCells(page).allTextContents()) {
-          expect(text).toBe("—");
+          expect(text.replace(/\s/g, "")).toBe("—Notwaitlisted");
         }
         expect(harness.errors).toEqual([]);
       } finally {

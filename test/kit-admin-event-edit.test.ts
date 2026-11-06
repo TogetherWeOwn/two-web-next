@@ -258,9 +258,15 @@ describe("resolveKitEventEdit: bounded roster paging", () => {
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(outcome.view.roster.entries.map((e) => e.waitlistPosition)).toEqual([7, null]);
     const waitlist = outcome.view.roster.sortHeaders.find((h) => h.key === "waitlist")!;
-    expect(waitlist.label).toBe("Waitlist");
+    expect(waitlist.label).toBe("Waitlist position");
     expect(waitlist.active).toBe(false);
-    expect(waitlist.linkLabel).toBe("Sort by waitlist ascending");
+    expect(waitlist.linkLabel).toBe("Sort by waitlist position ascending");
+    expect(outcome.view.roster.sortHeaders.map((h) => h.key)).toEqual([
+      "status",
+      "answered",
+      "waitlist",
+    ]);
+    expect(outcome.view.roster.waitlistHint).toContain("so numbers can skip.");
   });
 
   it("computes the Hono range line and next-page flag from the filtered total", async () => {

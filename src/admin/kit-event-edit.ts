@@ -46,6 +46,7 @@ import {
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { rosterWaitlistHint } from "./roster-copy";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -109,6 +110,7 @@ export type KitEventEditRosterView = {
   /** Past-end and zero-row copy, exactly like the Hono section; null when rows render. */
   emptyText: string | null;
   sortHeaders: KitEventEditSortHeader[];
+  waitlistHint: string;
   /** The Hono-owned GET search target, with its roster anchor. */
   searchAction: string;
 };
@@ -309,9 +311,10 @@ export async function resolveKitEventEdit(
             : null,
         sortHeaders: [
           sortHeader(row.eventKey, query, "status", "Status"),
-          sortHeader(row.eventKey, query, "waitlist", "Waitlist"),
           sortHeader(row.eventKey, query, "answered", "Answered"),
+          sortHeader(row.eventKey, query, "waitlist", "Waitlist position"),
         ],
+        waitlistHint: rosterWaitlistHint,
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
       },

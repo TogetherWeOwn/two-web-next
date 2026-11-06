@@ -421,48 +421,64 @@ for (const renderer of ["Hono", "Kit"] as const) {
         kit,
       );
       expect(response.status).toBe(200);
-      const rows = displayedRows(await response.text());
+      const html = await response.text();
+      const rows = displayedRows(html);
       expect(rows).toHaveLength(100);
-      expect(rows.map((r) => r[2])).toEqual(Array.from({ length: 100 }, (_, i) => `#${i + 1}`));
+      expect(rows.map((r) => r[3])).toEqual(Array.from({ length: 100 }, (_, i) => `#${i + 1}`));
+      expect(text(rosterHtml(html))).toContain("so numbers can skip.");
+      expect(text(rosterHtml(html))).toMatch(
+        /Paused or closed queues don(?:'|&#39;|&#x27;)t advance\./,
+      );
+      expect(html).toContain('aria-label="Sort by waitlist position ascending"');
+      expect(html).toContain('rel="stylesheet" href="/styles.css"');
+      expect(html).toMatch(/Answered[\s\S]*Waitlist position/);
       assertBounded(fixture);
     });
 
     it("WQ-R02 a member search never renumbers the queue it narrows", async () => {
       const fixture = rosterDb();
-      const facet = displayedRows(
-        await (
-          await readRoster(renderer, fixture, qs({ roster_status: "waitlisted" }), kit)
-        ).text(),
-      );
       const searched = displayedRows(
         await (
           await readRoster(
             renderer,
             fixture,
-            qs({ roster_status: "waitlisted", roster_q: "Team" }),
+            qs({
+              roster_status: "waitlisted",
+              roster_q: "1",
+              roster_sort: "waitlist",
+              roster_order: "asc",
+            }),
             kit,
           )
         ).text(),
       );
-      expect(searched).toHaveLength(100);
-      expect(searched.map((r) => r[2])).toEqual(facet.map((r) => r[2]));
+      const matches = Array.from({ length: 105 }, (_, i) => i).filter((i) =>
+        String(i).includes("1"),
+      );
+      expect(searched).toHaveLength(matches.length);
+      expect(searched.map((r) => [r[0], r[3]])).toEqual(
+        matches.map((i) => [`${needle} ${i}`, `#${i + 1}`]),
+      );
     });
 
     it("WQ-R03 non-waitlisted rows show a dash, never a queue number", async () => {
       const fixture = rosterDb();
       const response = await readRoster(renderer, fixture, "", kit);
       expect(response.status).toBe(200);
-      const rows = displayedRows(await response.text());
+      const html = await response.text();
+      const rows = displayedRows(html);
       expect(rows).toHaveLength(100);
       for (const row of rows) {
-        if (row[1] === "waitlisted") expect(row[2]).toMatch(/^#\d+$/);
-        else expect(row[2]).toBe("—");
+        if (row[1] === "waitlisted") expect(row[3]).toMatch(/^#\d+$/);
+        else expect(row[3]).toBe("— Not waitlisted");
       }
+      expect(rosterHtml(html)).toContain('<span aria-hidden="true">—</span>');
+      expect(rosterHtml(html)).toContain('<span class="sr-only">Not waitlisted</span>');
       // The nameless legacy import sits on the last page, labeled and unranked.
       const last = await readRoster(renderer, rosterDb(), qs({ roster_page: "5" }), kit);
       const orphans = displayedRows(await last.text()).filter((r) => r[0] === "Unknown member");
       expect(orphans).toHaveLength(1);
-      expect(orphans[0]![2]).toBe("—");
+      expect(orphans[0]![3]).toBe("— Not waitlisted");
       assertBounded(fixture);
     });
 
@@ -477,7 +493,9 @@ for (const renderer of ["Hono", "Kit"] as const) {
       expect(desc.status).toBe(200);
       const descHtml = await desc.text();
       const descRows = displayedRows(descHtml);
-      expect(descRows.map((r) => r[2])[0]).toBe("#105");
+      expect(descRows.map((r) => [r[0], r[3]])).toEqual(
+        Array.from({ length: 100 }, (_, i) => [`${needle} ${104 - i}`, `#${105 - i}`]),
+      );
       const ascFixture = rosterDb();
       const asc = await readRoster(
         renderer,
@@ -485,8 +503,29 @@ for (const renderer of ["Hono", "Kit"] as const) {
         qs({ roster_status: "waitlisted", roster_sort: "waitlist", roster_order: "asc" }),
         kit,
       );
-      expect(displayedRows(await asc.text()).map((r) => r[2])[0]).toBe("#1");
+      expect(displayedRows(await asc.text()).map((r) => [r[0], r[3]])).toEqual(
+        Array.from({ length: 100 }, (_, i) => [`${needle} ${i}`, `#${i + 1}`]),
+      );
       assertBounded(ascFixture);
+      for (const order of ["asc", "desc"]) {
+        const page = await readRoster(
+          renderer,
+          rosterDb(),
+          qs({
+            roster_status: "waitlisted",
+            roster_sort: "waitlist",
+            roster_order: order,
+            roster_page: "2",
+          }),
+          kit,
+        );
+        expect(displayedRows(await page.text()).map((r) => [r[0], r[3]])).toEqual(
+          Array.from({ length: 5 }, (_, i) => {
+            const index = order === "asc" ? 100 + i : 4 - i;
+            return [`${needle} ${index}`, `#${index + 1}`];
+          }),
+        );
+      }
       const section = rosterHtml(await (await readRoster(renderer, rosterDb(), "", kit)).text());
       const header = links(section).find(
         (l) => normalizedLink(l.href).get("roster_sort") === "waitlist",

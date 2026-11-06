@@ -485,16 +485,18 @@ series cancel or repeat-rule editor.
 ### Read the RSVP roster
 
 The event edit screen shows **RSVPs (count)** with **Member**, **Status**,
-**Waitlist**, and **Answered** (UTC), newest responses first by default.
+**Answered** (UTC), and **Waitlist position**, newest responses first by default.
 **Search members** with **Search** matches username text case-insensitively;
-**Status**, **Waitlist**, and **Answered** column links toggle sorting while
+**Status**, **Answered**, and **Waitlist position** column links toggle sorting while
 retaining the search. The count is the number
 of matching answers (all statuses, not just going seats), so searching can
-reduce it. The **Waitlist** column shows each waitlisted member's global
-position in line (`#1` is next to be promoted); other answers show a dash.
-Positions are stable: searching, filtering, paging, or sorting never renumbers
-the queue, so a position quoted to a member stays valid while you work the
-roster. Sorting by **Waitlist** lists the queue head first (last in descending
+reduce it. The **Waitlist position** column shows each waitlisted member's place
+in this event's whole queue (`#1` is next to be promoted); other answers show a dash.
+Searching, filtering, paging, or sorting never renumbers the queue, so numbers
+can skip. Positions reflect the queue at page render and can change after RSVPs
+move; reload before quoting one. A place in line is not a promised seat, and paused
+or closed queues do not advance. **Answered** is answer recency, not queue priority.
+Sorting by **Waitlist position** lists the queue head first (last in descending
 order); unranked answers always sort last. The roster shows 100 answers per page with a "Showing a-b of N"
 line; **Previous** and **Next** keep the search and sort and return to the
 roster section. Sorting or searching again starts back on page 1. Save event

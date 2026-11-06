@@ -3,6 +3,7 @@
 
 import type { FC } from "hono/jsx";
 import type { RosterEntry } from "../reads";
+import { rosterWaitlistHint } from "../roster-copy";
 import {
   ROSTER_PAGE_SIZE,
   ROSTER_STATUSES,
@@ -37,6 +38,7 @@ export const EventRosterSection: FC<{
     <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
       <h2>RSVPs ({total})</h2>
       <p class="hint">Save event changes before searching or sorting the roster.</p>
+      <p class="hint">{rosterWaitlistHint}</p>
       <p data-testid="roster-range">{rosterRangeText(rangeStart, rangeEnd, total)}</p>
       <form method="get" action={`${action}#rsvp-roster`} class="filters">
         <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
@@ -83,19 +85,19 @@ export const EventRosterSection: FC<{
                 }
               />
               <TableSortHeader
-                label="Waitlist"
-                active={rosterQuery.sort === "waitlist"}
-                order={rosterQuery.order}
-                url={(order) =>
-                  rosterUrl(eventKey, rosterQuery, { sort: "waitlist", order, page: 1 })
-                }
-              />
-              <TableSortHeader
                 label="Answered"
                 active={rosterQuery.sort === "answered"}
                 order={rosterQuery.order}
                 url={(order) =>
                   rosterUrl(eventKey, rosterQuery, { sort: "answered", order, page: 1 })
+                }
+              />
+              <TableSortHeader
+                label="Waitlist position"
+                active={rosterQuery.sort === "waitlist"}
+                order={rosterQuery.order}
+                url={(order) =>
+                  rosterUrl(eventKey, rosterQuery, { sort: "waitlist", order, page: 1 })
                 }
               />
             </tr>
@@ -112,12 +114,17 @@ export const EventRosterSection: FC<{
                 <tr key={r.userId}>
                   <td>{r.username?.trim() || "Unknown member"}</td>
                   <td>{r.status}</td>
-                  <td>
-                    {r.status === "waitlisted" && r.waitlistPosition != null
-                      ? `#${r.waitlistPosition}`
-                      : "—"}
-                  </td>
                   <td>{r.answeredAt.toISOString()}</td>
+                  <td>
+                    {r.status === "waitlisted" && r.waitlistPosition != null ? (
+                      `#${r.waitlistPosition}`
+                    ) : (
+                      <>
+                        <span aria-hidden="true">—</span>
+                        <span class="sr-only">Not waitlisted</span>
+                      </>
+                    )}
+                  </td>
                 </tr>
               ))
             )}
