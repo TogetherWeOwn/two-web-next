@@ -1,11 +1,13 @@
-// SSR leaves a usable canonical link. Enhance only when both link and status exist.
+// SSR leaves the URL in a readonly field for manual copying and hides the
+// one-click control until it can really copy. Enhance only when both the
+// control and its status exist; revealing the control is that enhancement.
 (() => {
   const q = (s) => document.querySelector(s);
   let link = q("[data-copy-link]");
   let toast = q("[data-copy-toast]");
   if (!link || !toast) return;
   const feed = link.getAttribute("data-copy-feed") != null;
-  if (feed) link.hidden = false;
+  link.hidden = false;
   const manual = "Select the feed URL and copy it manually in your calendar app.";
   // Unsettled clipboard promises get truthful feedback at 5 s; the feedback contract caps this at 10 s.
   const feedbackDeadlineMs = 5000;

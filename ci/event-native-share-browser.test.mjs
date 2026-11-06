@@ -412,14 +412,37 @@ describe("Native event sharing", () => {
       await noEscapedEffects(f);
     });
 
-    test(`${view}: CONTROL real no-JS client keeps calendar and canonical Copy link navigation, no focusable Share`, async (t) => {
+    test(`${view}: CONTROL real no-JS client keeps calendar destinations, copy control hidden and unfocusable, no focusable Share`, async (t) => {
       const f = await open(t, view, { javaScriptEnabled: false });
       assert.equal(await nativeButton(f.page).count(), 0);
-      await calendarAndCopy(f.page);
+      assert.equal(await f.page.getByRole("link", { name: SHARE_NAME }).count(), 0);
+      // Calendar destinations remain usable without JavaScript.
+      assert.equal(
+        await f.page.getByTestId("event-ics").getAttribute("href"),
+        `/events/${SHARE_KEY}.ics`,
+      );
+      assert.match(
+        await f.page.getByTestId("event-google-calendar").getAttribute("href"),
+        /^https:\/\/calendar\.google\.com\/calendar\/render\?/,
+      );
+      // The SSR copy control stays in the document for the binder to reveal,
+      // but without JavaScript it must not promise copying: not visible, not
+      // in the accessibility tree as a Copy link, and not focusable. Against
+      // the pre-implementation visible navigating anchor each check fails.
       const copy = f.page.getByTestId("event-copy-link");
-      await tabTo(f.page, copy);
-      await f.page.keyboard.press("Enter");
-      await expect(f.page).toHaveURL(SHARE_CANONICAL);
+      assert.equal(await copy.count(), 1);
+      assert.equal(await copy.getAttribute("href"), SHARE_CANONICAL);
+      assert.equal(await copy.getAttribute("data-copy-link"), SHARE_CANONICAL);
+      await expect(copy).toBeHidden();
+      assert.equal(await f.page.getByRole("link", { name: /copy link/i }).count(), 0);
+      assert.equal(
+        await copy.evaluate((node) => {
+          node.focus();
+          return document.activeElement === node;
+        }),
+        false,
+        "hidden copy control must not be focusable without JavaScript",
+      );
       assert.deepEqual(f.errors, []);
       assert.deepEqual(f.dialogs, []);
       assert.deepEqual(f.blocked, []);
