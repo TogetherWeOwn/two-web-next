@@ -268,7 +268,14 @@ describe("Hono EventPage review refresh link", () => {
   });
 
   it("keeps the ordinary refresh byte-identical without review", () => {
-    const html = String(jsx(EventPage, { ...base, session: mod, review: undefined }));
+    const html = String(
+      jsx(EventPage, {
+        ...base,
+        session: mod,
+        review: undefined,
+        attendeesPaging: { page: 2, prevHref: archiveEventHref(KEY, ARCHIVE, 1), nextHref: null },
+      }),
+    );
     expect(rosterLinks(html).refresh).toBe(archiveEventHref(KEY, ARCHIVE, 2));
     expect(html).not.toContain("review=1");
   });
