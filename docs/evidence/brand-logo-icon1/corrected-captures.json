@@ -1,0 +1,78 @@
+{
+  "runId": 42299178227,
+  "runAttempt": 1,
+  "artifactId": 13542999803,
+  "headSha": "c2c105ced54a43d92222a866ecb0b20830ce4610",
+  "images": [
+    {
+      "file": "corrected-hono-home-desktop.png",
+      "source": "test-results-kit-parity/parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-home-1280.png",
+      "sha256": "fca4f9cbff97ab5cf93f7421e7f33f5ac0b1e07d9af102829ded2de1c8dcc448",
+      "width": 1280,
+      "height": 800
+    },
+    {
+      "file": "corrected-hono-home-mobile.png",
+      "source": "test-results-kit-parity/parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-home-390.png",
+      "sha256": "31aea6799d601771bb44d2a88cd32908cce637217fdafab85fbcd8b4bf0a1df1",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "corrected-hono-about-desktop.png",
+      "source": "test-results-kit-parity/parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-about-1280.png",
+      "sha256": "a4a67dc38149e51b546a174637bb24e4e0ff6eef3486c86a062cf9ba28d2b1df",
+      "width": 1280,
+      "height": 800
+    },
+    {
+      "file": "corrected-hono-about-mobile.png",
+      "source": "test-results-kit-parity/parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-about-390.png",
+      "sha256": "dc3ecd26b9a79c899cb69345dd89ddab2ae39f1b02a522fbdc4abc05dbad3483",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "corrected-hono-join-desktop.png",
+      "source": "test-results-kit-parity/parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-join-1280.png",
+      "sha256": "071c263032c152690925a4d10ed1f881c5dcce698f58fa0cd1a70ccc80e318fd",
+      "width": 1280,
+      "height": 800
+    },
+    {
+      "file": "corrected-hono-join-mobile.png",
+      "source": "test-results-kit-parity/parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-join-390.png",
+      "sha256": "ec453eb906fd9715b1ef1c13069aead7bba8ce2313086a939193b5958923beba",
+      "width": 390,
+      "height": 844
+    },
+    {
+      "file": "corrected-kit-guest-desktop.png",
+      "source": "test-results-kit-visual/events-index.visual-Kit-ev-c3b1c-schedule-desktop-and-mobile-chromium/kit-events-index-desktop-actual.png",
+      "sha256": "3b597e453dfa9cd463815ff3a73305e924be996456231c203011bc9d3e7d7b4f",
+      "width": 1280,
+      "height": 1503
+    },
+    {
+      "file": "corrected-kit-guest-mobile.png",
+      "source": "test-results-kit-visual/events-index.visual-Kit-ev-c3b1c-schedule-desktop-and-mobile-chromium/kit-events-index-mobile-actual.png",
+      "sha256": "2923794fd10f2a6de41ce063b582938355b06b6371e7fb136490d324ed595abe",
+      "width": 390,
+      "height": 2255
+    },
+    {
+      "file": "corrected-kit-member-desktop.png",
+      "source": "test-results-kit-parity/parity-kit-member-board-visuals-default-desktop-and-mobile-chromium/member-board-default-desktop-actual.png",
+      "sha256": "783f78240d00afe9f2084f2d43420b96828e8a1f131c0557d3c3aafe2cd5e75b",
+      "width": 1280,
+      "height": 966
+    },
+    {
+      "file": "corrected-kit-member-mobile.png",
+      "source": "test-results-kit-parity/parity-kit-member-board-visuals-default-desktop-and-mobile-chromium/member-board-default-mobile-actual.png",
+      "sha256": "2a39d7dc92aa23da62d66e1b7c2f34f2f8fb6523974d4db89d52d87d10bb7da3",
+      "width": 390,
+      "height": 1206
+    }
+  ]
+}
