@@ -212,6 +212,11 @@ function selftest() {
     cpSync(join(repoRoot, "assets"), join(scratch, "assets"), { recursive: true });
     cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
     cpSync(join(repoRoot, "vendor"), join(scratch, "vendor"), { recursive: true });
+    mkdirSync(join(scratch, "src"), { recursive: true });
+    copyFileSync(
+      join(repoRoot, "src/ember-fallback-style.ts"),
+      join(scratch, "src/ember-fallback-style.ts"),
+    );
     mkdirSync(join(scratch, "web/src"), { recursive: true });
     copyFileSync(
       join(repoRoot, "web/src/ember-theme.css"),
