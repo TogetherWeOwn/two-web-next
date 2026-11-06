@@ -97,7 +97,7 @@ describe("workflow concurrency", () => {
     // deploy.yml only deploys push-event runs, so staging would miss that SHA.
     expect(triggers(ci)).toMatch(/\n  schedule:\n    - cron: /);
     expect(ci).toMatch(
-      /\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| \(github\.event_name == 'schedule' && 'nightly'\) \|\| github\.ref \}\}\$\{\{ inputs\.kit_budget_diagnostic && '-kit-budget-diagnostic' \|\| '' \}\}\n/,
+      /\n  group: \$\{\{ github\.workflow \}\}-\$\{\{ github\.event\.pull_request\.number \|\| \(github\.event_name == 'schedule' && 'nightly'\) \|\| github\.ref \}\}\n/,
     );
   });
 
@@ -130,12 +130,9 @@ const runScript = (block: string) =>
     .join("\n");
 // Only the conditions modelled here are accepted: any other gate condition fails
 // this suite until its conclusion in a cancelled run is worked out and pinned.
-const conditionHolds = (condition: string, runCancelled: boolean, diagnostic = false) => {
+const conditionHolds = (condition: string, runCancelled: boolean) => {
   if (condition === "always()") return true;
   if (condition === "${{ !cancelled() }}") return !runCancelled;
-  if (condition === "${{ !cancelled() && !inputs.kit_budget_diagnostic }}") {
-    return !runCancelled && !diagnostic;
-  }
   throw new Error(`unmodelled gate condition: ${condition}`);
 };
 type Results = { scope: string; downstream: string };
@@ -177,16 +174,9 @@ const gates = [
     }),
   },
 ];
-const conclusion = (
-  gate: (typeof gates)[number],
-  runCancelled: boolean,
-  results: Results,
-  diagnostic = false,
-) => {
+const conclusion = (gate: (typeof gates)[number], runCancelled: boolean, results: Results) => {
   const condition = gate.block.match(/\n    if: ([^\n]+)\n/)?.[1] ?? "";
-  if (!conditionHolds(condition, runCancelled, diagnostic)) {
-    return runCancelled ? "cancelled" : "skipped";
-  }
+  if (!conditionHolds(condition, runCancelled)) return runCancelled ? "cancelled" : "skipped";
   const run = spawnSync("bash", ["-c", gate.script(gate.block)], {
     env: gate.env(results),
     encoding: "utf8",
@@ -262,20 +252,6 @@ describe("merge queue validation", () => {
       expect(triggers(text)).not.toContain("merge_group:");
     }
   });
-});
-
-describe("diagnostic dispatch isolation", () => {
-  it.each(gates.filter(({ gate }) => gate !== "e2e-ok"))(
-    "$gate does not report diagnostic measurement as qualification CI",
-    (gate) => {
-      expect(conclusion(gate, false, { scope: "skipped", downstream: "skipped" }, true)).toBe(
-        "skipped",
-      );
-      expect(conclusion(gate, true, { scope: "skipped", downstream: "skipped" }, true)).toBe(
-        "cancelled",
-      );
-    },
-  );
 });
 
 describe("superseded duplicate pull_request runs", () => {
