@@ -304,7 +304,9 @@ binding isolation before any remote mutation.
    and its retained safeguards: staging is met by the automatic post-merge,
    pre-production staging/e2e/soak gate, not a pre-merge staging run or artifact
    equality. Production promotion still waits for qualification of the resulting
-   exact `main` SHA. Any push requires a new exact-head confirmation.
+   exact `main` SHA. A scope-skipped staging journey/passive job is not qualifying
+   evidence: follow the linked contract's post-merge manual-dispatch caveat rather
+   than claiming automatic eligibility. Any push requires a new exact-head confirmation.
    When native review stages apply, the final-stage reviewer squash-merges the
    exact reviewed and confirmed head before closing the task; otherwise the
    author merges. Pin the merge to that SHA. Record the confirmation, pinned

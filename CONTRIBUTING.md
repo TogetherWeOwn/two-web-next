@@ -89,9 +89,10 @@ requirement. Do not demand paired artifact hashes or a comparison to current
 
 Before merge, require:
 
-1. **Exact-head checks and review.** Required CI and Devin Review pass on the
-   exact PR head. Every finding is fixed or answered with evidence, and
-   applicable security reviews, rulesets and native review stages are complete.
+1. **Exact-head checks and review.** All required checks listed above (`ci-ok`,
+   `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review`) pass on the
+   exact PR head. Every finding is fixed or answered with evidence, and applicable
+   security reviews, rulesets and native review stages are complete.
    Record exact-head GitHub Actions run/job links and conclusions; local output
    does not replace required Actions evidence.
 2. **Fresh production confirmation.** Obtain a new per-PR exact-head Release
@@ -118,6 +119,20 @@ production candidate. See the [deployment runbook](docs/runbook.md#deploy-and-re
 for the existing staging, promotion, migration and rollback checks. Missing or
 failing post-merge qualification holds production promotion, not a request to
 stage the unmerged PR first.
+
+The automatic path is not a promise that every merged SHA becomes eligible.
+Currently `e2e-staging.yml` scope-skips `staging-journeys` and `staging-passive`
+for docs/test-only deploys. Those skips are not passing qualification evidence;
+`ci/resolve-promotion-sha.mjs` requires successful journeys and executed quality
+checks in a post-deploy `workflow_run`, plus soak, for automatic selection.
+If releasing a scope-skipped candidate, run `e2e-staging` by manual dispatch
+from the matching deployed `main` revision after merge to obtain the missing
+journey/passive evidence. The automatic resolver does not select manual-dispatch
+runs, so this does not itself make that SHA auto-promotable. Any explicit
+production dispatch requires its own exact-SHA Release Manager confirmation
+and all existing promotion, migration and rollback guards. If matching evidence
+cannot be obtained, hold that candidate's promotion; do not stage an unmerged
+head, infer a pass from a skip, or change a workflow in this documentation PR.
 
 This changes when staging evidence is required, not the pipeline or other
 merge/release gates. No red deterministic gate is waived, no pipeline skip/no-op
