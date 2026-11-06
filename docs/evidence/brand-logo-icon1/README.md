@@ -21,18 +21,22 @@
   mobile; the 1200×630 share card; the SVG favicon; the 192/512/maskable-512
   icons; the Apple touch icon; the web manifest.
 - **Non-goals:** a new visual direction beyond the owner artwork; a light-theme
-  lockup variant; Kit route screenshots; data, auth, or route-flag changes; any
-  threshold or baseline change.
+  lockup variant; data, auth, or route-flag changes; threshold relaxation or
+  wholesale baseline regeneration. Changed Kit chrome needs its own evidence;
+  intentional baseline replacements require exact-attempt visual review.
 
 ## Captures
 
 All twelve images were opened for visual inspection. The viewport is 1280×800
 for desktop and 390×844 for mobile. The only intended visual change is the
 header lockup: the "TWO" text placeholder becomes the Logo 1 mark plus
-"TOGETHER WE OWN" wordmark. Header geometry is unchanged — the lockup occupies
-the same centered slot (top-left, stacked, on mobile) — and no page shows
-horizontal overflow at either width. Body copy, nav, buttons, and footers are
-pixel-identical between each before/after pair.
+"TOGETHER WE OWN" wordmark. The lockup uses the existing centered desktop slot
+and top-left mobile slot. The original inspection reported no horizontal
+overflow at these two widths; it did not verify 360px. These captures are not
+pixel-identical outside the header: mobile text and downstream positions also
+differ. They show the artwork swap, not proof of unchanged page geometry.
+Pinned-runner visual comparisons and the narrow-screen review determine which
+layout differences are acceptable.
 
 | Page / viewport | Before | After |
 | --- | --- | --- |
@@ -52,10 +56,18 @@ pipeline the tests use, served alongside the repo `public/` assets (the real
 route with off-origin requests aborted. No database, Discord, bot, or staging
 traffic supplies these screenshots.
 
-The Hono a11y gate and both Lighthouse gates pass (24/24 LHRs each, exit 0);
-their commands and results are reported in the pull request. The Kit header
-shares the same `logo.svg` via copy-public but no Kit route was screenshotted:
-the Hono gates do not exercise the Kit route.
+Historical targeted Hono a11y and Lighthouse runs passed (24/24 LHRs each,
+exit 0), as recorded by the original implementation on 2026-11-03. These are
+not current-head CI results. On head `678de6f6`, the [a11y job](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42294753174/job/128157093522)
+and [Lighthouse job](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42294753174/job/128157093714)
+both passed. They exercise Hono, not Kit.
+
+The original twelve captures do not exercise Kit. The exact-head
+[browser-smoke failure](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42294753053/job/128157032840)
+contains real Hono and Kit expected/actual/diff images in artifact
+`e2e-failure-42294753053-1`. Its 32 failing visual comparisons remain unaccepted
+pending review. Their existence is not a visual pass, and no new Kit image has
+yet been published or claimed as inspected in this record.
 
 Icon and manifest coverage is by file, not screenshot: `favicon.svg`,
 `public/icons/icon-192.png` (192×192), `icon-512.png` (512×512),

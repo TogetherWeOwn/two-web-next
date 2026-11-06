@@ -1,8 +1,13 @@
 import { describe, expect, it } from "vitest";
 import { readdirSync, readFileSync, statSync } from "node:fs";
-import { join, relative } from "node:path";
+import { join, relative, sep } from "node:path";
+import { fileURLToPath } from "node:url";
 
-const repoRoot = new URL("..", import.meta.url).pathname;
+const repoRoot = fileURLToPath(new URL("..", import.meta.url));
+
+function toPosix(path: string): string {
+  return path.split(sep).join("/");
+}
 
 const RAMP = {
   "--color-brand-ember": "#ff9c36",
@@ -25,7 +30,7 @@ function collect(dir: string, out: string[] = []): string[] {
     if (statSync(full).isDirectory()) {
       collect(full, out);
     } else if (SCAN_EXTENSIONS.has(entry.slice(entry.lastIndexOf(".")))) {
-      const rel = relative(repoRoot, full);
+      const rel = toPosix(relative(repoRoot, full));
       if (!ALLOWLISTED.has(rel)) out.push(rel);
     }
   }
@@ -33,6 +38,12 @@ function collect(dir: string, out: string[] = []): string[] {
 }
 
 describe("brand token layer (Logo/Icon 1 ramp)", () => {
+  it("resolves the repo root to a native path and normalizes separators", () => {
+    expect(readFileSync(join(repoRoot, "package.json"), "utf8")).toContain('"name"');
+    expect(toPosix(["public", "theme-tokens.css"].join(sep))).toBe("public/theme-tokens.css");
+    expect(collect(join(repoRoot, "public"))).not.toContain("public/theme-tokens.css");
+  });
+
   it("defines the ember/magenta/violet ramp as semantic tokens", () => {
     const css = readFileSync(join(repoRoot, "public/theme-tokens.css"), "utf8");
     for (const [token, hex] of Object.entries(RAMP)) {

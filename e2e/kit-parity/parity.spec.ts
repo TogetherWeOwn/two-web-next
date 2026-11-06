@@ -318,6 +318,25 @@ for (const target of targets) {
       expect(body).not.toContain("Sign out");
     });
 
+    // Both renderers ship the Logo/Icon 1 head links: SVG favicon first, then
+    // the PNG fallback and the touch icon, matched on tag attributes so the
+    // Hono JSX and Kit app.html spellings both qualify.
+    test("head declares the SVG favicon with PNG fallbacks", async () => {
+      const response = await api(target).get("/events/past");
+      expect(response.status()).toBe(200);
+      const body = await response.text();
+      const links = body.match(/<link\b[^>]*>/g) ?? [];
+      const find = (rel: string, href: string) =>
+        links.findIndex((tag) => tag.includes(`rel="${rel}"`) && tag.includes(`href="${href}"`));
+      const svg = find("icon", "/favicon.svg");
+      const png = find("icon", "/icons/icon-192.png");
+      expect(svg, `${target.name}: SVG favicon link`).toBeGreaterThan(-1);
+      expect(links[svg]).toContain('type="image/svg+xml"');
+      expect(png, `${target.name}: PNG fallback link`).toBeGreaterThan(svg);
+      expect(links[png]).toContain('type="image/png"');
+      expect(find("apple-touch-icon", "/icons/apple-touch-icon.png")).toBeGreaterThan(-1);
+    });
+
     test("page two renders the out-of-range refusal", async () => {
       const response = await api(target).get("/events/past?page=2");
       expect(response.status()).toBe(200);
