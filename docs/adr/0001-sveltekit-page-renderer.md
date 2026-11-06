@@ -37,8 +37,8 @@ it and chose SvelteKit directly.
    `POST /admin/events`) still renders that page through Hono until its write
    family migrates. The Kit page for the same form mirrors that response: the
    422 status, the entered values, the field errors and the no-JavaScript
-   path. A page family reaches M0 when its GET pages are Kit-served; the
-   rejected-POST page moves with its write family after M0.
+   path. A page family counts toward M0 once its GET pages are Kit-served in
+   production; the rejected-POST page moves with its write family after M0.
 3. **M0** means that every page family below is served by Kit in production
    and that the production cut of the Kit Worker has finished its 48-hour
    production acceptance.
