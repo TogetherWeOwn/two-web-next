@@ -4,7 +4,11 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
-import { withEventDetailHtml, type DetailLeavesModel } from "../../src/events/detail-leaves";
+import {
+  withEventDetailHtml,
+  type DetailLeavesModel,
+  type EventDetailHtml,
+} from "../../src/events/detail-leaves";
 
 const webRequire = createRequire(new URL("../../web/package.json", import.meta.url));
 const { compile } = webRequire("svelte/compiler") as {
@@ -14,7 +18,9 @@ const { compile } = webRequire("svelte/compiler") as {
   ) => { js: { code: string } };
 };
 
-let cachedRender: ((model: Record<string, unknown>) => string) | null = null;
+type SeriesDetailModel = DetailLeavesModel & { detailHtml: EventDetailHtml };
+
+let cachedRender: ((model: SeriesDetailModel) => string) | null = null;
 export async function renderSeriesDetail(model: Record<string, unknown>): Promise<string> {
   if (!cachedRender) {
     const worktree = fileURLToPath(new URL("../../", import.meta.url));
@@ -62,7 +68,7 @@ export function renderDetail(model) {
         ],
       });
       const bundle = (await import(pathToFileURL(outfile).href)) as {
-        renderDetail: (model: Record<string, unknown>) => string;
+        renderDetail: (model: SeriesDetailModel) => string;
       };
       cachedRender = bundle.renderDetail;
     } finally {
