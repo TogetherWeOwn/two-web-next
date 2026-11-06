@@ -20,9 +20,7 @@ describe("brand header screenshot evidence", () => {
     expect(captureStep).toContain(
       "uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9",
     );
-    expect(captureStep?.match(/path: (.+)/)?.[1]).toBe(
-      "test-results-kit-parity/**/brand-*.png",
-    );
+    expect(captureStep?.match(/path: (.+)/)?.[1]).toBe("test-results-kit-parity/**/brand-*.png");
     expect(captureStep).toContain("if-no-files-found: ignore");
     expect(captureStep).not.toContain("env:");
     expect(captureStep).not.toContain(".dev.vars");

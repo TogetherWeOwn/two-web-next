@@ -74,8 +74,8 @@ Kit signed-in 360/768px captures are missing from this historical attempt:
 the new capture's cookie setup failed before member navigation. The existing
 Kit member-board visual journey supplies signed-in 390/1280px evidence.
 The corrected setup subsequently passed on `b738e122`, but that successful
-run retained no images. The remaining widths still need retrieval, opening
-and publication from a run with screenshot retention enabled.
+run retained no images. Run 42310900115 now supplies all four widths for both
+renderers, including Kit member 360/768, as recorded below.
 
 ## Named intentional baseline acceptance
 
@@ -110,7 +110,44 @@ were unchanged. No threshold, mask, test skip or asset budget was loosened.
 Acceptance is intentional-diff evidence, not a passing browser gate; the final
 exact head must still pass Actions.
 
-## Actions verification checkpoint
+## Retained four-width captures and Actions checkpoint
+
+At head `a513f5ae8e6f0bc70714f3a5f582c9d1400529c6`,
+[browser-smoke](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42310900115/job/128211868039)
+passed: 17 Kit visuals, 17 Hono visuals, 452 critical journeys, 79 parity tests
+(zero failed/skipped), and two authenticated performance checks.
+[e2e-ok](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42310900115/job/128215177032)
+passed. The pinned uploader retained all 28 expected PNGs in
+[artifact 13548672752](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42310900115/artifacts/13548672752),
+`brand-header-captures-42310900115-1`. The downloaded archive SHA256 matched
+the upload log. [The retained-capture manifest](retained-captures.json) records
+every source path, dimension and SHA256. All 28 original images were opened by
+the implementation author and published together in the task's downloadable
+PNG-only evidence bundle with this provenance. This is not final independent
+UX review or production approval.
+
+Coverage: Hono guest home/about/join/events and member leaderboard, plus Kit
+guest events and member leaderboard, each at 360/390/768/1280px. These are
+viewport screenshots: 844px high at 360/390/768 and 800px at 1280, unlike the
+older full-page Kit captures above. The missing Kit member 360/768 evidence
+is now retrieved, opened and published. No baseline changed in this step.
+
+Same-head [a11y](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42310900133/job/128211882638),
+[Lighthouse](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42310900133/job/128211882587),
+bundle budget, [PR lint/gitleaks](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42310956016),
+CodeQL and Devin succeeded. CodeRabbit completed with no new actionable
+comment. Hono audits do not exercise Kit.
+[Check](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42310900133/job/128211882597)
+and [Node 22](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42310900133/job/128211882586)
+failed on one Biome formatting difference in
+`test/brand-header-evidence-contract.test.ts`, before typecheck or unit tests.
+The missing Kit admin contrast upload was downstream of the early failure.
+`ci-ok` failed; the admin icon correction has no passing unit-suite evidence
+yet. Applied only the exact formatter-requested single-line assertion layout;
+its meaning is unchanged. This correction and evidence update require fresh
+exact-head Actions; no full-suite pass is claimed.
+
+## Earlier Actions verification checkpoint
 
 At published head `b738e1222938faea196d640a38dbd4422cb3c4d3`,
 [browser-smoke](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304037907/job/128188837937)
@@ -120,7 +157,7 @@ performance checks. Both renderers' guest/member header tests passed at all
 four widths. The [e2e aggregate](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304037907/job/128192283898)
 also passed. The artifact listing was empty: successful execution proves the
 assertions, not that any screenshot was retrieved or visually reviewed.
-The PNG-retention correction requires another Actions run to close that gap.
+The later PNG-retention run above closes that screenshot-publication gap.
 
 The same head's [a11y](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188850887),
 [Lighthouse](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188850735),
@@ -162,8 +199,9 @@ environment files. The existing failure report is unchanged. Missing files are
 ignored because earlier setup may fail before captures run; the presence and
 completeness of the expected images must still be checked, never inferred
 from a successful upload step. `test/brand-header-evidence-contract.test.ts`
-pins the upload condition, scope and existing action SHA. This retention fix
-requires its own next-head Actions execution.
+pins the upload condition, scope and existing action SHA. The actual upload
+executed successfully on `a513f5ae`; the regression test's formatter correction
+still requires its own next-head Actions execution.
 
 On `c2c105ce`, the Hono multi-width assertions passed. All twenty Hono guest
 home/about/join/events and member-board captures plus four Kit guest events
