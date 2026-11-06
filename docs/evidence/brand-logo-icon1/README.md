@@ -119,6 +119,16 @@ fixture member name and the approved logo dimensions. Only disposable seeded
 rows and stubbed integrations supply these images; no live Discord, bot,
 staging or production data is used.
 
+The workflow retains `test-results-kit-parity/**/brand-*.png` in the separate
+`brand-header-captures-<run>-<attempt>` artifact on success as well as failure.
+This narrowly scoped upload contains PNGs only, not traces, cookie storage or
+environment files. The existing failure report is unchanged. Missing files are
+ignored because earlier setup may fail before captures run; the presence and
+completeness of the expected images must still be checked, never inferred
+from a successful upload step. `test/brand-header-evidence-contract.test.ts`
+pins the upload condition, scope and existing action SHA. This retention fix
+requires its own next-head Actions execution.
+
 On `c2c105ce`, the Hono multi-width assertions passed. All twenty Hono guest
 home/about/join/events and member-board captures plus four Kit guest events
 captures executed. Kit member capture failed because its setup derived a
