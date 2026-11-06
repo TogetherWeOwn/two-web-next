@@ -76,16 +76,41 @@ or overly clipped names, and the others are superseded by the same responsive
 correction. None has been accepted into the baseline set. Fresh post-fix
 artifacts must be reviewed before either acceptance script runs.
 
-`e2e/kit-parity/parity.spec.ts` now captures guest and signed-in header states
-at 360, 390, 768 and 1280px in the existing GitHub Actions fixture stack. These
+`e2e/kit-parity/parity.spec.ts` captures guest and signed-in header states at
+360, 390, 768 and 1280px in the existing GitHub Actions fixture stack. These
 are screenshot outputs in `test-results-kit-parity/`, not new golden baselines.
 The added assertions require no page overflow, one-line guest actions, the full
-fixture member name and the approved logo dimensions. The assertions and
-captures are not yet executed. They avoid a duplicate local app build on the
-shared host while exercising the real renderers against disposable fixtures.
-Required Kit publication remains guest `kit-events-index-{desktop,mobile}` and
-signed-in `member-board-default-{desktop,mobile}` from the post-fix artifact;
-Hono captures never substitute for them.
+fixture member name and the approved logo dimensions. They avoid a duplicate
+local app build on the shared host while exercising the real renderers against
+disposable fixtures.
+
+On head `c2c105ce`, [browser-smoke attempt 1](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178227/job/128172290149)
+failed. Artifact `e2e-failure-42299178227-1` contains 32 corrected visual
+expected/actual/diff triplets and 24 new header captures: all twenty Hono
+home/about/join/events guest and board-member captures, plus four Kit guest
+events captures. The Hono multi-width header assertions passed; Kit's member
+capture failed before navigation because its cookie setup derived a secure
+`__Host-` cookie from the HTTP fixture URL. Kit member 360/768px captures are
+therefore missing. The existing Kit member-board visual journey did produce
+its 390×844 and 1280×800 actuals, but the comparisons failed on the brand diff.
+A repeated-worker RSVP teardown also reported 429. No green browser gate is
+claimed. The capture setup now preserves the issued cookie's attributes, like
+the existing member-board visual journey, and initializes the Hono jar even
+when the capture runs alone; a fresh Actions run must verify the correction.
+
+The same head's [check](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178568/job/128172290283)
+and [Node 22 compatibility](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178568/job/128172290299)
+jobs failed typecheck on the token test's global URL versus Node URL types.
+The test now imports `URL` from `node:url`; that correction is not yet verified.
+The head's [Hono a11y](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178568/job/128172290320)
+and [Lighthouse](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178568/job/128172290325)
+jobs passed. Neither exercises Kit.
+
+Fresh images are awaiting UX review; none has been accepted. Required Kit
+publication remains guest `kit-events-index-{desktop,mobile}` and signed-in
+`member-board-default-{desktop,mobile}` from the post-fix artifact; Hono captures
+never substitute for them. Corrected mobile after-images must replace the
+historical table entries only after that review.
 
 Icon and manifest coverage is by file, not screenshot: `favicon.svg`,
 `public/icons/icon-192.png` (192×192), `icon-512.png` (512×512),

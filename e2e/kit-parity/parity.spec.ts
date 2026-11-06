@@ -1041,9 +1041,33 @@ for (const target of targets) {
       { name: "member-board", path: "/leaderboards/members", member: true },
     ];
     for (const state of states) {
+      const hono = targets.find((candidate) => candidate.name === "hono")!;
+      if (state.member) {
+        // beforeAll leaves Hono's jar guest-clean. Populate it even when this
+        // capture runs alone, then re-sign its freshest cookie for the target.
+        const ready = await api(hono).get("/leaderboards/members", {
+          headers: { cookie: await memberCookie(hono) },
+        });
+        expect(ready.status(), "issued member session reaches the board").toBe(200);
+      }
+      const cookie = state.member ? await memberCookie(target) : null;
       const context = await browser.newContext({
         baseURL: target.origin,
         ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+        // Match the existing member-board visual journey: preserve the issued
+        // attributes instead of deriving a secure __Host cookie from Kit's HTTP URL.
+        storageState: {
+          cookies: cookie
+            ? (await api(hono).storageState()).cookies
+                .filter((session) => session.name === "__Host-two_session")
+                .map((session) => ({
+                  ...session,
+                  domain: new URL(target.origin).hostname,
+                  value: cookie.slice(cookie.indexOf("=") + 1),
+                }))
+            : [],
+          origins: [],
+        },
       });
       try {
         await context.route("**/*", (route) => {
@@ -1052,17 +1076,10 @@ for (const target of targets) {
           return allowed ? route.continue() : route.abort("blockedbyclient");
         });
         if (state.member) {
-          const cookie = await memberCookie(target);
-          await context.addCookies([
-            {
-              name: "__Host-two_session",
-              value: cookie.slice(cookie.indexOf("=") + 1),
-              url: target.origin,
-              secure: true,
-              httpOnly: true,
-              sameSite: "Lax",
-            },
-          ]);
+          expect(
+            (await context.cookies()).filter((session) => session.name === "__Host-two_session"),
+            "one issued member session in the browser jar",
+          ).toHaveLength(1);
         }
         const page = await context.newPage();
         for (const width of [360, 390, 768, 1280]) {
