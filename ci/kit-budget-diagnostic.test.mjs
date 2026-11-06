@@ -74,6 +74,25 @@ test("only opt-in dispatch selects diagnosis and ordinary CI retains its own gat
   assert.match(block("kit-budget-diagnostic"), /if-no-files-found: error/);
 });
 
+test("diagnostic job environment rejects runner context and redundant inherited cache", () => {
+  const workflow = fs.readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const diagnostic = workflow.split("\n  kit-budget-diagnostic:\n")[1]?.split(/\n  [\w-]+:\n/)[0];
+  assert.equal(typeof diagnostic, "string");
+  const jobEnv = diagnostic.match(/^    env:\n((?:      [^\n]*\n)+)    steps:/m)?.[1];
+  assert.equal(typeof jobEnv, "string");
+  assert.match(jobEnv, /npm_config_ignore_scripts: "true"/);
+  assert.match(jobEnv, /npm_config_min_release_age: "3"/);
+  const validate = (env) => {
+    assert.doesNotMatch(env, /\$\{\{[^}\n]*\brunner\./);
+    assert.doesNotMatch(env, /^\s*npm_config_cache:/m);
+  };
+  validate(jobEnv);
+  assert.throws(
+    () => validate(`${jobEnv}      npm_config_cache: \${{ runner.temp }}/kit-budget-npm\n`),
+    assert.AssertionError,
+  );
+});
+
 test("canonical failure is preserved and signal/spawn failure cannot look green", () => {
   assert.equal(exitStatus({ status: 0 }), 0);
   assert.equal(exitStatus({ status: 1 }), 1);
