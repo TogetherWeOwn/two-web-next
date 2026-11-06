@@ -547,6 +547,9 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Admin waitlist DB-free regression
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: env -u DATABASE_URL node node_modules/vitest/vitest.mjs run test/admin.test.ts test/admin-waitlist-order-postgres-acceptance.test.ts test/admin-waitlist-classifier.test.ts
       - name: Kit public payload contract (hostile fixtures, no network or DB)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:kit-payloads
