@@ -20,7 +20,7 @@ The six PNGs in this directory show the superseded advisory editor section,
 not the member-detail review mode. They are retained for the before comparison
 only. They do not verify the current candidate, Kit parity or publish-from-view.
 
-New screenshots and exact-head GitHub Actions evidence are still pending.
+Final-head screenshots and complete GitHub Actions evidence are still pending.
 No current visual, accessibility, performance or CI pass is claimed here.
 The Hono gates do not exercise the Kit route; Kit needs its own screenshots.
 
@@ -29,4 +29,12 @@ The existing Actions `a11y` job captures the Hono review/notice routes. Its
 renderers at both widths, ready/corrections/published/cancelled, under
 `artifacts/a11y/saved-review/` in `a11y-evidence`. No baseline is accepted by these
 captures. Publish-from-review, stale mutation and publish failure belong to the
-second slice; this candidate is read-only. Artifact inspection is still pending.
+second slice; this candidate is read-only.
+
+At `e0b17c4a`, all 16 Hono/Kit state captures were downloaded and opened from
+[Actions a11y-evidence](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42174903206/artifacts/13482957436).
+The harness captures have a broken header logo; Kit uses a light surface and its
+input outline is absent. These are observations, not visual acceptance. Six real
+Hono route captures (save notice, corrections, cancelled; 360/1280) were also opened.
+The audit failed two published-review attendee-count assertions before axe ran on
+that state. Current-head rerun and independent UX/Security/QA acceptance remain.

@@ -51,6 +51,23 @@ for (const identity of ["guest", "member", "moderator"]) {
   });
 }
 
+test("published review retains the seeded member attendees before axe", async () => {
+  const scenario = {
+    route: "/e/:key",
+    status: 200,
+    identity: "moderator",
+    state: "review-published",
+  };
+  const selector = '[data-testid="event-attendees"]';
+  assert.equal(contentExpectations(scenario).find((item) => item.selector === selector).count, 1);
+  await assertAuditContent(fixturePage(scenario), scenario);
+  for (const count of [0, 2])
+    await assert.rejects(
+      assertAuditContent(fixturePage(scenario, { [selector]: { count } }), scenario),
+      /Fixture content count/,
+    );
+});
+
 test("the waitlisted event fixture cannot silently render as going", async () => {
   const scenario = { route: "/e/:key", status: 200, identity: "member", state: "waitlisted" };
   await assertAuditContent(fixturePage(scenario), scenario);

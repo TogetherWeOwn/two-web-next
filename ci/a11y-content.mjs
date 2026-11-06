@@ -106,7 +106,7 @@ export function contentExpectations(scenario) {
       },
       {
         selector: '[data-testid="event-attendees"]',
-        count: scenario.identity === "guest" || scenario.identity === "moderator" ? 0 : 1,
+        count: scenario.identity === "member" || scenario.state === "review-published" ? 1 : 0,
       },
       {
         selector: '[data-testid="event-join-pitch"]',

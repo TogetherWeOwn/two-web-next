@@ -3,6 +3,7 @@
 // registers this in browser-capable CI, not the Chromium-free root unit job.
 import assert from "node:assert/strict";
 import { mkdirSync, readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { resolve, sep } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -41,8 +42,15 @@ const unrelated = new Set([
 ]);
 let browser;
 let kit;
+let kitCompiler;
 before(async () => {
   kit = await compileScheduleKit();
+  const webRequire = createRequire(new URL("../web/package.json", import.meta.url));
+  const { compile } = webRequire("@tailwindcss/node");
+  kitCompiler = await compile(
+    readFileSync(new URL("../web/src/app.css", import.meta.url), "utf8"),
+    { base: fileURLToPath(new URL("../web/src/", import.meta.url)) },
+  );
   browser = await chromium.launch({ headless: true });
 });
 after(async () => {
@@ -84,7 +92,15 @@ async function open(t, twin, options = {}) {
   // itself via addScriptTag. No rewritten HTML copy: serve rendered.html
   // unchanged (plus Kit CSS) so JSON-LD stays verbatim.
   let html = rendered.html;
-  if (kit.css) html = html.replace("</head>", `<style>${kit.css}</style></head>`);
+  let css = kit.css;
+  if (twin === "Kit") {
+    const candidates = [...html.matchAll(/class="([^"]+)"/g)].flatMap((match) =>
+      match[1].split(/\s+/),
+    );
+    css += kitCompiler.build(candidates);
+  }
+  assert.ok(!css.includes("</style"));
+  if (css) html = html.replace("</head>", `<style>${css}</style></head>`);
   if (spec.corrupt) {
     html = html.replaceAll(spec.corrupt[0], spec.corrupt[1]);
     // Poison a numeric duplicate too, if the enhancement transports epoch ms.
@@ -206,7 +222,9 @@ async function open(t, twin, options = {}) {
             ? "text/css"
             : file.endsWith(".js")
               ? "text/javascript"
-              : "application/octet-stream",
+              : file.endsWith(".svg")
+                ? "image/svg+xml"
+                : "application/octet-stream",
         });
         return;
       } catch (error) {
