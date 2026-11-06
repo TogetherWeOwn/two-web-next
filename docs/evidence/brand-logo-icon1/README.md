@@ -64,11 +64,16 @@ dimension-checked, and `site.webmanifest` lists the SVG first. The share card
 `public/og-1200x630.png` is a single-lockup recomposition verified at exactly
 1200×630 RGB; no test pins its bytes.
 
-No visual baseline was changed or accepted, and no threshold was relaxed. Known
-boundary: the homepage LCP ratchets (`test/homepage-mobile-lcp-acceptance.test.ts`)
-measure 24950 B HTML (> 24800) and 18860 B inlined CSS (> 18850) on this head.
-The brand delta is fully itemized and irreducible — every byte is required
-artwork wiring (SVG favicon link, token layer, lockup dimensions, share path)
-— and the token lines keep standard Biome formatting because the lint gate
-outranks byte-shaving. That reconciliation belongs to the paired LCP card and
-is flagged in the pull request, not absorbed here.
+No visual baseline was changed or accepted. The token stylesheet fits the
+unchanged 1536 B raw / 512 B gzip bundle budget; the unnecessary proposed
+raw-budget increase was removed before review.
+
+Historical boundary (2026-11-03, `d9bb71c6`): the homepage LCP ratchets
+(`test/homepage-mobile-lcp-acceptance.test.ts`) measured 24950 B HTML
+(> 24800) and 18860 B inlined CSS (> 18850) against that branch's original
+thresholds. The token lines keep standard Biome formatting. The ratchet
+reconciliation subsequently merged separately in PR #2031; these historical
+failures are not a reason to wait for that already-merged PR. Current merge
+verification belongs to the exact-head GitHub Actions runs linked in the
+pull request, including browser-smoke, a11y and Lighthouse. This evidence
+record does not claim those later runs passed.
