@@ -6,6 +6,7 @@ import { readFileSync } from "node:fs";
 import { parseSigned } from "hono/utils/cookie";
 import { createEmberCapture } from "../test/helpers/ember-capture.ts";
 import { captureManifest } from "../test/helpers/ember-capture-data.ts";
+import { verifyCaptureSession } from "../test/helpers/ember-capture-session.ts";
 import { SESSION_COOKIE } from "../src/session-cookie.ts";
 import { hashToken, SESSION_TTL_SECONDS } from "../src/sessions.ts";
 
@@ -32,26 +33,32 @@ try {
       const secret = randomBytes(32).toString("base64url");
       for (const persona of ["member", "moderator"]) {
         const cookie = await fixture.session(persona, secret);
-        const expiryUpperBound = new Date(Date.now() + SESSION_TTL_SECONDS * 1000).toISOString();
         const parsed = await parseSigned(cookie, secret);
         const token = parsed[SESSION_COOKIE];
         assert.equal(typeof token, "string");
-        const rows = await fixture.client`select member, moderator,
-          expires_at > now() as unexpired,
-          created_at > now() - interval '24 hours' as young,
-          expires_at <= ${expiryUpperBound}::timestamptz as bounded
-          from web_sessions where token_hash = ${await hashToken(token)}`;
-        assert.equal(rows.length, 1);
-        assert.deepEqual(
-          { ...rows[0] },
-          {
-            member: true,
-            moderator: persona === "moderator",
-            unexpired: true,
-            young: true,
-            bounded: true,
-          },
-        );
+        await verifyCaptureSession(fixture.client, token, persona);
+        // Exercise that same SQL query with a controlled one-minute clock skew.
+        // Only a private fixture row changes; restore it before leaving the proof.
+        const tokenHash = await hashToken(token);
+        await fixture.client.begin(async (sql) => {
+          const [original] = await sql`select expires_at, now() as clock
+            from web_sessions where token_hash = ${tokenHash}`;
+          const processNow = new Date(original.clock).getTime() + 60_000;
+          const skewedExpiry = new Date(processNow + SESSION_TTL_SECONDS * 1000).toISOString();
+          try {
+            await sql`update web_sessions set expires_at = ${skewedExpiry}::timestamptz
+              where token_hash = ${tokenHash}`;
+            const [control] = await sql`select
+              expires_at > now() + ${SESSION_TTL_SECONDS} * interval '1 second' as exceeds_database_bound
+              from web_sessions where token_hash = ${tokenHash}`;
+            assert.equal(control.exceeds_database_bound, true);
+            await verifyCaptureSession(sql, token, persona, processNow);
+          } finally {
+            const originalExpiry = new Date(original.expires_at).toISOString();
+            await sql`update web_sessions set expires_at = ${originalExpiry}::timestamptz
+              where token_hash = ${tokenHash}`;
+          }
+        });
       }
       // Hotzone and leaderboard GETs append anonymous views outside the seed hash.
       await fixture.client`insert into board_view_logs

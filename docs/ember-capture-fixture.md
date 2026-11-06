@@ -18,8 +18,9 @@ npx vitest run test/ember-capture.test.ts
 For SQL verification, create a fresh run-owned numeric `two_web_next_tog<digits>`
 database on the documented test host and explicitly set `DATABASE_URL` to it.
 Record that database's name privately before invocation, and reserve it for this
-run alone. Capture admission rejects shared `postgres`, `two_web_next` and
-`w15_tests` databases even though the underlying test-fixture guard permits them.
+run alone. On `agent-testdb`, capture admission rejects shared `postgres`,
+`two_web_next` and `w15_tests` databases even though the underlying test-fixture
+guard permits them; only numeric `two_web_next_tog<digits>` names pass there.
 The existing CI service URL is accepted only under its existing `CI` and
 `GITHUB_ACTIONS` admission conditions; that service container belongs to the job
 and is disposable as a whole. No production/staging targets or credentials are
@@ -102,9 +103,14 @@ runs the same memory-session semantics at the frozen instant, including the exac
 expiry and absolute-age boundaries. The SQL verifier proves current real-clock
 role bits and bounded expiry: liveness uses database time, while the upper bound
 uses the minting process clock and the existing session TTL, not a second copy of
-the duration or an assumption that the two clocks are identical. No live guild/bot
-role configuration is needed; leave bot credentials and live outbound integrations
-absent. The independent
+the duration or an assumption that the two clocks are identical. It also executes
+that same verification query with a controlled process clock one minute ahead of
+transaction time, temporarily adjusting only the private fixture row's expiry and
+restoring it afterward. A negative control proves a database-clock upper bound
+would reject that row. A unit test substitutes a 37-second canonical TTL and checks
+the real query's bound, detecting a copied two-hour literal without changing app
+authentication. No live guild/bot role configuration is needed; leave bot credentials
+and live outbound integrations absent. The independent
 server-render-clock prerequisite and adapter must preserve this separation.
 
 ## Data, IDs and provenance
