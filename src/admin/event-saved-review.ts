@@ -51,7 +51,7 @@ export function savedEventReview(row: SavedEventReviewRow, now: Date) {
         : row.status === "published"
           ? "This event is already published. This is what members see now."
           : row.status === "cancelled"
-            ? "This event is cancelled. Members don't see it in listings."
+            ? "This event is cancelled."
             : row.status === "past"
               ? "This event has ended and cannot be published as-is."
               : "This event is not a draft and cannot be published as-is.",

@@ -329,7 +329,12 @@ export const EventPage: FC<{
           viewerMember: member,
           showJoinPitch: !session,
           joinReturnTo: returnTo ?? path,
-          attendeesRefreshHref: archiveEventHref(e.eventKey, archive, attendeesPaging.page),
+          attendeesRefreshHref: archiveEventHref(
+            e.eventKey,
+            archive,
+            attendeesPaging.page,
+            Boolean(review),
+          ),
           goingCount: e.goingCount,
         }}
       />

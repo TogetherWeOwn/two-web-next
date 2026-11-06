@@ -16,6 +16,7 @@ import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import {
   ATTENDEE_PAGE_SIZE,
+  getEventForModeratorReview,
   getEventNeighbors,
   getEventSeriesContext,
   getPublicEvent,
@@ -137,12 +138,14 @@ export function registerDetailRoutes(
           if (!eventKeyAllowed(key, c.env.APP_URL)) return notFound();
           const db = await dbFor(c);
           if (!db) return databaseUnavailableBuffered(c);
-          const e = await getPublicEvent(db, key);
-          if (!e) return notFound();
           const wantsReview = c.req.query("review") === "1";
           const reviewSession = wantsReview ? await readSession(c) : null;
           if (wantsReview && !reviewSession?.moderator) return forbidden(c);
           if (wantsReview) c.header("cache-control", "private, no-store");
+          const e = wantsReview
+            ? await getEventForModeratorReview(db, key)
+            : await getPublicEvent(db, key);
+          if (!e) return notFound();
           if (e.status === "cancelled" && !wantsReview) {
             c.header("x-robots-tag", "noindex, nofollow");
             // The live page personalizes on the session and the one-shot join
@@ -247,11 +250,12 @@ export function registerDetailRoutes(
                     e.eventKey,
                     archive,
                     attendees.length === 0 ? 1 : attendeePage - 1,
+                    wantsReview,
                   )
                 : null,
             nextHref:
               attendeeLookahead.length > 0
-                ? archiveEventHref(e.eventKey, archive, attendeePage + 1)
+                ? archiveEventHref(e.eventKey, archive, attendeePage + 1, wantsReview)
                 : null,
           };
           // Auth return (`?next=`): normalized archive/attendee context

@@ -53,6 +53,7 @@ import { eventLinkAvailability } from "./link-availability";
 import { isOngoing } from "./ongoing";
 import {
   ATTENDEE_PAGE_SIZE,
+  getEventForModeratorReview,
   getEventNeighbors,
   getEventSeriesContext,
   getPublicEvent,
@@ -78,6 +79,8 @@ import { waitlistPosition } from "./waitlist";
 export interface KitEventDetailStore {
   dbForFn: (ctx: { env: Env }) => Promise<Db | null>;
   getEventFn: (db: Db, key: string) => Promise<PublicEvent | null>;
+  /** Selected only after moderator review admission; legacy fakes can reuse their read. */
+  getReviewEventFn?: (db: Db, key: string) => Promise<PublicEvent | null>;
   neighborsFn: (db: Db, event: Pick<PublicEvent, "id">) => Promise<EventNeighbors>;
   relatedFn: (db: Db, event: Pick<PublicEvent, "id" | "game">) => Promise<EventLink[]>;
   /** Series run read. Optional so existing fakes keep compiling: the resolver
@@ -304,6 +307,7 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
   return {
     dbForFn: ({ env: bound }) => dbFor({ env: bound }),
     getEventFn: (db, key) => getPublicEvent(db, key),
+    getReviewEventFn: (db, key) => getEventForModeratorReview(db, key),
     neighborsFn: (db, event) => getEventNeighbors(db, event),
     relatedFn: (db, event) => listRelatedEvents(db, event),
     seriesFn: (db, event) => getEventSeriesContext(db, event),
@@ -391,9 +395,20 @@ export async function resolveKitEventDetail(
       setHeaders(headers);
       return { kind: "unavailable", status: 503, headers };
     }
+    const wantsReview = new URLSearchParams(search).get("review") === "1";
+    if (wantsReview && (session.status === "unknown" || !session.session?.moderator)) {
+      const status = session.status === "unknown" ? 503 : 403;
+      const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
+      setHeaders(headers);
+      return status === 503
+        ? { kind: "unavailable", status, headers }
+        : { kind: "forbidden", status, headers };
+    }
     let event: PublicEvent | null;
     try {
-      event = await store.getEventFn(db, key);
+      event = wantsReview
+        ? await (store.getReviewEventFn ?? store.getEventFn)(db, key)
+        : await store.getEventFn(db, key);
     } catch (err) {
       reportDetailLoadFailure(err, requestId);
       const headers = { "cache-control": NO_STORE };
@@ -401,15 +416,6 @@ export async function resolveKitEventDetail(
       return { kind: "unavailable", status: 503, headers };
     }
     if (event) {
-      const wantsReview = new URLSearchParams(search).get("review") === "1";
-      if (wantsReview && (session.status === "unknown" || !session.session?.moderator)) {
-        const status = session.status === "unknown" ? 503 : 403;
-        const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
-        setHeaders(headers);
-        return status === 503
-          ? { kind: "unavailable", status, headers }
-          : { kind: "forbidden", status, headers };
-      }
       // Cancelled before any session-gated read: the 410 stays
       // viewer-independent, so a store outage or a rotated cookie can never
       // turn the static cancellation into a 500. The outcome carries the #838
@@ -526,11 +532,12 @@ export async function resolveKitEventDetail(
                 event.eventKey,
                 archive,
                 attendees.length === 0 ? 1 : attendeePage - 1,
+                wantsReview,
               )
             : null,
         nextHref:
           attendeeRows.length > ATTENDEE_PAGE_SIZE
-            ? archiveEventHref(event.eventKey, archive, attendeePage + 1)
+            ? archiveEventHref(event.eventKey, archive, attendeePage + 1, wantsReview)
             : null,
       };
       // RSVP closure is decided once here, on the server render instant, with
@@ -594,7 +601,12 @@ export async function resolveKitEventDetail(
           canonical: pageCanonical,
           path: pagePath,
           // Keep validated roster/archive state only, never raw query text.
-          attendeesRefreshHref: archiveEventHref(event.eventKey, archive, attendeePage),
+          attendeesRefreshHref: archiveEventHref(
+            event.eventKey,
+            archive,
+            attendeePage,
+            wantsReview,
+          ),
           archiveReturn: archiveReturnLink(archive),
           robots,
           // Drafts have no Markdown view: the session-free .md route 403s for
