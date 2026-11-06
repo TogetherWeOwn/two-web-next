@@ -469,9 +469,10 @@ function assertStructure(html: string, range: RangeCase) {
   const ordered = [label, input, examples, button, status];
   const actual = mount.childNodes.filter(isElement);
   expect(actual.length).toBe(ordered.length);
-  expect(actual.every((node, index) => node === ordered[index]), "chosen controls retain order").toBe(
-    true,
-  );
+  expect(
+    actual.every((node, index) => node === ordered[index]),
+    "chosen controls retain order",
+  ).toBe(true);
   expect(local.filter((node) => node.tagName === "input").length).toBe(1);
   expect(local.filter((node) => node.tagName === "button").length).toBe(1);
   expect(local.filter((node) => attribute(node, "role") === "status").length).toBe(1);
