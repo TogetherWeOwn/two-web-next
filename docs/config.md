@@ -41,7 +41,13 @@ PRs, logs or command arguments.
   backstop (keeping manual dispatch), gated by
   `PRODUCTION_DEPLOY_ENABLED`, the live `production` Environment's protection,
   exact-SHA CI and the Hyperdrive sentinel check, with a 30-minute staging
-  soak, already-live skip, pending-migration stop and `PRODUCTION_HOLD_UNTIL`. By default, protection requires
+  soak, already-live skip, pending-migration stop and `PRODUCTION_HOLD_UNTIL`.
+  Default selection (including an empty-SHA dispatch) also requires a known live
+  commit and verified forward ancestry before candidate checkout; behind,
+  divergent or unproven ancestry is refused. An explicit matching dispatch SHA
+  retains the separately authorized recovery route and all its other gates
+  ([ancestry contract](./runbook.md#default-promotion-ancestry-admission)).
+  By default, protection requires
   reviewers with self-review prevented; with `PRODUCTION_AUTO_APPROVE=true`, the
   gate instead requires a main-only deployment policy and successful staging
   deploy and `e2e-staging` runs on the same SHA, with an executed, passing

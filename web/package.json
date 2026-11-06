@@ -9,13 +9,13 @@
   "scripts": {
     "postinstall": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs",
     "prebuild": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs",
-    "build": "vite build && node scripts/copy-public.mjs",
+    "build": "vite build && node scripts/copy-public.mjs && node ../ci/kit-route-evidence.mjs",
     "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "preview:deploy": "wrangler deploy"
   },
   "devDependencies": {
-    "@sveltejs/adapter-cloudflare": "8.0.1",
-    "@sveltejs/kit": "3.1.0",
+    "@sveltejs/adapter-cloudflare": "8.0.2",
+    "@sveltejs/kit": "3.1.1",
     "@sveltejs/vite-plugin-svelte": "7.3.1",
     "@tailwindcss/vite": "^4.3.3",
     "svelte": "5.57.2",

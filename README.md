@@ -8,8 +8,10 @@ repository: fixes only, no new features.
 
 Stack: [Hono](https://hono.dev) on Cloudflare Workers, TypeScript, Vitest,
 [Drizzle](https://orm.drizzle.team) + Postgres, server-rendered HTML with plain
-JavaScript islands. The [parity matrix](docs/parity.md) tracks the migration;
-migration plan: TOG-9671.
+JavaScript islands. The [parity matrix](docs/parity.md) tracks the migration.
+SvelteKit with Svelte 5 under [web/](web/) is the
+accepted single page renderer; Hono keeps the non-page APIs for now. See
+[ADR 0001](docs/adr/0001-sveltekit-page-renderer.md) and its retirement register.
 How it fits together: [docs/architecture.md](docs/architecture.md).
 Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](docs/db-migrations.md).
 Operations (deploy/rollback, `/up`, queues, outages and restore drills):
@@ -431,18 +433,29 @@ not the currently serving version. Worker code reaches production only through
 exactly `true`. The production workflow promotes automatically when
 `e2e-staging` completes plus a daily 14:17 UTC schedule backstop, and keeps a
 manually authorized dispatch for explicit redeploys; it never deploys on push,
-PR or release. Automatic runs promote only a staging green that soaked 30
-minutes with no newer red staging run, skip cleanly when production already
-serves the target (`/up` revision marker) or there is nothing soaked and green,
-and read the live production ledger via `/up` when the target journal has
+PR or release. Default selection (both automatic triggers and an empty-SHA
+manual dispatch) requires a known live `/up` commit and verified forward
+ancestry from that commit to the candidate. A behind or divergent selection,
+or unreadable/malformed ancestry evidence, fails closed before candidate
+checkout or promotion side effects. Equality keeps the clean no-op. The
+workflow-head guard cannot be omitted by an older candidate. Only an explicit,
+matching dispatch SHA selects the existing separately authorized recovery
+route; `migrations_applied` never bypasses default ancestry admission. See the
+[ancestry contract](docs/runbook.md#default-promotion-ancestry-admission).
+
+Automatic runs promote only a staging green that soaked 30 minutes with no
+newer red staging run, skip cleanly when production already serves the target
+(`/up` revision marker) or there is nothing soaked and green, and read the live
+production ledger via `/up` when the target journal has
 entries production lacks: when the ledger holds every target web entry (set
 inclusion), the run clears automatically; otherwise it stops with a clear
 error (ledger lacks entries, ledger read failed, unusable target timestamp,
 non-ok database, or a live Worker that predates the ledger signal —
 automatic migration otherwise waits on the least-privilege migrator). An
-unknown live commit after three `/up` reads also stops promotion. A manual
-re-dispatch with `migrations_applied: true` records an audited continuation
-past any stop once `db-migrate.yml` (target production) has applied the
+unknown live commit stops default selection at the ancestry guard; explicit
+recovery also stops at the migration gate after three `/up` reads. An explicit
+manual re-dispatch with `migrations_applied: true` records an audited continuation
+past these migration stops once `db-migrate.yml` (target production) has applied the
 target's migrations; automatic runs ignore that input and halt on those stops
 unless the ledger already proves the target applied. The first promotion
 after the ledger signal ships needs one manual dispatch because the live
