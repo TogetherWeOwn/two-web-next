@@ -65,7 +65,14 @@
   function samePath(raw) {
     // A single leading slash with no backslash or whitespace is rooted on
     // this origin; it cannot be a protocol-relative or scheme URL.
-    return typeof raw === "string" && /^\/(?!\/)[^\s\x00-\x1f\x7f\\]*$/.test(raw) ? raw : null;
+    if (
+      typeof raw !== "string" ||
+      /[\s\x00-\x1f\x7f\\]/.test(raw) ||
+      raw[0] !== "/" ||
+      raw[1] === "/"
+    )
+      return null;
+    return raw;
   }
   window.addEventListener("two:session-expired", function (event) {
     event.preventDefault();
@@ -104,9 +111,9 @@
   if (reviewLink) {
     // Both renderers emit the canonical saved-review URL ending in ?review=1.
     var reviewHref = reviewLink.href;
-    reviewLink.addEventListener("click", function () {
+    reviewLink.onclick = function () {
       reviewLink.href = reviewHref + (draft || snapshot() !== initial ? "&unsaved=1" : "");
-    });
+    };
   }
   window.addEventListener("beforeunload", function (event) {
     // Only Save or a normal, explicit recovery activation exempts one trip.

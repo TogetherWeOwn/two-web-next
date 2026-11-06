@@ -1,28 +1,89 @@
+import { readFileSync } from "node:fs";
+import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 import { eventEditorBrowser as browser } from "./helpers/admin-event-editor";
 
+// Keep the acceptance-owned expiry harness unchanged; this fixture owns only
+// the new review link and its dirty snapshot.
+function reviewBrowser(draft = false) {
+  const values = new Map([["title", "Game night"]]);
+  const link = {
+    href: "https://next.example/e/abc?review=1",
+    onclick: null as (() => void) | null,
+  };
+  const listeners = new Map<
+    string,
+    (event: { preventDefault: () => void; returnValue?: string }) => void
+  >();
+  const editor = { hasAttribute: () => draft, addEventListener: vi.fn() };
+  runInNewContext(
+    readFileSync(new URL("../public/islands/admin-event-editor.js", import.meta.url), "utf8"),
+    {
+      document: {
+        querySelector: (selector: string) =>
+          selector === "[data-event-editor]"
+            ? editor
+            : selector === '[data-testid="review-event"]'
+              ? link
+              : null,
+      },
+      window: {
+        addEventListener: (
+          name: string,
+          fn: (event: { preventDefault: () => void; returnValue?: string }) => void,
+        ) => listeners.set(name, fn),
+      },
+      FormData: class {
+        [Symbol.iterator]() {
+          return values[Symbol.iterator]();
+        }
+      },
+      URLSearchParams,
+    },
+  );
+  return {
+    values,
+    link,
+    click: () => link.onclick!(),
+    navigate: () => {
+      const event = { preventDefault: vi.fn(), returnValue: undefined as string | undefined };
+      listeners.get("beforeunload")!(event);
+      return event;
+    },
+  };
+}
+
 describe("Admin event editor navigation guard", () => {
+  it.each(["/auth/recover\\n", "/auth/recover\\r\\n", "/auth/recover\\u2028"])(
+    "refuses a recovery path with a trailing control: %j",
+    (path) => {
+      const b = browser();
+      b.expireSession(path);
+      expect(b.recoveryLink()!.href).toBe("/auth/recover?next=%2Fadmin%2Fevents%2Fabc");
+    },
+  );
+
   it("marks review navigation only while edits are unsaved and leaves protection armed", () => {
-    const b = browser({ review: true });
-    const link = b.reviewLink!;
-    link.click();
+    const b = reviewBrowser();
+    const link = b.link;
+    b.click();
     expect(link.href).toBe("https://next.example/e/abc?review=1");
     const saved = b.values.get("title")!;
     b.values.set("title", "Unsaved title");
-    link.click({ ctrlKey: true });
+    b.click();
     expect(link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
-    expect(b.navigate("unrelated").preventDefault).toHaveBeenCalledOnce();
+    expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
     b.values.set("title", saved);
-    link.click();
+    b.click();
     expect(link.href).toBe("https://next.example/e/abc?review=1");
-    expect(b.navigate("unrelated").preventDefault).not.toHaveBeenCalled();
+    expect(b.navigate().preventDefault).not.toHaveBeenCalled();
   });
 
   it("marks a rejected Save as unsaved even without another keystroke", () => {
-    const b = browser({ review: true, draft: true });
-    b.reviewLink!.click();
-    expect(b.reviewLink!.href).toContain("&unsaved=1");
-    expect(b.navigate("unrelated").preventDefault).toHaveBeenCalledOnce();
+    const b = reviewBrowser(true);
+    b.click();
+    expect(b.link.href).toContain("&unsaved=1");
+    expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
   });
 
   it.each(["search", "sort"] as const)("allows clean roster %s navigation", (kind) => {

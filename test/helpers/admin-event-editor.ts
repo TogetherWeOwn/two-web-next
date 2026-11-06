@@ -33,13 +33,11 @@ export type ClickInit = {
 
 export function eventEditorBrowser({
   missing = false,
-  review = false,
   draft = false,
   initial = {},
   path = "/admin/events/abc",
 }: {
   missing?: boolean;
-  review?: boolean;
   draft?: boolean;
   initial?: Record<string, string>;
   path?: string;
@@ -148,11 +146,6 @@ export function eventEditorBrowser({
     created.push(el);
     return el;
   };
-  const reviewLink = review ? makeElement("a") : null;
-  if (reviewLink) {
-    reviewLink.attrs["data-testid"] = "review-event";
-    reviewLink.href = "https://next.example/e/abc?review=1";
-  }
   const inserted: { node: FakeElement; before: unknown }[] = [];
   const editorAttrs: Record<string, string> = {};
   const editor = {
@@ -225,7 +218,6 @@ export function eventEditorBrowser({
   });
   return {
     values,
-    reviewLink,
     search,
     windowListeners,
     listeners,
