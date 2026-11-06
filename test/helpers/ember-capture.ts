@@ -164,6 +164,7 @@ export async function createEmberCapture(input: {
     await fixture.client`delete from web_session_grace`;
     await fixture.client`delete from web_sessions`;
     await fixture.client`delete from featured_contents`;
+    await fixture.client`delete from board_view_logs`;
     await fixture.reset();
     await fixture.client.begin(async (tx) => {
       for (const [table, rows] of Object.entries(captureTables())) {

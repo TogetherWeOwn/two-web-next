@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { parseSigned } from "hono/utils/cookie";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+import * as fixtureDb from "./helpers/member-data-db";
 import {
   createMemorySessionStore,
   hashToken,
@@ -79,13 +80,22 @@ describe("ember capture admission", () => {
         "",
       ].map((databaseUrl) => ({ ...input, databaseUrl })),
     ];
-    for (const target of denied) {
-      expect(() => requireCaptureTarget(target, {})).toThrow();
-      // Production/staging strings are inert refusal inputs, never probes.
-      if (target.databaseUrl.includes("example.test"))
-        await expect(createEmberCapture(target as typeof input)).rejects.toThrow(
-          "refusing before connecting",
-        );
+    const initialize = vi
+      .spyOn(fixtureDb, "createMemberDataFixture")
+      .mockRejectedValue(new Error("Unexpected fixture initialization"));
+    try {
+      // Exercise the non-CI refusal even when this test runs in Actions.
+      vi.stubEnv("CI", "false");
+      vi.stubEnv("GITHUB_ACTIONS", "false");
+      for (const target of denied) {
+        expect(() => requireCaptureTarget(target, {})).toThrow();
+        // Inert refusal inputs, never probes: initialization is intercepted too.
+        await expect(createEmberCapture(target as typeof input)).rejects.toThrow();
+        expect(initialize).not.toHaveBeenCalled();
+      }
+    } finally {
+      initialize.mockRestore();
+      vi.unstubAllEnvs();
     }
   });
 

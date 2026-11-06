@@ -56,10 +56,14 @@ database or use a raw URL as a schema-isolation substitute**.
 
 Always put `await fixture.dispose()` in `finally`. `dispose()` closes both pools
 and drops only the schema this invocation created. `resetAndSeed()` clears local
-sessions/grace rows and all seed-owned rows, restores fixed IDs and serial
-positions, and revalidates the complete dataset. Do not reset while rendering or
-use one schema for concurrent base/head activity. Recreate or reset between
-halves: real routes can append audit/view logs and rotate sessions.
+sessions/grace rows, anonymous board-view logs, member-access/activity audit rows
+and all seed-owned rows, restores fixed seed IDs and serial positions, and
+revalidates the complete dataset. The SQL verifier inserts a board-view row and
+proves reset removes it as well as sessions. Do not reset while rendering or use
+one schema for concurrent base/head activity. Recreate or reset between halves:
+real routes can append audit/view logs and rotate sessions. This is a bounded
+reset, not a blanket schema wipe; recreate the fixture if an adapter introduces
+other writes.
 
 Normal failure during initialization also cleans up. A hard process kill cannot
 run `finally`: dispose the run-owned Postgres container/database. If retaining a
@@ -95,6 +99,10 @@ leave bot credentials and live outbound integrations absent. The independent
 server-render-clock prerequisite and adapter must preserve this separation.
 
 ## Data, IDs and provenance
+
+The fixture reuses the existing disposable-schema/migration harness, session-cookie
+APIs and shipped deterministic aggregate readers rather than adding a hosted
+capture service or copied implementation.
 
 The source registry is `test/helpers/ember-capture-data.ts`. The machine-readable
 contract is [`test/fixtures/ember-capture-v1.json`](../test/fixtures/ember-capture-v1.json).
@@ -146,7 +154,3 @@ renderer ownership and the later declarative adapter are independent gates.
 
 No Pilot A capture, model judge, external reference freeze, app/Kit redesign,
 production access, deployment or new spend is authorized by this fixture.
-
-REA angle: this reuses the existing disposable-schema/migration harness, public
-session-cookie APIs and shipped deterministic aggregate readers rather than
-adding a hosted capture service or copied implementation.

@@ -52,11 +52,17 @@ try {
           },
         );
       }
+      // Hotzone and leaderboard GETs append anonymous views outside the seed hash.
+      await fixture.client`insert into board_view_logs
+        (normalized_board_key, scope, season, result_count)
+        values ('hotzones/joins', 'all', 'all', 2)`;
+      assert.equal((await fixture.client`select count(*)::int as n from board_view_logs`)[0].n, 1);
       await fixture.client`delete from featured_contents where id = 1`;
       await assert.rejects(fixture.verify(), /capture_invalid/);
       const second = await fixture.resetAndSeed();
       assert.deepEqual(second, first);
       assert.equal((await fixture.client`select count(*)::int as n from web_sessions`)[0].n, 0);
+      assert.equal((await fixture.client`select count(*)::int as n from board_view_logs`)[0].n, 0);
       await fixture.dispose();
       cleanup = true;
       console.log(
