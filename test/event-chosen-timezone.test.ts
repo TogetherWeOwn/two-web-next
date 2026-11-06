@@ -572,7 +572,9 @@ function assertStructure(html: string, range: RangeCase) {
     expect(attribute(deviceStatus, "role")).toBe("status");
     expect(attribute(deviceStatus, "aria-live")).toBe("polite");
     expect(
-      deviceStatus.childNodes.every((node) => node.nodeName === "#text" && text(node).trim() === ""),
+      deviceStatus.childNodes.every(
+        (node) => node.nodeName === "#text" && text(node).trim() === "",
+      ),
     ).toBe(true);
     expect(nodes.indexOf(time)).toBeLessThan(nodes.indexOf(deviceButton));
     expect(nodes.indexOf(deviceButton)).toBeLessThan(nodes.indexOf(deviceStatus));
