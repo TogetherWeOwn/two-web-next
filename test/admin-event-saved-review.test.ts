@@ -32,8 +32,19 @@ describe("saved-event review read model", () => {
 
   it("describes cancellation instead of offering publication advice", () => {
     const view = savedEventReview({ ...row, status: "cancelled" }, now);
-    expect(view.guidance).toBe("This event is cancelled. Members don't see it in listings.");
+    // Cancelled events still appear in listings, so the guidance makes no
+    // listing claim; status guidance stays.
+    expect(view.guidance).toBe("This event is cancelled.");
+    expect(view.guidance).not.toContain("listings");
+    expect(view.guidance).not.toContain("Members don't see it");
     expect(view.corrections).toEqual([]);
+    // Cancellation guidance is independent of the draft-only corrections.
+    const broken = savedEventReview(
+      { ...row, status: "cancelled", location: null, endsAt: new Date(0) },
+      now,
+    );
+    expect(broken.guidance).toBe("This event is cancelled.");
+    expect(broken.corrections).toEqual([]);
   });
 
   it("describes the published record rather than offering another publication", () => {

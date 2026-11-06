@@ -22,24 +22,44 @@
 //   guests/nonmembers get no attendee section at all, previous/next hrefs
 //   are unchanged, and a past-end page keeps its bare-URL return link with
 //   its own (past-end) page number shown and no audit row.
+//
+// Saved-event review handback (nested in the Hono suite so it shares that
+// suite's existing DB boundary and fixture): the real Hono route and the real
+// Kit production store (not injected models) select the unfiltered moderator
+// review read only after admission, so an unreadable saved window renders its
+// corrections while every ordinary read keeps refusing it; review paging keeps
+// its validated marker beside archive state on both renderers. Hermetic twins
+// live in test/event-saved-review-handback.test.ts.
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
+import { sql } from "drizzle-orm";
 import { build } from "esbuild";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { events, memberDataAccessLogs, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
+import { archiveEventHref } from "../src/events/attendee-paths";
 import {
   kitEventDetailStore,
   resolveKitEventDetail,
   type KitEventDetailStore,
 } from "../src/events/kit-detail";
+import { getEventForModeratorReview, getPublicEvent } from "../src/events/reads";
 import type { KitRequestSession } from "../src/kit-session";
 import { createMemorySessionStore } from "../src/sessions";
-import { cookieFor, env, EVENT_KEY, MEMBER, OUTSIDER, SUBJECT, seed } from "./helpers/member-data";
+import {
+  cookieFor,
+  env,
+  EVENT_KEY,
+  MEMBER,
+  MODERATOR,
+  OUTSIDER,
+  SUBJECT,
+  seed,
+} from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 const PAGE = 100;
@@ -189,6 +209,76 @@ function expectNoPager(html: string) {
   expect(html).not.toContain('data-testid="event-attendees-next"');
 }
 
+// Saved-event review handback fixtures.
+const UNREADABLE_KEY = "01J00000000000000000000098";
+const ABSENT_KEY = "01J00000000000000000000097";
+const ARCHIVE = { page: 3, q: "raid night" };
+const ARCHIVE_SEARCH = "archivePage=3&archiveQuery=raid+night";
+const NOISE = "junk=evil&next=%2F%2Fevil.example&returnTo=%2F%2Fevil.example";
+const archiveQuery = { archivePage: "3", archiveQuery: "raid night" };
+// 101 synthetic going rows beside the seeded one: page 1 is full with a
+// lookahead, page 2 is partial, page 3 is an empty past-end page.
+const SYNTHETIC = 101;
+const reviewSynthId = (i: number) => `500000000000000${String(i).padStart(3, "0")}`;
+
+function parts(href: string | null | undefined) {
+  if (href == null) return null;
+  const url = new URL(href, "https://parts.invalid");
+  const entries = [...url.searchParams];
+  return { path: url.pathname, query: Object.fromEntries(entries), count: entries.length };
+}
+
+const reviewHref = (query: Record<string, string>, path = `/e/${EVENT_KEY}`) => ({
+  path,
+  query,
+  count: Object.keys(query).length,
+});
+
+function rosterLinks(html: string) {
+  const links: Record<string, string> = {};
+  for (const match of html.matchAll(
+    /<a href="([^"]*)"[^>]*\bdata-testid="event-attendees-(prev|next|refresh)"/g,
+  )) {
+    links[match[2]!] = match[1]!.replace(/&amp;/g, "&");
+  }
+  return links;
+}
+
+const REVIEW_LINKS = {
+  1: {
+    refresh: reviewHref({ ...archiveQuery, review: "1" }),
+    prev: null,
+    next: reviewHref({ attendees: "2", ...archiveQuery, review: "1" }),
+  },
+  2: {
+    refresh: reviewHref({ attendees: "2", ...archiveQuery, review: "1" }),
+    prev: reviewHref({ ...archiveQuery, review: "1" }),
+    next: null,
+  },
+  3: {
+    refresh: reviewHref({ attendees: "3", ...archiveQuery, review: "1" }),
+    prev: reviewHref({ ...archiveQuery, review: "1" }),
+    next: null,
+  },
+} as const;
+
+const ORDINARY_LINKS = (page: number) => ({
+  refresh: archiveEventHref(EVENT_KEY, ARCHIVE, page),
+  ...(page > 1 ? { prev: archiveEventHref(EVENT_KEY, ARCHIVE, 1) } : {}),
+  ...(page === 1 ? { next: archiveEventHref(EVENT_KEY, ARCHIVE, 2) } : {}),
+});
+
+const kitSession = (actor: typeof MEMBER): KitRequestSession => ({
+  status: "authenticated",
+  session: {
+    userId: actor.userId,
+    username: actor.username,
+    avatar: null,
+    member: actor.member,
+    moderator: actor.moderator,
+  },
+});
+
 describe.skipIf(!process.env.DATABASE_URL)(
   "Hono attendee current-page label acceptance (isolated agent-testdb schema)",
   () => {
@@ -284,6 +374,229 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(await logs()).toHaveLength(0);
       },
     );
+
+    describe("saved-event review handback", () => {
+      const reviewRequest = async (path: string, actor?: typeof MEMBER) =>
+        app.request(path, actor ? { headers: { cookie: await cookieFor(sessions, actor) } } : {}, {
+          ...env,
+          ADMIN_DB: fixture.db,
+          SESSION_STORE: sessions,
+        });
+      const productionStore = (): KitEventDetailStore => ({
+        ...kitEventDetailStore(env),
+        dbForFn: async () => fixture.db,
+        suggestionsFn: async () => [],
+      });
+      const resolveKit = (
+        key: string,
+        search: string,
+        session: KitRequestSession,
+        store: KitEventDetailStore = productionStore(),
+      ) =>
+        resolveKitEventDetail({
+          key,
+          search,
+          path: `/e/${key}`,
+          env,
+          session,
+          joinResult: null,
+          setHeaders: () => {},
+          store,
+        });
+
+      // The enclosing suite's hooks reset, seed and renew sessions before this
+      // runs, and restore mocks and reset after each case.
+      beforeEach(async () => {
+        const [event] = await fixture.db.select().from(events);
+        await fixture.db.insert(users).values(
+          Array.from({ length: SYNTHETIC }, (_, i) => ({
+            id: reviewSynthId(i),
+            username: `pager-${i}`,
+          })),
+        );
+        await fixture.db.insert(rsvps).values(
+          Array.from({ length: SYNTHETIC }, (_, i) => ({
+            eventId: event!.id,
+            userId: reviewSynthId(i),
+            status: "going",
+            createdAt: new Date(Date.UTC(2026, 0, 2, 0, i)),
+          })),
+        );
+        await fixture.db.insert(events).values({
+          eventKey: UNREADABLE_KEY,
+          title: 'Imported <script>alert("t")</script>',
+          status: "draft",
+          startsAt: new Date("2099-11-06T20:00:00Z"),
+          endsAt: new Date("2099-11-06T22:00:00Z"),
+        });
+        // The import defect under review: a stored bound no JS Date represents.
+        await fixture.db.execute(
+          sql`update events set starts_at = 'infinity' where event_key = ${UNREADABLE_KEY}`,
+        );
+      });
+
+      it("reads the unreadable window only through the moderator review read", async () => {
+        expect(await getPublicEvent(fixture.db, UNREADABLE_KEY)).toBeNull();
+        const review = await getEventForModeratorReview(fixture.db, UNREADABLE_KEY);
+        expect(review).toMatchObject({
+          eventKey: UNREADABLE_KEY,
+          status: "draft",
+          goingCount: 0,
+          goingOccupancy: 0,
+        });
+        expect(Number.isNaN(review!.startsAt.getTime())).toBe(true);
+        // A readable row is the same projection, going counts included.
+        const readable = await getPublicEvent(fixture.db, EVENT_KEY);
+        expect(readable!.goingCount).toBe(SYNTHETIC + 1);
+        expect(await getEventForModeratorReview(fixture.db, EVENT_KEY)).toEqual(readable);
+        expect(await getEventForModeratorReview(fixture.db, ABSENT_KEY)).toBeNull();
+      });
+
+      it("serves the unreadable saved draft to Hono moderator review only", async () => {
+        const path = `/e/${UNREADABLE_KEY}`;
+        const response = await reviewRequest(`${path}?review=1`, MODERATOR);
+        expect(response.status).toBe(200);
+        expect(response.headers.get("cache-control")).toBe("private, no-store");
+        expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+        const html = await response.text();
+        expect(html).toContain('name="robots" content="noindex, nofollow"');
+        expect(html).toContain("Fix these before publishing");
+        expect(html).toContain("Time unavailable");
+        expect(html).toContain(`href="/admin/events/${UNREADABLE_KEY}#f-location"`);
+        expect(html).toContain(`href="/admin/events/${UNREADABLE_KEY}#f-starts-at"`);
+        expect(html).toContain("Imported &lt;script&gt;");
+        expect(html).not.toContain('<script>alert("t")');
+        expect(html).toContain('aria-describedby="preview-rsvp-hint"');
+        expect(html).not.toContain("data-rsvp-form");
+        expect(html).not.toContain('src="/islands/rsvp-button.js"');
+
+        for (const actor of [undefined, MEMBER]) {
+          const refused = await reviewRequest(`${path}?review=1`, actor);
+          expect(refused.status).toBe(403);
+          expect(await refused.text()).not.toContain("Imported");
+        }
+        for (const actor of [undefined, MEMBER, MODERATOR]) {
+          expect((await reviewRequest(path, actor)).status).toBe(404);
+        }
+        expect((await reviewRequest(`${path}.md`)).status).toBe(404);
+        expect((await reviewRequest(`/e/${ABSENT_KEY}?review=1`, MODERATOR)).status).toBe(404);
+      });
+
+      it.each([1, 2, 3] as const)(
+        "keeps Hono review paging in review with archive state on page %i",
+        async (page) => {
+          const attendees = page > 1 ? `attendees=${page}&` : "";
+          const response = await reviewRequest(
+            `/e/${EVENT_KEY}?review=1&${attendees}${ARCHIVE_SEARCH}&${NOISE}`,
+            MODERATOR,
+          );
+          expect(response.status).toBe(200);
+          const html = await response.text();
+          expect(html).toContain('data-testid="event-review"');
+          const links = rosterLinks(html);
+          const want = REVIEW_LINKS[page];
+          expect(parts(links.refresh)).toEqual(want.refresh);
+          expect(parts(links.prev)).toEqual(want.prev);
+          expect(parts(links.next)).toEqual(want.next);
+          expect(Object.values(links).join(" ")).not.toMatch(/junk|evil|returnTo/);
+          expect(html).not.toContain("data-rsvp-form");
+          expect(html).not.toMatch(/action="[^"]*\/rsvp/);
+
+          // Ordinary paging is byte-identical and never gains the marker.
+          for (const prefix of ["", "review=true&"]) {
+            const ordinary = await reviewRequest(
+              `/e/${EVENT_KEY}?${prefix}${attendees}${ARCHIVE_SEARCH}&${NOISE}`,
+              MODERATOR,
+            );
+            expect(ordinary.status).toBe(200);
+            const ordinaryHtml = await ordinary.text();
+            expect(ordinaryHtml).not.toContain('data-testid="event-review"');
+            expect(rosterLinks(ordinaryHtml)).toEqual(ORDINARY_LINKS(page));
+          }
+        },
+      );
+
+      it("refuses guest and member review paging without leaking attendees", async () => {
+        for (const actor of [undefined, MEMBER]) {
+          const response = await reviewRequest(
+            `/e/${EVENT_KEY}?review=1&attendees=2&${ARCHIVE_SEARCH}`,
+            actor,
+          );
+          expect(response.status).toBe(403);
+          const html = await response.text();
+          expect(html).not.toContain("pager-");
+          expect(html).not.toContain('data-testid="event-attendees"');
+          expect(html).not.toContain('data-testid="event-review"');
+        }
+      });
+
+      it("selects the real Kit review read only for an admitted moderator", async () => {
+        const ok = await resolveKit(UNREADABLE_KEY, "?review=1", kitSession(MODERATOR));
+        expect(ok.kind).toBe("ok");
+        if (ok.kind !== "ok") throw new Error(ok.kind);
+        expect(ok.headers["cache-control"]).toBe("private, no-store");
+        expect(ok.headers["x-robots-tag"]).toBe("noindex, nofollow");
+        expect(ok.model.whenText).toBe("Time unavailable");
+        expect(ok.model.review?.banner).toContain("Fix these before publishing");
+        expect(ok.model.review?.banner).toContain(
+          `href="/admin/events/${UNREADABLE_KEY}#f-starts-at"`,
+        );
+        expect(ok.model.detailHtml.rsvp).toContain("RSVP is disabled in preview.");
+        expect(ok.model.detailHtml.rsvp).not.toContain("<form");
+
+        // The production ordinary read still refuses the same row.
+        for (const [search, session] of [
+          ["", kitSession(MODERATOR)],
+          ["?review=0", kitSession(MODERATOR)],
+        ] as const) {
+          expect(await resolveKit(UNREADABLE_KEY, search, session)).toMatchObject({
+            kind: "missing",
+            status: 404,
+          });
+        }
+        for (const [session, kind] of [
+          [{ status: "guest", session: null }, "forbidden"],
+          [kitSession(MEMBER), "forbidden"],
+          [{ status: "unknown", session: null }, "unavailable"],
+        ] as const) {
+          expect((await resolveKit(UNREADABLE_KEY, "?review=1", session)).kind).toBe(kind);
+        }
+        expect(await resolveKit(ABSENT_KEY, "?review=1", kitSession(MODERATOR))).toMatchObject({
+          kind: "missing",
+          status: 404,
+        });
+      });
+
+      it.each([1, 2, 3] as const)(
+        "keeps Kit review paging in review with archive state on page %i",
+        async (page) => {
+          const attendees = page > 1 ? `attendees=${page}&` : "";
+          const outcome = await resolveKit(
+            EVENT_KEY,
+            `?review=1&${attendees}${ARCHIVE_SEARCH}&${NOISE}`,
+            kitSession(MODERATOR),
+          );
+          if (outcome.kind !== "ok") throw new Error(outcome.kind);
+          const { model } = outcome;
+          const want = REVIEW_LINKS[page];
+          expect(parts(model.attendeesRefreshHref)).toEqual(want.refresh);
+          expect(parts(model.attendeesPaging.prevHref)).toEqual(want.prev);
+          expect(parts(model.attendeesPaging.nextHref)).toEqual(want.next);
+          const rendered = rosterLinks(model.detailHtml.roster);
+          expect(rendered.refresh).toBe(model.attendeesRefreshHref);
+          expect(rendered.prev ?? null).toBe(model.attendeesPaging.prevHref);
+          expect(rendered.next ?? null).toBe(model.attendeesPaging.nextHref);
+
+          const ordinary = await resolveKit(
+            EVENT_KEY,
+            `?${attendees}${ARCHIVE_SEARCH}&${NOISE}`,
+            kitSession(MODERATOR),
+          );
+          if (ordinary.kind !== "ok") throw new Error(ordinary.kind);
+          expect(rosterLinks(ordinary.model.detailHtml.roster)).toEqual(ORDINARY_LINKS(page));
+        },
+      );
+    });
   },
 );
 

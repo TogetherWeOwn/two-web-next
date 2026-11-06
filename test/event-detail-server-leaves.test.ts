@@ -159,10 +159,44 @@ describe("shared event detail server leaves", () => {
     expect(paused.model.detailHtml.rsvp).toContain("rsvp-paused");
     expect(paused.model.detailHtml.rsvp).not.toContain('type="submit"');
     const ended = await resolve({ endsAt: now });
-    vi.setSystemTime(new Date(0));
+    expect(ended.model.rsvpClosed).toBe("past");
     expect(ended.model.detailHtml.rsvp).toContain("rsvp-closed");
     expect(ended.model.detailHtml.rsvp).not.toContain("<form");
     expect(ended.model.detailHtml.metadata).not.toContain('data-testid="event-spots-left"');
+    const open = await resolve();
+    expect(open.model.rsvpClosed).toBeNull();
+    expect(open.model.detailHtml.rsvp).toContain("data-rsvp-form");
+    expect(open.model.detailHtml.rsvp).not.toContain("rsvp-closed");
+    expect(open.model.detailHtml.metadata).toContain('data-testid="event-spots-left"');
+
+    // Re-render the actual leaves after the viewer clock moves: the captured
+    // server verdict governs, so neither leaf flips with the clock.
+    vi.setSystemTime(new Date(0));
+    expect(Date.now()).toBeLessThan(Date.parse(ended.model.endsAt));
+    const endedAgain = withEventDetailHtml(ended.model).detailHtml;
+    expect(endedAgain).toEqual(ended.model.detailHtml);
+    expect(endedAgain.rsvp).toContain("rsvp-closed");
+    expect(endedAgain.rsvp).not.toContain("<form");
+    expect(endedAgain.metadata).not.toContain('data-testid="event-spots-left"');
+    vi.setSystemTime(new Date("2099-01-01T00:00:00Z"));
+    expect(Date.now()).toBeGreaterThan(Date.parse(open.model.endsAt));
+    const openAgain = withEventDetailHtml(open.model).detailHtml;
+    expect(openAgain).toEqual(open.model.detailHtml);
+    expect(openAgain.rsvp).toContain("data-rsvp-form");
+    expect(openAgain.rsvp).not.toContain("rsvp-closed");
+    expect(openAgain.metadata).toContain('data-testid="event-spots-left"');
+
+    // Negative controls: the leaf does read the supplied verdict, so swapping
+    // it (with the clock unchanged) flips both leaves.
+    const forcedClosed = withEventDetailHtml({ ...open.model, rsvpClosed: "past" }).detailHtml;
+    expect(forcedClosed.rsvp).toContain("rsvp-closed");
+    expect(forcedClosed.rsvp).not.toContain("<form");
+    expect(forcedClosed.metadata).not.toContain('data-testid="event-spots-left"');
+    vi.setSystemTime(new Date(0));
+    const forcedOpen = withEventDetailHtml({ ...ended.model, rsvpClosed: null }).detailHtml;
+    expect(forcedOpen.rsvp).toContain("data-rsvp-form");
+    expect(forcedOpen.rsvp).not.toContain("rsvp-closed");
+    expect(forcedOpen.metadata).toContain('data-testid="event-spots-left"');
   });
 
   it("keeps review form-free and the cancelled hidden-row difference explicit", async () => {

@@ -24,6 +24,7 @@ type AccessibilityNotesFixture = { accessibilityNotes?: string | null };
 function fixture(
   over: Partial<typeof events.$inferSelect> & AccessibilityNotesFixture = {},
   queryError?: Error,
+  missing = false,
 ) {
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect & AccessibilityNotesFixture = {
@@ -77,6 +78,7 @@ function fixture(
     if (sql.includes('from "rsvps"'))
       return sql.includes("count(*)") ? { rows: [[row.id, 3]] } : { rows: [] };
     if (sql.includes('"event_key" =')) {
+      if (missing) return { rows: [] };
       return {
         rows: [
           columns.map((key) =>
@@ -236,8 +238,72 @@ describe("Event page parity (fixture-only)", () => {
         html.indexOf('class="event-discovery"'),
       );
       if (status !== "draft") expect(html).not.toContain("Fix these before publishing");
+      if (status === "cancelled") {
+        // Status guidance stays; the false listing claim is gone.
+        expect(html).toContain("This event is cancelled.");
+        expect(html).not.toContain("see it in listings");
+        expect(html).not.toContain("Members don&#39;t see it");
+      }
     },
   );
+
+  it("authorizes review before any event read and keeps absent rows 404", async () => {
+    const source = fixture({ status: "draft", startsAt: new Date(NaN), endsAt: new Date(NaN) });
+    for (const cookie of [undefined, await source.cookie()]) {
+      source.queries.length = 0;
+      const refused = await source.request(cookie, `${PATH}?review=1`);
+      expect(refused.status).toBe(403);
+      expect(await refused.text()).not.toContain("Time unavailable");
+      expect(source.queries.some((sql) => sql.includes('"event_key" ='))).toBe(false);
+    }
+    const missing = fixture({ status: "draft" }, undefined, true);
+    const response = await missing.request(await missing.cookie(true), `${PATH}?review=1`);
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain('data-testid="event-review"');
+  });
+
+  it("serves an unreadable saved draft to moderator review through the real route", async () => {
+    const source = fixture({
+      status: "draft",
+      title: 'Raid <script>alert("t")</script>',
+      location: " ",
+      startsAt: new Date(NaN),
+      endsAt: new Date(NaN),
+    });
+    const moderator = await source.cookie(true);
+    const response = await source.request(moderator, `${PATH}?review=1`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    const html = await response.text();
+    expect(html).toContain('name="robots" content="noindex, nofollow"');
+    expect(html).toContain('data-testid="event-review"');
+    expect(html).toContain("Fix these before publishing");
+    expect(html).toContain("Time unavailable");
+    for (const anchor of ["#f-location", "#f-starts-at", "#f-ends-at"]) {
+      expect(html).toContain(`href="/admin/events/${KEY}${anchor}"`);
+    }
+    expect(html).toContain("The saved start time can&#39;t be read.");
+    expect(html).toContain("The saved end time can&#39;t be read.");
+    expect(html).toContain("Raid &lt;script&gt;");
+    expect(html).not.toContain('<script>alert("t")');
+    // Inert RSVP: the disabled placeholder, no form, no RSVP island.
+    expect(html).toContain('aria-describedby="preview-rsvp-hint"');
+    expect(html).not.toContain("data-rsvp-form");
+    expect(html).not.toMatch(/action="[^"]*\/rsvp/);
+    expect(html).not.toContain('src="/islands/rsvp-button.js"');
+    expect(html).not.toContain('"startDate"');
+    expect(html).not.toContain('"endDate"');
+
+    // Ordinary reads keep refusing the unreadable window, moderators included.
+    for (const cookie of [undefined, await source.cookie(), moderator]) {
+      expect((await source.request(cookie)).status).toBe(404);
+    }
+    expect((await source.request(moderator, `${PATH}?review=0`)).status).toBe(404);
+    const published = fixture({ startsAt: new Date(NaN), endsAt: new Date(NaN) });
+    expect((await published.request(undefined, `${PATH}.md`)).status).toBe(404);
+    expect((await published.request(await published.cookie(true))).status).toBe(404);
+  });
 
   it("renders corrections and member detail even with unreadable persisted dates", async () => {
     const source = fixture({
@@ -247,7 +313,8 @@ describe("Event page parity (fixture-only)", () => {
       endsAt: new Date(NaN),
     });
     const response = await source.request(await source.cookie(true), `${PATH}?review=1`);
-    expect(response.status).toBe(404);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Time unavailable");
     const e = { ...source.row, goingCount: 0, goingOccupancy: 0 };
     const html = String(
       jsx(EventPage, {
