@@ -27,10 +27,14 @@ that changed something.
   ([data-import.md](data-import.md)): rows the current app writes use
   `{status: {before, after}}`; imported legacy rows keep the spatie
   `{attributes, old}` shape. The runner accepts both. An event counts
-  once, at its first publish inside the window.
+  once, at its first publish ever, and only when that first publish falls
+  inside the window: the query also reads earlier publish rows, so an
+  event republished inside the window after an earlier publish is left out.
 - **Re-edit:** a moderator content edit of the same event at time `t` with
   `publish < t ≤ publish + 60 minutes` — the app's `updated event …`
-  rows, or a legacy `updated` row that changed a content field. Cancel
+  rows, or a legacy `updated` row, that changed a content field. The app
+  stamps `updatedAt` (and may bump `agentVersion`) on every save, so a
+  save that changed only those bookkeeping fields is not a re-edit. Cancel
   and RSVP pause/reopen rows are status changes, not content edits, and
   never count.
 - **Observation completeness:** an event published less than 60 minutes
@@ -92,19 +96,48 @@ code only, never driver details.
 
 | Label | Publish window (UTC) | Published | Re-edited ≤60 min | Share | Method |
 | --- | --- | ---: | ---: | ---: | --- |
-| Baseline (pre–Goal 4) | 2026-10-04T07:23:27.601Z – 2026-11-01T07:23:27.601Z | 0 | 0 | n/a (nothing published) | v1 |
-| Follow-up (4 weeks after first Goal 4 release) | not yet due | — | — | — | v1 |
+| Baseline (pre–Goal 4) | 2026-10-05T13:48:32.000Z – 2026-11-02T13:48:32.000Z | 0 | 0 | n/a (nothing published) | v1 |
+| Follow-up | 28 days from the last Goal 4 merge — not yet due | — | — | — | v1 |
 
-Baseline run 2026-11-01 (operator, read-only backup role, head
-`3aa37080`): `{"metric":"event-reedit-within-1h","methodVersion":1,
-"published":0,"reedited":0,"underObserved":0,"sharePercent":null}`.
+**Baseline window.** The baseline window ends at the first Goal 4 merge,
+2026-11-02T13:48:32Z (pull request #2027), so no Goal 4 change could have
+shaped the baseline. The runner reads a past window, so the measurement
+could be taken after that merge. Run 2026-11-06 by the operator, with the
+read-only backup role over verify-full TLS, after confirming
+`transaction_read_only = on`, at head `4d209c2c`:
+
+```sh
+node bin/event-reedit-baseline.mjs --target=production --end=2026-11-02T13:48:32Z --json
+```
+
+`{"metric":"event-reedit-within-1h","methodVersion":1,
+"windowStart":"2026-10-05T13:48:32.000Z","windowEnd":"2026-11-02T13:48:32.000Z",
+"observedUntil":"2026-11-02T14:48:32.000Z","published":0,"reedited":0,
+"underObserved":0,"sharePercent":null}`.
+
 Production `activity_log` holds **0 rows in total**, not just 0 event
-rows, so there is no share to record yet: either production has had no
-moderator event publishes, or the app does not write `activity_log` in
-production. The app code does write the table on moderator event
-transitions and edits (`src/admin/store-event-writes.ts`), which points
-at missing production writes rather than missing publishes — tracked as
-a follow-up card before Goal 4 relies on this metric.
+rows, so the pre–Goal 4 baseline is n/a (nothing published), not 0%. Any
+Goal 4 comparison has to start from data written after the merges.
+The app code does write the table on moderator event transitions and
+edits (`src/admin/store-event-writes.ts`), which points at missing
+production writes rather than missing publishes. A follow-up card tracks
+this before Goal 4 relies on the metric.
+
+**Follow-up window.** Measure the same way over the 28 days that start
+at the last Goal 4 merge: pass `--end=<last Goal 4 merge + 28 days>`
+once that instant has passed by at least 60 minutes, and record the
+merge it starts from.
+
+**Superseded run.** An earlier run on 2026-11-01 (head `3aa37080`) used
+the window 2026-10-04T07:23:27.601Z – 2026-11-01T07:23:27.601Z and
+returned the same empty result. Its window ended about 30 hours before
+the first Goal 4 merge, so the pinned run above replaces it.
+
+**Method v1 corrections.** Before any non-empty measurement, v1 was
+corrected to read earlier publish rows (republished events) and to ignore
+saves that changed only bookkeeping fields. Both recorded runs read an
+empty `activity_log`, so their results are the same under the corrected
+code, and the version stays at 1.
 
 Record a measurement by replacing the pending cells with the runner's
 `windowStart`/`windowEnd`, `published`, `reedited` and `sharePercent`

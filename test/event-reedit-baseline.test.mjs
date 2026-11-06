@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
   classifyActivityRow,
   computeReeditShare,
+  exceedsRowCap,
   failureLine,
+  MAX_ROWS,
   parseArgs,
   renderReport,
 } from "../bin/event-reedit-baseline.mjs";
@@ -77,6 +79,34 @@ describe("classifyActivityRow", () => {
         description: "updated",
         event: "updated",
         properties: { attributes: { status: "cancelled" }, old: { status: "published" } },
+        createdAt: at("2026-10-02T00:30:00Z"),
+      }),
+    ).toBe("other");
+  });
+
+  it("does not count a save that only stamped bookkeeping fields", () => {
+    // commitLockedUpdate always sets updatedAt and may bump agentVersion.
+    const noop = {
+      ...edit("k1", at("2026-10-02T00:20:00Z")),
+      properties: {
+        updatedAt: { before: "2026-10-02T00:00:00.000Z", after: "2026-10-02T00:20:00.000Z" },
+        agentVersion: { before: 3, after: 4 },
+      },
+    };
+    expect(classifyActivityRow(noop)).toBe("other");
+    expect(
+      classifyActivityRow({
+        ...noop,
+        properties: { ...noop.properties, startsAt: { before: "a", after: "b" } },
+      }),
+    ).toBe("edit");
+    expect(
+      classifyActivityRow({
+        subjectType: "App\\Models\\Event",
+        subjectId: "42",
+        description: "updated",
+        event: "updated",
+        properties: { attributes: { updated_at: "x" }, old: { updated_at: "w" } },
         createdAt: at("2026-10-02T00:30:00Z"),
       }),
     ).toBe("other");
@@ -176,5 +206,25 @@ describe("parseArgs", () => {
       windowDays: 28,
       json: true,
     });
+  });
+
+  it("refuses a malformed --end and holds the 1-366 --window-days bound", () => {
+    const base = ["--target=production"];
+    expect(() => parseArgs([...base, "--end=not-a-date"])).toThrow();
+    expect(() => parseArgs([...base, "--end="])).toThrow();
+    expect(parseArgs([...base, "--end=2026-11-02T13:48:32Z"]).end).toBe("2026-11-02T13:48:32Z");
+    expect(parseArgs([...base, "--window-days=1"]).windowDays).toBe(1);
+    expect(parseArgs([...base, "--window-days=366"]).windowDays).toBe(366);
+    expect(() => parseArgs([...base, "--window-days=367"])).toThrow();
+    expect(() => parseArgs([...base, "--window-days=1.5"])).toThrow();
+  });
+});
+
+describe("exceedsRowCap", () => {
+  it("accepts exactly MAX_ROWS and refuses one more", () => {
+    expect(MAX_ROWS).toBe(100_000);
+    expect(exceedsRowCap(0)).toBe(false);
+    expect(exceedsRowCap(MAX_ROWS)).toBe(false);
+    expect(exceedsRowCap(MAX_ROWS + 1)).toBe(true);
   });
 });

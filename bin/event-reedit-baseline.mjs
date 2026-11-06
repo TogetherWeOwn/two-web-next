@@ -43,9 +43,25 @@ Output: aggregate counts and the share only. Exit 0 = ok, 1 = run failure,
 // current app writes use {field: {before, after}}; imported legacy rows keep
 // the spatie {attributes, old} shape verbatim. A publish is a status
 // transition into "published" in either shape. A re-edit is a moderator
-// content edit: the app's "updated event ..." rows, or a legacy "updated"
-// row that changed something besides status/rsvp_open. Publish, cancel and
+// content edit: an app "updated event ..." row, or a legacy "updated" row,
+// that changed a field besides the bookkeeping ones below. The app stamps
+// updatedAt (and bumps agentVersion) on every save, so a save that changed
+// nothing else still writes a row; it is not a re-edit. Publish, cancel and
 // RSVP pause/reopen rows are never re-edits.
+const NON_CONTENT_KEYS = new Set([
+  "status",
+  "rsvpOpen",
+  "rsvp_open",
+  "updatedAt",
+  "updated_at",
+  "agentVersion",
+  "agent_version",
+]);
+const changesContent = (fields) =>
+  fields !== null &&
+  typeof fields === "object" &&
+  Object.keys(fields).some((k) => !NON_CONTENT_KEYS.has(k));
+
 export function classifyActivityRow(row) {
   const subjectType = typeof row?.subjectType === "string" ? row.subjectType : "";
   if (!/(^|\\)Event$/.test(subjectType)) return "other";
@@ -56,13 +72,8 @@ export function classifyActivityRow(row) {
   if (attributes && attributes.status === "published" && p.old?.status !== "published")
     return "publish";
   if (typeof row?.description === "string" && row.description.startsWith("updated event "))
-    return "edit";
-  if (row?.event === "updated" && attributes) {
-    const contentKeys = Object.keys(attributes).filter(
-      (k) => k !== "status" && k !== "updated_at" && k !== "rsvp_open",
-    );
-    if (contentKeys.length > 0) return "edit";
-  }
+    return changesContent(p) ? "edit" : "other";
+  if (row?.event === "updated" && changesContent(attributes)) return "edit";
   return "other";
 }
 
@@ -126,6 +137,26 @@ export function computeReeditShare(rows, { windowStart, windowEnd, observedUntil
     sharePercent: published === 0 ? null : Math.round((reedited / published) * 1000) / 10,
   };
 }
+
+// One bounded SELECT. Rows inside [windowStart, fetchEnd) feed both sides;
+// publish transitions before the window come along too, so an event first
+// published earlier and republished inside the window is not mistaken for a
+// first publish. Edits before the window are never needed.
+export function fetchActivityRows(sql, { windowStart, fetchEnd }) {
+  return sql`
+    select subject_type as "subjectType", subject_id as "subjectId",
+           description, event, properties, created_at as "createdAt"
+    from activity_log
+    where subject_type like '%Event'
+      and created_at < ${fetchEnd}
+      and (created_at >= ${windowStart}
+           or properties->'status'->>'after' = 'published'
+           or properties->'attributes'->>'status' = 'published')
+    order by created_at asc, id asc
+    limit ${MAX_ROWS + 1}`;
+}
+
+export const exceedsRowCap = (rowCount) => rowCount > MAX_ROWS;
 
 export function parseArgs(args) {
   const out = { target: null, end: null, windowDays: DEFAULT_WINDOW_DAYS, json: false };
@@ -215,15 +246,8 @@ async function main() {
         search_path: "public",
       },
     });
-    const rows = await sql`
-      select subject_type as "subjectType", subject_id as "subjectId",
-             description, event, properties, created_at as "createdAt"
-      from activity_log
-      where subject_type like '%Event'
-        and created_at >= ${windowStart} and created_at < ${fetchEnd}
-      order by created_at asc, id asc
-      limit ${MAX_ROWS + 1}`;
-    if (rows.length > MAX_ROWS) {
+    const rows = await fetchActivityRows(sql, { windowStart, fetchEnd });
+    if (exceedsRowCap(rows.length)) {
       process.stderr.write("REEDIT_BASELINE_TOO_MANY_ROWS\n");
       code = 1;
     } else {
