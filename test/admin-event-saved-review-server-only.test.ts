@@ -54,6 +54,11 @@ describe("saved-event review server-only presentation", () => {
       "Preview — as members will see it",
       "Saved record last updated",
       "Fix these before publishing",
+      "Show in my device timezone",
+      "Compare in another timezone",
+      "Attendees shown at page load.",
+      "No one is listed as going yet.",
+      "You're going",
     ]) {
       expect(js.code.includes(prose), `client must not carry: ${prose}`).toBe(false);
     }

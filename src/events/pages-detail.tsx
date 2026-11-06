@@ -2,7 +2,8 @@
 import type { FC } from "hono/jsx";
 import { isPublicJoinUrl } from "./public-join-url";
 import { canonicalUrl } from "../seo";
-import { EVENT_ONGOING_TESTID, isValidZone, renderGoingCount } from "../islands/contracts";
+import { EVENT_ONGOING_TESTID, isValidZone } from "../islands/contracts";
+import { EventMetadata, EventRoster } from "./detail-leaves";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
@@ -171,139 +172,27 @@ export const EventPage: FC<{
         <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
       </section>
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
-      <dl class="event-meta" aria-label="Event details">
-        <div>
-          <dt>Starts</dt>
-          <dd>
-            <time datetime={instantIso(e.startsAt) || undefined}>
-              {fmtWithOffset(e.startsAt, e.timezone)} (
-              {isValidZone(e.timezone) ? e.timezone : "UTC"})
-            </time>
-          </dd>
-          <dd class="event-device-timezone" data-event-device-timezone>
-            <button type="button" hidden data-testid="event-device-timezone-starts-button">
-              Show in my device timezone
-            </button>
-            <p
-              role="status"
-              aria-live="polite"
-              data-testid="event-device-timezone-starts-status"
-            ></p>
-          </dd>
-        </div>
-        <div>
-          <dt>Ends</dt>
-          <dd>
-            <time datetime={instantIso(e.endsAt) || undefined}>
-              {fmtWithOffset(e.endsAt, e.timezone)} ({isValidZone(e.timezone) ? e.timezone : "UTC"})
-            </time>
-          </dd>
-          <dd class="event-device-timezone" data-event-device-timezone>
-            <button type="button" hidden data-testid="event-device-timezone-ends-button">
-              Show in my device timezone
-            </button>
-            <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
-          </dd>
-        </div>
-        {e.status === "draft" || e.status === "cancelled" ? null : (
-          <div hidden>
-            <dt>Time from now</dt>
-            <dd
-              class="event-device-timezone"
-              data-event-time-from-now
-              data-starts-at={instantIso(e.startsAt) || undefined}
-              data-ends-at={instantIso(e.endsAt) || undefined}
-            >
-              <button type="button" hidden data-testid="event-time-from-now-button">
-                Show time from now
-              </button>
-              <p role="status" aria-live="polite" data-testid="event-time-from-now-status"></p>
-            </dd>
-          </div>
-        )}
-        {duration ? (
-          <div>
-            <dt>Duration</dt>
-            <dd>{duration}</dd>
-          </div>
-        ) : null}
-        <div>
-          <dt>Where</dt>
-          <dd>
-            {e.location ? (
-              <>
-                <p data-testid="event-venue">{e.location}</p>
-                <p>
-                  <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
-                    Get directions
-                  </a>
-                </p>
-              </>
-            ) : (
-              <p data-testid="event-venue-tbd">
-                Venue TBD — check <a href="/discord">Discord</a> for updates.
-              </p>
-            )}
-          </dd>
-        </div>
-        {e.organizer_name ? (
-          <div>
-            <dt>Hosted by</dt>
-            <dd>
-              <p data-testid="event-organizer">{e.organizer_name}</p>
-            </dd>
-          </div>
-        ) : null}
-        {series && series.hosts.length > 0 ? (
-          <div>
-            <dt>Series hosts</dt>
-            <dd>
-              <p data-testid="event-series-hosts">{series.hosts.join(", ")}</p>
-            </dd>
-          </div>
-        ) : null}
-        <div>
-          <dt>The lineup</dt>
-          <dd>
-            <p
-              dangerouslySetInnerHTML={{
-                __html: renderGoingCount(e.eventKey, {
-                  going: e.goingCount,
-                  occupancy: e.goingOccupancy,
-                  capacity: e.capacity,
-                  // Reconciliation can lag: published rows stop inviting at
-                  // their end, using the same server instant as RSVP below.
-                  // Draft previews retain the line. The binder patches existing
-                  // spots nodes only, so refresh cannot recreate it after close.
-                  showSpotsLeft:
-                    e.status === "draft" || (e.status === "published" && e.endsAt > now),
-                  announcement: null,
-                }),
-              }}
-            />
-          </dd>
-        </div>
-        <div hidden>
-          <dt>Compare in another timezone</dt>
-          <dd class="event-device-timezone" data-event-chosen-timezone>
-            <label for="chosen-timezone-input">Timezone (IANA identifier)</label>
-            <input
-              type="text"
-              id="chosen-timezone-input"
-              data-testid="event-chosen-timezone-input"
-              maxlength={64}
-              hidden
-              autocomplete="off"
-              spellcheck={false}
-            />
-            <p data-testid="event-chosen-timezone-examples">e.g. Europe/London, Asia/Tokyo</p>
-            <button type="button" hidden data-testid="event-chosen-timezone-button">
-              Compare times
-            </button>
-            <p role="status" aria-live="polite" data-testid="event-chosen-timezone-status"></p>
-          </dd>
-        </div>
-      </dl>
+      <EventMetadata
+        model={{
+          eventKey: e.eventKey,
+          status: e.status,
+          whenText: fmtWithOffset(e.startsAt, e.timezone),
+          endsWhenText: fmtWithOffset(e.endsAt, e.timezone),
+          timeDatetime: instantIso(e.startsAt),
+          endsAt: instantIso(e.endsAt),
+          zoneLabel: isValidZone(e.timezone) ? e.timezone : "UTC",
+          durationText: duration,
+          location: e.location,
+          directionsUrl: e.location ? directionsUrl(e.location) : null,
+          organizerName: e.organizer_name ?? null,
+          series,
+          goingCount: e.goingCount,
+          goingOccupancy: e.goingOccupancy,
+          capacity: e.capacity,
+        }}
+        showTimeFromNow={e.status !== "draft" && e.status !== "cancelled"}
+        showSpotsLeft={e.status === "draft" || (e.status === "published" && e.endsAt > now)}
+      />
       <div class="event-rsvp">
         {review ? (
           <EventReviewSection review={review} part="rsvp" />
@@ -433,94 +322,17 @@ export const EventPage: FC<{
           ) : null}
         </section>
       </div>
-      {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
-        <section
-          aria-labelledby="event-attendees-heading"
-          data-testid="event-attendees"
-          data-island="attendees-live"
-        >
-          {attendeesPaging.prevHref || attendeesPaging.nextHref ? (
-            <h2 id="event-attendees-heading">Who's going</h2>
-          ) : (
-            <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
-          )}
-          {attendees.length > 0 ? (
-            <ul class="event-attendee-grid">
-              {attendees.map((attendee) => (
-                <li>
-                  <span class="event-attendee-mark" aria-hidden="true">
-                    {Array.from(attendee.name)[0]}
-                  </span>
-                  <a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>There are no more attendees on this page.</p>
-          )}
-          {attendeesPaging.prevHref || attendeesPaging.nextHref ? (
-            <nav class="event-attendees-pagination" aria-label="Attendee pages">
-              {attendeesPaging.prevHref ? (
-                <a href={attendeesPaging.prevHref} rel="prev" data-testid="event-attendees-prev">
-                  ← Previous attendees
-                </a>
-              ) : null}{" "}
-              <span data-testid="event-attendees-current-page" aria-current="page">
-                Page {attendeesPaging.page}
-              </span>{" "}
-              {attendeesPaging.nextHref ? (
-                <a href={attendeesPaging.nextHref} rel="next" data-testid="event-attendees-next">
-                  Next attendees →
-                </a>
-              ) : null}
-            </nav>
-          ) : null}
-          <p>
-            Attendees shown at page load.{" "}
-            <a
-              href={archiveEventHref(e.eventKey, archive, attendeesPaging.page)}
-              data-testid="event-attendees-refresh"
-            >
-              Refresh attendees
-            </a>
-            .
-          </p>
-        </section>
-      ) : (
-        // One accessible shell for guest, non-member and empty member states.
-        // Later attendee pages retain the populated/stale-page branch above.
-        <section
-          aria-labelledby="event-roster-heading"
-          data-testid={
-            member
-              ? "event-roster-empty"
-              : session
-                ? "event-roster-members-only"
-                : "event-roster-guest-nudge"
-          }
-        >
-          <h2 id="event-roster-heading">Who's going{member ? " (0)" : ""}</h2>
-          <p>
-            {member ? (
-              "No one is listed as going yet."
-            ) : session ? (
-              <>
-                Members only —{" "}
-                <a href={`/join?next=${encodeURIComponent(returnTo ?? path)}`}>join the Discord</a>{" "}
-                to see who's in.
-              </>
-            ) : (
-              <>
-                {e.goingCount > 0 ? `${e.goingCount} going —` : "No one is listed as going yet."}{" "}
-                <a href={`/join/discord?next=${encodeURIComponent(returnTo ?? path)}`}>
-                  sign in to see who's in
-                </a>
-                .
-              </>
-            )}
-          </p>
-        </section>
-      )}
+      <EventRoster
+        model={{
+          attendees,
+          attendeesPaging,
+          viewerMember: member,
+          showJoinPitch: !session,
+          joinReturnTo: returnTo ?? path,
+          attendeesRefreshHref: archiveEventHref(e.eventKey, archive, attendeesPaging.page),
+          goingCount: e.goingCount,
+        }}
+      />
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/event-share.js" defer />
       <script src="/islands/going-count.js" defer />

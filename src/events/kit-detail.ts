@@ -38,6 +38,7 @@ import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
+import { withEventDetailHtml, type EventDetailHtml } from "./detail-leaves";
 import {
   formatDetailWhen,
   formatElapsedDuration,
@@ -134,6 +135,8 @@ export interface KitEventDetailSeries {
 }
 
 export interface KitEventDetailModel {
+  /** Escaped server-only member presentation; created after disclosure declaration. */
+  detailHtml: EventDetailHtml;
   /** Moderator-only escaped leaves; the member rendering is shared unchanged. */
   review?: { banner: string; actions: string; rsvp: string };
   eventKey: string;
@@ -556,7 +559,7 @@ export async function resolveKitEventDetail(
         kind: "ok",
         status: 200,
         headers,
-        model: {
+        model: withEventDetailHtml({
           ...(review
             ? {
                 review: {
@@ -643,7 +646,7 @@ export async function resolveKitEventDetail(
           endsAt: instantIso(event.endsAt),
           jsonLd: eventJsonLd(event, appUrl),
           siteJsonLd: siteJsonLd(appUrl),
-        },
+        }),
       };
     }
   }

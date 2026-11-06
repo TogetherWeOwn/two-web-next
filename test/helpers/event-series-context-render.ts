@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { withEventDetailHtml, type DetailLeavesModel } from "../../src/events/detail-leaves";
 
 const webRequire = createRequire(new URL("../../web/package.json", import.meta.url));
 const { compile } = webRequire("svelte/compiler") as {
@@ -68,5 +69,6 @@ export function renderDetail(model) {
       rmSync(scratch, { recursive: true, force: true });
     }
   }
-  return cachedRender!(model);
+  // Series overrides change the metadata leaf, so rebuild it as the resolver does.
+  return cachedRender!(withEventDetailHtml(model as unknown as DetailLeavesModel));
 }

@@ -51,3 +51,16 @@ failed lint on one import's formatting before types/tests. Browser setup omitted
 Tailwind's required dependency callback: all 64 cases cancelled, no new captures.
 The import and callback are corrected; verification remains pending. Scope,
 docs-links, bundle-budget and Lighthouse passed; no overall green is claimed.
+
+## Shared detail leaves — unexecuted preparation
+
+The candidate reuses escaped Hono metadata, RSVP and roster presentation on Kit,
+without changing member reads, native actions, focus targets, islands or styles.
+The existing cancelled-review hidden time row remains Kit-only. One server clock
+still decides RSVP and lineup availability. Direct fixture overrides rebuild the
+same production HTML projection; the capture harness uses the real resolver.
+
+No new captures, tests, build or byte measurements have run for this preparation.
+Earlier screenshots and Actions results do not verify this broader candidate.
+Independent real-route desktop/mobile UX, Security and QA acceptance, all four
+unchanged Kit JS budgets and exact-final-head checks remain required.

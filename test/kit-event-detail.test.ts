@@ -39,6 +39,7 @@ import {
   resolveKitEventDetail,
   type KitEventDetailStore,
 } from "../src/events/kit-detail";
+import { withEventDetailHtml } from "../src/events/detail-leaves";
 import { ROUTE_MANIFEST, resolveRouteOwner } from "../src/route-ownership";
 
 const APP_URL = "https://next.example.test";
@@ -1255,7 +1256,7 @@ describe("Kit detail presentation", () => {
     if (outcome.kind !== "ok") throw new Error("unreachable");
     expect(outcome.model.attendeesPaging.page).toBe(page);
     const { renderDetail } = await buildKitEventDetailBundle();
-    const html = renderDetail({ ...outcome.model, eventKey: key });
+    const html = renderDetail(withEventDetailHtml({ ...outcome.model, eventKey: key }));
     expect(html.match(/<form[^>]*action="([^"]*)"[^>]*data-rsvp-form/)?.[1]).toBe(action);
   });
 
