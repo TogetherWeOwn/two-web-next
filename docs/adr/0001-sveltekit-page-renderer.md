@@ -32,7 +32,13 @@ it and chose SvelteKit directly.
    JSON, feeds, the public API and OpenAPI, MCP, agent ingress, health,
    version, the CSP sink, SEO files, legacy redirects and static assets. The
    method-aware ownership, same-origin, session, CSRF, body-limit and throttle
-   rules stay as they are.
+   rules stay as they are. A retained write handler that answers a rejected
+   native form with an HTML page (for example the 422 page of
+   `POST /admin/events`) still renders that page through Hono until its write
+   family migrates. The Kit page for the same form mirrors that response: the
+   422 status, the entered values, the field errors and the no-JavaScript
+   path. A page family reaches M0 when its GET pages are Kit-served; the
+   rejected-POST page moves with its write family after M0.
 3. **M0** means that every page family below is served by Kit in production
    and that the production cut of the Kit Worker has finished its 48-hour
    production acceptance.
@@ -66,7 +72,10 @@ above. The decision does not rest on a completed comparison.
 - Hono stays a runtime dependency of the Kit Worker until the post-M0
   migration finishes. The catch-all `web/src/routes/[...path]/+server.ts`
   remains the fallback, and setting a manifest entry back to `enabled: false`
-  remains the per-route rollback.
+  remains the per-route rollback until that family's rollback end. That
+  rollback works only while the Hono handler exists, so the handler is kept
+  until then (see the ordering rules). After deletion, the rollback is a
+  whole-release rollback to a build that still contains the handler.
 - The Hono-only gates (`npm run a11y`, `npm run lighthouse`, the visual specs)
   do not qualify a Kit route that they did not exercise. Each slice brings its
   own Kit evidence, as described below.
@@ -86,7 +95,7 @@ reviewer, no-JS check or security check is weakened.
 | Hydration, actions or navigation weaken security | Strict-CSP tests run on the built output. CSRF, origin, session, cache, throttle and cross-origin POST protections are unchanged. There is no `unsafe-inline` or `unsafe-eval` relaxation. Dependency pins follow [security-pin contracts](../security-pin-contracts.md). |
 | A form or a navigation needs JavaScript | Native forms, POST/303 ownership and the signed-out, session-expired, error and rate-limit states all run with JavaScript disabled. |
 | Accessibility or visuals regress | The existing a11y and quality gates pass. Desktop (1280×800), mobile (390×844) and required-state screenshots are captured and opened. Design QA goes through the normal review stage. |
-| Workload measurements are missing | The skipped trial and the missing Hyperdrive timings stay labelled not run. Operational evidence comes from authorized slice and release verification. Tests and probes never touch staging or production databases. |
+| Workload measurements are missing | The skipped trial and the missing Hyperdrive timings stay labelled not run. Operational evidence comes from authorized slice and release verification. Tests and ad-hoc probes never touch staging or production databases. The release workflows' existing authorized smokes (for example `/up`) are part of release verification and are not covered by that restriction. |
 | Post-M0 app complexity | Each app feature proves its own strict CSP, client state, interaction latency and real route budget. |
 
 ## Retirement register

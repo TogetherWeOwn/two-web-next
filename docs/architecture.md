@@ -229,9 +229,9 @@ Read from: [web/package.json](../web/package.json),
   preview and staging only, not serving production traffic; page families
   move per the ADR's retirement register.
 - [spike/](../spike/) holds the Hyperdrive-semantics probe only. Status:
-  acceptance remains **not verified** per
-  [its findings](../spike/hyperdrive-semantics/findings.md); the live
-  staging attempt ended in a pre-SQL refusal.
+  the live Hyperdrive-to-Neon staging run on 2026-10-01 passed 3/3 after an
+  earlier pre-SQL refusal was fixed, per the "Live Hyperdrive → Neon staging
+  result" section of [its findings](../spike/hyperdrive-semantics/findings.md).
 - [e2e/](../e2e/) holds Playwright browser journeys. Offline-first:
   [fixtures](../e2e/fixtures.ts) block non-localhost traffic and the
   [stub worker](../e2e/worker.ts) fakes Discord OAuth; staging-guarded
