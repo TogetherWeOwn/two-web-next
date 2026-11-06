@@ -260,10 +260,8 @@ export const EventRoster: FC<{ model: DetailRosterModel }> = ({ model }) =>
         ) : (
           <>
             Members only —{" "}
-            <a href={`/join?next=${encodeURIComponent(model.joinReturnTo)}`}>
-              join the Discord
-            </a>{" "}
-            to see who's in.
+            <a href={`/join?next=${encodeURIComponent(model.joinReturnTo)}`}>join the Discord</a> to
+            see who's in.
           </>
         )}
       </p>

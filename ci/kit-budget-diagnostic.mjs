@@ -142,7 +142,8 @@ function runPair(pair, evidence) {
   summary.complete = true;
   saveSummary();
   return (
-    Object.values(summary.results).find((result) => result.checkerExitCode !== 0)?.checkerExitCode ?? 0
+    Object.values(summary.results).find((result) => result.checkerExitCode !== 0)
+      ?.checkerExitCode ?? 0
   );
 }
 
