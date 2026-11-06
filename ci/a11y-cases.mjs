@@ -177,12 +177,16 @@ export const coverage = {
       { path: `/e/${cancelled}`, identity: "member", status: 410, state: "cancelled-member" },
       { path: "/e/01J00000000000000000000020", identity: "member", state: "paused-member" },
       { path: `/e/${draft}`, identity: "moderator" },
+      { path: `/e/${draft}?review=1`, identity: "moderator", state: "review-corrections" },
+      { path: `/e/${event}?review=1`, identity: "moderator", state: "review-published" },
+      { path: `/e/${cancelled}?review=1`, identity: "moderator", state: "review-cancelled" },
       { path: "/e/invalid-key", status: 404 },
     ],
   },
   "/admin/events/:key": {
     cases: [
       { path: `/admin/events/${event}`, identity: "moderator" },
+      { path: `/admin/events/${draft}?saved=1`, identity: "moderator", state: "saved-draft" },
       { path: "/admin/events/missing", identity: "moderator", status: 404 },
     ],
   },

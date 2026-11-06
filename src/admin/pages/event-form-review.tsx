@@ -6,7 +6,7 @@ import type { SavedEventReview } from "../event-saved-review";
 export const SavedEventNotice: FC<{ eventKey: string }> = ({ eventKey }) => (
   <p class="notice" role="status" data-testid="event-saved-review">
     Saved.{" "}
-    <a href={`/e/${encodeURIComponent(eventKey)}?review=1`}>
+    <a class="link" href={`/e/${encodeURIComponent(eventKey)}?review=1`}>
       Review the saved event before publishing
     </a>
   </p>

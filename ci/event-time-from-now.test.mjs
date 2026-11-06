@@ -2,7 +2,7 @@
 // No opt-in/skip or simulated GREEN when Chromium is unavailable. The Builder
 // registers this in browser-capable CI, not the Chromium-free root unit job.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdirSync, readFileSync } from "node:fs";
 import { resolve, sep } from "node:path";
 import { after, before, describe, it } from "node:test";
 import { fileURLToPath } from "node:url";
@@ -56,6 +56,7 @@ async function open(t, twin, options = {}) {
     endsAt: new Date(spec.endsAt),
     timezone: spec.timezone,
     status: spec.status ?? "published",
+    ...(spec.row ?? {}),
   });
   const rendered = await renderScheduledPage(
     twin,
@@ -63,10 +64,11 @@ async function open(t, twin, options = {}) {
     spec.viewer ?? "member",
     kit,
     spec.serverTime ?? serverTime,
+    spec.review ? "?review=1" : "",
   );
   assert.equal(
     rendered.status,
-    spec.status === "cancelled" ? 410 : 200,
+    spec.status === "cancelled" && !spec.review ? 410 : 200,
     "U2_FIXTURE_ROUTE: reach the real route/model",
   );
   const scripts = [...rendered.html.matchAll(/<script\b[^>]*\bsrc="([^"]+)"[^>]*>\s*<\/script>/g)]
@@ -223,6 +225,37 @@ async function open(t, twin, options = {}) {
   }
   return { page, errors, requests, html: rendered.html };
 }
+
+describe("saved-event review screenshots", () => {
+  for (const twin of ["Hono", "Kit"]) {
+    for (const state of ["ready", "corrections", "published", "cancelled"]) {
+      it(`${twin} ${state} at desktop and mobile`, async (t) => {
+        const { page, errors } = await open(t, twin, {
+          review: true,
+          viewer: "moderator",
+          status: state === "published" || state === "cancelled" ? state : "draft",
+          row: state === "corrections" ? { location: " " } : {},
+        });
+        assert.equal(await page.getByTestId("event-review").count(), 1);
+        assert.equal(
+          await page.getByRole("button", { name: "RSVP", exact: true }).isDisabled(),
+          true,
+        );
+        assert.deepEqual(errors, []);
+        mkdirSync("artifacts/a11y/saved-review", { recursive: true });
+        for (const width of [1280, 390]) {
+          await page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
+          await page.evaluate(() => document.fonts.ready);
+          assert.ok(await page.locator("html").evaluate((node) => node.scrollWidth <= innerWidth));
+          await page.screenshot({
+            path: `artifacts/a11y/saved-review/${twin}-${state}-${width}.png`,
+            fullPage: true,
+          });
+        }
+      });
+    }
+  }
+});
 
 async function quiet(opened) {
   assert.deepEqual(opened.errors, [], "U2_SCRIPT_ERROR: enhancement must fail harmlessly");

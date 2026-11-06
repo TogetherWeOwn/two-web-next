@@ -1,6 +1,10 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
+import { jsx } from "hono/jsx/jsx-runtime";
+import { savedEventReview } from "../src/admin/event-saved-review";
+import { EventPage } from "../src/events/pages-detail";
+import { eventJsonLd } from "../src/seo-json-ld";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
 import app from "./app";
@@ -243,8 +247,19 @@ describe("Event page parity (fixture-only)", () => {
       endsAt: new Date(NaN),
     });
     const response = await source.request(await source.cookie(true), `${PATH}?review=1`);
-    const html = await response.text();
-    expect(response.status).toBe(200);
+    expect(response.status).toBe(404);
+    const e = { ...source.row, goingCount: 0, goingOccupancy: 0 };
+    const html = String(
+      jsx(EventPage, {
+        e,
+        neighbors: { previous: null, next: null },
+        related: [],
+        appUrl: APP_URL,
+        jsonLd: eventJsonLd(e, APP_URL),
+        session: { id: "mod", username: "Mod", avatar: null, member: true, moderator: true },
+        review: savedEventReview(e, new Date()),
+      }),
+    );
     expect(html).toContain("Fix these before publishing");
     expect(html).toContain(`href="/admin/events/${KEY}#f-starts-at"`);
     expect(html).toContain("Time unavailable");

@@ -23,3 +23,10 @@ only. They do not verify the current candidate, Kit parity or publish-from-view.
 New screenshots and exact-head GitHub Actions evidence are still pending.
 No current visual, accessibility, performance or CI pass is claimed here.
 The Hono gates do not exercise the Kit route; Kit needs its own screenshots.
+
+The existing Actions `a11y` job captures the Hono review/notice routes. Its
+`ci/event-time-from-now.test.mjs` fixture harness also captures both actual detail
+renderers at both widths, ready/corrections/published/cancelled, under
+`artifacts/a11y/saved-review/` in `a11y-evidence`. No baseline is accepted by these
+captures. Publish-from-review, stale mutation and publish failure belong to the
+second slice; this candidate is read-only. Artifact inspection is still pending.

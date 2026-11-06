@@ -63,7 +63,7 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
   it.each(["draft", "published", "cancelled"])(
     "shows save review only for a saved draft, not %s",
     async (status) => {
-      for (const saved of [undefined, "1"]) {
+      for (const saved of [undefined, "1", "<script>"]) {
         const result = await resolveKitEventEdit(
           "EVTPAST01",
           { saved },
@@ -71,6 +71,10 @@ describe("resolveKitEventEdit: Hono edit-read parity", () => {
         );
         if (result.kind !== "ok") throw new Error("expected ok");
         if (status === "draft" && saved === "1") {
+          expect(result.view.savedNoticeHtml).toContain('class="notice" role="status"');
+          expect(result.view.savedNoticeHtml).toContain(
+            'Saved. <a class="link" href="/e/EVTPAST01?review=1">',
+          );
           expect(result.view.savedNoticeHtml).toContain('href="/e/EVTPAST01?review=1"');
           expect(result.view.savedNoticeHtml).toContain("Review the saved event before publishing");
         } else expect(result.view.savedNoticeHtml).toBeNull();
