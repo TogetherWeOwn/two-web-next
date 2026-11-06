@@ -168,17 +168,13 @@ app.use("*", (c, next) =>
 app.use("*", trustHosts());
 
 // Before throttles, session rotation, body parsing, or any mounted handler.
-app.use("*", (c, next) =>
-  sameOrigin(c, async () => {
-    const refusal = captureRefusal(c.req.raw, c.env);
-    if (refusal) {
-      c.res = refusal;
-      return;
-    }
-    await next();
-    c.res = captureResponse(c.req.raw, c.env, c.res);
-  }),
-);
+app.use("*", sameOrigin);
+app.use("*", async (c, next) => {
+  const refusal = captureRefusal(c.req.raw, c.env);
+  if (refusal) return refusal;
+  await next();
+  c.res = captureResponse(c.req.raw, c.env, c.res);
+});
 app.use("*", authStatusScript);
 app.use("*", expiredWriteBanner);
 app.use("*", freezeBanner);
