@@ -61,6 +61,10 @@
 .profile-theme .profile-field.profile-switch input { display: inline-block; width: 1.5rem; height: 1.5rem; min-height: 0; margin: 0; padding: 0; flex-shrink: 0; accent-color: var(--brand); }
 .profile-theme .profile-hint { font-weight: 400; font-size: .9rem; margin: .5rem 0 0; }
 .profile-theme .profile-count { font-weight: 400; font-size: .9rem; margin: .25rem 0 0; }
+/* A field's hint and count render before its label: open space above the
+   group and close it below, so they read as part of the next field. */
+.profile-theme .profile-hint:has(+ .profile-count) { margin-top: 1.5rem; }
+.profile-theme .profile-count + .profile-field { margin-top: .5rem; }
 .profile-theme .actions { flex-wrap: wrap; }
 .profile-theme button { cursor: pointer; }
 .profile-theme .profile-secondary { background: transparent; color: var(--ink); border-color: var(--muted); }
