@@ -23,13 +23,17 @@ export function archiveEventHref(
   eventKey: string,
   archive: ArchiveContext | null | undefined,
   attendeePage = 1,
+  review = false,
 ): string {
-  const path = attendeePageHref(eventKey, attendeePage);
-  if (!archive) return path;
+  const path = attendeePageHref(encodeURIComponent(eventKey), attendeePage);
+  if (!archive && !review) return path;
   const [base, search] = path.split("?");
   const params = new URLSearchParams(search);
-  params.set("archivePage", String(archive.page));
-  if (archive.q) params.set("archiveQuery", archive.q);
+  if (archive) {
+    params.set("archivePage", String(archive.page));
+    if (archive.q) params.set("archiveQuery", archive.q);
+  }
+  if (review) params.set("review", "1");
   return `${base}?${params}`;
 }
 

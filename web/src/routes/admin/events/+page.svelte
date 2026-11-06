@@ -165,6 +165,7 @@ const now = new Date();
               {@render fillCell(r)}
               <td>
                 {#if r.status === "draft"}
+                  <a class="link" href={`/e/${encodeURIComponent(r.eventKey)}?review=1`} aria-label={`Review ${r.title}${sameTitleSuffix(r.title, rowIso(r), duplicates)}`} data-testid="review-event">Review</a>
                   <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
                     <button
                       type="submit"
