@@ -39,7 +39,9 @@ Hono route captures (save notice, corrections, cancelled; 360/1280) were also op
 The audit failed two published-review attendee-count assertions before axe ran on
 that state. Current-head rerun and independent UX/Security/QA acceptance remain.
 
-The same run's Node 22 suite finished with seven failures: four draft redirect
-expectations, two expired CRUD fixtures, and Markdown's invalid-date error pin.
-Corrections retain the assertions, freeze the CRUD clock, and scope invalid-date
-fallback to HTML. They are local and untested; the coverage job remains unresolved.
+The same run's Node 22 and coverage suites each finished with seven failures:
+four draft redirect expectations, two expired CRUD fixtures, and Markdown's
+invalid-date error pin (25,862 passed, 676 skipped in each suite). Corrections
+retain the assertions, freeze the CRUD clock, and scope invalid-date fallback to
+HTML. Corrected-head Actions remain pending. The failed check skipped later Kit
+build/contrast gates; its contrast upload failed because no captures were produced.
