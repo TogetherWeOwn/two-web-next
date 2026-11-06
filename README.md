@@ -8,8 +8,10 @@ repository: fixes only, no new features.
 
 Stack: [Hono](https://hono.dev) on Cloudflare Workers, TypeScript, Vitest,
 [Drizzle](https://orm.drizzle.team) + Postgres, server-rendered HTML with plain
-JavaScript islands. The [parity matrix](docs/parity.md) tracks the migration;
-migration plan: TOG-9671.
+JavaScript islands. The [parity matrix](docs/parity.md) tracks the migration.
+SvelteKit with Svelte 5 under [web/](web/) is the
+accepted single page renderer; Hono keeps the non-page APIs for now. See
+[ADR 0001](docs/adr/0001-sveltekit-page-renderer.md) and its retirement register.
 How it fits together: [docs/architecture.md](docs/architecture.md).
 Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](docs/db-migrations.md).
 Operations (deploy/rollback, `/up`, queues, outages and restore drills):
