@@ -131,11 +131,14 @@ passed. CodeQL and Devin completed successfully, with no new findings at this
 checkpoint. Hono audits still do not exercise Kit.
 [Full check](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188851020)
 and [Node 22 compatibility](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42304038201/job/128188850755)
-were still running at the 2026-11-06 22:54 UTC inspection. Their live logs
-already report 18 failures in `test/page-shells.test.ts`, all admin-shell
-variants. The new shared SVG/PNG/touch assertions exposed the separate admin
-shell's missing icon declarations. The correction adds those same three links
-to `src/admin/pages/shell.tsx`; no assertion or admin layout is changed.
+finished with failures at 22:57 and 22:58 UTC on 2026-11-06. Each suite
+reported 18 failed, 26042 passed and 676 skipped tests across 1 failed,
+1237 passed and 5 skipped files. All 18 failures were in
+`test/page-shells.test.ts`, on admin-shell variants; no additional failing
+test appeared in either completed log. The `ci-ok` aggregate failed too.
+The new shared SVG/PNG/touch assertions exposed the separate admin shell's
+missing icon declarations. The correction adds those same three links to
+`src/admin/pages/shell.tsx`; no assertion or admin layout is changed.
 The existing route inventory covers ordinary, operational and error admin
 shells. No local reproduction ran because this isolated worktree has no
 installed dependencies; the correction awaits its own Actions run.
@@ -175,7 +178,8 @@ screenshot-publication gap or establish a final-head full CI pass.
 The same head's [check](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178568/job/128172290283)
 and [Node 22 compatibility](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178568/job/128172290299)
 jobs failed typecheck on global URL versus Node URL types. The token test now
-imports `URL` from `node:url`; the next Actions run must verify it.
+imports `URL` from `node:url`; both `b738e122` jobs passed typecheck before
+the admin-shell unit failures recorded above.
 [Hono a11y](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178568/job/128172290320)
 and [Lighthouse](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42299178568/job/128172290325)
 passed on that head. Neither exercises Kit. Historical targeted Hono audits
