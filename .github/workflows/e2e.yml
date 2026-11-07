@@ -329,6 +329,16 @@ jobs:
             echo "$new"
             exit 1
           fi
+      - name: Saved review screenshots
+        if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'test/rsvp-pending-control-')) }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: saved-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/**/attachments/hono-review-*.png
+            test-results-kit-parity/**/attachments/kit-review-*.png
+          if-no-files-found: error
+          retention-days: 7
       - name: Brand header captures
         if: ${{ always() && !cancelled() }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

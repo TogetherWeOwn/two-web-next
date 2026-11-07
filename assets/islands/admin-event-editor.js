@@ -30,7 +30,7 @@
     if (status) status.textContent = message;
   }
   function unlock() {
-    if (lockTimer !== null) clearTimeout(lockTimer);
+    clearTimeout(lockTimer);
     lockTimer = null;
     locked = false;
     // The Save departure never happened, so its one-shot exemption lapses too.
@@ -63,6 +63,8 @@
   });
   // Same bar as safeNext (src/join/service.ts): a same-origin path or nothing.
   function samePath(raw) {
+    // A single leading slash with no backslash or whitespace is rooted on
+    // this origin; it cannot be a protocol-relative or scheme URL.
     if (
       typeof raw !== "string" ||
       /[\s\x00-\x1f\x7f\\]/.test(raw) ||
@@ -70,22 +72,15 @@
       raw[1] === "/"
     )
       return null;
-    try {
-      var origin = window.location.origin;
-      if (new URL(raw, origin).origin !== origin) return null;
-    } catch {
-      return null;
-    }
     return raw;
   }
   window.addEventListener("two:session-expired", function (event) {
     event.preventDefault();
-    var detail = (event && event.detail) || {};
+    var detail = event.detail || {};
     var recoveryUrl =
       samePath(detail.recoveryUrl) ||
       "/auth/recover?next=" + encodeURIComponent(window.location.pathname + window.location.search);
-    var old = document.querySelector('[data-testid="admin-session-expired"]');
-    if (old) old.remove();
+    document.querySelector('[data-testid="admin-session-expired"]')?.remove();
     var notice = document.createElement("div");
     notice.setAttribute("data-testid", "admin-session-expired");
     notice.setAttribute("role", "alert");
@@ -112,18 +107,19 @@
     editor.parentNode.insertBefore(notice, editor);
     notice.focus();
   });
+  var reviewLink = document.querySelector('[data-testid="review-event"]');
+  if (reviewLink) {
+    // Both renderers emit the canonical saved-review URL ending in ?review=1.
+    var reviewHref = reviewLink.href;
+    reviewLink.onclick = function () {
+      reviewLink.href = reviewHref + (draft || snapshot() !== initial ? "&unsaved=1" : "");
+    };
+  }
   window.addEventListener("beforeunload", function (event) {
-    // Only the Save departure is exempt, even if loading is then stopped.
-    if (saving) {
-      saving = false;
-      leavingForRecovery = false;
-      return;
-    }
-    // Only a normal, explicit recovery activation exempts that one trip.
-    // Modified and middle clicks keep the current-document guard; an
-    // interrupted recovery re-arms when its one-shot window lapses.
-    if (leavingForRecovery) {
-      leavingForRecovery = false;
+    // Only Save or a normal, explicit recovery activation exempts one trip.
+    // Modified/middle recovery clicks keep the current-document guard.
+    if (saving || leavingForRecovery) {
+      saving = leavingForRecovery = false;
       return;
     }
     if (!draft && snapshot() === initial) return;
