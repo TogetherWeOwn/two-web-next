@@ -729,7 +729,17 @@ jobs:
         run: node --test ci/check-auth-perf*.test.mjs
       - name: Worker local startup diagnostic selftests (offline fixtures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        env:
+          WORKER_STARTUP_SELFTEST_EVIDENCE_DIR: artifacts/worker-startup-selftest
         run: node --test ci/check-worker-startup.test.mjs ci/worker-startup-runner.test.mjs ci/worker-startup-ci-wiring.test.mjs
+      - name: Worker local startup selftest evidence
+        if: failure() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: worker-startup-selftest
+          path: artifacts/worker-startup-selftest
+          if-no-files-found: warn
+          retention-days: 14
       - name: Kit adapter build and local startup diagnostic (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         env:

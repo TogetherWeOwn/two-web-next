@@ -40,6 +40,24 @@ test("local startup measurement is hard-wired after selftests and before Kit run
   assert(diagnostic.if.includes("needs.scope.outputs.draft != 'true'"));
 });
 
+test("failed offline selftests retain evidence through a scoped pinned upload", () => {
+  const selftests = steps.find((s) =>
+    s.run?.startsWith("node --test ci/check-worker-startup.test.mjs"),
+  );
+  const retained = steps.find((s) => s.with?.name === "worker-startup-selftest");
+  assert.equal(
+    selftests.env.WORKER_STARTUP_SELFTEST_EVIDENCE_DIR,
+    "artifacts/worker-startup-selftest",
+  );
+  assert.equal(retained.if, `failure() && ${selftests.if}`);
+  assert.equal(retained.uses, "actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9");
+  assert.equal(retained.uses, artifact.uses);
+  assert.equal(retained.with.path, "artifacts/worker-startup-selftest");
+  assert.equal(retained.with["if-no-files-found"], "warn");
+  assert.equal(retained.with["retention-days"], 14);
+  assert.equal(steps.indexOf(retained), steps.indexOf(selftests) + 1);
+});
+
 test("all profiles and numeric evidence upload even on failure, not the serialized bindings", () => {
   assert(artifact);
   assert.equal(artifact.if, `always() && ${diagnostic.if}`);
