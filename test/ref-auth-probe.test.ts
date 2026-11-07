@@ -70,7 +70,9 @@ describe("isolated ref authorization probe", () => {
     expect(workflow).toContain("timeout-minutes: 5");
     expect(workflow).toContain("if: ${{ always() }}");
     expect(workflow.match(/uses: actions\/github-script@[0-9a-f]{40}/g)).toHaveLength(2);
-    expect(workflow).not.toMatch(/checkout@|secrets:|vars\.|environment:|workflow_call:|push:|schedule:/);
+    expect(workflow).not.toMatch(
+      /checkout@|secrets:|vars\.|environment:|workflow_call:|push:|schedule:/,
+    );
     expect(workflow).not.toContain("/releases");
   });
 
@@ -92,6 +94,32 @@ describe("isolated ref authorization probe", () => {
       expect.stringContaining('"run_head"'),
       "json",
     );
+  });
+
+  it("passes fresh 15-second AbortSignals to the pinned fetch-based transport", async () => {
+    const timeout = vi
+      .spyOn(AbortSignal, "timeout")
+      .mockImplementation(() => new AbortController().signal);
+    try {
+      const h = harness();
+      validProbe(h);
+      await h.run(0);
+      const clean = cleanup();
+      clean.request
+        .mockResolvedValueOnce(owned())
+        .mockResolvedValueOnce(response(null, 204))
+        .mockRejectedValueOnce(missing());
+      await clean.run(1);
+      const calls = [...h.request.mock.calls, ...clean.request.mock.calls];
+      expect(timeout).toHaveBeenCalledTimes(calls.length);
+      expect(timeout.mock.calls.every(([milliseconds]) => milliseconds === 15000)).toBe(true);
+      const signals = calls.map(([, options]) => options.request.signal);
+      expect(signals.every((signal) => signal instanceof AbortSignal)).toBe(true);
+      expect(new Set(signals).size).toBe(calls.length);
+      expect(calls.every(([, options]) => options.request.timeout === undefined)).toBe(true);
+    } finally {
+      timeout.mockRestore();
+    }
   });
 
   it.each(["", "A".repeat(40), `${target}\n`, "main", "a".repeat(41)])(

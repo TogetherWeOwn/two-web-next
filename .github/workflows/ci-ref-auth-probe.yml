@@ -51,7 +51,7 @@ jobs:
             const request = async (route, args = {}) => {
               try {
                 const response = await github.request(route, {
-                  owner, repo, ...args, request: { timeout: 15000 }
+                  owner, repo, ...args, request: { signal: AbortSignal.timeout(15000) }
                 });
                 core.info(JSON.stringify({ route, status: response.status, body: response.data }));
                 return response;
@@ -77,7 +77,7 @@ jobs:
             // No overwrite or retry. Each attempt owns a different diagnostic ref.
             try {
               await github.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
-                owner, repo, ref: `tags/${tag}`, request: { timeout: 15000 }
+                owner, repo, ref: `tags/${tag}`, request: { signal: AbortSignal.timeout(15000) }
               });
               throw new Error('Probe ref already exists');
             } catch (error) {
@@ -125,7 +125,7 @@ jobs:
             const read = async () => {
               try {
                 return await github.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
-                  owner, repo, ref: shortRef, request: { timeout: 15000 }
+                  owner, repo, ref: shortRef, request: { signal: AbortSignal.timeout(15000) }
                 });
               } catch (error) {
                 if (error.status === 404) return null;
@@ -139,7 +139,7 @@ jobs:
                   existing.data.object?.sha !== sha) throw new Error('Ref is not owned by this attempt');
               try {
                 await github.request('DELETE /repos/{owner}/{repo}/git/refs/{ref}', {
-                  owner, repo, ref: shortRef, request: { timeout: 15000 }
+                  owner, repo, ref: shortRef, request: { signal: AbortSignal.timeout(15000) }
                 });
               } catch (error) {
                 core.info(JSON.stringify({ status: error.status ?? null, body: error.response?.data ?? null }));
