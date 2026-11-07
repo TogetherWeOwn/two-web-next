@@ -248,6 +248,19 @@ async function runVector(port, vector, context, tailLabel) {
   return { request: requestRecord(vector, headers), response };
 }
 
+// One line per head field and per row: a changed vector is a one-line diff,
+// and the committed set stays under GitHub's 20,000-line PR diff limit, past
+// which the diff API returns 406 and diff-based review bots cannot run.
+export function goldenJson(head, key, rows) {
+  const line = ([name, value]) => ` ${JSON.stringify(name)}: ${JSON.stringify(value)}`;
+  const body = Array.isArray(rows)
+    ? rows.map((row) => `  ${JSON.stringify(row)}`)
+    : Object.entries(rows).map((entry) => ` ${line(entry)}`);
+  const [open, close] = Array.isArray(rows) ? ["[", "]"] : ["{", "}"];
+  const fields = Object.entries(head).map((entry) => `${line(entry)},`);
+  return `{\n${fields.join("\n")}\n ${JSON.stringify(key)}: ${open}\n${body.join(",\n")}\n ${close}\n}\n`;
+}
+
 async function recordRun({
   adminUrl,
   template,
@@ -321,9 +334,9 @@ async function recordRun({
           .sort()
           .map((id) => [id, records[id]]),
       );
-      await writeFile(target, `${JSON.stringify({ file, vectors: sorted }, null, 1)}\n`);
+      await writeFile(target, goldenJson({ file }, "vectors", sorted));
     }
-    await writeFile(join(out, "index.json"), `${JSON.stringify({ ...meta, coverage }, null, 1)}\n`);
+    await writeFile(join(out, "index.json"), goldenJson(meta, "coverage", coverage));
   } finally {
     child.kill("SIGTERM");
     await new Promise((done) => (child.exitCode !== null ? done() : child.once("exit", done)));

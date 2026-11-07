@@ -14,6 +14,7 @@ import {
   normalizeHeaders,
   normalizeSetCookie,
 } from "./normalize.mjs";
+import { goldenJson } from "./record.mjs";
 import { signedCookieNames } from "./signed-cookies.mjs";
 import { buildVectors, concretePath, listPublicFiles, slug } from "./vectors.mjs";
 
@@ -260,4 +261,16 @@ test("signed-cookie vectors cover every cookie the card names", () => {
     committed.cookies.map((c) => c.name),
     names,
   );
+});
+
+test("goldens are written one vector per line and round-trip", () => {
+  const vectors = { GET: { response: { status: 200 } }, HEAD: { response: { status: 200 } } };
+  const text = goldenJson({ file: "routes/about" }, "vectors", vectors);
+  assert.deepEqual(JSON.parse(text), { file: "routes/about", vectors });
+  assert.equal(text.trimEnd().split("\n").length, 7);
+  const coverage = [{ entry: "GET /", file: "routes/root", vector: "GET" }];
+  assert.deepEqual(JSON.parse(goldenJson({ schema: 1 }, "coverage", coverage)), {
+    schema: 1,
+    coverage,
+  });
 });

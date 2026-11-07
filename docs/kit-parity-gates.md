@@ -195,8 +195,11 @@ differs before its hook runs (trailing-slash 308, method handling, automatic
   `drizzle`, `wrangler.jsonc`, `package-lock.json`). `index.json` records the
   git trees of those inputs and of the harness, plus the coverage map. To
   re-record, copy the `route-parity-<sha>` artifact from the `check` job into
-  that directory and run `npx biome format --write` on it; the checks compare
-  parsed JSON, so formatting never changes a result. The committed set was
+  that directory unchanged. The recorder writes one vector per line, so a
+  changed vector is a one-line diff and the set stays under GitHub's
+  20,000-line pull request diff limit (past it the diff API returns 406 and
+  Devin Review fails without reviewing). Biome skips these directories for the
+  same reason. The checks compare parsed JSON. The committed set was
   recorded at `226cbb91368f33babe7d90ac4b51f5203c6c0e2c`.
 - `test/fixtures/parity/signed-cookies.json` holds `hono/cookie` vectors for
   every cookie `src/` signs (`node ci/parity/signed-cookies.mjs --write`).
