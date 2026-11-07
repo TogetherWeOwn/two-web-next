@@ -53,7 +53,8 @@ for (const target of targets) {
               fontFamily: style.fontFamily,
               fontSize: style.fontSize,
               lineHeight: style.lineHeight,
-              motionFast: Number.parseFloat(style.getPropertyValue("--motion-duration-fast")),
+              // Probe the role consumed by shared button transitions, not an unused alias.
+              motionBase: Number.parseFloat(style.getPropertyValue("--motion-duration-base")),
               overflow: browser.document.documentElement.scrollWidth > browser.innerWidth,
               outlineWidth: focus.outlineWidth,
               outlineOffset: focus.outlineOffset,
@@ -63,8 +64,8 @@ for (const target of targets) {
           expect(metrics.fontSize).toBe("16px");
           expect(metrics.lineHeight).toBe("24.8px");
           expect(metrics.overflow).toBe(false);
-          if (state === "reduced-motion") expect(metrics.motionFast).toBe(0);
-          else expect(metrics.motionFast).toBeGreaterThan(0);
+          if (state === "reduced-motion") expect(metrics.motionBase).toBe(0);
+          else expect(metrics.motionBase).toBeGreaterThan(0);
           if (state === "keyboard-focus") {
             expect(metrics.outlineWidth).toBe("2px");
             expect(metrics.outlineOffset).toBe("3px");
