@@ -328,7 +328,7 @@ export function renderErrorShell(code, adminBack) {
         // compiled app.css), never the light Hono canvas — otherwise the axe
         // contrast run below checks a page nobody is served.
         expect(dom.bodyBackground).toBe("rgb(18, 23, 25)");
-        expect(dom.title).toBe(`${copy.title} — Together We Own`);
+        expect(dom.title).toBe(`${copy.documentTitle ?? copy.title} — Together We Own`);
         expect(dom.robots).toBe("noindex, nofollow");
         // The big status numeral is decorative: visible, but out of the a11y tree.
         expect(dom.recoveryCodeHidden).toBe("true");
