@@ -25,6 +25,7 @@ import {
   WRONG_QA_TOKEN,
   identityCookies,
   refreshClone,
+  resetSessions,
   seedTemplate,
 } from "./fixture.mjs";
 import {
@@ -268,7 +269,6 @@ async function recordRun({
   runUrl.pathname = `/${runDb}`;
   const clone = postgres(runUrl.href, { max: 1, onnotice: () => {} });
   await refreshClone(clone);
-  await clone.end();
 
   const scratch = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "route-parity-"));
   const { path: config } = await harnessConfig(targetConfig, scratch, runUrl.href);
@@ -308,6 +308,7 @@ async function recordRun({
     const context = { cookies: await identityCookies(), etags: new Map() };
     const files = new Map();
     for (const vector of vectors) {
+      if (vector.identity) await resetSessions(clone);
       const record = await runVector(port, vector, context, tailLabel);
       const file = files.get(vector.file) ?? {};
       file[vector.id] = record;
@@ -335,6 +336,7 @@ async function recordRun({
     child.kill("SIGTERM");
     await new Promise((done) => (child.exitCode !== null ? done() : child.once("exit", done)));
     await rm(scratch, { recursive: true, force: true });
+    await clone.end();
     await admin.unsafe(`drop database if exists ${runDb} with (force)`);
     await admin.end();
   }

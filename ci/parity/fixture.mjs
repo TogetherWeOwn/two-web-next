@@ -97,6 +97,10 @@ export async function seedTemplate(sql) {
       values (${key}, ${title}, 'Route-parity fixture', ${starts}, ${ends}, 'UTC', 'published', 10, true,
         ${SEEDED_AT}, ${SEEDED_AT})`;
   }
+  await insertSessions(sql);
+}
+
+async function insertSessions(sql) {
   for (const [name, session] of Object.entries(SESSIONS)) {
     const hash = await hashToken(session.token);
     const expired = name === "expired";
@@ -114,4 +118,17 @@ export async function seedTemplate(sql) {
 /** Per clone: live sessions start now, inside the database's 24-hour absolute cap. */
 export async function refreshClone(sql) {
   await sql`update web_sessions set created_at = now() where expires_at > now()`;
+}
+
+/**
+ * Before each identity vector. An authenticated page view rotates the session:
+ * it deletes the presented token's row, so without this only the first
+ * member/moderator vector of a run would authenticate and every later one
+ * would record a guest response.
+ */
+export async function resetSessions(sql) {
+  await sql`delete from web_session_grace`;
+  await sql`delete from web_sessions`;
+  await insertSessions(sql);
+  await refreshClone(sql);
 }
