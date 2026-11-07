@@ -262,7 +262,7 @@ export async function compileRosterKit() {
   bridgeModules.env = `export const env=${JSON.stringify(env)};`;
   const built = await build({
     stdin: {
-      contents: `import {state} from "bridge"; import {load} from ${JSON.stringify(load)}; import {load as layout} from ${JSON.stringify(layout)}; import P from ${JSON.stringify(page)}; import {render} from "svelte/server"; export function configure(deps){Object.assign(state,deps);} export {load,layout}; const template=${JSON.stringify(readFileSync(join(root, "web/src/app.html"), "utf8"))}; export function html(data){const {head,body}=render(P,{props:{data}}); return template.replace('%sveltekit.head%',()=>head).replace('%sveltekit.body%',()=>body);}`,
+      contents: `import {state} from "bridge"; import {load} from ${JSON.stringify(load)}; import {load as layout} from ${JSON.stringify(layout)}; import P from ${JSON.stringify(page)}; import {render} from "svelte/server"; export function configure(deps){Object.assign(state,deps);} export {load,layout}; const template=${JSON.stringify(readFileSync(join(root, "web/src/app.html"), "utf8"))}; export function html(data){const {head,body}=render(P,{props:{data}}); return template.replace(/%sveltekit\\.(head|body)%/g,(_match,part)=>part==='head'?head:body);}`,
       resolveDir: root,
       sourcefile: "roster-status-ssr.mjs",
     },

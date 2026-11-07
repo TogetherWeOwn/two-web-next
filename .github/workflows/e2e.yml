@@ -252,6 +252,7 @@ jobs:
         env:
           CAPTURE_BASE: ${{ inputs.waitlist_capture_base }}
           WAITLIST_CAPTURE_BEFORE: "true"
+          WAITLIST_CAPTURE_OUTPUT: ${{ runner.temp }}/waitlist-before
         run: |
           set -euo pipefail
           [[ "$CAPTURE_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
@@ -259,7 +260,7 @@ jobs:
           files=(src/admin/kit-event-edit.ts src/admin/pages/event-form-roster.tsx 'web/src/routes/admin/events/[key]/+page.svelte')
           trap 'git restore --source=HEAD -- "${files[@]}"' EXIT
           for file in "${files[@]}"; do git show "$CAPTURE_BASE:$file" > "$file"; done
-          npx playwright test --config playwright.waitlist-capture.config.ts --output "$RUNNER_TEMP/waitlist-before"
+          npx playwright test --config playwright.waitlist-capture.config.ts
       - name: Upload waitlist before evidence
         if: always() && github.event_name == 'workflow_dispatch' && inputs.waitlist_capture_base != ''
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
