@@ -8,12 +8,7 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readWranglerConfig } from "../wrangler-config.mjs";
-import {
-  loadRecording,
-  parseExceptions,
-  report,
-  EXCEPTIONS_DOC,
-} from "./compare.mjs";
+import { loadRecording, parseExceptions, report, EXCEPTIONS_DOC } from "./compare.mjs";
 
 import { compareProductionRecordings, productionAssetPaths } from "./asset-headers.mjs";
 

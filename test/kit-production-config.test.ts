@@ -2,7 +2,8 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
 
-const { readWranglerConfig } = createRequire(import.meta.url)("../ci/wrangler-config.mjs");
+const require = createRequire(import.meta.url);
+const { readWranglerConfig } = require("../ci/wrangler-config.mjs");
 
 // web/wrangler.production.jsonc is the reviewed Kit Worker config for the
 // production script name. It must mirror the root env.production bindings and

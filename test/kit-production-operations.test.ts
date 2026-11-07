@@ -12,7 +12,8 @@ import app from "./app";
 // runs on its own, and that production Tail paging keeps today's Hono route
 // labels. Source only: nothing here proves what is deployed.
 
-const { readWranglerConfig } = createRequire(import.meta.url)("../ci/wrangler-config.mjs");
+const require = createRequire(import.meta.url);
+const { readWranglerConfig } = require("../ci/wrangler-config.mjs");
 const read = (path: string) => readFileSync(path, "utf8");
 const kit = readWranglerConfig(read("web/wrangler.production.jsonc"));
 const main = readWranglerConfig(read("wrangler.jsonc"));
