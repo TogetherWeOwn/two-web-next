@@ -1,5 +1,5 @@
 // node --import tsx --test ci/event-native-share-browser.test.mjs
-// Runs in browser-enabled CI with an executed-case verifier.
+// No opt-in skips; runs in browser-enabled CI with an executed-case verifier.
 // The Hono a11y/Lighthouse gates do not cover Kit.
 import assert from "node:assert/strict";
 import { readFile, readdir, mkdir } from "node:fs/promises";
