@@ -102,6 +102,8 @@ describe("featured transfer bounds (local transport)", () => {
   it("preserves the legacy never-throw contract outside the cache fallback", async () => {
     const { db } = fixture(true);
     expect(await listVisibleFeatured(db, now)).toEqual([]);
-    await expect(listVisibleFeatured(db, now, true)).rejects.toThrow("private driver detail");
+    await expect(listVisibleFeatured(db, now, true)).rejects.toMatchObject({
+      cause: { message: "private driver detail" },
+    });
   });
 });
