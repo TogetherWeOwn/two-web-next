@@ -135,21 +135,49 @@ for (const renderer of ["Hono", "Kit"] as const) {
           await page.screenshot({ path: info.outputPath(`${filename}.png`) });
           await page.screenshot({ path: info.outputPath(`${filename}-full.png`), fullPage: true });
           if (viewport.width === 390) {
-            const offset = await page.getByTestId("roster-table-scroll").evaluate((el) => {
+            const scroll = await page.getByTestId("roster-table-scroll").evaluate((el) => {
               el.scrollIntoView({ block: "start" });
-              // Keep fractional scroll rounding from clipping the header at the viewport edge.
+              // Leave a small top inset for readable capture framing.
               window.scrollBy(0, -16);
               el.scrollLeft = el.scrollWidth;
-              return el.scrollLeft;
+              return {
+                offset: el.scrollLeft,
+                overflowing: el.scrollWidth > el.clientWidth,
+                atEnd: el.scrollLeft === el.scrollWidth - el.clientWidth,
+              };
             });
-            expect(offset).toBeGreaterThan(0);
+            expect(scroll.offset).toBeGreaterThan(0);
+            expect(scroll.overflowing).toBe(true);
+            expect(scroll.atEnd).toBe(true);
             const header = page.getByTestId("rsvp-roster").getByRole("columnheader").last();
-            await expect(header).toBeInViewport({ ratio: 1 });
+            await expect(header).toHaveAccessibleName(before ? /answered/i : /waitlist position/i);
+            // Whole-pixel scroll limits can clip cell padding, but must not clip content.
+            await expect(header.getByRole("link")).toBeInViewport({ ratio: 1 });
             if (!before) {
               const rank = waitlistCells(page)
                 .filter({ hasText: /^#\d+$/ })
                 .first();
-              await expect(rank).toBeInViewport({ ratio: 1 });
+              await expect(rank).toHaveText(/^#\d+$/);
+              const inView = await rank.evaluate((td) => {
+                const range = document.createRange();
+                range.selectNodeContents(td);
+                const text = range.getBoundingClientRect();
+                const region = td.closest(".admin-table-scroll");
+                if (!region) return false;
+                const port = region.getBoundingClientRect();
+                return (
+                  text.width > 0 &&
+                  text.left >= port.left &&
+                  text.right <= port.right &&
+                  text.top >= port.top &&
+                  text.bottom <= port.bottom &&
+                  text.left >= 0 &&
+                  text.right <= window.innerWidth &&
+                  text.top >= 0 &&
+                  text.bottom <= window.innerHeight
+                );
+              });
+              expect(inView).toBe(true);
             }
             await page.screenshot({ path: info.outputPath(`${filename}-scrolled.png`) });
           }
