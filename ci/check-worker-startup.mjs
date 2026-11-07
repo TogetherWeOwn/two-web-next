@@ -99,8 +99,11 @@ export function summarizeProfile(profile) {
     );
   }
   let sampledUs = 0;
-  let idleUs = 0;
-  let gcUs = 0;
+  let reversals = 0;
+  let maxReversalUs = 0;
+  let previousTimestamp = profile.startTime;
+  const maxReversals = Math.min(3, Math.floor(0.02 * profile.samples.length));
+  const samples = [];
   for (let i = 0; i < profile.samples.length; i++) {
     const id = profile.samples[i];
     const delta = profile.timeDeltas[i];
@@ -114,12 +117,39 @@ export function summarizeProfile(profile) {
       throw new Error(
         `Invalid CPU profile sample: non-finite timeDelta at sample ${i} (${sampleValue(delta)})`,
       );
-    if (delta < 0)
-      throw new Error(`Invalid CPU profile sample: negative timeDelta ${delta} at sample ${i}`);
-    const node = nodes.get(id);
     sampledUs += delta;
+    const timestamp = profile.startTime + sampledUs;
+    if (timestamp < profile.startTime || timestamp > profile.endTime)
+      throw new Error(
+        `Invalid CPU profile sample: timestamp outside profile window at sample ${i}`,
+      );
+    if (timestamp < previousTimestamp) {
+      const reversalUs = previousTimestamp - timestamp;
+      if (reversalUs > 1000)
+        throw new Error(
+          `Invalid CPU profile sample: reversal ${reversalUs} us exceeds 1000 us at sample ${i}`,
+        );
+      reversals++;
+      maxReversalUs = Math.max(maxReversalUs, reversalUs);
+      if (reversals > maxReversals)
+        throw new Error(
+          `Invalid CPU profile sample: reversal count ${reversals} exceeds ${maxReversals} at sample ${i}`,
+        );
+    }
+    samples.push({ timestamp, id, sampleIndex: i });
+    previousTimestamp = timestamp;
+  }
+  // V8 drains samples by code-event id, not timestamp. Preserve ties' original order.
+  samples.sort((a, b) => a.timestamp - b.timestamp || a.sampleIndex - b.sampleIndex);
+  let idleUs = 0;
+  let gcUs = 0;
+  previousTimestamp = profile.startTime;
+  for (const sample of samples) {
+    const delta = sample.timestamp - previousTimestamp;
+    const node = nodes.get(sample.id);
     if (node.callFrame.functionName === "(idle)") idleUs += delta;
     if (node.callFrame.functionName === "(garbage collector)") gcUs += delta;
+    previousTimestamp = sample.timestamp;
   }
   const windowUs = profile.endTime - profile.startTime;
   requireValue(
@@ -135,6 +165,8 @@ export function summarizeProfile(profile) {
     // Sampling may leave a valid unsampled tail; retain it, do not call it CPU.
     unsampledMs: Math.max(0, windowUs - sampledUs) / 1000,
     samples: profile.samples.length,
+    reversals,
+    maxReversalUs,
   };
 }
 function readBounded(file, max) {
@@ -501,7 +533,13 @@ export async function collect({ outdir, budget, identity, cli, run = runCommand 
 }
 export function summary(evidence) {
   const numeric = evidence.runs.map((r) => r.measurement[METRIC].toFixed(3)).join(", ");
-  return `## Worker local startup diagnostic\n\n${METRIC}: **${evidence.status}**, maximum **${evidence.maximumMs.toFixed(3)} ms** of exactly 3 cold runs (${numeric} ms). Warning >=400 ms; failure >=700 ms.\n\nAuthoritative Cloudflare startup_time_ms: **unavailable**. Production margin: **unmet**. This local sampling diagnostic is not provider startup CPU or validation.\n\nSource: \`${evidence.identity.sha}\`; upload SHA-256: \`${evidence.identity.uploadSha256}\`. Original profiles and build/tool/runner-bound numeric evidence are in the worker-startup-local artifact.\n`;
+  const reversals = evidence.runs
+    .map(
+      (r) =>
+        `Cold ${r.invocation}: ${r.measurement.reversals} reversals; largest ${r.measurement.maxReversalUs} us.`,
+    )
+    .join("\n");
+  return `## Worker local startup diagnostic\n\n${METRIC}: **${evidence.status}**, maximum **${evidence.maximumMs.toFixed(3)} ms** of exactly 3 cold runs (${numeric} ms). Warning >=400 ms; failure >=700 ms.\n\n${reversals}\n\nAuthoritative Cloudflare startup_time_ms: **unavailable**. Production margin: **unmet**. This local sampling diagnostic is not provider startup CPU or validation.\n\nSource: \`${evidence.identity.sha}\`; upload SHA-256: \`${evidence.identity.uploadSha256}\`. Original profiles and build/tool/runner-bound numeric evidence are in the worker-startup-local artifact.\n`;
 }
 async function main() {
   const args = process.argv.slice(2);

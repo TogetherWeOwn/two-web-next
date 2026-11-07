@@ -131,8 +131,21 @@ acceptance on success, warning, breach and unavailable evidence.
 Each build is bounded to 240 seconds, serialization to 60 seconds, and each
 profile to 30 seconds, with 2 MiB child-output caps and process-group cleanup.
 Profiles are limited to 8 MiB, 50,000 nodes, 100,000 samples and a 15-second window.
-Missing, non-finite, negative, malformed, incomplete, mismatched, wrong-build/tool,
-failed and timed-out evidence fails closed. Pinned Wrangler only rejects module
+Missing, non-finite, malformed, incomplete, mismatched, wrong-build/tool,
+failed and timed-out evidence fails closed. Sample timestamps are rebuilt from
+`startTime + cumulative timeDeltas` and must stay within the inclusive profile
+window, without clamping. V8 `15.7.112.5` in pinned workerd `1.20261101.1`
+drains samples by code-event id rather than timestamp (see
+[`SamplingEventsProcessor::ProcessOneSample`](https://github.com/v8/v8/blob/15.7.112.5/src/profiler/cpu-profiler.cc)
+and [workerd's V8 pin](https://github.com/cloudflare/workerd/blob/v1.20261101.1/build/deps/v8.MODULE.bazel)).
+Small timestamp reversals are accepted only up to 1,000 us each and
+`min(3, floor(0.02 * sample count))` per profile; fewer than 50 samples allow none.
+Samples are stable-sorted by timestamp, with each sorted interval charged to
+that sample's node as before. Sampled time remains the raw delta sum, and the
+`sampledUs <= windowUs + 1000` check is unchanged. Each numeric run and the human
+summary report `reversals` and `maxReversalUs`. Larger, excessive or out-of-window
+reversals fail with the offending sample index; no samples are replaced or retried.
+Pinned Wrangler only rejects module
 failure when unsupported bindings exist, so upload admission deliberately requires
 an unsupported Hyperdrive binding; a future change must replace this failure
 proof, not silently drop it. Local environment/dotenv binding inclusion and

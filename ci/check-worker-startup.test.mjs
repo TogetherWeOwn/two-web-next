@@ -22,6 +22,7 @@ import {
   METRIC,
   runCommand,
   summarizeProfile,
+  summary,
   validateBudget,
   validateEvidence,
   validateUpload,
@@ -111,6 +112,11 @@ const work = (us) =>
     [2, 1000],
   ]);
 const buf = (p) => Buffer.from(JSON.stringify(p));
+function reversalProfile(count = 50, indices = [1], reversalUs = 2) {
+  return profile(
+    Array.from({ length: count }, (_, i) => [5, indices.includes(i) ? -reversalUs : 2000]),
+  );
+}
 
 function multipart({ metadata, parts = { "index.js": "export default {}" } }) {
   const b = "----testboundary123";
@@ -206,6 +212,8 @@ describe("summarizeProfile", () => {
       windowMs: 105,
       unsampledMs: 0,
       samples: 5,
+      reversals: 0,
+      maxReversalUs: 0,
     });
   });
   test("GC, program/wrapper and request frames all count as non-idle", () => {
@@ -236,7 +244,128 @@ describe("summarizeProfile", () => {
   test("rejects sampled time exceeding window by more than 1ms", () => {
     const p = work(50000);
     p.endTime -= 1001;
-    assert.throws(() => summarizeProfile(p), /Incomplete CPU profile timing/);
+    assert.throws(() => summarizeProfile(p), {
+      message: "Invalid CPU profile sample: timestamp outside profile window at sample 1",
+    });
+  });
+  test("accepts the retained 86-sample profile shape with one -2 us reversal", () => {
+    // Numeric timing and frame classes from the failing cold-1 profile in run 42385737608.
+    const timeDeltas = [
+      38336, 9772, 1064, 1066, 1063, 1063, 1070, 1073, 1057, 1062, 1069, 1065, 1062, 1063, 1088,
+      1061, 1061, 1065, 1066, 1064, 1063, 1059, 1063, 1064, 1069, 1066, 1064, 1064, 1066, 1068,
+      1064, 1063, 1065, 1072, 1058, 1063, 1063, 1061, 1065, 1064, 1065, 1065, 1065, 1067, 1062,
+      1063, 1066, 1062, 1066, 1067, 1081, 1072, 1068, 1081, 1079, 1081, 1083, 1084, 1068, 1082,
+      1064, 1069, 1066, 77, 984, 1060, 1066, 1064, -2, 30, 1025, 1061, 1071, 1062, 1066, 1064, 1074,
+      1066, 1073, 119, 948, 1063, 1385, 1068, 1064, 1062,
+    ];
+    const p = profile(
+      timeDeltas.map((delta, i) => [i === 0 ? 2 : [14, 50, 58, 65, 82].includes(i) ? 3 : 5, delta]),
+      { start: 2601042521 },
+    );
+    p.endTime = 2601184460;
+    assert.deepEqual(summarizeProfile(p), {
+      [METRIC]: 95.414,
+      sampledMs: 133.75,
+      idleMs: 38.336,
+      gcMs: 5.682,
+      windowMs: 141.939,
+      unsampledMs: 8.189,
+      samples: 86,
+      reversals: 1,
+      maxReversalUs: 2,
+    });
+  });
+  test("sorts a -2 us reversal before idle and GC attribution without mutating the profile", () => {
+    const p = reversalProfile();
+    p.samples[0] = 2;
+    p.samples[1] = 3;
+    p.endTime += 15393;
+    const before = clone(p);
+    assert.deepEqual(summarizeProfile(p), {
+      [METRIC]: 97.998,
+      sampledMs: 97.998,
+      idleMs: 0,
+      gcMs: 1.998,
+      windowMs: 113.391,
+      unsampledMs: 15.393,
+      samples: 50,
+      reversals: 1,
+      maxReversalUs: 2,
+    });
+    assert.deepEqual(p, before);
+  });
+  test("stable timestamp ties charge the first original sample and keep the raw delta sum", () => {
+    const p = reversalProfile(100, [1, 99]);
+    p.samples[1] = 2;
+    p.timeDeltas[2] = 0;
+    p.samples[2] = 3;
+    // The final reversal leaves the last raw timestamp below the sorted maximum.
+    p.endTime += 2;
+    const s = summarizeProfile(p);
+    assert.equal(s.sampledMs, 193.996);
+    assert.equal(s.idleMs, 1.998);
+    assert.equal(s.gcMs, 0);
+    assert.equal(s[METRIC], 191.998);
+    assert.equal(s.unsampledMs, 0.002);
+    assert.equal(s.reversals, 2);
+    assert.equal(s.maxReversalUs, 2);
+  });
+  test("accepts a reversal of exactly 1000 us", () => {
+    const s = summarizeProfile(reversalProfile(50, [1], 1000));
+    assert.equal(s.reversals, 1);
+    assert.equal(s.maxReversalUs, 1000);
+    assert.equal(s.sampledMs, 97);
+  });
+  test("rejects a reversal over 1000 us with its sample index", () => {
+    assert.throws(() => summarizeProfile(reversalProfile(50, [1], 1001)), {
+      message: "Invalid CPU profile sample: reversal 1001 us exceeds 1000 us at sample 1",
+    });
+  });
+  for (const [count, indices, allowed] of [
+    [49, [1], 0],
+    [100, [1, 3, 5], 2],
+    [149, [1, 3, 5], 2],
+    [200, [1, 3, 5, 7], 3],
+    [100, Array.from({ length: 50 }, (_, i) => i * 2 + 1), 2],
+  ]) {
+    test(`rejects ${indices.length} reversals in ${count} samples (limit ${allowed})`, () => {
+      assert.throws(() => summarizeProfile(reversalProfile(count, indices)), {
+        message: `Invalid CPU profile sample: reversal count ${allowed + 1} exceeds ${allowed} at sample ${indices[allowed]}`,
+      });
+    });
+  }
+  test("accepts three reversals at the 150-sample boundary and reports the largest", () => {
+    const p = reversalProfile(150, [1, 3, 5]);
+    p.timeDeltas[3] = -10;
+    const s = summarizeProfile(p);
+    assert.equal(s.reversals, 3);
+    assert.equal(s.maxReversalUs, 10);
+    assert.equal(s.sampledMs, 293.986);
+  });
+  test("rejects timestamps below the window without clamping", () => {
+    const p = reversalProfile();
+    p.timeDeltas[0] = -2;
+    assert.throws(() => summarizeProfile(p), {
+      message: "Invalid CPU profile sample: timestamp outside profile window at sample 0",
+    });
+  });
+  test("rejects timestamps above the window even within the old 1000 us tolerance", () => {
+    const p = work(50000);
+    p.endTime -= 1;
+    assert.throws(() => summarizeProfile(p), {
+      message: "Invalid CPU profile sample: timestamp outside profile window at sample 1",
+    });
+  });
+  test("accepts timestamps on both inclusive window boundaries", () => {
+    assert.equal(
+      summarizeProfile(
+        profile([
+          [5, 0],
+          [5, 1000],
+        ]),
+      ).sampledMs,
+      1,
+    );
   });
   test("rejects idle-only profile", () => {
     assert.throws(() => summarizeProfile(profile([[2, 5000]])), /Incomplete CPU profile timing/);
@@ -256,10 +385,10 @@ describe("summarizeProfile", () => {
       "Invalid CPU profile sample: non-finite timeDelta at sample 1 (Infinity)",
     ],
     [
-      "negative timeDelta",
+      "excess reversal count",
       "timeDeltas",
       -5,
-      "Invalid CPU profile sample: negative timeDelta -5 at sample 1",
+      "Invalid CPU profile sample: reversal count 1 exceeds 0 at sample 1",
     ],
   ]) {
     test(`names ${name} and the offending sample index`, () => {
@@ -594,6 +723,16 @@ describe("validateEvidence strictness", () => {
     check((e) => {
       e.runs[0].measurement.samples += 1;
     }, /Mismatched numeric profile evidence/));
+  for (const field of ["reversals", "maxReversalUs"]) {
+    test(`altered measurement ${field}`, () =>
+      check((e) => {
+        e.runs[0].measurement[field] += 1;
+      }, /Mismatched numeric profile evidence/));
+    test(`missing measurement ${field}`, () =>
+      check((e) => {
+        delete e.runs[0].measurement[field];
+      }, /Mismatched numeric profile evidence/));
+  }
   test("altered maximum", () =>
     check((e) => {
       e.maximumMs = 1;
@@ -625,7 +764,7 @@ describe("validateEvidence strictness", () => {
     ev.runs[0].profileSha256 = sha256(b[0]);
     assert.throws(
       () => validateEvidence(ev, IDENTITY, b, BUDGET),
-      /Invalid CPU profile sample: negative timeDelta -5 at sample 0/,
+      /Invalid CPU profile sample: timestamp outside profile window at sample 0/,
     );
   });
   test("empty profile buffer", () => {
@@ -777,6 +916,28 @@ describe("collect orchestration", () => {
     // Retained files re-validate against the evidence.
     const bufs = ev.runs.map((r) => readFileSync(join(h.outdir, r.profile)));
     assert.equal(validateEvidence(ev, ev.identity, bufs, BUDGET), "warn");
+  });
+  test("retains, validates and summarizes reversal diagnostics for each cold run", async () => {
+    const h = harness({
+      profiles: [reversalProfile(), reversalProfile(150, [1, 3, 5], 10), work(50000)],
+    });
+    const ev = await collect({ outdir: h.outdir, budget: BUDGET, identity: {}, cli, run: h.run });
+    assert.equal(h.calls.length, 4);
+    const bufs = ev.runs.map((r) => readFileSync(join(h.outdir, r.profile)));
+    assert.equal(validateEvidence(ev, ev.identity, bufs, BUDGET), "pass");
+    for (const [i, reversals, maxReversalUs] of [
+      [0, 1, 2],
+      [1, 3, 10],
+      [2, 0, 0],
+    ]) {
+      const numeric = JSON.parse(readFileSync(join(h.outdir, `cold-${i + 1}.json`), "utf8"));
+      assert.deepEqual(numeric, ev.runs[i]);
+      assert.equal(numeric.measurement.reversals, reversals);
+      assert.equal(numeric.measurement.maxReversalUs, maxReversalUs);
+      assert(
+        summary(ev).includes(`Cold ${i + 1}: ${reversals} reversals; largest ${maxReversalUs} us.`),
+      );
+    }
   });
   test("fail verdict at 700 ms", async () => {
     const h = harness({ profiles: [work(10000), work(700000), work(10000)] });
