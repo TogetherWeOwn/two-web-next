@@ -156,7 +156,15 @@ describe("anonymous cache response helpers", () => {
     const gen = anonCacheGeneration();
     const now = 5_000;
     await settle("e", html("e", null), gen, now);
-    await settleAnonCacheResponse("p", source, html("p", null), gen, ANON_PAST_TTL_MS, PAST_CC, now);
+    await settleAnonCacheResponse(
+      "p",
+      source,
+      html("p", null),
+      gen,
+      ANON_PAST_TTL_MS,
+      PAST_CC,
+      now,
+    );
     await settle("c", html("c", "public, max-age=30, s-maxage=30"), gen, now);
     expect(readAnonCacheResponse("e", source, now)?.headers.get("cache-control")).toBe(EVENTS_CC);
     expect(readAnonCacheResponse("p", source, now)?.headers.get("cache-control")).toBe(PAST_CC);
