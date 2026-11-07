@@ -190,6 +190,58 @@ describe.skipIf(!process.env.DATABASE_URL)("shared agent event acceptance (agent
     expect(sent).toHaveLength(0);
   });
 
+  it("agent draft edits advance a future review stamp and invalidate the reviewed revision", async () => {
+    const event_key = await create();
+    const reviewed = "2098-01-01T00:00:00.123Z";
+    await fixture.client`UPDATE events SET updated_at = ${reviewed} WHERE event_key = ${event_key}`;
+    const stamp = async () => {
+      const [row] =
+        await fixture.client`SELECT updated_at FROM events WHERE event_key = ${event_key}`;
+      return new Date(row!.updated_at).toISOString();
+    };
+    expect((await call("update", { event_key, version: 1, fields })).status).toBe(200);
+    const first = await stamp();
+    expect(new Date(first).getTime()).toBe(new Date(reviewed).getTime() + 1);
+    expect((await call("update", { event_key, version: 2, fields })).status).toBe(200);
+    expect(new Date(await stamp()).getTime()).toBe(new Date(first).getTime() + 1);
+    await expect(
+      transitionEvent(
+        fixture.db,
+        { id: "fixture-moderator", username: "Moderator" },
+        event_key,
+        "published",
+        reviewed,
+      ),
+    ).rejects.toMatchObject({ fields: { reviewed_updated_at: expect.any(String) } });
+    const [row] = await fixture.client`SELECT status FROM events WHERE event_key = ${event_key}`;
+    expect(row!.status).toBe("draft");
+    expect(sent).toHaveLength(0);
+  });
+
+  it.each(["publish", "cancel"])(
+    "agent %s advances a future review stamp exactly once",
+    async (op) => {
+      const event_key = await create();
+      if (op === "cancel") expect((await call("publish", { event_key })).status).toBe(200);
+      const reviewed = "2098-01-01T00:00:00.123Z";
+      await fixture.client`UPDATE events SET updated_at = ${reviewed} WHERE event_key = ${event_key}`;
+      const move = { event_key, idempotency_key: randomUUID() };
+      const status = op === "publish" ? "published" : "cancelled";
+      expect((await call(op, move)).status).toBe(200);
+      const [row] =
+        await fixture.client`SELECT status, updated_at FROM events WHERE event_key = ${event_key}`;
+      expect(row!.status).toBe(status);
+      expect(new Date(row!.updated_at).toISOString()).toBe("2098-01-01T00:00:00.124Z");
+      expect(sentStatuses).toEqual(op === "publish" ? ["published"] : ["published", "cancelled"]);
+      const deliveries = sent.length;
+      expect((await call(op, move)).body.replayed).toBe(true);
+      const [replayed] =
+        await fixture.client`SELECT updated_at FROM events WHERE event_key = ${event_key}`;
+      expect(replayed!.updated_at).toEqual(row!.updated_at);
+      expect(sent).toHaveLength(deliveries);
+    },
+  );
+
   it("dispatches once per accepted lifecycle move/published edit, never for drafts, replays or denials", async () => {
     const event_key = await create();
     expect((await call("update", { event_key, version: 1, fields })).status).toBe(200);

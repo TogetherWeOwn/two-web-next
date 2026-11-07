@@ -19,7 +19,10 @@
 // member state), and every database failure is a 503 before bytes.
 import { dbFor } from "../admin/db";
 import { savedEventReview } from "../admin/event-saved-review";
-import { renderSavedEventReviewHtml } from "../admin/pages/event-form-review";
+import {
+  renderEventPublishedNoticeHtml,
+  renderSavedEventReviewHtml,
+} from "../admin/pages/event-form-review";
 import { alertRequestError, exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import type { Env } from "../env";
@@ -144,6 +147,7 @@ export interface KitEventDetailModel {
   detailHtml: EventDetailHtml;
   /** Moderator-only escaped leaves; the member rendering is shared unchanged. */
   review?: { banner: string; actions: string; rsvp: string };
+  publishedNotice?: string;
   eventKey: string;
   title: string;
   game: string | null;
@@ -556,7 +560,7 @@ export async function resolveKitEventDetail(
             : null;
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
-      const review = wantsReview ? savedEventReview(event, now) : null;
+      const review = wantsReview ? savedEventReview(event, now, search) : null;
       const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
@@ -569,6 +573,12 @@ export async function resolveKitEventDetail(
         status: 200,
         headers,
         model: withEventDetailHtml({
+          ...(viewer?.moderator &&
+          event.status === "published" &&
+          !review &&
+          new URLSearchParams(search).get("published") === "1"
+            ? { publishedNotice: renderEventPublishedNoticeHtml() }
+            : {}),
           ...(review
             ? {
                 review: {

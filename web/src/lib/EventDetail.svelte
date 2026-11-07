@@ -100,6 +100,7 @@ const detailIslands = [
     <a href={model.archiveReturn?.href ?? "/events"}>{model.archiveReturn?.label ?? "← All events"}</a>
   </nav>
   {#if model.viewerModerator && model.review}{@html model.review.banner}{/if}
+  {#if model.viewerModerator && model.publishedNotice}{@html model.publishedNotice}{/if}
   <section class="event-hero" aria-label="Event overview">
     <p class="event-kicker">{model.game ?? "Community event"}</p>
     {#if model.isDraft}

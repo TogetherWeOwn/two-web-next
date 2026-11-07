@@ -277,7 +277,15 @@ export function registerDetailRoutes(
             <EventPage
               now={now}
               e={e}
-              review={wantsReview ? savedEventReview(e, new Date()) : undefined}
+              review={
+                wantsReview ? savedEventReview(e, new Date(), new URL(c.req.url).search) : undefined
+              }
+              publishedNotice={
+                session?.moderator &&
+                e.status === "published" &&
+                c.req.query("published") === "1" &&
+                !wantsReview
+              }
               neighbors={neighbors}
               related={related}
               series={series}
