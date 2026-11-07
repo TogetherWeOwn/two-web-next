@@ -56,6 +56,34 @@ describe("local capture request integration", () => {
     expect(asset.headers.has(clock.SSR_CAPTURE_HEADER)).toBe(false);
   });
 
+  it("refuses moderator review selectors rather than certifying a live-clock display", async () => {
+    for (const wall of ["2029-01-01T00:00:00Z", "2031-01-01T00:00:00Z"]) {
+      vi.useFakeTimers().setSystemTime(new Date(wall));
+      for (const query of ["review=1", "review=", "%72eview=1&review=0"]) {
+        for (const method of ["GET", "HEAD"]) {
+          const input = new Request(`${APP_URL}/e/fixture?${query}`, { method });
+          expect(clock.captureRefusal(input, env)?.status).toBe(412);
+          const response = await app.request(input, undefined, env);
+          expect(response.status).toBe(412);
+          expect(response.headers.has(clock.SSR_CAPTURE_HEADER)).toBe(false);
+          expect(response.headers.get("cache-control")).toBe("private, no-store");
+          const decorated = clock.captureResponse(
+            input,
+            env,
+            new Response("<main>review</main>", {
+              headers: { "content-type": "text/html" },
+            }),
+          );
+          expect(decorated.headers.has(clock.SSR_CAPTURE_HEADER)).toBe(false);
+          expect(
+            clock.captureRefusal(input, { ...env, SSR_CAPTURE_FIXTURE: "false" }),
+          ).toBeUndefined();
+          expect(Date.now()).toBe(new Date(wall).getTime());
+        }
+      }
+    }
+  });
+
   it("preserves the Hono host guard despite a fixture flag and spoofed request header", async () => {
     const response = await app.request(
       new Request("https://example.test/faq", {

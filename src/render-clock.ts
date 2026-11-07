@@ -37,11 +37,19 @@ export function capturePathCovered(path: string): boolean {
   );
 }
 
+function captureUrlCovered(url: URL): boolean {
+  // Moderator saved-review guidance uses live editor readiness, not a frozen row.
+  return (
+    capturePathCovered(url.pathname) &&
+    !(url.pathname.startsWith("/e/") && url.searchParams.has("review"))
+  );
+}
+
 export function captureRefusal(request: Request, env: RenderClockEnv): Response | undefined {
-  const path = new URL(request.url).pathname;
+  const url = new URL(request.url);
   // Asset loads are not capture rows and never carry the qualification marker.
-  const asset = /\.(?:css|js|woff2?|png|svg|ico|webmanifest)$/.test(path);
-  if (!captureRequest(request, env) || capturePathCovered(path) || asset) return;
+  const asset = /\.(?:css|js|woff2?|png|svg|ico|webmanifest)$/.test(url.pathname);
+  if (!captureRequest(request, env) || captureUrlCovered(url) || asset) return;
   return new Response("SSR capture clock is not qualified for this route.\n", {
     status: 412,
     headers: { "cache-control": "private, no-store", "content-type": "text/plain; charset=utf-8" },
@@ -60,7 +68,7 @@ export function captureResponse(
   // A missing event can render wall-time suggestions. Refusals, redirects,
   // framework data requests and outages are not proof of a frozen HTML view.
   if (
-    capturePathCovered(new URL(request.url).pathname) &&
+    captureUrlCovered(new URL(request.url)) &&
     [200, 410].includes(response.status) &&
     response.headers.get("content-type")?.includes("text/html")
   ) {
