@@ -865,6 +865,24 @@ export async function dispatchHookRequest(
   event: HookEventLike,
   deps: HookDispatchDeps,
 ): Promise<Response> {
+  const response = await dispatchOwnedRequest(event, deps);
+  // Kit 3.1.1 respond.js rebuilds matching 200s after handle, retaining only
+  // cache headers and cookies. Return the same 304 first, with ALL headers,
+  // including on the Hono/untrusted-host branches. Match Kit's exact rule,
+  // not a broader HTTP parser: unrelated validators must stay untouched.
+  const etag = response.headers.get("etag");
+  let validator = event.request.headers.get("if-none-match");
+  if (validator?.startsWith('W/"')) validator = validator.slice(2);
+  if (response.status === 200 && etag !== null && validator === etag) {
+    return new Response(null, { status: 304, headers: response.headers });
+  }
+  return response;
+}
+
+async function dispatchOwnedRequest(
+  event: HookEventLike,
+  deps: HookDispatchDeps,
+): Promise<Response> {
   if (!isTrustedHost(deps.appUrl, [event.request.headers.get("host"), event.url.host])) {
     return deps.honoFetch(event.request);
   }

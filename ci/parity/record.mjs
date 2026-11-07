@@ -38,7 +38,7 @@ import {
   stableHex,
 } from "./normalize.mjs";
 import { goldenJson, packRecording } from "./golden.mjs";
-import { buildVectors, loadVectorInputs } from "./vectors.mjs";
+import { buildVectors, loadVectorInputs, SAME_ORIGIN } from "./vectors.mjs";
 
 export const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 /** Inputs whose git trees decide whether a golden directory still applies. */
@@ -176,7 +176,8 @@ function requestHeaders(vector, context) {
     "x-parity-client": clientAddress(key),
     accept: vector.accept ?? "*/*",
   };
-  if (vector.origin) headers.origin = vector.origin;
+  if (vector.origin)
+    headers.origin = vector.origin === SAME_ORIGIN ? context.appUrl : vector.origin;
   if (vector.contentType) headers["content-type"] = vector.contentType;
   if (vector.authorization) headers.authorization = vector.authorization;
   if (vector.bearer === "ops-control-bearer")
@@ -274,7 +275,7 @@ async function recordRun({
   await refreshClone(clone);
 
   const scratch = await mkdtemp(join(process.env.RUNNER_TEMP ?? tmpdir(), "route-parity-"));
-  const { path: config } = await harnessConfig(targetConfig, scratch, runUrl.href);
+  const { path: config, appUrl } = await harnessConfig(targetConfig, scratch, runUrl.href);
   const port = await unusedPort();
   const child = spawn(
     join(repo, "node_modules/.bin/wrangler"),
@@ -308,7 +309,7 @@ async function recordRun({
     stream.on("data", (data) => (workerLog += data));
   try {
     await waitReady(port, child, () => workerLog);
-    const context = { cookies: await identityCookies(), etags: new Map() };
+    const context = { cookies: await identityCookies(), etags: new Map(), appUrl };
     const files = new Map();
     for (const vector of vectors) {
       await resetState(clone);

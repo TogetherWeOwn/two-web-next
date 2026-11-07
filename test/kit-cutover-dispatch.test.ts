@@ -159,6 +159,80 @@ describe("production Kit cutover dispatch", () => {
   });
 });
 
+describe("Kit conditional-response header preservation", () => {
+  const headers = {
+    etag: '"fixture-etag"',
+    "content-security-policy": "default-src 'self'",
+    "x-request-id": "fixture-request-id",
+    "x-two-origin": "hono",
+    "cache-control": "public, max-age=60",
+    vary: "Accept",
+    "content-type": "text/html; charset=UTF-8",
+    "x-custom-contract": "retained",
+  };
+
+  it.each([
+    ["hono", '"fixture-etag"'],
+    ["hono", 'W/"fixture-etag"'],
+    ["kit", '"fixture-etag"'],
+    ["kit", 'W/"fixture-etag"'],
+    ["fallback", 'W/"fixture-etag"'],
+    ["untrusted", 'W/"fixture-etag"'],
+  ])("keeps every header on the %s branch for %s", async (branch, validator) => {
+    const request = new Request(`${APP_URL}/${branch === "hono" ? "unowned" : "about"}`, {
+      headers: { "if-none-match": validator, "cf-ray": "0123456789abcdef" },
+    });
+    const upstream = new Response("body", { headers });
+    upstream.headers.append("set-cookie", "first=1; Secure; HttpOnly; Path=/");
+    upstream.headers.append("set-cookie", "second=2; Secure; SameSite=Lax; Path=/");
+    const deps = {
+      ...dispatchDeps(),
+      honoFetch: vi.fn(async () => upstream),
+      resolve: vi.fn(async () => upstream),
+    };
+    const url = new URL(request.url);
+    if (branch === "untrusted") url.host = "untrusted.example";
+    const response = await dispatchHookRequest(
+      { request, url, route: { id: branch === "fallback" ? "/[...path]" : "/about" } },
+      deps,
+    );
+    expect(response.status).toBe(304);
+    expect(await response.text()).toBe("");
+    expect([...response.headers]).toEqual([...upstream.headers]);
+    expect(response.headers.getSetCookie()).toEqual(upstream.headers.getSetCookie());
+    expect(response.headers.get("content-security-policy")).toBeTruthy();
+    expect(response.headers.get("x-request-id")).toBeTruthy();
+    expect(response.headers.get("x-two-origin")).toBe("hono");
+    expect(deps.honoFetch.mock.calls.length + deps.resolve.mock.calls.length).toBe(1);
+  });
+
+  it.each([
+    [200, null, '"fixture-etag"'],
+    [200, '"other"', '"fixture-etag"'],
+    [200, "*", '"fixture-etag"'],
+    [200, '"other", "fixture-etag"', '"fixture-etag"'],
+    [200, '"fixture-etag"', null],
+    [304, '"fixture-etag"', '"fixture-etag"'],
+    [404, '"fixture-etag"', '"fixture-etag"'],
+    [201, '"fixture-etag"', '"fixture-etag"'],
+  ])("does not rewrite status %s / validator %s / ETag %s", async (status, validator, etag) => {
+    const requestHeaders = new Headers();
+    if (validator !== null) requestHeaders.set("if-none-match", validator);
+    const request = new Request(`${APP_URL}/unowned`, { headers: requestHeaders });
+    const responseHeaders = new Headers(headers);
+    if (etag === null) responseHeaders.delete("etag");
+    const upstream = new Response(status === 304 ? null : "body", {
+      status,
+      headers: responseHeaders,
+    });
+    const response = await dispatchHookRequest(
+      { request, url: new URL(request.url), route: { id: "/[...path]" } },
+      { ...dispatchDeps(), honoFetch: async () => upstream },
+    );
+    expect(response).toBe(upstream);
+  });
+});
+
 describe("Kit pre-hook configuration", () => {
   it("pins ignore on every endpoint and the root page layout", () => {
     const endpoints = filesUnder("web/src/routes").filter((path) => path.endsWith("/+server.ts"));

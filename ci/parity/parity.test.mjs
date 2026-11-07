@@ -22,9 +22,53 @@ import {
   normalizeSetCookie,
 } from "./normalize.mjs";
 import { signedCookieNames } from "./signed-cookies.mjs";
+import { productionHonoTarget } from "./production.mjs";
+import { readWranglerConfig } from "../wrangler-config.mjs";
 import { buildVectors, concretePath, listPublicFiles, slug } from "./vectors.mjs";
 
 const repo = join(import.meta.dirname, "../..");
+test("production comparison retains Hono, production origin and all-family-off Kit", () => {
+  const root = readWranglerConfig(readFileSync(join(repo, "wrangler.jsonc"), "utf8"));
+  const kit = readWranglerConfig(readFileSync(join(repo, "web/wrangler.production.jsonc"), "utf8"));
+  const target = productionHonoTarget(root, kit);
+  assert.equal(target.main, join(repo, "src/worker.ts"));
+  assert.equal(target.vars.APP_URL, "https://togetherweown.com");
+  assert.deepEqual(target.vars, root.env.production.vars);
+  assert.deepEqual(target.queues, root.env.production.queues);
+  assert.equal(target.assets.directory, join(repo, "public"));
+  assert.equal(target.routes, undefined);
+  assert.equal(target.hyperdrive, undefined);
+  assert.equal(target.env, undefined);
+  assert.equal(root.main, "src/worker.ts");
+  for (const flag of ["KIT_ROUTE_ARCHIVE", "KIT_ROUTE_STATIC"])
+    for (const value of [undefined, "true", "FALSE"])
+      assert.throws(
+        () => productionHonoTarget(root, { ...kit, vars: { ...kit.vars, [flag]: value } }),
+        /requires/,
+      );
+  assert.throws(() => productionHonoTarget({ ...root, main: "kit.ts" }, kit), /pure-Hono/);
+  assert.throws(() => productionHonoTarget(root, { ...kit, name: "different" }), /share/);
+  assert.throws(
+    () =>
+      productionHonoTarget(root, {
+        ...kit,
+        vars: { ...kit.vars, APP_URL: "https://next.togetherweown.com" },
+      }),
+    /share/,
+  );
+});
+
+test("production comparison is wired after the adapter build and uploads its recordings", () => {
+  const workflow = readFileSync(join(repo, ".github/workflows/ci.yml"), "utf8");
+  const build = workflow.indexOf("- name: Kit adapter build and local startup diagnostic");
+  const parity = workflow.indexOf("- name: Production Kit all-family-off route parity");
+  assert.ok(build >= 0 && parity > build);
+  assert.match(workflow, /node --import tsx ci\/parity\/production\.mjs/);
+  assert.match(workflow, /path: artifacts\/production-kit-parity\//);
+  const source = readFileSync(join(repo, "ci/parity/record.mjs"), "utf8");
+  assert.match(source, /vector\.origin === SAME_ORIGIN \? context\.appUrl : vector\.origin/);
+});
+
 const inventory = JSON.parse(
   readFileSync(join(repo, "test/fixtures/route-inventory.json"), "utf8"),
 );
