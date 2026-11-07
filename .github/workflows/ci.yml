@@ -583,6 +583,13 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Deterministic capture fixture (owned schema, two clean seeds, no captures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run capture:verify
+        env:
+          DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          APP_URL: http://127.0.0.1:8787
+          CAPTURE_SEED_ID: ember-capture-v1
       - name: Migration workflow selftest (isolated Postgres, no network APIs)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run db:migrate:selftest
