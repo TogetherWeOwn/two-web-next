@@ -422,6 +422,13 @@ database probe or production test.
 
 ### Production (gated automatic promotion)
 
+The production app Worker builds once with a native esbuild metafile, verifies
+its digest-bound inventory, then uploads those same bytes with `--no-bundle`.
+Only a successful version-aware promotion smoke creates deployed evidence.
+See the [Worker bundle inventory contract](docs/worker-bundle-inventory.md) for
+artifact names, schemas, conservative package findings and consumer validation.
+CI dry-run inventories alone are not deployment evidence.
+
 Cutover decision state is recorded in `docs/cutover-gates.md` and the release
 contract in `docs/releases.md`; this section describes the deployment contract,
 not the currently serving version. Worker code reaches production only through
