@@ -108,6 +108,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
         ]) {
           await page.goto(`${origin}${path}?${query}#rsvp-roster`);
           await expect(page.getByTestId("rsvp-roster")).toBeVisible();
+          expect(await page.evaluate(() => document.documentElement.scrollWidth)).toBe(viewport.width);
           await expect(page.getByTestId("roster-table-scroll")).toHaveCSS("overflow-x", "auto");
           await expect(page.getByTestId("rsvp-roster").getByRole("columnheader")).toHaveCount(
             before ? 3 : 4,
