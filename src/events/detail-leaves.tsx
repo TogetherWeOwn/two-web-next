@@ -40,7 +40,9 @@ export interface DetailShareModel {
 }
 
 export interface DetailLeavesModel
-  extends DetailMetadataModel, DetailRosterModel, DetailShareModel {
+  extends DetailMetadataModel,
+    DetailRosterModel,
+    DetailShareModel {
   rsvpOpen: boolean;
   rsvpClosed: RsvpClosedReason | null;
   answer: ViewerRsvp | null;
@@ -61,8 +63,8 @@ export const EventShare: FC<{ model: DetailShareModel }> = ({ model }) => (
     <h2 id="event-share-heading">Save the date</h2>
     {model.status === "draft" ? (
       <p data-testid="event-share-draft-note">
-        Calendar and share links open once this event is published. Members can&apos;t open a
-        draft yet.
+        Calendar and share links open once this event is published. Members can&apos;t open a draft
+        yet.
       </p>
     ) : (
       <>
