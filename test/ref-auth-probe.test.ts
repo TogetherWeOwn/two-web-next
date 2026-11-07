@@ -3,7 +3,11 @@ import { describe, expect, it, vi } from "vitest";
 
 const workflow = readFileSync(".github/workflows/ci-ref-auth-probe.yml", "utf8");
 const scripts = [...workflow.matchAll(/^          script: \|\n((?: {12}[^\n]*\n|\n)+)/gm)].map(
-  (match) => match[1].replace(/^ {12}/gm, ""),
+  (match) => {
+    const script = match[1];
+    if (script === undefined) throw new Error("Missing workflow script capture");
+    return script.replace(/^ {12}/gm, "");
+  },
 );
 const AsyncFunction = Object.getPrototypeOf(async () => {}).constructor;
 const target = "a".repeat(40);
@@ -88,8 +92,8 @@ describe("isolated ref authorization probe", () => {
       "POST /repos/{owner}/{repo}/git/tags",
       "POST /repos/{owner}/{repo}/git/refs",
     ]);
-    expect(h.request.mock.calls[3][1]).toMatchObject({ object: target, type: "commit" });
-    expect(h.request.mock.calls[4][1]).toMatchObject({ ref, sha: tagSha });
+    expect(h.request.mock.calls[3]?.[1]).toMatchObject({ object: target, type: "commit" });
+    expect(h.request.mock.calls[4]?.[1]).toMatchObject({ ref, sha: tagSha });
     expect(h.core.summary.addCodeBlock).toHaveBeenCalledWith(
       expect.stringContaining('"run_head"'),
       "json",
