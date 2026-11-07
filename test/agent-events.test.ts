@@ -81,7 +81,9 @@ describe("busy response redaction assertion (pure)", () => {
     "still rejects leaked diagnostics outside the request ID: %s",
     (diagnostic) => {
       const response = answer();
-      expect(() => busy({ ...response, body: { ...response.body, message: diagnostic } })).toThrow();
+      expect(() =>
+        busy({ ...response, body: { ...response.body, message: diagnostic } }),
+      ).toThrow();
       expect(() =>
         busy({ ...response, body: { ...response.body, details: { request_id: diagnostic } } }),
       ).toThrow();
