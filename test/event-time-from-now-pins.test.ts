@@ -80,10 +80,10 @@ describe("event time-from-now served-markup pins", () => {
     // first-paint race and the quality gate records CLS on the event page).
     const theme = readFileSync("public/event-theme.css", "utf8");
     expect(theme).toContain(
-      ".event-theme .event-meta div[hidden]{display: block;visibility: hidden}",
+      ".event-theme .event-meta div[hidden]{display:block;visibility:hidden}",
     );
     expect(theme).toContain(
-      ".event-theme .event-meta button[hidden],.event-theme .event-meta input[hidden]{display: inline-block;visibility: hidden}",
+      ".event-theme .event-meta button[hidden],.event-theme .event-meta input[hidden]{display:inline-block;visibility:hidden}",
     );
   });
   it("does not offer the action on a draft", () => {
