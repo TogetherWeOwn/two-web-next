@@ -136,10 +136,17 @@ for (const renderer of ["Hono", "Kit"] as const) {
           await page.screenshot({ path: info.outputPath(`${filename}-full.png`), fullPage: true });
           if (viewport.width === 390) {
             const offset = await page.getByTestId("roster-table-scroll").evaluate((el) => {
+              el.scrollIntoView({ block: "start" });
               el.scrollLeft = el.scrollWidth;
               return el.scrollLeft;
             });
             expect(offset).toBeGreaterThan(0);
+            const header = page.getByTestId("rsvp-roster").getByRole("columnheader").last();
+            await expect(header).toBeInViewport({ ratio: 1 });
+            if (!before) {
+              const rank = waitlistCells(page).filter({ hasText: /^#\d+$/ }).first();
+              await expect(rank).toBeInViewport({ ratio: 1 });
+            }
             await page.screenshot({ path: info.outputPath(`${filename}-scrolled.png`) });
           }
         }
