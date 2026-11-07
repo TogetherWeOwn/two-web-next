@@ -15,12 +15,17 @@ exactly one server file changes, `chunks/admin.js`, +4225 raw and +1906
 gzip. Kit client JS is byte-identical to main.
 
 Exact-head CI measured the composed build (this branch merged with main
-`161462d2`) at 1226469 raw across 114 files. Main alone measured 1222246
-at `161462d2`, so this feature adds 4223 raw, matching the per-file
-attribution. Main grew by 3318 server bytes between `5e3bfae8` (1218928)
-and `161462d2`, which is why earlier measurements over `9bd711c6`
-(1222055) and `5e3bfae8` (1222658) fit lower ceilings. The fixture
-interval value is the 1226469 measurement.
+`2c86dc09`, merge ref `3d0a43fc`) at 1228316 raw across 114 files. Main
+alone measured 1224091 at `2c86dc09`, so this feature adds 4225 raw,
+matching the per-file attribution. The fixture interval value is the
+1228316 measurement.
+
+Main alone at `2c86dc09` is 1435 bytes over its own 1222656 ceiling. Its
+server JS grew from 1222363 at `21a17861` through #2056 and #2001, each
+of which fit on its own base. This step therefore also covers that main
+growth; it is recorded here, not attributed to this feature. Earlier
+measurements of this branch over `161462d2` (1226469) and `21a17861`
+(1226590) fit 1226752 for the same reason.
 
 Compaction already applied before sizing:
 
@@ -40,9 +45,10 @@ lose the conformance test's exact-match guarantee, so this PR keeps them.
 
 ## Least-cover sizing
 
-- Server raw 1222656 -> 1226752: +4096 bytes, 0.335%; the smallest
-  512-byte step that covers the composed build (1226240 rejects it by
-  229). Main moving to `21a17861` (1222363, +117) still leaves 166 bytes.
+- Server raw 1222656 -> 1228800: +6144 bytes, 0.503%; the smallest
+  512-byte step that covers the composed build (1228288 rejects it by
+  28). Headroom over the `2c86dc09` measurement is 484 bytes. Of the
+  6144, 1435 cover main's own overage at `2c86dc09` and 4225 this feature.
 - Server gzip stays at 342272. Since
   `2026-11-04-server-gzip-runtime-boundary.md`, server gzip overages warn
   and do not gate, so this PR does not raise that ceiling.
@@ -53,6 +59,6 @@ budget change. No Class-A budget changes.
 ## Enforcement
 
 The fragment oracle in `ci/budget-fragments.test.mjs` admits server raw
-1226752 only from its explicit allocation list and keeps every earlier
+1228800 only from its explicit allocation list and keeps every earlier
 allocation. The checker fixtures in `ci/check-kit-perf.test.mjs` pin the
 interval, exact and one-over cases for the new ceiling.
