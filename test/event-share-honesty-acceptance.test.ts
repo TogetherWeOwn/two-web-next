@@ -59,7 +59,9 @@ for (const view of SHARE_VIEWS) {
         )!;
         const id = attr(field, "id");
         expect(id).toBeTruthy();
-        expect(nodes.some((node) => node.tagName === "label" && attr(node, "for") === id)).toBe(true);
+        expect(nodes.some((node) => node.tagName === "label" && attr(node, "for") === id)).toBe(
+          true,
+        );
         expect(html).toContain('data-testid="event-manual-copy"');
         const copy = nodes.filter((node) => attr(node, "data-testid") === "event-copy-link");
         expect(copy).toHaveLength(1);
@@ -120,9 +122,7 @@ for (const view of SHARE_VIEWS) {
       );
       // Only the heading and the publication note; no status region either.
       expect(inside.some((node) => attr(node, "role") === "status")).toBe(false);
-      expect(
-        inside.filter((node) => !["section", "h2", "p"].includes(node.tagName)),
-      ).toEqual([]);
+      expect(inside.filter((node) => !["section", "h2", "p"].includes(node.tagName))).toEqual([]);
       expect(html).not.toContain("data-copy-link=");
       expect(html).not.toContain(".ics");
     });

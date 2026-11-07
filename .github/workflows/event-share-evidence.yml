@@ -25,12 +25,21 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
           persist-credentials: false
       - name: Retain the capture recipe from the reviewed head
         run: cp ci/event-native-share-browser.test.mjs "$RUNNER_TEMP/event-share-capture.mjs"
+      - name: Resolve the before revision at the PR fork point
+        id: baseline
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          baseline=$(git merge-base "$BASE_SHA" "$HEAD_SHA")
+          printf 'sha=%s\n' "$baseline" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ matrix.phase == 'before' && github.event.pull_request.base.sha || github.event.pull_request.head.sha }}
+          ref: ${{ matrix.phase == 'before' && steps.baseline.outputs.sha || github.event.pull_request.head.sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

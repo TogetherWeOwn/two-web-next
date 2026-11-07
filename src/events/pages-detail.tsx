@@ -330,7 +330,12 @@ export const EventPage: FC<{
               <p data-testid="event-manual-copy">
                 Select the event link and copy it manually to share it.
               </p>
-              <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+              <p
+                role="status"
+                aria-live="polite"
+                data-testid="event-copy-toast"
+                data-copy-toast
+              ></p>
               {e.status === "published" ? (
                 <p
                   role="status"
