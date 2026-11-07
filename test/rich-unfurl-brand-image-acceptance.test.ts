@@ -265,7 +265,7 @@ function expectRichUnfurl(
   const images = metaContents(html, "property", "og:image");
   expect(images, `${page}: exactly one og:image`).toHaveLength(1);
   expect(images, `${page}: exact brand asset on the canonical origin`).toEqual([
-    `${new URL(canonical).origin}/icons/icon-512.png`,
+    `${new URL(canonical).origin}/og-1200x630.png`,
   ]);
   const alts = metaContents(html, "property", "og:image:alt");
   expect(alts, `${page}: exactly one og:image:alt`).toHaveLength(1);
@@ -298,9 +298,9 @@ async function expectBrandAssetServed(imageUrl: string, canonical: string) {
   expect(image.hash, "og:image carries no fragment").toBe("");
   expect(image.pathname.startsWith("//"), "og:image has no double slash").toBe(false);
   expect(imageUrl, "served image is the exact absolute brand URL").toBe(
-    `${canon.origin}/icons/icon-512.png`,
+    `${canon.origin}/og-1200x630.png`,
   );
-  const approved = image.pathname === "/icons/icon-512.png";
+  const approved = image.pathname === "/og-1200x630.png";
   expect(approved, `og:image reuses an approved brand file, got ${image.pathname}`).toBe(true);
   const diskPath = join(root, "public", image.pathname);
   expect(existsSync(diskPath), `og:image exists under public/: ${image.pathname}`).toBe(true);
@@ -733,7 +733,7 @@ describe("Kit home and both profile routes emit the exact brand image", () => {
     expect(canonicals(head)).toEqual(["https://next.example.test/"]);
     expect(metaContents(head, "property", "og:url")).toEqual(["https://next.example.test/"]);
     expect(metaContents(head, "property", "og:image")).toEqual([
-      "https://next.example.test/icons/icon-512.png",
+      "https://next.example.test/og-1200x630.png",
     ]);
     expect(metaContents(head, "property", "og:image:alt")).toEqual([
       "Together We Own community logo",
@@ -754,7 +754,7 @@ describe("Kit home and both profile routes emit the exact brand image", () => {
       expect(
         metaContents(head, "property", "og:image"),
         `${route}: exactly one brand image`,
-      ).toEqual(["https://next.example.test/icons/icon-512.png"]);
+      ).toEqual(["https://next.example.test/og-1200x630.png"]);
       expect(
         metaContents(head, "property", "og:image:alt"),
         `${route}: exactly one brand alt`,

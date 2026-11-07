@@ -38,6 +38,9 @@ export const Shell: FC<
         <meta charset="utf-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <title>{title} — TWO admin</title>
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+        <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
+        <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
         <link rel="stylesheet" href="/styles.css" />
         <link rel="stylesheet" href="/admin-rsvp-review.css" />
         {stylesheet ? <link rel="stylesheet" href={stylesheet} /> : null}
