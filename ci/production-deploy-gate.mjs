@@ -130,27 +130,39 @@ export async function checkPromotionAncestry(env, { fetchImpl = fetch } = {}) {
   if (typeof liveSha !== "string" || !/^[0-9a-f]{40}$/.test(liveSha)) {
     throw new Error("Default promotion requires a known full 40-hex live production SHA");
   }
-  if (isAlreadyLive(targetSha, liveSha)) return "equal";
+  const alreadyLive = isAlreadyLive(targetSha, liveSha);
   if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY ?? "")) {
     throw new Error("Promotion ancestry requires GITHUB_REPOSITORY owner/repo");
   }
   if (!env.GITHUB_TOKEN) throw new Error("Promotion ancestry requires GITHUB_TOKEN");
-  const response = await fetchImpl(
-    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${liveSha}...${targetSha}`,
-    {
-      headers: {
-        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
-        Accept: "application/vnd.github+json",
-        "X-GitHub-Api-Version": "2022-11-28",
-      },
-      redirect: "error",
-      signal: AbortSignal.timeout(10_000),
+  // Equality is a clean no-op only when main is also live. Read main now, not
+  // workflow_run's head_sha or the workflow checkout: either can lag the tip.
+  const path = alreadyLive ? "/commits/main" : `/compare/${liveSha}...${targetSha}`;
+  const response = await fetchImpl(`https://api.github.com/repos/${env.GITHUB_REPOSITORY}${path}`, {
+    headers: {
+      Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+      Accept: "application/vnd.github+json",
+      "X-GitHub-Api-Version": "2022-11-28",
     },
-  );
+    redirect: "error",
+    signal: AbortSignal.timeout(10_000),
+  });
   if (!response.ok) {
     throw new Error(`Promotion ancestry lookup failed (HTTP ${response.status})`);
   }
   const comparison = await response.json();
+  if (alreadyLive) {
+    const mainSha = comparison?.sha;
+    if (typeof mainSha !== "string" || !/^[0-9a-f]{40}$/.test(mainSha)) {
+      throw new Error("Cannot prove default promotion is current: main SHA is missing or invalid");
+    }
+    if (mainSha !== liveSha) {
+      throw new Error(
+        `Default promotion stalled: selected ${targetSha} is already live, but main is ${mainSha}; restore first-attempt staging journeys/passive/quality evidence for a new commit and soak, or use an explicitly authorized SHA dispatch for recovery`,
+      );
+    }
+    return "equal";
+  }
   // Exact SHA refs bind the requested head. Require the base and merge-base
   // identities plus consistent counts, not a status string alone. Do not use
   // the commits array: GitHub can paginate/truncate it for large comparisons.
@@ -1156,10 +1168,9 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
         `No regression against production: ${result.passedOnProduction}/${result.checks} checks pass on production and all pass on the candidate; staging error rate ${result.stagingRate.toFixed(4)} over ${result.staging.requests} requests (${result.verdict}), limit ${result.limit.toFixed(4)} from production ${result.productionRate.toFixed(4)} over ${result.production.requests}`,
       );
     } else if (process.argv[2] === "--already-live") {
-      // Clean skip when production already serves the target: exits 0 in
-      // both cases and reports via GITHUB_OUTPUT so the workflow can skip
-      // the deploy without going red. An unreadable /up never counts as
-      // live; --check-ancestry then refuses every default selection.
+      // Identity only: --check-ancestry must still refuse an already-live
+      // default selection when main differs. An unreadable /up never counts
+      // as live; --check-ancestry then refuses every default selection.
       const deploySha = (process.env.DEPLOY_SHA ?? "").replace(/\s+/g, "").toLowerCase();
       if (!/^[0-9a-f]{40}$/.test(deploySha)) {
         throw new Error("DEPLOY_SHA must be a full 40-hex commit (resolved by the preflight job)");
@@ -1174,7 +1185,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       const already = isAlreadyLive(deploySha, live);
       console.log(
         already
-          ? `Production already serves ${deploySha}; skipping deploy`
+          ? `Production already serves ${deploySha}; checking promotion progress before standing down`
           : live
             ? `Production serves ${live}, promoting ${deploySha}`
             : "Production live commit unreadable; proceeding to promotion gates",

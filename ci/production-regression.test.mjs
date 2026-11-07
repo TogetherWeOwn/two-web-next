@@ -509,7 +509,8 @@ test("e2e-staging records the passive set for every promotable deploy", () => {
     workflow.indexOf("\n  staging-passive:\n"),
     workflow.indexOf("\n  staging-journeys:\n"),
   );
-  assert.match(job, /needs\.scope\.outputs\.skip_e2e != 'true'/);
+  assert.doesNotMatch(job, /needs\.scope\.outputs\.skip_e2e/);
+  assert.match(job, /needs: scope\n/);
   assert.match(
     job,
     /ref: \$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}/,
