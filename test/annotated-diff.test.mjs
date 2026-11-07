@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
 import { afterAll, describe, expect, it } from "vitest";
 import {
@@ -287,6 +288,52 @@ describe("regions", () => {
     expect(r.passes.every((p) => !p.active)).toBe(true);
     expect(PNG.sync.read(r.mask).width).toBe(40);
     expect(PNG.sync.read(r.mask).data.every((value) => value === 255)).toBe(true);
+  });
+
+  it("preserves direct pixelmatch pass evidence and mask bytes on fast paths", () => {
+    const white = png(40, 40);
+    const cases = [
+      [white, png(40, 40)],
+      [white, png(40, 40, [255, 255, 255], square(10, 10, 3))],
+      [white, png(40, 40, [255, 255, 255], square(15, 15, 10))],
+      [white, png(40, 40, [245, 245, 245])],
+      [white, png(40, 50)],
+      [white, png(40, 50, [0, 0, 0])],
+    ];
+    for (const [a, b] of cases) {
+      const width = a.width,
+        height = Math.max(a.height, b.height),
+        size = width * height;
+      const aligned = [a, b].map((image) => {
+        const data = Buffer.alloc(size * 4, 255);
+        image.data.copy(data);
+        return data;
+      });
+      const expectedMask = new PNG({ width, height });
+      expectedMask.data.fill(255);
+      const expectedPasses = [
+        [THRESHOLDS.tolerant, THRESHOLDS.minimum],
+        [THRESHOLDS.sensitive, size * THRESHOLDS.ratio],
+      ].map(([threshold, floor]) => {
+        const diff = new Uint8Array(size * 4);
+        const count = pixelmatch(...aligned, diff, width, height, {
+          threshold,
+          includeAA: false,
+          diffMask: true,
+        });
+        if (count >= floor)
+          for (let i = 0; i < size; i++)
+            if (diff[i * 4 + 3]) {
+              expectedMask.data.fill(0, i * 4, i * 4 + 3);
+            }
+        return { threshold, count, floor, active: count >= floor };
+      });
+      const actual = regions(a, b, 1, true);
+      expect(actual.passes).toEqual(expectedPasses);
+      expect(actual.mask.equals(PNG.sync.write(expectedMask))).toBe(true);
+      if (expectedPasses.every((p) => !p.active)) expect(actual.regions).toEqual([]);
+      else expect(actual.regions.length).toBeGreaterThan(0);
+    }
   });
 
   it("freezes the pass thresholds", () => {

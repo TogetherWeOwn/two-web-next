@@ -436,19 +436,28 @@ export function regions(a, b, dpr = 2, fullPage = false) {
   const aa = align(a),
     bb = align(b),
     mask = new Uint8Array(size),
-    passes = [];
+    passes = [],
+    identical = aa.equals(bb);
   for (const [threshold, floor] of [
     [THRESHOLDS.tolerant, THRESHOLDS.minimum],
     [THRESHOLDS.sensitive, size * THRESHOLDS.ratio],
   ]) {
-    const diff = new Uint8Array(size * 4);
-    const count = pixelmatch(aa, bb, diff, width, height, {
-      threshold,
-      includeAA: false,
-      diffMask: true,
-    });
+    const diff = identical ? null : new Uint8Array(size * 4);
+    const count = identical
+      ? 0
+      : pixelmatch(aa, bb, diff, width, height, {
+          threshold,
+          includeAA: false,
+          diffMask: true,
+        });
     passes.push({ threshold, count, floor, active: count >= floor });
     if (count >= floor) for (let i = 0; i < size; i++) if (diff[i * 4 + 3]) mask[i] = 1;
+  }
+  // An empty gated mask cannot grow regions; retain its exact PNG and pass evidence.
+  if (passes.every((p) => !p.active)) {
+    const raw = new PNG({ width, height });
+    raw.data.fill(255);
+    return { regions: [], mask: PNG.sync.write(raw), passes };
   }
   // Square dilation in two sliding-window passes, in device pixels.
   const radius = THRESHOLDS.dilation * dpr,

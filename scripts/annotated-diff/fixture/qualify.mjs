@@ -316,6 +316,8 @@ const audits = [];
 await new Promise((resolve) => server.listen(new URL(url).port, "127.0.0.1", resolve));
 try {
   for (const mode of ["full-page", "viewport", "fallback", "candidate-flake", "zero"]) {
+    const started = performance.now();
+    console.log("CAPTURE_PATH_STAGE", mode, "capture");
     const dir = path.join(run, mode);
     const frozen = {
       ...spec,
@@ -370,6 +372,7 @@ try {
               ],
             },
           ];
+    console.log("CAPTURE_PATH_STAGE", mode, "compare");
     let manifest;
     if (["fallback", "candidate-flake"].includes(mode)) {
       await assert.rejects(() => compare({ dir, root: source, intent }), /capture_invalid/);
@@ -421,6 +424,7 @@ try {
         );
       await assert.rejects(() => render({ dir, author: "fixture:deterministic" }));
       audits.push({ mode, rejected: true });
+      console.log("CAPTURE_PATH_STAGE", mode, "complete", Math.round(performance.now() - started));
       continue;
     }
     for (const v of manifest.views) {
@@ -442,7 +446,9 @@ try {
         ),
       ),
     );
+    console.log("CAPTURE_PATH_STAGE", mode, "render");
     await render({ dir, author: "fixture:deterministic" });
+    console.log("CAPTURE_PATH_STAGE", mode, "check");
     const checked = await check({ dir });
     assert.equal(checked.checks.passed, true, JSON.stringify(checked.checks));
     for (const v of checked.views) {
@@ -504,6 +510,7 @@ try {
       checks: checked.checks,
       manifest_sha256: hash(await fs.readFile(path.join(dir, "annotated-diff.manifest.json"))),
     });
+    console.log("CAPTURE_PATH_STAGE", mode, "complete", Math.round(performance.now() - started));
   }
 } finally {
   await new Promise((resolve, reject) => server.close((e) => (e ? reject(e) : resolve())));
