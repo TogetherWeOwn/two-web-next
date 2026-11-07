@@ -2,11 +2,9 @@
 // route-inventory: GET /events/:file{.+\.ics}
 // Acceptance-owned: real app/read admission/builders, injected pg-proxy and
 // memory sessions only. No timestamp writes, database, Discord or network.
-import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
@@ -20,26 +18,24 @@ import {
   calendarRow,
   healthyVevent,
 } from "./helpers/ics-wire-fixture";
+import { encodeEventRow } from "./helpers/pg-proxy-event-projection";
 
 const PATH = `/events/${KEY}.ics`;
 const SECRET = "test-session-secret-at-least-32-bytes-long";
 type Actor = "guest" | "member" | "moderator";
-const columns = Object.keys(getTableColumns(events)) as (keyof CalendarRow)[];
-
 function fixture(initial = [calendarRow()]) {
   const rows = initial;
-  const wire = (row: CalendarRow) =>
-    columns.map((key) => {
-      const value = row[key];
-      // Model driver decoding of a non-finite PostgreSQL timestamp. Never
-      // serialize an invalid Date with toISOString (that would test the fake).
-      return value instanceof Date
-        ? Number.isFinite(value.getTime())
-          ? value.toISOString()
-          : "infinity"
-        : value;
-    });
   const db = drizzle(async (sql, params) => {
+    const wire = (row: CalendarRow) =>
+      encodeEventRow(sql, params, row, (value) =>
+        // Model driver decoding of a non-finite PostgreSQL timestamp. Never
+        // serialize an invalid Date with toISOString (that would test the fake).
+        value instanceof Date
+          ? Number.isFinite(value.getTime())
+            ? value.toISOString()
+            : "infinity"
+          : value,
+      );
     if (sql.includes('from "events"') && sql.includes('"event_key" ='))
       return { rows: rows.filter((row) => row.eventKey === params[0]).map(wire) };
     if (sql.includes('from "events"') && sql.includes('"status" in')) {
