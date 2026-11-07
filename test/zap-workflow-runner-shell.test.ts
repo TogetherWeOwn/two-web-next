@@ -123,7 +123,7 @@ function workflowGateUnderRunner(first: unknown, second: unknown) {
     const verdicts = result.stdout
       .split("\n")
       .filter((line) => line.startsWith("{"))
-      .map((line) => JSON.parse(line));
+      .map((line) => JSON.parse(line) as { error_code: string; alerts: { plugin_id: string }[] });
     return {
       status: result.status,
       scans,
@@ -192,7 +192,10 @@ describe("ZAP workflow consumer under runner errexit", () => {
       ["high_alert", ["40012"]],
     ]);
     expect(result.summary.match(/^## ZAP baseline/gm)).toHaveLength(2);
-    expect(result.summary).toContain("Re-scan after a lone PII Disclosure (10062) High");
+    // Blank lines around the label end the first alert table, so it does not render as a row.
+    expect(result.summary).toMatch(
+      /\|\n\nRe-scan after a lone PII Disclosure \(10062\) High[^\n]*\n\n/,
+    );
     expect(result.summary).toContain("| High | 40012 | Cross Site Scripting | 1 |");
     // Report text (instance evidence, URLs, matched values) never reaches the log or summary.
     expect(result.output).not.toContain("4111111111111111");

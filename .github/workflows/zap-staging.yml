@@ -80,7 +80,7 @@ jobs:
             if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then echo "zap-baseline.py exited $rc"; exit 1; fi
             test -s "$RUNNER_TEMP/zap/zap-report.json"
             echo "Re-scan verdict:"
-            echo "Re-scan after a lone PII Disclosure (10062) High; the section above is the first scan." >> "$GITHUB_STEP_SUMMARY"
+            printf '\nRe-scan after a lone PII Disclosure (10062) High; the section above is the first scan.\n\n' >> "$GITHUB_STEP_SUMMARY"
             node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json --format json | tee "$RUNNER_TEMP/zap/rescan-verdict.json"
           else
             exit 1
