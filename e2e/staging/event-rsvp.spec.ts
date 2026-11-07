@@ -88,10 +88,20 @@ async function createDraft(admin: Page, stem: string, capacity: number): Promise
   await admin.getByLabel("Location", { exact: true }).fill("Staging lounge");
   await admin.getByLabel("Capacity (empty = unlimited)").fill(String(capacity));
   await admin.getByRole("button", { name: "Create draft", exact: true }).click();
-  await expect(admin).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}$/);
+  // Saved drafts stay on the editor with a review link; the query is not part of the key.
+  await expect(admin).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}\?saved=1$/);
   const eventKey = new URL(admin.url()).pathname.split("/").at(-1);
   expect(eventKey).toBeDefined();
+  expect(eventKey).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
   await expect(admin.getByRole("heading", { name: "Status: draft", exact: true })).toBeVisible();
+  const saved = admin.getByTestId("event-saved-review");
+  await expect(saved).toContainText("Saved.");
+  const review = saved.getByRole("link", {
+    name: "Review the saved event before publishing",
+    exact: true,
+  });
+  await expect(review).toBeVisible();
+  await expect(review).toHaveAttribute("href", `/e/${eventKey}?review=1`);
   return eventKey as string;
 }
 

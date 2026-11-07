@@ -15,9 +15,19 @@
 // wrong aggregate fails too. The public collection path is listJson alone;
 // viewer-specific waitlist reads are intentionally not part of its contract.
 import { drizzle } from "drizzle-orm/postgres-js";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { events } from "../src/db/admin-schema";
 import { adminSchema, schema } from "../src/db/index";
-import { getPublicEvent, listHomeUpcoming, listJson } from "../src/events/reads";
+import {
+  EGRESS_EVENT_KEY_MAX_BYTES,
+  FEED_EGRESS_LIMIT,
+  FEED_EGRESS_TEXT_MAX_BYTES,
+  getPublicEvent,
+  listFeed,
+  listHomeUpcoming,
+  listJson,
+  sitemapEvents,
+} from "../src/events/reads";
 import { goingCount } from "../src/events/waitlist";
 import { listVisibleFeatured } from "../src/featured";
 import {
@@ -209,5 +219,113 @@ describe.skipIf(!process.env.DATABASE_URL)("event bounded reads (agent-testdb)",
     });
     expect(measured.count).toBe(10);
     expect(measured.count).not.toBeLessThan(5);
+  });
+
+  // Sitemap stored-text admission (hermetic pins: sitemap-egress-text-bound).
+  // The real octet_length admission refuses an oversized key inside
+  // PostgreSQL; the refused row keeps its capped slot and is never refilled.
+  const STAMP = new Date("2026-07-01T12:00:00Z");
+  const REFUSAL = "Event egress read refused oversized stored text.";
+  const seedKeys = (keys: string[]) =>
+    fixture.db.insert(events).values(
+      keys.map((eventKey, i) => ({
+        eventKey,
+        title: "Game night",
+        timezone: "UTC",
+        status: "published",
+        startsAt: new Date(STAMP.getTime() + i * 60_000),
+        endsAt: new Date(STAMP.getTime() + i * 60_000 + 3_600_000),
+        createdBy: "event-moderator",
+        createdAt: STAMP,
+        updatedAt: STAMP,
+      })),
+    );
+
+  it("sitemap refuses oversized stored keys in PostgreSQL and ships healthy siblings", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const exact = "𝄞".repeat(EGRESS_EVENT_KEY_MAX_BYTES / 4);
+      // Compressible, so the unique key index still accepts the 64 KiB value.
+      const keys = ["01ARZ3NDEKTSV4RRFFQ69G5FAV", exact, `${exact}k`, "k".repeat(65_536)];
+      await seedKeys(keys);
+      expect((await sitemapEvents(countedDb)).map((entry) => entry.key)).toEqual(keys.slice(0, 2));
+      expect(warn.mock.calls.filter(([message]) => message === REFUSAL)).toEqual([
+        [REFUSAL, { surface: "sitemap", skipped: 2, code: "stored-text-oversized" }],
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("sitemap saturated refusal keeps every capped slot in one SELECT without refilling", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      // 1000 oversized keys fill the cap; the healthy 1001st row starts last.
+      await seedKeys(
+        Array.from({ length: FEED_EGRESS_LIMIT + 1 }, (_, i) =>
+          i < FEED_EGRESS_LIMIT
+            ? `${String(i).padStart(4, "0")}${"x".repeat(EGRESS_EVENT_KEY_MAX_BYTES - 3)}`
+            : "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+        ),
+      );
+      const measured = await countStatements(() => sitemapEvents(countedDb));
+      expect(measured.result).toEqual([]);
+      expect(measured.count).toBe(1);
+      expect(warn.mock.calls).toEqual([
+        [
+          "Event egress read reached capacity.",
+          { surface: "sitemap", limit: FEED_EGRESS_LIMIT, returned: FEED_EGRESS_LIMIT },
+        ],
+        [
+          REFUSAL,
+          { surface: "sitemap", skipped: FEED_EGRESS_LIMIT, code: "stored-text-oversized" },
+        ],
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  // Feed stored-text admission (hermetic pins: feed-egress-text-bound). The
+  // whole-row marker must treat a NULL optional column as fitting, and a
+  // value one byte over any budget as refused, inside PostgreSQL.
+  it("feed refuses oversized stored text in PostgreSQL and ships NULL-text siblings", async () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      const fields = Object.keys(
+        FEED_EGRESS_TEXT_MAX_BYTES,
+      ) as (keyof typeof FEED_EGRESS_TEXT_MAX_BYTES)[];
+      const exact = Object.fromEntries(
+        fields.map((field) => [field, "𝄞".repeat(FEED_EGRESS_TEXT_MAX_BYTES[field] / 4)]),
+      ) as Record<(typeof fields)[number], string>;
+      const row = (i: number, text: Partial<typeof exact>) => ({
+        eventKey: `01ARZ3NDEKTSV4RRFFQ69G5F${String(i).padStart(2, "0")}`,
+        title: "Game night",
+        timezone: "UTC",
+        status: "published",
+        startsAt: new Date(STAMP.getTime() + i * 60_000),
+        endsAt: new Date(STAMP.getTime() + i * 60_000 + 3_600_000),
+        createdBy: "event-moderator",
+        createdAt: STAMP,
+        updatedAt: STAMP,
+        ...text,
+      });
+      await fixture.db
+        .insert(events)
+        .values([
+          row(0, {}),
+          row(1, exact),
+          ...fields.map((field, i) => row(i + 2, { [field]: `${exact[field]}k` })),
+        ]);
+      const output = await listFeed(countedDb, ["published"], new Date(STAMP.getTime() - 60_000));
+      expect(output.map((r) => r.startsAt.getTime() - STAMP.getTime())).toEqual([0, 60_000]);
+      expect(output[0]).toMatchObject({ game: null, description: null, organizer_name: null });
+      expect(output[1]).toMatchObject({ title: exact.title, description: exact.description });
+      expect(warn.mock.calls.filter(([message]) => message === REFUSAL)).toEqual([
+        [REFUSAL, { surface: "feed", skipped: fields.length, code: "stored-text-oversized" }],
+      ]);
+    } finally {
+      warn.mockRestore();
+    }
   });
 });
