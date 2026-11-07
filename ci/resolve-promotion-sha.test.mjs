@@ -19,9 +19,27 @@ const lhSteps = (conclusions) =>
 // runs: newest first, as the API returns them; jobs: run id -> staging-journeys conclusion, or
 // { journeys, quality, qualitySteps, qualityJobs } (quality defaults to success with both
 // Lighthouse steps executed successfully; null leaves the job out, like runs before the gate existed).
-function stub(runs, jobs) {
+// history: the full per-commit e2e-staging history (stagingRunsSinceCommit),
+// served for the `created` query; it defaults to runs. committed: the commit's
+// committer date, or null for a commit the API cannot date.
+function stub(runs, jobs, { history = runs, committed = "2025-12-01T00:00:00Z" } = {}) {
   return async (url) => {
     const { pathname, searchParams } = new URL(url);
+    if (/\/commits\/[0-9a-f]{40}$/.test(pathname)) {
+      return { ok: true, json: async () => ({ commit: { committer: { date: committed } } }) };
+    }
+    if (
+      pathname.endsWith("/actions/workflows/e2e-staging.yml/runs") &&
+      searchParams.has("created")
+    ) {
+      assert.equal(searchParams.get("branch"), "main");
+      assert.equal(searchParams.get("created"), ">=2025-11-30T00:00:00.000Z");
+      const page = Number(searchParams.get("page"));
+      return {
+        ok: true,
+        json: async () => ({ workflow_runs: history.slice((page - 1) * 100, page * 100) }),
+      };
+    }
     if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
       assert.equal(searchParams.get("branch"), "main");
       assert.equal(searchParams.get("event"), "workflow_run");
@@ -65,11 +83,11 @@ const run = (id, deployed, conclusion = "success", status = "completed", updated
   run_attempt: 1,
   updated_at,
 });
-const resolve = (runs, jobs, nowMs) =>
+const resolve = (runs, jobs, nowMs, history) =>
   resolvePromotionSha({
     repository: "o/r",
     token: "t",
-    fetchImpl: stub(runs, jobs),
+    fetchImpl: stub(runs, jobs, history),
     ...(nowMs ? { nowMs } : {}),
   });
 
@@ -643,6 +661,34 @@ test("an older red run on a later page still disqualifies the newer pass of its 
   );
 });
 
+test("an older red run past the resolver's window still disqualifies the newer pass of its commit", async () => {
+  // The window (5 pages of 20) shows only A's fresh first-attempt pass; A's
+  // failed run sits 150 runs back in its full history and still decides.
+  const C = "c".repeat(40);
+  const filler = Array.from({ length: 150 }, (_, i) => run(1000 - i, C, "cancelled"));
+  const history = [run(2000, A), ...filler, run(3, A, "failure")];
+  assert.equal(await resolve([run(2000, A)], { 2000: "success" }, undefined, { history }), null);
+  // Positive control: the same history without the red run promotes A.
+  assert.equal(
+    await resolve([run(2000, A)], { 2000: "success" }, undefined, {
+      history: history.slice(0, -1),
+    }),
+    A,
+  );
+});
+
+test("a commit history too long to read in full, or an undatable commit, is refused", async () => {
+  const history = Array.from({ length: 1000 }, (_, i) => run(5000 - i, A));
+  await assert.rejects(
+    resolve([run(5000, A)], { 5000: "success" }, undefined, { history }),
+    /More than 1000 e2e-staging runs since a{40} was committed: cannot prove it never went red/,
+  );
+  await assert.rejects(
+    resolve([run(2, A)], { 2: "success" }, undefined, { committed: null }),
+    /Cannot date commit a{40}/,
+  );
+});
+
 test("a cancelled first attempt of the same commit does not disqualify its pass", async () => {
   assert.equal(await resolve([run(4, A), run(3, A, "cancelled")], { 4: "success" }), A);
 });
@@ -713,6 +759,7 @@ test("resolver CLI promotes a soaked green on automatic triggers", () => {
       body: { workflow_runs: [cliRun(7, A, oldAt)] },
     },
     cliJobs(7),
+    { match: `/commits/${A}`, body: { commit: { committer: { date: oldAt } } } },
   ]);
   assert.equal(result.status, 0);
   assert.equal(result.written, `sha=${A}\n`);

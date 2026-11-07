@@ -759,7 +759,10 @@ Both modes refuse a candidate with red staging evidence: any failed or
 timed-out `e2e-staging` run that names it, or any run past its first attempt.
 GitHub's run list shows only a run's latest attempt, so a re-run that turned
 green hides the red attempt it replaced; the gate counts the re-run itself as
-red. A reviewer approval stands in for missing staging evidence, never for red
+red. The check reads every `e2e-staging` run created since the candidate was
+committed, not a fixed window, so a fresh redeploy cannot bury an older red
+run; a history too long to read in full (over 1,000 runs) is refused. A
+reviewer approval stands in for missing staging evidence, never for red
 evidence. Fix forward: land a new commit and promote it once its own staging
 run passes on the first attempt. A re-run can still diagnose a flake, but its
 green is not promotion evidence.

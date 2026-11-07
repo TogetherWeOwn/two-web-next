@@ -8,6 +8,7 @@ import {
   e2eTitle,
   isRedStagingRun,
   PROMOTION_SOAK_MS,
+  stagingRunsSinceCommit,
 } from "./resolve-promotion-sha.mjs";
 import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
@@ -437,11 +438,18 @@ export async function requireStagingEvidence(
   const evidence = [];
   for (const file of workflows) {
     const runs = [];
-    for (let page = 1; page <= pages; page += 1) {
-      const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
-      const batch = (await get(`/actions/workflows/${file}/runs?${query}`)).workflow_runs ?? [];
-      runs.push(...batch.filter((run) => run.display_title === titles[file]));
-      if (batch.length < 100) break;
+    if (file === "e2e-staging.yml") {
+      // Every e2e-staging run on the SHA, however old: fix forward refuses a
+      // red run anywhere in its history (stagingRunsSinceCommit).
+      const history = await stagingRunsSinceCommit({ get, sha });
+      runs.push(...history.filter((run) => run.display_title === titles[file]));
+    } else {
+      for (let page = 1; page <= pages; page += 1) {
+        const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
+        const batch = (await get(`/actions/workflows/${file}/runs?${query}`)).workflow_runs ?? [];
+        runs.push(...batch.filter((run) => run.display_title === titles[file]));
+        if (batch.length < 100) break;
+      }
     }
     if (!runs.length) {
       throw new Error(`Missing or incomplete exact-SHA ${file} evidence`);
@@ -489,40 +497,37 @@ export async function requireStagingSoakIfEvident(
   { repository, sha },
   { token, fetchImpl = fetch, nowMs = Date.now() } = {},
 ) {
-  const title = e2eTitle(sha);
-  const named = [];
-  const passed = [];
-  for (let page = 1; page <= 3; page += 1) {
-    const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
-    const response = await fetchImpl(
-      `https://api.github.com/repos/${repository}/actions/workflows/e2e-staging.yml/runs?${query}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
+  async function get(path) {
+    const response = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
       },
-    );
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!response.ok) {
       throw new Error(`Staging soak lookup failed (HTTP ${response.status})`);
     }
-    const batch = (await response.json()).workflow_runs ?? [];
-    for (const run of batch.filter((run) => run.display_title === title)) {
-      if (
-        !Number.isSafeInteger(run.id) ||
-        run.head_branch !== "main" ||
-        run.path !== ".github/workflows/e2e-staging.yml" ||
-        run.head_repository?.full_name !== repository
-      ) {
-        throw new Error("e2e-staging.yml evidence revision/branch/workflow mismatch");
-      }
-      named.push(run);
-      if (run.status === "completed" && run.conclusion === "success") passed.push(run);
+    return response.json();
+  }
+  const title = e2eTitle(sha);
+  const named = [];
+  const passed = [];
+  // Every e2e-staging run on the SHA, however old (stagingRunsSinceCommit).
+  for (const run of await stagingRunsSinceCommit({ get, sha })) {
+    if (run.display_title !== title) continue;
+    if (
+      !Number.isSafeInteger(run.id) ||
+      run.head_branch !== "main" ||
+      run.path !== ".github/workflows/e2e-staging.yml" ||
+      run.head_repository?.full_name !== repository
+    ) {
+      throw new Error("e2e-staging.yml evidence revision/branch/workflow mismatch");
     }
-    if (batch.length < 100) break;
+    named.push(run);
+    if (run.status === "completed" && run.conclusion === "success") passed.push(run);
   }
   // A reviewer approval stands in for missing staging evidence, never for red
   // evidence: a red or re-run staging verdict is fixed forward on a new commit.

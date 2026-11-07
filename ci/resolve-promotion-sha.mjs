@@ -46,6 +46,39 @@ export function isRedStagingRun(run) {
 export const deployTitle = (sha) => `deploy ${sha}`;
 export const e2eTitle = (sha) => `e2e-staging deploy ${sha}`;
 
+// Fix forward needs a commit's whole e2e-staging history, not a fixed window:
+// a redeploy can put a fresh first-attempt pass in front of a red run any
+// number of runs back. No run can name a commit before it was committed, so
+// every e2e-staging run created since its committer date (less a day for clock
+// skew) is read to the end of the list. A history too long to read in full is
+// refused, never truncated. `get` is the caller's GitHub API reader for the
+// repository; the result is every listed run, filter by e2eTitle(sha).
+export const STAGING_HISTORY_SKEW_MS = 24 * 60 * 60 * 1000;
+export async function stagingRunsSinceCommit({ get, sha, maxPages = 10 }) {
+  const committed = Date.parse((await get(`/commits/${sha}`))?.commit?.committer?.date ?? "");
+  if (!Number.isFinite(committed)) {
+    throw new Error(`Cannot date commit ${sha} to read its whole e2e-staging history`);
+  }
+  const since = new Date(committed - STAGING_HISTORY_SKEW_MS).toISOString();
+  const runs = [];
+  for (let page = 1; page <= maxPages; page += 1) {
+    const query = new URLSearchParams({
+      branch: "main",
+      created: `>=${since}`,
+      per_page: "100",
+      page: String(page),
+    });
+    const { workflow_runs: batch = [] } = await get(
+      `/actions/workflows/e2e-staging.yml/runs?${query}`,
+    );
+    runs.push(...batch);
+    if (batch.length < 100) return runs;
+  }
+  throw new Error(
+    `More than ${maxPages * 100} e2e-staging runs since ${sha} was committed: cannot prove it never went red`,
+  );
+}
+
 export async function resolvePromotionSha({
   repository,
   token,
@@ -68,7 +101,7 @@ export async function resolvePromotionSha({
   }
   // Every page is read before deciding: an older red run of a commit (a
   // re-run deploy starts a fresh e2e-staging run) must disqualify its newer
-  // green, and only the full list shows it.
+  // green. Older history past this window is read per candidate below.
   const runs = [];
   for (let page = 1; page <= pages; page += 1) {
     const query = new URLSearchParams({
@@ -126,6 +159,10 @@ export async function resolvePromotionSha({
       (quality.steps ?? []).some((step) => step.name === name && step.conclusion === "success"),
     );
     if (!executed) continue;
+    // The window above can miss an older red run of this commit; its whole
+    // history decides (stagingRunsSinceCommit).
+    const history = await stagingRunsSinceCommit({ get, sha });
+    if (history.some((past) => titleShaOf(past) === sha && isRedStagingRun(past))) continue;
     return sha;
   }
   return null;

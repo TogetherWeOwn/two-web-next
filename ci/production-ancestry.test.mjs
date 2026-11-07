@@ -419,6 +419,7 @@ const incidentRuns = [
   display_title: `e2e-staging deploy ${sha}`,
   status: "completed",
   conclusion: [41812145125, 41619180413].includes(id) ? "skipped" : "success",
+  run_attempt: 1,
   updated_at: SOAKED,
 }));
 const incidentJourneys = {
@@ -432,6 +433,9 @@ const incidentJourneys = {
 function incidentStaging() {
   return async (url) => {
     const { pathname, searchParams } = new URL(url);
+    if (pathname.endsWith(`/commits/${OLDER}`)) {
+      return okJson({ commit: { committer: { date: "2026-11-01T00:00:00Z" } } });
+    }
     if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
       const page = Number(searchParams.get("page"));
       const size = Number(searchParams.get("per_page"));
