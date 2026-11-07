@@ -137,6 +137,8 @@ for (const renderer of ["Hono", "Kit"] as const) {
           if (viewport.width === 390) {
             const offset = await page.getByTestId("roster-table-scroll").evaluate((el) => {
               el.scrollIntoView({ block: "start" });
+              // Keep fractional scroll rounding from clipping the header at the viewport edge.
+              window.scrollBy(0, -16);
               el.scrollLeft = el.scrollWidth;
               return el.scrollLeft;
             });
@@ -144,7 +146,9 @@ for (const renderer of ["Hono", "Kit"] as const) {
             const header = page.getByTestId("rsvp-roster").getByRole("columnheader").last();
             await expect(header).toBeInViewport({ ratio: 1 });
             if (!before) {
-              const rank = waitlistCells(page).filter({ hasText: /^#\d+$/ }).first();
+              const rank = waitlistCells(page)
+                .filter({ hasText: /^#\d+$/ })
+                .first();
               await expect(rank).toBeInViewport({ ratio: 1 });
             }
             await page.screenshot({ path: info.outputPath(`${filename}-scrolled.png`) });
