@@ -204,7 +204,7 @@ differs before its hook runs (trailing-slash 308, method handling, automatic
   CSP is one table line) and the set under GitHub's 20,000-line pull request
   diff limit; past it the diff API returns 406 and Devin Review fails without
   reviewing. Biome skips these directories. The committed set was
-  recorded at `226cbb91368f33babe7d90ac4b51f5203c6c0e2c`.
+  recorded at `2c86dc093c675a2eaff577da5aebf5d3cbd13924`.
 - `test/fixtures/parity/signed-cookies.json` holds `hono/cookie` vectors for
   every cookie `src/` signs (`node ci/parity/signed-cookies.mjs --write`).
 - `npm run check:route-parity` (the `check` job) records pure Hono twice and
