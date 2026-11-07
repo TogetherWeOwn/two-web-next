@@ -150,6 +150,7 @@ jobs:
     concurrency:
       group: ${{ inputs.environment == 'staging' && 'deploy-staging' || 'production-worker-mutation' }}
       cancel-in-progress: false
+      queue: max
     # Preflight verifies the environment name and the configured
     # automated-evidence or reviewer mode before GitHub can auto-create a
     # missing/unprotected Environment.

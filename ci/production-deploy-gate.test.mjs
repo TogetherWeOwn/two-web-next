@@ -1037,9 +1037,9 @@ const sharedMutationGroup = "production-worker-mutation";
 function jobConcurrencyBlocks(workflow) {
   return [
     ...workflow.matchAll(
-      /^    concurrency:\n      group: (.+)\n      cancel-in-progress: (true|false)\n/gm,
+      /^    concurrency:\n      group: (.+)\n      cancel-in-progress: (true|false)\n(?: {6}queue: (\w+)\n)?/gm,
     ),
-  ].map((match) => ({ group: match[1].trim(), cancel: match[2] }));
+  ].map((match) => ({ group: match[1].trim(), cancel: match[2], queue: match[3] }));
 }
 
 test("production promotion and rollback mutations share one static non-cancelling lock", () => {
@@ -1066,6 +1066,9 @@ test("production promotion and rollback mutations share one static non-cancellin
     ["deploy-staging"],
     "the staging rollback lock must match deploy.yml's job-level lock",
   );
+  // Both deploy-staging entrants queue (not displace) pending runs.
+  assert.equal(jobConcurrencyBlocks(staging)[0].queue, "max");
+  assert.equal(jobConcurrencyBlocks(rollback)[0].queue, "max");
   for (const [label, workflow] of [
     ["deploy-production.yml", deploy],
     ["rollback-production.yml (production)", production],

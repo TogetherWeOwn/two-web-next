@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -615,9 +615,12 @@ test("staging qualification preserves the deployed SHA through checker checkout 
 test("staging qualification refuses A after B replaces it and locks every measurement against deploys", async () => {
   const workflow = read("../.github/workflows/e2e-staging.yml");
   const deploy = read("../.github/workflows/deploy.yml");
-  assert.match(deploy, /concurrency:\n {6}group: deploy-staging\n {6}cancel-in-progress: false/);
+  assert.match(
+    deploy,
+    /concurrency:\n {6}group: deploy-staging\n {6}cancel-in-progress: false\n {6}queue: max\n/,
+  );
   assert.match(workflow, /concurrency:\n[\s\S]*?group: >-\n[\s\S]*?'deploy-staging'/);
-  assert.match(workflow, /cancel-in-progress: false/);
+  assert.match(workflow, /^ {2}cancel-in-progress: false\n {2}queue: max\n/m);
   for (const job of ["zap-baseline", "staging-passive", "staging-journeys", "staging-quality"]) {
     const body = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [\w-]+:\n/)[0];
     assert.match(body, /needs: scope\n/, `${job} must await the under-lock identity check`);
@@ -671,6 +674,185 @@ test("qualification target refuses malformed or foreign deploy identities and no
   assert.throws(() => qualificationTarget({ ...manual, sha: "bad" }), /Invalid deployed/);
   assert.throws(() => qualificationTarget({ ...manual, repository: "other/repo" }), /repository/);
   assert.throws(() => qualificationTarget({ ...manual, eventName: "push" }), /Unsupported/);
+});
+
+// Offline model of GitHub's documented concurrency queue semantics. It is a
+// deterministic specification fixture, not an observation of live behavior.
+// One group runs at most one entrant. `queue: single` (the default) keeps one
+// pending entrant and cancels the older pending one when another arrives.
+// `queue: max` keeps up to `limit` pending entrants (this illustrative trace pops from
+// the front; it does not claim GitHub guarantees FIFO order) and
+// cancels the NEW arrival once the queue is full. A running entrant is never
+// cancelled while cancel-in-progress is false.
+function concurrencyGroup({ queue = "single", limit = 100 } = {}) {
+  const state = { running: null, pending: [], cancelled: [], mutations: [] };
+  const promote = () => {
+    state.running = state.pending.shift() ?? null;
+  };
+  return {
+    state,
+    arrive(entrant) {
+      if (!state.running) {
+        state.running = entrant;
+      } else if (queue === "max") {
+        if (state.pending.length >= limit) state.cancelled.push(entrant);
+        else state.pending.push(entrant);
+      } else {
+        if (state.pending.length) state.cancelled.push(state.pending.pop());
+        state.pending.push(entrant);
+      }
+    },
+    // Only the entrant holding the group may mutate staging.
+    mutate(entrant) {
+      if (state.running !== entrant) return false;
+      state.mutations.push(entrant);
+      return true;
+    },
+    finish() {
+      promote();
+    },
+  };
+}
+
+test("model: default single queue lets qualification A displace pending deploy B", () => {
+  const group = concurrencyGroup();
+  group.arrive("deploy-running");
+  group.arrive("deploy-B");
+  group.arrive("qualification-A");
+  assert.deepEqual(group.state.cancelled, ["deploy-B"]);
+  assert.deepEqual(group.state.pending, ["qualification-A"]);
+});
+
+test("model: queue max retains pending B and a full queue cancels the new arrival", () => {
+  const group = concurrencyGroup({ queue: "max" });
+  group.arrive("deploy-running");
+  group.arrive("deploy-B");
+  group.arrive("qualification-A");
+  assert.deepEqual(group.state.cancelled, []);
+  assert.deepEqual(group.state.pending, ["deploy-B", "qualification-A"]);
+
+  const full = concurrencyGroup({ queue: "max" });
+  full.arrive("running");
+  for (let index = 0; index < 100; index += 1) full.arrive(`pending-${index}`);
+  assert.equal(full.state.pending.length, 100);
+  full.arrive("new-arrival");
+  assert.deepEqual(full.state.cancelled, ["new-arrival"]);
+  assert.equal(full.state.pending[0], "pending-0");
+  assert.equal(full.state.pending.length, 100);
+});
+
+test("model: A queued behind B fails the revision check instead of borrowing B", async () => {
+  const group = concurrencyGroup({ queue: "max" });
+  group.arrive("deploy-running");
+  group.arrive("deploy-B");
+  group.arrive("qualification-A");
+  group.finish();
+  assert.equal(group.state.running, "deploy-B");
+  group.finish();
+  assert.equal(group.state.running, "qualification-A");
+  // B deployed first, so staging now reports B's commit to A's lock.
+  await assert.rejects(
+    requireQualificationRevision(SHA, revisionOptions("b".repeat(40))),
+    /expected a{40}/,
+  );
+});
+
+test("model: B and a staging restore of A cannot mutate while A holds the whole-workflow lock", () => {
+  const group = concurrencyGroup({ queue: "max" });
+  group.arrive("qualification-A");
+  group.arrive("deploy-B");
+  group.arrive("restore-A");
+  assert.equal(group.mutate("deploy-B"), false);
+  assert.equal(group.mutate("restore-A"), false);
+  assert.deepEqual(group.state.mutations, []);
+  group.finish();
+  assert.equal(group.mutate("deploy-B"), true);
+  assert.equal(group.mutate("restore-A"), false);
+});
+
+// Every managed entrant of the shared staging group must queue and never cancel.
+function stagingEntrantViolations(files) {
+  const found = [];
+  for (const [label, text] of Object.entries(files)) {
+    for (const match of text.matchAll(/^( *)concurrency:\n((?:\1 {2}.*\n)+)/gm)) {
+      if (!match[2].includes("deploy-staging")) continue;
+      found.push({ label, ok: /cancel-in-progress: false\n\s+queue: max\n/.test(match[2]) });
+    }
+  }
+  return found;
+}
+
+test("every deploy-staging entrant sets cancel-in-progress false and queue max", () => {
+  const files = Object.fromEntries(
+    readdirSync(new URL("../.github/workflows/", import.meta.url))
+      .filter((name) => name.endsWith(".yml"))
+      .map((name) => [name, read(`../.github/workflows/${name}`)]),
+  );
+  const entrants = stagingEntrantViolations(files);
+  assert.deepEqual(entrants.map((entrant) => entrant.label).sort(), [
+    "deploy.yml",
+    "e2e-staging.yml",
+    "rollback-production.yml",
+  ]);
+  assert.deepEqual(
+    entrants.filter((entrant) => !entrant.ok),
+    [],
+  );
+  // Control: an entrant left on the default queue is detected.
+  const defaulted = {
+    "fixture.yml":
+      "jobs:\n  x:\n    concurrency:\n      group: deploy-staging\n      cancel-in-progress: false\n    runs-on: x\n",
+  };
+  assert.deepEqual(stagingEntrantViolations(defaulted), [{ label: "fixture.yml", ok: false }]);
+});
+
+test("queue compatibility is tested by the blocking original-workflow linter and native PR smoke", () => {
+  const ci = read("../.github/workflows/ci.yml");
+  const build = read("./actionlint/build.sh");
+  const scope = ci.split("\n  scope:\n")[1].split("\n  queue-syntax-smoke:\n")[0];
+  assert.match(scope, /run: bash ci\/actionlint\/build\.sh/);
+  assert.match(build, /git -C "\$src" apply --check/);
+  assert.match(build, /test -count=1 -v \.\/\.\.\./);
+  assert.match(
+    build,
+    /node "\$root\/ci\/actionlint\/queue-cli\.mjs" "\$work\/stock-actionlint" "\$work\/actionlint"/,
+  );
+  assert.match(build, /"\$work\/actionlint" -shellcheck= -pyflakes=\n/);
+  assert.doesNotMatch(build, /-ignore|continue-on-error|\|\| true/);
+  const smoke = ci.split("\n  queue-syntax-smoke:\n")[1].split("\n  docs-links:\n")[0];
+  assert.match(smoke, /if: github\.event_name == 'pull_request'/);
+  assert.match(
+    smoke,
+    /group: queue-syntax-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+  );
+  assert.match(smoke, /cancel-in-progress: false\n {6}queue: max/);
+  assert.match(smoke, /permissions: \{\}/);
+  assert.match(smoke, /runs-on: ubuntu-latest/);
+  assert.doesNotMatch(smoke, /secrets\.|environment:|deploy-staging/);
+  const qualification = read("../.github/workflows/e2e-staging.yml");
+  const final = qualification.split("\n  qualification-revision:\n")[1];
+  assert.match(
+    final,
+    /needs: \[scope, zap-baseline, staging-passive, staging-journeys, staging-quality\]/,
+  );
+  // Implicit success() requires every measurement; cancellation, failure or a
+  // skipped dependency cannot schedule a successful final verification.
+  assert.doesNotMatch(final, /\n {4}if:|continue-on-error/);
+  assert.match(final, /run: node ci\/staging-qualification\.mjs --verify/);
+  assert.match(final, /DEPLOYED_SHA: \$\{\{ needs\.scope\.outputs\.sha \}\}/);
+});
+
+test("qualification target also refuses an incomplete deploy run and a truncated SHA title", () => {
+  for (const patch of [
+    { status: "in_progress" },
+    { status: undefined },
+    { display_title: `deploy ${SHA.slice(0, 39)}` },
+    { display_title: `deploy  ${SHA}` },
+  ]) {
+    const context = qualificationContext();
+    Object.assign(context.event.workflow_run, patch);
+    assert.throws(() => qualificationTarget(context));
+  }
 });
 
 test("watch config writes the journey ledger only when asked", () => {

@@ -492,7 +492,7 @@ test("rejected completion events never enter staging job concurrency", () => {
   assert.doesNotMatch(workflow, /^concurrency:/m);
   assert.match(
     workflow,
-    /    concurrency:\n      group: deploy-staging\n      cancel-in-progress: false/,
+    /    concurrency:\n      group: deploy-staging\n      cancel-in-progress: false\n      queue: max\n/,
   );
   const expression = workflow.match(/    if: >-\n((?:      .*\n)+)/)[1];
   const accepts = new Function("github", `return ${expression}`);

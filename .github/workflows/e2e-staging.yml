@@ -36,6 +36,7 @@ concurrency:
           github.event.workflow_run.head_repository.full_name == github.repository)) &&
         'deploy-staging' || format('e2e-staging-ignored-{0}', github.run_id) }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   # Retain scope classification for diagnostics and fail closed if it fails.

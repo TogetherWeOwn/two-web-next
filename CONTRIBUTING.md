@@ -143,9 +143,15 @@ The whole qualification workflow shares the staging deploy job's
 any measurement and again after all jobs pass, while holding that lock. GitHub
 does not guarantee FIFO order: if a newer deploy wins the lock first, the
 superseded candidate fails qualification instead of borrowing its replacement's
-results. The lock covers dependency installation, journeys, passive checks,
+results. Every managed entrant of that group (the deploy job, the
+qualification workflow and the staging rollback job) sets
+`cancel-in-progress: false` and `queue: max`, so a pending run is retained
+rather than displaced. If the queue is full, GitHub cancels the new arrival,
+not a queued run. This protects only mutations that go through these managed
+entrants. The lock covers dependency installation, journeys, passive checks,
 quality and ZAP; do not move it to individual measurement jobs. Out-of-band
-staging mutations must not bypass this coordination.
+staging mutations are outside this boundary and must not bypass this
+coordination.
 
 This changes when staging evidence is required, not the pipeline or other
 merge/release gates. No red deterministic gate is waived, no pipeline skip/no-op
