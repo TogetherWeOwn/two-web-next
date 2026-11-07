@@ -1,3 +1,4 @@
+import { captureRefusal, captureResponse } from "./render-clock";
 import { type Context, Hono } from "hono";
 import { getSignedCookie, setSignedCookie } from "hono/cookie";
 import { secureHeaders } from "hono/secure-headers";
@@ -168,6 +169,14 @@ app.use("*", trustHosts());
 
 // Before throttles, session rotation, body parsing, or any mounted handler.
 app.use("*", sameOrigin);
+if (typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true) {
+  app.use("*", async (c, next) => {
+    const refusal = captureRefusal(c.req.raw, c.env);
+    if (refusal) return refusal;
+    await next();
+    c.res = captureResponse(c.req.raw, c.env, c.res);
+  });
+}
 app.use("*", authStatusScript);
 app.use("*", expiredWriteBanner);
 app.use("*", freezeBanner);
