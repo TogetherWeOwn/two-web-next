@@ -37,8 +37,11 @@ test("moderator sees the created event in the activity-log viewer, plus the empt
   await page.getByLabel("Location", { exact: true }).fill("Community voice");
   await page.getByLabel("Capacity (empty = unlimited)").fill("10");
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
-  await expect(page).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}$/);
+  // Create redirects to the saved-draft review, which may carry `?saved=1`;
+  // read the key from the pathname so the query never leaks into it.
+  await expect(page).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}(?:\?saved=1)?$/);
   const eventKey = new URL(page.url()).pathname.split("/").at(-1)!;
+  expect(eventKey).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
 
   // 2. The viewer renders the row: who, what, when, subject. Filter through
   // the form so the subject-filter wiring is proven too.

@@ -197,7 +197,7 @@ export function gateUsage(scriptName) {
 // Build the versioned JSON report. Groups always carry the canonical IDs;
 // measured checks carry rawBytes/gzipBytes; exit 2 carries a fixed error code
 // and a concrete next_action. Deterministic: no timestamps, stable key order.
-export function buildJsonReport({ check, groups, exitCode, error = null }) {
+export function buildJsonReport({ check, groups, exitCode, error = null, warnings = [] }) {
   const report = {
     version: JSON_VERSION,
     check,
@@ -218,6 +218,8 @@ export function buildJsonReport({ check, groups, exitCode, error = null }) {
       }),
     })),
   };
+  // Advisory evidence only when present, so other checkers' reports are unchanged.
+  if (warnings.length) report.warnings = [...warnings];
   if (error) {
     report.error = {
       code: error.code,

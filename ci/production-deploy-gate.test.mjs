@@ -16,6 +16,7 @@ import {
   assertProductionTarget,
   assertRollbackVersionId,
   checkProductionGate,
+  checkRollbackGate,
   isAlreadyLive,
   pendingLedgerTags,
   pendingMigrationTags,
@@ -154,6 +155,11 @@ function stubProductionApi(evidence, seen = {}) {
     if (parsed.pathname.endsWith("/environments/production")) {
       seen.environment = (seen.environment ?? 0) + 1;
       return { ok: true, json: async () => protectedEnvironment };
+    }
+    if (parsed.pathname.endsWith("/workflows/e2e-staging.yml/runs")) {
+      // Reviewer mode ages a staging pass when one names the SHA; this stub
+      // models a reviewer-approved promotion with no staging evidence yet.
+      return { ok: true, json: async () => ({ total_count: 0, workflow_runs: [] }) };
     }
     seen.ci = (seen.ci ?? 0) + 1;
     if (parsed.pathname.endsWith("/workflows/ci.yml/runs")) {
@@ -678,7 +684,7 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
   // checkout-behavior changes, not an observed ENOENT.
   const preflight = workflow.slice(
     workflow.indexOf("\n  preflight:\n"),
-    workflow.indexOf("\n  deploy-production:\n"),
+    workflow.indexOf("\n  staging-soak:\n"),
   );
   assert.ok(preflight.includes("preflight"), "preflight job missing");
   const checkouts = preflight.split("- uses: actions/checkout@").slice(1);
@@ -707,21 +713,48 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
   const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
-  assert.equal(workflow.split(runsOn).length - 1, 2);
+  // preflight, staging-soak, regression, deploy-production,
+  // post-deploy-watch and notify.
+  assert.equal(workflow.split(runsOn).length - 1, 6);
   assert.equal(
     workflow.split("ubuntu-latest").length - 1,
-    2,
+    6,
     "ubuntu-latest only as the public-repo branch",
   );
-  assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
-  assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
-  for (const key of Object.keys(credentials)) {
-    // Credentials check, required-secrets preflight, production Tail deploy,
-    // version upload and promotion: all production-only.
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 5);
+  // Staging credentials appear only in the staging-soak job, which binds
+  // the staging Environment, runs no wrangler and makes one gate call.
+  const soak = workflow.slice(
+    workflow.indexOf("\n  staging-soak:\n"),
+    workflow.indexOf("\n  regression:\n"),
+  );
+  const outsideSoak = workflow.replace(soak, "");
+  assert.ok(!outsideSoak.includes("secrets.CLOUDFLARE_API_TOKEN"));
+  assert.ok(!outsideSoak.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
+  assert.equal(soak.split("secrets.CLOUDFLARE_API_TOKEN").length - 1, 1);
+  assert.match(soak, /\n {4}environment: staging\n/, "staging-soak binds the staging Environment");
+  assert.ok(!soak.includes("wrangler "), "staging-soak never runs wrangler");
+  assert.ok(!/secrets\.PRODUCTION_/.test(soak), "staging-soak never sees production secrets");
+  assert.match(soak, /run: node ci\/production-deploy-gate\.mjs --staging-soak\n/);
+  // Credentials check, required-secrets preflight, rollback-target check,
+  // production Tail deploy, version upload, promotion and the auto-rollback
+  // explicit secret map: all production-only. The regression check keeps
+  // the production account id for its baseline query but reads analytics
+  // with the repo-level read-only token, so only the account id appears
+  // there.
+  for (const [key, count] of Object.entries({
+    CLOUDFLARE_API_TOKEN: 7,
+    CLOUDFLARE_ACCOUNT_ID: 8,
+  })) {
+    assert.equal(
+      (workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length,
+      count,
+    );
   }
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
   const requiredSecrets = workflow.indexOf("run: node ci/check-production-secrets.mjs");
+  const rollbackTarget = workflow.indexOf(
+    "- name: Confirm the recorded rollback target still exists with its secrets",
+  );
   const tailDeploy = workflow.indexOf(
     "run: npx wrangler deploy --config tail/wrangler.jsonc --env production",
   );
@@ -732,7 +765,8 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.ok(
     credentialCheck > 0 &&
       credentialCheck < requiredSecrets &&
-      requiredSecrets < tailDeploy &&
+      requiredSecrets < rollbackTarget &&
+      rollbackTarget < tailDeploy &&
       tailDeploy < upload &&
       upload < gradual,
   );
@@ -886,8 +920,10 @@ test("rollback workflow reuses the production gate with no wider permissions", (
     new URL("../.github/workflows/rollback-production.yml", import.meta.url),
     "utf8",
   );
-  // Manual-only on main: no push, PR, release or completion trigger.
+  // Manual dispatch or a call from automation: no push, PR, release or
+  // completion trigger of its own.
   assert.match(workflow, /\n  workflow_dispatch:\n/);
+  assert.match(workflow, /\n  workflow_call:\n/);
   assert.ok(!workflow.includes("push:"));
   assert.ok(!workflow.includes("pull_request:"));
   assert.ok(!workflow.includes("workflow_run:"));
@@ -898,31 +934,53 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   );
   assert.match(workflow, /^  preflight:/m);
   assert.match(workflow, /^  rollback-production:/m);
-  // Production Environment gate in either approval mode; never cancelled.
-  assert.match(workflow, /environment:\n      name: production\n/);
+  // The chosen Environment gate (production in either approval mode, or
+  // staging); never cancelled. Preflight validates the name before the job
+  // binds it, so a typo cannot auto-create an unprotected Environment.
+  assert.match(workflow, /environment:\n      name: \$\{\{ inputs\.environment \}\}\n/);
+  assert.match(workflow, /options: \[production, staging\]/);
   assert.match(workflow, /cancel-in-progress: false/);
-  // Same request gate as a deploy, in both jobs.
-  assert.equal((workflow.match(/run: node ci\/production-deploy-gate\.mjs\n/g) ?? []).length, 2);
+  const preflightJob = workflow.slice(
+    workflow.indexOf("\n  preflight:\n"),
+    workflow.indexOf("\n  rollback-production:\n"),
+  );
+  assert.ok(
+    preflightJob.indexOf("run: node ci/rollback-target.mjs --environment") <
+      preflightJob.indexOf("run: node ci/production-deploy-gate.mjs --rollback"),
+  );
+  // Same rollback request gate in both jobs.
+  assert.equal(
+    (workflow.match(/run: node ci\/production-deploy-gate\.mjs --rollback\n/g) ?? []).length,
+    2,
+  );
   // version_id validation runs before the rollback command, in both jobs.
   assert.equal(
     (workflow.match(/run: node ci\/production-deploy-gate\.mjs --version-id\n/g) ?? []).length,
     2,
   );
-  // Same visibility-aware runners as the production deploy workflow (TOG-12326).
+  // Same visibility-aware runners as the production deploy workflow:
+  // preflight, rollback-production and notify.
   const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
-  assert.equal(workflow.split(runsOn).length - 1, 2);
+  assert.equal(workflow.split(runsOn).length - 1, 3);
   assert.equal(
     workflow.split("ubuntu-latest").length - 1,
-    2,
+    3,
     "ubuntu-latest only as the public-repo branch",
   );
-  // Production-only secrets, credential check before the mutation.
-  assert.ok(!workflow.includes("secrets.CLOUDFLARE_API_TOKEN"));
-  assert.ok(!workflow.includes("secrets.CLOUDFLARE_ACCOUNT_ID"));
-  for (const key of Object.keys(credentials)) {
-    // Credentials check, rollback target-version secrets preflight and the
-    // rollback itself: all production-only.
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 3);
+  // Each environment gets only its own credentials: production secrets only
+  // when the environment is exactly production, staging (repo-level)
+  // secrets for any non-production environment. The inverse guard keeps an
+  // empty production secret resolving to '' (a loud credentials-check
+  // failure) instead of falling back to the staging name. Staging passes
+  // its repo secret under its own name via the declared workflow_call secret.
+  // Credential check before the mutation.
+  for (const key of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]) {
+    // Credentials check, live-version guard, rollback target-version secrets
+    // preflight and the rollback itself.
+    const selector = `\${{ inputs.environment == 'production' && secrets.PRODUCTION_${key} || inputs.environment != 'production' && secrets.${key} || '' }}`;
+    assert.equal(workflow.split(selector).length - 1, 4);
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 4);
+    assert.equal((workflow.match(new RegExp(`secrets\\.${key}\\b`, "g")) ?? []).length, 4);
   }
   const versionCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --version-id");
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
@@ -930,8 +988,9 @@ test("rollback workflow reuses the production gate with no wider permissions", (
     "run: node ci/check-production-secrets.mjs --rollback-version",
   );
   const rollback = workflow.indexOf(
-    'run: npx wrangler rollback "$ROLLBACK_VERSION_ID" --name two-web-next-production',
+    'run: npx wrangler rollback "$ROLLBACK_VERSION_ID" --name "$ROLLBACK_WORKER_NAME"',
   );
+  assert.match(workflow, /ROLLBACK_WORKER_NAME: \$\{\{ steps\.target\.outputs\.worker \}\}/);
   assert.ok(rollback > 0);
   assert.ok(
     versionCheck > 0 &&
@@ -986,9 +1045,24 @@ test("production promotion and rollback mutations share one static non-cancellin
     new URL("../.github/workflows/rollback-production.yml", import.meta.url),
     "utf8",
   );
+  // The rollback lock is chosen per environment from two static names:
+  // production shares the promotion lock, staging shares deploy.yml's.
+  const rollbackSelector =
+    "${{ inputs.environment == 'staging' && 'deploy-staging' || 'production-worker-mutation' }}";
+  assert.deepEqual(
+    jobConcurrencyBlocks(rollback).map((block) => block.group),
+    [rollbackSelector],
+  );
+  const production = rollback.replace(rollbackSelector, sharedMutationGroup);
+  const staging = readFileSync(new URL("../.github/workflows/deploy.yml", import.meta.url), "utf8");
+  assert.deepEqual(
+    jobConcurrencyBlocks(staging).map((block) => block.group),
+    ["deploy-staging"],
+    "the staging rollback lock must match deploy.yml's job-level lock",
+  );
   for (const [label, workflow] of [
     ["deploy-production.yml", deploy],
-    ["rollback-production.yml", rollback],
+    ["rollback-production.yml (production)", production],
   ]) {
     const blocks = jobConcurrencyBlocks(workflow);
     // Exactly one job-level mutation lock per workflow: deleting it fails here.
@@ -1006,7 +1080,7 @@ test("production promotion and rollback mutations share one static non-cancellin
     }
   }
   const deployGroup = jobConcurrencyBlocks(deploy)[0].group;
-  const rollbackGroup = jobConcurrencyBlocks(rollback)[0].group;
+  const rollbackGroup = jobConcurrencyBlocks(production)[0].group;
   assert.equal(deployGroup, rollbackGroup, "promotion and rollback locks must match exactly");
 });
 
@@ -1023,12 +1097,11 @@ test("shared production mutation lock never nests at workflow level nor leaks in
   // nests the shared job-level group.
   for (const [label, workflow, expected] of [
     ["deploy-production.yml", deploy, "deploy-production"],
-    ["rollback-production.yml", rollback, "rollback-production"],
+    ["rollback-production.yml", rollback, "rollback-${{ inputs.environment }}"],
   ]) {
     const header = workflow.slice(0, workflow.indexOf("\njobs:"));
-    assert.match(
-      header,
-      new RegExp(`^concurrency:\\n  group: ${expected}\\n  cancel-in-progress: false\\n`, "m"),
+    assert.ok(
+      header.includes(`\nconcurrency:\n  group: ${expected}\n  cancel-in-progress: false\n`),
       `${label} keeps its own non-cancelling workflow-level group`,
     );
     assert.ok(
@@ -1075,7 +1148,7 @@ test("rollback smoke enforces the same public-route set as the gradual live gate
     /    - name: Health and SLO gate at 100 percent \(live traffic\)\n(?:.*\n)*?      run: \|\n((?:        .*\n)+)/,
   )?.[1];
   const manual = rollback.match(
-    /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+    /      - name: Smoke test public routes on the rolled-back version\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
   )?.[1];
   assert.ok(live && manual);
   for (const step of [live, manual]) {
@@ -1084,17 +1157,25 @@ test("rollback smoke enforces the same public-route set as the gradual live gate
     assert.ok(!step.includes("curl "));
   }
   // The action threads --allow-indexable through env (same flag, same
-  // checker); the manual rollback passes it literally.
+  // checker); the rollback passes it for production only.
   assert.match(live, /\$INDEXABLE/);
   assert.match(
     action,
     /INDEXABLE: \$\{\{ inputs\.allow-indexable == 'true' && '--allow-indexable' \|\| '' \}\}/,
   );
-  assert.match(manual, /--allow-indexable/);
+  assert.match(
+    manual,
+    /if \[ "\$ROLLBACK_INDEXABLE" = "true" \]; then indexable=\(--allow-indexable\); fi/,
+  );
   // The gradual live gate probes the production domain through env, like the
-  // manual rollback probes the literal apex: same origin, same checker.
+  // rollback probes the environment's origin from ci/rollback-target.mjs.
   assert.ok(live.includes('node bin/smoke.mjs "https://$DOMAIN"'));
-  assert.match(manual, /node bin\/smoke\.mjs https:\/\/togetherweown\.com --allow-indexable/);
+  assert.ok(
+    manual.includes(
+      'node bin/smoke.mjs "$ROLLBACK_ORIGIN" "${indexable[@]}" --expected-version-id "$ROLLBACK_VERSION_ID"',
+    ),
+  );
+  assert.match(rollback, /ROLLBACK_ORIGIN: \$\{\{ steps\.target\.outputs\.origin \}\}/);
 });
 
 // Automated approval mode (repo variable PRODUCTION_AUTO_APPROVE=true).
@@ -1116,6 +1197,8 @@ function stagingRun(file, id, overrides = {}) {
     head_repository: { full_name: "fixture/repo" },
     status: "completed",
     conclusion: "success",
+    // Long past the 30-minute soak floor unless a test overrides it.
+    updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
   };
 }
@@ -1359,12 +1442,13 @@ for (const job of ["preflight", "rollback-production"]) {
     );
     const block = workflow.split(`\n  ${job}:\n`)[1]?.split(/\n  [\w-]+:\n/)[0];
     assert.ok(block, `${job} job must exist`);
-    const gates = block.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+    const gates = block.split("run: node ci/production-deploy-gate.mjs --rollback\n").slice(1);
     assert.equal(gates.length, 1, `${job} must run the shared gate`);
     const gate = gates[0].split("\n      - ")[0];
+    assert.match(gate, /ROLLBACK_ENVIRONMENT: \$\{\{ inputs\.environment \}\}/);
     assert.match(gate, /PRODUCTION_AUTO_APPROVE: \$\{\{ vars\.PRODUCTION_AUTO_APPROVE \}\}/);
     assert.match(gate, /PRODUCTION_DEPLOY_ENABLED: \$\{\{ vars\.PRODUCTION_DEPLOY_ENABLED \}\}/);
-    assert.match(gate, /DEPLOY_SHA: \$\{\{ github\.sha \}\}/);
+    assert.match(gate, /DEPLOY_SHA: \$\{\{ inputs\.ref \|\| github\.sha \}\}/);
     assert.match(gate, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
   });
 }
@@ -1391,11 +1475,16 @@ test("rollback-production passes the checked-out commit as DEPLOY_SHA to both ga
     new URL("../.github/workflows/rollback-production.yml", import.meta.url),
     "utf8",
   );
-  const gates = rollback.split("run: node ci/production-deploy-gate.mjs\n").slice(1);
+  const gates = rollback.split("run: node ci/production-deploy-gate.mjs --rollback\n").slice(1);
   assert.equal(gates.length, 2);
   for (const gate of gates) {
-    assert.match(gate.split("\n      - ")[0], /DEPLOY_SHA: \$\{\{ github\.sha \}\}/);
+    assert.match(
+      gate.split("\n      - ")[0],
+      /DEPLOY_SHA: \$\{\{ inputs\.ref \|\| github\.sha \}\}/,
+    );
   }
+  // Both checkouts use the same scripts commit the gate verifies.
+  assert.equal(rollback.split("ref: ${{ inputs.ref || github.sha }}").length - 1, 2);
 });
 
 test("CI runs the promotion resolver selftest beside the production gate selftest", () => {
@@ -2173,4 +2262,110 @@ test("check-migrations CLI halts closed when the live Worker predates the ledger
   );
   assert.equal(result.status, 1);
   assert.match(result.stderr, /migration_ledger/);
+});
+
+// Rollback gate (rollback-production.yml --rollback), per environment.
+test("production rollback skips staging evidence under auto-approve: it serves a prior version", async () => {
+  const seen = {};
+  const evidence = await checkRollbackGate(
+    { ...autoEnv, ROLLBACK_ENVIRONMENT: "production" },
+    stubAutoApi({ "deploy.yml": [], "e2e-staging.yml": [] }, autoEnvironment, seen),
+    { checkoutSha: dispatchSha },
+  );
+  assert.deepEqual(evidence, { sha: dispatchSha, runId: 42, runAttempt: 1 });
+  assert.equal(seen.environment, 1);
+  assert.equal(seen["deploy.yml"], undefined);
+  assert.equal(seen["e2e-staging.yml"], undefined);
+});
+
+test("production rollback never waits on a hold, but keeps the enable flag and red-CI refusal", async () => {
+  const held = {
+    ...greenEnv,
+    ROLLBACK_ENVIRONMENT: "production",
+    PRODUCTION_HOLD_UNTIL: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+  };
+  const evidence = await checkRollbackGate(held, stubProductionApi(ciEvidence()), {
+    checkoutSha: dispatchSha,
+  });
+  assert.equal(evidence.sha, dispatchSha);
+  await assert.rejects(
+    checkProductionGate(held, noNetwork, { checkoutSha: dispatchSha }),
+    /held until/,
+  );
+  await assert.rejects(
+    checkRollbackGate({ ...held, PRODUCTION_DEPLOY_ENABLED: "false" }, noNetwork),
+    /deployment disabled/,
+  );
+  const red = ciEvidence();
+  red.runs.workflow_runs[0].conclusion = "failure";
+  await assert.rejects(
+    checkRollbackGate(held, stubProductionApi(red), { checkoutSha: dispatchSha }),
+    /Full CI has not completed successfully/,
+  );
+});
+
+test("staging rollback needs main and green CI, never the production Environment", async () => {
+  const seen = {};
+  const env = { ...greenEnv, PRODUCTION_DEPLOY_ENABLED: "", ROLLBACK_ENVIRONMENT: "staging" };
+  for (const event of ["workflow_dispatch", "schedule", "workflow_run"]) {
+    const evidence = await checkRollbackGate(
+      { ...env, GITHUB_EVENT_NAME: event },
+      stubProductionApi(ciEvidence(), seen),
+      { checkoutSha: dispatchSha },
+    );
+    assert.equal(evidence.sha, dispatchSha);
+  }
+  assert.equal(seen.environment, undefined);
+  for (const override of [
+    { GITHUB_EVENT_NAME: "push" },
+    { GITHUB_EVENT_NAME: "pull_request" },
+    { GITHUB_REF: "refs/heads/feature" },
+  ]) {
+    await assert.rejects(checkRollbackGate({ ...env, ...override }, noNetwork), /on main/);
+  }
+  await assert.rejects(
+    checkRollbackGate({ ...env, DEPLOY_SHA: "main" }, noNetwork),
+    /DEPLOY_SHA must be a full 40-hex commit/,
+  );
+  await assert.rejects(
+    checkRollbackGate(env, stubProductionApi(ciEvidence()), { checkoutSha: otherSha }),
+  );
+});
+
+test("rollback gate refuses an unknown environment before any API call", async () => {
+  for (const name of [undefined, "", "Production", "preview", "staging "]) {
+    await assert.rejects(
+      checkRollbackGate({ ...greenEnv, ROLLBACK_ENVIRONMENT: name }, noNetwork),
+      /ROLLBACK_ENVIRONMENT must be production or staging/,
+    );
+  }
+});
+
+test("auto-approve refuses an e2e-staging pass younger than the 30-minute soak, on every trigger", async () => {
+  for (const [label, updated_at] of [
+    ["10 minutes old", new Date(Date.now() - 10 * 60 * 1000).toISOString()],
+    ["missing", undefined],
+    ["unparsable", "yesterday"],
+  ]) {
+    const staging = stagingEvidence();
+    staging["e2e-staging.yml"] = [stagingRun("e2e-staging.yml", 200, { updated_at })];
+    for (const event of ["workflow_dispatch", "workflow_run", "schedule"]) {
+      await assert.rejects(
+        checkProductionGate(
+          { ...autoEnv, GITHUB_EVENT_NAME: event },
+          stubAutoApi(staging, autoEnvironment),
+          { checkoutSha: dispatchSha },
+        ),
+        /has not soaked 30 minutes since it passed/,
+        label,
+      );
+    }
+  }
+  const soaked = stagingEvidence();
+  soaked["e2e-staging.yml"] = [
+    stagingRun("e2e-staging.yml", 200, {
+      updated_at: new Date(Date.now() - 31 * 60 * 1000).toISOString(),
+    }),
+  ];
+  assert.equal((await checkAuto(soaked, autoEnvironment)).autoApprove, true);
 });

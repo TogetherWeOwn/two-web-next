@@ -4,6 +4,7 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
 import { assertMigrationAdmission } from "./migration-admission.mjs";
+import { OwnershipRefusal, assertMigratorOwnership } from "./migration-ownership.mjs";
 import {
   DefaultAclRefusal,
   assertRuntimeDefaultAcl,
@@ -282,6 +283,17 @@ export async function runMigration(mode, env = process.env, options = {}) {
       await assertRuntimeDefaultAcl(connection);
     } catch (error) {
       if (error instanceof DefaultAclRefusal) refuse(error.message);
+      throw error;
+    }
+    // Same surfacing rule as the default-ACL guard: a reviewed object the
+    // migrator cannot ALTER (owned by a role it does not inherit) must
+    // refuse here, named, instead of failing inside the apply transaction
+    // behind the masked driver message. plan() also runs under the apply
+    // lock before any DDL, so apply stays covered without a second call.
+    try {
+      await assertMigratorOwnership(connection);
+    } catch (error) {
+      if (error instanceof OwnershipRefusal) refuse(error.message);
       throw error;
     }
     const pending = await pendingMigrations(connection, migrations);

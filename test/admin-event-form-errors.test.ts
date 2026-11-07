@@ -242,7 +242,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
     it(`${mode}: valid wall times still save the same UTC instants`, async () => {
       const res = await post(path, FORM);
       expect(res.status).toBe(303);
-      const key = res.headers.get("location")!.split("/").pop()!;
+      const key = new URL(res.headers.get("location")!, APP_URL).pathname.split("/").pop()!;
       const [saved] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
       expect(saved?.startsAt.toISOString()).toBe("2026-11-04T20:00:00.000Z");
       expect(saved?.endsAt.toISOString()).toBe("2026-11-04T22:00:00.000Z");
@@ -276,7 +276,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       ends_at: "2026-10-25 02:30",
     });
     expect(res.status).toBe(303);
-    const key = res.headers.get("location")!.split("/").pop()!;
+    const key = new URL(res.headers.get("location")!, APP_URL).pathname.split("/").pop()!;
     const [saved] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
     expect(saved?.startsAt.toISOString()).toBe("2026-10-25T01:30:00.000Z");
     expect(saved?.endsAt.toISOString()).toBe("2026-10-25T02:30:00.000Z");

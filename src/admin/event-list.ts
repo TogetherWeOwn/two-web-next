@@ -20,6 +20,23 @@ const EVENT_FREE_TEXT_MAX_LENGTH = 128;
 const boundEventFreeText = (value: string): string =>
   value.length > EVENT_FREE_TEXT_MAX_LENGTH ? "" : value;
 
+/** Same-title rows on one page: only those accessible names take the ISO suffix (§4a). */
+export function pageTitleDuplicates(rows: readonly { title: string }[]): Set<string> {
+  const counts = new Map<string, number>();
+  for (const row of rows) counts.set(row.title, (counts.get(row.title) ?? 0) + 1);
+  return new Set([...counts].filter(([, n]) => n > 1).map(([title]) => title));
+}
+
+/** ` (ISO)` suffix for same-title rows; empty for unique titles or unrenderable starts. */
+export function sameTitleSuffix(
+  title: string,
+  iso: string | null,
+  duplicates: ReadonlySet<string>,
+): string {
+  if (!duplicates.has(title) || !iso) return "";
+  return ` (${iso})`;
+}
+
 /** Only known query values reach the store or the navigation links. */
 export function parseEventListQuery(params: EventListParams): EventListQuery {
   const status = params.status;

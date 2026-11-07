@@ -7,7 +7,7 @@ import { QA_HEADER, STAGING_APP_URL } from "../src/qa";
 import { env as baseEnv } from "./helpers/member-data";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
 
-const token = "test-only-probe-token";
+const token = "test-only-probe-token-with-32-plus";
 const staging = { ...baseEnv, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: token };
 const ERROR = {
   reason: "payload_too_large",

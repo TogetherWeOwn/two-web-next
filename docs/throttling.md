@@ -172,7 +172,15 @@ exception: its identity/token gate runs before `throttle("qa-login", …)` (same
 shape as `/__probe/alert` in [`src/alert-probe.ts`](../src/alert-probe.ts)),
 so unauthenticated probes 404 without spending the shared `qa-login` bucket and
 a probe flood can never lock out legitimate QA logins. Only gated QA logins
-charge the bucket.
+charge the bucket. Failed guesses are not free, though: both QA-token gates
+draw on the per-client, per-isolate attempt budget in
+[`src/qa.ts`](../src/qa.ts) (`QA_ATTEMPT_CAPACITY` attempts, refilling one
+per second, the ops-token shape in
+[`src/admin/ops-overrides.tsx`](../src/admin/ops-overrides.tsx)). A presented
+token takes an attempt before the digest comparison and a match refunds it,
+so only failures drain a client; an exhausted budget answers the same 404
+before any comparison runs. It is DB-free and is not a `web_throttle_hits`
+bucket, so it never appears in the bucket tables above.
 
 ## Prune and storage bound
 

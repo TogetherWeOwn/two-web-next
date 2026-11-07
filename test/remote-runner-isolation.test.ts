@@ -63,6 +63,10 @@ function sourceBetween(source: string, start: string, end: string) {
 // Execute ONLY the pinned CLI's pure dotenv implementation and exact CLI check,
 // in a VM with synthetic process.env/cwd. Its bundled dotenv/expand dependencies
 // only require built-ins; no Wrangler initialization/auth/telemetry runs here.
+// Bundle numbering re-reviewed for 4.156.1: require_main is dotenv 16.3.1 and
+// require_main3 is the dotenv-expand 12.0.2 that init_dot_env wires into
+// import_dotenv3/import_dotenv_expand2; require_main2 is a separate
+// dotenv-expand 13.0.0 copy the CLI dotenv loader does not use.
 function loadViaPinnedWrangler(cwd: string, env: NodeJS.ProcessEnv, envFiles?: string[]) {
   const source = readFileSync(
     path.join(root, "node_modules/wrangler/wrangler-dist/cli.js"),
@@ -70,7 +74,7 @@ function loadViaPinnedWrangler(cwd: string, env: NodeJS.ProcessEnv, envFiles?: s
   );
   expect(
     JSON.parse(readFileSync(path.join(root, "node_modules/wrangler/package.json"), "utf8")).version,
-  ).toBe("4.152.0");
+  ).toBe("4.156.1");
   const require = createRequire(import.meta.url);
   const context = vm.createContext({
     process: { env: { ...env }, cwd: () => cwd, platform: "linux" },
@@ -97,12 +101,12 @@ function loadViaPinnedWrangler(cwd: string, env: NodeJS.ProcessEnv, envFiles?: s
     };
     const path29 = { resolve: (...parts) => __require("path").resolve(process.cwd(), ...parts) };
     const path29__namespace = { default: __require("path") };
-    ${sourceBetween(source, "var require_package = __commonJS({", "function validateFileSecrets(")}
-    ${sourceBetween(source, "var require_main2 = __commonJS({", "// src/config/case-insensitive-env.ts")}
-    ${sourceBetween(source, "function getDefaultEnvFiles(", "var import_dotenv2, import_dotenv_expand, isWindows5;")}
+    ${sourceBetween(source, "var require_package = __commonJS({", "var require_main2 = __commonJS({")}
+    ${sourceBetween(source, "var require_main3 = __commonJS({", "function getDefaultEnvFiles(")}
+    ${sourceBetween(source, "function getDefaultEnvFiles(", "var import_dotenv3, import_dotenv_expand2, isWindows5;")}
     const isWindows5 = false;
-    const import_dotenv2 = { default: require_main() };
-    const import_dotenv_expand = { default: require_main2() };
+    const import_dotenv3 = { default: require_main() };
+    const import_dotenv_expand2 = { default: require_main3() };
     ${sourceBetween(source, '    const resolvedEnvFilePaths = (args["env-file"]', "    writeOutput({")}
   `,
     context,

@@ -1,6 +1,10 @@
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
+import { jsx } from "hono/jsx/jsx-runtime";
+import { savedEventReview } from "../src/admin/event-saved-review";
+import { EventPage } from "../src/events/pages-detail";
+import { eventJsonLd } from "../src/seo-json-ld";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { __resetAlertRateLimitForTests } from "../src/alerts";
 import app from "./app";
@@ -20,6 +24,7 @@ type AccessibilityNotesFixture = { accessibilityNotes?: string | null };
 function fixture(
   over: Partial<typeof events.$inferSelect> & AccessibilityNotesFixture = {},
   queryError?: Error,
+  missing = false,
 ) {
   const start = new Date("2030-01-10T20:00:00Z");
   const row: typeof events.$inferSelect & AccessibilityNotesFixture = {
@@ -73,10 +78,15 @@ function fixture(
     if (sql.includes('from "rsvps"'))
       return sql.includes("count(*)") ? { rows: [[row.id, 3]] } : { rows: [] };
     if (sql.includes('"event_key" =')) {
+      if (missing) return { rows: [] };
       return {
         rows: [
           columns.map((key) =>
-            row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key],
+            row[key] instanceof Date
+              ? Number.isFinite(row[key].getTime())
+                ? row[key].toISOString()
+                : "infinity"
+              : row[key],
           ),
         ],
       };
@@ -207,6 +217,123 @@ describe("Event page parity (fixture-only)", () => {
     }
   });
 
+  it.each(["draft", "published", "cancelled"])(
+    "restricts %s review to moderators and reuses member detail",
+    async (status) => {
+      const source = fixture({ status });
+      for (const cookie of [undefined, await source.cookie()]) {
+        expect((await source.request(cookie, `${PATH}?review=1`)).status).toBe(403);
+      }
+      const response = await source.request(await source.cookie(true), `${PATH}?review=1`);
+      const html = await response.text();
+      expect(response.status).toBe(200);
+      expect(response.headers.get("cache-control")).toBe("private, no-store");
+      expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+      expect(html.match(/<h1\b/g)).toHaveLength(1);
+      expect(html).toContain('data-testid="event-review"');
+      expect(html).toContain('data-testid="event-venue">The lobby &amp; voice channel');
+      expect(html).toContain('aria-describedby="preview-rsvp-hint"');
+      expect(html).not.toContain("data-rsvp-form");
+      expect(html.indexOf('data-testid="event-review-actions"')).toBeGreaterThan(
+        html.indexOf('class="event-discovery"'),
+      );
+      if (status !== "draft") expect(html).not.toContain("Fix these before publishing");
+      if (status === "cancelled") {
+        // Status guidance stays; the false listing claim is gone.
+        expect(html).toContain("This event is cancelled.");
+        expect(html).not.toContain("see it in listings");
+        expect(html).not.toContain("Members don&#39;t see it");
+      }
+    },
+  );
+
+  it("authorizes review before any event read and keeps absent rows 404", async () => {
+    const source = fixture({ status: "draft", startsAt: new Date(NaN), endsAt: new Date(NaN) });
+    for (const cookie of [undefined, await source.cookie()]) {
+      source.queries.length = 0;
+      const refused = await source.request(cookie, `${PATH}?review=1`);
+      expect(refused.status).toBe(403);
+      expect(await refused.text()).not.toContain("Time unavailable");
+      expect(source.queries.some((sql) => sql.includes('"event_key" ='))).toBe(false);
+    }
+    const missing = fixture({ status: "draft" }, undefined, true);
+    const response = await missing.request(await missing.cookie(true), `${PATH}?review=1`);
+    expect(response.status).toBe(404);
+    expect(await response.text()).not.toContain('data-testid="event-review"');
+  });
+
+  it("serves an unreadable saved draft to moderator review through the real route", async () => {
+    const source = fixture({
+      status: "draft",
+      title: 'Raid <script>alert("t")</script>',
+      location: " ",
+      startsAt: new Date(NaN),
+      endsAt: new Date(NaN),
+    });
+    const moderator = await source.cookie(true);
+    const response = await source.request(moderator, `${PATH}?review=1`);
+    expect(response.status).toBe(200);
+    expect(response.headers.get("cache-control")).toBe("private, no-store");
+    expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
+    const html = await response.text();
+    expect(html).toContain('name="robots" content="noindex, nofollow"');
+    expect(html).toContain('data-testid="event-review"');
+    expect(html).toContain("Fix these before publishing");
+    expect(html).toContain("Time unavailable");
+    for (const anchor of ["#f-location", "#f-starts-at", "#f-ends-at"]) {
+      expect(html).toContain(`href="/admin/events/${KEY}${anchor}"`);
+    }
+    expect(html).toContain("The saved start time can&#39;t be read.");
+    expect(html).toContain("The saved end time can&#39;t be read.");
+    expect(html).toContain("Raid &lt;script&gt;");
+    expect(html).not.toContain('<script>alert("t")');
+    // Inert RSVP: the disabled placeholder, no form, no RSVP island.
+    expect(html).toContain('aria-describedby="preview-rsvp-hint"');
+    expect(html).not.toContain("data-rsvp-form");
+    expect(html).not.toMatch(/action="[^"]*\/rsvp/);
+    expect(html).not.toContain('src="/islands/rsvp-button.js"');
+    expect(html).not.toContain('"startDate"');
+    expect(html).not.toContain('"endDate"');
+
+    // Ordinary reads keep refusing the unreadable window, moderators included.
+    for (const cookie of [undefined, await source.cookie(), moderator]) {
+      expect((await source.request(cookie)).status).toBe(404);
+    }
+    expect((await source.request(moderator, `${PATH}?review=0`)).status).toBe(404);
+    const published = fixture({ startsAt: new Date(NaN), endsAt: new Date(NaN) });
+    expect((await published.request(undefined, `${PATH}.md`)).status).toBe(404);
+    expect((await published.request(await published.cookie(true))).status).toBe(404);
+  });
+
+  it("renders corrections and member detail even with unreadable persisted dates", async () => {
+    const source = fixture({
+      status: "draft",
+      location: " ",
+      startsAt: new Date(NaN),
+      endsAt: new Date(NaN),
+    });
+    const response = await source.request(await source.cookie(true), `${PATH}?review=1`);
+    expect(response.status).toBe(200);
+    expect(await response.text()).toContain("Time unavailable");
+    const e = { ...source.row, goingCount: 0, goingOccupancy: 0 };
+    const html = String(
+      jsx(EventPage, {
+        e,
+        neighbors: { previous: null, next: null },
+        related: [],
+        appUrl: APP_URL,
+        jsonLd: eventJsonLd(e, APP_URL),
+        session: { id: "mod", username: "Mod", avatar: null, member: true, moderator: true },
+        review: savedEventReview(e, new Date()),
+      }),
+    );
+    expect(html).toContain("Fix these before publishing");
+    expect(html).toContain(`href="/admin/events/${KEY}#f-starts-at"`);
+    expect(html).toContain("Time unavailable");
+    expect(html).not.toContain('"startDate"');
+    expect(html).not.toContain('"endDate"');
+  });
+
   it("shows a draft only to a moderator, with robots suppression", async () => {
     const source = fixture({ status: "draft" });
     for (const cookie of [undefined, await source.cookie()]) {
@@ -271,7 +398,7 @@ describe("Event page parity (fixture-only)", () => {
     }
     expect(html).toContain('name="twitter:card" content="summary"');
     expect(html).not.toContain("<script> & friends");
-    expect(html).toContain(`property="og:image" content="${APP_URL}/icons/icon-512.png"`);
+    expect(html).toContain(`property="og:image" content="${APP_URL}/og-1200x630.png"`);
     expect(html).toContain('property="og:image:alt" content="Together We Own community logo"');
   });
 

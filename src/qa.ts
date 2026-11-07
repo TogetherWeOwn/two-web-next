@@ -6,7 +6,9 @@
 // synthetic snowflakes so fixtures stay stable across the ports.
 //
 // Env gate: `APP_URL` must be the staging host (`https://next.togetherweown.com`)
-// AND `QA_AUTH_TOKEN` must be set. Anywhere else the route does not exist (404).
+// AND `QA_AUTH_TOKEN` must be set to a value of MIN_QA_TOKEN_LENGTH to
+// MAX_QA_PRESENTED_TOKEN_LENGTH characters (32-512, no surrounding
+// whitespace). Anywhere else the route does not exist (404).
 
 export const QA_HEADER = "X-TWO-QA-Auth";
 
@@ -21,6 +23,17 @@ export function qaIdentity(name: string): QaIdentity | undefined {
   return Object.hasOwn(QA_IDENTITIES, name) ? QA_IDENTITIES[name] : undefined;
 }
 
+/** True for the synthetic QA fixture snowflakes above. Their session bits are
+ * fixtures by construction — the identities are not Discord guild members —
+ * so the mid-session role recheck (src/session-role-refresh.ts) leaves them
+ * as issued. This predicate is the identity half only: callers must also
+ * require `qaEnabled(APP_URL, QA_AUTH_TOKEN)` before treating a fixture id
+ * as exempt, so an environment where the QA route does not exist (everywhere
+ * but staging) never exempts any identity on the snowflake alone. */
+export function isQaFixtureId(userId: string): boolean {
+  return Object.values(QA_IDENTITIES).some((identity) => identity.discordId === userId);
+}
+
 export const STAGING_APP_URL = "https://next.togetherweown.com";
 
 // The longest presented QA token the gate will hash, in characters. Anything
@@ -30,8 +43,23 @@ export const STAGING_APP_URL = "https://next.togetherweown.com";
 // byte-identical 404, so valid and short-bad-token behavior is unchanged.
 export const MAX_QA_PRESENTED_TOKEN_LENGTH = 512;
 
+// The configured QA token window, in characters. Same 32-512 window as the
+// ops control token (src/admin/ops-overrides.tsx): a shorter configured value
+// leaves the route disabled (404) instead of running with a guessable secret,
+// and a longer one disables it too because `qaTokenMatches` never hashes a
+// presented token over MAX_QA_PRESENTED_TOKEN_LENGTH, so it could never match.
+// Surrounding whitespace never counts toward the window and disables the seam
+// too, matching the ops-token gate.
+export const MIN_QA_TOKEN_LENGTH = 32;
+
 export function qaEnabled(appUrl: string, qaToken: string | undefined): boolean {
-  return appUrl === STAGING_APP_URL && !!qaToken;
+  return (
+    appUrl === STAGING_APP_URL &&
+    !!qaToken &&
+    qaToken.trim() === qaToken &&
+    qaToken.length >= MIN_QA_TOKEN_LENGTH &&
+    qaToken.length <= MAX_QA_PRESENTED_TOKEN_LENGTH
+  );
 }
 
 const sha256 = (s: string) => crypto.subtle.digest("SHA-256", new TextEncoder().encode(s));
@@ -49,4 +77,42 @@ export async function qaTokenMatches(
   let diff = x.length ^ y.length;
   for (let i = 0; i < Math.min(x.length, y.length); i++) diff |= x[i]! ^ y[i]!;
   return diff === 0;
+}
+
+// Pre-authentication guess cap, per client and per isolate, mirroring the
+// ops-token attempt bucket (src/admin/ops-overrides.tsx): a presented token
+// takes an attempt before the digest comparison and a match refunds it, so
+// only failed guesses drain a client. Sustained guessing costs one attempt
+// per second after the initial burst; a legitimate holder never nets a
+// spend, and one client's flood cannot drain another client's budget.
+// DB-free by design — a guess never debits the shared `qa-login` bucket —
+// and bounded to QA_MAX_ATTEMPT_CLIENTS entries, evicting the least
+// recently seen. Callers answer the existing byte-identical 404 on refusal,
+// so exhaustion is indistinguishable from any other failed gate check.
+export const QA_ATTEMPT_CAPACITY = 10;
+const QA_ATTEMPT_REFILL_PER_SECOND = 1;
+const QA_MAX_ATTEMPT_CLIENTS = 1024;
+const qaAttempts = new Map<string, { tokens: number; at: number }>();
+
+/** Take one guess attempt for `client`; false when its budget is spent. */
+export function takeQaAttempt(client: string, now = Date.now()): boolean {
+  const prior = qaAttempts.get(client);
+  const tokens = prior
+    ? Math.min(
+        QA_ATTEMPT_CAPACITY,
+        prior.tokens + (Math.max(0, now - prior.at) / 1000) * QA_ATTEMPT_REFILL_PER_SECOND,
+      )
+    : QA_ATTEMPT_CAPACITY;
+  qaAttempts.delete(client);
+  if (qaAttempts.size >= QA_MAX_ATTEMPT_CLIENTS)
+    qaAttempts.delete(qaAttempts.keys().next().value as string);
+  const allowed = tokens >= 1;
+  qaAttempts.set(client, { tokens: allowed ? tokens - 1 : tokens, at: now });
+  return allowed;
+}
+
+/** Return the attempt a matching token just spent, so matches never drain. */
+export function refundQaAttempt(client: string): void {
+  const bucket = qaAttempts.get(client);
+  if (bucket) bucket.tokens = Math.min(QA_ATTEMPT_CAPACITY, bucket.tokens + 1);
 }
