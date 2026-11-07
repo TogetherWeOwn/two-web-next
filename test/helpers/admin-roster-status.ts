@@ -270,7 +270,7 @@ export async function compileRosterKit() {
     format: "esm",
     platform: "node",
     write: false,
-    tsconfigRaw: { compilerOptions: {} },
+    tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
     nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
     alias: { "#lib": join(root, "web/src/lib") },
     logLevel: "silent",

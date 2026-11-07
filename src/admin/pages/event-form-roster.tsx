@@ -14,11 +14,13 @@ import {
   type RosterQuery,
 } from "../table-list";
 import { TableSortHeader } from "./shell";
+import { formatAdminTime } from "../chronology";
 
 export const EventRosterSection: FC<{
   eventKey: string;
   action: string;
-  roster: RosterEntry[];
+  roster: (Pick<RosterEntry, "username" | "status" | "answeredAt"> &
+    Partial<Pick<RosterEntry, "waitlistPosition">>)[];
   rosterTotal?: number;
   rosterQuery?: RosterQuery;
 }> = ({
@@ -39,6 +41,9 @@ export const EventRosterSection: FC<{
       <h2>RSVPs ({total})</h2>
       <p class="hint">Save event changes before searching or sorting the roster.</p>
       <p class="hint">{rosterWaitlistHint}</p>
+      <p class="hint">
+        Answered shows the latest response update in UTC, not the original waitlist join time.
+      </p>
       <p data-testid="roster-range">{rosterRangeText(rangeStart, rangeEnd, total)}</p>
       <form method="get" action={`${action}#rsvp-roster`} class="filters">
         <input type="hidden" name="roster_sort" value={rosterQuery.sort} />
@@ -110,23 +115,28 @@ export const EventRosterSection: FC<{
                 </td>
               </tr>
             ) : (
-              roster.map((r) => (
-                <tr key={r.userId}>
-                  <td>{r.username?.trim() || "Unknown member"}</td>
-                  <td>{r.status}</td>
-                  <td>{r.answeredAt.toISOString()}</td>
-                  <td>
-                    {r.status === "waitlisted" && r.waitlistPosition != null ? (
-                      `#${r.waitlistPosition}`
-                    ) : (
-                      <>
-                        <span aria-hidden="true">—</span>
-                        <span class="sr-only">Not waitlisted</span>
-                      </>
-                    )}
-                  </td>
-                </tr>
-              ))
+              roster.map((r, index) => {
+                const time = formatAdminTime(r.answeredAt);
+                return (
+                  <tr key={index}>
+                    <td>{r.username?.trim() || "Unknown member"}</td>
+                    <td>{r.status}</td>
+                    <td class="admin-chronology">
+                      {time.iso ? <time datetime={time.iso}>{time.label}</time> : time.label}
+                    </td>
+                    <td>
+                      {r.status === "waitlisted" && r.waitlistPosition != null ? (
+                        `#${r.waitlistPosition}`
+                      ) : (
+                        <>
+                          <span aria-hidden="true">—</span>
+                          <span class="sr-only">Not waitlisted</span>
+                        </>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })
             )}
           </tbody>
         </table>

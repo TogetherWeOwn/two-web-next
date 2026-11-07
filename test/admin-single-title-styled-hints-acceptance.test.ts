@@ -40,6 +40,7 @@ import {
   JoinAttemptPage,
   JoinAttemptsPage,
 } from "../src/admin/pages";
+import { EventRosterSection } from "../src/admin/pages/event-form-roster";
 import { JOIN_RETENTION_DAYS } from "../src/admin/reads";
 import type { ActivityLogViewerRow, JoinAttemptRow, RosterEntry } from "../src/admin/reads";
 import type { EventRow } from "../src/admin/store";
@@ -247,8 +248,21 @@ const kitActivityData = () => ({
   hasNext: false,
 });
 
+// The Kit edit page injects the shared Hono roster as server-rendered HTML.
+const kitRosterHtml = (): string =>
+  String(
+    jsx(EventRosterSection, {
+      eventKey: eventRow.eventKey,
+      action: `/admin/events/${eventRow.eventKey}`,
+      roster,
+      rosterTotal: 1,
+      rosterQuery: parseRosterQuery({}),
+    }),
+  );
+
 const kitEditData = () => ({
   view: {
+    rosterHtml: kitRosterHtml(),
     title: eventRow.title,
     key: eventRow.eventKey,
     values: {},
