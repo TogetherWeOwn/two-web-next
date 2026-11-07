@@ -9,6 +9,21 @@
 
 import { PUBLIC_ROUTE_SLOTS } from "./seo-slots";
 
+export const MONTH_NAMES = [
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
+
 export type SitemapUrl = {
   loc: string;
   lastmod?: string;

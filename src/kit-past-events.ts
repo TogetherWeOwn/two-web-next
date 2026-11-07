@@ -9,8 +9,8 @@ import {
   anonCacheSource,
   anonPastKey,
   isAnonCacheEligible,
-  readAnonCache,
-  writeAnonCache,
+  readAnonCacheResponse,
+  settleAnonCacheResponse,
 } from "./events/anon-cache";
 import { normalizePastPage } from "./events/reads";
 import type { PublicEvent } from "./events/reads";
@@ -82,20 +82,8 @@ export async function dispatchPastArchiveRequest(
   const source = eligible ? anonCacheSource(env) : null;
   const key = eligible ? anonPastKey(request.method, page) : null;
   if (source && key) {
-    const hit = readAnonCache(key, source, now);
-    if (hit) {
-      const headers = new Headers({ "cache-control": hit.cacheControl });
-      headers.set(
-        "cache-control",
-        hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
-      );
-      // The entry stores no content type and a string body defaults to
-      // text/plain; name the cached HTML exactly as Hono's c.html() does so
-      // repeat guests render the page instead of its source.
-      headers.set("content-type", "text/html; charset=UTF-8");
-      if (hit.vary) headers.set("vary", hit.vary);
-      return new Response(hit.body, { status: hit.status, headers });
-    }
+    const hit = readAnonCacheResponse(key, source, now);
+    if (hit) return hit;
   }
 
   const generation = source ? anonCacheGeneration() : 0;
@@ -110,25 +98,15 @@ export async function dispatchPastArchiveRequest(
   });
 
   if (source && key && cacheable && cleanResponse.status === 200) {
-    // Buffer the candidate before the final generation comparison: a retire
-    // that lands while clone().text() is in flight must stop the stale bytes
-    // from settling. The compare-and-write below is synchronous, so it stays
-    // atomic within the isolate.
-    const body = await cleanResponse.clone().text();
-    if (anonCacheGeneration() === generation) {
-      writeAnonCache(
-        key,
-        source,
-        {
-          status: cleanResponse.status,
-          cacheControl: cleanResponse.headers.get("cache-control") ?? "public, max-age=300",
-          vary: cleanResponse.headers.get("vary"),
-          body,
-        },
-        ANON_PAST_TTL_MS,
-        now,
-      );
-    }
+    await settleAnonCacheResponse(
+      key,
+      source,
+      cleanResponse,
+      generation,
+      ANON_PAST_TTL_MS,
+      "public, max-age=300",
+      now,
+    );
   }
 
   return cleanResponse;

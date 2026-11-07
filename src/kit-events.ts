@@ -1,4 +1,3 @@
-import { Hono } from "hono";
 import { alertRequestError } from "./alerts";
 import type { Db } from "./db/index";
 import type { Env, HeaderSession } from "./env";
@@ -8,8 +7,8 @@ import {
   anonCacheSource,
   anonEventsKey,
   isAnonCacheEligible,
-  readAnonCache,
-  writeAnonCache,
+  readAnonCacheResponse,
+  settleAnonCacheResponse,
 } from "./events/anon-cache";
 import {
   loadCalendarPageModel,
@@ -17,38 +16,14 @@ import {
   type CalendarPageInput,
   type CalendarPageModel,
 } from "./events/page-models.server";
-import { guardRequestId, publicReadGuard, seedGuardRequestId } from "./events/routes-shared";
+import { kitPublicReadGuard, type KitPublicReadGuard } from "./kit-past-events";
 import type { DiscordEventsSource } from "./events/discord-transients-types";
 import { inviteDestination } from "./invite";
 import type { JoinResult } from "./return-journey";
 import { canonicalUrl } from "./seo";
 
-export type KitEventsGuard = (
-  request: Request,
-  env: Env,
-  requestId?: unknown,
-) => Promise<Response | null>;
-
-const guardApp = new Hono<{ Bindings: Env }>();
-guardApp.use(guardRequestId);
-guardApp.all("*", async (c) => {
-  const limited = await publicReadGuard(c);
-  return limited ?? c.body(null, 204);
-});
-
-/**
- * Reuse the public Hono read budget for the native Kit route. The dispatch
- * passes its minted id so a 429 renders the same support reference the
- * response header carries; without one the refusal stays blank-safe.
- */
-export async function kitEventsGuard(
-  request: Request,
-  env: Env,
-  requestId?: unknown,
-): Promise<Response | null> {
-  const response = await guardApp.fetch(seedGuardRequestId(request, requestId), env);
-  return response.status === 204 ? null : response;
-}
+export type KitEventsGuard = KitPublicReadGuard;
+export const kitEventsGuard: KitEventsGuard = kitPublicReadGuard;
 
 /** Viewer bits the Kit list load needs: the header name, member chrome, draft visibility. */
 export interface KitEventsSession {
@@ -154,20 +129,8 @@ export async function dispatchEventsRequest(
       pathAndSearch = "/events";
     }
     key = anonEventsKey(request.method, pathAndSearch, island);
-    const hit = readAnonCache(key, source, now);
-    if (hit) {
-      const headers = new Headers({ "cache-control": hit.cacheControl });
-      headers.set(
-        "cache-control",
-        hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
-      );
-      // The entry stores no content type and a string body defaults to
-      // text/plain; name the cached HTML exactly as Hono's c.html() does so
-      // repeat guests render the page instead of its source.
-      headers.set("content-type", "text/html; charset=UTF-8");
-      if (hit.vary) headers.set("vary", hit.vary);
-      return new Response(hit.body, { status: hit.status, headers });
-    }
+    const hit = readAnonCacheResponse(key, source, now);
+    if (hit) return hit;
   }
 
   const generation = source ? anonCacheGeneration() : 0;
@@ -183,25 +146,15 @@ export async function dispatchEventsRequest(
   });
 
   if (source && key && cacheable && cleanResponse.status === 200) {
-    // Buffer the candidate before the final generation comparison: a retire
-    // that lands while clone().text() is in flight must stop the stale bytes
-    // from settling. The compare-and-write below is synchronous, so it stays
-    // atomic within the isolate.
-    const body = await cleanResponse.clone().text();
-    if (anonCacheGeneration() === generation) {
-      writeAnonCache(
-        key,
-        source,
-        {
-          status: cleanResponse.status,
-          cacheControl: cleanResponse.headers.get("cache-control") ?? "public, max-age=60",
-          vary: cleanResponse.headers.get("vary"),
-          body,
-        },
-        ANON_EVENTS_TTL_MS,
-        now,
-      );
-    }
+    await settleAnonCacheResponse(
+      key,
+      source,
+      cleanResponse,
+      generation,
+      ANON_EVENTS_TTL_MS,
+      "public, max-age=60",
+      now,
+    );
   }
 
   return cleanResponse;

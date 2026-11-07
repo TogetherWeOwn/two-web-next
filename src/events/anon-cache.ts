@@ -159,6 +159,52 @@ export function writeAnonCache(
   entries.set(key, { ...res, source, expiresAt: now + ttlMs });
 }
 
+/** Rebuild cached HTML with only its remaining public lifetime. */
+export function readAnonCacheResponse(
+  key: string,
+  source: AnonCacheSource,
+  now: number = Date.now(),
+): Response | null {
+  const hit = readAnonCache(key, source, now);
+  if (!hit) return null;
+  const headers = new Headers({ "cache-control": hit.cacheControl });
+  headers.set(
+    "cache-control",
+    hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
+  );
+  // String bodies default to text/plain; repeat guests must receive HTML.
+  headers.set("content-type", "text/html; charset=UTF-8");
+  if (hit.vary) headers.set("vary", hit.vary);
+  return new Response(hit.body, { status: hit.status, headers });
+}
+
+/** Buffer before the final synchronous generation comparison and write. */
+export async function settleAnonCacheResponse(
+  key: string,
+  source: AnonCacheSource,
+  response: Response,
+  capturedGeneration: number,
+  ttlMs: number,
+  fallbackCacheControl: string,
+  now: number = Date.now(),
+): Promise<void> {
+  const body = await response.clone().text();
+  if (anonCacheGeneration() === capturedGeneration) {
+    writeAnonCache(
+      key,
+      source,
+      {
+        status: response.status,
+        cacheControl: response.headers.get("cache-control") ?? fallbackCacheControl,
+        vary: response.headers.get("vary"),
+        body,
+      },
+      ttlMs,
+      now,
+    );
+  }
+}
+
 /**
  * Retire every anonymous calendar/archive entry. Called after a committed
  * event or RSVP mutation (never on a refusal or a rollback), so the next
