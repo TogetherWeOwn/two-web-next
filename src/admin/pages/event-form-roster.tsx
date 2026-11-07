@@ -3,6 +3,7 @@
 
 import type { FC } from "hono/jsx";
 import type { RosterEntry } from "../reads";
+import { rosterWaitlistHint } from "../roster-copy";
 import {
   ROSTER_PAGE_SIZE,
   ROSTER_STATUSES,
@@ -18,7 +19,8 @@ import { formatAdminTime } from "../chronology";
 export const EventRosterSection: FC<{
   eventKey: string;
   action: string;
-  roster: Pick<RosterEntry, "username" | "status" | "answeredAt">[];
+  roster: (Pick<RosterEntry, "username" | "status" | "answeredAt"> &
+    Partial<Pick<RosterEntry, "waitlistPosition">>)[];
   rosterTotal?: number;
   rosterQuery?: RosterQuery;
 }> = ({
@@ -38,6 +40,7 @@ export const EventRosterSection: FC<{
     <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
       <h2>RSVPs ({total})</h2>
       <p class="hint">Save event changes before searching or sorting the roster.</p>
+      <p class="hint">{rosterWaitlistHint}</p>
       <p class="hint">
         Answered shows the latest response update in UTC, not the original waitlist join time.
       </p>
@@ -94,12 +97,20 @@ export const EventRosterSection: FC<{
                   rosterUrl(eventKey, rosterQuery, { sort: "answered", order, page: 1 })
                 }
               />
+              <TableSortHeader
+                label="Waitlist position"
+                active={rosterQuery.sort === "waitlist"}
+                order={rosterQuery.order}
+                url={(order) =>
+                  rosterUrl(eventKey, rosterQuery, { sort: "waitlist", order, page: 1 })
+                }
+              />
             </tr>
           </thead>
           <tbody>
             {roster.length === 0 ? (
               <tr>
-                <td colspan={3} data-testid="roster-empty">
+                <td colspan={4} data-testid="roster-empty">
                   {total > 0 ? "No RSVPs on this page." : rosterEmptyText(rosterQuery)}
                 </td>
               </tr>
@@ -112,6 +123,16 @@ export const EventRosterSection: FC<{
                     <td>{r.status}</td>
                     <td class="admin-chronology">
                       {time.iso ? <time datetime={time.iso}>{time.label}</time> : time.label}
+                    </td>
+                    <td>
+                      {r.status === "waitlisted" && r.waitlistPosition != null ? (
+                        `#${r.waitlistPosition}`
+                      ) : (
+                        <>
+                          <span aria-hidden="true">—</span>
+                          <span class="sr-only">Not waitlisted</span>
+                        </>
+                      )}
                     </td>
                   </tr>
                 );
