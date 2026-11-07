@@ -347,10 +347,23 @@ async function recordRun({
   return workerLog;
 }
 
-export async function record({ out, runs = 1, targetConfig = "wrangler.jsonc", databaseUrl }) {
+export async function record({
+  out,
+  runs = 1,
+  targetConfig = "wrangler.jsonc",
+  databaseUrl,
+  extraPublicFiles = [],
+}) {
   const adminUrl = requireDisposableDatabase(databaseUrl);
   const inputs = await loadVectorInputs(repo);
-  const { vectors, coverage } = buildVectors(inputs);
+  for (const path of extraPublicFiles) {
+    if (inputs.publicFiles.includes(path))
+      throw new Error(`Supplemental asset collides with the shared public inventory: ${path}`);
+  }
+  const { vectors, coverage } = buildVectors({
+    ...inputs,
+    publicFiles: [...inputs.publicFiles, ...extraPublicFiles],
+  });
   const { ALERT_ROUTES } = await import(pathToFileURL(join(repo, "tail/worker.ts")).href);
   const tailLabel = (route) => (route ? (ALERT_ROUTES.has(route) ? route : "[redacted]") : null);
   const meta = {

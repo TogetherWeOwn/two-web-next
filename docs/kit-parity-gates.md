@@ -255,6 +255,24 @@ production-origin recording does not claim the staging-origin committed bytes
 are interchangeable. Missing vectors and unapproved differences fail the gate;
 a draft fast-pass, dry-run bundle, or unexecuted step is not parity evidence.
 
+The production comparison also discovers every generated `/_app/immutable/*`
+file and `/_app/version.json` from the built asset directory. Both Workers
+receive the same supplemental paths and the same method and conditional vectors.
+`asset-headers.json` compares every security-header name emitted by
+`securityHeadersFor` against Hono at that URL, byte for byte; it fails on a
+missing header even when both sides omit it. Plain GET and HEAD must actually
+serve the built asset (200), not a hook fallback or missing-file response. The
+artifact retains each complete response, not only the selected header values.
+
+These supplemental files did not exist in the pure-Hono public inventory, so
+this is a security-header contract, not a claim that their bodies, cache policy,
+status or route labels equal Hono's 404. No existing route/static inventory row
+is projected this way: all of those still compare their entire responses,
+including headers, bodies, cookies and tail labels. Supplemental paths cannot
+replace a shared public file. The gate also requires the built `_headers` to
+retain the reviewed source policy. Adapter 8.0.2 reads `_headers` from the web
+project root itself; moving it into `static/` is explicitly unsupported.
+
 The hook preempts Kit's automatic conditional-response rewrite only for its
 exact match rule (including a leading weak validator). It returns the 304 with
 the complete header set and cookies, rather than Kit's cache-header-only copy.

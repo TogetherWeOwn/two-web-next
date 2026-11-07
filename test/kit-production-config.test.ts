@@ -1,7 +1,8 @@
 import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { describe, expect, it } from "vitest";
-// @ts-expect-error Standalone CI tooling has no declaration file.
-import { readWranglerConfig } from "../ci/wrangler-config.mjs";
+
+const { readWranglerConfig } = createRequire(import.meta.url)("../ci/wrangler-config.mjs");
 
 // web/wrangler.production.jsonc is the reviewed Kit Worker config for the
 // production script name. It must mirror the root env.production bindings and

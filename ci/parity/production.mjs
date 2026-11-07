@@ -9,12 +9,13 @@ import { join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { readWranglerConfig } from "../wrangler-config.mjs";
 import {
-  compareRecordings,
   loadRecording,
   parseExceptions,
   report,
   EXCEPTIONS_DOC,
 } from "./compare.mjs";
+
+import { compareProductionRecordings, productionAssetPaths } from "./asset-headers.mjs";
 
 const repo = resolve(import.meta.dirname, "../..");
 
@@ -43,6 +44,15 @@ async function main() {
   const root = readWranglerConfig(readFileSync(join(repo, "wrangler.jsonc"), "utf8"));
   const kit = readWranglerConfig(readFileSync(join(repo, "web/wrangler.production.jsonc"), "utf8"));
   const target = productionHonoTarget(root, kit);
+  const assetPaths = productionAssetPaths(
+    resolve(repo, "web", kit.assets.directory),
+    readFileSync(join(repo, "web/_headers"), "utf8"),
+  );
+  const { securityHeadersFor } = await import("../../src/headers.ts");
+  const securityHeaderNames = securityHeadersFor(
+    { path: "/_app/version.json", method: "GET" },
+    target.vars.FEATURED_IMAGE_HOSTS,
+  ).map(([name]) => name.toLowerCase());
   const out = resolve(
     process.env.PRODUCTION_PARITY_ARTIFACT_DIR ?? "artifacts/production-kit-parity",
   );
@@ -57,24 +67,32 @@ async function main() {
       out: baseline,
       targetConfig: config,
       databaseUrl: process.env.PARITY_DATABASE_URL,
+      extraPublicFiles: assetPaths,
     });
     const built = await record({
       out: candidate,
       targetConfig: "web/wrangler.production.jsonc",
       databaseUrl: process.env.PARITY_DATABASE_URL,
+      extraPublicFiles: assetPaths,
     });
     if (hono.meta.vectorCount === 0 || hono.meta.vectorCount !== built.meta.vectorCount)
       throw new Error("Production parity did not record the complete shared inventory");
     const exceptions = parseExceptions(readFileSync(join(repo, EXCEPTIONS_DOC), "utf8"));
-    const comparison = compareRecordings(
+    const { comparison, assets } = compareProductionRecordings(
       loadRecording(baseline),
       loadRecording(candidate),
+      assetPaths,
+      securityHeaderNames,
       exceptions,
     );
-    const summary = report(
-      comparison,
-      "pure Hono production vs built Kit production (all families off)",
-    );
+    const summary = [
+      report(comparison, "pure Hono production vs built Kit production (all families off)"),
+      report(
+        { failures: assets.failures, approved: [], unused: [] },
+        "pre-hook asset security headers",
+      ),
+    ].join("\n");
+    await writeFile(join(out, "asset-headers.json"), JSON.stringify(assets, null, 2) + "\n");
     await writeFile(
       join(out, "comparison.json"),
       JSON.stringify(
@@ -94,7 +112,7 @@ async function main() {
     );
     await writeFile(join(out, "summary.txt"), summary + "\n");
     console.log(summary);
-    process.exitCode = comparison.failures.length ? 1 : 0;
+    process.exitCode = comparison.failures.length || assets.failures.length ? 1 : 0;
   } finally {
     await rm(scratch, { recursive: true, force: true });
   }

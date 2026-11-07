@@ -19,6 +19,16 @@ build yet.
   capture, no notification, no versions deploy, no migration. It still waits for
   the `production` Environment approval because the checks need production
   credentials.
+- `test/kit-production-operations.test.ts` pins these source facts, with no
+  runtime claim: `web/wrangler.production.jsonc` only produces to the two
+  production queues and declares no consumers and no crons; the root
+  `wrangler.jsonc` still points at the Hono entry `src/worker.ts`, which exports
+  `fetch`, `queue` and `scheduled`, and its production env is produce-only;
+  `wrangler.jobs.jsonc` `env.production` (`two-web-jobs-production`) is a
+  separate Worker with no routes that consumes those same queues and owns both
+  crons; the production Tail `ALERT_ROUTES` equals the Hono route inventory
+  (no Kit route ids), and `/about`, `/faq` and `/rules` keep the same Hono route
+  label whether served directly or through the Hono catch-all dispatch.
 
 ## Unimplemented
 
