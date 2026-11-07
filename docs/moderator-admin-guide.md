@@ -406,10 +406,14 @@ leave-page warning for unsaved changes (including after a rejected Save).
    drafts receive publication corrections. RSVP is disabled in preview; other
    member links work normally. Published and cancelled previews describe their
    current state without offering another publication.
-5. **Back to edit** returns to the editor. In this read-only slice, publication
-   still uses the editor's separate **Publish** action and its existing row lock.
-   Publish-from-review and its stale-record check follow separately. Earlier
-   readiness advice is never authorization to publish a later saved record.
+5. Choose **Publish** at the bottom of the review, or **Back to edit** to correct
+   something. Publish uses only the saved record shown, not unsaved editor edits.
+   If another save happened since you opened review, nothing publishes: the page
+   shows the latest saved record and a change warning. Check that record before
+   trying again. Validation refusals also return to review with a specific reason.
+6. Successful publication lands on the live member detail page with **Published.
+   Members can now see this event.** The editor and list still offer their direct
+   Publish actions; those keep the existing editor landing.
 
 Hono and Kit share the preview chrome without duplicating the member rendering.
 

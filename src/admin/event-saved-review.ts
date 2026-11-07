@@ -3,6 +3,7 @@ import { instantIso } from "../events/date-format";
 
 export type SavedEventReviewRow = {
   eventKey: string;
+  title?: string;
   status: string;
   location: string | null;
   startsAt: Date;
@@ -10,7 +11,16 @@ export type SavedEventReviewRow = {
   updatedAt?: Date;
 };
 
-export function savedEventReview(row: SavedEventReviewRow, now: Date) {
+const reviewErrors: Record<string, string> = {
+  stale:
+    "This draft changed after you opened review. You're now looking at the latest saved record — check it over before publishing.",
+  location: "Location is blank. Add a location and save.",
+  ended: "This event has already ended. Fix the end time and save.",
+  dates: "The saved event times can't be read. Fix the times and save.",
+  status: "This event is no longer a draft. Nothing was published from this review.",
+};
+
+export function savedEventReview(row: SavedEventReviewRow, now: Date, search = "") {
   const editHref = `/admin/events/${encodeURIComponent(row.eventKey)}`;
   const corrections: { message: string; href: string; label: string }[] = [];
   if (row.status === "draft") {
@@ -41,9 +51,16 @@ export function savedEventReview(row: SavedEventReviewRow, now: Date) {
       });
     }
   }
+  const query = new URLSearchParams(search);
+  const errorCode = query.get("publish_error") ?? "";
   return {
     href: `/e/${encodeURIComponent(row.eventKey)}?review=1`,
     editHref,
+    publishHref: `${editHref}/publish`,
+    title: row.title ?? "event",
+    isDraft: row.status === "draft",
+    error: Object.hasOwn(reviewErrors, errorCode) ? reviewErrors[errorCode] : null,
+    unsaved: query.get("unsaved") === "1",
     updatedAt: row.updatedAt ? instantIso(row.updatedAt) || null : null,
     guidance:
       row.status === "draft"

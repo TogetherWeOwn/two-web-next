@@ -586,6 +586,27 @@ jobs:
         run: npm run db:migrate
         env:
           DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+      - name: Route parity selftests (no Worker or DB)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:route-parity:selftest
+      # Pure-Hono contract goldens (docs/kit-parity-gates.md): record root
+      # wrangler.jsonc twice on loopback against clones of the service DB and
+      # require zero differences, plus the committed goldens while current.
+      - name: Route parity (pure Hono recorded twice, zero differences)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        timeout-minutes: 15
+        run: npm run check:route-parity
+        env:
+          PARITY_DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
+          PARITY_ARTIFACT_DIR: artifacts/route-parity
+      - name: Route parity recording
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: route-parity-${{ github.sha }}
+          path: artifacts/route-parity/
+          if-no-files-found: ignore
+          retention-days: 14
       - name: Deterministic capture fixture (owned schema, two clean seeds, no captures)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run capture:verify

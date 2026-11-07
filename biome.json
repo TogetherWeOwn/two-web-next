@@ -6,7 +6,14 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!!**/node_modules", "!!**/dist", "!!drizzle/meta", "!package-lock.json"]
+    "includes": [
+      "**",
+      "!!**/node_modules",
+      "!!**/dist",
+      "!!drizzle/meta",
+      "!package-lock.json",
+      "!test/fixtures/parity/hono-*"
+    ]
   },
   "formatter": {
     "indentStyle": "space",

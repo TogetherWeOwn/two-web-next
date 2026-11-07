@@ -247,6 +247,46 @@ describe("Event page parity (fixture-only)", () => {
     },
   );
 
+  it("carries publish_error and unsaved into the escaped review chrome with a live publish form", async () => {
+    const source = fixture({ status: "draft", title: '<b>Chess</b> "night"' });
+    const response = await source.request(
+      await source.cookie(true),
+      `${PATH}?review=1&publish_error=stale&unsaved=1&publish_error=<script>`,
+    );
+    const html = await response.text();
+    expect(response.status).toBe(200);
+    expect(html).toContain('data-testid="event-review-error"');
+    expect(html).toContain('tabindex="-1"');
+    expect(html).toContain("This draft changed after you opened review.");
+    expect(html).toContain('data-testid="event-review-unsaved"');
+    expect(html).toContain(`action="/admin/events/${KEY}/publish"`);
+    expect(html).toContain('name="reviewed_updated_at" value="2030-01-10T20:00:00.000Z"');
+    expect(html).not.toMatch(/disabled=""[^>]*data-testid="publish-reviewed-event"/);
+    expect(html).not.toContain("<b>Chess</b>");
+    expect(html).not.toContain("<script>");
+  });
+
+  it("shows the published notice only to moderators on a published event without review", async () => {
+    const source = fixture({ status: "published" });
+    const mod = await (
+      await source.request(await source.cookie(true), `${PATH}?published=1`)
+    ).text();
+    expect(mod).toContain('data-testid="event-published"');
+    expect(mod).not.toContain('data-testid="event-review"');
+    expect(mod).not.toContain("reviewed_updated_at");
+    for (const cookie of [undefined, await source.cookie()]) {
+      const res = await source.request(cookie, `${PATH}?published=1`);
+      expect(await res.text()).not.toContain('data-testid="event-published"');
+    }
+    const plain = await source.request(await source.cookie(true), PATH);
+    expect(await plain.text()).not.toContain('data-testid="event-published"');
+    const draft = fixture({ status: "draft" });
+    const notDraft = await draft.request(await draft.cookie(true), `${PATH}?published=1`);
+    expect(await notDraft.text()).not.toContain('data-testid="event-published"');
+    const review = await source.request(await source.cookie(true), `${PATH}?review=1&published=1`);
+    expect(await review.text()).not.toContain('data-testid="event-published"');
+  });
+
   it("authorizes review before any event read and keeps absent rows 404", async () => {
     const source = fixture({ status: "draft", startsAt: new Date(NaN), endsAt: new Date(NaN) });
     for (const cookie of [undefined, await source.cookie()]) {

@@ -594,6 +594,14 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         if (!db) return writeUnavailable(c);
         const key = c.req.param("key");
         if (!eventKeyAllowed(key, c.env.APP_URL)) return eventNotFound(c);
+        const body = action === "publish" ? await parsedForm(c) : {};
+        if (!body) return badRequest(c);
+        const fromReview = body.review === "1";
+        const reviewedUpdatedAt = fromReview
+          ? typeof body.reviewed_updated_at === "string"
+            ? body.reviewed_updated_at
+            : ""
+          : undefined;
         try {
           const actor = c.get("adminActor");
           const { row, writeBack } =
@@ -604,12 +612,33 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
                   actor,
                   key,
                   action === "publish" ? "published" : "cancelled",
+                  reviewedUpdatedAt,
                 );
           if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
-          return c.redirect(`/admin/events/${row.eventKey}`, 303);
+          return c.redirect(
+            fromReview ? `/e/${row.eventKey}?published=1` : `/admin/events/${row.eventKey}`,
+            303,
+          );
         } catch (err) {
           if (err instanceof NotFoundError) return eventNotFound(c);
           if (err instanceof ValidationError) {
+            if (fromReview) {
+              const reason = err.fields.reviewed_updated_at
+                ? "stale"
+                : err.fields.location
+                  ? "location"
+                  : err.fields.ends_at
+                    ? "ended"
+                    : err.fields.dates
+                      ? "dates"
+                      : "status";
+              // PRG reads the latest saved detail through the moderator-only
+              // review route. Query codes select fixed copy, never raw input.
+              return c.redirect(
+                `/e/${encodeURIComponent(key)}?review=1&publish_error=${reason}`,
+                303,
+              );
+            }
             // A blank location blocks publishing: re-render the edit form so the
             // no-JS moderator sees the error next to the location control and can
             // fix it, rather than an error page with nowhere to correct it.
@@ -629,7 +658,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
               c,
               422,
               "That transition is not allowed",
-              err.fields.status ?? err.fields.ends_at ?? err.fields.rsvp_open,
+              err.fields.status ?? err.fields.ends_at ?? err.fields.dates ?? err.fields.rsvp_open,
               // Nothing changed. Offer plain GET links back to the event and
               // the list; never a form that would retry the refused POST.
               [
