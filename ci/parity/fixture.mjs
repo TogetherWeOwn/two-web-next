@@ -132,3 +132,13 @@ export async function resetSessions(sql) {
   await insertSessions(sql);
   await refreshClone(sql);
 }
+
+/**
+ * Before every vector. Signed-in writes enqueue jobs, and `/up` reports the
+ * oldest job's age from the database clock, so a job left by an earlier
+ * vector would make later bodies depend on wall time and vector order.
+ */
+export async function clearQueue(sql) {
+  await sql`delete from queue_failed_jobs`;
+  await sql`delete from queue_jobs`;
+}
