@@ -383,6 +383,27 @@ or other navigation: with JavaScript enabled, the edit screen requests a browser
 leave-page warning for unsaved changes (including after a rejected Save).
 **Save** itself is exempt; the warning is not a substitute for saving.
 
+### Save → review → publish
+
+1. **Save** edits first. A rejected Save retains attempted edits but does not
+   change the saved event. Correct the errors and save successfully.
+2. For a saved draft, choose **Review before publishing** in Status, or **Review**
+   in the events list. `/e/<key>?review=1` renders the actual member detail page
+   with moderator-only preview chrome. New, unsaved forms have no review link.
+3. Check the saved title, times, venue and description. **Saved record last
+   updated** shows the persisted UTC update time, not the rendering clock.
+   Unsaved editor changes never appear in preview. Save and review again after editing.
+4. Follow correction links back to the editor, fix the fields and save. Only
+   drafts receive publication corrections. RSVP is disabled in preview; other
+   member links work normally. Published and cancelled previews describe their
+   current state without offering another publication.
+5. **Back to edit** returns to the editor. In this read-only slice, publication
+   still uses the editor's separate **Publish** action and its existing row lock.
+   Publish-from-review and its stale-record check follow separately. Earlier
+   readiness advice is never authorization to publish a later saved record.
+
+Hono and Kit share the preview chrome without duplicating the member rendering.
+
 ### Cancel, past events and unsupported controls
 
 - **Cancel** on the list / **Cancel event** on edit is available for drafts and

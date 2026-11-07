@@ -338,13 +338,11 @@ describe("Kit gone alternatives acceptance", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const bytes = new Uint8Array(await response.arrayBuffer());
-    // Re-captured for the Ember Hours kit migration: the only delta from the
-    // prior pin is the shared shell chrome (Mona Sans preload, ground-0
-    // theme-color). Prior history: re-captured with main 4cd035fd8 merged;
-    // the delta from the earlier pin was main 48e55e5d6 (final attendance
-    // line in src/events/pages-gone.tsx).
+    // Re-captured after combining the Ember Hours font/theme chrome with
+    // Logo/Icon 1's header lockup, favicon and og:image card. The gone-page
+    // content and response headers retain their existing contract.
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-      "9ed48d60f6371be8f5edf5417ef39b73f33108ce6e3ca119cab92b7703b5ecbb",
+      "7e28057541da30169b345bc703590961439daf421bbf771eee354999d64ea92c",
     );
   });
 

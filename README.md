@@ -177,6 +177,15 @@ Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
 
+### Deterministic capture data
+
+The separate [Ember capture fixture](docs/ember-capture-fixture.md) materializes
+invented data and private local sessions in a disposable owned schema. Its
+manifest declares all 33 frozen route-states. `npm run capture:manifest` is offline;
+`npm run capture:verify` requires the documented explicit loopback/test-DB opt-in,
+proves two clean seeds and cleans up. This is not the legacy e2e seed or Pilot
+capture authorization.
+
 ### Public-payload privacy contract
 
 Run `npm run check:hono-payloads -- --format json` for the fixture-only Hono
@@ -701,8 +710,12 @@ These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 Squash-merge only; PR titles follow Conventional Commits and the body follows the
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
 `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review` are required
-on the exact head, with no approving review. A merge to `main` deploys production, so
-it also needs the owner's approval. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
+on the exact head, with no approving review. The final-stage reviewer merges when
+native review stages apply; otherwise the author merges. A merge to `main` reaches
+production, so it needs fresh per-PR exact-head Release Manager confirmation on a
+child card assigned and addressed to the Release Manager. Pin the squash merge to
+that confirmed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
+for post-merge staging qualification and retained safeguards, and [AGENTS.md](AGENTS.md).
 
 ## License
 

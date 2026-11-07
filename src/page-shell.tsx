@@ -68,6 +68,7 @@ export const Layout: FC<
         ) : null}
         <meta name="theme-color" content="#15100f" />
         <link rel="manifest" href="/site.webmanifest" />
+        <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
         <link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192" />
         <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180" />
         {robots ? <meta name="robots" content={robots} /> : null}
@@ -203,7 +204,7 @@ export const SiteHeader: FC<
       ) : null}
     </nav>
     <a class="brand" href="/" aria-label="Together We Own homepage">
-      <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
+      <img src="/logo.svg" width="180" height="50" alt="Together We Own" />
     </a>
     {account ? (
       <nav class="header-account" aria-label="Account">

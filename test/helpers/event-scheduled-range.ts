@@ -63,7 +63,7 @@ export function scheduledEvent(fixture: ScheduleCase, over: Partial<EventRow> = 
   };
 }
 
-async function honoPage(row: EventRow, viewer: Viewer) {
+async function honoPage(row: EventRow, viewer: Viewer, search: string) {
   const columns = Object.keys(getTableColumns(events)) as (keyof EventRow)[];
   // Only database results are synthetic; route policy, sessions and HTML are real.
   const db = drizzle(async (sql) => {
@@ -108,11 +108,11 @@ async function honoPage(row: EventRow, viewer: Viewer) {
       })
     ).split(";")[0]!;
   }
-  const response = await app.request(schedulePath, { headers }, env);
+  const response = await app.request(schedulePath + search, { headers }, env);
   return { status: response.status, html: await response.text() };
 }
 
-async function kitPage(row: EventRow, viewer: Viewer, renderer: KitRenderer) {
+async function kitPage(row: EventRow, viewer: Viewer, renderer: KitRenderer, search: string) {
   const session: KitRequestSession =
     viewer === "guest"
       ? { status: "guest", session: null }
@@ -138,7 +138,7 @@ async function kitPage(row: EventRow, viewer: Viewer, renderer: KitRenderer) {
   };
   const outcome = await resolveKitEventDetail({
     key: row.eventKey,
-    search: "",
+    search,
     path: schedulePath,
     env: { APP_URL: scheduleOrigin } as Env,
     session,
@@ -166,6 +166,7 @@ export async function renderScheduledPage(
   viewer: Viewer,
   renderer: KitRenderer,
   now = scheduleNow,
+  search = "",
 ) {
   const originalDate = globalThis.Date;
   const originalFetch = globalThis.fetch;
@@ -185,7 +186,9 @@ export async function renderScheduledPage(
   };
   try {
     const result =
-      twin === "Hono" ? await honoPage(row, viewer) : await kitPage(row, viewer, renderer);
+      twin === "Hono"
+        ? await honoPage(row, viewer, search)
+        : await kitPage(row, viewer, renderer, search);
     if (fetches) throw new Error(`Fixture attempted ${fetches} external fetches`);
     return result;
   } finally {

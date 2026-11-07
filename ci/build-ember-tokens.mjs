@@ -211,7 +211,10 @@ export function generate(root = ROOT) {
         return `--${alias}:${alias === "font-ui" && value === display ? "var(--font-display)" : value};`;
       })
       .join("");
-  const facade = `.base-theme{${hooks("")}${aliases}color-scheme:dark;${declarations(roles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}}`;
+  const brand = ["ember", "magenta", "violet"]
+    .map((name) => `--color-brand-${name}:${get(`color-grad-${name}`)};`)
+    .join("");
+  const facade = `.base-theme{${hooks("")}${aliases}${brand}color-scheme:dark;${declarations(roles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}}`;
   const reduced = roles
     .filter(([, source]) => kit.reduced.has(`--two-${source}`))
     .map(([alias, source]) => `--${alias}:${kit.reduced.get(`--two-${source}`)};`)

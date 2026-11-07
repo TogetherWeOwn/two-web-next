@@ -67,7 +67,7 @@ describe("homepage theme", () => {
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');
     expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
-    expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
+    expect(html).toContain('src="/logo.svg" width="180" height="50" alt="Together We Own"');
     expect(html).toContain('data-testid="site-jsonld"');
     const withoutJsonLd = html.replace(
       /<script type="application\/ld\+json"[^>]*>[\s\S]*?<\/script>/g,
@@ -287,6 +287,15 @@ describe("homepage theme", () => {
     // Keep the original strict ceiling, including generated kit roles.
     // Shared type roles also ship in styles.css under its unchanged budget.
     expect(Buffer.byteLength(css, "utf8")).toBeLessThan(13000);
+  });
+
+  it("crops the lockup to its mark on narrow screens without shrinking account chrome", () => {
+    const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
+    expect(css).toMatch(
+      /@media\s*\(max-width:\s*30rem\)\s*\{\s*\.base-theme \.brand img\s*\{\s*width:\s*50px;\s*height:\s*50px;\s*object-fit:\s*cover;\s*object-position:\s*left center;?\s*\}\s*\}/,
+    );
+    expect(css).toMatch(/\.base-theme \.who\s*\{\s*max-width:\s*9rem;?\s*\}/);
+    expect(render()).toContain('src="/logo.svg" width="180" height="50"');
   });
 
   it("uses the kit hover and on-accent roles for the primary button", () => {

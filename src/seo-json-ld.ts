@@ -99,8 +99,8 @@ export function buildEventNode(e: JsonLdEventInput, appUrl: string): Record<stri
     "@type": "Event",
     "@id": canonical,
     name: e.title,
-    startDate: e.startsAt.toISOString(),
-    endDate: e.endsAt.toISOString(),
+    ...(Number.isFinite(e.startsAt.getTime()) ? { startDate: e.startsAt.toISOString() } : {}),
+    ...(Number.isFinite(e.endsAt.getTime()) ? { endDate: e.endsAt.toISOString() } : {}),
     eventStatus:
       e.status === "cancelled"
         ? "https://schema.org/EventCancelled"

@@ -650,7 +650,10 @@ describe("ci heavy-job scope gates", () => {
   it("runs the adapter build, dry run and generated Worker fixture in required check", () => {
     const block = jobBlock("check");
     for (const [name, command] of [
-      ["Kit adapter build", "npm run build --prefix web"],
+      [
+        "Kit adapter build and local startup diagnostic (no deploy)",
+        "node ci/check-worker-startup.mjs",
+      ],
       [
         "Kit Worker bundle dry run (no deploy)",
         "npx wrangler deploy --config web/wrangler.jsonc --dry-run",

@@ -10,6 +10,48 @@ guides analysis only; it is not a permission boundary.
 Read the applicable `AGENTS.md`, `CONTRIBUTING.md`, `CONSTRAINTS.md`, and
 nearby docs for contracts. Do not invent conventions they do not state.
 
+## Merge and production staging evidence
+
+When evaluating release evidence, apply the
+[merge and production staging contract](CONTRIBUTING.md#merge-and-production-staging-evidence).
+For `TogetherWeOwn/two-web-next` and `TogetherWeOwn/two-bot-next`, the staging
+item is met by the automatic **post-merge, pre-production** staging/e2e/soak
+gate. Do not demand a staging run for an unmerged head, or make artifact equality,
+paired hashes or a comparison to current `main` a merge prerequisite. This is
+not limited to docs/test-only changes and is not proof that staging already ran.
+
+Before merge, verify all required checks listed in CONTRIBUTING, including the
+required review-app checks, pass on the exact PR head, with findings fixed or
+answered with evidence, applicable security reviews and
+native stages complete, and fresh per-PR exact-head Release Manager confirmation
+on a child card assigned and addressed to the Release Manager. Require exact-head
+Actions run/job links and conclusions, migration ledger evidence or "no
+migration", a known-good rollback target and the automatic staging path on the
+confirmation card. A new push needs new confirmation. The final-stage reviewer,
+or author without native stages, must pin the squash merge to the reviewed and
+confirmed head and record the confirmation and squash SHA in the release log.
+An otherwise mergeable PR does not need restacking solely because `main` moved.
+
+Distinguish that merge evidence from production qualification: the resulting
+exact `main` SHA still has to pass full CI, staging deploy, staging e2e and soak
+under the existing promotion guard before automatic production promotion.
+Require matching candidate-SHA Actions evidence for promotion, not a PR-head
+pass or a different `main` SHA. Missing or failing post-merge qualification
+holds promotion; it does not create a pre-merge staging requirement. In particular,
+the current docs/test-only scope can skip staging journeys and passive ledgers;
+that is not qualification or automatic promotion eligibility. Apply CONTRIBUTING's
+post-merge manual-dispatch caveat for a scope-skipped candidate. Manual staging
+evidence is not selected by the automatic resolver, and an explicit production
+dispatch still needs its own exact-SHA Release Manager confirmation and all
+existing guards. Do not change the pipeline or infer a pass from a skip.
+
+Required checks, rulesets, review gates, incident/freeze/hold safeguards,
+identity/capability holds, rollback requirements and confirmation for every
+other production deploy remain. No red deterministic gate is waived; no pipeline
+skip/no-op or production action is authorized. Previous rejections remain
+historical, not retroactive approvals: resubmit for a fresh exact-head decision.
+This advisory analysis role still does not approve or merge.
+
 ## What merits a finding
 
 Report blocking defects only: concrete correctness, security, privacy,
