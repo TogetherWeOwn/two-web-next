@@ -2010,7 +2010,8 @@ test("already-live CLI reports exact GITHUB_OUTPUT for live, stale and unreadabl
   );
   assert.equal(served.status, 0);
   assert.equal(served.written, `already_live=true\nlive_sha=${target}\n`);
-  assert.match(served.stdout, /skipping deploy/);
+  assert.match(served.stdout, /checking promotion progress before standing down/);
+  assert.doesNotMatch(served.stdout, /skipping deploy/);
   const stale = spawnGateCli(
     ["--already-live"],
     { DEPLOY_SHA: target, PRODUCTION_ORIGIN: origin },

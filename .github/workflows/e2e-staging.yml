@@ -10,14 +10,10 @@ run-name: e2e-staging ${{ github.event.workflow_run.display_title || github.sha 
 # Blacksmith. QA_AUTH_TOKEN comes from the staging Environment secret and is
 # never printed; GitHub masks secrets in logs automatically. Browsers run here
 # in CI only, never on the controller.
-# Docs-only and test-only deploys (ci/change-scope.sh skip_e2e verdict,
-# mirrored from e2e.yml) skip the journeys below: prose that no gate, test or
-# build reads, and unit tests the journeys never execute, prove nothing about
-# the deployed Worker. There is no PR context here (workflow_run +
-# workflow_dispatch triggers), so the scope job diffs the deployed head SHA
-# against its parent instead of listing PR files. e2e-staging gates no merge
-# (required checks are ci-ok, gitleaks, e2e-ok and pr-lint), so a skip never
-# blocks anything.
+# Every successful main deploy runs journeys and passive ledgers, including
+# docs/test-only commits. Production needs exact-deployed-SHA evidence: a skip
+# cannot qualify a candidate, nor inherit a pass from an unproven runtime tree.
+# PR-only scope skipping in e2e.yml is unchanged.
 
 on:
   workflow_run:
@@ -33,12 +29,9 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  # Cheap change-scope gate (mirrors e2e.yml): a deploy whose head commit only
-  # touches prose (`docs/**`, root `*.md`) that no gate, test or build reads,
-  # or only the `test/` unit tree the journeys never execute, fast-passes the
-  # journeys below instead of occupying a runner for 25 minutes. Manual
-  # dispatches always run the journeys. ci/change-scope.sh fails closed:
-  # every other path resolves to skip_e2e=false.
+  # Retain scope classification for diagnostics and fail closed if it fails.
+  # Its skip_e2e verdict never skips deployed-Worker qualification: journeys
+  # and passive ledgers below run even for docs/test-only deployments.
   scope:
     name: scope
     if: >-
@@ -100,10 +93,10 @@ jobs:
     name: staging-passive
     needs: scope
     if: >-
-      needs.scope.outputs.skip_e2e != 'true' && (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository))
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -156,10 +149,10 @@ jobs:
     name: staging-journeys
     needs: scope
     if: >-
-      needs.scope.outputs.skip_e2e != 'true' && (github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository))
+       github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment:
