@@ -40,6 +40,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
 <AdminShell title={`Edit ${view.title}`}>
 <section>
   <h1>Edit {view.title}</h1>
+  {#if view.savedNoticeHtml}{@html view.savedNoticeHtml}{/if}
   {#if hasErrors}
     <div class="notice" role="alert" tabindex="-1" data-testid="form-errors" data-admin-validation-summary="">
       <p>Check the highlighted fields and try again.</p>
@@ -209,6 +210,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
     <h2>Status: {view.status}</h2>
     <div class="actions rsvp-actions">
       {#if view.showPublish}
+        <a class="btn" href={`/e/${encodeURIComponent(view.key)}?review=1`} data-testid="review-event">Review before publishing</a>
         <form method="post" action={`/admin/events/${view.key}/publish`}>
           <button type="submit" class="btn" data-testid="publish-event">Publish</button>
         </form>

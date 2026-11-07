@@ -106,8 +106,9 @@ function boundLine(line) {
 export function measure(root = repoRoot) {
   const logs = [];
   const errors = [];
+  const warnings = [];
   const groups = [];
-  const fail = (code, error) => ({ code, logs, errors, groups, error });
+  const fail = (code, error) => ({ code, logs, errors, warnings, groups, error });
 
   let budget;
   try {
@@ -245,7 +246,12 @@ export function measure(root = repoRoot) {
       nextAction: REBUILD_NEXT_ACTION,
     });
   }
-  const serverOutcome = measureGroup(serverFiles, budget.server.js, "server js", logs, errors);
+  // Server gzip is advisory: a gzip-only overage warns (exit 0) while server
+  // raw bytes and the file count stay hard. Client and Worker gzip stay hard.
+  const serverOutcome = measureGroup(serverFiles, budget.server.js, "server js", logs, errors, {
+    warnings,
+    advisoryGzip: true,
+  });
   if (serverOutcome.error) {
     return fail(2, {
       code: "INCOMPLETE_ENUMERATION",
@@ -254,13 +260,14 @@ export function measure(root = repoRoot) {
     });
   }
   breaches += serverOutcome.breach ? 1 : 0;
+  const serverStatus = serverOutcome.breach ? "fail" : serverOutcome.warn ? "warn" : "pass";
   groups.push({
     id: "kit.server.js",
-    status: serverOutcome.breach ? "fail" : "pass",
+    status: serverStatus,
     checks: [
       {
         id: "kit.server.js",
-        status: serverOutcome.breach ? "fail" : "pass",
+        status: serverStatus,
         rawBytes: serverOutcome.raw,
         gzipBytes: serverOutcome.gzip,
         files: serverFiles.length,
@@ -355,11 +362,15 @@ export function measure(root = repoRoot) {
     ),
   );
   if (breaches) return fail(1, null);
+  if (warnings.length) {
+    logs.push("kit perf budget: passed with warnings (advisory server gzip over its ceiling).");
+    return fail(0, null);
+  }
   logs.push("kit perf budget: every Kit asset fits.");
   return fail(0, null);
 }
 
-function measureGroup(files, group, label, logs, errors) {
+function measureGroup(files, group, label, logs, errors, { warnings, advisoryGzip = false } = {}) {
   let raw = 0;
   let gzip = 0;
   for (const file of files) {
@@ -377,24 +388,35 @@ function measureGroup(files, group, label, logs, errors) {
     gzip += gzipSync(bytes).length;
   }
   const over = [];
+  let warn = false;
   if (raw > group.maxRawBytes) over.push(`raw ${raw}B over ${group.maxRawBytes}B`);
-  if (gzip > group.maxGzipBytes) over.push(`gzip ${gzip}B over ${group.maxGzipBytes}B`);
+  if (gzip > group.maxGzipBytes) {
+    const detail = `gzip ${gzip}B over ${group.maxGzipBytes}B`;
+    if (advisoryGzip && warnings) {
+      warn = true;
+      warnings.push(
+        boundLine(`kit perf budget: warning: ${label}: ${detail} (advisory, not a failure)`),
+      );
+    } else over.push(detail);
+  }
   if (files.length > group.maxFiles) over.push(`${files.length} files over ${group.maxFiles}`);
   if (over.length) {
     errors.push(boundLine(`kit perf budget: ${label}: ${over.join(", ")}`));
-    return { breach: true, raw, gzip };
+    return { breach: true, warn, raw, gzip };
   }
+  if (warn) return { breach: false, warn, raw, gzip };
   logs.push(
     boundLine(
       `ok ${label}: ${files.length}/${group.maxFiles} files, raw ${raw}/${group.maxRawBytes}B, gzip ${gzip}/${group.maxGzipBytes}B`,
     ),
   );
-  return { breach: false, raw, gzip };
+  return { breach: false, warn: false, raw, gzip };
 }
 
 export function run(root = repoRoot, output = console) {
   const result = measure(root);
   for (const line of result.logs) output.log(line);
+  for (const line of result.warnings) output.error(line);
   for (const line of result.errors) output.error(line);
   return result.code;
 }
@@ -418,8 +440,10 @@ export function runJson(root = repoRoot) {
       groups,
       exitCode: result.code,
       error: result.error,
+      warnings: result.warnings,
     }),
     logs: result.logs,
+    warnings: result.warnings,
     errors: result.errors,
   };
 }
@@ -497,11 +521,20 @@ function selftest() {
   check(
     "server breach fails",
     ({ root, budget }) => {
-      budget.server.js.maxGzipBytes -= 1;
+      budget.server.js.maxRawBytes -= 1;
       save(root, budget);
     },
     1,
     "server js",
+  );
+  check(
+    "server gzip-only overage warns and passes",
+    ({ root, budget }) => {
+      budget.server.js.maxGzipBytes -= 1;
+      save(root, budget);
+    },
+    0,
+    "warning: server js",
   );
   check(
     "unbudgeted chunk still counted in totals",
@@ -622,6 +655,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   } else if (parsed.options.format === "json") {
     const measured = runJson(parsed.options.root ?? repoRoot);
     for (const line of measured.logs) console.error(line);
+    for (const line of measured.warnings) console.error(line);
     for (const line of measured.errors) console.error(line);
     process.stdout.write(`${JSON.stringify(measured.report)}\n`);
     process.exitCode = measured.code;

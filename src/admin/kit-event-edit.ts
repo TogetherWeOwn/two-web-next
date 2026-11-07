@@ -47,6 +47,7 @@ import {
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { renderSavedEventNoticeHtml } from "./pages/event-form-review";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -131,6 +132,7 @@ export type KitEventEditView = {
    * the page injects it via {@html} so the client bundle carries no review
    * strings or disclosure markup (client gzip ceiling). */
   pauseReviewHtml: string | null;
+  savedNoticeHtml: string | null;
 };
 
 export type KitEventEditOutcome =
@@ -256,6 +258,10 @@ export async function resolveKitEventEdit(
       key: row.eventKey,
       title: row.title,
       status: row.status,
+      savedNoticeHtml:
+        rawQuery.saved === "1" && row.status === "draft"
+          ? renderSavedEventNoticeHtml(row.eventKey)
+          : null,
       values: {
         title: row.title,
         game: row.game ?? "",

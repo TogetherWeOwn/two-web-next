@@ -34,20 +34,25 @@ describe("saved preview: unchanged guest query and effect controls", () => {
     expect(read.sql).toContain(
       'order by "featured_contents"."position" asc, "featured_contents"."id" asc',
     );
-    expect(read.params).toEqual([true, CHECKED_AT.toISOString(), CHECKED_AT.toISOString()]);
+    expect(read.sql).toContain("limit $4");
+    expect(read.params).toEqual([true, CHECKED_AT.toISOString(), CHECKED_AT.toISOString(), 101]);
   });
 
   it("CONTROL-SQL02: cached guest base selects published rows with bounds, never unpublished content", async () => {
     const { db, calls } = queryFixture();
-    expect(await listPublishedFeatured(db)).toEqual([]);
+    expect(await listPublishedFeatured(db, CHECKED_AT)).toEqual([]);
     expect(calls).toHaveLength(2);
     const read = calls[1]!;
-    expect(read.sql).toContain('where "featured_contents"."is_published" = $1');
+    expect(read.sql).toContain('where ("featured_contents"."is_published" = $1');
+    expect(read.sql).toContain('"featured_contents"."ends_at" is null');
+    expect(read.sql).toContain('"featured_contents"."ends_at" > $2');
+    expect(read.sql).not.toContain('"featured_contents"."starts_at" <=');
     expect(read.sql).toContain('"starts_at", "ends_at" from "featured_contents"');
     expect(read.sql).toContain(
       'order by "featured_contents"."position" asc, "featured_contents"."id" asc',
     );
-    expect(read.params).toEqual([true]);
+    expect(read.sql).toContain("limit $3");
+    expect(read.params).toEqual([true, CHECKED_AT.toISOString(), 101]);
   });
 
   it("CONTROL-effects: real renderers need no network or database write to inspect an admitted live row", async () => {

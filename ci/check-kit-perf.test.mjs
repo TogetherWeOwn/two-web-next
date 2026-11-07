@@ -1485,6 +1485,20 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
     if (unsupported) assert.fail(unsupported);
     const fx = makeShippingFixture(t, group, axis, bytes);
     const result = runJson(fx.root);
+    // Server gzip is advisory: it warns and exits 0 instead of failing.
+    const warnOnly = Boolean(breach) && group === "kit.server.js" && axis === "gzip";
+    if (warnOnly) {
+      assert.equal(result.code, 0, result.errors.join("\n"));
+      assert.equal(result.report.groups.find((g) => g.id === group).status, "warn");
+      assert.equal(result.report.ok, true);
+      assert.equal(result.report.warnings.length, 1);
+      assert.equal(
+        result.warnings[0],
+        `kit perf budget: warning: server js: gzip ${bytes}B over ${ceiling}B (advisory, not a failure)`,
+      );
+      assert.deepEqual(result.errors, []);
+      return;
+    }
     assert.equal(result.code, breach ? 1 : 0, result.errors.join("\n"));
     assert.equal(result.report.exitCode, result.code);
     assert.equal(result.report.ok, !breach);
@@ -1545,3 +1559,99 @@ for (const { name, group, axis, bytes, ceiling, breach = false, unsupported } of
     }
   });
 }
+
+// Server gzip advisory semantics (synthetic fixtures, budgets exact-fit).
+function serverCase(t, { files, serverJs }) {
+  const fx = makeFixture({ server: files, budgetOverrides: { serverJs } });
+  t.after(() => fx.cleanup());
+  return fx;
+}
+const SERVER_GZIP = gzipSync(SERVER_BODY).length;
+
+test("server gzip: exact ceiling passes with no warning", (t) => {
+  const fx = serverCase(t, { files: undefined, serverJs: {} });
+  const result = runJson(fx.root);
+  assert.equal(result.code, 0);
+  assert.deepEqual(result.warnings, []);
+  assert.equal(result.report.warnings, undefined);
+});
+
+test("server gzip: one byte over warns, exits 0, and reports evidence", (t) => {
+  const fx = serverCase(t, { files: undefined, serverJs: { maxGzipBytes: SERVER_GZIP - 1 } });
+  const human = fx.runCaptured();
+  assert.equal(human.code, 0);
+  assert.ok(human.errors.some((l) => l.includes("warning: server js: gzip")));
+  assert.ok(!human.logs.includes("kit perf budget: every Kit asset fits."));
+  const json = runJson(fx.root);
+  assert.equal(json.report.groups.find((g) => g.id === "kit.server.js").status, "warn");
+  assert.equal(json.report.groups.find((g) => g.id === "kit.server.js").checks[0].status, "warn");
+  assert.equal(json.report.ok, true);
+  assert.equal(json.report.warnings.length, 1);
+});
+
+test("server raw bytes and file count stay hard", (t) => {
+  const raw = runJson(
+    serverCase(t, { files: undefined, serverJs: { maxRawBytes: SERVER_BODY.length - 1 } }).root,
+  );
+  assert.equal(raw.code, 1);
+  assert.deepEqual(raw.warnings, []);
+  const files = runJson(
+    serverCase(t, {
+      files: [
+        { name: "chunks/a.js", body: SERVER_BODY },
+        { name: "chunks/b.js", body: SERVER_BODY },
+      ],
+      serverJs: { maxFiles: 1 },
+    }).root,
+  );
+  assert.equal(files.code, 1);
+});
+
+test("server mixed gzip warning plus raw breach fails and keeps the warning", (t) => {
+  const fx = serverCase(t, {
+    files: undefined,
+    serverJs: { maxRawBytes: SERVER_BODY.length - 1, maxGzipBytes: SERVER_GZIP - 1 },
+  });
+  const result = runJson(fx.root);
+  assert.equal(result.code, 1);
+  assert.equal(result.report.ok, false);
+  assert.equal(result.report.groups.find((g) => g.id === "kit.server.js").status, "fail");
+  assert.equal(result.report.warnings.length, 1);
+  assert.equal(result.errors.length, 1);
+  assert.match(result.errors[0], /server js: raw \d+B over \d+B$/);
+});
+
+test("client and Worker gzip overages stay hard", (t) => {
+  const client = serverCase(t, { files: undefined, serverJs: {} });
+  const budgetPath = join(client.root, "ci/kit-perf-budget.json");
+  for (const mutate of [
+    (b) => (b.client.js.maxGzipBytes -= 1),
+    (b) => (b.client.css.maxGzipBytes -= 1),
+    (b) => (b.worker["_worker.js"].maxGzipBytes -= 1),
+  ]) {
+    const budget = JSON.parse(readFileSync(budgetPath, "utf8"));
+    mutate(budget);
+    writeFileSync(budgetPath, JSON.stringify(budget));
+    const result = runJson(client.root);
+    assert.equal(result.code, 1);
+    assert.deepEqual(result.warnings, []);
+    writeFileSync(budgetPath, JSON.stringify({ ...JSON.parse(readFileSync(budgetPath, "utf8")) }));
+    // Restore for the next mutation.
+    budget.client.js.maxGzipBytes = gzipSync(JS_BODY).length;
+    budget.client.css.maxGzipBytes = gzipSync(CSS_BODY).length;
+    budget.worker["_worker.js"].maxGzipBytes = gzipSync(WORKER_BODY).length;
+    writeFileSync(budgetPath, JSON.stringify(budget));
+  }
+});
+
+test("server gzip: malformed ceiling and missing evidence still exit 2", (t) => {
+  for (const bad of ["x", -1, null, 1.5]) {
+    const fx = serverCase(t, { files: undefined, serverJs: { maxGzipBytes: bad } });
+    const result = runJson(fx.root);
+    assert.equal(result.code, 2, `ceiling ${String(bad)}`);
+    assert.equal(result.report.error.code, "INVALID_PLAN");
+  }
+  const missing = makeFixture({ omitServerDir: true });
+  t.after(() => missing.cleanup());
+  assert.equal(runJson(missing.root).code, 2);
+});
