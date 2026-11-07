@@ -2,9 +2,10 @@
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { ValidationError, wallToUtc } from "../src/admin/validation";
+import * as writeback from "../src/admin/writeback";
 import { activityLog, events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
@@ -268,6 +269,33 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       expect(await fixture.db.select().from(activityLog)).toEqual([]);
     });
   }
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("publish: a malformed multipart body answers 400 with no writes or write-back", async () => {
+    const dispatch = vi.spyOn(writeback, "dispatchWriteBack").mockResolvedValue(undefined);
+    const before = await fixture.db.select().from(events);
+    const res = await app.request(
+      `${APP_URL}/admin/events/${KEY}/publish`,
+      {
+        method: "POST",
+        headers: {
+          cookie,
+          origin: APP_URL,
+          "content-type": "multipart/form-data; boundary=x",
+        },
+        body: "garbage",
+      },
+      env,
+    );
+    expect(res.status).toBe(400);
+    expect(await fixture.db.select().from(events)).toEqual(before);
+    expect(before[0]?.status).toBe("draft");
+    expect(await fixture.db.select().from(activityLog)).toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
 
   it("fresh fold input saves the second occurrence deterministically", async () => {
     const res = await post("/admin/events", {

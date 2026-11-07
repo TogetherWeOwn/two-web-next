@@ -594,7 +594,8 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         if (!db) return writeUnavailable(c);
         const key = c.req.param("key");
         if (!eventKeyAllowed(key, c.env.APP_URL)) return eventNotFound(c);
-        const body = action === "publish" ? await c.req.parseBody() : {};
+        const body = action === "publish" ? await parsedForm(c) : {};
+        if (!body) return badRequest(c);
         const fromReview = body.review === "1";
         const reviewedUpdatedAt = fromReview
           ? typeof body.reviewed_updated_at === "string"
