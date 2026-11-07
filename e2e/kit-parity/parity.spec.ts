@@ -1524,6 +1524,7 @@ function archiveTurnEndsAt(i: number): string {
 test("Kit saved review states at desktop and mobile widths", async ({ browser }) => {
   test.setTimeout(60_000);
   const target = targets.find((item) => item.name === "kit")!;
+  expect(kitFixtureOwnsEventDetail(), "Kit fixture owns the event detail").toBe(true);
   const key = "01J00000000000000000000990";
   const userId = "900000000000000844";
   const bearer = `two_${randomBytes(32).toString("base64url")}`;
@@ -1574,7 +1575,7 @@ test("Kit saved review states at desktop and mobile widths", async ({ browser })
           : `review=1${state === "stale" ? "&publish_error=stale" : state === "unsaved" ? "&unsaved=1" : ""}`;
       const response = await page.goto(`/e/${key}?${query}`);
       expect(response?.status()).toBe(200);
-      expect(response?.headers()["x-two-renderer"]).toBe(expectedKitMarker(`/e/${key}`));
+      expect(response?.headers()["x-two-renderer"]).toBe("kit");
       await expect(
         page.getByRole("heading", { name: "Community game night", exact: true }),
       ).toBeVisible();
