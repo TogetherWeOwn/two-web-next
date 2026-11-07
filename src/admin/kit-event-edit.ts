@@ -47,7 +47,10 @@ import {
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { rosterWaitlistHint } from "./roster-copy";
+import { formatAdminTime } from "./chronology";
 import { renderSavedEventNoticeHtml } from "./pages/event-form-review";
+import { EventRosterSection } from "./pages/event-form-roster";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -61,14 +64,14 @@ export type KitEventEditValues = {
   capacity: string;
 };
 
-/** One roster row as the Hono table renders it: display name, status and the
- * ISO instant. The member identifier stays out of the view: Hono uses it only
- * as a vnode key, never as rendered text, so the Svelte page keys rows by
- * their instant and index instead. */
+/** One roster row as the Hono table renders it: display name, status, global
+ * waitlist position and ISO instant (null when the stored time is unusable).
+ * The member identifier stays out of the view and shared roster HTML. */
 export type KitEventEditRosterEntry = {
   member: string;
   status: string;
-  answeredAt: string;
+  waitlistPosition: number | null;
+  answeredAt: string | null;
 };
 
 /** One roster sort header, mirroring the Hono TableSortHeader copy exactly. */
@@ -109,6 +112,7 @@ export type KitEventEditRosterView = {
   /** Past-end and zero-row copy, exactly like the Hono section; null when rows render. */
   emptyText: string | null;
   sortHeaders: KitEventEditSortHeader[];
+  waitlistHint: string;
   /** The Hono-owned GET search target, with its roster anchor. */
   searchAction: string;
 };
@@ -128,6 +132,8 @@ export type KitEventEditView = {
   seriesNote: string | null;
   endsAt: string;
   roster: KitEventEditRosterView;
+  /** Shared escaped, read-only roster markup; the Kit route has csr=false. */
+  rosterHtml: string;
   /** Pre-rendered pause-review HTML when rsvpAction is rsvp-pause, else null;
    * the page injects it via {@html} so the client bundle carries no review
    * strings or disclosure markup (client gzip ceiling). */
@@ -162,6 +168,7 @@ export type KitEventEditRosterRow = {
   username: string | null;
   status: string;
   answeredAt: Date;
+  waitlistPosition?: number | null;
 };
 
 export type KitEventEditDeps = {
@@ -234,7 +241,10 @@ export async function resolveKitEventEdit(
   const entries = roster.rows.map((r) => ({
     member: r.username?.trim() || "Unknown member",
     status: r.status,
-    answeredAt: r.answeredAt.toISOString(),
+    // Rendered only for waitlisted rows: the window rank is global, but a
+    // non-waitlisted row must never show a queue number.
+    waitlistPosition: r.status === "waitlisted" ? (r.waitlistPosition ?? null) : null,
+    answeredAt: formatAdminTime(r.answeredAt).iso,
   }));
   const rangeStart = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + 1 : 0;
   const rangeEnd = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + entries.length : 0;
@@ -284,6 +294,15 @@ export async function resolveKitEventEdit(
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
       endsAt: endFinite ? row.endsAt.toISOString() : "",
+      rosterHtml: String(
+        EventRosterSection({
+          eventKey: row.eventKey,
+          action: `/admin/events/${row.eventKey}`,
+          roster: roster.rows,
+          rosterTotal: roster.total,
+          rosterQuery: query,
+        }),
+      ),
       roster: {
         total: roster.total,
         query,
@@ -311,7 +330,9 @@ export async function resolveKitEventEdit(
         sortHeaders: [
           sortHeader(row.eventKey, query, "status", "Status"),
           sortHeader(row.eventKey, query, "answered", "Answered (UTC)"),
+          sortHeader(row.eventKey, query, "waitlist", "Waitlist position"),
         ],
+        waitlistHint: rosterWaitlistHint,
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
       },

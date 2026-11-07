@@ -29,6 +29,10 @@ on:
     - cron: "29 2 * * *"
   workflow_dispatch:
     inputs:
+      waitlist_capture_base:
+        description: "Optional 40-character base SHA for waitlist before evidence"
+        required: false
+        type: string
       featured_capture_base:
         description: "Optional 40-character base SHA for featured before/after evidence"
         required: false
@@ -243,6 +247,28 @@ jobs:
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Build Kit worker
         run: npm run build --prefix web
+      - name: Waitlist roster before evidence
+        if: github.event_name == 'workflow_dispatch' && inputs.waitlist_capture_base != ''
+        env:
+          CAPTURE_BASE: ${{ inputs.waitlist_capture_base }}
+          WAITLIST_CAPTURE_BEFORE: "true"
+          WAITLIST_CAPTURE_OUTPUT: ${{ runner.temp }}/waitlist-before
+        run: |
+          set -euo pipefail
+          [[ "$CAPTURE_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git fetch --no-tags --depth=1 origin "$CAPTURE_BASE"
+          files=(src/admin/kit-event-edit.ts src/admin/pages/event-form-roster.tsx 'web/src/routes/admin/events/[key]/+page.svelte')
+          trap 'git restore --source=HEAD -- "${files[@]}"' EXIT
+          for file in "${files[@]}"; do git show "$CAPTURE_BASE:$file" > "$file"; done
+          npx playwright test --config playwright.waitlist-capture.config.ts
+      - name: Upload waitlist before evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.waitlist_capture_base != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: waitlist-roster-before-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/waitlist-before/**/waitlist-*.png
+          if-no-files-found: error
+          retention-days: 7
       - name: Kit visual regression
         run: npx playwright test --config playwright.kit-visual.config.ts
       # Hono visual regression also runs before the mutating journeys.
@@ -338,6 +364,14 @@ jobs:
             test-results/**/attachments/hono-review-*.png
             test-results-kit-parity/**/attachments/kit-review-*.png
           if-no-files-found: error
+          retention-days: 7
+      - name: Waitlist roster screenshot evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: waitlist-roster-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/**/waitlist-*.png
+          if-no-files-found: ignore
           retention-days: 7
       - name: Brand header captures
         if: ${{ always() && !cancelled() }}

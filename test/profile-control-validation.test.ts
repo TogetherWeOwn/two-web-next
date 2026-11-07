@@ -35,7 +35,7 @@ describe("profile control-character validation", () => {
         for (const value of [control, `${control}Halo`, `Ha${control}lo`, `Halo${control}`]) {
           expect(validateProfile(input(value))).toEqual({
             ok: false,
-            errors: { [field]: "Remove control characters." },
+            errors: { [field]: "Remove control or invisible characters." },
           });
         }
       }
@@ -45,7 +45,10 @@ describe("profile control-character validation", () => {
   it("reports both fields without returning persistable attributes", () => {
     expect(validateProfile({ ...valid, bio: "bad\u0000bio", games: ["bad\u007fgame"] })).toEqual({
       ok: false,
-      errors: { bio: "Remove control characters.", games: "Remove control characters." },
+      errors: {
+        bio: "Remove control or invisible characters.",
+        games: "Remove control or invisible characters.",
+      },
     });
   });
 
@@ -60,7 +63,7 @@ describe("profile control-character validation", () => {
   });
 
   it.each(shapes)("accepts Unicode and permitted whitespace in $name", ({ input }) => {
-    for (const character of ["\t", "\n", "\r", "\r\n", "\u0085", " ", " ", " ", "‍", "🎮", "遊"]) {
+    for (const character of ["\t", "\n", "\r", "\r\n", " ", " ", " ", "🎮", "遊"]) {
       const value = `a${character}b`;
       expect(profileClientErrors({ bio: value, games_text: value, timezone: "" })).toEqual({});
       expect(validateProfile(input(value)).ok).toBe(true);
@@ -104,7 +107,7 @@ describe("profile control-character validation", () => {
     });
     expect(validateProfile({ ...valid, games_text: "bad\u0000" })).toEqual({
       ok: false,
-      errors: { games: "Remove control characters." },
+      errors: { games: "Remove control or invisible characters." },
     });
   });
 
@@ -232,7 +235,7 @@ describe("profile write boundary (in-memory fixtures only)", () => {
       expect(response.status).toBe(422);
       expect(await response.json()).toEqual({
         error: "invalid",
-        fields: { [field]: "Remove control characters." },
+        fields: { [field]: "Remove control or invisible characters." },
       });
       expect(save).not.toHaveBeenCalled();
       expect(store.rows.get(id)).toEqual({ id, username: "alice", avatar: null, ...valid });

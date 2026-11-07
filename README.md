@@ -422,6 +422,13 @@ database probe or production test.
 
 ### Production (gated automatic promotion)
 
+The production app Worker builds once with a native esbuild metafile, verifies
+its digest-bound inventory, then uploads those same bytes with `--no-bundle`.
+Only a successful version-aware promotion smoke creates deployed evidence.
+See the [Worker bundle inventory contract](docs/worker-bundle-inventory.md) for
+artifact names, schemas, conservative package findings and consumer validation.
+CI dry-run inventories alone are not deployment evidence.
+
 Cutover decision state is recorded in `docs/cutover-gates.md` and the release
 contract in `docs/releases.md`; this section describes the deployment contract,
 not the currently serving version. Worker code reaches production only through
@@ -441,8 +448,10 @@ matching dispatch SHA selects the existing separately authorized recovery
 route; `migrations_applied` never bypasses default ancestry admission. See the
 [ancestry contract](docs/runbook.md#default-promotion-ancestry-admission).
 
-Automatic runs promote only a staging green that soaked 30 minutes with no
-newer red staging run, skip cleanly when production already serves the target
+Automatic runs promote only a first-attempt staging green that soaked 30
+minutes, with no red or re-run staging run on that commit or a newer one
+(a red staging gate is fixed forward on a new commit, never re-run until
+green), skip cleanly when production already serves the target
 (`/up` revision marker) or there is nothing soaked and green, and read the live
 production ledger via `/up` when the target journal has
 entries production lacks: when the ledger holds every target web entry (set

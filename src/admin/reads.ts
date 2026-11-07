@@ -12,6 +12,7 @@ import {
 } from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
+import { rankedRosterPrefix } from "../db/roster-statement";
 import { activityLog, events, rsvps } from "../db/admin-schema";
 import { joinAttempts, users } from "../db/schema";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
@@ -83,13 +84,7 @@ export async function listRoster(
         : sql`line.updated_at`;
   const ranked = (await keyedMemberRead(() =>
     db.execute(sql`
-      select line.user_id, users.username, line.status, line.updated_at, line.position from (
-        select rsvps.user_id, rsvps.status, rsvps.updated_at,
-          case when rsvps.status = 'waitlisted' then
-            row_number() over (partition by rsvps.status order by rsvps.created_at, coalesce(rsvps.legacy_id, rsvps.id), rsvps.id)::int
-          end as position
-        from rsvps inner join events on events.id = rsvps.event_id
-        where events.event_key = ${eventKey}
+      ${sql.raw(rankedRosterPrefix)} ${eventKey}
       ) line left join users on users.id = line.user_id
       ${filters.length ? sql`where ${sql.join(filters, sql` and `)}` : sql``}
       order by ${column} ${direction} ${query.sort === "waitlist" ? sql`nulls last,` : sql`,`} line.user_id asc

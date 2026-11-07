@@ -164,7 +164,7 @@ describe("admin zero-row tables degrade instead of crashing", () => {
     );
     expect(empty).toContain('data-testid="roster-table"');
     expect(empty).toContain('data-testid="roster-table-scroll"');
-    expect(empty).toContain('colspan="3" data-testid="roster-empty"');
+    expect(empty).toContain('colspan="4" data-testid="roster-empty"');
     expect(empty).toContain("No RSVPs yet.");
     expect(empty).toContain("RSVPs (0)");
     expect(empty).toContain('name="roster_q"');
