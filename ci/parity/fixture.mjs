@@ -67,7 +67,7 @@ export async function identityCookies() {
   };
 }
 
-/** Seed the template database once. Rows mirror e2e/seed.mjs plus three sessions. */
+/** Seed the template database once. Rows mirror e2e/seed.mjs plus two users, one profile and three sessions. */
 export async function seedTemplate(sql) {
   const events = [
     [EVENT_KEY, "E2E Community Night", "2099-01-01T18:00:00Z", "2099-01-01T20:00:00Z"],
@@ -97,6 +97,16 @@ export async function seedTemplate(sql) {
       values (${key}, ${title}, 'Route-parity fixture', ${starts}, ${ends}, 'UTC', 'published', 10, true,
         ${SEEDED_AT}, ${SEEDED_AT})`;
   }
+  // Profile pages read `users`: without these rows a signed-in member's
+  // /profile and /members/:user record the branded 404, not the page.
+  for (const { userId, username } of [SESSIONS.member, SESSIONS.moderator]) {
+    await sql`
+      insert into users (id, username, avatar, member, created_at, updated_at)
+      values (${userId}, ${username}, null, true, ${SEEDED_AT}, ${SEEDED_AT})`;
+  }
+  await sql`
+    insert into profiles (user_id, bio, games, timezone, created_at, updated_at)
+    values (${MEMBER_ID}, 'Route-parity fixture', ${sql.json(["Valheim"])}, 'UTC', ${SEEDED_AT}, ${SEEDED_AT})`;
   await insertSessions(sql);
 }
 

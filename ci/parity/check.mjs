@@ -49,21 +49,22 @@ for (const row of meta.coverage ?? []) {
 }
 
 // A fixture session that silently reads as guest would turn every identity
-// vector into a guest golden: the signed-in pages must answer differently
-// from a forged cookie.
+// vector into a guest golden, and a session without its seeded user row would
+// record the branded 404: the signed-in pages must render (200), unlike a
+// forged cookie.
 for (const [file, identity] of [
   ["routes/profile", "member"],
+  ["routes/members_user", "moderator"],
   ["routes/admin", "moderator"],
 ]) {
   const vectors = first.get(file) ?? {};
   const signedIn = vectors[`GET identity:${identity}`]?.response;
   const forged = vectors["GET identity:forged"]?.response;
-  if (
-    !signedIn ||
-    !forged ||
-    (signedIn.status === forged.status && signedIn.headers.location === forged.headers.location)
-  )
-    fail(`${file} answers the ${identity} fixture session like a forged cookie`);
+  if (!signedIn || !forged || signedIn.status !== 200 || forged.status === 200)
+    fail(
+      `${file} answers the ${identity} fixture session with ${signedIn?.status}, ` +
+        `a forged cookie with ${forged?.status}; expected the rendered page only for the session`,
+    );
 }
 
 const golden = join(repo, GOLDENS, `hono-${meta.pinnedSha}`);
