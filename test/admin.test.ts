@@ -57,6 +57,7 @@ import {
   stripTags,
 } from "./helpers/refused-edit-roster";
 import { clearAuditRows } from "./helpers/audit-rows";
+import { registerWaitlistAcceptance } from "./helpers/admin-waitlist-acceptance";
 import {
   cookieFor as featuredCookieFor,
   env as featuredEnv,
@@ -212,6 +213,7 @@ describe("admin guard pins (memory store, no DB)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", () => {
+  registerWaitlistAcceptance();
   // Roster acceptance keeps its own scoped fixture under the pre-existing DB gate.
   describe("refused event edit explains the missing roster (isolated test DB)", () => {
     let fixture: MemberDataFixture;

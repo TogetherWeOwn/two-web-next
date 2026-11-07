@@ -2,7 +2,7 @@ import { jsx } from "hono/jsx/jsx-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
-import { EventMetadata, withEventDetailHtml } from "../src/events/detail-leaves";
+import { EventMetadata, EventShare, withEventDetailHtml } from "../src/events/detail-leaves";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
 import { ATTENDEE_PAGE_SIZE, type PublicEvent } from "../src/events/reads";
 import type { KitSession } from "../src/kit-session";
@@ -92,6 +92,31 @@ async function resolve(
 afterEach(() => vi.useRealTimers());
 
 describe("shared event detail server leaves", () => {
+  it.each(["draft", "published", "past", "cancelled"])(
+    "shares escaped %s markup between Hono and Kit",
+    async (status) => {
+      const { model } = await resolve();
+      const next = {
+        ...model,
+        status,
+        title: '<img src=x onerror="bad">',
+        canonical: 'https://next.example.test/e/key?x="<script>',
+      };
+      const html = withEventDetailHtml(next).detailHtml.share;
+      expect(html).toBe(jsx(EventShare, { model: next }).toString());
+      expect(html).not.toMatch(/<img|<script|onerror="bad"/);
+      if (status === "draft") {
+        expect(html).toContain('data-testid="event-share-draft-note"');
+        expect(html).not.toMatch(/<a\b|<input\b|<button\b|data-copy-toast/);
+      } else {
+        expect(html).toContain("&quot;&lt;script&gt;");
+        expect(html).toContain('data-testid="event-manual-copy"');
+        expect(html).toContain('data-testid="event-copy-link" hidden');
+        expect(html.includes("data-native-share-status")).toBe(status === "published");
+      }
+    },
+  );
+
   it.each([null, { ...member, member: false }])(
     "keeps member rows out of guest/nonmember HTML",
     async (viewer) => {
