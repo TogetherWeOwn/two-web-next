@@ -121,7 +121,12 @@ or persistent cross-request capture state.
 `test/render-clock.test.ts` proves build/config/request guards, mutable-Date
 isolation, concurrent live/default behavior, repeated Hono render and Kit model
 state, read-parameter plumbing and closed qualification. The integration suite
-exercises actual Hono middleware and cache isolation; the Worker suite exercises
+exercises actual Hono middleware and cache isolation;
+`test/render-clock-routes.test.ts` drives real Hono `/e/:key` and `/events/past`
+and compiled Kit `e/[key]` and `events/past` loaders at two host wall times
+against fixture-only database reads. Date-sensitive rows guard all four clock
+bindings, with runtime opt-out controls. Kit assertions cover loader models;
+the existing Svelte SSR test covers their rendering. The Worker suite exercises
 both compiled build variants on a real loopback socket, with outbound network
 forbidden. `test/kit-event-detail.test.ts` also repeats real Svelte SSR HTML at
 different wall times. Existing fixture/route ownership and auth/session suites
