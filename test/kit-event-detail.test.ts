@@ -39,6 +39,7 @@ import {
   resolveKitEventDetail,
   type KitEventDetailStore,
 } from "../src/events/kit-detail";
+import { withEventDetailHtml } from "../src/events/detail-leaves";
 import { ROUTE_MANIFEST, resolveRouteOwner } from "../src/route-ownership";
 
 const APP_URL = "https://next.example.test";
@@ -232,6 +233,58 @@ describe("event-detail route ownership", () => {
     );
     expect(load).toContain("eventDetailErrorPayload(outcome)");
     expect(load).toContain("cookies.delete(JOIN_RESULT_COOKIE");
+  });
+});
+
+describe("member-detail review mode", () => {
+  it.each(["draft", "published", "cancelled"])(
+    "admits only moderators for %s review",
+    async (status) => {
+      const store = fakeStore({ event: { ...row({ status }), goingCount: 0, goingOccupancy: 0 } });
+      for (const session of [GUEST, memberSession(), UNKNOWN]) {
+        const { outcome } = await resolve(KEY, store, session, null, "?review=1");
+        expect(outcome.kind).toBe(session === UNKNOWN ? "unavailable" : "forbidden");
+      }
+      const { outcome } = await resolve(KEY, store, memberSession(MOD_ID, true), null, "?review=1");
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error(outcome.kind);
+      expect(outcome.headers["x-robots-tag"]).toBe("noindex, nofollow");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html.match(/<h1\b/g)).toHaveLength(1);
+      expect(html).toContain('data-testid="event-review"');
+      expect(html).toContain("RSVP is disabled in preview.");
+      expect(html).not.toContain("data-rsvp-form");
+      expect(html.indexOf('data-testid="event-review-actions"')).toBeGreaterThan(
+        html.indexOf('class="event-discovery"'),
+      );
+      if (status !== "draft") expect(html).not.toContain("Fix these before publishing");
+    },
+  );
+
+  it("keeps unreadable dates renderable without inventing JSON-LD instants", async () => {
+    const event = {
+      ...row({ status: "draft", startsAt: new Date(NaN), endsAt: new Date(NaN) }),
+      goingCount: 0,
+      goingOccupancy: 0,
+    };
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event }),
+      memberSession(MOD_ID, true),
+      null,
+      "?review=1",
+    );
+    if (outcome.kind !== "ok") throw new Error(outcome.kind);
+    expect(outcome.model.review?.banner).toContain("Fix these before publishing");
+    expect(outcome.model.whenText).toBe("Time unavailable");
+    expect(outcome.model.endsWhenText).toBe("Time unavailable");
+    expect(JSON.parse(outcome.model.jsonLd)).not.toHaveProperty("startDate");
+    expect(JSON.parse(outcome.model.jsonLd)).not.toHaveProperty("endDate");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    expect(renderDetail(outcome.model as unknown as Record<string, unknown>)).toContain(
+      "Time unavailable",
+    );
   });
 });
 
@@ -989,13 +1042,13 @@ describe("Kit detail presentation", () => {
     expect(html).toContain("This one has been and gone");
     expect(html).toContain('data-testid="event-roster-guest-nudge"');
     expect(html).toContain("2 going");
-    expect(html).toContain("sign in to see who's in");
+    expect(html).toContain("sign in to see who&#39;s in");
   });
 
   it("renders the member contract: attendees with profile links, no join pitch", async () => {
     const html = await memberHtml();
     expect(html).toContain('data-testid="event-attendees"');
-    expect(html).toContain("Who's going (2)");
+    expect(html).toContain("Who&#39;s going (2)");
     expect(html).toContain(">ann<");
     expect(html).toContain('href="/members/100000000000000003"');
     expect(html).toContain('data-testid="event-attendees-refresh"');
@@ -1234,7 +1287,7 @@ describe("Kit detail presentation", () => {
     if (outcome.kind !== "ok") throw new Error("unreachable");
     expect(outcome.model.attendeesPaging.page).toBe(page);
     const { renderDetail } = await buildKitEventDetailBundle();
-    const html = renderDetail({ ...outcome.model, eventKey: key });
+    const html = renderDetail(withEventDetailHtml({ ...outcome.model, eventKey: key }));
     expect(html.match(/<form[^>]*action="([^"]*)"[^>]*data-rsvp-form/)?.[1]).toBe(action);
   });
 

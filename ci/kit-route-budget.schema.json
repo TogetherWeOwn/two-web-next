@@ -1,0 +1,38 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Kit immutable route closure budgets",
+  "description": "The checker also validates exact source/build/budget route inventories and emitted dependency evidence. validateRouteBudget is the runtime schema authority.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "scope", "routes"],
+  "properties": {
+    "version": { "const": 1 },
+    "scope": { "const": "kit-immutable-route-closure-v1" },
+    "routes": {
+      "type": "object",
+      "minProperties": 1,
+      "propertyNames": { "pattern": "^/[^\\x00-\\x1f]*$" },
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["js", "css"],
+        "properties": {
+          "js": { "$ref": "#/$defs/ceiling" },
+          "css": { "$ref": "#/$defs/ceiling" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "ceiling": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["maxRawBytes", "maxGzipBytes", "maxFiles"],
+      "properties": {
+        "maxRawBytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "maxGzipBytes": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "maxFiles": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
+      }
+    }
+  }
+}

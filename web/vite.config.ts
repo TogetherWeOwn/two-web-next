@@ -63,12 +63,12 @@ export default defineConfig({
                   name: "admin",
                   test: /\/(?:src\/admin\/|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.svelte$))/,
                 },
-                // Co-compress the Kit profile view with its Hono markup twin,
-                // and the Kit member-board entrypoints with the board's Hono
-                // renderers already in this group; loaders keep their boundary.
+                // Co-compress the profile and board renderers across Hono/Kit,
+                // including hot zones and their shared period/read helpers.
+                // Grouping is SSR-only; client chunks keep their boundary.
                 {
                   name: "profiles",
-                  test: /\/src\/(?:profiles\/|lib\/ProfileView\.svelte$|routes\/leaderboards\/members\/\+(?:page|error)\.svelte$)/,
+                  test: /\/src\/(?:profiles\/|hotzones\/|kit-hotzones\.ts$|lib\/ProfileView\.svelte$|routes\/(?:leaderboards\/members|hotzones(?:\/\[signal\])?)\/\+(?:page|error)\.svelte$)/,
                 },
                 {
                   name: "events",

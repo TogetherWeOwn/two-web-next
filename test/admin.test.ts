@@ -420,6 +420,8 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       await db.delete(events);
       await db.delete(featuredContents);
       cookie = await cookieFor(store, { userId: modId, username: "mod", moderator: true });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-30T20:00:00Z"));
       vi.clearAllMocks();
     });
 

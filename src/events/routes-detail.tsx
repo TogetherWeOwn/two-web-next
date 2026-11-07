@@ -2,6 +2,7 @@ import { renderDate } from "../render-clock";
 // Detail event routes: GET /events/:key (JSON) and GET /e/:key (HTML).
 // Split out of src/events/routes.tsx; behavior unchanged.
 import { dbFor } from "../admin/db";
+import { savedEventReview } from "../admin/event-saved-review";
 import {
   databaseUnavailable,
   databaseUnavailableBuffered,
@@ -16,6 +17,7 @@ import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
 import {
   ATTENDEE_PAGE_SIZE,
+  getEventForModeratorReview,
   getEventNeighbors,
   getEventSeriesContext,
   getPublicEvent,
@@ -141,9 +143,15 @@ export function registerDetailRoutes(
           if (!eventKeyAllowed(key, c.env.APP_URL)) return notFound();
           const db = await dbFor(c);
           if (!db) return databaseUnavailableBuffered(c);
-          const e = await getPublicEvent(db, key);
+          const wantsReview = c.req.query("review") === "1";
+          const reviewSession = wantsReview ? await readSession(c) : null;
+          if (wantsReview && !reviewSession?.moderator) return forbidden(c);
+          if (wantsReview) c.header("cache-control", "private, no-store");
+          const e = wantsReview
+            ? await getEventForModeratorReview(db, key)
+            : await getPublicEvent(db, key);
           if (!e) return notFound();
-          if (e.status === "cancelled") {
+          if (e.status === "cancelled" && !wantsReview) {
             c.header("x-robots-tag", "noindex, nofollow");
             // The live page personalizes on the session and the one-shot join
             // confirmation, so it is never share-cached (main W16) and always
@@ -180,12 +188,13 @@ export function registerDetailRoutes(
           // the loser as a guest. Same x-two-island contract as the
           // events-calendar fragment (routes-calendar.tsx).
           const session =
-            c.req.header("x-two-island") === "attendees-live"
+            reviewSession ??
+            (c.req.header("x-two-island") === "attendees-live"
               ? await readFragmentSession(c)
-              : await readSession(c);
+              : await readSession(c));
           viewer = session?.id ?? null;
           if (e.status === "draft" && !session?.moderator) return forbidden(c);
-          if (e.status === "draft" || e.status === "past")
+          if (wantsReview || e.status === "draft" || e.status === "past")
             c.header("x-robots-tag", "noindex, nofollow");
           // One-shot join confirmation (legacy join_result flash): the event
           // page is a join-CTA landing (`/join?next=/e/<key>`), so it consumes
@@ -246,11 +255,12 @@ export function registerDetailRoutes(
                     e.eventKey,
                     archive,
                     attendees.length === 0 ? 1 : attendeePage - 1,
+                    wantsReview,
                   )
                 : null,
             nextHref:
               attendeeLookahead.length > 0
-                ? archiveEventHref(e.eventKey, archive, attendeePage + 1)
+                ? archiveEventHref(e.eventKey, archive, attendeePage + 1, wantsReview)
                 : null,
           };
           // Auth return (`?next=`): normalized archive/attendee context
@@ -267,6 +277,7 @@ export function registerDetailRoutes(
             <EventPage
               now={now}
               e={e}
+              review={wantsReview ? savedEventReview(e, new Date()) : undefined}
               neighbors={neighbors}
               related={related}
               series={series}

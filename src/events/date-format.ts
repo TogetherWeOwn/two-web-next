@@ -13,6 +13,16 @@ export const fmt = (d: Date, tz: string): string => {
   }
 };
 
+/** Empty for an unreadable stored instant; never substitute the render clock. */
+export function instantIso(instant: Date): string {
+  return Number.isFinite(instant.getTime()) ? instant.toISOString() : "";
+}
+
+/** HTML detail tolerates unreadable instants; Markdown keeps its error contract. */
+export function formatDetailWhen(instant: Date, timezone: string): string {
+  return instantIso(instant) ? formatEventWhen(instant, timezone) : "Time unavailable";
+}
+
 /** Detail wall time shared by HTML, Kit and Markdown; ISO on a bad zone. */
 export function formatEventWhen(instant: Date, timezone: string): string {
   try {

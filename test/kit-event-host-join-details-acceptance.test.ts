@@ -32,6 +32,7 @@ import {
   type KitEventDetailModel,
   type KitEventDetailStore,
 } from "../src/events/kit-detail";
+import { withEventDetailHtml } from "../src/events/detail-leaves";
 import type {
   EventAttendee,
   EventLink,
@@ -274,7 +275,8 @@ function withHostJoin(
   model: Record<string, unknown>,
   fields: KitEventHostJoinFields,
 ): Record<string, unknown> {
-  return { ...model, ...fields };
+  const next = { ...model, ...fields } as unknown as KitEventDetailModel;
+  return withEventDetailHtml(next) as unknown as Record<string, unknown>;
 }
 
 /** Decode the HTML entities SSR attribute/text escaping can produce (&amp; last). */
