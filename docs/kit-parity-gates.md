@@ -197,7 +197,7 @@ differs before its hook runs (trailing-slash 308, method handling, automatic
   re-record, copy the `route-parity-<sha>` artifact from the `check` job into
   that directory and run `npx biome format --write` on it; the checks compare
   parsed JSON, so formatting never changes a result. The committed set was
-  recorded at `b889b30cb8e21f1997897f3761b069da036c85a7`.
+  recorded at `226cbb91368f33babe7d90ac4b51f5203c6c0e2c`.
 - `test/fixtures/parity/signed-cookies.json` holds `hono/cookie` vectors for
   every cookie `src/` signs (`node ci/parity/signed-cookies.mjs --write`).
 - `npm run check:route-parity` (the `check` job) records pure Hono twice and

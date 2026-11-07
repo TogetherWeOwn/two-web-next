@@ -1,0 +1,897 @@
+{
+  "file": "routes/api_public_join",
+  "vectors": {
+    "DELETE": {
+      "request": {
+        "method": "DELETE",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "origin": "https://next.togetherweown.com",
+          "content-type": "application/x-www-form-urlencoded"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "cache-control": "no-store, private",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "text/html; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "transfer-encoding": "chunked",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-robots-tag": "noindex, nofollow",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "text",
+          "bytes": 3780,
+          "sha256": "13e8a5dc7abd5819dbbfb21301d3e2b5f48771993097064526a64b989f37244d"
+        },
+        "route": "unmatched",
+        "tailLabel": "[redacted]",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-length": "117",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "application/json; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "json",
+          "bytes": 117,
+          "sha256": "0bddeb7c968e7aa9671bdae17d8ff4d1ba5ae03a37789384fd2e2033c9fc1b86",
+          "shape": {
+            "intro": "string",
+            "invite_url": "string"
+          }
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET accept:html": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "text/html"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-length": "117",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "application/json; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "json",
+          "bytes": 117,
+          "sha256": "0bddeb7c968e7aa9671bdae17d8ff4d1ba5ae03a37789384fd2e2033c9fc1b86",
+          "shape": {
+            "intro": "string",
+            "invite_url": "string"
+          }
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET accept:json": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "application/json"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-length": "117",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "application/json; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "json",
+          "bytes": 117,
+          "sha256": "0bddeb7c968e7aa9671bdae17d8ff4d1ba5ae03a37789384fd2e2033c9fc1b86",
+          "shape": {
+            "intro": "string",
+            "invite_url": "string"
+          }
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET identity:expired": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "cookie": "<identity:expired>"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-length": "117",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "application/json; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "json",
+          "bytes": 117,
+          "sha256": "0bddeb7c968e7aa9671bdae17d8ff4d1ba5ae03a37789384fd2e2033c9fc1b86",
+          "shape": {
+            "intro": "string",
+            "invite_url": "string"
+          }
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET identity:forged": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "cookie": "<identity:forged>"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-length": "117",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "application/json; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "json",
+          "bytes": 117,
+          "sha256": "0bddeb7c968e7aa9671bdae17d8ff4d1ba5ae03a37789384fd2e2033c9fc1b86",
+          "shape": {
+            "intro": "string",
+            "invite_url": "string"
+          }
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET identity:member": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "cookie": "<identity:member>"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-length": "117",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "application/json; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "json",
+          "bytes": 117,
+          "sha256": "0bddeb7c968e7aa9671bdae17d8ff4d1ba5ae03a37789384fd2e2033c9fc1b86",
+          "shape": {
+            "intro": "string",
+            "invite_url": "string"
+          }
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET identity:moderator": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "cookie": "<identity:moderator>"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-length": "117",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "application/json; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "json",
+          "bytes": 117,
+          "sha256": "0bddeb7c968e7aa9671bdae17d8ff4d1ba5ae03a37789384fd2e2033c9fc1b86",
+          "shape": {
+            "intro": "string",
+            "invite_url": "string"
+          }
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET if-none-match:exact": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "if-none-match": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\""
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "empty",
+          "bytes": 0
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET if-none-match:star": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "if-none-match": "*"
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "empty",
+          "bytes": 0
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET if-none-match:weak": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "if-none-match": "W/\"05e311db0d6f1a9879d6f543bc270f6a125708e9\""
+        }
+      },
+      "response": {
+        "status": 304,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "empty",
+          "bytes": 0
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET path:__data.json": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join/__data.json",
+        "headers": {
+          "accept": "*/*"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "cache-control": "no-store, private",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "text/html; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "transfer-encoding": "chunked",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-robots-tag": "noindex, nofollow",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "text",
+          "bytes": 3265,
+          "sha256": "53555eabf9e201cd6278b7375c00da466affce51971190030894a39f8e339147"
+        },
+        "route": "unmatched",
+        "tailLabel": "[redacted]",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET path:encoded-percent": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join%25",
+        "headers": {
+          "accept": "*/*"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "cache-control": "no-store, private",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "text/html; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "transfer-encoding": "chunked",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-robots-tag": "noindex, nofollow",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "text",
+          "bytes": 3780,
+          "sha256": "13e8a5dc7abd5819dbbfb21301d3e2b5f48771993097064526a64b989f37244d"
+        },
+        "route": "unmatched",
+        "tailLabel": "[redacted]",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET path:encoded-slash": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join/a%2Fb",
+        "headers": {
+          "accept": "*/*"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "cache-control": "no-store, private",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "text/html; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "transfer-encoding": "chunked",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-robots-tag": "noindex, nofollow",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "text",
+          "bytes": 3780,
+          "sha256": "13e8a5dc7abd5819dbbfb21301d3e2b5f48771993097064526a64b989f37244d"
+        },
+        "route": "unmatched",
+        "tailLabel": "[redacted]",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "GET path:trailing-slash": {
+      "request": {
+        "method": "GET",
+        "path": "/api/public/join/",
+        "headers": {
+          "accept": "*/*"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "cache-control": "no-store, private",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "text/html; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "transfer-encoding": "chunked",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-robots-tag": "noindex, nofollow",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "text",
+          "bytes": 3780,
+          "sha256": "13e8a5dc7abd5819dbbfb21301d3e2b5f48771993097064526a64b989f37244d"
+        },
+        "route": "unmatched",
+        "tailLabel": "[redacted]",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "HEAD": {
+      "request": {
+        "method": "HEAD",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*"
+        }
+      },
+      "response": {
+        "status": 200,
+        "headers": {
+          "cache-control": "public, max-age=60",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "application/json; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "etag": "\"05e311db0d6f1a9879d6f543bc270f6a125708e9\"",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "empty",
+          "bytes": 0
+        },
+        "route": "/api/public/join",
+        "tailLabel": "/api/public/join",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "OPTIONS": {
+      "request": {
+        "method": "OPTIONS",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "cache-control": "no-store, private",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "text/html; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "transfer-encoding": "chunked",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-robots-tag": "noindex, nofollow",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "text",
+          "bytes": 3780,
+          "sha256": "13e8a5dc7abd5819dbbfb21301d3e2b5f48771993097064526a64b989f37244d"
+        },
+        "route": "unmatched",
+        "tailLabel": "[redacted]",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "PATCH": {
+      "request": {
+        "method": "PATCH",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "origin": "https://next.togetherweown.com",
+          "content-type": "application/x-www-form-urlencoded"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "cache-control": "no-store, private",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "text/html; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "transfer-encoding": "chunked",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-robots-tag": "noindex, nofollow",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "text",
+          "bytes": 3780,
+          "sha256": "13e8a5dc7abd5819dbbfb21301d3e2b5f48771993097064526a64b989f37244d"
+        },
+        "route": "unmatched",
+        "tailLabel": "[redacted]",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "POST": {
+      "request": {
+        "method": "POST",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "origin": "https://next.togetherweown.com",
+          "content-type": "application/x-www-form-urlencoded"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "cache-control": "no-store, private",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "text/html; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "transfer-encoding": "chunked",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-robots-tag": "noindex, nofollow",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "text",
+          "bytes": 3780,
+          "sha256": "13e8a5dc7abd5819dbbfb21301d3e2b5f48771993097064526a64b989f37244d"
+        },
+        "route": "unmatched",
+        "tailLabel": "[redacted]",
+        "alerts": [],
+        "outbound": []
+      }
+    },
+    "PUT": {
+      "request": {
+        "method": "PUT",
+        "path": "/api/public/join",
+        "headers": {
+          "accept": "*/*",
+          "origin": "https://next.togetherweown.com",
+          "content-type": "application/x-www-form-urlencoded"
+        }
+      },
+      "response": {
+        "status": 404,
+        "headers": {
+          "cache-control": "no-store, private",
+          "content-security-policy": "default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self' https://cdn.discordapp.com; frame-src 'none'; style-src 'self'; script-src 'self'; font-src 'self'; frame-ancestors 'none'; form-action 'self'; report-to csp-endpoint",
+          "content-type": "text/html; charset=UTF-8",
+          "cross-origin-embedder-policy": "credentialless",
+          "cross-origin-opener-policy": "same-origin",
+          "cross-origin-resource-policy": "same-origin",
+          "origin-agent-cluster": "?1",
+          "permissions-policy": "camera=(), microphone=(), geolocation=()",
+          "referrer-policy": "strict-origin-when-cross-origin",
+          "reporting-endpoints": "csp-endpoint=\"/csp-reports\"",
+          "transfer-encoding": "chunked",
+          "x-content-type-options": "nosniff",
+          "x-dns-prefetch-control": "off",
+          "x-download-options": "noopen",
+          "x-frame-options": "DENY",
+          "x-permitted-cross-domain-policies": "none",
+          "x-request-id": "<masked>",
+          "x-robots-tag": "noindex, nofollow",
+          "x-xss-protection": "0"
+        },
+        "setCookies": [],
+        "body": {
+          "kind": "text",
+          "bytes": 3780,
+          "sha256": "13e8a5dc7abd5819dbbfb21301d3e2b5f48771993097064526a64b989f37244d"
+        },
+        "route": "unmatched",
+        "tailLabel": "[redacted]",
+        "alerts": [],
+        "outbound": []
+      }
+    }
+  }
+}
