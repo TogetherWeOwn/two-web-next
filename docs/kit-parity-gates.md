@@ -184,7 +184,11 @@ differs before its hook runs (trailing-slash 308, method handling, automatic
   registration: cross-origin and missing Origin, `Accept` HTML and JSON,
   `text/plain` and JSON bodies, a body one byte over 1 MiB, each session, wrong
   and malformed bearers and wrong and valid QA tokens where the route takes
-  them. Four throttle bursts (`/join/discord`, `/auth/discord`,
+  them. Bearer routes also get the wrong and malformed bearers on GET, and the
+  ops-overrides routes get the fixture operator bearer on GET and each write method;
+  `check:route-parity` fails unless that bearer gets past the 401. Source
+  evidence and agent events are disabled in the fixture (404 before the bearer
+  check), so they get no valid-bearer vector. Four throttle bursts (`/join/discord`, `/auth/discord`,
   `POST /logout`, `/events`) record the response after the limit.
 - Each response keeps status, the full header set, Set-Cookie names and
   attributes, the body sha256 (and a JSON shape for JSON), the request-log

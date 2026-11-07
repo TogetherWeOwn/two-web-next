@@ -67,6 +67,19 @@ for (const [file, identity] of [
     );
 }
 
+// The operator bearer must reach the ops-overrides handler (200 panel, or 503
+// when the fixture has no bot endpoint), not the 401 a wrong token gets.
+{
+  const ops = first.get("routes/admin_ops-overrides") ?? {};
+  const valid = ops["GET bearer:valid"]?.response;
+  const wrong = ops["GET bearer:wrong"]?.response;
+  if (!valid || !wrong || valid.status === 401 || wrong.status !== 401)
+    fail(
+      `routes/admin_ops-overrides answers the fixture operator bearer with ${valid?.status}, ` +
+        `a wrong bearer with ${wrong?.status}; expected only the wrong bearer to get 401`,
+    );
+}
+
 const golden = join(repo, GOLDENS, `hono-${meta.pinnedSha}`);
 if (existsSync(golden)) {
   const index = JSON.parse(readFileSync(join(golden, "index.json"), "utf8"));

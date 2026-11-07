@@ -179,6 +179,8 @@ function requestHeaders(vector, context) {
   if (vector.origin) headers.origin = vector.origin;
   if (vector.contentType) headers["content-type"] = vector.contentType;
   if (vector.authorization) headers.authorization = vector.authorization;
+  if (vector.bearer === "ops-control-bearer")
+    headers.authorization = `Bearer ${FIXTURE_SECRETS.OPS_CONTROL_TOKEN}`;
   if (vector.qaToken) {
     headers["x-two-qa-auth"] =
       vector.qaToken === "valid" ? FIXTURE_SECRETS.QA_AUTH_TOKEN : WRONG_QA_TOKEN;
@@ -200,6 +202,7 @@ function requestRecord(vector, headers) {
   delete kept["x-parity-client"];
   if (kept.cookie) kept.cookie = `<identity:${vector.identity}>`;
   if (kept["x-two-qa-auth"]) kept["x-two-qa-auth"] = `<qa-token:${vector.qaToken}>`;
+  if (vector.bearer) kept.authorization = `<bearer:${vector.bearer}>`;
   // The If-None-Match vectors echo the ETag the target served, so the same mask applies.
   if (kept["if-none-match"]) kept["if-none-match"] = maskAssetEtag(kept["if-none-match"]);
   if (vector.bodyBytes) kept["content-length"] = String(vector.bodyBytes);

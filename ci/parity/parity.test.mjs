@@ -100,7 +100,17 @@ test("the matrix carries the method, path, conditional and negotiation vectors",
   ]) {
     assert.ok(rsvp.includes(id), `rsvp has ${id}`);
   }
-  assert.ok(ids("routes/admin_ops-overrides").includes("POST bearer:wrong"));
+  const ops = ids("routes/admin_ops-overrides");
+  for (const id of [
+    "GET bearer:valid",
+    "GET bearer:wrong",
+    "POST bearer:valid",
+    "POST bearer:wrong",
+  ])
+    assert.ok(ops.includes(id), `ops-overrides has ${id}`);
+  const evidence = ids("routes/admin_queue_source-evidence_id");
+  assert.ok(evidence.includes("GET bearer:wrong"));
+  assert.ok(!evidence.includes("GET bearer:valid"));
   assert.ok(ids("routes/auth_qa_identity").includes("POST qa-token:wrong"));
   const burst = matrix.vectors.find((v) => v.id === "POST throttle:exhausted");
   assert.equal(burst.repeat, 31);

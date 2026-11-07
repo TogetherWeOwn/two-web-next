@@ -81,8 +81,21 @@ export function slug(path) {
 
 const isBearer = (auth) => auth.endsWith("-bearer");
 const isStagingToken = (auth) => auth === "staging-token";
+// Bearer schemes the fixture can present a valid credential for. Source
+// evidence and agent events are disabled in the fixture env (404 before the
+// bearer check), so a valid token there would record the same response.
+const VALID_BEARER = new Set(["ops-control-bearer"]);
 
-function getFamily(file, path, { identities, conditional }) {
+function bearerVectors(method, auth) {
+  if (!isBearer(auth)) return [];
+  return [
+    ...(VALID_BEARER.has(auth) ? [{ id: `${method} bearer:valid`, bearer: auth }] : []),
+    { id: `${method} bearer:wrong`, authorization: "Bearer parity-wrong-token" },
+    { id: `${method} bearer:malformed`, authorization: "Basic cGFyaXR5" },
+  ];
+}
+
+function getFamily(file, path, { identities, conditional, auth }) {
   const vectors = [{ id: "GET accept:html", method: "GET", path, accept: "text/html" }];
   vectors.push({ id: "GET accept:json", method: "GET", path, accept: "application/json" });
   if (identities) {
@@ -97,6 +110,7 @@ function getFamily(file, path, { identities, conditional }) {
       { id: "GET if-none-match:star", method: "GET", path, ifNoneMatch: "*" },
     );
   }
+  if (auth) vectors.push(...bearerVectors("GET", auth).map((v) => ({ ...v, method: "GET", path })));
   return vectors.map((vector) => ({ ...vector, file }));
 }
 
@@ -154,12 +168,7 @@ function unsafeFamily(file, path, method, auth) {
     { id: `${method} body:oversized`, bodyBytes: OVERSIZED_BYTES },
     ...IDENTITIES.map((identity) => ({ id: `${method} identity:${identity}`, identity })),
   ];
-  if (isBearer(auth)) {
-    vectors.push(
-      { id: `${method} bearer:wrong`, authorization: "Bearer parity-wrong-token" },
-      { id: `${method} bearer:malformed`, authorization: "Basic cGFyaXR5" },
-    );
-  }
+  vectors.push(...bearerVectors(method, auth));
   if (isStagingToken(auth)) {
     vectors.push(
       { id: `${method} qa-token:wrong`, qaToken: "wrong" },
@@ -201,7 +210,13 @@ export function buildVectors({ inventory, publicFiles, kitPaths, throttles }) {
     vectors.push(...methodFamily(file, path));
     const gettable = row.methods.has("GET") || row.methods.has("ALL");
     if (gettable) {
-      vectors.push(...getFamily(file, path, { identities: true, conditional: true }));
+      vectors.push(
+        ...getFamily(file, path, {
+          identities: true,
+          conditional: true,
+          auth: row.auth.get("GET") ?? row.auth.get("ALL"),
+        }),
+      );
       vectors.push(...pathVariants(file, template, path));
     }
     for (const method of [...row.methods].sort()) {
