@@ -104,7 +104,7 @@ for (const [state, key, guidance] of [
   [
     "review-corrections",
     "01J00000000000000000000017",
-    "This is a draft. Only moderators can see this page.",
+    "This is a draft. Only moderators can see this page. Check it over, then publish from the bottom of this page when you're ready.",
   ],
   [
     "review-published",

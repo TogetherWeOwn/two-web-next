@@ -5,7 +5,8 @@ import { A11Y_FREEZE_DATES } from "./a11y-cases.mjs";
 // whole paragraph: cancelled events still appear in moderator listings, so a
 // trailing listing claim must fail the text match.
 const REVIEW_GUIDANCE = {
-  "review-corrections": "This is a draft. Only moderators can see this page.",
+  "review-corrections":
+    "This is a draft. Only moderators can see this page. Check it over, then publish from the bottom of this page when you're ready.",
   "review-published": "This event is already published. This is what members see now.",
   "review-cancelled": "This event is cancelled.",
 };

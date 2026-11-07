@@ -1542,7 +1542,8 @@ test("Kit saved review states at desktop and mobile widths", async ({ browser })
       {
         name: "__Host-two_session",
         value: `${bearer}.${signature}`,
-        url: target.origin,
+        domain: new URL(target.origin).hostname,
+        path: "/",
         secure: true,
         httpOnly: true,
         sameSite: "Lax",
