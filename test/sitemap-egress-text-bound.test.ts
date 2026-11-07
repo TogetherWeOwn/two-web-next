@@ -4,30 +4,14 @@
 // database; its row is refused whole, keeps its slot under the 1000-row cap
 // and is counted in one text-free warning.
 //
-// Hermetic pins run over a local pg-proxy transport. The SQL proofs run the
-// real octet_length admission on the guarded disposable test database only
-// (skipped without DATABASE_URL). Synthetic rows only.
+// Hermetic pins run over a local pg-proxy transport. The real octet_length
+// admission proofs live in the live bounded-reads suite
+// (test/events-bounded-reads.test.ts). Synthetic rows only.
 import { drizzle } from "drizzle-orm/pg-proxy";
-import {
-  afterAll,
-  afterEach,
-  beforeAll,
-  beforeEach,
-  describe,
-  expect,
-  it,
-  type MockInstance,
-  vi,
-} from "vitest";
-import { events } from "../src/db/admin-schema";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import { EGRESS_EVENT_KEY_MAX_BYTES, FEED_EGRESS_LIMIT, sitemapEvents } from "../src/events/reads";
 import { buildSitemapUrls, crawlableEvents, renderSitemap } from "../src/seo";
-import {
-  createMemberDataFixture,
-  testDatabaseUrl,
-  type MemberDataFixture,
-} from "./helpers/member-data-db";
 import { projectEventRow } from "./helpers/pg-proxy-event-projection";
 
 const APP_URL = "https://next.example.test";
@@ -147,66 +131,5 @@ describe("sitemap key admission (hermetic)", () => {
     const body = bytes(render((await sitemapEvents(db)).map((entry) => entry.key)));
     expect(body).toBeLessThanOrEqual(staticOnly + FEED_EGRESS_LIMIT * perEntry);
     expect(body).toBe(staticOnly + (FEED_EGRESS_LIMIT / 2) * perEntry);
-  });
-});
-
-describe.skipIf(!process.env.DATABASE_URL)("sitemap key admission (agent-testdb)", () => {
-  let db: MemberDataFixture;
-  beforeAll(async () => {
-    db = await createMemberDataFixture(testDatabaseUrl(process.env.DATABASE_URL!).href);
-  });
-  afterAll(async () => {
-    await db?.dispose();
-  });
-
-  it("refuses oversized stored keys in PostgreSQL and ships healthy siblings", async () => {
-    await db.reset();
-    const exact = "𝄞".repeat(EGRESS_EVENT_KEY_MAX_BYTES / 4);
-    // Compressible, so the unique key index still accepts the 64 KiB value.
-    const keys = ["01ARZ3NDEKTSV4RRFFQ69G5FAV", exact, `${exact}k`, "k".repeat(65_536)];
-    await db.db.insert(events).values(
-      keys.map((eventKey, i) => ({
-        ...stored(eventKey, i),
-        title: "Game night",
-        timezone: "UTC",
-        status: "published",
-        createdBy: "event-moderator",
-        createdAt: STAMP,
-      })),
-    );
-    expect((await sitemapEvents(db.db)).map((entry) => entry.key)).toEqual(keys.slice(0, 2));
-    expect(refusals()).toEqual([
-      [REFUSAL, { surface: "sitemap", skipped: 2, code: "stored-text-oversized" }],
-    ]);
-  });
-
-  it("saturated refusal keeps every capped slot in one SELECT without refilling", async () => {
-    await db.reset();
-    // 1000 oversized keys fill the cap; the healthy 1001st row starts last.
-    const keys = Array.from({ length: FEED_EGRESS_LIMIT + 1 }, (_, i) =>
-      i < FEED_EGRESS_LIMIT
-        ? `${String(i).padStart(4, "0")}${"x".repeat(EGRESS_EVENT_KEY_MAX_BYTES - 3)}`
-        : "01ARZ3NDEKTSV4RRFFQ69G5FAV",
-    );
-    await db.db.insert(events).values(
-      keys.map((eventKey, i) => ({
-        ...stored(eventKey, i),
-        title: "Game night",
-        timezone: "UTC",
-        status: "published",
-        createdBy: "event-moderator",
-        createdAt: STAMP,
-      })),
-    );
-    const queries = vi.spyOn(db.client, "unsafe");
-    expect(await sitemapEvents(db.db)).toEqual([]);
-    expect(queries).toHaveBeenCalledTimes(1);
-    expect(warn.mock.calls).toEqual([
-      [
-        "Event egress read reached capacity.",
-        { surface: "sitemap", limit: FEED_EGRESS_LIMIT, returned: FEED_EGRESS_LIMIT },
-      ],
-      [REFUSAL, { surface: "sitemap", skipped: FEED_EGRESS_LIMIT, code: "stored-text-oversized" }],
-    ]);
   });
 });
