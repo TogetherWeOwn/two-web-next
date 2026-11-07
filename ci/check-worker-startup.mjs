@@ -49,6 +49,15 @@ export function validateBudget(budget) {
   );
   return budget;
 }
+function sampleValue(value) {
+  let rendered;
+  try {
+    rendered = typeof value === "number" ? String(value) : JSON.stringify(value);
+  } catch {
+    rendered = String(value);
+  }
+  return (rendered ?? String(value)).slice(0, 64);
+}
 export function summarizeProfile(profile) {
   requireValue(
     profile &&
@@ -93,12 +102,21 @@ export function summarizeProfile(profile) {
   let idleUs = 0;
   let gcUs = 0;
   for (let i = 0; i < profile.samples.length; i++) {
-    const node = nodes.get(profile.samples[i]);
+    const id = profile.samples[i];
     const delta = profile.timeDeltas[i];
-    requireValue(
-      node && Number.isSafeInteger(profile.samples[i]) && finite(delta),
-      "Invalid CPU profile sample/delta pair",
-    );
+    if (!Number.isSafeInteger(id))
+      throw new Error(
+        `Invalid CPU profile sample: non-integer node id at sample ${i} (${sampleValue(id)})`,
+      );
+    if (!nodes.has(id))
+      throw new Error(`Invalid CPU profile sample: unknown node ${id} at sample ${i}`);
+    if (typeof delta !== "number" || !Number.isFinite(delta))
+      throw new Error(
+        `Invalid CPU profile sample: non-finite timeDelta at sample ${i} (${sampleValue(delta)})`,
+      );
+    if (delta < 0)
+      throw new Error(`Invalid CPU profile sample: negative timeDelta ${delta} at sample ${i}`);
+    const node = nodes.get(id);
     sampledUs += delta;
     if (node.callFrame.functionName === "(idle)") idleUs += delta;
     if (node.callFrame.functionName === "(garbage collector)") gcUs += delta;
