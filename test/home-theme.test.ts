@@ -67,7 +67,7 @@ describe("homepage theme", () => {
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');
     expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
-    expect(html).toContain('src="/logo.svg" width="64" height="64" alt="Together We Own"');
+    expect(html).toContain('src="/logo.svg" width="180" height="50" alt="Together We Own"');
     expect(html).toContain('data-testid="site-jsonld"');
     const withoutJsonLd = html.replace(
       /<script type="application\/ld\+json"[^>]*>[\s\S]*?<\/script>/g,
@@ -272,6 +272,15 @@ describe("homepage theme", () => {
     // ~600 bytes of :not(.content-theme) guards. Still no @import, no remote
     // URLs, still one hand-readable file.
     expect(css.length).toBeLessThan(13000);
+  });
+
+  it("crops the lockup to its mark on narrow screens without shrinking account chrome", () => {
+    const css = readFileSync(new URL("../public/theme.css", import.meta.url), "utf8");
+    expect(css).toMatch(
+      /@media \(max-width: 30rem\)\s*\{\s*\.base-theme \.brand img\s*\{\s*width: 50px; height: 50px; object-fit: cover; object-position: left center;\s*\}\s*\}/,
+    );
+    expect(css).toContain(".base-theme .who { max-width: 9rem; }");
+    expect(render()).toContain('src="/logo.svg" width="180" height="50"');
   });
 
   it("keeps the primary .btn:hover lift on the brand token", () => {

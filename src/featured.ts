@@ -31,6 +31,29 @@ function isSameSitePath(raw: string): boolean {
 
 export const FEATURED_READ_DEADLINE_MS = 500;
 const FEATURED_DB_TIMEOUT_MS = 250;
+export const FEATURED_ROW_CAP = 100;
+
+// Keep the inherited stored-text admission at the form's existing maxima.
+// Inspect only max + 1 PostgreSQL characters, not an entire pathological value;
+// refuse a row whole before transfer rather than truncating its display text.
+const featuredTextAdmission = sql`length(substring(${featuredContents.title} from 1 for 256)) <= 255
+  and (${featuredContents.body} is null or length(substring(${featuredContents.body} from 1 for 1001)) <= 1000)
+  and (${featuredContents.url} is null or length(substring(${featuredContents.url} from 1 for 256)) <= 255)
+  and (${featuredContents.imageUrl} is null or length(substring(${featuredContents.imageUrl} from 1 for 256)) <= 255)
+  and (${featuredContents.imageAlt} is null or length(substring(${featuredContents.imageAlt} from 1 for 256)) <= 255)`;
+
+function boundFeaturedRows<T>(rows: T[], status?: { saturated: boolean }): T[] {
+  const saturated = rows.length > FEATURED_ROW_CAP;
+  if (status) status.saturated = saturated;
+  if (saturated) {
+    // Counts only: never log stored text, SQL, URLs or identities.
+    console.warn("Featured read reached the row cap.", {
+      limit: FEATURED_ROW_CAP,
+      returned: FEATURED_ROW_CAP,
+    });
+  }
+  return rows.slice(0, FEATURED_ROW_CAP);
+}
 
 // The lock/statement guard both readers share: cancel lock waits/slow
 // statements in Postgres, not just the HTTP wait, and never alter pooled
@@ -79,9 +102,13 @@ async function withPublishedFeaturedRead<T>(run: () => Promise<T[]>): Promise<T[
   }
 }
 
-/** Legacy currentlyVisible: start inclusive, end exclusive; no homepage cap. */
-export async function listVisibleFeatured(db: Db, now = new Date()): Promise<VisibleFeatured[]> {
-  return withFeaturedDeadline(() =>
+/** Start inclusive, end exclusive; admit text and cap rows before transfer. */
+export async function listVisibleFeatured(
+  db: Db,
+  now = new Date(),
+  propagateFailure = false,
+): Promise<VisibleFeatured[]> {
+  const run = () =>
     db.transaction(async (tx) => {
       // Like optional search analytics: cancel lock waits/slow statements in
       // Postgres, not just the HTTP wait, and never alter pooled session settings.
@@ -101,12 +128,16 @@ export async function listVisibleFeatured(db: Db, now = new Date()): Promise<Vis
             eq(featuredContents.isPublished, true),
             or(isNull(featuredContents.startsAt), lte(featuredContents.startsAt, now)),
             or(isNull(featuredContents.endsAt), gt(featuredContents.endsAt, now)),
+            featuredTextAdmission,
           ),
         )
-        .orderBy(asc(featuredContents.position), asc(featuredContents.id));
-      return rows.map(safeStoredLink);
-    }),
-  );
+        .orderBy(asc(featuredContents.position), asc(featuredContents.id))
+        .limit(FEATURED_ROW_CAP + 1);
+      return boundFeaturedRows(rows).map(safeStoredLink);
+    });
+  // The saturated-cache fallback must propagate failures to cachedFeatured's
+  // existing one-warn fallback; ordinary visible-reader callers never throw.
+  return propagateFailure ? withPublishedFeaturedRead(run) : withFeaturedDeadline(run);
 }
 
 export type PublishedFeatured = Pick<
@@ -115,15 +146,18 @@ export type PublishedFeatured = Pick<
 >;
 
 /**
- * Published base list for the homepage guest cache: every published row with
- * its window bounds, same order, same deadline/cancel contract. The homepage
- * applies the live window per request (currentlyVisible in
- * `./featured-status`), so boundary instants stay exact while the
- * time-invariant base is shared across requests. Unlike the legacy visible
- * read, failures and the deadline reject: the only caller, cachedFeatured,
- * logs the one home-pattern warn and serves the empty-list fallback.
+ * Bounded published base for the homepage guest cache. Exclude already-ended
+ * rows before the cap so expired inventory cannot crowd out live content.
+ * Future windows remain: the homepage evaluates visibility per request, keeping
+ * boundary instants exact. A saturated base is incomplete and must not be cached;
+ * the caller uses the bounded visible read instead. Failures and the deadline
+ * reject to cachedFeatured's existing one-warn empty-list fallback.
  */
-export async function listPublishedFeatured(db: Db): Promise<PublishedFeatured[]> {
+export async function listPublishedFeatured(
+  db: Db,
+  now = new Date(),
+  status?: { saturated: boolean },
+): Promise<PublishedFeatured[]> {
   return withPublishedFeaturedRead(() =>
     db.transaction(async (tx) => {
       await tx.execute(featuredTimeoutGuard());
@@ -139,9 +173,16 @@ export async function listPublishedFeatured(db: Db): Promise<PublishedFeatured[]
           endsAt: featuredContents.endsAt,
         })
         .from(featuredContents)
-        .where(eq(featuredContents.isPublished, true))
-        .orderBy(asc(featuredContents.position), asc(featuredContents.id));
-      return rows.map(safeStoredLink);
+        .where(
+          and(
+            eq(featuredContents.isPublished, true),
+            or(isNull(featuredContents.endsAt), gt(featuredContents.endsAt, now)),
+            featuredTextAdmission,
+          ),
+        )
+        .orderBy(asc(featuredContents.position), asc(featuredContents.id))
+        .limit(FEATURED_ROW_CAP + 1);
+      return boundFeaturedRows(rows, status).map(safeStoredLink);
     }),
   );
 }

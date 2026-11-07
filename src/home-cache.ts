@@ -28,7 +28,12 @@
 import { databaseUrl } from "./db/connection";
 import type { Db } from "./db/index";
 import type { Env } from "./env";
-import { listPublishedFeatured, type PublishedFeatured, type VisibleFeatured } from "./featured";
+import {
+  listPublishedFeatured,
+  listVisibleFeatured,
+  type PublishedFeatured,
+  type VisibleFeatured,
+} from "./featured";
 import { currentlyVisible } from "./featured-status";
 import { loadHomeUpcomingMerged, type HomeUpcomingMerged } from "./events/reads";
 import type { DiscordEventsSource } from "./events/discord-transients-types";
@@ -228,7 +233,12 @@ export async function cachedFeatured(
   let value: PublishedFeatured[];
   try {
     const db = await openDb();
-    value = db ? await listPublishedFeatured(db) : [];
+    const status = { saturated: false };
+    value = db ? await listPublishedFeatured(db, now, status) : [];
+    // The capped base may be all future windows, or its visible rows may end
+    // before the TTL. Never store an incomplete base: re-read the live window
+    // before capping so healthy rows beyond it can still appear.
+    if (db && status.saturated) return await listVisibleFeatured(db, now, true);
   } catch {
     // Mirror warnHomeFallback (src/events/reads.ts): the bounded exception
     // class plus the validated request id, never driver text, SQL or

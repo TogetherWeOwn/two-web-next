@@ -27,6 +27,7 @@ import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { listFeed, sitemapEvents } from "../src/events/reads";
 import { registerSeoLeaves } from "../src/seo-leaves";
+import { isEventProjection, projectEventRow } from "./helpers/pg-proxy-event-projection";
 
 vi.mock("../src/admin/db", async (importOriginal) => {
   const original = await importOriginal<typeof import("../src/admin/db")>();
@@ -105,15 +106,17 @@ function limitOf(query: Query): number | undefined {
 function fixture(input: Row[], failure?: { error: unknown }) {
   const seen: Query[] = [];
   const columns = Object.keys(getTableColumns(events)) as (keyof Row)[];
-  const encode = (event: Row) =>
-    columns.map((column) => {
-      const value = event[column];
-      return value instanceof Date
-        ? Number.isFinite(value.getTime())
-          ? value.toISOString()
-          : "280000-01-01 00:00:00+00"
-        : value;
-    });
+  const encodeValue = (value: unknown) =>
+    value instanceof Date
+      ? Number.isFinite(value.getTime())
+        ? value.toISOString()
+        : "280000-01-01 00:00:00+00"
+      : value;
+  // Explicit egress projections are mapped by position; full reads by column.
+  const encode = (event: Row, query: Query) =>
+    isEventProjection(query.sql)
+      ? projectEventRow(query.sql, query.params, event, encodeValue)
+      : columns.map((column) => encodeValue(event[column]));
   const db = drizzle(async (sql, params) => {
     if (/^set\s/i.test(sql)) return { rows: [] };
     const query = { sql, params: [...params] };
@@ -150,7 +153,7 @@ function fixture(input: Row[], failure?: { error: unknown }) {
     }
     const limit = limitOf(query);
     if (limit !== undefined) output = output.slice(0, limit);
-    return { rows: output.map(encode) };
+    return { rows: output.map((event) => encode(event, query)) };
   });
   Object.assign(db, {
     transaction: async (run: (tx: Db) => Promise<unknown>) => run(db as unknown as Db),
@@ -434,7 +437,26 @@ describe("window omission diagnostics are independent of builder timestamp/SEQUE
     ]);
     const output = await listFeed(source.db, ["published", "cancelled"], NOW);
     expect(output.map((entry) => entry.eventKey)).toEqual([key(2), key(5)]);
-    expect(output).toEqual([row(2), row(5)]);
+    // The feed read transfers only the columns the builders render.
+    const feedColumns = [
+      "id",
+      "eventKey",
+      "title",
+      "game",
+      "description",
+      "timezone",
+      "location",
+      "organizer_name",
+      "status",
+      "capacity",
+      "startsAt",
+      "endsAt",
+      "updatedAt",
+      "icsSequence",
+    ] as const;
+    const projected = (event: Row) =>
+      Object.fromEntries(feedColumns.map((column) => [column, event[column] ?? null]));
+    expect(output).toEqual([projected(row(2)), projected(row(5))]);
     expectQuery(source.seen, "feed", ["published", "cancelled"]);
     expect(logs).toEqual([[FEED_SKIP, { skipped: 3 }]]);
   });
