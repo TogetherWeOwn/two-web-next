@@ -955,6 +955,100 @@ test("multi-hop runtime-administered ledger chain refuses on an ADMIN-only runti
   });
 });
 
+// The drizzle schema owner can drop and recreate the ledger whatever the
+// ledger's own ACLs say, so schema ownership and schema rights refuse too.
+test("runtime-owned drizzle schema refuses with no rights on the ledger objects", async () => {
+  await fixture(async ({ client, run }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      await createFixtureLedger(client);
+      await client.unsafe("ALTER SCHEMA drizzle OWNER TO two_web_app");
+      assert.deepEqual(await runtimeAcl(client, "drizzle.__drizzle_migrations"), []);
+      const [schema] = await client`
+        select pg_get_userbyid(nspowner) as owner, nspacl from pg_namespace where nspname = 'drizzle'`;
+      assert.equal(schema.owner, "two_web_app");
+      assert.equal(schema.nspacl, null);
+      await assertLedgerRefused(
+        client,
+        run,
+        /migration ledger object: schema drizzle\/two_web_app\/OWNER/,
+      );
+    } finally {
+      // DROP OWNED cannot drop a schema that still holds the ledger.
+      await client.unsafe("ALTER SCHEMA drizzle OWNER TO CURRENT_USER").catch(() => {});
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+for (const grantee of ["two_web_app", "PUBLIC"]) {
+  for (const privilege of ["CREATE", "USAGE"]) {
+    test(`${privilege} on schema drizzle for ${grantee} refuses ledger admission`, async () => {
+      await fixture(async ({ client, run }) => {
+        const created = await ensureRuntimeRole(client);
+        try {
+          await createFixtureLedger(client);
+          assert.equal((await run("plan")).length, journal.entries.length);
+          await client.unsafe(`GRANT ${privilege} ON SCHEMA drizzle TO ${grantee}`);
+          await assertLedgerRefused(
+            client,
+            run,
+            new RegExp(`migration ledger object: schema drizzle/${grantee}/${privilege}`),
+          );
+          await client.unsafe(`REVOKE ${privilege} ON SCHEMA drizzle FROM ${grantee}`);
+          assert.equal((await run("plan")).length, journal.entries.length);
+        } finally {
+          await dropRuntimeRoleIfCreated(client, created);
+        }
+      });
+    });
+  }
+}
+
+for (const [shape, link] of [
+  ["owner via ADMIN-only membership", "WITH ADMIN TRUE, INHERIT FALSE, SET FALSE"],
+  ["CREATE via inherited membership", "WITH INHERIT TRUE"],
+]) {
+  test(`runtime-reachable drizzle schema ${shape} refuses ledger admission`, async () => {
+    await fixture(async ({ client, run }) => {
+      const group = `ledger_schema_${randomUUID().replaceAll("-", "")}`;
+      const created = await ensureRuntimeRole(client);
+      await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+      try {
+        await createFixtureLedger(client);
+        await client.unsafe(
+          shape.startsWith("owner")
+            ? `ALTER SCHEMA drizzle OWNER TO "${group}"`
+            : `GRANT CREATE ON SCHEMA drizzle TO "${group}"`,
+        );
+        // An unrelated schema owner or grantee is benign; only the runtime
+        // link makes the same catalog state prohibited.
+        assert.equal((await run("plan")).length, journal.entries.length);
+        await client.unsafe(`GRANT "${group}" TO two_web_app ${link}`);
+        assert.equal(
+          (await client`select pg_has_role('two_web_app', ${group}, 'MEMBER') as member`)[0].member,
+          true,
+        );
+        await assertLedgerRefused(
+          client,
+          run,
+          new RegExp(
+            `migration ledger object: schema drizzle/${group}/${shape.startsWith("owner") ? "OWNER" : "CREATE"}`,
+          ),
+        );
+        await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+        assert.equal((await run("plan")).length, journal.entries.length);
+      } finally {
+        await client.unsafe(`REVOKE "${group}" FROM two_web_app`).catch(() => {});
+        await client.unsafe("ALTER SCHEMA drizzle OWNER TO CURRENT_USER").catch(() => {});
+        await client.unsafe(`DROP OWNED BY "${group}"`).catch(() => {});
+        await client.unsafe(`DROP ROLE IF EXISTS "${group}"`).catch(() => {});
+        await dropRuntimeRoleIfCreated(client, created);
+      }
+    });
+  });
+}
+
 test("sequence post-default matrix for login, group, and runtime roles", async () => {
   await fixture(async ({ client }) => {
     const suffix = randomUUID().replaceAll("-", "");
@@ -1550,6 +1644,14 @@ assert.deepEqual(state.statements, [
       FROM objects AS c
       JOIN pg_attribute AS a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
       CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
+    UNION ALL
+    SELECT 'schema ' || n.nspname, n.nspowner, 'OWNER', true
+      FROM pg_namespace AS n WHERE n.nspname = 'drizzle'
+    UNION ALL
+    SELECT 'schema ' || n.nspname, acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM pg_namespace AS n
+      CROSS JOIN LATERAL aclexplode(n.nspacl) AS acl
+     WHERE n.nspname = 'drizzle'
   )
   SELECT object_name,
          CASE WHEN grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END AS grantee,
