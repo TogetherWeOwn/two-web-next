@@ -549,8 +549,18 @@ describe("resolveKitEventEdit: rosterHtml is the shared EventRosterSection rende
     const outcome = await resolveKitEventEdit(baseRow.eventKey, {}, depsFor());
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(outcome.view.roster.entries).toEqual([
-      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
-      { member: "Unknown member", status: "waitlisted", answeredAt: "2026-06-01T12:00:00.000Z" },
+      {
+        member: "mod",
+        status: "going",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
+      {
+        member: "Unknown member",
+        status: "waitlisted",
+        waitlistPosition: null,
+        answeredAt: "2026-06-01T12:00:00.000Z",
+      },
     ]);
     expect(typeof outcome.view.rosterHtml).toBe("string");
   });
