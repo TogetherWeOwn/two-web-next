@@ -108,6 +108,39 @@ export async function seedTemplate(sql) {
     insert into profiles (user_id, bio, games, timezone, created_at, updated_at)
     values (${MEMBER_ID}, 'Route-parity fixture', ${sql.json(["Valheim"])}, 'UTC', ${SEEDED_AT}, ${SEEDED_AT})`;
   await insertSessions(sql);
+  await snapshotSeed(sql);
+}
+
+/**
+ * Copy every public table and sequence into `parity_seed` and define
+ * `parity_seed.reset()`, which puts them back. Clones inherit both.
+ */
+async function snapshotSeed(sql) {
+  await sql.unsafe(`
+    create schema parity_seed;
+    create table parity_seed.sequences as
+      select schemaname, sequencename, last_value from pg_sequences where schemaname = 'public';
+    do $$
+    declare t text;
+    begin
+      for t in select tablename from pg_tables where schemaname = 'public' loop
+        execute format('create table parity_seed.%I as table public.%I', t, t);
+      end loop;
+    end $$;
+    create function parity_seed.reset() returns void language plpgsql as $$
+    declare t text; s record;
+    begin
+      -- replica: skip foreign-key and user triggers while the rows go back.
+      set local session_replication_role = replica;
+      for t in select tablename from pg_tables where schemaname = 'public' loop
+        execute format('delete from public.%I', t);
+        execute format('insert into public.%I overriding system value select * from parity_seed.%I', t, t);
+      end loop;
+      for s in select * from parity_seed.sequences loop
+        perform setval(format('%I.%I', s.schemaname, s.sequencename),
+          coalesce(s.last_value, 1), s.last_value is not null);
+      end loop;
+    end $$;`);
 }
 
 async function insertSessions(sql) {
@@ -131,24 +164,14 @@ export async function refreshClone(sql) {
 }
 
 /**
- * Before each identity vector. An authenticated page view rotates the session:
- * it deletes the presented token's row, so without this only the first
- * member/moderator vector of a run would authenticate and every later one
- * would record a guest response.
+ * Before every vector: restore the seeded rows and sequences. Without this a
+ * vector would see what earlier vectors left behind: a rotated (deleted)
+ * session, a queued job that `/up` ages by the database clock, or a profile
+ * or event a signed-in write changed. Each golden then depends only on its
+ * own request, so a candidate that differs on one write cannot shift the
+ * goldens of later routes.
  */
-export async function resetSessions(sql) {
-  await sql`delete from web_session_grace`;
-  await sql`delete from web_sessions`;
-  await insertSessions(sql);
+export async function resetState(sql) {
+  await sql`select parity_seed.reset()`;
   await refreshClone(sql);
-}
-
-/**
- * Before every vector. Signed-in writes enqueue jobs, and `/up` reports the
- * oldest job's age from the database clock, so a job left by an earlier
- * vector would make later bodies depend on wall time and vector order.
- */
-export async function clearQueue(sql) {
-  await sql`delete from queue_failed_jobs`;
-  await sql`delete from queue_jobs`;
 }

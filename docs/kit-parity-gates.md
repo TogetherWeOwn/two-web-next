@@ -164,8 +164,12 @@ differs before its hook runs (trailing-slash 308, method handling, automatic
 - `ci/parity/record.mjs` runs the target Worker under `wrangler dev --local`
   (never `vite dev`) behind `ci/parity/harness.ts`. Each run gets a fresh clone
   of one migrated template database seeded by `ci/parity/fixture.mjs` (the
-  `e2e/seed.mjs` events plus member, moderator and expired sessions). Seeded
-  event timestamps are fixed, because the feeds publish `updated_at`. The
+  `e2e/seed.mjs` events, member and moderator users, one member profile and
+  member, moderator and expired sessions). Seeded timestamps are fixed,
+  because the feeds publish `updated_at`. The template keeps a copy of every
+  table and sequence in a `parity_seed` schema, and `parity_seed.reset()`
+  restores them before each vector, so no golden depends on an earlier
+  vector's writes, session rotation or queued jobs. The
   harness freezes the JS clock at 2026-07-01T12:00:00Z, reseeds
   `crypto.getRandomValues`/`randomUUID` per vector, derives `cf-ray` and the
   throttle client key from the vector id, and answers outbound fetches only

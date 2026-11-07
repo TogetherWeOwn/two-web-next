@@ -23,10 +23,9 @@ import { readWranglerConfig } from "../wrangler-config.mjs";
 import {
   FIXTURE_SECRETS,
   WRONG_QA_TOKEN,
-  clearQueue,
   identityCookies,
   refreshClone,
-  resetSessions,
+  resetState,
   seedTemplate,
 } from "./fixture.mjs";
 import {
@@ -309,8 +308,7 @@ async function recordRun({
     const context = { cookies: await identityCookies(), etags: new Map() };
     const files = new Map();
     for (const vector of vectors) {
-      await clearQueue(clone);
-      if (vector.identity) await resetSessions(clone);
+      await resetState(clone);
       const record = await runVector(port, vector, context, tailLabel);
       const file = files.get(vector.file) ?? {};
       file[vector.id] = record;
