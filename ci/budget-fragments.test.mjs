@@ -192,9 +192,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // and 1220480; 1219584 rejects by 898 and 896).
 // 1222656 admits the pinned Ember migration (both frozen builds 1222251;
 // 1220608 rejects by 1643), with every other fragment unchanged.
+// 1223168 admits the RFC 5892 joiner tables in the shared text rule on top of
+// that (composed build 1222658 over main 5e3bfae8; 1222656 rejects by 2).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
   1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536,
-  1219584, 1220608, 1222656,
+  1219584, 1220608, 1222656, 1223168,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -231,7 +233,7 @@ function assertShippingKitBudget(actual, approvedClient) {
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536, 1219584, 1220608, 1222656`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536, 1219584, 1220608, 1222656, 1223168`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = approvedClient
