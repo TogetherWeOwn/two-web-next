@@ -11,6 +11,7 @@
 // the guarded /admin/events/:key/edit legacy redirect stay Hono-owned, so
 // this model carries no write: UTC carriers, future recurrence propagation
 // and postcommit writeback keep one Hono authority.
+import { jsx } from "hono/jsx/jsx-runtime";
 import { describe, expect, it, vi } from "vitest";
 import type { Db } from "../src/db/index";
 import { isDatabaseUnavailable } from "../src/db/errors";
@@ -20,7 +21,8 @@ import {
   type KitEventEditRosterRow,
   type KitEventEditRow,
 } from "../src/admin/kit-event-edit";
-import { ROSTER_PAGE_SIZE } from "../src/admin/table-list";
+import { EventRosterSection } from "../src/admin/pages/event-form-roster";
+import { parseRosterQuery, ROSTER_PAGE_SIZE } from "../src/admin/table-list";
 
 const db = {} as Db;
 
@@ -251,6 +253,27 @@ describe("resolveKitEventEdit: bounded roster paging", () => {
     }
   });
 
+  it("nulls an unusable roster instant instead of throwing, keeping the row", async () => {
+    const outcome = await resolveKitEventEdit(
+      "EVTPAST01",
+      {},
+      depsFor({
+        list: async () => ({
+          rows: [
+            { username: "mod", status: "going", answeredAt },
+            { username: "broken", status: "going", answeredAt: new Date(Number.NaN) },
+          ],
+          total: 2,
+        }),
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.roster.entries).toEqual([
+      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
+      { member: "broken", status: "going", answeredAt: null },
+    ]);
+  });
+
   it("computes the Hono range line and next-page flag from the filtered total", async () => {
     const outcome = await resolveKitEventEdit(
       "EVTPAST01",
@@ -375,5 +398,116 @@ describe("resolveKitEventEdit: status actions and series note", () => {
     expect(series.seriesNote).toBe(
       "Part of a weekly series. Moving this event moves the not-yet-started occurrences by the same amount.",
     );
+  });
+});
+
+describe("resolveKitEventEdit: rosterHtml is the shared EventRosterSection render", () => {
+  // The Kit page injects view.rosterHtml via {@html}; it must be byte-equal to
+  // what the Hono edit page renders for the same roster, query and total.
+  const honoRoster = (
+    rawQuery: Record<string, string>,
+    list: { rows: KitEventEditRosterRow[]; total: number },
+  ): string =>
+    String(
+      jsx(EventRosterSection, {
+        eventKey: baseRow.eventKey,
+        action: `/admin/events/${baseRow.eventKey}`,
+        roster: list.rows,
+        rosterTotal: list.total,
+        rosterQuery: parseRosterQuery(rawQuery),
+      }),
+    );
+  const rosterHtmlFor = async (
+    rawQuery: Record<string, string>,
+    list: { rows: KitEventEditRosterRow[]; total: number },
+  ): Promise<string> => {
+    const outcome = await resolveKitEventEdit(
+      baseRow.eventKey,
+      rawQuery,
+      depsFor({ list: async () => list }),
+    );
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    return outcome.view.rosterHtml;
+  };
+
+  it("matches the Hono section for valid and invalid answered times", async () => {
+    const list = {
+      rows: [
+        { username: "  mod  ", status: "going", answeredAt },
+        { username: null, status: "waitlisted", answeredAt },
+        { username: "broken", status: "maybe", answeredAt: new Date(Number.NaN) },
+      ],
+      total: 3,
+    };
+    const html = await rosterHtmlFor({}, list);
+    expect(html).toBe(honoRoster({}, list));
+    expect(html).toContain('<time datetime="2026-06-01T12:00:00.000Z">');
+    expect(html).toContain("Unknown member");
+    expect(html.match(/<time\b/g) ?? []).toHaveLength(2);
+  });
+
+  it("escapes username, status and search text exactly like the Hono section", async () => {
+    const list = {
+      rows: [{ username: `<img src=x onerror="a()">&`, status: `<b>going</b>`, answeredAt }],
+      total: 1,
+    };
+    const query = { roster_q: `"><script>alert(1)</script>` };
+    const html = await rosterHtmlFor(query, list);
+    expect(html).toBe(honoRoster(query, list));
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("<b>going</b>");
+    expect(html).toContain("&lt;img");
+    expect(html).toContain("&lt;b&gt;going&lt;/b&gt;");
+  });
+
+  it("matches the Hono section for empty, unmatched-search and past-end states", async () => {
+    const cases: [Record<string, string>, { rows: KitEventEditRosterRow[]; total: number }][] = [
+      [{}, { rows: [], total: 0 }],
+      [
+        { roster_q: "nobody", roster_status: "going" },
+        { rows: [], total: 0 },
+      ],
+      [{ roster_page: "5" }, { rows: [], total: 2 }],
+    ];
+    for (const [query, list] of cases) {
+      const html = await rosterHtmlFor(query, list);
+      expect(html).toBe(honoRoster(query, list));
+      expect(html).toContain('data-testid="roster-empty"');
+    }
+    expect(await rosterHtmlFor({}, { rows: [], total: 0 })).toContain("No RSVPs yet.");
+    expect(await rosterHtmlFor({ roster_q: "nobody" }, { rows: [], total: 0 })).toContain(
+      "No RSVPs match this member search.",
+    );
+    expect(await rosterHtmlFor({ roster_page: "5" }, { rows: [], total: 2 })).toContain(
+      "No RSVPs on this page.",
+    );
+  });
+
+  it("matches the Hono section for recovery links and prev/next paging", async () => {
+    const paged = {
+      rows: baseRoster.rows,
+      total: 3 * ROSTER_PAGE_SIZE,
+    };
+    const query = { roster_page: "2", roster_q: "mod", roster_sort: "status", roster_order: "asc" };
+    const html = await rosterHtmlFor(query, paged);
+    expect(html).toBe(honoRoster(query, paged));
+    expect(html).toContain('rel="prev"');
+    expect(html).toContain('rel="next"');
+    const pastEnd = { rows: [], total: 2 };
+    const recovery = await rosterHtmlFor({ roster_page: "5", roster_q: "mod" }, pastEnd);
+    expect(recovery).toBe(honoRoster({ roster_page: "5", roster_q: "mod" }, pastEnd));
+    expect(recovery).toContain("First page of these responses");
+    expect(recovery).toContain("Clear roster filters");
+  });
+
+  it("keeps the structured roster view unchanged beside the new field", async () => {
+    const outcome = await resolveKitEventEdit(baseRow.eventKey, {}, depsFor());
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.roster.entries).toEqual([
+      { member: "mod", status: "going", answeredAt: "2026-06-01T12:00:00.000Z" },
+      { member: "Unknown member", status: "waitlisted", answeredAt: "2026-06-01T12:00:00.000Z" },
+    ]);
+    expect(typeof outcome.view.rosterHtml).toBe("string");
   });
 });

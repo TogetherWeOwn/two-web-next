@@ -113,6 +113,22 @@ describe("loadActivityLogPage: shared filters, paging, instants, headers", () =>
     expect(setHeaders).toHaveBeenCalledWith({ "cache-control": "private, no-store" });
   });
 
+  it("nulls an unusable instant instead of throwing, keeping the row", async () => {
+    const out = await loadActivityLogPage({
+      env,
+      subjectParam: null,
+      causerParam: null,
+      pageParam: null,
+      setHeaders: headersSpy(),
+      dbForFn: async () => db,
+      listFn: async () => [row({ id: 1 }), row({ id: 2, createdAt: new Date(Number.NaN) })],
+    });
+    expect(out.rows).toEqual([
+      expect.objectContaining({ id: 1, createdAt: "2026-10-01T12:00:00.000Z" }),
+      expect.objectContaining({ id: 2, createdAt: null }),
+    ]);
+  });
+
   it("reports no next page at the exact page-size boundary", async () => {
     const out = await loadActivityLogPage({
       env,
@@ -394,6 +410,14 @@ describe("Kit activity-log page: Hono markup contract, no island, no payload", (
     for (const needle of ["activityLogEmptyText", "activityLogUrl", "formatActivityCauser"]) {
       expect(page()).toContain(needle);
     }
+  });
+
+  it("labels instants in UTC like Hono and keeps bad rows visible", () => {
+    expect(page()).toContain("when (UTC)");
+    expect(page()).toContain("formatAdminTime");
+    expect(page()).toContain('class="admin-chronology"');
+    expect(page()).toContain("<time datetime={time.iso}>{time.label}</time>");
+    expect(page()).toContain("{:else}{time.label}");
   });
 
   it("renders inside the admin chrome with its own title and never indexes", () => {
