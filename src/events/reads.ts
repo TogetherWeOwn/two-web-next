@@ -1120,29 +1120,60 @@ function warnEgressCapacity(surface: "sitemap" | "feed", returned: number): void
   }
 }
 
+/**
+ * Stored event text has no schema length limit, so collection egress admits
+ * each text column in SQL up to a UTF-8 byte budget. An oversized value never
+ * leaves the database: its row is refused whole (never truncated), keeps its
+ * slot under the row cap, and is counted in one warning per read. The event
+ * key budget is the bot write maximum (64 code points) at 4 bytes each.
+ * Operator steps: docs/runbook-logs.md, "Export omission warnings".
+ */
+export const EGRESS_EVENT_KEY_MAX_BYTES = 256;
+
+function warnEgressTextRefusal(surface: "sitemap" | "feed", skipped: number): void {
+  if (skipped > 0) {
+    console.warn("Event egress read refused oversized stored text.", {
+      surface,
+      skipped,
+      code: "stored-text-oversized",
+    });
+  }
+}
+
 export async function sitemapEvents(
   db: Db,
 ): Promise<{ key: string; status: "published"; updatedAt: string | null }[]> {
+  // Only the key and the guard dates are fetched. `event_key` is NOT NULL,
+  // so a NULL here means the stored key exceeded its byte budget.
   const rows = await db
-    .select()
+    .select({
+      eventKey: sql<
+        string | null
+      >`case when octet_length(${events.eventKey}) <= ${EGRESS_EVENT_KEY_MAX_BYTES} then ${events.eventKey} end`,
+      startsAt: events.startsAt,
+      endsAt: events.endsAt,
+      updatedAt: events.updatedAt,
+    })
     .from(events)
     .where(eq(events.status, "published"))
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
   warnEgressCapacity("sitemap", rows.length);
+  const admitted = rows.filter((r): r is typeof r & { eventKey: string } => r.eventKey !== null);
+  warnEgressTextRefusal("sitemap", rows.length - admitted.length);
   // One poison row (unrenderable window, or an updatedAt outside the JS Date
   // range) must not empty the sitemap via the route's static fallback:
   // skip it in JS and log the count. The guard lives in JS (not SQL) because
   // SQL cannot see a timestamp that is finite in PostgreSQL but out of range
   // in JS. A DB failure still rejects here; the route degrades to the static
   // entries instead.
-  const renderable = rows.filter(
+  const renderable = admitted.filter(
     (r) =>
       isRenderableEventWindow(r) &&
       r.updatedAt instanceof Date &&
       Number.isFinite(r.updatedAt.getTime()),
   );
-  const skipped = rows.length - renderable.length;
+  const skipped = admitted.length - renderable.length;
   if (skipped > 0) {
     console.warn("sitemapEvents skipped unrenderable rows.", { skipped });
   }
