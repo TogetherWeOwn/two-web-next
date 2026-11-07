@@ -318,6 +318,25 @@ for (const target of targets) {
       expect(body).not.toContain("Sign out");
     });
 
+    // Both renderers ship the Logo/Icon 1 head links: SVG favicon first, then
+    // the PNG fallback and the touch icon, matched on tag attributes so the
+    // Hono JSX and Kit app.html spellings both qualify.
+    test("head declares the SVG favicon with PNG fallbacks", async () => {
+      const response = await api(target).get("/events/past");
+      expect(response.status()).toBe(200);
+      const body = await response.text();
+      const links = body.match(/<link\b[^>]*>/g) ?? [];
+      const find = (rel: string, href: string) =>
+        links.findIndex((tag) => tag.includes(`rel="${rel}"`) && tag.includes(`href="${href}"`));
+      const svg = find("icon", "/favicon.svg");
+      const png = find("icon", "/icons/icon-192.png");
+      expect(svg, `${target.name}: SVG favicon link`).toBeGreaterThan(-1);
+      expect(links[svg]).toContain('type="image/svg+xml"');
+      expect(png, `${target.name}: PNG fallback link`).toBeGreaterThan(svg);
+      expect(links[png]).toContain('type="image/png"');
+      expect(find("apple-touch-icon", "/icons/apple-touch-icon.png")).toBeGreaterThan(-1);
+    });
+
     test("page two renders the out-of-range refusal", async () => {
       const response = await api(target).get("/events/past?page=2");
       expect(response.status()).toBe(200);
@@ -1003,6 +1022,126 @@ for (const target of targets) {
       expect(Object.keys(body).sort()).toEqual(["error", "request_id"]);
       expect(response.headers()["content-security-policy"] ?? "").toContain("default-src 'self'");
     });
+  });
+
+  test(`${target.name}: brand header preserves guest and member chrome at narrow widths`, async ({
+    browser,
+    playwright,
+  }) => {
+    test.setTimeout(120_000);
+    const states = [
+      ...(target.name === "hono"
+        ? [
+            { name: "guest-home", path: "/", member: false },
+            { name: "guest-about", path: "/about", member: false },
+            { name: "guest-join", path: "/join", member: false },
+          ]
+        : []),
+      { name: "guest-events", path: "/events", member: false },
+      { name: "member-board", path: "/leaderboards/members", member: true },
+    ];
+    for (const state of states) {
+      const hono = targets.find((candidate) => candidate.name === "hono")!;
+      if (state.member) {
+        // beforeAll leaves Hono's jar guest-clean. Populate it even when this
+        // capture runs alone, then re-sign its freshest cookie for the target.
+        const ready = await api(hono).get("/leaderboards/members", {
+          headers: { cookie: await memberCookie(hono) },
+        });
+        expect(ready.status(), "issued member session reaches the board").toBe(200);
+      }
+      const cookie = state.member ? await memberCookie(target) : null;
+      const context = await browser.newContext({
+        baseURL: target.origin,
+        ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+        // Match the existing member-board visual journey: preserve the issued
+        // attributes instead of deriving a secure __Host cookie from Kit's HTTP URL.
+        storageState: {
+          cookies: cookie
+            ? (await api(hono).storageState()).cookies
+                .filter((session) => session.name === "__Host-two_session")
+                .map((session) => ({
+                  ...session,
+                  domain: new URL(target.origin).hostname,
+                  value: cookie.slice(cookie.indexOf("=") + 1),
+                }))
+            : [],
+          origins: [],
+        },
+      });
+      try {
+        await context.route("**/*", (route) => {
+          const url = new URL(route.request().url());
+          const allowed = url.origin === "https://localhost:8787" || url.origin === KIT_ORIGIN;
+          return allowed ? route.continue() : route.abort("blockedbyclient");
+        });
+        if (state.member) {
+          expect(
+            (await context.cookies()).filter((session) => session.name === "__Host-two_session"),
+            "one issued member session in the browser jar",
+          ).toHaveLength(1);
+        }
+        const page = await context.newPage();
+        for (const width of [360, 390, 768, 1280]) {
+          await page.setViewportSize({ width, height: width === 1280 ? 800 : 844 });
+          const response = await page.goto(state.path);
+          expect(response?.status()).toBe(200);
+          if (target.name === "kit") {
+            expect(response?.headers()["x-two-renderer"] ?? null).toBe(
+              expectedKitMarker(state.path),
+            );
+          }
+          await page.waitForLoadState("networkidle");
+          await page.screenshot({
+            path: test.info().outputPath(`brand-${target.name}-${state.name}-${width}.png`),
+            animations: "disabled",
+            caret: "hide",
+          });
+          const logo = await page.locator(".brand img").boundingBox();
+          expect(logo?.width).toBe(width <= 480 ? 50 : 180);
+          expect(logo?.height).toBe(50);
+          const chrome = (await page.evaluate(`(() => {
+            const account = document.querySelector('.header-account');
+            const button = account.querySelector('.btn');
+            const who = account.querySelector('.who');
+            const range = document.createRange();
+            if (button) range.selectNodeContents(button);
+            return {
+              overflow: document.documentElement.scrollWidth > window.innerWidth,
+              buttonLines: button ? new Set([...range.getClientRects()].map(r => r.top)).size : 0,
+              nameClipped: who ? who.scrollWidth > who.clientWidth : false
+            };
+          })()`)) as { overflow: boolean; buttonLines: number; nameClipped: boolean };
+          expect(chrome.overflow, `${state.name} @ ${width}: no horizontal overflow`).toBe(false);
+          if (state.member) {
+            await expect(page.locator(".header-account .who")).toHaveText("QA Member");
+            expect(chrome.nameClipped, `${state.name} @ ${width}: full member name`).toBe(false);
+          } else {
+            expect(chrome.buttonLines, `${state.name} @ ${width}: single-line action`).toBe(1);
+          }
+        }
+      } finally {
+        try {
+          if (state.member && target.name === "hono") {
+            // Page reads rotate the bearer. Keep the browser's latest jar for
+            // later parity tests and RSVP teardown before closing the browser.
+            const storageState = await context.storageState();
+            expect(
+              storageState.cookies.some((cookie) => cookie.name === "__Host-two_session"),
+            ).toBe(true);
+            const replacement = await playwright.request.newContext({
+              baseURL: target.origin,
+              ignoreHTTPSErrors: target.ignoreHTTPSErrors,
+              storageState,
+            });
+            await api(target).dispose();
+            contexts.set(target.name, replacement);
+          }
+        } finally {
+          await context.close();
+        }
+      }
+    }
   });
 
   for (const viewport of PARITY_VIEWPORTS) {
