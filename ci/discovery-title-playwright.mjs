@@ -21,6 +21,8 @@ export default defineConfig({
       command:
         "node_modules/.bin/wrangler dev --config e2e/wrangler.jsonc --local --local-protocol https --ip localhost --port 8787",
       cwd,
+      // The TSX preload belongs to the capture worker, not Wrangler/esbuild workers.
+      env: { NODE_OPTIONS: "" },
       url: "https://localhost:8787/up",
       ignoreHTTPSErrors: true,
       reuseExistingServer: false,
@@ -29,6 +31,8 @@ export default defineConfig({
     {
       command: "node ci/kit-worker-dev.mjs",
       cwd,
+      // The TSX preload belongs to the capture worker, not Wrangler/esbuild workers.
+      env: { NODE_OPTIONS: "" },
       url: "http://127.0.0.1:8788/favicon.ico",
       reuseExistingServer: false,
       timeout: budget.startup.maxMs,
