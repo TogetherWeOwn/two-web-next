@@ -391,7 +391,7 @@ jobs:
         run: |
           mkdir -p artifacts/a11y
           node --import tsx --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-native-share.tap ci/event-native-share-browser.test.mjs
-          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-native-share.tap "Native event sharing" 34
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-native-share.tap "Native event sharing" 44
       - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
         env:
           KIT_ERROR_SHELL_BROWSER_TESTS: "true"

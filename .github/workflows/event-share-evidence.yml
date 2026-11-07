@@ -1,0 +1,68 @@
+name: Event share evidence
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - .github/workflows/event-share-evidence.yml
+      - assets/islands/copy-link.js
+      - public/event-theme.css
+      - public/islands/copy-link.js
+      - src/events/pages-detail.tsx
+      - web/src/lib/EventDetail.svelte
+      - test/event-share-honesty-acceptance.test.ts
+      - ci/event-native-share-browser.test.mjs
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        phase: [before, after]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - name: Retain the capture recipe from the reviewed head
+        run: cp ci/event-native-share-browser.test.mjs "$RUNNER_TEMP/event-share-capture.mjs"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ matrix.phase == 'before' && github.event.pull_request.base.sha || github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+          cache: npm
+      - name: Install locked dependencies without lifecycle hooks
+        run: |
+          npm ci --include=dev --ignore-scripts --no-audit --no-fund
+          npm ci --prefix web --include=dev --ignore-scripts --no-audit --no-fund
+          node ci/build-leaf-css.mjs
+          npx playwright install --with-deps chromium
+      - name: Capture both renderers and all progressive-enhancement states
+        env:
+          EVENT_NATIVE_SHARE_EVIDENCE_DIR: artifacts/event-share
+          PHASE: ${{ matrix.phase }}
+        run: |
+          cp "$RUNNER_TEMP/event-share-capture.mjs" ci/event-native-share-browser.test.mjs
+          git rev-parse HEAD > artifacts-revision.txt
+          if [ "$PHASE" = after ]; then
+            npm run build:assets
+            git diff --exit-code -- public/islands/copy-link.js
+            npx vitest run test/event-share-honesty-acceptance.test.ts test/event-page.test.ts test/event-page-share.test.ts test/event-copy-link-fallback.test.ts test/event-navigation.test.ts test/event-theme.test.ts
+            node --import tsx --test ci/event-native-share-browser.test.mjs
+          else
+            node --import tsx --test --test-name-pattern='capture current fixture' ci/event-native-share-browser.test.mjs
+          fi
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: event-share-${{ matrix.phase }}
+          path: |
+            artifacts/event-share/
+            artifacts-revision.txt
+          if-no-files-found: error
+          retention-days: 14
