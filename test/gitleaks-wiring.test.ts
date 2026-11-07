@@ -30,7 +30,9 @@ describe("gitleaks fixture policy", () => {
     const entries = policy
       .split(/\r?\n\[\[allowlists\]\]\r?\n/)
       .map((entry) => entry.trim())
-      .filter((entry) => entry.includes("Synthetic ULID event key in the render-clock route fixture"));
+      .filter((entry) =>
+        entry.includes("Synthetic ULID event key in the render-clock route fixture"),
+      );
     expect(entries).toEqual([
       String.raw`description = "Synthetic ULID event key in the render-clock route fixture (fakeDb only), not a credential"
 targetRules = ["generic-api-key"]
