@@ -242,7 +242,10 @@ describe("summarizeProfile", () => {
     assert.equal(s[METRIC], 184.281);
   });
   test("rejects sampled time exceeding window by more than 1ms", () => {
-    const p = work(50000);
+    const p = profile([
+      [5, 1000],
+      [5, 50000],
+    ]);
     p.endTime -= 1001;
     assert.throws(() => summarizeProfile(p), {
       message: "Invalid CPU profile sample: timestamp outside profile window at sample 1",
@@ -282,9 +285,9 @@ describe("summarizeProfile", () => {
     p.endTime += 15393;
     const before = clone(p);
     assert.deepEqual(summarizeProfile(p), {
-      [METRIC]: 97.998,
+      [METRIC]: 97.996,
       sampledMs: 97.998,
-      idleMs: 0,
+      idleMs: 0.002,
       gcMs: 1.998,
       windowMs: 113.391,
       unsampledMs: 15.393,
@@ -300,7 +303,7 @@ describe("summarizeProfile", () => {
     p.timeDeltas[2] = 0;
     p.samples[2] = 3;
     // The final reversal leaves the last raw timestamp below the sorted maximum.
-    p.endTime += 2;
+    p.endTime = p.startTime + p.timeDeltas.reduce((sum, delta) => sum + delta, 0) + 2;
     const s = summarizeProfile(p);
     assert.equal(s.sampledMs, 193.996);
     assert.equal(s.idleMs, 1.998);
