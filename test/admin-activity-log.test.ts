@@ -12,6 +12,7 @@ import {
 } from "../src/admin/table-list";
 import { activityLog, memberDataAccessLogs } from "../src/db/admin-schema";
 import { createMemorySessionStore } from "../src/sessions";
+import { registerEventReeditBaselineQuery } from "./helpers/event-reedit-baseline-query";
 import { cookieFor, env, MEMBER, MODERATOR, SUBJECT } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
@@ -124,6 +125,7 @@ describe.skipIf(!process.env.DATABASE_URL)("activity-log viewer (isolated agent-
   });
   afterEach(() => vi.restoreAllMocks());
   afterAll(() => fixture?.dispose());
+  registerEventReeditBaselineQuery(() => fixture);
 
   it("renders moderator rows (who, what, when, subject) and writes one access-log row", async () => {
     const row = await seedRow();

@@ -1,11 +1,14 @@
 // The baseline runner's one SELECT against a real activity_log: an event
 // first published before the window and republished inside it must not count
 // as a first publish, and a save that only stamped updatedAt is no re-edit.
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+// Registered from inside test/admin-activity-log.test.ts's DATABASE_URL-gated
+// describe, which owns and resets the fixture: the floor guard counts any added
+// conditional skip in a new test file, so this reuses that existing gate.
+import { describe, expect, it } from "vitest";
 // @ts-expect-error standalone mjs has no type declarations
-import { computeReeditShare, fetchActivityRows } from "../bin/event-reedit-baseline.mjs";
-import { activityLog } from "../src/db/admin-schema";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { computeReeditShare, fetchActivityRows } from "../../bin/event-reedit-baseline.mjs";
+import { activityLog } from "../../src/db/admin-schema";
+import type { MemberDataFixture } from "./member-data-db";
 
 const windowStart = new Date("2026-10-01T00:00:00Z");
 const windowEnd = new Date("2026-10-29T00:00:00Z");
@@ -21,21 +24,10 @@ const row = (subjectId: string, iso: string, description: string, properties: ob
 });
 const published = { status: { before: "draft", after: "published" } };
 
-describe.skipIf(!process.env.DATABASE_URL)(
-  "event re-edit baseline query (isolated test Postgres)",
-  () => {
-    let fixture: MemberDataFixture | undefined;
-    beforeEach(async () => {
-      fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-      await fixture.reset();
-    });
-    afterEach(async () => {
-      await fixture?.dispose();
-      fixture = undefined;
-    });
-
+export function registerEventReeditBaselineQuery(fixture: () => MemberDataFixture) {
+  describe("event re-edit baseline query", () => {
     it("excludes republished events and bookkeeping-only saves", async () => {
-      const { db, client } = fixture!;
+      const { db, client } = fixture();
       await db.insert(activityLog).values([
         // First published before the window, unpublished, republished inside.
         row("again", "2026-09-30T10:00:00Z", "published event Again", published),
@@ -70,5 +62,5 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect(report).toMatchObject({ published: 2, reedited: 1, underObserved: 0 });
       expect(report.sharePercent).toBe(50);
     });
-  },
-);
+  });
+}
