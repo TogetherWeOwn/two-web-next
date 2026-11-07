@@ -170,10 +170,14 @@ describe("Kit event-edit page contract", () => {
   });
 
   it("keeps the Hono roster section: search, sort, range, table and paging", async () => {
-    const html = await rosterHtmlFor({ roster_page: "2" }, { rows: [rosterRow], total: 150 });
+    const html = await rosterHtmlFor(
+      { roster_page: "2" },
+      { rows: Array.from({ length: 100 }, () => rosterRow), total: 250 },
+    );
     expect(html).toContain('data-testid="rsvp-roster"');
     expect(html).toContain('aria-label="RSVP roster"');
-    expect(html).toContain("RSVPs (150)");
+    expect(html).toContain("RSVPs (250)");
+    expect(html).toContain("Showing 101-200 of 250 responses");
     expect(html).toContain("Save event changes before searching or sorting the roster.");
     expect(html).toContain('data-testid="roster-range"');
     expect(html).toContain('name="roster_q"');
@@ -184,6 +188,13 @@ describe("Kit event-edit page contract", () => {
     expect(html).toContain('aria-label="RSVP roster pages"');
     expect(html).toContain('rel="prev"');
     expect(html).toContain('rel="next"');
+    const lastPage = await rosterHtmlFor(
+      { roster_page: "2" },
+      { rows: Array.from({ length: 50 }, () => rosterRow), total: 150 },
+    );
+    expect(lastPage).toContain("Showing 101-150 of 150 responses");
+    expect(lastPage).toContain('rel="prev"');
+    expect(lastPage).not.toContain('rel="next"');
     const empty = await rosterHtmlFor({}, { rows: [], total: 0 });
     expect(empty).toContain('data-testid="roster-empty"');
   });
