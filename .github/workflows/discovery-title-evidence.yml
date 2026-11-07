@@ -1,0 +1,126 @@
+name: Discovery title evidence
+on:
+  pull_request:
+    paths:
+      - .github/workflows/discovery-title-evidence.yml
+      - ci/discovery-title-*
+permissions:
+  contents: read
+concurrency:
+  group: discovery-title-evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+jobs:
+  capture:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: agent_test
+          POSTGRES_DB: two_web_next
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_test -d two_web_next"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://agent_test@127.0.0.1:5432/two_web_next
+      WRANGLER_SEND_METRICS: "false"
+      CLOUDFLARE_LOAD_DEV_VARS_FROM_DOT_ENV: "false"
+      CLOUDFLARE_INCLUDE_PROCESS_ENV: "false"
+      npm_config_ignore_scripts: "true"
+      npm_config_min_release_age: "3"
+    defaults:
+      run:
+        working-directory: .
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: b04aa9823e1a87c04284ea8fc20c63099338ac79
+          path: .capture-after
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Verify frozen public head and compute true merge base
+        id: source
+        run: |
+          set -euo pipefail
+          expected=b04aa9823e1a87c04284ea8fc20c63099338ac79
+          test "$(git -C .capture-after ls-remote origin refs/heads/feat/discovery-page-titles | cut -f1)" = "$expected"
+          test "$(git -C .capture-after rev-parse HEAD)" = "$expected"
+          before=$(git -C .capture-after merge-base origin/main "$expected")
+          printf 'before=%s\n' "$before" >> "$GITHUB_OUTPUT"
+          mkdir discovery-title-evidence
+          BEFORE_SHA="$before" node --input-type=module <<'JS'
+          import { execFileSync } from 'node:child_process';
+          import { writeFileSync } from 'node:fs';
+          const sha = (cwd) => execFileSync('git', ['rev-parse', 'HEAD'], { cwd, encoding: 'utf8' }).trim();
+          writeFileSync('discovery-title-evidence/provenance.json', JSON.stringify({
+            captureToolSha: sha('.'), before: process.env.BEFORE_SHA, after: sha('.capture-after'),
+            runUrl: `${process.env.GITHUB_SERVER_URL}/${process.env.GITHUB_REPOSITORY}/actions/runs/${process.env.GITHUB_RUN_ID}`,
+            runner: `${process.env.ImageOS}/${process.env.ImageVersion}`, clock: '2026-04-01T00:00:00Z'
+          }, null, 2));
+          JS
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ steps.source.outputs.before }}
+          path: .capture-before
+          persist-credentials: false
+      - name: Install locked tool and app dependencies without hooks
+        run: |
+          set -euo pipefail
+          npm --version
+          for tree in . .capture-before .capture-after; do
+            npm ci --prefix "$tree" --include=dev --no-audit --no-fund
+            npm ci --prefix "$tree/web" --include=dev --no-audit --no-fund
+            (cd "$tree" && node ci/build-leaf-css.mjs)
+          done
+          npx --no-install playwright install --with-deps chromium
+          node --test ci/discovery-title-evidence.test.mjs
+      - name: Seed only the disposable service
+        run: |
+          set -euo pipefail
+          npm run db:migrate
+          node e2e/seed.mjs
+          node ci/discovery-title-evidence.mjs fixtures
+      - name: Build both app identities
+        run: |
+          set -euo pipefail
+          for identity in before after; do
+            (cd ".capture-$identity" && node e2e/prepare.mjs && npm run build --prefix web)
+          done
+      - name: Capture merge base with the reviewed tool
+        run: CAPTURE_IDENTITY=before CAPTURE_APP_ROOT="$GITHUB_WORKSPACE/.capture-before" NODE_OPTIONS=--import=tsx TZ=America/Los_Angeles timeout --kill-after=10s 8m npx --no-install playwright test --config ci/discovery-title-playwright.mjs
+      - name: Capture frozen product head with the same tool
+        if: always()
+        run: CAPTURE_IDENTITY=after CAPTURE_APP_ROOT="$GITHUB_WORKSPACE/.capture-after" NODE_OPTIONS=--import=tsx TZ=America/Los_Angeles timeout --kill-after=10s 8m npx --no-install playwright test --config ci/discovery-title-playwright.mjs
+      - name: Assert both source trees remain unpatched
+        if: always()
+        run: |
+          git -C .capture-before diff --exit-code
+          git -C .capture-after diff --exit-code
+      - name: Validate and summarize even partial captures
+        if: always()
+        run: node ci/discovery-title-evidence.mjs verify
+      - name: Remove evidence-only rows and ephemeral material
+        if: always()
+        run: |
+          node ci/discovery-title-evidence.mjs cleanup
+          rm -f .capture-before/e2e/.dev.vars .capture-after/e2e/.dev.vars
+      - name: Upload only evidence, never runtime configs or logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: discovery-title-evidence-${{ github.event.pull_request.head.sha }}
+          path: discovery-title-evidence/
+          if-no-files-found: error
+          retention-days: 14
