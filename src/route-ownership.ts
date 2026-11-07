@@ -333,6 +333,29 @@ export function stagingManifestFor(
   });
 }
 
+// Production must not inherit preview's enabled manifest, even if rollout
+// variables are missing. Only canonical production configuration may opt into
+// the same reviewed families as staging; malformed production URLs fail closed.
+export function productionManifestFor(env: {
+  APP_URL?: string;
+  KIT_ROUTE_ARCHIVE?: string;
+  KIT_ROUTE_STATIC?: string;
+}): OwnedRoute[] | undefined {
+  const productionUrl = "https://togetherweown.com";
+  let app: URL;
+  try {
+    app = new URL(env.APP_URL ?? "");
+  } catch {
+    return undefined;
+  }
+  if (app.hostname !== new URL(productionUrl).hostname) return undefined;
+  return stagingManifestFor({
+    APP_URL: env.APP_URL === productionUrl ? STAGING_APP_URL : "",
+    KIT_ROUTE_ARCHIVE: env.KIT_ROUTE_ARCHIVE ?? "false",
+    KIT_ROUTE_STATIC: env.KIT_ROUTE_STATIC ?? "false",
+  });
+}
+
 // Response header set only on the Kit-rendered branch of the hook, so the
 // preview parity check and worker e2e can prove which renderer answered.
 // Hono responses (honoFetch or the catch-all fallback) never carry it.
@@ -371,15 +394,15 @@ function normalizePath(path: string): string | null {
   // An encoded data suffix (%5F is "_") decodes into the suffix; strip again
   // so /events/past/%5F%5Fdata.json follows its page like the literal form.
   const base = decoded.endsWith(DATA_SUFFIX) ? decoded.slice(0, -DATA_SUFFIX.length) : decoded;
-  let out = base;
-  while (out.length > 1 && out.endsWith("/")) out = out.slice(0, -1);
-  return out || "/";
+  // Hono freezes trailing-slash variants as distinct paths, usually branded
+  // 404s. Never turn one into a native page (or let Kit redirect it pre-hook).
+  if (base.length > 1 && base.endsWith("/")) return null;
+  return base || "/";
 }
 
 function isReserved(path: string): boolean {
   if (RESERVED_EXACT.has(path)) return true;
-  // The bare prefix counts too: trailing-slash normalization turns "/api/"
-  // into "/api", which must not escape the reservation.
+  // The bare prefix counts too; neither it nor any descendant can be claimed.
   return RESERVED_PREFIXES.some(
     (prefix) => path === prefix.slice(0, -1) || path.startsWith(prefix),
   );
@@ -440,8 +463,12 @@ export function resolveRouteOwner(
 
 // Hook entry point: pure function of method + path. Reads nothing else, so the
 // body is still unread and the URL (query included) is intact for the owner.
-export function decideRoute(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST) {
-  return enabledRouteFor({ method: request.method, path: new URL(request.url).pathname }, manifest);
+export function decideRoute(
+  request: Request,
+  manifest: OwnedRoute[] = ROUTE_MANIFEST,
+  url: URL = new URL(request.url),
+) {
+  return enabledRouteFor({ method: request.method, path: url.pathname }, manifest);
 }
 
 export function decideOwner(request: Request, manifest: OwnedRoute[] = ROUTE_MANIFEST): RouteOwner {
@@ -674,11 +701,11 @@ function decodeTwinPath(path: string): string {
   }
 }
 
-export function isSameOriginAllowed(request: Request, appUrl: string): boolean {
+export function isSameOriginAllowed(request: Request, appUrl: string, url?: URL): boolean {
   const method = request.method.toUpperCase();
   let path: string;
   try {
-    path = decodeTwinPath(new URL(request.url).pathname);
+    path = decodeTwinPath((url ?? new URL(request.url)).pathname);
   } catch {
     return false;
   }
@@ -853,12 +880,18 @@ export async function dispatchHookRequest(
         KIT_PARITY_FIXTURE_MEMBER_BOARD: deps.fixtureMemberBoard ? "true" : undefined,
         KIT_PARITY_FIXTURE_EVENT_DETAIL: deps.fixtureEventDetail ? "true" : undefined,
       }) ??
+      productionManifestFor({
+        APP_URL: deps.appUrl,
+        KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
+        KIT_ROUTE_STATIC: deps.kitRouteStatic,
+      }) ??
       stagingManifestFor({
         APP_URL: deps.appUrl,
         KIT_ROUTE_ARCHIVE: deps.kitRouteArchive,
         KIT_ROUTE_STATIC: deps.kitRouteStatic,
       }) ??
       ROUTE_MANIFEST,
+    event.url,
   );
   if (!route) {
     return deps.honoFetch(event.request);
@@ -876,7 +909,7 @@ export async function dispatchHookRequest(
   // exact APP_URL Origin (or the Sec-Fetch-Site fallback when Origin is
   // absent), with only the documented machine exemptions. Refused before the
   // session bridge and before resolve, body unread, hardened like Hono.
-  if (!isSameOriginAllowed(event.request, deps.appUrl)) {
+  if (!isSameOriginAllowed(event.request, deps.appUrl, event.url)) {
     const refused = sameOriginRefusal(event, deps.appUrl, deps.featuredImageHosts);
     refused.headers.set("x-request-id", requestId);
     return refused;
