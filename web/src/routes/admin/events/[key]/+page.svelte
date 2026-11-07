@@ -1,6 +1,5 @@
 <script lang="ts">
 import AdminShell from "#lib/AdminShell.svelte";
-import { formatAdminTime } from "../../../../../../src/admin/chronology";
 import { eventValidationSummary } from "../../../../../../src/admin/form-errors";
 import type { PageProps } from "./$types";
 
@@ -20,10 +19,10 @@ import type { PageProps } from "./$types";
 // text-limit and editor islands enhance it when JavaScript runs. There is
 // deliberately no removal affordance anywhere on this resource, and this
 // port adds none: the guarded /admin/events/:key/edit legacy redirect stays
-// Hono-owned too. The pause review arrives as pre-rendered server HTML via
-// load data (the same src/admin/rsvp-review.ts renderer Hono mirrors),
-// injected via {@html}: inlined literals or a shared component would breach
-// the client gzip and file-count ceilings. The parity test fails on drift.
+// Hono-owned too. The pause review and read-only roster arrive as escaped
+// server HTML via load data, using the same renderers as Hono. Injecting them
+// via {@html} avoids duplicating their markup in the Kit bundles. Native GET
+// roster controls need no client handlers; the parity test fails on drift.
 let { data }: PageProps = $props();
 const view = $derived(data.view);
 const values = $derived(view.values ?? {});
@@ -31,7 +30,6 @@ const errors = $derived(view.errors ?? {});
 const hasErrors = $derived(view.hasErrors ?? Object.keys(errors).length > 0);
 const val = (name: string) => values[name] ?? "";
 const timezoneVal = $derived(val("timezone") || "Europe/London");
-const roster = $derived(view.roster);
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
 const textLimitsIsland =
   '<script type="module" src="/islands/admin-event-text-limits.js"></' + "script>";
@@ -245,91 +243,7 @@ const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "
       {/if}
     </div>
   </section>
-  <section id="rsvp-roster" aria-label="RSVP roster" data-testid="rsvp-roster">
-    <h2>RSVPs ({roster.total})</h2>
-    <p class="hint">Save event changes before searching or sorting the roster.</p>
-    <p class="hint">Answered shows the latest response update in UTC, not the original waitlist join time.</p>
-    <p data-testid="roster-range">
-      {roster.rangeText}
-    </p>
-    <form method="get" action={roster.searchAction} class="filters">
-      <input type="hidden" name="roster_sort" value={roster.query.sort} />
-      <input type="hidden" name="roster_order" value={roster.query.order} />
-      <div class="field">
-        <label for="roster-status">Answer status</label>
-        <select id="roster-status" name="roster_status">
-          {#each roster.statusOptions as o (o.value)}
-            <option value={o.value} selected={o.selected}>{o.label}</option>
-          {/each}
-        </select>
-      </div>
-      <div class="field">
-        <label for="roster-q">Search members</label>
-        <input id="roster-q" name="roster_q" type="search" value={roster.query.q} />
-      </div>
-      <div class="field">
-        <button type="submit" class="btn">Search</button>
-      </div>
-    </form>
-    <p id="roster-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>
-    <!-- Keyboard-scroll parity with the Hono panel (test/admin-table-scroll-parity.test.ts):
-      the labelled roster region stays Tab-focusable so keyboard users can arrow-scroll
-      the wide roster, per axe scrollable-region-focusable. The compiler cannot tell a
-      labelled scroll region from a static div, hence the scoped ignore. -->
-    <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
-    <div
-      class="admin-table-scroll"
-      role="region"
-      aria-label="RSVP roster list"
-      aria-describedby="roster-scroll-hint"
-      tabindex={0}
-      data-testid="roster-table-scroll"
-    >
-      <table class="admin-table" data-testid="roster-table">
-        <thead>
-          <tr>
-            <th scope="col">Member</th>
-            {#each roster.sortHeaders as h (h.key)}
-              <th scope="col" aria-sort={h.ariaSort}>
-                <a href={h.url} aria-label={h.linkLabel}>{h.label}{h.marker}</a>
-              </th>
-            {/each}
-          </tr>
-        </thead>
-        <tbody>
-          {#if roster.entries.length === 0}
-            <tr>
-              <td colspan={3} data-testid="roster-empty">{roster.emptyText}</td>
-            </tr>
-          {:else}
-            {#each roster.entries as r, i (`${r.answeredAt}-${i}`)}
-              {@const time = formatAdminTime(r.answeredAt)}
-              <tr>
-                <td>{r.member}</td>
-                <td>{r.status}</td>
-                <td class="admin-chronology">{#if time.iso}<time datetime={time.iso}>{time.label}</time>{:else}{time.label}{/if}</td>
-              </tr>
-            {/each}
-          {/if}
-        </tbody>
-      </table>
-    </div>
-    {#if roster.firstUrl || roster.clearUrl}
-      <p class="actions">
-        {#if roster.firstUrl}<a href={roster.firstUrl}>First page of these responses</a>{/if}
-        {#if roster.clearUrl}<a href={roster.clearUrl}>Clear roster filters</a>{/if}
-      </p>
-    {/if}
-    <nav aria-label="RSVP roster pages" class="actions">
-      {#if roster.hasPrev}
-        <a rel="prev" href={roster.prevUrl}>Previous</a>
-      {/if}
-      <span>Page {roster.query.page}</span>
-      {#if roster.hasNext}
-        <a rel="next" href={roster.nextUrl}>Next</a>
-      {/if}
-    </nav>
-  </section>
+  {@html view.rosterHtml}
   {@html textLimitsIsland}
   {@html editorIsland}
 </section>

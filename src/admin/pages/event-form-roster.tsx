@@ -18,7 +18,7 @@ import { formatAdminTime } from "../chronology";
 export const EventRosterSection: FC<{
   eventKey: string;
   action: string;
-  roster: RosterEntry[];
+  roster: Pick<RosterEntry, "username" | "status" | "answeredAt">[];
   rosterTotal?: number;
   rosterQuery?: RosterQuery;
 }> = ({
@@ -104,10 +104,10 @@ export const EventRosterSection: FC<{
                 </td>
               </tr>
             ) : (
-              roster.map((r) => {
+              roster.map((r, index) => {
                 const time = formatAdminTime(r.answeredAt);
                 return (
-                  <tr key={r.userId}>
+                  <tr key={index}>
                     <td>{r.username?.trim() || "Unknown member"}</td>
                     <td>{r.status}</td>
                     <td class="admin-chronology">
