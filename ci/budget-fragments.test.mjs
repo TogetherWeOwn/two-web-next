@@ -202,9 +202,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // and 1220480; 1219584 rejects by 898 and 896).
 // 1222656 admits the pinned Ember migration (both frozen builds 1222251;
 // 1220608 rejects by 1643), with every other fragment unchanged.
+// 1223680 admits the waitlist-position composition (Actions 1223241;
+// 1222656 rejects by 585, and the lower 512-byte step still rejects by 73).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
   1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440,
-  1217024, 1217536, 1219584, 1220608, 1222656,
+  1217024, 1217536, 1219584, 1220608, 1222656, 1223680,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -248,7 +250,7 @@ function assertShippingKitBudget(actual, approvedClient) {
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440, 1217024, 1217536, 1219584, 1220608, 1222656`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440, 1217024, 1217536, 1219584, 1220608, 1222656, 1223680`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = approvedClient
@@ -499,6 +501,27 @@ test("shipping oracle admits the bounded Ember server allocations together", () 
     const drift = structuredClone(plan);
     drift.server.js[axis] = value;
     assert.throws(() => assertShippingKitBudget(drift), `${axis} drift must fail`);
+  }
+});
+
+test("shipping oracle admits only the bounded waitlist server raw allocation", () => {
+  const plan = {
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1223680, maxGzipBytes: 342272 },
+    },
+  };
+  assertShippingKitBudget(plan);
+  for (const [axis, value] of [
+    ["maxRawBytes", 1223168],
+    ["maxRawBytes", 1223679],
+    ["maxRawBytes", 1223681],
+    ["maxGzipBytes", 342273],
+    ["maxFiles", 127],
+  ]) {
+    const drift = structuredClone(plan);
+    drift.server.js[axis] = value;
+    assert.throws(() => assertShippingKitBudget(drift), `${axis} ${value} drift must fail`);
   }
 });
 

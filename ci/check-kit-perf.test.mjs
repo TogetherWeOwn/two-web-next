@@ -563,10 +563,12 @@ const SHIPPING_SERVER_RAW_ALLOCATIONS = {
   1213440: { intervalBytes: 1213135, exactBytes: 1213440, overBytes: 1213441 },
   1220608: { intervalBytes: 1220482, exactBytes: 1220608, overBytes: 1220609 },
   1222656: { intervalBytes: 1222251, exactBytes: 1222656, overBytes: 1222657 },
+  // Waitlist-position Actions measurement; +512 still rejects by 73 bytes.
+  1223680: { intervalBytes: 1223241, exactBytes: 1223680, overBytes: 1223681 },
 };
 const SHIPPING_SERVER_RAW_UNSUPPORTED =
   `unsupported server raw allocation ${String(SHIPPING_SERVER_RAW_CAP)}: ` +
-  `expected one of 1212416, 1213440, 1220608, 1222656`;
+  `expected one of 1212416, 1213440, 1220608, 1222656, 1223680`;
 
 test("shipping budget: server raw allocation is explicitly approved", () => {
   assert.ok(
