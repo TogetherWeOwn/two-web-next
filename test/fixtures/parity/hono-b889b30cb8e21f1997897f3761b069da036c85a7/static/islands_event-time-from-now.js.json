@@ -184,7 +184,7 @@
         "path": "/islands/event-time-from-now.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"44588d021b0e32b25903d0c34f27033e\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/event-time-from-now.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"44588d021b0e32b25903d0c34f27033e\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

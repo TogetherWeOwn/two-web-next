@@ -184,7 +184,7 @@
         "path": "/islands/join-widget.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"fc3ac384f818a981b5b3945d0f473736\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/join-widget.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"fc3ac384f818a981b5b3945d0f473736\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

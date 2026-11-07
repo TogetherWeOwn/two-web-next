@@ -184,7 +184,7 @@
         "path": "/schedule-theme.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"45ce689ccd90b13dc63b131a41f13d6b\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/schedule-theme.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"45ce689ccd90b13dc63b131a41f13d6b\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

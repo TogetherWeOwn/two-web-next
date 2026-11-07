@@ -184,7 +184,7 @@
         "path": "/islands/going-count.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"cc77dee77ebca854c22949167c36c737\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/going-count.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"cc77dee77ebca854c22949167c36c737\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

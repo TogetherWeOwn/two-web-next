@@ -184,7 +184,7 @@
         "path": "/islands/model-context.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"833db00189927b01d000ed5e2b77bed7\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/model-context.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"833db00189927b01d000ed5e2b77bed7\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

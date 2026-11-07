@@ -184,7 +184,7 @@
         "path": "/operator-overrides-theme.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"18839dd6cdb876cb5924a30b926b55ab\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/operator-overrides-theme.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"18839dd6cdb876cb5924a30b926b55ab\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

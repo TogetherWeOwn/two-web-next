@@ -184,7 +184,7 @@
         "path": "/islands/event-device-timezone.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"9fa27bed7abfd5d410086c6d0fbd83fc\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/event-device-timezone.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"9fa27bed7abfd5d410086c6d0fbd83fc\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

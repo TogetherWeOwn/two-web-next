@@ -184,7 +184,7 @@
         "path": "/profile-theme.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"753d9aa8fdedfa6ae846144c229aa086\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/profile-theme.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"753d9aa8fdedfa6ae846144c229aa086\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

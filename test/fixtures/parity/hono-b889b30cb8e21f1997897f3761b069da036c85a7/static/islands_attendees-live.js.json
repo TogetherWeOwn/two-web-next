@@ -184,7 +184,7 @@
         "path": "/islands/attendees-live.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"5c7ee63c1defde05b262b8755dba7c92\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/attendees-live.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"5c7ee63c1defde05b262b8755dba7c92\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

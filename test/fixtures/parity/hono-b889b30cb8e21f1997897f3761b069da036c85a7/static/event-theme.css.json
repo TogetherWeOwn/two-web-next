@@ -184,7 +184,7 @@
         "path": "/event-theme.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"9a9c687348351fbc80a9388066212963\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/event-theme.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"9a9c687348351fbc80a9388066212963\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

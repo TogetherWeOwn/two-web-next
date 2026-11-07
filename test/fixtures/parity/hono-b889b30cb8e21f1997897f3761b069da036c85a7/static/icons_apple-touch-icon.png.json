@@ -184,7 +184,7 @@
         "path": "/icons/apple-touch-icon.png",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"28f376f22692c6cfb7ceaea2b639e389\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/icons/apple-touch-icon.png",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"28f376f22692c6cfb7ceaea2b639e389\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

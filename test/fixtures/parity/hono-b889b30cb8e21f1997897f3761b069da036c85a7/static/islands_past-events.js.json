@@ -184,7 +184,7 @@
         "path": "/islands/past-events.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"6e164664fc99ccd53bbb4ed6acf3c2ef\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/past-events.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"6e164664fc99ccd53bbb4ed6acf3c2ef\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

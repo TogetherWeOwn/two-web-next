@@ -9,7 +9,7 @@
     "drizzle": "031d5018d193a61bbddf9916442dc91651ef9f41",
     "wrangler.jsonc": "40a40b113c517397d98bf0184caed974040573cb",
     "package-lock.json": "c2267d54dab37f5a89a3a47fb379ca3230328428",
-    "ci/parity": "0753a1a2e72b55ce3ff245bfa15d06746c5e2e05",
+    "ci/parity": "29d7867e25039757a2d9d1ca068779da5dcd72f8",
     "e2e/discord-stub.ts": "a37723f3558d0a03119c43d644aa21f277a4a7bc",
     "test/fixtures/route-inventory.json": "2429171542e53dd0a71286c6863399def23ada50"
   },
@@ -34,7 +34,7 @@
     },
     {
       "entry": "GET /.well-known/security.txt",
-      "file": "routes/.well-known_security.txt",
+      "file": "routes/_well-known_security.txt",
       "vector": "GET"
     },
     {

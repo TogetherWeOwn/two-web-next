@@ -184,7 +184,7 @@
         "path": "/islands/admin-event-editor.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"98282ddd8bfe191de8ea9f521ad93d34\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/admin-event-editor.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"98282ddd8bfe191de8ea9f521ad93d34\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

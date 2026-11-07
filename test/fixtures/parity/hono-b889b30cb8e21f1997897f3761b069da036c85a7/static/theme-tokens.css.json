@@ -184,7 +184,7 @@
         "path": "/theme-tokens.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"de1a6a618378ee54c7161cb188b69311\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/theme-tokens.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"de1a6a618378ee54c7161cb188b69311\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

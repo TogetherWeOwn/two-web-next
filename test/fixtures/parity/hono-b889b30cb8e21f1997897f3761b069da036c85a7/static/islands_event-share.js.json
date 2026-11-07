@@ -184,7 +184,7 @@
         "path": "/islands/event-share.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"1c6ab859a363ead51effed043e3ede65\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/event-share.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"1c6ab859a363ead51effed043e3ede65\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

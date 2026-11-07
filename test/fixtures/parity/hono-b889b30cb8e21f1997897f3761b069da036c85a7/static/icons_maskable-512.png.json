@@ -184,7 +184,7 @@
         "path": "/icons/maskable-512.png",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"276a0b53dc06fb98e90e9d58379fadc4\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/icons/maskable-512.png",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"276a0b53dc06fb98e90e9d58379fadc4\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

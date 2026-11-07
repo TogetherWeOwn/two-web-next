@@ -184,7 +184,7 @@
         "path": "/islands/local-time-compare.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"eb268f16f5fc08392a7465fa22c27e00\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/local-time-compare.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"eb268f16f5fc08392a7465fa22c27e00\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

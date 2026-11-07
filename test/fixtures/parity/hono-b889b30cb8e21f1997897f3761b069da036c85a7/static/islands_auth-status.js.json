@@ -184,7 +184,7 @@
         "path": "/islands/auth-status.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"1cd4a50c68bb01c4ee17efd5695afabc\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/auth-status.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"1cd4a50c68bb01c4ee17efd5695afabc\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

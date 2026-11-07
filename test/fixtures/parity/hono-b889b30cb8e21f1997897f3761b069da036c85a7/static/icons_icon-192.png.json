@@ -184,7 +184,7 @@
         "path": "/icons/icon-192.png",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"8d649a4244f5ba8ba2fa3575da76a4c2\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/icons/icon-192.png",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"8d649a4244f5ba8ba2fa3575da76a4c2\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

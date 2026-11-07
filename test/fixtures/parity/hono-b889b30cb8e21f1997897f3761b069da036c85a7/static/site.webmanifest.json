@@ -241,7 +241,7 @@
         "path": "/site.webmanifest",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"c4a521f0543ba760847e4809bbebc945\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -348,7 +348,7 @@
         "path": "/site.webmanifest",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"c4a521f0543ba760847e4809bbebc945\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

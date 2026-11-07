@@ -184,7 +184,7 @@
         "path": "/logo.svg",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"2b9c9df1740272c972bfc85d2e27e012\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/logo.svg",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"2b9c9df1740272c972bfc85d2e27e012\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

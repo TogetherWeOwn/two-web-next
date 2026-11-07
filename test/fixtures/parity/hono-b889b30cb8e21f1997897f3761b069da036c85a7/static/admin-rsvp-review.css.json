@@ -184,7 +184,7 @@
         "path": "/admin-rsvp-review.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"80b44fa41c0e9aa9e5e4ab00504a605d\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/admin-rsvp-review.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"80b44fa41c0e9aa9e5e4ab00504a605d\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

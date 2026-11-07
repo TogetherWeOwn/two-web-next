@@ -184,7 +184,7 @@
         "path": "/islands/events-calendar.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"0924fb94fb56f6e4b21d5867926981e5\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/events-calendar.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"0924fb94fb56f6e4b21d5867926981e5\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

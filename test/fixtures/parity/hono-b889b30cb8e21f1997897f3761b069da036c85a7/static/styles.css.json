@@ -184,7 +184,7 @@
         "path": "/styles.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"98351dfabc6623ca101e39cbee3b2990\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/styles.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"98351dfabc6623ca101e39cbee3b2990\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

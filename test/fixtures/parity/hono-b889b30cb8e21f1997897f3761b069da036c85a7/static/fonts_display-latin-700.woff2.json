@@ -184,7 +184,7 @@
         "path": "/fonts/display-latin-700.woff2",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"141cf900782e3c38b5978555aac39adc\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/fonts/display-latin-700.woff2",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"141cf900782e3c38b5978555aac39adc\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

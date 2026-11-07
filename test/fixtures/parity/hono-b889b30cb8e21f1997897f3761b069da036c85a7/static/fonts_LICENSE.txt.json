@@ -184,7 +184,7 @@
         "path": "/fonts/LICENSE.txt",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"26c9d6691dea5443cc5b59257300faa9\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/fonts/LICENSE.txt",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"26c9d6691dea5443cc5b59257300faa9\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

@@ -184,7 +184,7 @@
         "path": "/favicon.ico",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"bd4ca3172d8bc7bc14655bd97bc31151\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/favicon.ico",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"bd4ca3172d8bc7bc14655bd97bc31151\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

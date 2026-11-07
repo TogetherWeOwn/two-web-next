@@ -184,7 +184,7 @@
         "path": "/islands/rsvp-button.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"28105c0d70970a670b4bcf45b1426bc3\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/rsvp-button.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"28105c0d70970a670b4bcf45b1426bc3\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {

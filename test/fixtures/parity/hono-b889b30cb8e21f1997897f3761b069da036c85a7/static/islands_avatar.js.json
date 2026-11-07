@@ -184,7 +184,7 @@
         "path": "/islands/avatar.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"f99d8b9e4a1fe70d1e64933876be4baf\""
+          "if-none-match": "\"<asset-etag>\""
         }
       },
       "response": {
@@ -272,7 +272,7 @@
         "path": "/islands/avatar.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"f99d8b9e4a1fe70d1e64933876be4baf\""
+          "if-none-match": "W/\"<asset-etag>\""
         }
       },
       "response": {
