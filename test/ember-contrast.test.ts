@@ -95,7 +95,8 @@ describe("echo violet is never a text colour", () => {
   });
 
   function echoTextReferences(css: string): string[] {
-    const clean = css.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, "");
+    // A space preserves token boundaries.
+    const clean = css.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, " ");
     const references = [...clean.matchAll(/(?<![\w-])color\s*:[^;{}]+;/gi)]
       .filter((match) =>
         /--two-color-(state-)?echo|var\(\s*--(?:color-)?echo\s*[,)]/.test(match[0]),
@@ -119,6 +120,8 @@ describe("echo violet is never a text colour", () => {
       "<p class='hover:text-echo/80'>Echo</p>",
       '<p class={active ? "text-echo" : "text-t1"}>Echo</p>',
       "<p class:text-echo={active}>Echo</p>",
+      '<p<!-- x -->class="text-echo">Echo</p>',
+      "a{z:1/**/color:var(--echo);}",
     ]) {
       expect(echoTextReferences(css), css).not.toEqual([]);
     }
