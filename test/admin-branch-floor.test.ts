@@ -782,7 +782,9 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       recurrence_count: "2",
     });
     expect(created.status).toBe(303);
-    const parentKey = created.headers.get("location")!.split("/").pop()!;
+    const parentKey = new URL(created.headers.get("location")!, env.APP_URL).pathname
+      .split("/")
+      .pop()!;
     const [parent] = await db.select().from(events).where(eq(events.eventKey, parentKey));
     const [child] = await db.select().from(events).where(eq(events.parentEventId, parent!.id));
     const childAuditsBefore = (await db.select().from(activityLog)).filter(
@@ -813,7 +815,9 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       recurrence_count: "2",
     });
     expect(created.status).toBe(303);
-    const parentKey = created.headers.get("location")!.split("/").pop()!;
+    const parentKey = new URL(created.headers.get("location")!, env.APP_URL).pathname
+      .split("/")
+      .pop()!;
     const [parent] = await db.select().from(events).where(eq(events.eventKey, parentKey));
     const [child] = await db.select().from(events).where(eq(events.parentEventId, parent!.id));
     await db

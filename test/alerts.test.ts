@@ -6,10 +6,12 @@ import {
   AlertRateLimit,
   alertQueueFailing,
   alertRequestError,
+  exceptionClass,
   fingerprintOf,
   shouldReport,
 } from "../src/alerts";
 import { registerErrorHandlers } from "../src/errors";
+import { sanitizeExceptionClass } from "../src/exception-class";
 import { MemberReadRefused } from "../src/member-reads";
 import { consume } from "../src/jobs/consumer";
 import { CALL_INTERNAL_ACTION, SYNC_EVENT } from "../src/jobs/constants";
@@ -19,6 +21,55 @@ import type { BotClient, EventStore, QueueLedger, UniqueLock } from "../src/jobs
 class BoomError extends Error {}
 
 afterEach(() => vi.restoreAllMocks());
+
+describe("exceptionClass", () => {
+  it("names plain errors and non-errors as before", () => {
+    expect(exceptionClass(new BoomError("x"))).toBe("BoomError");
+    expect(exceptionClass(new TypeError("x"))).toBe("TypeError");
+    expect(exceptionClass("string")).toBe("string");
+    expect(exceptionClass(null)).toBe("object");
+    expect(exceptionClass(undefined)).toBe("undefined");
+  });
+
+  it("de-newlines and bounds a hostile class name so it cannot forge log lines", () => {
+    class ForgedError extends Error {}
+    Object.defineProperty(ForgedError, "name", {
+      value: `Forged\r\n{"level":"critical"}${"x".repeat(200)}`,
+    });
+    const cls = exceptionClass(new ForgedError());
+    expect(cls).not.toContain("\n");
+    expect(cls).not.toContain("\r");
+    expect(cls.startsWith('Forged_{"level":"critical"}')).toBe(true);
+    expect(cls.length).toBe(100);
+    expect(fingerprintOf(new ForgedError(), "/join")).toBe(`${cls}@/join`);
+  });
+
+  it("bounds class names at exactly 100 characters and never returns empty", () => {
+    const named = (name: string) => {
+      class NamedError extends Error {}
+      Object.defineProperty(NamedError, "name", { value: name });
+      return new NamedError();
+    };
+    // An empty class name falls back to the instance name, so the result
+    // is still a non-empty, safe class label.
+    expect(exceptionClass(named(""))).toBe("Error");
+    const atLimit = "E".repeat(100);
+    expect(exceptionClass(named(atLimit))).toBe(atLimit);
+    expect(exceptionClass(named(`${atLimit}X`))).toBe(atLimit);
+  });
+
+  it("sanitizeExceptionClass degrades empty and non-string raw names to unknown", () => {
+    expect(sanitizeExceptionClass("")).toBe("unknown");
+    expect(sanitizeExceptionClass(42)).toBe("unknown");
+    expect(sanitizeExceptionClass("Boom\r\nError")).toBe("Boom_Error");
+  });
+
+  it("degrades a non-string class name to unknown instead of throwing", () => {
+    class OddError extends Error {}
+    Object.defineProperty(OddError, "name", { value: 42 });
+    expect(exceptionClass(new OddError())).toBe("unknown");
+  });
+});
 
 describe("dont-report list", () => {
   it("stays silent for 404/403/429 and validation, reports 5xx and plain errors", () => {

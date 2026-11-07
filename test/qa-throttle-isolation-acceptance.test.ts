@@ -150,6 +150,11 @@ describe("QA throttle isolation from the shared counter", () => {
       expect([404, 429]).toContain(res.status);
       expect(res.headers.getSetCookie()).toHaveLength(0);
     }
+    // The guesses drain this client's per-client attempt budget (src/qa.ts),
+    // which refills over time; advance the clock for one refill. The shared
+    // qa-login budget below was never debited, so the valid login is not
+    // locked out of it.
+    vi.spyOn(Date, "now").mockReturnValue(NOW + 1_000);
     const res = await request(f.bindings, ip, { identity: "qa-member", token: TOKEN });
     expect(res.status).toBe(204);
     expect(await res.text()).toBe("");

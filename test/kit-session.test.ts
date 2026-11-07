@@ -92,6 +92,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
     const decision = await resolveRequestSession(requestWith([await pair(SESSION_COOKIE, token)]), {
       sessionSecret: SECRET,
       store,
+      roleRecheck: null,
     });
     expect(decision).toEqual({
       status: "authenticated",
@@ -107,7 +108,13 @@ describe("resolveRequestSession (one request, one session decision)", () => {
 
   it("reports guest when no session cookie is presented", async () => {
     const store = createMemorySessionStore();
-    expect(await resolveRequestSession(requestWith([]), { sessionSecret: SECRET, store })).toEqual({
+    expect(
+      await resolveRequestSession(requestWith([]), {
+        sessionSecret: SECRET,
+        store,
+        roleRecheck: null,
+      }),
+    ).toEqual({
       status: "guest",
       session: null,
     });
@@ -119,7 +126,11 @@ describe("resolveRequestSession (one request, one session decision)", () => {
     const good = await pair(SESSION_COOKIE, token);
     const tampered = `${good.slice(0, -1)}${good.endsWith("A") ? "B" : "A"}`;
     expect(
-      await resolveRequestSession(requestWith([tampered]), { sessionSecret: SECRET, store }),
+      await resolveRequestSession(requestWith([tampered]), {
+        sessionSecret: SECRET,
+        store,
+        roleRecheck: null,
+      }),
     ).toEqual({ status: "guest", session: null });
   });
 
@@ -130,6 +141,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
       await resolveRequestSession(requestWith([await pair(SESSION_COOKIE, token, WRONG_SECRET)]), {
         sessionSecret: SECRET,
         store,
+        roleRecheck: null,
       }),
     ).toEqual({ status: "guest", session: null });
   });
@@ -140,6 +152,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
       await resolveRequestSession(requestWith([await pair(SESSION_COOKIE, "not-a-session")]), {
         sessionSecret: SECRET,
         store,
+        roleRecheck: null,
       }),
     ).toEqual({ status: "guest", session: null });
   });
@@ -150,6 +163,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
       await resolveRequestSession(requestWith([await pair(SESSION_COOKIE, newSessionToken())]), {
         sessionSecret: SECRET,
         store,
+        roleRecheck: null,
       }),
     ).toEqual({ status: "guest", session: null });
   });
@@ -172,6 +186,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
       await resolveRequestSession(requestWith([await pair(SESSION_COOKIE, token)]), {
         sessionSecret: SECRET,
         store,
+        roleRecheck: null,
       }),
     ).toEqual({ status: "guest", session: null });
   });
@@ -184,6 +199,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
       await resolveRequestSession(requestWith([await pair(SESSION_COOKIE, token)]), {
         sessionSecret: SECRET,
         store,
+        roleRecheck: null,
       }),
     ).toEqual({ status: "guest", session: null });
   });
@@ -201,6 +217,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
       await resolveRequestSession(requestWith([await pair(SESSION_COOKIE, token)]), {
         sessionSecret: SECRET,
         store: failing,
+        roleRecheck: null,
       }),
     ).toEqual({ status: "unknown", session: null });
   });
@@ -212,6 +229,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
       await resolveRequestSession(requestWith([await pair(SESSION_COOKIE, token)]), {
         sessionSecret: "",
         store,
+        roleRecheck: null,
       }),
     ).toEqual({ status: "unknown", session: null });
   });
@@ -224,6 +242,7 @@ describe("resolveRequestSession (one request, one session decision)", () => {
       await resolveRequestSession(requestWith([await pair(AUTH_STATUS_COOKIE, statusKey)]), {
         sessionSecret: SECRET,
         store,
+        roleRecheck: null,
       }),
     ).toEqual({ status: "guest", session: null });
   });
@@ -236,7 +255,7 @@ describe("one decision per request (memoized, strand-free)", () => {
     const get = vi.spyOn(store, "get");
     const cached = createRequestSessionCache();
     const request = requestWith([await pair(SESSION_COOKIE, token)]);
-    const deps = { sessionSecret: SECRET, store };
+    const deps = { sessionSecret: SECRET, store, roleRecheck: null };
     const [first, second, third] = await Promise.all([
       cached(request, deps),
       cached(request, deps),
@@ -252,7 +271,7 @@ describe("one decision per request (memoized, strand-free)", () => {
     const store = createMemorySessionStore();
     const { token, row } = await seedSession(store);
     const cached = createRequestSessionCache();
-    const deps = { sessionSecret: SECRET, store };
+    const deps = { sessionSecret: SECRET, store, roleRecheck: null };
     // Fire and abandon: no rotation or revocation exists in the read path, so
     // there is no in-flight mutation to strand the session.
     void cached(requestWith([await pair(SESSION_COOKIE, token)]), deps);
@@ -276,7 +295,7 @@ describe("one decision per request (memoized, strand-free)", () => {
     };
     await store.create(base);
     const cached = createRequestSessionCache();
-    const deps = { sessionSecret: SECRET, store };
+    const deps = { sessionSecret: SECRET, store, roleRecheck: null };
     const cookie = await pair(SESSION_COOKIE, token);
     expect((await cached(requestWith([cookie]), deps)).session?.moderator).toBe(false);
     // Discord role recompute flips the flag on the next sign-in write.

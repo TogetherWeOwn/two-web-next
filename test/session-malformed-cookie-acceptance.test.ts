@@ -210,6 +210,7 @@ describe("Kit resolveRequestSession", () => {
     const decision = await resolveRequestSession(request, {
       sessionSecret: SECRET,
       store: spy.store,
+      roleRecheck: null,
     });
     expect(decision).toEqual({ status: "guest", session: null });
     expect(spy.readCalls()).toEqual([]);
@@ -338,6 +339,7 @@ describe("controls: well-formed bearers behave exactly as before", () => {
     const decision = await resolveRequestSession(request, {
       sessionSecret: SECRET,
       store: spy.store,
+      roleRecheck: null,
     });
     expect(decision.status).toBe("authenticated");
     expect(spy.callsTo("get").map((c) => c.args)).toEqual([[tokenHash]]);
@@ -352,6 +354,7 @@ describe("controls: well-formed bearers behave exactly as before", () => {
     const decision = await resolveRequestSession(request, {
       sessionSecret: SECRET,
       store: spy.store,
+      roleRecheck: null,
     });
     expect(decision).toEqual({ status: "guest", session: null });
     expect(spy.callsTo("get").map((c) => c.args)).toEqual([[await hashToken(unknown)]]);

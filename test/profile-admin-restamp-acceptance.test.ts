@@ -557,6 +557,7 @@ describe.skipIf(!pgUrl)("profile/admin session re-stamp (disposable postgres)", 
       const decision = await resolveRequestSession(requestWith(live.cookie), {
         sessionSecret: SECRET,
         store,
+        roleRecheck: null,
       });
       expect(decision.status).toBe("authenticated");
       expect(decision.session).toMatchObject({ userId: MEMBER.userId });
@@ -598,6 +599,7 @@ describe.skipIf(!pgUrl)("profile/admin session re-stamp (disposable postgres)", 
         const decision = await resolveRequestSession(requestWith(cookie), {
           sessionSecret: SECRET,
           store,
+          roleRecheck: null,
         });
         expect(decision.status).toBe("authenticated");
         expect(decision.session).toMatchObject({ userId: MEMBER.userId });

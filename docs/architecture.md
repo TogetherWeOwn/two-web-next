@@ -196,8 +196,13 @@ default, `--apply` revokes), implemented in
 short-lived signed cookie plus a single-use hashed journey record
 (`web_oauth_journeys`, 10-minute TTL)
 ([src/oauth-journeys.ts](../src/oauth-journeys.ts)); moderator status is
-recomputed at login from Discord role-ID intersection, failing closed on a
-blank allowlist or failed lookup ([src/roles.ts](../src/roles.ts)); the QA
+derived at login from Discord role-ID intersection, failing closed on a
+blank allowlist or failed lookup ([src/roles.ts](../src/roles.ts)), and a
+live privileged session re-derives its member/moderator flags from Discord
+at most every five minutes before they authorize a request
+([src/session-role-refresh.ts](../src/session-role-refresh.ts)) — only a
+definitive Discord answer replaces the stored flags, so a Discord outage
+never gates a signed-in session; the QA
 seam ([src/qa.ts](../src/qa.ts)) works only on the exact staging `APP_URL`
 with its configured token and otherwise answers 404.
 
@@ -211,19 +216,22 @@ Read from: [web/package.json](../web/package.json),
 [bin/smoke.mjs](../bin/smoke.mjs), [bin/json-smoke.mjs](../bin/json-smoke.mjs).
 
 - [web/](../web/) (`two-web-next-kit` in
-  [web/package.json](../web/package.json)) is the experimental SvelteKit
-  strangler preview, not the primary Worker: the hook
+  [web/package.json](../web/package.json)) is the SvelteKit strangler and
+  the accepted single page renderer
+  ([ADR 0001](adr/0001-sveltekit-page-renderer.md)), not yet the production
+  Worker: the hook
   ([web/src/hooks.server.ts](../web/src/hooks.server.ts)) picks exactly one
   renderer per request from the method-aware manifest in
   [src/route-ownership.ts](../src/route-ownership.ts) before Kit resolve,
   and Hono-owned paths (the default, including disabled native routes and the
   reserved APIs) go to the unchanged in-process Hono app
   ([web/src/lib/server/hono.ts](../web/src/lib/server/hono.ts)). Status:
-  experimental spike, not serving production traffic.
+  preview and staging only, not serving production traffic; page families
+  move per the ADR's retirement register.
 - [spike/](../spike/) holds the Hyperdrive-semantics probe only. Status:
-  acceptance remains **not verified** per
-  [its findings](../spike/hyperdrive-semantics/findings.md); the live
-  staging attempt ended in a pre-SQL refusal.
+  the live Hyperdrive-to-Neon staging run on 2026-10-01 passed 3/3 after an
+  earlier pre-SQL refusal was fixed, per the "Live Hyperdrive → Neon staging
+  result" section of [its findings](../spike/hyperdrive-semantics/findings.md).
 - [e2e/](../e2e/) holds Playwright browser journeys. Offline-first:
   [fixtures](../e2e/fixtures.ts) block non-localhost traffic and the
   [stub worker](../e2e/worker.ts) fakes Discord OAuth; staging-guarded
@@ -289,6 +297,7 @@ exactly once.
 | `src/error-responses.tsx` | entry |
 | `src/errors.tsx` | entry |
 | `src/events/` | events |
+| `src/exception-class.ts` | observability |
 | `src/featured-eligibility.ts` | content |
 | `src/featured-image.ts` | content |
 | `src/featured-policy.ts` | content |
@@ -359,6 +368,7 @@ exactly once.
 | `src/seo-leaves.tsx` | entry |
 | `src/session-cookie.ts` | auth |
 | `src/session-revocation.ts` | auth |
+| `src/session-role-refresh.ts` | auth |
 | `src/sessions.ts` | auth |
 | `src/static-leaves.tsx` | entry |
 | `src/throttle.ts` | http-guard |

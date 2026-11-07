@@ -111,7 +111,7 @@ describe("admin event fill column and UTC labels (no DB)", () => {
 
   it("labels the starts column as UTC in the header and its sort toggle", () => {
     expect(html).toContain("Starts (UTC)");
-    expect(html).toContain('aria-label="Sort by starts (utc) ascending"');
+    expect(html).toContain('aria-label="Sort by starts (UTC) ascending"');
     expect(html).not.toContain(">Starts<");
   });
 
@@ -266,7 +266,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const html = await res.text();
       // UTC column label, header and sort toggle (starts_at asc is active, so the toggle offers descending).
       expect(html).toContain("Starts (UTC)");
-      expect(html).toContain('aria-label="Sort by starts (utc) descending"');
+      expect(html).toContain('aria-label="Sort by starts (UTC) descending"');
       expect(html).toContain('<th scope="col">Fill</th>');
       // Going-only: distractors never occupy a seat.
       expect(fillCell(html, "fill-partial")).toBe("1 of 4 going");

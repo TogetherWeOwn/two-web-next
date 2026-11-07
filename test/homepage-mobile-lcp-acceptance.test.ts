@@ -37,18 +37,22 @@ import worker from "../ci/lighthouse-worker";
 const require = createRequire(import.meta.url);
 const lighthouserc = require("../ci/lighthouserc.cjs").ci;
 
-// Tight ratchets: current main serves 24,711 B HTML with an 18,943 B inlined
-// style block (77% of the document). Dropping the dead 500 face saves exactly
-// 155 raw bytes (verified by simulation), landing at 24,556 / 18,788, so the
-// budgets below are red now and green after that fix with <100 B slack. They
-// exist to stop the fix (or any later change) from regrowing homepage weight
-// while headroom is being restored. Gzip is deliberately not asserted: the
-// repetitive face bytes compress away (7 B), so a gzip ratchet would be noise.
-// The brand unfurl tags (og:image + og:image:alt) add exactly 154 raw bytes
-// to every canonical page including the homepage (measured 24,588 -> 24,742),
-// so the HTML budget below carries that delta with the same <100 B slack.
-const MAX_HOMEPAGE_HTML_RAW_BYTES = 24800;
-const MAX_HOMEPAGE_INLINE_CSS_RAW_BYTES = 18850;
+// Homepage weight ratchets after the Living Lobby section-3 token migration.
+// Measured growth over main: HTML 24794 -> 27176 raw bytes (gzip 6611 ->
+// 7378, informational); inlined critical CSS 18761 -> 21143 raw bytes
+// (gzip 4536 -> 5330, informational). Attribution, all inside the inlined
+// leaf bundle: public/theme-tokens.css +1032 (the section-3 ramp; its
+// value-mapping prose moved to docs/home-theme.md so responses do not ship
+// it) plus public/theme.css +1350 (ember focus, font-role faces). The HTML
+// shell is byte-identical, so both raw deltas match at +2382. The budgets
+// below are those re-measured bytes plus 200 B slack; they stop later
+// changes from regrowing homepage weight while LCP headroom is being
+// restored. Gzip stays informational: it compresses the repetitive face
+// bytes away, so a gzip ratchet would be noise. (The brand unfurl tags add
+// a constant 154 raw bytes to every canonical page, already included on
+// both sides of this derivation.)
+const MAX_HOMEPAGE_HTML_RAW_BYTES = 27376;
+const MAX_HOMEPAGE_INLINE_CSS_RAW_BYTES = 21343;
 
 const context = {
   waitUntil: vi.fn(),

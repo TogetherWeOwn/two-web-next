@@ -730,7 +730,15 @@ describe("performance CI", () => {
   it("pins the patched Puppeteer graph only under Lighthouse", () => {
     const pkg = JSON.parse(readFileSync(new URL("../package.json", import.meta.url), "utf8"));
     expect(pkg.devDependencies["@lhci/cli"]).toBe("0.15.1");
-    expect(pkg.overrides["@lhci/cli"]).toEqual({ tmp: "0.2.7", "@puppeteer/browsers": "3.2.3" });
+    // chrome-launcher 1.x drops the rimraf 3 -> glob 7 -> minimatch 3 chain
+    // (GHSA-g3hv-75wg-m249); uuid 11.1.1 fixes GHSA-w5hq-g745-h8pq. LHCI only
+    // calls Launcher.getInstallations() and uuid.v4(), both unchanged.
+    expect(pkg.overrides["@lhci/cli"]).toEqual({
+      tmp: "0.2.7",
+      "@puppeteer/browsers": "3.2.3",
+      "chrome-launcher": "1.2.2",
+      uuid: "11.1.1",
+    });
     // GHSA-c475-qrg2-pj4r: LHCI's real proxy chain still needs patched FTP.
     expect(pkg.overrides["basic-ftp"]).toBe("6.2.1");
     // The verified Node floor supports the browser helper's ESM entry point.
@@ -740,6 +748,11 @@ describe("performance CI", () => {
     // dependency or force Zod 4 into the older BiDi parser's Zod 3 contract.
     expect(pkg.overrides).not.toHaveProperty("puppeteer-core");
     expect(pkg.overrides).not.toHaveProperty("zod");
+    // GHSA-67mh-4wv8-2f99: patch only the vulnerable @esbuild-kit copy.
+    // A top-level esbuild pin would also replace the esbuild wrangler
+    // bundles the production Worker with, so keep it scoped.
+    expect(pkg.overrides["@esbuild-kit/core-utils"]).toEqual({ esbuild: "0.28.2" });
+    expect(pkg.overrides).not.toHaveProperty("esbuild");
   });
 
   it("loads the pinned Lighthouse toolchain with patched transitive dependencies", () => {
@@ -759,6 +772,12 @@ describe("performance CI", () => {
       assert.equal(require("@lhci/cli/package.json").version, "0.15.1");
       const tmp = lhciRequire("tmp");
       assert.equal(lhciRequire("tmp/package.json").version, "0.2.7");
+      // The overridden chrome-launcher is ESM; the CommonJS LHCI consumer must
+      // still load it (require(esm) on the Node floor) and find the API it uses.
+      assert.equal(lhciRequire("chrome-launcher/package.json").version, "1.2.2");
+      assert.equal(typeof lhciRequire("chrome-launcher").Launcher.getInstallations, "function");
+      assert.equal(lhciRequire("uuid/package.json").version, "11.1.1");
+      assert.match(lhciRequire("uuid").v4(), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
       const file = tmp.fileSync({ postfix: ".html" });
       try {
         assert.ok(file.name.endsWith(".html"));
