@@ -465,7 +465,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         throw err;
       }
       const { row } = await createEvent(db, c.get("adminActor"), input!, recurrence ?? null);
-      return c.redirect(`/admin/events/${row.eventKey}`, 303);
+      return c.redirect(
+        `/admin/events/${row.eventKey}${row.status === "draft" ? "?saved=1" : ""}`,
+        303,
+      );
     },
   );
 
@@ -489,6 +492,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         roster={roster}
         rosterTotal={rosterTotal}
         rosterQuery={rosterQuery}
+        saved={c.req.query("saved") === "1"}
       />,
     );
   });
@@ -550,7 +554,10 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         );
         if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
         for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
-        return c.redirect(`/admin/events/${row.eventKey}`, 303);
+        return c.redirect(
+          `/admin/events/${row.eventKey}${row.status === "draft" ? "?saved=1" : ""}`,
+          303,
+        );
       } catch (err) {
         if (err instanceof NotFoundError) return eventNotFound(c);
         if (err instanceof ValidationError) {

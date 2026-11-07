@@ -10,6 +10,48 @@ guides analysis only; it is not a permission boundary.
 Read the applicable `AGENTS.md`, `CONTRIBUTING.md`, `CONSTRAINTS.md`, and
 nearby docs for contracts. Do not invent conventions they do not state.
 
+## Merge and production staging evidence
+
+When evaluating release evidence, apply the
+[merge and production staging contract](CONTRIBUTING.md#merge-and-production-staging-evidence).
+For `TogetherWeOwn/two-web-next` and `TogetherWeOwn/two-bot-next`, the staging
+item is met by the automatic **post-merge, pre-production** staging/e2e/soak
+gate. Do not demand a staging run for an unmerged head, or make artifact equality,
+paired hashes or a comparison to current `main` a merge prerequisite. This is
+not limited to docs/test-only changes and is not proof that staging already ran.
+
+Before merge, verify all required checks listed in CONTRIBUTING, including the
+required review-app checks, pass on the exact PR head, with findings fixed or
+answered with evidence, applicable security reviews and
+native stages complete, and fresh per-PR exact-head Release Manager confirmation
+on a child card assigned and addressed to the Release Manager. Require exact-head
+Actions run/job links and conclusions, migration ledger evidence or "no
+migration", a known-good rollback target and the automatic staging path on the
+confirmation card. A new push needs new confirmation. The final-stage reviewer,
+or author without native stages, must pin the squash merge to the reviewed and
+confirmed head and record the confirmation and squash SHA in the release log.
+An otherwise mergeable PR does not need restacking solely because `main` moved.
+
+Distinguish that merge evidence from production qualification: the resulting
+exact `main` SHA still has to pass full CI, staging deploy, staging e2e and soak
+under the existing promotion guard before automatic production promotion.
+Require matching candidate-SHA Actions evidence for promotion, not a PR-head
+pass or a different `main` SHA. Missing or failing post-merge qualification
+holds promotion; it does not create a pre-merge staging requirement. In particular,
+the current docs/test-only scope can skip staging journeys and passive ledgers;
+that is not qualification or automatic promotion eligibility. Apply CONTRIBUTING's
+post-merge manual-dispatch caveat for a scope-skipped candidate. Manual staging
+evidence is not selected by the automatic resolver, and an explicit production
+dispatch still needs its own exact-SHA Release Manager confirmation and all
+existing guards. Do not change the pipeline or infer a pass from a skip.
+
+Required checks, rulesets, review gates, incident/freeze/hold safeguards,
+identity/capability holds, rollback requirements and confirmation for every
+other production deploy remain. No red deterministic gate is waived; no pipeline
+skip/no-op or production action is authorized. Previous rejections remain
+historical, not retroactive approvals: resubmit for a fresh exact-head decision.
+This advisory analysis role still does not approve or merge.
+
 ## What merits a finding
 
 Report blocking defects only: concrete correctness, security, privacy,
@@ -19,9 +61,8 @@ that follows, and evidence from the actual code at the reviewed commit.
 
 Severity is impact times confidence, after the disproof pass below:
 
-- **Severe (red):** production-reachable member-data exposure, auth or
-  moderator-authorization bypass, data loss/corruption, or a broken deploy —
-  and the mechanism is verified, not plausible-sounding.
+- **Severe (red):** only an outcome listed under "What counts as Severe"
+  below, and the mechanism is verified, not plausible-sounding.
 - **Non-severe:** a real defect with limited blast radius or a narrow trigger.
 - **Investigate/flag, not a bug:** the mechanism depends on an assumption you
   could not verify in this repo or its pinned dependencies. Say what is
@@ -31,6 +72,36 @@ Severity is impact times confidence, after the disproof pass below:
   as directed by `SECURITY.md`, including the unverified step; reserve Critical
   for a traced, verified path. Any public note must be non-sensitive and
   non-exploitative.
+
+## What counts as Severe
+
+Severe only when merging the change would cause one of these:
+
+- **Data loss or corruption:** a queue retry in `src/jobs/` that applies the
+  same RSVP sync twice, or an edit to an applied migration in `drizzle/`.
+- **Security or auth/authz weakness:** `src/roles.ts` treating a blank
+  moderator allowlist as "everyone", or a new member-data route in
+  `src/profiles/` that skips `routes-gate.ts`.
+- **Production breakage or a broken deploy/rollback gate:**
+  `deploy-production.yml` promoting a commit without its passing staging
+  journeys, or `rollback-production.yml` unable to restore the prior version.
+- **Wrong user-visible behavior with no workaround:** `src/join/` sending
+  every member back to the Discord login, so nobody can sign in.
+- **A test or gate that can no longer fail:** `ci/floor-guard.mjs` exiting 0
+  when it could not run.
+
+Not Severe (use Non-severe): missing edge-case tests (no empty-query case
+for event search), naming (a helper name in `src/throttle.ts`), docs drift
+(`docs/throttling.md` lagging a throttle change), refactor suggestions
+(splitting `src/profiles/routes.tsx`), performance without a measured
+regression ("this `src/member-reads.ts` query may be slow"), and defensive
+checks for states the callers already prevent (a null-session check in a
+handler `routes-gate.ts` already guards).
+
+These labels only grade a finding that already qualifies under "What
+merits a finding", "Test rigor" and "Skip"; they never make an item
+reportable. Most of the Not Severe items are skipped outright, and any
+that is still reported is Non-severe.
 
 ## Disproof pass (before posting any finding)
 

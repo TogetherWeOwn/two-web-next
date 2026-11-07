@@ -333,7 +333,7 @@ export type Admission = "moderator" | "member" | "guest";
 
 export async function readRoster(
   renderer: Renderer,
-  fixture: RosterFixture,
+  fixture: Pick<RosterFixture, "db">,
   query = "",
   kit?: RosterKit,
   admission: Admission = "moderator",

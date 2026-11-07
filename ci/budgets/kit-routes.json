@@ -1,0 +1,318 @@
+{
+  "version": 1,
+  "scope": "kit-immutable-route-closure-v1",
+  "routes": {
+    "/": {
+      "js": {
+        "maxRawBytes": 150528,
+        "maxGzipBytes": 58624,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/[...path]": {
+      "js": {
+        "maxRawBytes": 0,
+        "maxGzipBytes": 0,
+        "maxFiles": 0
+      },
+      "css": {
+        "maxRawBytes": 0,
+        "maxGzipBytes": 0,
+        "maxFiles": 0
+      }
+    },
+    "/about": {
+      "js": {
+        "maxRawBytes": 139264,
+        "maxGzipBytes": 54272,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin": {
+      "js": {
+        "maxRawBytes": 145920,
+        "maxGzipBytes": 57344,
+        "maxFiles": 21
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 3
+      }
+    },
+    "/admin/activity-log": {
+      "js": {
+        "maxRawBytes": 146432,
+        "maxGzipBytes": 57856,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/events": {
+      "js": {
+        "maxRawBytes": 154112,
+        "maxGzipBytes": 60416,
+        "maxFiles": 23
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/events/[key]": {
+      "js": {
+        "maxRawBytes": 156160,
+        "maxGzipBytes": 60416,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/events/new": {
+      "js": {
+        "maxRawBytes": 153088,
+        "maxGzipBytes": 59136,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/featured": {
+      "js": {
+        "maxRawBytes": 147456,
+        "maxGzipBytes": 57856,
+        "maxFiles": 21
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/featured/[id]": {
+      "js": {
+        "maxRawBytes": 148480,
+        "maxGzipBytes": 58112,
+        "maxFiles": 21
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/featured/new": {
+      "js": {
+        "maxRawBytes": 144896,
+        "maxGzipBytes": 56576,
+        "maxFiles": 21
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/join-attempts": {
+      "js": {
+        "maxRawBytes": 147456,
+        "maxGzipBytes": 58368,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/admin/join-attempts/[id]": {
+      "js": {
+        "maxRawBytes": 145408,
+        "maxGzipBytes": 57344,
+        "maxFiles": 22
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/auth/recover": {
+      "js": {
+        "maxRawBytes": 137728,
+        "maxGzipBytes": 53248,
+        "maxFiles": 17
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/e/[key]": {
+      "js": {
+        "maxRawBytes": 171008,
+        "maxGzipBytes": 65024,
+        "maxFiles": 21
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/events": {
+      "js": {
+        "maxRawBytes": 0,
+        "maxGzipBytes": 0,
+        "maxFiles": 0
+      },
+      "css": {
+        "maxRawBytes": 0,
+        "maxGzipBytes": 0,
+        "maxFiles": 0
+      }
+    },
+    "/events/past": {
+      "js": {
+        "maxRawBytes": 143872,
+        "maxGzipBytes": 55808,
+        "maxFiles": 17
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/faq": {
+      "js": {
+        "maxRawBytes": 140288,
+        "maxGzipBytes": 54528,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/hotzones": {
+      "js": {
+        "maxRawBytes": 142336,
+        "maxGzipBytes": 55296,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/hotzones/[signal]": {
+      "js": {
+        "maxRawBytes": 141824,
+        "maxGzipBytes": 55296,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/join": {
+      "js": {
+        "maxRawBytes": 141312,
+        "maxGzipBytes": 54784,
+        "maxFiles": 17
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/leaderboards/members": {
+      "js": {
+        "maxRawBytes": 144384,
+        "maxGzipBytes": 56320,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/members/[user]": {
+      "js": {
+        "maxRawBytes": 159232,
+        "maxGzipBytes": 60928,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/privacy": {
+      "js": {
+        "maxRawBytes": 138752,
+        "maxGzipBytes": 54016,
+        "maxFiles": 17
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/profile": {
+      "js": {
+        "maxRawBytes": 159232,
+        "maxGzipBytes": 60928,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    },
+    "/rules": {
+      "js": {
+        "maxRawBytes": 140288,
+        "maxGzipBytes": 54528,
+        "maxFiles": 18
+      },
+      "css": {
+        "maxRawBytes": 3072,
+        "maxGzipBytes": 1280,
+        "maxFiles": 2
+      }
+    }
+  }
+}

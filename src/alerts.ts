@@ -19,6 +19,7 @@ export const SCHEDULED_FAILING_JOBS = ["events:reconcile", "model:prune"] as con
 export type ScheduledFailingJob = (typeof SCHEDULED_FAILING_JOBS)[number];
 
 import { AlertProbeError } from "./alert-probe-error";
+import { sanitizeExceptionClass } from "./exception-class";
 import { currentReleaseFields } from "./release-tag";
 import { safeRequestId } from "./request-log";
 import { projectSyncRetryDiagnostic, type SyncRetryDiagnostic } from "./jobs/sync-retry-diagnostic";
@@ -40,8 +41,8 @@ export function shouldReport(err: unknown): boolean {
 }
 
 export function exceptionClass(err: unknown): string {
-  if (err instanceof Error) return err.constructor?.name || err.name || "Error";
-  return typeof err;
+  const raw = err instanceof Error ? err.constructor?.name || err.name || "Error" : typeof err;
+  return sanitizeExceptionClass(raw);
 }
 
 export function fingerprintOf(err: unknown, route: string): string {

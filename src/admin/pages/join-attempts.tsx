@@ -65,7 +65,7 @@ export const JoinAttemptsPage: FC<{
               <th scope="col">Source</th>
               <th scope="col">Discord id</th>
               <th scope="col">Request id</th>
-              <th scope="col">Attempted</th>
+              <th scope="col">Attempted (UTC)</th>
             </tr>
           </thead>
           <tbody>

@@ -46,6 +46,11 @@ const withoutNul = (raw: string | undefined): string =>
 const FREE_TEXT_MAX_LENGTH = 128;
 const boundFreeText = (value: string): string => (value.length > FREE_TEXT_MAX_LENGTH ? "" : value);
 
+/** Sort-header accessible name that preserves the UTC designator (§4c). */
+export function sortHeaderAriaLabel(label: string, next: SortOrder): string {
+  return `Sort by ${label.toLowerCase().replaceAll("(utc)", "(UTC)")} ${next === "asc" ? "ascending" : "descending"}`;
+}
+
 export function parseRosterQuery(params: ListParams): RosterQuery {
   const page = Number(params.roster_page);
   // Same unsafe-OFFSET guard as the join-attempts viewer: PostgreSQL OFFSET

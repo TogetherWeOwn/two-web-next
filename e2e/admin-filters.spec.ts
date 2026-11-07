@@ -42,9 +42,12 @@ async function createDraft(
   if (accessibilityNotes !== undefined)
     await page.getByLabel("Accessibility notes", { exact: true }).fill(accessibilityNotes);
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
-  await expect(page).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}$/);
+  // Create redirects to the saved-draft review, which may carry `?saved=1`;
+  // read the key from the pathname so the query never leaks into it.
+  await expect(page).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}(?:\?saved=1)?$/);
   const eventKey = new URL(page.url()).pathname.split("/").at(-1)!;
   expect(eventKey).toBeDefined();
+  expect(eventKey).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
   await expect(page.getByRole("heading", { name: "Status: draft", exact: true })).toBeVisible();
   return eventKey;
 }
@@ -101,8 +104,10 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     // Reopen control proves the paused state stuck.
     await page.goto(`/admin/events/${pausedKey}`);
     await page.getByTestId("rsvp-pause-review").locator("summary").click();
-    await page.getByRole("button", { name: "Pause RSVPs", exact: true }).click();
-    await expect(page.getByRole("button", { name: "Reopen RSVPs", exact: true })).toBeVisible();
+    await page.getByRole("button", { name: `Pause RSVPs for ${pausedTitle}`, exact: true }).click();
+    await expect(
+      page.getByRole("button", { name: `Reopen RSVPs for ${pausedTitle}`, exact: true }),
+    ).toBeVisible();
 
     const table = page.getByTestId("events-table");
     const rowFor = (title: string) => table.locator("tbody tr", { hasText: title });

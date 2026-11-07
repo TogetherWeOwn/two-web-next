@@ -10,7 +10,7 @@ import { createTailWorker } from "../tail/worker";
 import { env as baseEnv } from "./helpers/member-data";
 import { withThrottleTx } from "./helpers/throttle-tx-double";
 
-const token = "test-only-probe-token";
+const token = "test-only-probe-token-with-32-plus";
 const staging = { ...baseEnv, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: token };
 afterEach(() => vi.restoreAllMocks());
 

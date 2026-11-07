@@ -7,6 +7,7 @@ import type { EventRow } from "../store";
 import type { RosterEntry } from "../reads";
 import type { RosterQuery } from "../table-list";
 import { EventFormFields } from "./event-form-fields";
+import { SavedEventNotice } from "./event-form-review";
 import { EventRosterSection } from "./event-form-roster";
 import { EventStatusSection } from "./event-form-status";
 import { Shell } from "./shell";
@@ -23,12 +24,26 @@ export const EventFormPage: FC<{
   // GET, so a 422 re-render explains its absence instead of dropping the
   // section silently. Carries no roster data of any kind.
   rosterHiddenNotice?: boolean;
-}> = ({ mode, row, values, errors, roster, rosterTotal, rosterQuery, rosterHiddenNotice }) => {
+  saved?: boolean;
+}> = ({
+  mode,
+  row,
+  values,
+  errors,
+  roster,
+  rosterTotal,
+  rosterQuery,
+  rosterHiddenNotice,
+  saved,
+}) => {
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
     <Shell title={mode === "new" ? "New event" : `Edit ${row!.title}`}>
       <section>
         <h1>{mode === "new" ? "New event" : `Edit ${row!.title}`}</h1>
+        {mode === "edit" && saved && row?.status === "draft" ? (
+          <SavedEventNotice eventKey={row.eventKey} />
+        ) : null}
         <EventFormFields mode={mode} row={row} values={values} errors={errors} action={action} />
         {mode === "edit" && row ? <EventStatusSection row={row} /> : null}
         {mode === "edit" && roster ? (

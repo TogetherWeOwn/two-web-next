@@ -94,6 +94,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
       browser,
     }) => {
       const info = test.info();
+      const before = process.env.WAITLIST_CAPTURE_BEFORE === "true";
       const context = await browser.newContext({ viewport });
       try {
         const harness = await mount(context, renderer);
@@ -108,24 +109,28 @@ for (const renderer of ["Hono", "Kit"] as const) {
           await page.goto(`${origin}${path}?${query}#rsvp-roster`);
           await expect(page.getByTestId("rsvp-roster")).toBeVisible();
           await expect(page.getByTestId("roster-table-scroll")).toHaveCSS("overflow-x", "auto");
-          if (state === "default") {
+          await expect(page.getByTestId("rsvp-roster").getByRole("columnheader")).toHaveCount(
+            before ? 3 : 4,
+          );
+          if (!before && state === "default") {
             await expect(page.locator("#rsvp-roster .sr-only").first()).toHaveCSS(
               "position",
               "absolute",
             );
           }
-          if (state === "filtered-gaps") {
+          if (!before && state === "filtered-gaps") {
             await expect(waitlistCells(page)).toHaveText(
               Array.from({ length: 105 }, (_, i) => i)
                 .filter((i) => String(i).includes("1"))
                 .map((i) => `#${i + 1}`),
             );
           }
-          if (state === "page-two") {
+          if (!before && state === "page-two") {
             await expect(waitlistCells(page)).toHaveText(["#101", "#102", "#103", "#104", "#105"]);
           }
-          const filename = `waitlist-${renderer}-${viewport.width}-${state}`;
+          const filename = `waitlist-${before ? "before" : "after"}-${renderer}-${viewport.width}-${state}`;
           await page.screenshot({ path: info.outputPath(`${filename}.png`) });
+          await page.screenshot({ path: info.outputPath(`${filename}-full.png`), fullPage: true });
           if (viewport.width === 390) {
             const offset = await page.getByTestId("roster-table-scroll").evaluate((el) => {
               el.scrollLeft = el.scrollWidth;
