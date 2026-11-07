@@ -103,7 +103,10 @@ export function validateDefaultAclRows(rows) {
 // WITH INHERIT/SET, or escalate through a longer ADMIN chain link by link. pg_has_role(..., 'MEMBER')
 // reports bare membership through any number of hops, so it covers the
 // inherited, assumable, and administered shapes alike; a guard that only
-// refuses over-approximates safely here.
+// refuses over-approximates safely here. The drizzle schema is checked the
+// same way: its owner can drop and recreate the ledger whatever the ledger's
+// own ACLs say, CREATE lets a holder plant objects beside it, and the runtime
+// has no reviewed need for USAGE there either.
 const LEDGER_ACL_QUERY = `
   WITH targets(oid) AS (
     SELECT to_regclass('drizzle.__drizzle_migrations')
@@ -123,6 +126,14 @@ const LEDGER_ACL_QUERY = `
       FROM objects AS c
       JOIN pg_attribute AS a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
       CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
+    UNION ALL
+    SELECT 'schema ' || n.nspname, n.nspowner, 'OWNER', true
+      FROM pg_namespace AS n WHERE n.nspname = 'drizzle'
+    UNION ALL
+    SELECT 'schema ' || n.nspname, acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM pg_namespace AS n
+      CROSS JOIN LATERAL aclexplode(n.nspacl) AS acl
+     WHERE n.nspname = 'drizzle'
   )
   SELECT object_name,
          CASE WHEN grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END AS grantee,

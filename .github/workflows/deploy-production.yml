@@ -34,8 +34,9 @@ concurrency:
 jobs:
   preflight:
     name: production-preflight
-    # Automatic runs (workflow_run, schedule) only promote a soaked green with
-    # no newer red staging run (ci/resolve-promotion-sha.mjs). A workflow_run
+    # Automatic runs (workflow_run, schedule) only promote a soaked first-attempt
+    # green with no red or re-run staging run on it or newer
+    # (ci/resolve-promotion-sha.mjs). A workflow_run
     # from a failed or non-main staging run resolves nothing and skips cleanly.
     if: >-
       github.event_name == 'workflow_dispatch' ||

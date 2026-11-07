@@ -652,9 +652,20 @@ test("staging soak sample spans the candidate version's life, at most 24 hours",
 function stagingRunsApi(runs, { status = 200 } = {}) {
   return async (url) => {
     const parsed = new URL(url);
+    if (parsed.pathname.endsWith(`/commits/${SHA}`)) {
+      return {
+        ok: true,
+        json: async () => ({ commit: { committer: { date: "2026-10-30T00:00:00Z" } } }),
+      };
+    }
     assert.ok(parsed.pathname.endsWith("/actions/workflows/e2e-staging.yml/runs"));
+    assert.equal(parsed.searchParams.get("created"), ">=2026-10-29T00:00:00.000Z");
     if (status !== 200) return { ok: false, status };
-    return { ok: true, json: async () => ({ workflow_runs: runs }) };
+    const page = Number(parsed.searchParams.get("page"));
+    return {
+      ok: true,
+      json: async () => ({ workflow_runs: runs.slice((page - 1) * 100, page * 100) }),
+    };
   };
 }
 const stagingPass = (id, updated_at) => ({
@@ -665,6 +676,7 @@ const stagingPass = (id, updated_at) => ({
   head_repository: { full_name: "fixture/repo" },
   status: "completed",
   conclusion: "success",
+  run_attempt: 1,
   updated_at,
 });
 const soakArgs = { repository: "fixture/repo", sha: SHA };
@@ -693,12 +705,14 @@ test("reviewer mode ages a staging pass approved early, and only when one exists
     ),
     { runId: 7 },
   );
-  // No run names the SHA, or none passed: the reviewer's approval is the gate.
+  // No run names the SHA: the reviewer's approval is the gate.
   assert.equal(await requireStagingSoakIfEvident(soakArgs, soakOpts(stagingRunsApi([]))), null);
   assert.equal(
     await requireStagingSoakIfEvident(
       soakArgs,
-      soakOpts(stagingRunsApi([{ ...stagingPass(7, young), conclusion: "failure" }])),
+      soakOpts(
+        stagingRunsApi([{ ...stagingPass(7, young), status: "in_progress", conclusion: null }]),
+      ),
     ),
     null,
   );
@@ -714,6 +728,64 @@ test("reviewer mode ages a staging pass approved early, and only when one exists
   await assert.rejects(
     requireStagingSoakIfEvident(soakArgs, soakOpts(stagingRunsApi([], { status: 403 }))),
     /Staging soak lookup failed \(HTTP 403\)/,
+  );
+});
+
+test("reviewer mode refuses a SHA whose staging went red or was re-run, never only the latest attempt", async () => {
+  const old = "2026-11-01T11:00:00.000Z";
+  // The 9ee70484 case: attempt 1 failed, attempt 2 passed. The run list shows
+  // only attempt 2, so the re-run itself is the red evidence.
+  for (const run_attempt of [2, 3, undefined]) {
+    await assert.rejects(
+      requireStagingSoakIfEvident(
+        soakArgs,
+        soakOpts(stagingRunsApi([{ ...stagingPass(7, old), run_attempt }])),
+      ),
+      /run 7 on [0-9a-f]{40} failed or was re-run .*fix forward with a new commit/,
+      `attempt ${run_attempt}`,
+    );
+  }
+  // A failed run is red evidence the reviewer cannot approve past, and a newer
+  // first-attempt pass of the same SHA (a re-run deploy) does not outvote it.
+  for (const conclusion of ["failure", "timed_out"]) {
+    await assert.rejects(
+      requireStagingSoakIfEvident(
+        soakArgs,
+        soakOpts(stagingRunsApi([stagingPass(8, old), { ...stagingPass(7, old), conclusion }])),
+      ),
+      /run 7 on [0-9a-f]{40} failed or was re-run/,
+      conclusion,
+    );
+  }
+  // The whole history of the SHA decides, not a window: a failed run behind
+  // 350 runs of other commits still refuses the reviewer's approval.
+  const other = { display_title: `e2e-staging deploy ${"e".repeat(40)}` };
+  const filler = Array.from({ length: 350 }, (_, i) => ({
+    ...stagingPass(500 - i, old),
+    ...other,
+  }));
+  await assert.rejects(
+    requireStagingSoakIfEvident(
+      soakArgs,
+      soakOpts(
+        stagingRunsApi([
+          stagingPass(900, old),
+          ...filler,
+          { ...stagingPass(7, old), conclusion: "failure" },
+        ]),
+      ),
+    ),
+    /run 7 on [0-9a-f]{40} failed or was re-run/,
+  );
+  // Positive control: a cancelled first attempt is not red, and the newer pass soaks.
+  assert.deepEqual(
+    await requireStagingSoakIfEvident(
+      soakArgs,
+      soakOpts(
+        stagingRunsApi([stagingPass(8, old), { ...stagingPass(7, old), conclusion: "cancelled" }]),
+      ),
+    ),
+    { runId: 8 },
   );
 });
 

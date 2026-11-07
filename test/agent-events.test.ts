@@ -40,6 +40,69 @@ const FIELDS = {
   capacity: 4,
 };
 
+function busy(answer: Answer) {
+  expect(answer.status).toBe(503);
+  expect(answer.body).toMatchObject({
+    code: "operation_busy",
+    reason: "operation_busy",
+    next: "Retry with the same idempotency key.",
+  });
+  const { request_id, ...body } = answer.body;
+  expect(request_id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  expect(answer.headers ?? {}).not.toHaveProperty("Retry-After");
+  // A valid random ULID can contain a SQLSTATE; exempt only this validated field.
+  expect(JSON.stringify({ ...answer, body })).not.toMatch(
+    /pg_sleep|57014|55P03|Drizzle|PostgresError/,
+  );
+}
+
+describe("busy response redaction assertion (pure)", () => {
+  const requestId = "01M6TET01R57014CXCETF1F6RD";
+  const answer = (): Answer => ({
+    status: 503,
+    body: {
+      code: "operation_busy",
+      reason: "operation_busy",
+      next: "Retry with the same idempotency key.",
+      request_id: requestId,
+    },
+  });
+
+  it.each([requestId, "01M6TET01R55P03CXCETF1F6RD"])(
+    "accepts a valid request ID containing a SQLSTATE: %s",
+    (request_id) => {
+      const response = answer();
+      response.body.request_id = request_id;
+      expect(() => busy(response)).not.toThrow();
+      expect(response.body.request_id).toBe(request_id);
+    },
+  );
+
+  it.each(["pg_sleep", "57014", "55P03", "Drizzle", "PostgresError"])(
+    "still rejects leaked diagnostics outside the request ID: %s",
+    (diagnostic) => {
+      const response = answer();
+      expect(() =>
+        busy({ ...response, body: { ...response.body, message: diagnostic } }),
+      ).toThrow();
+      expect(() =>
+        busy({ ...response, body: { ...response.body, details: { request_id: diagnostic } } }),
+      ).toThrow();
+      expect(() => busy({ ...response, headers: { "X-Diagnostic": diagnostic } })).toThrow();
+      expect(() => busy({ ...response, headers: { [diagnostic]: "present" } })).toThrow();
+    },
+  );
+
+  it.each(["", requestId.slice(1), `${requestId}0`, "01M6TET01R57014CXCETF1F6RI"])(
+    "still rejects an invalid request ID: %s",
+    (request_id) => {
+      const response = answer();
+      response.body.request_id = request_id;
+      expect(() => busy(response)).toThrow();
+    },
+  );
+});
+
 describe("validateFields / digest (pure)", () => {
   it("accepts the documented example and rejects bad wall times and offsets", () => {
     expect(validateFields(FIELDS).ok).toBe(true);
@@ -427,17 +490,6 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
       return { sdSql: wrap(raw), errors, injected: () => injected };
     }
 
-    function busy(answer: Answer) {
-      expect(answer.status).toBe(503);
-      expect(answer.body).toMatchObject({
-        code: "operation_busy",
-        reason: "operation_busy",
-        next: "Retry with the same idempotency key.",
-      });
-      expect(answer.body.request_id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
-      expect(answer.headers ?? {}).not.toHaveProperty("Retry-After");
-      expect(JSON.stringify(answer)).not.toMatch(/pg_sleep|57014|55P03|Drizzle|PostgresError/);
-    }
     let sdFixture: JobsFixture;
     let sdSql: postgres.Sql;
     let holder: postgres.Sql;

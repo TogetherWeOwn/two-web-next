@@ -10,6 +10,7 @@ import {
   type ActivityLogQuery,
 } from "../table-list";
 import { Shell } from "./shell";
+import { formatAdminTime } from "../chronology";
 
 // Imported rows keep legacy internal causer IDs (docs/data-import.md), which the
 // access-log guard cannot take as subjects (snowflakes only). The shared
@@ -29,8 +30,8 @@ export const ActivityLogPage: FC<{
       <section>
         <h1>Activity log</h1>
         <p class="hint">
-          Read-only. Who changed what, when. Views that name a member are access-logged; imported
-          causer IDs are labeled legacy.
+          Read-only. Who changed what, when (UTC). Views that name a member are access-logged;
+          imported causer IDs are labeled legacy.
         </p>
         <form method="get" action="/admin/activity-log" class="filters">
           <div class="field">
@@ -75,19 +76,22 @@ export const ActivityLogPage: FC<{
                   </td>
                 </tr>
               ) : (
-                rows.map((r) => (
-                  <tr key={r.id}>
-                    <td>{formatActivityCauser(r.causerId)}</td>
-                    <td>{r.description}</td>
-                    <td>
-                      <time datetime={r.createdAt.toISOString()}>{r.createdAt.toISOString()}</time>
-                    </td>
-                    <td>
-                      {[r.subjectType, r.subjectId].filter(Boolean).join(" ") || "—"}
-                      {r.event ? ` (${r.event})` : ""}
-                    </td>
-                  </tr>
-                ))
+                rows.map((r) => {
+                  const time = formatAdminTime(r.createdAt);
+                  return (
+                    <tr key={r.id}>
+                      <td>{formatActivityCauser(r.causerId)}</td>
+                      <td>{r.description}</td>
+                      <td class="admin-chronology">
+                        {time.iso ? <time datetime={time.iso}>{time.label}</time> : time.label}
+                      </td>
+                      <td>
+                        {[r.subjectType, r.subjectId].filter(Boolean).join(" ") || "—"}
+                        {r.event ? ` (${r.event})` : ""}
+                      </td>
+                    </tr>
+                  );
+                })
               )}
             </tbody>
           </table>
