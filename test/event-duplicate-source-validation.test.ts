@@ -300,7 +300,7 @@ describe.skipIf(!process.env.DATABASE_URL)("duplicate invalid source regressions
 
     const res = await save(source.eventKey);
     expect(res.status).toBe(303);
-    expect(res.headers.get("location")).toBe(`/admin/events/${source.eventKey}`);
+    expect(res.headers.get("location")).toBe(`/admin/events/${source.eventKey}?saved=1`);
     const rows = await fixture.db.select().from(events);
     expect(rows).toHaveLength(1);
     expect(rows[0]).toMatchObject({

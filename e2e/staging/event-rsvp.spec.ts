@@ -3,6 +3,7 @@ import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
 import { assertFreshPendingRsvp, assertNoRsvpSyncNotes } from "../rsvp-pending";
 import {
   emptyStorageState,
+  eventFixtureWindow,
   expect,
   memberStorageState,
   moderatorStorageState,
@@ -82,16 +83,34 @@ async function createDraft(admin: Page, stem: string, capacity: number): Promise
   await admin
     .getByLabel("Description", { exact: true })
     .fill("Created by the post-deploy staging suite; cancelled after the run.");
-  await admin.getByLabel("Starts (local wall time, YYYY-MM-DD HH:mm)").fill("2099-03-01 18:00");
-  await admin.getByLabel("Ends (local wall time, YYYY-MM-DD HH:mm)").fill("2099-03-01 20:00");
-  await admin.getByLabel("Timezone", { exact: true }).fill("UTC");
+  const window = eventFixtureWindow();
+  await admin.getByLabel("Starts (local wall time, YYYY-MM-DD HH:mm)").fill(window.startsAt);
+  await admin.getByLabel("Ends (local wall time, YYYY-MM-DD HH:mm)").fill(window.endsAt);
+  await admin.getByLabel("Timezone", { exact: true }).fill(window.timezone);
   await admin.getByLabel("Location", { exact: true }).fill("Staging lounge");
   await admin.getByLabel("Capacity (empty = unlimited)").fill(String(capacity));
   await admin.getByRole("button", { name: "Create draft", exact: true }).click();
-  await expect(admin).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}$/);
+  // Saved drafts stay on the editor with a review link; the query is not part of the key.
+  await expect(admin).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}\?saved=1$/);
   const eventKey = new URL(admin.url()).pathname.split("/").at(-1);
   expect(eventKey).toBeDefined();
+  expect(eventKey).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
   await expect(admin.getByRole("heading", { name: "Status: draft", exact: true })).toBeVisible();
+  await expect(admin.getByLabel("Starts (local wall time, YYYY-MM-DD HH:mm)")).toHaveValue(
+    window.startsAt,
+  );
+  await expect(admin.getByLabel("Ends (local wall time, YYYY-MM-DD HH:mm)")).toHaveValue(
+    window.endsAt,
+  );
+  await expect(admin.getByLabel("Timezone", { exact: true })).toHaveValue(window.timezone);
+  const saved = admin.getByTestId("event-saved-review");
+  await expect(saved).toContainText("Saved.");
+  const review = saved.getByRole("link", {
+    name: "Review the saved event before publishing",
+    exact: true,
+  });
+  await expect(review).toBeVisible();
+  await expect(review).toHaveAttribute("href", `/e/${eventKey}?review=1`);
   return eventKey as string;
 }
 

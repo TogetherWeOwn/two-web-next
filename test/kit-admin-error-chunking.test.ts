@@ -80,6 +80,41 @@ describe("static content server chunking", () => {
   });
 });
 
+describe("profile and board server chunking", () => {
+  it("co-compresses mirrored hot-zone renderers with their shared read helpers", () => {
+    const pattern = groupPattern("profiles");
+    for (const module of [
+      "src/profiles/pages.tsx",
+      "src/hotzones/pages.tsx",
+      "src/hotzones/aggregates.ts",
+      "src/hotzones/season.ts",
+      "src/kit-hotzones.ts",
+      "web/src/lib/ProfileView.svelte",
+      "web/src/routes/leaderboards/members/+page.svelte",
+      "web/src/routes/hotzones/+page.svelte",
+      "web/src/routes/hotzones/+error.svelte",
+      "web/src/routes/hotzones/[signal]/+page.svelte",
+    ]) {
+      expect(pattern.test(`/checkout/${module}`), module).toBe(true);
+    }
+  });
+
+  it("does not capture Kit loaders, endpoints, unrelated pages or lookalike helpers", () => {
+    const pattern = groupPattern("profiles");
+    for (const module of [
+      "src/kit-hotzones.ts.backup",
+      "src/kit-hotzones-other.ts",
+      "web/src/routes/hotzones/+page.server.ts",
+      "web/src/routes/hotzones/+server.ts",
+      "web/src/routes/hotzones/nested/+page.svelte",
+      "web/src/routes/admin/+page.svelte",
+      "web/src/routes/profile/+page.svelte",
+    ]) {
+      expect(pattern.test(`/checkout/${module}`), module).toBe(false);
+    }
+  });
+});
+
 describe("native admin error server chunking", () => {
   it("co-compresses both boundaries with their pure shell and retry helper", () => {
     const pattern = groupPattern("admin-errors");
@@ -110,6 +145,20 @@ describe("native admin error server chunking", () => {
     }
     expect(groupPattern("site-shell").test("/checkout/web/src/lib/ErrorShell.svelte")).toBe(true);
     expect(groupPattern("admin").test("/checkout/src/admin/reads.ts")).toBe(true);
+  });
+
+  it("groups the Hono application entry with admin without capturing Kit hooks or loaders", () => {
+    const pattern = groupPattern("admin");
+    expect(pattern.test("/checkout/src/index.tsx")).toBe(true);
+    expect(pattern.test("/checkout/src/admin/routes.tsx")).toBe(true);
+    for (const module of [
+      "src/index.tsx.backup",
+      "web/src/hooks.server.ts",
+      "web/src/routes/admin/+page.server.ts",
+      "web/src/routes/admin/+server.ts",
+    ]) {
+      expect(pattern.test(`/checkout/${module}`), module).toBe(false);
+    }
   });
 
   it("keeps grouping on SSR and preserves conservative minification", () => {

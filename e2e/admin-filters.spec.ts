@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { expect, localOrigin, qaLogin, test } from "./fixtures";
+import { expectSavedReviewActions } from "./saved-review-actions";
 
 // Moderator admin event-list journey against local wrangler dev + disposable
 // Postgres: create two fixtures (a draft with RSVPs open by default, and a
@@ -42,9 +43,12 @@ async function createDraft(
   if (accessibilityNotes !== undefined)
     await page.getByLabel("Accessibility notes", { exact: true }).fill(accessibilityNotes);
   await page.getByRole("button", { name: "Create draft", exact: true }).click();
-  await expect(page).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}$/);
+  // Create redirects to the saved-draft review, which may carry `?saved=1`;
+  // read the key from the pathname so the query never leaks into it.
+  await expect(page).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}(?:\?saved=1)?$/);
   const eventKey = new URL(page.url()).pathname.split("/").at(-1)!;
   expect(eventKey).toBeDefined();
+  expect(eventKey).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
   await expect(page.getByRole("heading", { name: "Status: draft", exact: true })).toBeVisible();
   return eventKey;
 }
@@ -76,10 +80,55 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     // event renders for guests and on the public calendar.
     const draft = await guest.request.get(`/e/${draftKey}`, { maxRedirects: 0 });
     expect(draft.status()).toBe(403);
-    await page.getByRole("button", { name: "Publish", exact: true }).click();
-    await expect(
-      page.getByRole("heading", { name: "Status: published", exact: true }),
-    ).toBeVisible();
+    const captureReview = async (state: string) => {
+      for (const viewport of [
+        { width: 1280, height: 800 },
+        { width: 390, height: 844 },
+      ]) {
+        await page.setViewportSize(viewport);
+        await expectSavedReviewActions(page, state, viewport.width);
+        const name = `hono-review-${state}-${viewport.width}`;
+        const path = test.info().outputPath(`${name}.png`);
+        await page.screenshot({ path, fullPage: true });
+        await test.info().attach(name, { path, contentType: "image/png" });
+      }
+    };
+    // Review always reads the saved row, even when the editor is dirty.
+    await page.getByLabel("Title", { exact: true }).fill("Not saved");
+    page.once("dialog", (dialog) => dialog.accept());
+    await page.getByTestId("review-event").click();
+    await expect(page.getByTestId("event-review-unsaved")).toBeVisible();
+    await expect(page.getByRole("heading", { name: pausedTitle, exact: true })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Not saved", exact: true })).toHaveCount(0);
+    await captureReview("unsaved");
+    await page.goto(`/e/${pausedKey}?review=1`);
+    await expect(page.getByTestId("publish-reviewed-event")).toBeEnabled();
+    await expect(page.getByRole("button", { name: "RSVP", exact: true })).toBeDisabled();
+    await captureReview("ready");
+    // Another editor commits after review opened. The old submit must stop,
+    // show the fresh saved content, and move focus to the stale alert.
+    const editor = await context.newPage();
+    await editor.goto(`/admin/events/${pausedKey}`);
+    await editor.getByLabel("Description", { exact: true }).fill("Updated after review opened.");
+    await editor.getByTestId("save-event").click();
+    await expect(editor.getByTestId("event-saved-review")).toBeVisible();
+    await editor.close();
+    await page.getByTestId("publish-reviewed-event").click();
+    await expect(page).toHaveURL(`/e/${pausedKey}?review=1&publish_error=stale`);
+    await expect(page.getByTestId("event-review-error")).toBeFocused();
+    await expect(page.getByText("Updated after review opened.", { exact: true })).toBeVisible();
+    expect((await guest.request.get(`/e/${pausedKey}`, { maxRedirects: 0 })).status()).toBe(403);
+    await captureReview("stale");
+    await page.getByTestId("publish-reviewed-event").click();
+    await expect(page).toHaveURL(`/e/${pausedKey}?published=1`);
+    await expect(page.getByTestId("event-published")).toHaveText(
+      "Published. Members can now see this event.",
+    );
+    await expect(page.getByTestId("event-review")).toHaveCount(0);
+    await captureReview("success");
+    await page.goto(`/e/${pausedKey}?review=1`);
+    await expect(page.getByTestId("publish-reviewed-event")).toHaveCount(0);
+    await captureReview("published");
     const published = await guest.request.get(`/e/${pausedKey}`, { maxRedirects: 0 });
     expect(published.status()).toBe(200);
     expect(await published.text()).toContain(pausedTitle);
@@ -96,6 +145,14 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     ).toBeVisible();
     await expect(guestEventPage.getByText(/^Accessibility(?: notes)?$/i)).toBeVisible();
     await expect(guestEventPage.getByText(publishedNotes, { exact: true })).toBeVisible();
+
+    await page.goto(`/admin/events/${draftKey}`);
+    await page.getByLabel("Location", { exact: true }).fill("");
+    await page.getByTestId("save-event").click();
+    await expect(page.getByTestId("event-saved-review")).toBeVisible();
+    await page.getByTestId("review-event").click();
+    await expect(page.getByTestId("publish-reviewed-event")).toBeDisabled();
+    await captureReview("corrections");
 
     // 3. Pause the published fixture's RSVPs from its edit screen. The
     // Reopen control proves the paused state stuck.
@@ -154,6 +211,10 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     expect(((await cancel.json()) as { data: { status: string } }).data.status).toBe("cancelled");
     // Cancel is terminal, so the fixture needs no finally cleanup.
     pausedKey = undefined;
+
+    await page.goto(`/e/${cancelledKey}?review=1`);
+    await expect(page.getByTestId("publish-reviewed-event")).toHaveCount(0);
+    await captureReview("cancelled");
 
     // The guest now sees the cancelled notice (frozen testid) on the 410 page.
     const guestPage = await guest.newPage();

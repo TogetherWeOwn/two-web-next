@@ -3,7 +3,13 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { APEX_ORIGIN } from "./operator-constants.mjs";
-import { deployTitle, e2eTitle, PROMOTION_SOAK_MS } from "./resolve-promotion-sha.mjs";
+import {
+  deployTitle,
+  e2eTitle,
+  isRedStagingRun,
+  PROMOTION_SOAK_MS,
+  stagingRunsSinceCommit,
+} from "./resolve-promotion-sha.mjs";
 import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
@@ -99,6 +105,69 @@ export function isAlreadyLive(deploySha, liveSha) {
     deploySha.toLowerCase() === liveSha.toLowerCase() &&
     /^[0-9a-f]{40}$/i.test(deploySha)
   );
+}
+
+// Default selection is monotonic even when staging eligibility falls back to
+// an older green. Run from the workflow-head checkout before candidate code.
+// An explicit dispatch only selects the existing recovery route; it grants no
+// authorization and does not replace any of that route's other gates.
+export async function checkPromotionAncestry(env, { fetchImpl = fetch } = {}) {
+  const targetSha = env.DEPLOY_SHA;
+  if (!/^[0-9a-f]{40}$/.test(targetSha)) {
+    throw new Error("Promotion ancestry requires a full 40-hex DEPLOY_SHA");
+  }
+  if (!AUTOMATIC_PROMOTION_EVENTS.has(env.GITHUB_EVENT_NAME)) {
+    throw new Error("Promotion ancestry requires workflow_run, schedule or workflow_dispatch");
+  }
+  const input = (env.INPUT_SHA ?? "").trim().toLowerCase();
+  if (env.GITHUB_EVENT_NAME === "workflow_dispatch" && input) {
+    if (!/^[0-9a-f]{40}$/.test(input) || input !== targetSha) {
+      throw new Error("Explicit dispatch SHA must be full 40-hex and match DEPLOY_SHA");
+    }
+    return "explicit";
+  }
+  const liveSha = env.LIVE_SHA;
+  if (typeof liveSha !== "string" || !/^[0-9a-f]{40}$/.test(liveSha)) {
+    throw new Error("Default promotion requires a known full 40-hex live production SHA");
+  }
+  if (isAlreadyLive(targetSha, liveSha)) return "equal";
+  if (!/^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(env.GITHUB_REPOSITORY ?? "")) {
+    throw new Error("Promotion ancestry requires GITHUB_REPOSITORY owner/repo");
+  }
+  if (!env.GITHUB_TOKEN) throw new Error("Promotion ancestry requires GITHUB_TOKEN");
+  const response = await fetchImpl(
+    `https://api.github.com/repos/${env.GITHUB_REPOSITORY}/compare/${liveSha}...${targetSha}`,
+    {
+      headers: {
+        Authorization: `Bearer ${env.GITHUB_TOKEN}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
+      },
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`Promotion ancestry lookup failed (HTTP ${response.status})`);
+  }
+  const comparison = await response.json();
+  // Exact SHA refs bind the requested head. Require the base and merge-base
+  // identities plus consistent counts, not a status string alone. Do not use
+  // the commits array: GitHub can paginate/truncate it for large comparisons.
+  if (
+    comparison?.status !== "ahead" ||
+    !Number.isSafeInteger(comparison.ahead_by) ||
+    comparison.ahead_by <= 0 ||
+    comparison.behind_by !== 0 ||
+    comparison.total_commits !== comparison.ahead_by ||
+    comparison.base_commit?.sha !== liveSha ||
+    comparison.merge_base_commit?.sha !== liveSha
+  ) {
+    throw new Error(
+      `Default promotion refused: ${targetSha} is not a verified forward descendant of live ${liveSha} (behind, divergent or invalid ancestry evidence)`,
+    );
+  }
+  return "ahead";
 }
 
 // Pending-production-migration comparison: tags in the target journal that
@@ -314,6 +383,18 @@ function requireExecutedStagingQuality(jobs, runId) {
   }
 }
 
+// Fix forward, never re-run: a commit with any red e2e-staging run, or any run
+// past its first attempt, is refused in both approval modes. A red staging
+// gate is answered by a new commit; re-running until green is not evidence.
+function refuseRedOrRerunStaging(runs, sha) {
+  const red = runs.filter(isRedStagingRun);
+  if (red.length) {
+    throw new Error(
+      `e2e-staging.yml run ${red[0].id} on ${sha} failed or was re-run (attempt ${red[0].run_attempt ?? "unknown"}): fix forward with a new commit, never re-run staging until green`,
+    );
+  }
+}
+
 // Automated approval evidence: for each staging workflow, the most recent run on
 // the deployment SHA must be a completed success. An older success does not
 // count if a later run on the same SHA failed or is still running.
@@ -321,7 +402,8 @@ function requireExecutedStagingQuality(jobs, runId) {
 // main's tip when they triggered, not the deployed commit. Their run-names carry
 // the deployed SHA (deploy <sha>, e2e-staging deploy <sha>); evidence joins on
 // that. The newest run per title decides, and the e2e run must have actually
-// passed staging-journeys (it concludes success with the job skipped).
+// passed staging-journeys (it concludes success with the job skipped), and no
+// e2e-staging run on the SHA may be red or a re-run (refuseRedOrRerunStaging).
 // Automatic promotion, including an explicit-SHA dispatch, also requires the
 // e2e-staging pass to have soaked for PROMOTION_SOAK_MS (30 minutes), the same
 // floor the automatic resolver applies. A reviewer approval stands in for the
@@ -356,11 +438,18 @@ export async function requireStagingEvidence(
   const evidence = [];
   for (const file of workflows) {
     const runs = [];
-    for (let page = 1; page <= pages; page += 1) {
-      const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
-      const batch = (await get(`/actions/workflows/${file}/runs?${query}`)).workflow_runs ?? [];
-      runs.push(...batch.filter((run) => run.display_title === titles[file]));
-      if (batch.length < 100) break;
+    if (file === "e2e-staging.yml") {
+      // Every e2e-staging run on the SHA, however old: fix forward refuses a
+      // red run anywhere in its history (stagingRunsSinceCommit).
+      const history = await stagingRunsSinceCommit({ get, sha });
+      runs.push(...history.filter((run) => run.display_title === titles[file]));
+    } else {
+      for (let page = 1; page <= pages; page += 1) {
+        const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
+        const batch = (await get(`/actions/workflows/${file}/runs?${query}`)).workflow_runs ?? [];
+        runs.push(...batch.filter((run) => run.display_title === titles[file]));
+        if (batch.length < 100) break;
+      }
     }
     if (!runs.length) {
       throw new Error(`Missing or incomplete exact-SHA ${file} evidence`);
@@ -381,6 +470,7 @@ export async function requireStagingEvidence(
       throw new Error(`Latest ${file} run on the deployment SHA is not successful`);
     }
     if (file === "e2e-staging.yml") {
+      refuseRedOrRerunStaging(runs, sha);
       const completedAt = Date.parse(latest.updated_at ?? "");
       if (!Number.isFinite(completedAt) || nowMs - completedAt < PROMOTION_SOAK_MS) {
         throw new Error(
@@ -407,39 +497,41 @@ export async function requireStagingSoakIfEvident(
   { repository, sha },
   { token, fetchImpl = fetch, nowMs = Date.now() } = {},
 ) {
-  const title = e2eTitle(sha);
-  const passed = [];
-  for (let page = 1; page <= 3; page += 1) {
-    const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
-    const response = await fetchImpl(
-      `https://api.github.com/repos/${repository}/actions/workflows/e2e-staging.yml/runs?${query}`,
-      {
-        headers: {
-          Authorization: `Bearer ${token}`,
-          Accept: "application/vnd.github+json",
-          "X-GitHub-Api-Version": "2022-11-28",
-        },
-        redirect: "error",
-        signal: AbortSignal.timeout(10_000),
+  async function get(path) {
+    const response = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+        Accept: "application/vnd.github+json",
+        "X-GitHub-Api-Version": "2022-11-28",
       },
-    );
+      redirect: "error",
+      signal: AbortSignal.timeout(10_000),
+    });
     if (!response.ok) {
       throw new Error(`Staging soak lookup failed (HTTP ${response.status})`);
     }
-    const batch = (await response.json()).workflow_runs ?? [];
-    for (const run of batch.filter((run) => run.display_title === title)) {
-      if (
-        !Number.isSafeInteger(run.id) ||
-        run.head_branch !== "main" ||
-        run.path !== ".github/workflows/e2e-staging.yml" ||
-        run.head_repository?.full_name !== repository
-      ) {
-        throw new Error("e2e-staging.yml evidence revision/branch/workflow mismatch");
-      }
-      if (run.status === "completed" && run.conclusion === "success") passed.push(run);
-    }
-    if (batch.length < 100) break;
+    return response.json();
   }
+  const title = e2eTitle(sha);
+  const named = [];
+  const passed = [];
+  // Every e2e-staging run on the SHA, however old (stagingRunsSinceCommit).
+  for (const run of await stagingRunsSinceCommit({ get, sha })) {
+    if (run.display_title !== title) continue;
+    if (
+      !Number.isSafeInteger(run.id) ||
+      run.head_branch !== "main" ||
+      run.path !== ".github/workflows/e2e-staging.yml" ||
+      run.head_repository?.full_name !== repository
+    ) {
+      throw new Error("e2e-staging.yml evidence revision/branch/workflow mismatch");
+    }
+    named.push(run);
+    if (run.status === "completed" && run.conclusion === "success") passed.push(run);
+  }
+  // A reviewer approval stands in for missing staging evidence, never for red
+  // evidence: a red or re-run staging verdict is fixed forward on a new commit.
+  refuseRedOrRerunStaging(named, sha);
   if (!passed.length) return null;
   const latest = passed.reduce((a, b) => (b.id > a.id ? b : a));
   const completedAt = Date.parse(latest.updated_at ?? "");
@@ -1015,7 +1107,7 @@ export async function checkRollbackGate(env, fetchImpl = fetch, options = {}) {
 // gate. A bare invocation (or a non-flag positional, as before) runs the
 // full gate.
 export const PRODUCTION_DEPLOY_GATE_USAGE =
-  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-migrations | --help]\nWith no flag, runs the full production gate.";
+  "Usage: node ci/production-deploy-gate.mjs [--credentials | --version-id | --rollback | --staging-soak | --fetch-passive-ledgers <dir> | --regression | --already-live | --check-ancestry | --check-migrations | --help]\nWith no flag, runs the full production gate.";
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   try {
@@ -1067,14 +1159,18 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // Clean skip when production already serves the target: exits 0 in
       // both cases and reports via GITHUB_OUTPUT so the workflow can skip
       // the deploy without going red. An unreadable /up never counts as
-      // live (fail open toward deploying, not toward skipping).
+      // live; --check-ancestry then refuses every default selection.
       const deploySha = (process.env.DEPLOY_SHA ?? "").replace(/\s+/g, "").toLowerCase();
       if (!/^[0-9a-f]{40}$/.test(deploySha)) {
         throw new Error("DEPLOY_SHA must be a full 40-hex commit (resolved by the preflight job)");
       }
       const origin =
         (process.env.PRODUCTION_ORIGIN ?? PRODUCTION_ORIGIN).trim() || PRODUCTION_ORIGIN;
-      const live = await readLiveProductionCommit({ origin });
+      let live = null;
+      for (let attempt = 0; attempt < 3 && !live; attempt += 1) {
+        if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 2000));
+        live = await readLiveProductionCommit({ origin });
+      }
       const already = isAlreadyLive(deploySha, live);
       console.log(
         already
@@ -1089,6 +1185,13 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
           `already_live=${already ? "true" : "false"}\nlive_sha=${live ?? ""}\n`,
         );
       }
+    } else if (process.argv[2] === "--check-ancestry") {
+      const result = await checkPromotionAncestry(process.env);
+      console.log(
+        result === "explicit"
+          ? "Explicit dispatch SHA selected; existing recovery authorization and promotion gates still required"
+          : `Default promotion ancestry: ${result}`,
+      );
     } else if (process.argv[2] === "--check-migrations") {
       // Pending-migration stop until the least-privilege migrator lands.
       // This step runs from the tip checkout (before the target re-checkout

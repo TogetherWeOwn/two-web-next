@@ -10,6 +10,15 @@ This guide is checked against repository source; it is not a claim that staging
 or production has been exercised. The [parity matrix](parity.md) tracks the
 migration, but its older pending labels are not a substitute for current screens.
 
+## Read response and activity times
+
+The event roster's **Answered** column shows the latest response update in UTC,
+not attendance or the original waitlist join time. The activity log's **When**
+column shows the same UTC instant for each change. Valid times keep their exact
+machine instant in semantic HTML. **Unrenderable time** means that row has no
+usable timestamp; the other rows stay visible. On a narrow screen, focus the
+labelled table region and scroll horizontally to read every column.
+
 ## Get into the panel
 
 1. Open `/admin`. There is no separate admin password or login form: guests go
@@ -383,6 +392,31 @@ or other navigation: with JavaScript enabled, the edit screen requests a browser
 leave-page warning for unsaved changes (including after a rejected Save).
 **Save** itself is exempt; the warning is not a substitute for saving.
 
+### Save → review → publish
+
+1. **Save** edits first. A rejected Save retains attempted edits but does not
+   change the saved event. Correct the errors and save successfully.
+2. For a saved draft, choose **Review before publishing** in Status, or **Review**
+   in the events list. `/e/<key>?review=1` renders the actual member detail page
+   with moderator-only preview chrome. New, unsaved forms have no review link.
+3. Check the saved title, times, venue and description. **Saved record last
+   updated** shows the persisted UTC update time, not the rendering clock.
+   Unsaved editor changes never appear in preview. Save and review again after editing.
+4. Follow correction links back to the editor, fix the fields and save. Only
+   drafts receive publication corrections. RSVP is disabled in preview; other
+   member links work normally. Published and cancelled previews describe their
+   current state without offering another publication.
+5. Choose **Publish** at the bottom of the review, or **Back to edit** to correct
+   something. Publish uses only the saved record shown, not unsaved editor edits.
+   If another save happened since you opened review, nothing publishes: the page
+   shows the latest saved record and a change warning. Check that record before
+   trying again. Validation refusals also return to review with a specific reason.
+6. Successful publication lands on the live member detail page with **Published.
+   Members can now see this event.** The editor and list still offer their direct
+   Publish actions; those keep the existing editor landing.
+
+Hono and Kit share the preview chrome without duplicating the member rendering.
+
 ### Cancel, past events and unsupported controls
 
 - **Cancel** on the list / **Cancel event** on edit is available for drafts and
@@ -493,12 +527,20 @@ series cancel or repeat-rule editor.
 
 ### Read the RSVP roster
 
-The event edit screen shows **RSVPs (count)** with **Member**, **Status**, and
-**Answered** (UTC), newest responses first by default. **Search members** with
-**Search** matches username text case-insensitively; **Status** and **Answered**
-column links toggle sorting while retaining the search. The count is the number
+The event edit screen shows **RSVPs (count)** with **Member**, **Status**,
+**Answered** (UTC), and **Waitlist position**, newest responses first by default.
+**Search members** with **Search** matches username text case-insensitively;
+**Status**, **Answered**, and **Waitlist position** column links toggle sorting while
+retaining the search. The count is the number
 of matching answers (all statuses, not just going seats), so searching can
-reduce it. The roster shows 100 answers per page with a "Showing a-b of N"
+reduce it. The **Waitlist position** column shows each waitlisted member's place
+in this event's whole queue (`#1` is next to be promoted); other answers show a dash.
+Searching, filtering, paging, or sorting never renumbers the queue, so numbers
+can skip. Positions reflect the queue at page render and can change after RSVPs
+move; reload before quoting one. A place in line is not a promised seat, and paused
+or closed queues do not advance. **Answered** is answer recency, not queue priority.
+Sorting by **Waitlist position** lists the queue head first (last in descending
+order); unranked answers always sort last. The roster shows 100 answers per page with a "Showing a-b of N"
 line; **Previous** and **Next** keep the search and sort and return to the
 roster section. Sorting or searching again starts back on page 1. Save event
 edits before these controls reload the page. This is a read-only roster: no adding/removing answers,

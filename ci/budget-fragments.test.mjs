@@ -17,6 +17,7 @@ import { gzipSync } from "node:zlib";
 import { loadBundleBudgets, loadKitBudget } from "./budget-fragments.mjs";
 import { run as runBundle } from "./check-bundle-budget.mjs";
 import { run as runKit } from "./check-kit-perf.mjs";
+import { approvedClientBudget } from "./client-ratchet-approval.mjs";
 
 const repoRoot = dirname(fileURLToPath(new URL("../package.json", import.meta.url)));
 
@@ -150,6 +151,11 @@ function kitFixture(t, fragments) {
 // and 338213; 338176 rejects by 37).
 // 338688 admits the MCP truncation notice on top of it (two builds 338619;
 // 338432 rejects by 187).
+// 339200 admits the admin UTC chronology composed with current main (two builds
+// 339026 and 339026; the lower 256-byte step 338944 rejects by 82).
+// 339456 re-admits the composed stack after the review-round adapter
+// hardening (two local builds 339319 and exact-head CI 339318; 339200
+// rejects by 119).
 // 339968 admits the session role recheck on top of it (two builds 339958;
 // 338688 rejects by 1270).
 // 340224 admits the recheck review hardening on top of that (two builds
@@ -158,9 +164,11 @@ function kitFixture(t, fragments) {
 // 340593 and 340594; 340224 rejects by 369 and 370).
 // 341248 admits the QA-token throttle on top of that (two builds, both
 // 341055; 340736 rejects by 319).
+// 342272 is the bounded Ember allocation (frozen builds 341996 and 341995;
+// 341248 rejects by 748 and 747), not automatic 25% headroom.
 const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
   335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176,
-  338432, 338688, 339968, 340224, 340736, 341248,
+  338432, 338688, 339200, 339456, 339968, 340224, 340736, 341248, 342272,
 ];
 // Admitted server.js maxRawBytes allocations. The SHIPPING_KIT_BUDGET pin
 // above (1203200) is the historical baseline; 1203968 admits the
@@ -179,6 +187,11 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // and 1209742; 1209344 rejects by 396 and 398).
 // 1211392 admits the MCP truncation notice on top of it (two builds 1210976;
 // 1209856 rejects by 1120).
+// 1212416 admits the admin UTC chronology composed with current main (two builds
+// 1212373 and 1212371; the lower 512-byte step 1211904 rejects by 469).
+// 1213440 re-admits the composed stack after the review-round adapter
+// hardening (two local builds 1213135 and exact-head CI 1213133; the lower
+// 512-byte step 1212928 rejects by 207).
 // 1217024 admits the session role recheck on top of it (two builds 1217003;
 // 1211392 rejects by 5611).
 // 1217536 admits the recheck review hardening on top of that (two builds
@@ -187,9 +200,16 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // 1219131 and 1219131; 1217536 rejects by 1595).
 // 1220608 admits the QA-token throttle on top of that (two builds 1220482
 // and 1220480; 1219584 rejects by 898 and 896).
+// 1222656 admits the pinned Ember migration (both frozen builds 1222251;
+// 1220608 rejects by 1643), with every other fragment unchanged.
+// 1228800 admits the RFC 5892 joiner tables in the shared text rule on top of
+// that (composed build 1228316 over main 2c86dc09; 1228288 rejects by 28).
+// 1229312 admits the profile bidi and invisible-character rule on top of that
+// (+435 over the joiner build; projected 1228751 over main 2c86dc09 leaves
+// 49 bytes at 1228800, too thin to absorb further main growth).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
-  1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536,
-  1219584, 1220608,
+  1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440,
+  1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -212,26 +232,36 @@ const SHIPPING_CLIENT_JS_ALLOCATIONS = [
   // Activity-log recovery links: two builds 260403/103909; the lower 260096
   // raw step rejects by 307, gzip ceiling unchanged.
   [260608, 103936],
+  // Admin UTC chronology: stack local and CI builds 261380/104463; the
+  // lower 261120 raw step rejects by 260, the lower 104448 gzip step by 15.
+  [261632, 104704],
+  // Admin UTC chronology remeasure: composed-stack builds 261850/104682
+  // after the adapter hardening; the 261632 raw ceiling rejects by 218,
+  // gzip ceiling unchanged.
+  [262144, 104704],
   // Moderator row accessible names: two builds 261250/104332; the lower
   // 261120 raw step rejects by 130 and the lower 104192 gzip step by 140.
   [261632, 104448],
 ];
 
-function assertShippingKitBudget(actual) {
+function assertShippingKitBudget(actual, approvedClient) {
   const gzip = actual?.server?.js?.maxGzipBytes;
   assert.ok(
     SHIPPING_SERVER_GZIP_ALLOCATIONS.includes(gzip),
-    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339968, 340224, 340736, 341248`,
+    `unsupported server gzip allocation ${String(gzip)}: expected one of 335104, 335360, 335872, 336128, 336384, 336640, 336896, 337152, 337408, 337664, 337920, 338176, 338432, 338688, 339200, 339456, 339968, 340224, 340736, 341248, 342272`,
   );
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536, 1219584, 1220608`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440, 1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312`,
   );
   const clientJs = actual?.client?.js;
-  const [maxRawBytes, maxGzipBytes] = SHIPPING_CLIENT_JS_ALLOCATIONS.find(
-    ([raw, clientGzip]) => clientJs?.maxRawBytes === raw && clientJs?.maxGzipBytes === clientGzip,
-  ) ?? [SHIPPING_KIT_BUDGET.client.js.maxRawBytes, SHIPPING_KIT_BUDGET.client.js.maxGzipBytes];
+  const [maxRawBytes, maxGzipBytes] = approvedClient
+    ? [approvedClient.js.maxRawBytes, approvedClient.js.maxGzipBytes]
+    : (SHIPPING_CLIENT_JS_ALLOCATIONS.find(
+        ([raw, clientGzip]) =>
+          clientJs?.maxRawBytes === raw && clientJs?.maxGzipBytes === clientGzip,
+      ) ?? [SHIPPING_KIT_BUDGET.client.js.maxRawBytes, SHIPPING_KIT_BUDGET.client.js.maxGzipBytes]);
   assert.deepEqual(actual, {
     ...SHIPPING_KIT_BUDGET,
     server: {
@@ -239,13 +269,14 @@ function assertShippingKitBudget(actual) {
     },
     client: {
       ...SHIPPING_KIT_BUDGET.client,
+      ...(approvedClient && { css: approvedClient.css }),
       js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes, maxGzipBytes },
     },
   });
 }
 
 test("kit fragments aggregate to an admitted shipping allocation", () => {
-  assertShippingKitBudget(loadKitBudget(repoRoot));
+  assertShippingKitBudget(loadKitBudget(repoRoot), approvedClientBudget(repoRoot));
 });
 
 test("shipping oracle admits the measured 335360 server gzip allocation", () => {
@@ -379,6 +410,19 @@ test("shipping oracle admits the measured MCP truncation-notice server allocatio
   });
 });
 
+test("shipping oracle admits the measured admin-UTC-chronology allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1212416, maxGzipBytes: 339200 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 261632, maxGzipBytes: 104704 },
+    },
+  });
+});
+
 test("shipping oracle admits the measured session role-recheck server allocations together", () => {
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
@@ -388,6 +432,19 @@ test("shipping oracle admits the measured session role-recheck server allocation
     client: {
       ...SHIPPING_KIT_BUDGET.client,
       js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 260608, maxGzipBytes: 103936 },
+    },
+  });
+});
+
+test("shipping oracle admits the remeasured admin-UTC-chronology allocations together", () => {
+  assertShippingKitBudget({
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1213440, maxGzipBytes: 339456 },
+    },
+    client: {
+      ...SHIPPING_KIT_BUDGET.client,
+      js: { ...SHIPPING_KIT_BUDGET.client.js, maxRawBytes: 262144, maxGzipBytes: 104704 },
     },
   });
 });
@@ -431,6 +488,25 @@ test("shipping oracle admits the measured QA-token throttle server allocations t
   });
 });
 
+test("shipping oracle admits the bounded Ember server allocations together", () => {
+  const plan = {
+    ...SHIPPING_KIT_BUDGET,
+    server: {
+      js: { ...SHIPPING_KIT_BUDGET.server.js, maxRawBytes: 1222656, maxGzipBytes: 342272 },
+    },
+  };
+  assertShippingKitBudget(plan);
+  for (const [axis, value] of [
+    ["maxRawBytes", 1222657],
+    ["maxGzipBytes", 342273],
+    ["maxFiles", 127],
+  ]) {
+    const drift = structuredClone(plan);
+    drift.server.js[axis] = value;
+    assert.throws(() => assertShippingKitBudget(drift), `${axis} drift must fail`);
+  }
+});
+
 test("shipping oracle admits the measured 1203968 server raw allocation", () => {
   assertShippingKitBudget({
     ...SHIPPING_KIT_BUDGET,
@@ -450,7 +526,8 @@ test("shipping oracle admits the measured ongoing-night server allocations", () 
 test("shipping oracle rejects an unsupported server raw allocation", () => {
   for (const maxRawBytes of [
     1203201, 1203712, 1203967, 1203969, 1205248, 1205503, 1205505, 1207551, 1207553, 1209343,
-    1209345, 1209855, 1209857, 1211391, 1211393, 1219583, 1219585, 1220607, 1220609,
+    1209345, 1209855, 1209857, 1211391, 1211393, 1212415, 1212417, 1213439, 1213441, 1219583,
+    1219585, 1220607, 1220609,
   ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
@@ -466,7 +543,8 @@ test("shipping oracle rejects an unsupported server raw allocation", () => {
 test("shipping oracle rejects an unsupported server gzip allocation", () => {
   for (const maxGzipBytes of [
     335105, 335359, 335616, 336385, 336641, 336897, 337153, 337407, 337409, 337919, 337921, 338175,
-    338177, 338431, 338433, 338687, 338689, 340735, 340737, 341247, 341249,
+    338177, 338431, 338433, 338687, 338689, 339199, 339201, 339455, 339457, 340735, 340737, 341247,
+    341249,
   ]) {
     const unsupported = {
       ...SHIPPING_KIT_BUDGET,
@@ -547,6 +625,16 @@ test("shipping oracle rejects client js pairs outside the admitted list", () => 
     [260608, 103935],
     [260608, 103937],
     [261632, 103936],
+    [260608, 104704],
+    [261631, 104704],
+    [261633, 104704],
+    [261632, 104703],
+    [261632, 104705],
+    [262143, 104704],
+    [262145, 104704],
+    [262144, 104703],
+    [262144, 104705],
+    [262144, 103936],
     [261631, 104448],
     [261633, 104448],
     [261632, 104447],
@@ -639,7 +727,7 @@ test("kit checker fits a fragment tree exactly at its ceilings", (t) => {
 
 test("kit checker breach against a fragment ceiling exits 1", (t) => {
   const root = kitFixture(t, {
-    "server.json": { server: { js: { maxRawBytes: 999999, maxGzipBytes: 1, maxFiles: 4 } } },
+    "server.json": { server: { js: { maxRawBytes: 1, maxGzipBytes: 999999, maxFiles: 4 } } },
   });
   assert.equal(runKit(root, sink), 1);
 });

@@ -34,8 +34,9 @@ concurrency:
 jobs:
   preflight:
     name: production-preflight
-    # Automatic runs (workflow_run, schedule) only promote a soaked green with
-    # no newer red staging run (ci/resolve-promotion-sha.mjs). A workflow_run
+    # Automatic runs (workflow_run, schedule) only promote a soaked first-attempt
+    # green with no red or re-run staging run on it or newer
+    # (ci/resolve-promotion-sha.mjs). A workflow_run
     # from a failed or non-main staging run resolves nothing and skips cleanly.
     if: >-
       github.event_name == 'workflow_dispatch' ||
@@ -85,6 +86,18 @@ jobs:
         run: node ci/production-deploy-gate.mjs --already-live
         env:
           DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+      - name: Refuse backward or unproven default production promotion
+        # Workflow-head code, before candidate checkout or any promotion side
+        # effects. Only an explicit dispatch SHA selects the existing recovery
+        # route; an empty-SHA dispatch obeys the same ancestry rule as auto runs.
+        if: steps.target.outputs.sha != ''
+        run: node ci/production-deploy-gate.mjs --check-ancestry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          INPUT_SHA: ${{ inputs.sha }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+          LIVE_SHA: ${{ steps.live.outputs.live_sha }}
       - name: Refuse pending production migrations before any deploy
         # A target whose journal has entries production lacks reads the live
         # production ledger via /up: when the ledger holds every target web
@@ -134,6 +147,18 @@ jobs:
           ROLLBACK_ENVIRONMENT: production
           GITHUB_TOKEN: ${{ github.token }}
           DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+      - name: Recheck ancestry against the recorded production rollback commit
+        # Production may change between the first live read and rollback capture.
+        # Bind admission to the captured commit; the deploy job's locked version
+        # freshness check then covers any change after that capture. Still tip code.
+        if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
+        run: node ci/production-deploy-gate.mjs --check-ancestry
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          INPUT_SHA: ${{ inputs.sha }}
+          DEPLOY_SHA: ${{ steps.target.outputs.sha }}
+          LIVE_SHA: ${{ steps.rollback-target.outputs.commit }}
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         if: steps.target.outputs.sha != '' && steps.live.outputs.already_live != 'true'
         with:
@@ -360,7 +385,12 @@ jobs:
       # No migrations, queue creation or SQL tests here: provisioning and W16
       # rehearsal are separate operator work. CI uses disposable SQL services.
       - name: Build production target without deploying
-        run: npx wrangler deploy --dry-run --env production --outdir dist-production
+        run: npx wrangler deploy --dry-run --env production --outdir dist-production --metafile dist-production/bundle-meta.json
+      - name: Inventory the exact production bundle
+        id: inventory
+        run: node workflow-tip/ci/worker-bundle-evidence.mjs create dist-production
+        env:
+          BUILD_SHA: ${{ needs.preflight.outputs.sha }}
       - name: Require production-only Cloudflare credentials
         run: node ci/production-deploy-gate.mjs --credentials
         env:
@@ -414,11 +444,20 @@ jobs:
       # test/probe-workflows.test.ts and reconciled per docs/runbook.md
       # ("Production trigger reconciliation"), never by this workflow.
       - name: Upload reviewed production version without changing triggers
-        run: npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"
+        # No second build: the verified entry is the one uploaded. Wrangler's
+        # native JSONL output binds this upload to a version UUID, not a log guess.
+        run: |
+          set -euo pipefail
+          node workflow-tip/ci/worker-bundle-evidence.mjs verify dist-production
+          test ! -e "$WRANGLER_OUTPUT_FILE_PATH"
+          npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}" --no-bundle dist-production/worker.js
+          node workflow-tip/ci/worker-bundle-evidence.mjs uploaded dist-production
         env:
           CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
           DEPLOY_SHA: ${{ needs.preflight.outputs.sha }}
+          BUILD_SHA: ${{ needs.preflight.outputs.sha }}
+          WRANGLER_OUTPUT_FILE_PATH: ${{ runner.temp }}/worker-version-upload.jsonl
       - name: Capture pre-promote dead-letter baseline
         # Read-only GET before the central gradual-promote action runs: that
         # action's stage smokes execute this repo's bin/smoke.mjs in this job,
@@ -532,6 +571,20 @@ jobs:
         with:
           name: production-promotion-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: ${{ runner.temp }}/promotion.json
+          if-no-files-found: error
+          retention-days: 30
+      - name: Bind bundle evidence to the smoke-verified promoted version
+        # Evidence failures must not suppress the successful promotion record.
+        run: node workflow-tip/ci/worker-bundle-evidence.mjs deployed dist-production
+        env:
+          BUILD_SHA: ${{ needs.preflight.outputs.sha }}
+          PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
+      - name: Archive production bundle inventory and receipts
+        if: ${{ !cancelled() && steps.inventory.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: worker-bundle-production-${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist-production/
           if-no-files-found: error
           retention-days: 30
 

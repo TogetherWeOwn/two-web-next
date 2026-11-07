@@ -2,6 +2,7 @@
 // arbitrary raw queries. A classification still permits exactly one statement.
 import { Column, getTableName, is } from "drizzle-orm";
 import { refuseMemberRead, type NonSensitiveRead } from "../member-reads";
+import { rankedRosterPrefix } from "./roster-statement";
 
 export type SelectedField = { path: string[]; field: unknown };
 export const normalizedStatement = (statement: string) => statement.trim().replace(/\s+/g, " ");
@@ -117,6 +118,16 @@ export function rawMemberOwner(statement: string): string | undefined {
   if (
     /^select event_id, user_id, position from \( select event_id, user_id, row_number\(\) over \(partition by event_id order by created_at, coalesce\(legacy_id, id\), id\)::int as position from rsvps where event_id in \(\$\d+(?:, \$\d+)*\) and status = 'waitlisted' \) line where user_id = \$\d+$/.test(
       query,
+    )
+  )
+    return "user_id";
+  // Moderator roster: only this bounded, event-scoped window projection may
+  // return computed queue ranks. Its user_id owns the joined username too.
+  // Filters run outside the window; sorts are fixed tokens, never arbitrary SQL.
+  if (
+    query.startsWith(rankedRosterPrefix) &&
+    /^ \$1 \) line left join users on users\.id = line\.user_id(?: where (?:line\.status = \$2(?: and users\.username ilike \$3)?|users\.username ilike \$2))? order by (?:line\.position (?:asc|desc) nulls last,|line\.(?:status|updated_at) (?:asc|desc) ,) line\.user_id asc limit 100 offset \$\d+$/.test(
+      query.slice(rankedRosterPrefix.length),
     )
   )
     return "user_id";

@@ -57,6 +57,7 @@ import {
   stripTags,
 } from "./helpers/refused-edit-roster";
 import { clearAuditRows } from "./helpers/audit-rows";
+import { registerWaitlistAcceptance } from "./helpers/admin-waitlist-acceptance";
 import {
   cookieFor as featuredCookieFor,
   env as featuredEnv,
@@ -212,6 +213,7 @@ describe("admin guard pins (memory store, no DB)", () => {
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", () => {
+  registerWaitlistAcceptance();
   // Roster acceptance keeps its own scoped fixture under the pre-existing DB gate.
   describe("refused event edit explains the missing roster (isolated test DB)", () => {
     let fixture: MemberDataFixture;
@@ -413,10 +415,15 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     });
 
     beforeEach(async () => {
+      // Keep event fixtures in the future without faking Postgres timers.
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-11-04T12:00:00Z"));
       await clearAuditRows(db, ["member_data_access_logs", "activity_log"]);
       await db.delete(events);
       await db.delete(featuredContents);
       cookie = await cookieFor(store, { userId: modId, username: "mod", moderator: true });
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date("2026-09-30T20:00:00Z"));
       vi.clearAllMocks();
     });
 

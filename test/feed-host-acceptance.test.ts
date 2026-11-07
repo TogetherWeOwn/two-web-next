@@ -36,10 +36,10 @@
 // params+value; the RSS reader is an independent well-formedness XML parser.
 // Raw-byte `includes`/`split` checks only prove escaping and placeholder-only
 // (no other `mailto:` / real domain), never presence.
-import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
+import { encodeEventRow } from "./helpers/pg-proxy-event-projection";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
@@ -574,17 +574,12 @@ describe("feed host: RSS author from organizer_name (parser-validated)", () => {
 // Route-level: pg-proxy fixtures, real app/reads/builders, no DB or network.
 // ---------------------------------------------------------------------------
 
-const columns = Object.keys(getTableColumns(events)) as (keyof EventRow)[];
-
-function wireRow(row: EventRow): unknown[] {
-  return columns.map((key) => {
-    const value = row[key];
-    return value instanceof Date ? value.toISOString() : value;
-  });
-}
-
 function routeFixture(rows: EventRow[]) {
   const query = vi.fn(async (sql: string, params: unknown[]) => {
+    const wireRow = (row: EventRow) =>
+      encodeEventRow(sql, params, row, (value) =>
+        value instanceof Date ? value.toISOString() : value,
+      );
     if (sql.includes('from "events"') && sql.includes('"event_key" =')) {
       return { rows: rows.filter((r) => r.eventKey === params[0]).map(wireRow) };
     }

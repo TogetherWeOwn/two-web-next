@@ -196,9 +196,9 @@ describe("event detail theme", () => {
 
   it("keeps event CSS compact, external and responsive without new art or dependencies", () => {
     const css = readFileSync(new URL("../public/event-theme.css", import.meta.url), "utf8");
-    expect(css).toContain("@media (max-width: 48rem)");
-    expect(css).toContain("overflow-wrap: anywhere");
-    expect(css).toContain("min-height: 44px");
+    expect(css).toContain("@media(max-width:48rem)");
+    expect(css).toContain("overflow-wrap:anywhere");
+    expect(css).toContain("min-height:44px");
     expect(css).not.toContain("@import");
     expect(css).not.toContain("url(");
     // 6150: the four Display stacks each carry the metric-matched

@@ -297,10 +297,20 @@ binding isolation before any remote mutation.
 
 1. Require green `ci-ok`, `e2e-ok`, `gitleaks`, `pr-lint`, `CodeRabbit` and
    `Devin Review` on the exact head SHA, with every review finding fixed or
-   answered with evidence, and the owner's approval through
-   `request_confirmation` on the card (this merge deploys production). The
-   agent that did the work then squash-merges. Record the merged SHA and
-   intended target.
+   answered with evidence, and fresh per-PR exact-head Release Manager
+   `request_confirmation` on a child card assigned and addressed to the Release
+   Manager (this merge deploys production). Apply the
+   [merge and production staging contract](../CONTRIBUTING.md#merge-and-production-staging-evidence)
+   and its retained safeguards: staging is met by the automatic post-merge,
+   pre-production staging/e2e/soak gate, not a pre-merge staging run or artifact
+   equality. Production promotion still waits for qualification of the resulting
+   exact `main` SHA. A scope-skipped staging journey/passive job is not qualifying
+   evidence: follow the linked contract's post-merge manual-dispatch caveat rather
+   than claiming automatic eligibility. Any push requires a new exact-head confirmation.
+   When native review stages apply, the final-stage reviewer squash-merges the
+   exact reviewed and confirmed head before closing the task; otherwise the
+   author merges. Pin the merge to that SHA. Record the confirmation, pinned
+   squash SHA and intended target in the release log.
 2. Before release, capture the current deployment and its **version ID** (not
    its deployment ID) as the known-good rollback pointer. The following are
    remote metadata reads, not database probes; approved Cloudflare credentials
@@ -672,6 +682,48 @@ line: `-- rollback-safe: <reason>`; reviewers check that note. The deploy job
 then confirms the recorded version is still the single 100% deployment and
 still carries its required secrets before any production mutation.
 
+#### Default promotion ancestry admission
+
+The resolver (`ci/resolve-promotion-sha.mjs`) retains latest-run invalidation:
+a newer skipped, unfinished or failed staging run cannot be outvoted by an
+older pass for the same SHA. Consequently, its newest eligible candidate can
+be older than the commit production currently serves. Staging eligibility is
+not proof of forward ancestry.
+
+Initial `/up` live-SHA capture makes at most three reads, two seconds apart,
+stopping on the first valid 40-hex commit. Exhausted or invalid reads leave
+live identity unknown; they never bypass default ancestry admission.
+After capture, `deploy-production` runs
+`node ci/production-deploy-gate.mjs --check-ancestry` from the trusted
+**workflow-head** checkout, before candidate checkout, migration checks or any
+promotion side effects. For `workflow_run`, `schedule`, and manual dispatch
+with an empty `sha`, live production must name a full 40-hex commit. Equality
+retains the existing clean no-op. Otherwise GitHub's exact-SHA
+`compare/<live>...<candidate>` must positively prove a forward descendant:
+`ahead`, positive integral `ahead_by`, zero `behind_by`, matching total count,
+and both base and merge-base equal to live. A behind or divergent candidate
+is a **refusal**, not a quiet no-op; missing, inconsistent, malformed or
+unavailable evidence also fails closed. No candidate checkout or downstream
+deployment runs after that refusal. The guard does not search for a different
+candidate or change staging skip policy.
+
+After rollback-target capture, the same workflow-head guard runs again with
+`LIVE_SHA` bound to the **recorded rollback commit**, still before candidate
+checkout. This closes the window where production changes between the first
+live read and rollback capture: admission against an earlier ancestor is not
+sufficient. The deploy job retains the shared production mutation lock and
+requires that recorded version to remain the single 100% deployment before
+mutation, covering changes after capture. A failed second ancestry lookup
+also refuses promotion; it never falls back to the first proof.
+
+Only `workflow_dispatch` with a nonblank, full SHA matching the resolved
+candidate selects the separate explicit redeploy/recovery route. That input
+is not authorization: retain current Release Manager approval, independent
+Security and QA review, exact-SHA CI, incident/rollback requirements and all
+other applicable promotion gates. `migrations_applied=true` does not bypass
+default ancestry admission, and neither does an empty-SHA manual dispatch.
+The rollback workflow remains a separate already-served-version route.
+
 #### Regression check against production
 
 Before the deploy job, `deploy-production` runs two more gates
@@ -702,6 +754,18 @@ mode the approval stands in for the resolver but not for the soak floor:
 when a staging pass for the candidate exists, it must still have soaked 30
 minutes; a promotion with no staging evidence yet rides on the reviewer's
 approval alone.
+
+Both modes refuse a candidate with red staging evidence: any failed or
+timed-out `e2e-staging` run that names it, or any run past its first attempt.
+GitHub's run list shows only a run's latest attempt, so a re-run that turned
+green hides the red attempt it replaced; the gate counts the re-run itself as
+red. The check reads every `e2e-staging` run created since the candidate was
+committed, not a fixed window, so a fresh redeploy cannot bury an older red
+run; a history too long to read in full (over 1,000 runs) is refused. A
+reviewer approval stands in for missing staging evidence, never for red
+evidence. Fix forward: land a new commit and promote it once its own staging
+run passes on the first attempt. A re-run can still diagnose a flake, but its
+green is not promotion evidence.
 
 #### Deploy notify
 

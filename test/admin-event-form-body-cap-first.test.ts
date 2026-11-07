@@ -30,6 +30,11 @@ vi.mock("../src/admin/store", async (importOriginal) => ({
   recordAccess: vi.fn(),
 }));
 
+vi.mock("../src/admin/reads", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../src/admin/reads")>()),
+  listRoster: vi.fn(async () => ({ rows: [], total: 0 })),
+}));
+
 const KEY = "01J0000000000000000000ABCD";
 const MAX = BODY_LIMIT_BYTES.form;
 const ERROR = {
@@ -172,6 +177,46 @@ beforeEach(() => {
   vi.mocked(recordAccess).mockResolvedValue(true);
 });
 
+describe("saved-event notice admission", () => {
+  it.each(["draft", "published", "cancelled"])(
+    "uses the current saved %s state",
+    async (status) => {
+      const current = { ...row, status };
+      vi.mocked(getEvent).mockResolvedValue(current);
+      vi.mocked(updateEvent).mockResolvedValue({
+        row: current,
+        writeBack: null,
+        childWriteBacks: [],
+      });
+      const { app, cookie, bindings } = await mounted(MODERATOR, throttleFixture(0));
+      const response = await app.request(`/events/${KEY}`, postForm(cookie, FORM), bindings);
+      expect(response.status).toBe(303);
+      expect(response.headers.get("location")).toBe(
+        `/admin/events/${KEY}${status === "draft" ? "?saved=1" : ""}`,
+      );
+      for (const saved of ["", "?saved=1", "?saved=%3Cscript%3E"]) {
+        const landing = await app.request(
+          `/events/${KEY}${saved}`,
+          { headers: { cookie } },
+          bindings,
+        );
+        expect(landing.status).toBe(200);
+        const html = await landing.text();
+        expect(html.includes('data-testid="event-saved-review"')).toBe(
+          status === "draft" && saved === "?saved=1",
+        );
+        if (status === "draft" && saved === "?saved=1") {
+          expect(html).toContain('class="notice" role="status"');
+          expect(html).toContain(`Saved. <a class="link" href="/e/${KEY}?review=1">`);
+          expect(html).toContain("Review the saved event before publishing");
+        }
+        expect(html).not.toContain("&lt;script&gt;");
+      }
+      expect(dbTouched).not.toHaveBeenCalled();
+    },
+  );
+});
+
 describe("body-size cap precedes the admin-write throttle on event form posts", () => {
   it.each(formPosts)(
     "%s: advertised and streamed oversized bodies are 413 with zero throttle spend and no store read",
@@ -277,7 +322,7 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
       const { app, cookie, bindings } = await mounted(MODERATOR, throttle);
       const response = await app.request(path, postForm(cookie, FORM), bindings);
       expect(response.status).toBe(303);
-      expect(response.headers.get("location")).toBe(`/admin/events/${KEY}`);
+      expect(response.headers.get("location")).toBe(`/admin/events/${KEY}?saved=1`);
       expect(throttle.count()).toBe(1);
       expect(
         throttle.buckets.some((v) => typeof v === "string" && v.startsWith("admin-write:")),
@@ -299,12 +344,15 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
       const throttle = throttleFixture(0);
       const { app, cookie, bindings } = await mounted(MODERATOR, throttle);
       const response = await app.request(
-        path,
+        `${path}?saved=1`,
         postForm(cookie, { ...FORM, starts_at: "not-a-time" }),
         bindings,
       );
       expect(response.status).toBe(422);
-      expect(await response.text()).toContain('data-testid="form-errors"');
+      const html = await response.text();
+      expect(html).toContain('data-testid="form-errors"');
+      expect(html).not.toContain('data-testid="event-saved-review"');
+      expect(response.headers.get("location")).toBeNull();
       expect(throttle.count()).toBe(1);
       expect(createEvent).not.toHaveBeenCalled();
       expect(updateEvent).not.toHaveBeenCalled();
