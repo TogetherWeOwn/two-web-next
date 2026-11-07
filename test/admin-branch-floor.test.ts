@@ -409,7 +409,8 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
   const actor = { id: MODERATOR.userId, username: MODERATOR.username };
 
   beforeAll(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
+    // The lock-wait proof needs a writer, publisher and independent observer.
+    fixture = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 3 });
     db = fixture.db;
     cookie = await cookieFor(store, MODERATOR);
   });
@@ -674,7 +675,10 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       const gate = new Promise<void>((resolve) => (release = resolve));
       let locked!: () => void;
       const holding = new Promise<void>((resolve) => (locked = resolve));
+      let writerPid = 0;
       const writer = db.transaction(async (tx) => {
+        const [backend] = await tx.execute<{ pid: number }>(sql`select pg_backend_pid() as pid`);
+        writerPid = backend!.pid;
         await tx.select().from(events).where(eq(events.eventKey, row.eventKey)).for("update");
         locked();
         await gate;
@@ -683,10 +687,10 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
           .set({ title: "Concurrent edit", updatedAt: new Date(row.updatedAt.getTime() + 5000) })
           .where(eq(events.eventKey, row.eventKey));
       });
-      await holding;
       let outcome: unknown;
       let observed = false;
       try {
+        await Promise.race([holding, writer]);
         const publish = transitionEvent(db, actor, row.eventKey, "published", reviewed).then(
           () => "published",
           (err: unknown) => (err instanceof ValidationError ? Object.keys(err.fields) : err),
@@ -694,7 +698,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
         // Wait until the publisher is blocked on the row lock before committing.
         for (let i = 0; i < 100 && !observed; i++) {
           const waiting = await db.execute(
-            sql`select 1 from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database()`,
+            sql`select 1 from pg_stat_activity where wait_event_type = 'Lock' and datname = current_database() and ${writerPid} = any(pg_blocking_pids(pid))`,
           );
           const found = waiting as unknown as { rows?: unknown[]; length?: number };
           observed = (found.rows ?? found).length! > 0;

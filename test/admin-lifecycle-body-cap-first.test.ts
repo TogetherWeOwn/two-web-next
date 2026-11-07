@@ -410,6 +410,7 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
         expect(vi.mocked(transitionEvent).mock.calls[0]?.slice(2)).toEqual([
           KEY,
           action === "publish" ? "published" : "cancelled",
+          undefined,
         ]);
         expect(setRsvpOpen).not.toHaveBeenCalled();
         expect(duplicateEvent).not.toHaveBeenCalled();
