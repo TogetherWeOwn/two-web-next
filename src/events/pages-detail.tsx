@@ -99,6 +99,7 @@ export const EventPage: FC<{
   attendeePage?: number;
   /** Rooted .md alternate path (A2), e.g. `/e/<key>.md`. */
   markdownAlternate?: string;
+  now?: Date;
   review?: SavedEventReview;
 }> = ({
   e,
@@ -119,14 +120,14 @@ export const EventPage: FC<{
   returnTo,
   attendeePage = 1,
   markdownAlternate,
+  now = new Date(),
   review: requestedReview,
 }) => {
   const review = session?.moderator ? requestedReview : undefined;
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
   const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
-  // Share one render instant with the lineup and RSVP control.
-  const now = new Date();
+  // Share the supplied display instant with the lineup and RSVP control.
   const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
