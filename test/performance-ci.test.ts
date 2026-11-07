@@ -12,7 +12,8 @@ import worker, { fixtureEnvForRequest } from "../ci/lighthouse-worker";
 import type { Db } from "../src/db/index";
 import { events, rsvps } from "../src/db/admin-schema";
 import { getPublicEvent, listHomeUpcoming } from "../src/events/reads";
-import { listVisibleFeatured } from "../src/featured";
+import { listPublishedFeatured, listVisibleFeatured } from "../src/featured";
+import { cachedFeatured } from "../src/home-cache";
 import { auditPaths, fixtureKey } from "../ci/lighthouse-paths";
 
 const require = createRequire(import.meta.url);
@@ -176,6 +177,16 @@ describe("performance CI", () => {
         imageAlt: null,
       },
     ]);
+    // Exercise the exact guest-cache base SQL too: visible-only coverage missed
+    // the inherited fixture drift and let Lighthouse admit an empty homepage.
+    expect(await listPublishedFeatured(db, now)).toEqual(
+      featured.map((row) => ({ ...row, startsAt: null, endsAt: null })),
+    );
+    const env = fixtureEnvForRequest(now.getTime());
+    const openDb = vi.fn(async () => env.ADMIN_DB as Db);
+    expect(await cachedFeatured(env, openDb, now)).toEqual(featured);
+    expect(await cachedFeatured(env, openDb, new Date(now.getTime() + 1))).toEqual(featured);
+    expect(openDb).toHaveBeenCalledOnce();
     const failure = new Error("Local callback failed");
     await expect(
       db.transaction(async () => {
