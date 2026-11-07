@@ -146,7 +146,8 @@ together. No `unsafe-inline` was added.
   screenshots and browser assertions are the Kit visual evidence.
 - Exact-pushed-head CI, independent design QA and CI visual-artifact review remain
   required. No visual baseline was accepted or regenerated locally. Accept an
-  intentional diff only through the CI failure artifact and `ci/visual-accept.mjs`.
+  intentional diff only through the reviewed CI failure artifact: use
+  `ci/visual-accept.mjs` for Hono and `ci/kit-visual-accept.mjs` for Kit.
 
 No production or staging database, probe, migration, deployment or merge was used.
 No performance budget, accessibility threshold or visual mask was loosened.

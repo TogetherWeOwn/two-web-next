@@ -53,9 +53,13 @@ function selftest() {
 }
 
 async function fetchText(url) {
-  const res = await fetch(url);
-  if (!res.ok) fail(`kit fetch ${res.status} for ${url}`);
-  return res.text();
+  try {
+    const res = await fetch(url, { signal: AbortSignal.timeout(15_000) });
+    if (!res.ok) fail(`kit fetch ${res.status} for ${url}`);
+    return await res.text();
+  } catch (error) {
+    fail(`kit fetch failed for ${url}: ${error instanceof Error ? error.message : String(error)}`);
+  }
 }
 
 async function check() {

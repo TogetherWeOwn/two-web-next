@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +16,38 @@ test("design-kit drift selftest passes on the vendored pin", () => {
     tag: readFileSync(join(ROOT, "vendor/design-kit/VERSION"), "utf8").trim(),
     mode: "selftest",
   });
+});
+
+test("design-kit network failures keep JSON output and bounded requests", () => {
+  for (const bodyFailure of [false, true]) {
+    const out = spawnSync(
+      process.execPath,
+      [
+        "--input-type=module",
+        "-e",
+        `import assert from "node:assert/strict";
+        AbortSignal.timeout = (milliseconds) => {
+          assert.equal(milliseconds, 15_000);
+          return new AbortController().signal;
+        };
+        globalThis.fetch = async (_url, options) => {
+          assert.ok(options?.signal instanceof AbortSignal);
+          if (${bodyFailure}) return { ok: true, text: async () => { throw new Error("fixture body failure"); } };
+          throw new Error("fixture network failure");
+        };
+        await import(${JSON.stringify(SCRIPT)});`,
+      ],
+      { encoding: "utf8", timeout: 5_000, env: {} },
+    );
+    assert.ifError(out.error);
+    assert.equal(out.status, 1);
+    const receipt = JSON.parse(out.stdout.trim());
+    assert.equal(receipt.ok, false);
+    assert.match(receipt.error, /kit fetch failed for https:\/\/raw\.githubusercontent\.com\//);
+    assert.ok(receipt.error.endsWith(`fixture ${bodyFailure ? "body" : "network"} failure`));
+    assert.ok(out.stderr.includes(receipt.error));
+    assert.doesNotMatch(out.stderr, /\n\s+at /);
+  }
 });
 
 test("required CI checks kit provenance and adapters after installing dependencies", () => {

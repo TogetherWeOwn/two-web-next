@@ -94,13 +94,51 @@ describe("echo violet is never a text colour", () => {
     expect(violations).toEqual([]);
   });
 
+  function echoTextReferences(css: string): string[] {
+    const clean = css.replace(/\/\*[\s\S]*?\*\/|<!--[\s\S]*?-->/g, "");
+    const references = [...clean.matchAll(/(?<![\w-])color\s*:[^;{}]+;/gi)]
+      .filter((match) =>
+        /--two-color-(state-)?echo|var\(\s*--(?:color-)?echo\s*[,)]/.test(match[0]),
+      )
+      .map((match) => match[0].trim());
+    for (const match of clean.matchAll(
+      /(?<![\w:-])class(?::text-echo(?![\w-])|\s*=\s*(?:"[^"]*"|'[^']*'|\{[^}]*\}))/g,
+    )) {
+      if (/(?<![\w-])text-echo(?![\w-])/.test(match[0])) references.push(match[0]);
+    }
+    return references;
+  }
+
+  it("detects emitted echo variables and Svelte text utilities without flagging backgrounds", () => {
+    for (const css of [
+      "a{color:var(--echo);}",
+      "a{color:var( --color-echo , red);}",
+      "a{color:var(--two-color-echo);}",
+      "a{color:var(--two-color-state-echo);}",
+      '<p class="text-echo">Echo</p>',
+      "<p class='hover:text-echo/80'>Echo</p>",
+      '<p class={active ? "text-echo" : "text-t1"}>Echo</p>',
+      "<p class:text-echo={active}>Echo</p>",
+    ]) {
+      expect(echoTextReferences(css), css).not.toEqual([]);
+    }
+    for (const css of [
+      "a{color:var(--echo-bg);}",
+      "a{background-color:var(--echo);}",
+      "a{--echo:#9d6aff;--color-echo:#9d6aff;}",
+      '<p class="bg-echo text-echo-bg">Tag</p>',
+      "/* a{color:var(--echo);} */",
+      '<!-- <p class="text-echo">Echo</p> -->',
+    ]) {
+      expect(echoTextReferences(css), css).toEqual([]);
+    }
+  });
+
   it("references no echo kit variable as a color value", () => {
     const violations: string[] = [];
     for (const { file, css } of cssLike()) {
-      const clean = css.replace(/\/\*[\s\S]*?\*\//g, "");
-      for (const match of clean.matchAll(/color\s*:[^;{}]+;/gi)) {
-        if (/--two-color-(state-)?echo/.test(match[0]))
-          violations.push(`${file}: ${match[0].trim()}`);
+      for (const reference of echoTextReferences(css)) {
+        violations.push(`${file}: ${reference}`);
       }
     }
     expect(violations).toEqual([]);

@@ -228,5 +228,6 @@ normal browser-smoke configuration refuses execution on the controller.
 
 Exact-head CI, independent design QA and production-merge confirmation remain
 required. No visual baseline was accepted locally. Accept an intentional diff
-only through the CI failure artifact and `ci/visual-accept.mjs`. No production
+only through the reviewed CI failure artifact: use `ci/visual-accept.mjs` for Hono
+and `ci/kit-visual-accept.mjs` for Kit. No production
 or staging database, probe, migration, deployment or merge was used.
