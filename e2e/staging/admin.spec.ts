@@ -47,10 +47,20 @@ test("staging moderator creates a draft then cancels it without publishing", asy
     await page.getByLabel("Location", { exact: true }).fill("Staging lounge");
     await page.getByLabel("Capacity (empty = unlimited)").fill("");
     await page.getByRole("button", { name: "Create draft", exact: true }).click();
-    await expect(page).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}$/);
+    // Saved drafts stay on the editor with a review link; the query is not part of the key.
+    await expect(page).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}\?saved=1$/);
     eventKey = new URL(page.url()).pathname.split("/").at(-1);
     expect(eventKey).toBeDefined();
+    expect(eventKey).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
     await expect(page.getByRole("heading", { name: "Status: draft", exact: true })).toBeVisible();
+    const saved = page.getByTestId("event-saved-review");
+    await expect(saved).toContainText("Saved.");
+    const review = saved.getByRole("link", {
+      name: "Review the saved event before publishing",
+      exact: true,
+    });
+    await expect(review).toBeVisible();
+    await expect(review).toHaveAttribute("href", `/e/${eventKey}?review=1`);
 
     const draft = await guest.request.get(`/e/${eventKey}`, { maxRedirects: 0 });
     expect(draft.status()).toBe(403);
