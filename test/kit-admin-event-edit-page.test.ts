@@ -192,7 +192,10 @@ describe("Kit event-edit page contract", () => {
     const html = await rosterHtmlFor(
       {},
       {
-        rows: [rosterRow, { username: "broken", status: "going", answeredAt: new Date(Number.NaN) }],
+        rows: [
+          rosterRow,
+          { username: "broken", status: "going", answeredAt: new Date(Number.NaN) },
+        ],
         total: 2,
       },
     );
