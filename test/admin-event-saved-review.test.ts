@@ -141,6 +141,17 @@ describe("saved-event review shared publish markup", () => {
     expect(html).toContain("&lt;img");
   });
 
+  it("only invites publication when the draft has no corrections", () => {
+    const ready = renderSavedEventReviewHtml(draft(), "banner");
+    expect(ready).toContain("Check it over, then publish from the bottom of this page");
+    const corrections = renderSavedEventReviewHtml(
+      savedEventReview({ ...row, location: "", title: "T" }, now),
+      "banner",
+    );
+    expect(corrections).toContain("Fix these before publishing");
+    expect(corrections).not.toContain("Check it over, then publish");
+  });
+
   it("disables publication while corrections remain", () => {
     const html = renderSavedEventReviewHtml(
       savedEventReview({ ...row, location: "", title: "T" }, now),

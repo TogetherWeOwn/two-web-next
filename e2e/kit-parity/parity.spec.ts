@@ -18,6 +18,7 @@ import {
   type ParityTarget,
 } from "../kit-parity";
 import { qaLoginRetryBudgetMs } from "../qa-login-retry.mjs";
+import { expectSavedReviewActions } from "../saved-review-actions";
 import { postParityQaLogin } from "./parity-qa-login.mjs";
 
 // Kit journey parity (docs/kit-parity-gates.md): the journeys run
@@ -1737,6 +1738,7 @@ test("Kit saved review states at desktop and mobile widths", async ({ browser })
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
+        await expectSavedReviewActions(page, state, viewport.width);
         const name = `kit-review-${state}-${viewport.width}`;
         const path = test.info().outputPath(`${name}.png`);
         await page.screenshot({ path, fullPage: true });

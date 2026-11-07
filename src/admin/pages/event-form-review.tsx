@@ -103,7 +103,7 @@ export const EventReviewSection: FC<{ review: SavedEventReview; part?: ReviewPar
       </p>
       <p>
         {review.guidance}
-        {review.isDraft
+        {review.isDraft && !needsCorrections
           ? " Check it over, then publish from the bottom of this page when you're ready."
           : null}
       </p>

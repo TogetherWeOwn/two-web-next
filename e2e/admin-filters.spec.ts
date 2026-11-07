@@ -1,5 +1,6 @@
 import type { Page } from "@playwright/test";
 import { expect, localOrigin, qaLogin, test } from "./fixtures";
+import { expectSavedReviewActions } from "./saved-review-actions";
 
 // Moderator admin event-list journey against local wrangler dev + disposable
 // Postgres: create two fixtures (a draft with RSVPs open by default, and a
@@ -85,6 +86,7 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
+        await expectSavedReviewActions(page, state, viewport.width);
         const name = `hono-review-${state}-${viewport.width}`;
         const path = test.info().outputPath(`${name}.png`);
         await page.screenshot({ path, fullPage: true });
