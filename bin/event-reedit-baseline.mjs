@@ -143,22 +143,27 @@ export function computeReeditShare(rows, { windowStart, windowEnd, observedUntil
 // inside the window, so an event first published before the window and
 // republished inside it is not mistaken for a first publish, and older history
 // cannot spend the row cap. Edits before the window are never needed.
+// Bounds bind as ISO strings with explicit casts: a client wrapped by drizzle
+// swaps the driver's timestamptz serializer for a pass-through, which rejects
+// Date parameters.
 export function fetchActivityRows(sql, { windowStart, fetchEnd }) {
+  const start = new Date(toMs(windowStart)).toISOString();
+  const end = new Date(toMs(fetchEnd)).toISOString();
   return sql`
     select a.subject_type as "subjectType", a.subject_id as "subjectId",
            a.description, a.event, a.properties, a.created_at as "createdAt"
     from activity_log a
     where a.subject_type like '%Event'
-      and a.created_at < ${fetchEnd}
-      and (a.created_at >= ${windowStart}
+      and a.created_at < ${end}::timestamptz
+      and (a.created_at >= ${start}::timestamptz
            or ((a.properties->'status'->>'after' = 'published'
                 or a.properties->'attributes'->>'status' = 'published')
                and exists (
                  select 1 from activity_log w
                  where w.subject_type = a.subject_type
                    and w.subject_id = a.subject_id
-                   and w.created_at >= ${windowStart}
-                   and w.created_at < ${fetchEnd}
+                   and w.created_at >= ${start}::timestamptz
+                   and w.created_at < ${end}::timestamptz
                    and (w.properties->'status'->>'after' = 'published'
                         or w.properties->'attributes'->>'status' = 'published'))))
     order by a.created_at asc, a.id asc
