@@ -973,7 +973,27 @@ jobs:
         run: npx wrangler deploy --config wrangler.jobs.jsonc --dry-run --outdir ../dist-jobs
       - name: Production build (wrangler dry run, no deployment)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
-        run: npx wrangler deploy --dry-run --env production --outdir dist-production
+        run: npx wrangler deploy --dry-run --env production --outdir dist-production --metafile dist-production/bundle-meta.json
+      - name: Worker bundle evidence selftest (offline fixtures, no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/worker-bundle-evidence.test.mjs
+      - name: Verify production build inventory and prebuilt upload equivalence (no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: |
+          node ci/worker-bundle-evidence.mjs create dist-production
+          node ci/worker-bundle-evidence.mjs verify dist-production
+          npx wrangler versions upload --env production --dry-run --no-bundle dist-production/worker.js --outdir dist-production-replay
+          cmp dist-production/worker.js dist-production-replay/worker.js
+        env:
+          BUILD_SHA: ${{ github.sha }}
+      - name: Archive build-only Worker bundle evidence
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: worker-bundle-build-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: dist-production/
+          if-no-files-found: error
+          retention-days: 30
       - name: Main Worker bundle budget selftest (offline fixtures, no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: node ci/check-worker-bundle.mjs --selftest
