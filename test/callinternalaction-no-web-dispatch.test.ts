@@ -191,7 +191,7 @@ describe("CallInternalAction is never web-dispatched (TOG-12678)", () => {
   });
 });
 
-const probeToken = "test-only-probe-token";
+const probeToken = "test-only-probe-token-with-32-plus";
 const staging = { ...baseEnv, APP_URL: STAGING_APP_URL, QA_AUTH_TOKEN: probeToken };
 
 function probeRequest(env: Env, headers: Record<string, string> = {}) {

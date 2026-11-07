@@ -260,7 +260,7 @@ test("the required CI job has a bounded coverage allowance without relaxing its 
     "bash ci/check-migration-numbers.sh",
     "node --test ci/production-deploy-gate.test.mjs",
     "npx wrangler deploy --dry-run --outdir dist",
-    "npx wrangler deploy --dry-run --env production --outdir dist-production",
+    "npx wrangler deploy --dry-run --env production --outdir dist-production --metafile dist-production/bundle-meta.json",
     "npm run test:inventory:selftest && npm run test:inventory -- --strict",
   ]) {
     const step = steps.find(

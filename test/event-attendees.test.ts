@@ -92,7 +92,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
     );
 
     it.each(["published", "past", "draft"])(
-      "%s keeps the logged attendee list alongside event states and canonical sharing",
+      "%s keeps the logged attendee list alongside event states and state-appropriate sharing",
       async (status) => {
         await fixture.db.update(events).set({ status, location: "Lobby & voice" });
         const res = await request(undefined, {
@@ -102,7 +102,17 @@ describe.skipIf(!process.env.DATABASE_URL)(
         expect(res.status).toBe(200);
         expect(html).toContain(`<a href="/members/${SUBJECT.userId}">${SUBJECT.username}</a>`);
         expect(html).toContain('data-testid="event-venue">Lobby &amp; voice');
-        expect(html).toContain(`data-copy-link="${env.APP_URL}/e/${EVENT_KEY}"`);
+        if (status === "draft") {
+          expect(html).toContain('data-testid="event-share-draft-note"');
+          expect(html).not.toMatch(
+            /data-copy-link|data-native-share|data-testid="event-(?:ics|google-calendar|link-url|copy-toast)"/,
+          );
+        } else {
+          expect(html).toContain(`data-copy-link="${env.APP_URL}/e/${EVENT_KEY}"`);
+          expect(html).toMatch(/data-testid="event-copy-link" hidden/);
+          expect(html).toMatch(/<input[^>]*data-testid="event-link-url"[^>]*readonly/);
+          expect(html).toContain('data-testid="event-manual-copy"');
+        }
         expect(html).not.toContain('data-testid="event-join-pitch"');
         if (status !== "published") {
           expect(html).toContain(`data-testid="event-${status}"`);

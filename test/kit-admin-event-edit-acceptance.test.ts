@@ -324,9 +324,24 @@ describe("acceptance: duplicate submits, rows and params", () => {
     );
     expect(view.roster.total).toBe(3);
     expect(view.roster.entries).toEqual([
-      { member: "sam", status: "going", answeredAt: answeredAt.toISOString() },
-      { member: "sam", status: "going", answeredAt: answeredAt.toISOString() },
-      { member: "sam", status: "going", answeredAt: answeredAt.toISOString() },
+      {
+        member: "sam",
+        status: "going",
+        waitlistPosition: null,
+        answeredAt: answeredAt.toISOString(),
+      },
+      {
+        member: "sam",
+        status: "going",
+        waitlistPosition: null,
+        answeredAt: answeredAt.toISOString(),
+      },
+      {
+        member: "sam",
+        status: "going",
+        waitlistPosition: null,
+        answeredAt: answeredAt.toISOString(),
+      },
     ]);
     expect(view.roster.rangeStart).toBe(1);
     expect(view.roster.rangeEnd).toBe(3);
@@ -494,30 +509,45 @@ describe("acceptance: no-JS behaviour", () => {
   });
 
   it("every control works without scripts: real forms, submit buttons and anchor navigation", () => {
-    // Six source forms: edit update, publish, cancel, duplicate, reopen,
-    // roster search. Pause arrives as pre-rendered server HTML via {@html}
-    // (client gzip ceiling), never as a source form; the rendered pause and
-    // reopen counts are pinned by the pause-review suites instead of this
-    // source text.
-    expect(pageSource.match(/<form\b/g) ?? []).toHaveLength(6);
+    // Five source forms: edit update, publish, cancel, duplicate, reopen.
+    // Pause and the GET roster search arrive as pre-rendered server HTML via
+    // {@html} (client gzip ceiling), never as source forms; the rendered
+    // pause and reopen counts are pinned by the pause-review suites and the
+    // roster search by the rendered-roster tests below.
+    expect(pageSource.match(/<form\b/g) ?? []).toHaveLength(5);
     expect(pageSource.match(/method="post"/g) ?? []).toHaveLength(5);
-    expect(pageSource.match(/method="get"/g) ?? []).toHaveLength(1);
+    expect(pageSource.match(/method="get"/g) ?? []).toHaveLength(0);
+    expect(pageSource).toContain("{@html view.rosterHtml}");
     // Every button submits its form; nothing depends on a click handler.
-    expect(pageSource.match(/<button\b/g) ?? []).toHaveLength(6);
-    expect(pageSource.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(6);
+    expect(pageSource.match(/<button\b/g) ?? []).toHaveLength(5);
+    expect(pageSource.match(/<button[^>]*type="submit"/g) ?? []).toHaveLength(5);
     expect(pageSource).not.toMatch(/\son(click|submit|input|change|keydown)=/);
     expect(pageSource).not.toContain("on:");
-    // Sorting and paging are plain links a no-JS browser can follow.
-    expect(pageSource).toContain("<a href={h.url}");
-    expect(pageSource).toContain('<a rel="prev" href={roster.prevUrl}>');
-    expect(pageSource).toContain('<a rel="next" href={roster.nextUrl}>');
   });
 
-  it("the roster search is a GET form carrying its state in named fields", () => {
-    expect(pageSource).toContain('name="roster_q"');
-    expect(pageSource).toContain('type="search"');
+  it("sorting and paging are plain links a no-JS browser can follow", async () => {
+    const view = await okView(
+      { roster_page: "2" },
+      { list: async () => ({ rows: rows(2), total: 3 * ROSTER_PAGE_SIZE }) },
+    );
+    const html = view.rosterHtml;
+    expect(html).toContain(`<a href="${view.roster.sortHeaders[0]!.url.replaceAll("&", "&amp;")}"`);
+    expect(html).toContain('rel="prev"');
+    expect(html).toContain('rel="next"');
+    expect(html).not.toMatch(/\son(click|submit|input|change|keydown)=/);
+    expect(html).not.toContain("<script");
+  });
+
+  it("the roster search is a GET form carrying its state in named fields", async () => {
+    const html = (await okView({ roster_sort: "status", roster_order: "asc" })).rosterHtml;
+    expect(html.match(/<form\b/g) ?? []).toHaveLength(1);
+    expect(html).toContain('method="get"');
+    expect(html).toContain(`action="/admin/events/${baseRow.eventKey}#rsvp-roster"`);
+    expect(html).toContain('name="roster_q"');
+    expect(html).toContain('type="search"');
     // Sort state rides along as hidden fields so a no-JS search keeps it.
-    expect(pageSource).toContain('name="roster_sort"');
-    expect(pageSource).toContain('name="roster_order"');
+    expect(html).toContain('name="roster_sort" value="status"');
+    expect(html).toContain('name="roster_order" value="asc"');
+    expect(html.match(/<button[^>]*>/g) ?? []).toHaveLength(1);
   });
 });

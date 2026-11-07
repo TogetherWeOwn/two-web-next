@@ -117,10 +117,9 @@ const TRANSITIONS = [
 ];
 
 const safeText = fc
-  .array(
-    fc.constantFrom("a", "Z", "é", "中", "م", "؜", "👩‍💻", "👨‍👩‍👧‍👦", "❤️‍🔥", "\t", "\n", "\r"),
-    { maxLength: 8 },
-  )
+  .array(fc.constantFrom("a", "Z", "é", "中", "م", "👩‍💻", "👨‍👩‍👧‍👦", "❤️‍🔥", "\t", "\n", "\r"), {
+    maxLength: 8,
+  })
   .map((tokens) => `x${tokens.join("")}y`);
 const forbidden = fc
   .oneof(
@@ -131,6 +130,10 @@ const forbidden = fc
     fc.integer({ min: 0x202a, max: 0x202e }),
     fc.integer({ min: 0x2066, max: 0x2069 }),
     fc.constantFrom(0x200b, 0x200c, 0x200d, 0xfeff),
+    // Bidi marks, word joiner and invisible operators, fillers, stray tags.
+    fc.integer({ min: 0x2060, max: 0x2064 }),
+    fc.constantFrom(0xad, 0x34f, 0x61c, 0x115f, 0x1160, 0x180e, 0x200e, 0x200f, 0x3164),
+    fc.constantFrom(0xffa0, 0xe0001, 0xe0041, 0xe007f),
   )
   .map(String.fromCodePoint);
 

@@ -2,9 +2,10 @@
 import { eq } from "drizzle-orm";
 import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { ValidationError, wallToUtc } from "../src/admin/validation";
+import * as writeback from "../src/admin/writeback";
 import { activityLog, events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { sameOrigin } from "../src/same-origin";
@@ -242,7 +243,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
     it(`${mode}: valid wall times still save the same UTC instants`, async () => {
       const res = await post(path, FORM);
       expect(res.status).toBe(303);
-      const key = res.headers.get("location")!.split("/").pop()!;
+      const key = new URL(res.headers.get("location")!, APP_URL).pathname.split("/").pop()!;
       const [saved] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
       expect(saved?.startsAt.toISOString()).toBe("2026-11-04T20:00:00.000Z");
       expect(saved?.endsAt.toISOString()).toBe("2026-11-04T22:00:00.000Z");
@@ -269,6 +270,33 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
     });
   }
 
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  it("publish: a malformed multipart body answers 400 with no writes or write-back", async () => {
+    const dispatch = vi.spyOn(writeback, "dispatchWriteBack").mockResolvedValue(undefined);
+    const before = await fixture.db.select().from(events);
+    const res = await app.request(
+      `${APP_URL}/admin/events/${KEY}/publish`,
+      {
+        method: "POST",
+        headers: {
+          cookie,
+          origin: APP_URL,
+          "content-type": "multipart/form-data; boundary=x",
+        },
+        body: "garbage",
+      },
+      env,
+    );
+    expect(res.status).toBe(400);
+    expect(await fixture.db.select().from(events)).toEqual(before);
+    expect(before[0]?.status).toBe("draft");
+    expect(await fixture.db.select().from(activityLog)).toEqual([]);
+    expect(dispatch).not.toHaveBeenCalled();
+  });
+
   it("fresh fold input saves the second occurrence deterministically", async () => {
     const res = await post("/admin/events", {
       ...FORM,
@@ -276,7 +304,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       ends_at: "2026-10-25 02:30",
     });
     expect(res.status).toBe(303);
-    const key = res.headers.get("location")!.split("/").pop()!;
+    const key = new URL(res.headers.get("location")!, APP_URL).pathname.split("/").pop()!;
     const [saved] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
     expect(saved?.startsAt.toISOString()).toBe("2026-10-25T01:30:00.000Z");
     expect(saved?.endsAt.toISOString()).toBe("2026-10-25T02:30:00.000Z");

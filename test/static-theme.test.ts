@@ -75,7 +75,7 @@ it.each(paths)(
       expect(html).not.toContain('.woff2" as="font"');
     }
     expect(html).toContain('class="bar site-header"');
-    expect(html).toContain('src="/logo.svg" width="64" height="64"');
+    expect(html).toContain('src="/logo.svg" width="180" height="50"');
     expect(html).toContain('aria-label="Primary"');
     expect(html).toContain('aria-label="Site"');
     expect(html).toContain(`<link rel="canonical" href="${env.APP_URL}${path}"`);

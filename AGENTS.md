@@ -19,7 +19,8 @@ Guidance for human and AI contributors.
 - The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
 - Squash-merge only. One PR is one logical change.
 - Title the PR with a Conventional Commits header: `type(scope): summary`, at most 100 characters, no trailing period. Release automation reads it.
-- Use the PR template, in short, active sentences. Linked Issues and Verification are required; the rest is optional.
+- Use the PR template, in short, active sentences. Fill in Linked Issues, Verification and Attestation; the rest is optional.
+- PRs follow the org contract in `TogetherWeOwn/.github` CONTRIBUTING + this repo's overrides; use this repo's PR template, which replaces the org template; its Attestation section is mandatory.
 - Keep references public-safe. No internal card IDs (`TOG-`, `PAP-`), private URLs, tokens, or secrets in any title, body, commit, comment, or branch name. Link public GitHub issues with `Closes #123`.
 - Report the tests you ran. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
@@ -66,5 +67,5 @@ A user-visible change to a page, component, CSS, typography, navigation, form, o
 - A UI change carries the evidence listed under UI changes.
 - Every required check is green on the exact head SHA that merges: `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review`. No approving review is required.
 - Every review finding is fixed, or answered with evidence.
-- The agent that did the work merges it. Owner governance (2026-10-31): gate-green PRs merge without owner approval, and only production deploys need the owner, through `request_confirmation` on the card. A merge to `main` here deploys production, so it waits for that approval; so does every other production deploy.
+- When native review stages apply, the final-stage reviewer squash-merges the exact reviewed head before closing the task; otherwise the author merges. Pin the merge to that SHA. A merge to `main` here deploys production, so it requires a fresh per-PR exact-head Release Manager `request_confirmation` on a child card assigned and addressed to the Release Manager; every other production deploy also needs Release Manager confirmation. Any push requires a new exact-head confirmation. Follow [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence) for the automatic post-merge, pre-production staging/e2e/soak gate, retained safeguards and release-log recording; neither pre-merge staging nor artifact equality is a merge prerequisite.
 - The PR is squash-merged, and the docs it made stale are updated.

@@ -22,13 +22,17 @@ const linkSelect =
   'select "id", "event_key", "title", "starts_at", "ends_at", "timezone", "location", "game", "rsvp_open" from "events"';
 const timeoutsSql =
   "select set_config('lock_timeout', $1, true), set_config('statement_timeout', $2, true)";
-const featuredSql =
-  'select "id", "title", "body", "url", "image_url", "image_alt" from "featured_contents" where ("featured_contents"."is_published" = $1 and ("featured_contents"."starts_at" is null or "featured_contents"."starts_at" <= $2) and ("featured_contents"."ends_at" is null or "featured_contents"."ends_at" > $3)) order by "featured_contents"."position" asc, "featured_contents"."id" asc';
-// Homepage guest cache base: every published row with its window bounds; the
-// worker applies the live window per request, so the open window here (null
-// bounds) stays visible at every instant.
-const publishedFeaturedSql =
-  'select "id", "title", "body", "url", "image_url", "image_alt", "starts_at", "ends_at" from "featured_contents" where "featured_contents"."is_published" = $1 order by "featured_contents"."position" asc, "featured_contents"."id" asc';
+// Pin the production SQL independently, including bounded text inspection.
+// Whitespace inside the raw admission fragment is significant to pg-proxy.
+const featuredAdmissionSql = `length(substring("featured_contents"."title" from 1 for 256)) <= 255
+  and ("featured_contents"."body" is null or length(substring("featured_contents"."body" from 1 for 1001)) <= 1000)
+  and ("featured_contents"."url" is null or length(substring("featured_contents"."url" from 1 for 256)) <= 255)
+  and ("featured_contents"."image_url" is null or length(substring("featured_contents"."image_url" from 1 for 256)) <= 255)
+  and ("featured_contents"."image_alt" is null or length(substring("featured_contents"."image_alt" from 1 for 256)) <= 255)`;
+const featuredSql = `select "id", "title", "body", "url", "image_url", "image_alt" from "featured_contents" where ("featured_contents"."is_published" = $1 and ("featured_contents"."starts_at" is null or "featured_contents"."starts_at" <= $2) and ("featured_contents"."ends_at" is null or "featured_contents"."ends_at" > $3) and ${featuredAdmissionSql}) order by "featured_contents"."position" asc, "featured_contents"."id" asc limit $4`;
+// Guest-cache base excludes already-ended rows before capping, but keeps future
+// windows for live per-request filtering. The fixture's null window stays open.
+const publishedFeaturedSql = `select "id", "title", "body", "url", "image_url", "image_alt", "starts_at", "ends_at" from "featured_contents" where ("featured_contents"."is_published" = $1 and ("featured_contents"."ends_at" is null or "featured_contents"."ends_at" > $2) and ${featuredAdmissionSql}) order by "featured_contents"."position" asc, "featured_contents"."id" asc limit $3`;
 // Attributable going count: joins users and counts only named rows, so the
 // badge agrees with the roster (the fixture's three going members are named).
 // Seat occupancy counts every going row (same shape as waitlist.goingCount);
@@ -227,10 +231,11 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         if (
           inTransaction &&
           sql === featuredSql &&
-          params.length === 3 &&
+          params.length === 4 &&
           params[0] === true &&
           isInstant(params[1]) &&
-          params[1] === params[2]
+          params[1] === params[2] &&
+          params[3] === 101
         ) {
           return {
             rows: [
@@ -248,8 +253,10 @@ export function fixtureEnvForRequest(nowMs: number): Env & Record<string, unknow
         if (
           inTransaction &&
           sql === publishedFeaturedSql &&
-          params.length === 1 &&
-          params[0] === true
+          params.length === 3 &&
+          params[0] === true &&
+          isInstant(params[1]) &&
+          params[2] === 101
         ) {
           return {
             rows: [

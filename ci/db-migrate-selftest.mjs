@@ -21,6 +21,7 @@ import {
   runMigration,
   safeMigrationError,
 } from "./db-migrate.mjs";
+import { OwnershipRefusal, assertMigratorOwnership } from "./migration-ownership.mjs";
 import {
   DefaultAclRefusal,
   SEQUENCE_RIGHTS,
@@ -705,6 +706,349 @@ test("already-bootstrapped database: global default and exposed ledger both refu
   });
 });
 
+async function createFixtureLedger(client) {
+  await client.unsafe(`
+    CREATE SCHEMA drizzle;
+    CREATE TABLE drizzle.__drizzle_migrations (
+      id serial PRIMARY KEY, hash text NOT NULL, created_at bigint
+    )`);
+}
+
+async function assertLedgerRefused(client, run, reason) {
+  await assert.rejects(assertRuntimeDefaultAcl(client), (error) => {
+    assert.ok(error instanceof DefaultAclRefusal);
+    assert.match(error.message, reason);
+    return true;
+  });
+  for (const mode of ["plan", "apply", "verify"]) {
+    await assert.rejects(run(mode), (error) => {
+      assert.match(safeMigrationError(error), /default-ACL guard refused/);
+      assert.match(safeMigrationError(error), reason);
+      return true;
+    });
+  }
+  assert.equal(
+    Number((await client`select count(*) from drizzle.__drizzle_migrations`)[0].count),
+    0,
+    "refusal must leave the pre-existing ledger unchanged, without applying migrations",
+  );
+  assert.equal((await client`select to_regclass('public.users') as name`)[0].name, null);
+}
+
+test("runtime ownership refuses even when ledger relation ACLs are NULL", async () => {
+  await fixture(async ({ client, run }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      await createFixtureLedger(client);
+      assert.notEqual((await client`select current_user as name`)[0].name, "two_web_app");
+      await client.unsafe("ALTER TABLE drizzle.__drizzle_migrations OWNER TO two_web_app");
+      const objects = await client`
+        select c.relacl, pg_get_userbyid(c.relowner) as owner
+          from pg_class c
+         where c.oid in (
+           'drizzle.__drizzle_migrations'::regclass,
+           pg_get_serial_sequence('drizzle.__drizzle_migrations', 'id')::regclass
+         )`;
+      assert.equal(objects.length, 2);
+      for (const object of objects) {
+        assert.equal(object.owner, "two_web_app");
+        assert.equal(object.relacl, null);
+      }
+      await assertLedgerRefused(client, run, /migration ledger object: .*\/two_web_app\/OWNER/);
+      // Ownership still permits DDL even after explicit ACLs are revoked.
+      await client.unsafe("REVOKE ALL ON TABLE drizzle.__drizzle_migrations FROM two_web_app");
+      await client.unsafe(
+        "REVOKE ALL ON SEQUENCE drizzle.__drizzle_migrations_id_seq FROM two_web_app",
+      );
+      await assertLedgerRefused(client, run, /migration ledger object: .*\/two_web_app\/OWNER/);
+    } finally {
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+for (const inherit of [true, false]) {
+  test(`runtime-accessible ledger owner refuses with INHERIT ${inherit}`, async () => {
+    await fixture(async ({ client, run }) => {
+      const group = `ledger_owner_${randomUUID().replaceAll("-", "")}`;
+      const created = await ensureRuntimeRole(client);
+      await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+      try {
+        await createFixtureLedger(client);
+        await client.unsafe(`ALTER TABLE drizzle.__drizzle_migrations OWNER TO "${group}"`);
+        assert.equal((await run("plan")).length, journal.entries.length);
+        await client.unsafe(`GRANT "${group}" TO two_web_app WITH INHERIT ${inherit}, SET TRUE`);
+        assert.equal(
+          (await client`select pg_has_role('two_web_app', ${group}, 'USAGE') as inherited`)[0]
+            .inherited,
+          inherit,
+        );
+        assert.equal(
+          (await client`select pg_has_role('two_web_app', ${group}, 'SET') as assumable`)[0]
+            .assumable,
+          true,
+        );
+        await assertLedgerRefused(client, run, /migration ledger object: .*\/OWNER/);
+      } finally {
+        await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+        await client.unsafe(`DROP OWNED BY "${group}"`);
+        await client.unsafe(`DROP ROLE "${group}"`);
+        await dropRuntimeRoleIfCreated(client, created);
+      }
+    });
+  });
+}
+
+for (const grantee of ["two_web_app", "PUBLIC"]) {
+  for (const privilege of ["SELECT", "UPDATE"]) {
+    test(`column-only ${privilege} for ${grantee} refuses ledger admission`, async () => {
+      await fixture(async ({ client, run }) => {
+        const created = await ensureRuntimeRole(client);
+        try {
+          await createFixtureLedger(client);
+          await client.unsafe(
+            `GRANT ${privilege} (hash) ON drizzle.__drizzle_migrations TO ${grantee}`,
+          );
+          const rows = await client`
+            select acl.privilege_type,
+                   case when acl.grantee = 0 then 'PUBLIC' else pg_get_userbyid(acl.grantee) end as grantee
+              from pg_attribute a
+              cross join lateral aclexplode(a.attacl) acl
+             where a.attrelid = 'drizzle.__drizzle_migrations'::regclass and a.attname = 'hash'`;
+          assert.ok(
+            rows.some((row) => row.privilege_type === privilege && row.grantee === grantee),
+          );
+          assert.deepEqual(await runtimeAcl(client, "drizzle.__drizzle_migrations"), []);
+          await assertLedgerRefused(
+            client,
+            run,
+            new RegExp(
+              `migration ledger object: __drizzle_migrations\\.hash/${grantee}/${privilege}`,
+            ),
+          );
+        } finally {
+          await dropRuntimeRoleIfCreated(client, created);
+        }
+      });
+    });
+  }
+}
+
+for (const [object, privilege] of [
+  ["TABLE drizzle.__drizzle_migrations", "SELECT"],
+  ["SEQUENCE drizzle.__drizzle_migrations_id_seq", "USAGE"],
+  ["TABLE drizzle.__drizzle_migrations", "UPDATE (hash)"],
+]) {
+  test(`inherited ${privilege} on ${object} refuses ledger admission`, async () => {
+    await fixture(async ({ client, run }) => {
+      const group = `ledger_reader_${randomUUID().replaceAll("-", "")}`;
+      const created = await ensureRuntimeRole(client);
+      await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+      try {
+        await createFixtureLedger(client);
+        await client.unsafe(`GRANT ${privilege} ON ${object} TO "${group}"`);
+        // An unrelated grantee is benign; only runtime inheritance makes
+        // this same catalog grant prohibited.
+        assert.equal((await run("plan")).length, journal.entries.length);
+        await client.unsafe(`GRANT "${group}" TO two_web_app WITH INHERIT TRUE`);
+        assert.equal(
+          (await client`select pg_has_role('two_web_app', ${group}, 'USAGE') as inherited`)[0]
+            .inherited,
+          true,
+        );
+        await assertLedgerRefused(client, run, /runtime rights on migration ledger object/);
+        await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+        assert.equal((await run("plan")).length, journal.entries.length);
+      } finally {
+        await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+        await client.unsafe(`DROP OWNED BY "${group}"`);
+        await client.unsafe(`DROP ROLE "${group}"`);
+        await dropRuntimeRoleIfCreated(client, created);
+      }
+    });
+  });
+}
+
+test("runtime-administered ledger owner and grantee refuse without INHERIT or SET", async () => {
+  await fixture(async ({ client, run }) => {
+    const group = `ledger_admin_${randomUUID().replaceAll("-", "")}`;
+    const created = await ensureRuntimeRole(client);
+    await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+    try {
+      await createFixtureLedger(client);
+      await client.unsafe(`ALTER TABLE drizzle.__drizzle_migrations OWNER TO "${group}"`);
+      // The column grant keeps a non-owner ledger row in the mix; ownership
+      // already makes it redundant. With no runtime link both are benign.
+      await client.unsafe(`GRANT UPDATE (hash) ON drizzle.__drizzle_migrations TO "${group}"`);
+      assert.equal((await run("plan")).length, journal.entries.length);
+      // ADMIN OPTION alone is effective authority: its holder can re-grant
+      // itself the role WITH INHERIT/SET, so neither USAGE nor SET needs to
+      // hold today for the runtime to reach the group's ledger rights.
+      await client.unsafe(
+        `GRANT "${group}" TO two_web_app WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`,
+      );
+      const probes = (
+        await client`
+        select pg_has_role('two_web_app', ${group}, 'USAGE') as inherited,
+               pg_has_role('two_web_app', ${group}, 'SET') as assumable,
+               pg_has_role('two_web_app', ${group}, 'MEMBER WITH ADMIN OPTION') as administers`
+      )[0];
+      assert.equal(probes.inherited, false);
+      assert.equal(probes.assumable, false);
+      assert.equal(probes.administers, true);
+      await assertLedgerRefused(client, run, /runtime rights on migration ledger object/);
+      await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+      assert.equal((await run("plan")).length, journal.entries.length);
+    } finally {
+      await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+      await client.unsafe(`DROP OWNED BY "${group}"`);
+      await client.unsafe(`DROP ROLE "${group}"`);
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+test("multi-hop runtime-administered ledger chain refuses on an ADMIN-only runtime link", async () => {
+  await fixture(async ({ client, run }) => {
+    const owner = `ledger_owner_${randomUUID().replaceAll("-", "")}`;
+    const hop = `ledger_hop_${randomUUID().replaceAll("-", "")}`;
+    const created = await ensureRuntimeRole(client);
+    await client.unsafe(`CREATE ROLE "${owner}" NOLOGIN`);
+    await client.unsafe(`CREATE ROLE "${hop}" NOLOGIN`);
+    try {
+      await createFixtureLedger(client);
+      await client.unsafe(`ALTER TABLE drizzle.__drizzle_migrations OWNER TO "${owner}"`);
+      assert.equal((await run("plan")).length, journal.entries.length);
+      // Two-hop ADMIN chain: the owner reaches the runtime only through the
+      // hop role. The owner-to-hop link carries INHERIT; only the runtime's
+      // own hop-to-runtime link lacks INHERIT and SET, and that link carries
+      // ADMIN. The single-hop USAGE/SET/ADMIN probes all read false on the
+      // owner, yet the runtime holds bare membership of it and can escalate
+      // link by link.
+      await client.unsafe(`GRANT "${owner}" TO "${hop}" WITH INHERIT TRUE`);
+      await client.unsafe(
+        `GRANT "${hop}" TO two_web_app WITH ADMIN TRUE, INHERIT FALSE, SET FALSE`,
+      );
+      const probes = (
+        await client`
+        select pg_has_role('two_web_app', ${owner}, 'USAGE') as inherited,
+               pg_has_role('two_web_app', ${owner}, 'SET') as assumable,
+               pg_has_role('two_web_app', ${owner}, 'MEMBER WITH ADMIN OPTION') as administers,
+               pg_has_role('two_web_app', ${owner}, 'MEMBER') as member`
+      )[0];
+      assert.equal(probes.inherited, false);
+      assert.equal(probes.assumable, false);
+      assert.equal(probes.administers, false);
+      assert.equal(probes.member, true);
+      await assertLedgerRefused(client, run, /runtime rights on migration ledger object/);
+      await client.unsafe(`REVOKE "${hop}" FROM two_web_app`);
+      assert.equal((await run("plan")).length, journal.entries.length);
+    } finally {
+      await client.unsafe(`REVOKE "${hop}" FROM two_web_app`).catch(() => {});
+      await client.unsafe(`REVOKE "${owner}" FROM "${hop}"`).catch(() => {});
+      await client.unsafe(`DROP OWNED BY "${owner}"`).catch(() => {});
+      await client.unsafe(`DROP OWNED BY "${hop}"`).catch(() => {});
+      await client.unsafe(`DROP ROLE IF EXISTS "${hop}"`).catch(() => {});
+      await client.unsafe(`DROP ROLE IF EXISTS "${owner}"`).catch(() => {});
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+// The drizzle schema owner can drop and recreate the ledger whatever the
+// ledger's own ACLs say, so schema ownership and schema rights refuse too.
+test("runtime-owned drizzle schema refuses with no rights on the ledger objects", async () => {
+  await fixture(async ({ client, run }) => {
+    const created = await ensureRuntimeRole(client);
+    try {
+      await createFixtureLedger(client);
+      await client.unsafe("ALTER SCHEMA drizzle OWNER TO two_web_app");
+      assert.deepEqual(await runtimeAcl(client, "drizzle.__drizzle_migrations"), []);
+      const [schema] = await client`
+        select pg_get_userbyid(nspowner) as owner, nspacl from pg_namespace where nspname = 'drizzle'`;
+      assert.equal(schema.owner, "two_web_app");
+      assert.equal(schema.nspacl, null);
+      await assertLedgerRefused(
+        client,
+        run,
+        /migration ledger object: schema drizzle\/two_web_app\/OWNER/,
+      );
+    } finally {
+      // DROP OWNED cannot drop a schema that still holds the ledger.
+      await client.unsafe("ALTER SCHEMA drizzle OWNER TO CURRENT_USER").catch(() => {});
+      await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+for (const grantee of ["two_web_app", "PUBLIC"]) {
+  for (const privilege of ["CREATE", "USAGE"]) {
+    test(`${privilege} on schema drizzle for ${grantee} refuses ledger admission`, async () => {
+      await fixture(async ({ client, run }) => {
+        const created = await ensureRuntimeRole(client);
+        try {
+          await createFixtureLedger(client);
+          assert.equal((await run("plan")).length, journal.entries.length);
+          await client.unsafe(`GRANT ${privilege} ON SCHEMA drizzle TO ${grantee}`);
+          await assertLedgerRefused(
+            client,
+            run,
+            new RegExp(`migration ledger object: schema drizzle/${grantee}/${privilege}`),
+          );
+          await client.unsafe(`REVOKE ${privilege} ON SCHEMA drizzle FROM ${grantee}`);
+          assert.equal((await run("plan")).length, journal.entries.length);
+        } finally {
+          await dropRuntimeRoleIfCreated(client, created);
+        }
+      });
+    });
+  }
+}
+
+for (const [shape, link] of [
+  ["owner via ADMIN-only membership", "WITH ADMIN TRUE, INHERIT FALSE, SET FALSE"],
+  ["CREATE via inherited membership", "WITH INHERIT TRUE"],
+]) {
+  test(`runtime-reachable drizzle schema ${shape} refuses ledger admission`, async () => {
+    await fixture(async ({ client, run }) => {
+      const group = `ledger_schema_${randomUUID().replaceAll("-", "")}`;
+      const created = await ensureRuntimeRole(client);
+      await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+      try {
+        await createFixtureLedger(client);
+        await client.unsafe(
+          shape.startsWith("owner")
+            ? `ALTER SCHEMA drizzle OWNER TO "${group}"`
+            : `GRANT CREATE ON SCHEMA drizzle TO "${group}"`,
+        );
+        // An unrelated schema owner or grantee is benign; only the runtime
+        // link makes the same catalog state prohibited.
+        assert.equal((await run("plan")).length, journal.entries.length);
+        await client.unsafe(`GRANT "${group}" TO two_web_app ${link}`);
+        assert.equal(
+          (await client`select pg_has_role('two_web_app', ${group}, 'MEMBER') as member`)[0].member,
+          true,
+        );
+        await assertLedgerRefused(
+          client,
+          run,
+          new RegExp(
+            `migration ledger object: schema drizzle/${group}/${shape.startsWith("owner") ? "OWNER" : "CREATE"}`,
+          ),
+        );
+        await client.unsafe(`REVOKE "${group}" FROM two_web_app`);
+        assert.equal((await run("plan")).length, journal.entries.length);
+      } finally {
+        await client.unsafe(`REVOKE "${group}" FROM two_web_app`).catch(() => {});
+        await client.unsafe("ALTER SCHEMA drizzle OWNER TO CURRENT_USER").catch(() => {});
+        await client.unsafe(`DROP OWNED BY "${group}"`).catch(() => {});
+        await client.unsafe(`DROP ROLE IF EXISTS "${group}"`).catch(() => {});
+        await dropRuntimeRoleIfCreated(client, created);
+      }
+    });
+  });
+}
+
 test("sequence post-default matrix for login, group, and runtime roles", async () => {
   await fixture(async ({ client }) => {
     const suffix = randomUUID().replaceAll("-", "");
@@ -774,6 +1118,141 @@ test("sequence post-default matrix for login, group, and runtime roles", async (
       await client.unsafe(`DROP ROLE IF EXISTS "${login}"`).catch(() => {});
       await client.unsafe(`DROP ROLE IF EXISTS "${group}"`).catch(() => {});
       await dropRuntimeRoleIfCreated(client, created);
+    }
+  });
+});
+
+test("ownership guard: inherited group ownership passes, foreign and non-inherited ownership refuse", async () => {
+  await fixture(async ({ client, run }) => {
+    const suffix = randomUUID().replaceAll("-", "");
+    const group = `own_group_${suffix}`;
+    const migrator = `own_migrator_${suffix}`;
+    const noninherited = `own_noninherit_${suffix}`;
+    const foreign = `own_foreign_${suffix}`;
+    try {
+      await client.unsafe(`CREATE ROLE "${group}" NOLOGIN`);
+      await client.unsafe(`CREATE ROLE "${migrator}" LOGIN`);
+      await client.unsafe(`CREATE ROLE "${noninherited}" LOGIN`);
+      await client.unsafe(`CREATE ROLE "${foreign}" NOLOGIN`);
+      await client.unsafe(`GRANT "${group}" TO "${migrator}" WITH INHERIT TRUE`);
+      await client.unsafe(`GRANT "${group}" TO "${noninherited}" WITH INHERIT FALSE`);
+      await client.unsafe(`GRANT CREATE ON SCHEMA public TO "${group}", "${foreign}"`);
+      await client.unsafe("CREATE SCHEMA drizzle");
+      await client.unsafe(`GRANT USAGE, CREATE ON SCHEMA drizzle TO "${foreign}"`);
+      // web_sessions owned by a group the migrator inherits (the repaired
+      // production shape); join_attempts owned by an unrelated role; an
+      // unreviewed table under the same foreign owner stays out of scope.
+      // The migration ledger under the foreign owner is in scope too: it is
+      // runner infrastructure, and its implicit owner rights never appear
+      // in relacl for the ledger ACL guard to see. An unrelated table in the
+      // drizzle schema is not the ledger and stays out of scope.
+      await client.unsafe(`SET ROLE "${group}"`);
+      await client.unsafe("CREATE TABLE public.web_sessions (id bigint)");
+      await client.unsafe("RESET ROLE");
+      await client.unsafe(`SET ROLE "${foreign}"`);
+      await client.unsafe("CREATE TABLE public.join_attempts (id bigint)");
+      await client.unsafe("CREATE TABLE public.ownership_unreviewed (id bigint)");
+      await client.unsafe(
+        "CREATE TABLE drizzle.__drizzle_migrations (id serial primary key, hash text not null, created_at bigint)",
+      );
+      await client.unsafe("CREATE TABLE drizzle.ownership_unrelated (id bigint)");
+      await client.unsafe("RESET ROLE");
+      // As the inheriting migrator: the foreign-owned reviewed table refuses
+      // by name; the group-owned reviewed table and the unreviewed table do
+      // not.
+      await client.unsafe(`SET ROLE "${migrator}"`);
+      try {
+        await assert.rejects(assertMigratorOwnership(client), (error) => {
+          assert.ok(error instanceof OwnershipRefusal);
+          assert.match(error.message, /Migration ownership guard refused/);
+          assert.match(error.message, new RegExp(`public\\.join_attempts \\(owner ${foreign}\\)`));
+          assert.match(
+            error.message,
+            new RegExp(`drizzle\\.__drizzle_migrations \\(owner ${foreign}\\)`),
+          );
+          assert.match(
+            error.message,
+            new RegExp(`drizzle\\.__drizzle_migrations_id_seq \\(owner ${foreign}\\)`),
+          );
+          assert.doesNotMatch(error.message, /web_sessions/);
+          assert.doesNotMatch(error.message, /ownership_unreviewed/);
+          assert.doesNotMatch(error.message, /ownership_unrelated/);
+          return true;
+        });
+      } finally {
+        await client.unsafe("RESET ROLE");
+      }
+      // plan() through the runner: a superuser connection bypasses ownership
+      // (it can ALTER anything), a non-superuser connection surfaces the
+      // named refusal instead of a masked driver error.
+      const [session] = await client`select rolsuper from pg_roles where rolname = session_user`;
+      if (session.rolsuper) {
+        assert.equal((await run("plan")).length, journal.entries.length);
+      } else {
+        let failure;
+        try {
+          await run("plan");
+        } catch (error) {
+          failure = error;
+        }
+        assert.ok(failure, "plan must refuse while a reviewed object is foreign-owned");
+        assert.match(safeMigrationError(failure), /Migration ownership guard refused/);
+        assert.match(safeMigrationError(failure), /public\.join_attempts/);
+      }
+      // With the foreign-owned reviewed table and ledger gone, the
+      // inheriting migrator passes on group ownership alone (USAGE, not
+      // literal equality) — while the unrelated foreign-owned drizzle
+      // table still exists and does not block.
+      await client.unsafe(`SET ROLE "${foreign}"`);
+      await client.unsafe("DROP TABLE public.join_attempts");
+      await client.unsafe("DROP TABLE drizzle.__drizzle_migrations");
+      await client.unsafe("RESET ROLE");
+      await client.unsafe(`SET ROLE "${migrator}"`);
+      try {
+        await assertMigratorOwnership(client);
+      } finally {
+        await client.unsafe("RESET ROLE");
+      }
+      // A membership without INHERIT cannot ALTER as the group and the
+      // runner never SET ROLEs, so it still refuses (USAGE, not MEMBER).
+      await client.unsafe(`SET ROLE "${noninherited}"`);
+      try {
+        await assert.rejects(assertMigratorOwnership(client), (error) => {
+          assert.ok(error instanceof OwnershipRefusal);
+          assert.match(error.message, new RegExp(`public\\.web_sessions \\(owner ${group}\\)`));
+          return true;
+        });
+      } finally {
+        await client.unsafe("RESET ROLE");
+      }
+    } finally {
+      await client.unsafe("RESET ROLE").catch(() => {});
+      await client.unsafe(`SET ROLE "${foreign}"`).catch(() => {});
+      await client.unsafe("DROP TABLE IF EXISTS public.ownership_unreviewed").catch(() => {});
+      await client.unsafe("DROP TABLE IF EXISTS public.join_attempts").catch(() => {});
+      await client.unsafe("DROP TABLE IF EXISTS drizzle.__drizzle_migrations").catch(() => {});
+      await client.unsafe("DROP TABLE IF EXISTS drizzle.ownership_unrelated").catch(() => {});
+      await client.unsafe("RESET ROLE").catch(() => {});
+      await client.unsafe(`SET ROLE "${group}"`).catch(() => {});
+      await client.unsafe("DROP TABLE IF EXISTS public.web_sessions").catch(() => {});
+      await client.unsafe("RESET ROLE").catch(() => {});
+      await client.unsafe(`REVOKE "${group}" FROM "${migrator}"`).catch(() => {});
+      await client.unsafe(`REVOKE "${group}" FROM "${noninherited}"`).catch(() => {});
+      // Schema grants and anything else the fixture roles hold in this
+      // database block DROP ROLE, and roles are cluster-global: strip them
+      // here or every run leaks two roles onto the shared test cluster.
+      await client
+        .unsafe(`REVOKE CREATE ON SCHEMA public FROM "${group}", "${foreign}"`)
+        .catch(() => {});
+      await client
+        .unsafe(`REVOKE USAGE, CREATE ON SCHEMA drizzle FROM "${foreign}"`)
+        .catch(() => {});
+      for (const role of [migrator, noninherited, foreign, group]) {
+        await client.unsafe(`DROP OWNED BY "${role}"`).catch(() => {});
+        await client.unsafe(`DROP ROLE IF EXISTS "${role}"`).catch((error) => {
+          console.log(`ownership fixture cleanup: could not drop role ${role}: ${error.message}`);
+        });
+      }
     }
   });
 });
@@ -1022,6 +1501,8 @@ function controlledDriver(_url, options) {
     if (text === "select current_user as current_user") return [{ current_user: "agent_test" }];
     if (text.includes("FROM pg_default_acl AS d")) return [];
     if (text.includes("pg_get_serial_sequence")) return [];
+    if (text.includes("rolsuper")) return [{ is_superuser: false }];
+    if (text.includes("pg_has_role")) return [];
     if (text.includes("to_regclass")) return [{ ledger: null }];
     if (text.includes("clock_timestamp")) return [{ timestamp: "2026-10-21T00:00:00.000000Z" }];
     throw new Error(`unexpected fixture statement: ${text}`);
@@ -1150,16 +1631,60 @@ assert.deepEqual(state.statements, [
     UNION ALL
     SELECT CASE WHEN to_regclass('drizzle.__drizzle_migrations') IS NULL THEN NULL
                 ELSE pg_get_serial_sequence('drizzle.__drizzle_migrations', 'id')::regclass END
+  ), objects AS (
+    SELECT c.* FROM targets JOIN pg_class AS c ON c.oid = targets.oid
+  ), rights(object_name, grantee, privilege_type, is_grantable) AS (
+    SELECT relname, relowner, 'OWNER', true FROM objects
+    UNION ALL
+    SELECT c.relname, acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM objects AS c
+      CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
+    UNION ALL
+    SELECT c.relname || '.' || a.attname, acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM objects AS c
+      JOIN pg_attribute AS a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
+      CROSS JOIN LATERAL aclexplode(a.attacl) AS acl
+    UNION ALL
+    SELECT 'schema ' || n.nspname, n.nspowner, 'OWNER', true
+      FROM pg_namespace AS n WHERE n.nspname = 'drizzle'
+    UNION ALL
+    SELECT 'schema ' || n.nspname, acl.grantee, acl.privilege_type, acl.is_grantable
+      FROM pg_namespace AS n
+      CROSS JOIN LATERAL aclexplode(n.nspacl) AS acl
+     WHERE n.nspname = 'drizzle'
   )
-  SELECT c.relname AS object_name,
-         CASE WHEN acl.grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(acl.grantee) END AS grantee,
-         acl.privilege_type,
-         acl.is_grantable
-    FROM targets
-    JOIN pg_class AS c ON c.oid = targets.oid
-    CROSS JOIN LATERAL aclexplode(c.relacl) AS acl
-   WHERE targets.oid IS NOT NULL
+  SELECT object_name,
+         CASE WHEN grantee = 0 THEN 'PUBLIC' ELSE pg_get_userbyid(grantee) END AS grantee,
+         privilege_type,
+         is_grantable,
+         CASE WHEN grantee = 0 THEN true ELSE EXISTS (
+           SELECT 1 FROM pg_roles AS runtime
+            WHERE runtime.rolname = 'two_web_app'
+              AND pg_has_role(runtime.oid, rights.grantee, 'MEMBER')
+         ) END AS runtime_access
+    FROM rights
    ORDER BY 1, 2, 3, 4
+`)},
+  "select coalesce((select rolsuper from pg_roles where rolname = current_user), false) as is_superuser",
+  ${JSON.stringify(`
+  SELECT n.nspname || '.' || c.relname AS object_name,
+         pg_get_userbyid(c.relowner) AS owner,
+         pg_has_role(current_user, pg_get_userbyid(c.relowner), 'USAGE') AS owner_equivalent
+    FROM pg_class AS c
+    JOIN pg_namespace AS n ON n.oid = c.relnamespace
+   WHERE (n.nspname = 'public' AND c.relkind IN ('r', 'p', 'S'))
+      OR (n.nspname = 'drizzle' AND (
+        c.relname = '__drizzle_migrations'
+        OR c.oid IN (
+          SELECT d.objid FROM pg_depend AS d
+            JOIN pg_class AS t ON t.oid = d.refobjid
+            JOIN pg_namespace AS tn ON tn.oid = t.relnamespace
+           WHERE tn.nspname = 'drizzle' AND t.relname = '__drizzle_migrations'
+             AND d.classid = 'pg_class'::regclass::oid
+             AND d.deptype IN ('a', 'i') AND d.refobjsubid > 0
+        )
+      ))
+   ORDER BY 1
 `)},
   "select to_regclass(?) as ledger",
   ${JSON.stringify("select to_char(clock_timestamp() at time zone 'UTC', 'YYYY-MM-DD\"T\"HH24:MI:SS.US\"Z\"') as timestamp")},

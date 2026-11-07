@@ -30,15 +30,28 @@ beforeAll(async () => {
 });
 const qs = (values: Record<string, string>) => new URLSearchParams(values).toString();
 const rosterReads = (fixture: ReturnType<typeof rosterDb>) =>
-  fixture.statements.filter((s) => s.sql.includes('from "rsvps"'));
+  fixture.statements.filter((s) => /from "?rsvps"? /.test(s.sql));
 const where = (sql: string) => sql.split(" where ")[1]!.split(/ order by | limit /)[0]!;
-const predicate = (sql: string, params: unknown[]) =>
-  where(sql).replace(/\$(\d+)/g, (_, n) => JSON.stringify(params[Number(n) - 1]));
+const predicate = (sql: string, params: unknown[]) => {
+  const unquoted = sql.replaceAll('"', "");
+  const clauses = unquoted.startsWith("select count(*)")
+    ? where(unquoted).replace(/[()]/g, "")
+    : [
+        unquoted.match(/ where (events\.event_key = \$\d+) \) line /)![1],
+        unquoted.match(
+          /\) line left join users on users\.id = line\.user_id where (.*?) order by/,
+        )?.[1],
+      ]
+        .filter(Boolean)
+        .join(" and ")
+        .replaceAll("line.status", "rsvps.status");
+  return clauses.replace(/\$(\d+)/g, (_, n) => JSON.stringify(params[Number(n) - 1]));
+};
 function displayedRows(html: string) {
   const body = rosterHtml(html).match(/<tbody>([\s\S]*?)<\/tbody>/)![1]!;
   return [...body.matchAll(/<tr\b[^>]*>([\s\S]*?)<\/tr>/g)]
     .map((r) => [...r[1]!.matchAll(/<td\b[^>]*>([\s\S]*?)<\/td>/g)].map((c) => text(c[1]!)))
-    .filter((r) => r.length === 3);
+    .filter((r) => r.length === 4);
 }
 function normalizedLink(href: string) {
   const url = new URL(href, "https://next.example.test");
@@ -52,17 +65,13 @@ function assertBounded(fixture: ReturnType<typeof rosterDb>) {
   expect(reads[0]!.sql).toMatch(/^select count\(\*\) /);
   expect(reads[0]!.fields).toEqual(["n"]);
   expect(reads[0]!.sql).not.toMatch(/limit|offset|group by|union/i);
-  expect(reads[1]!.fields.sort()).toEqual([
-    "answeredAt",
-    "memberId",
-    "status",
-    "userId",
-    "username",
-  ]);
-  const slot = reads[1]!.sql.match(/ limit \$(\d+)/)![1]!;
-  expect(reads[1]!.params[Number(slot) - 1]).toBe(100);
+  expect(reads[1]!.fields).toEqual([]); // execute() returns the raw projection below.
   expect(reads[1]!.sql).toMatch(
-    /order by "rsvps"\."(?:updated_at|status)" (?:asc|desc), "rsvps"\."user_id"/,
+    /^select line\.user_id, users\.username, line\.status, line\.updated_at, line\.position from \( /,
+  );
+  expect(reads[1]!.sql).toMatch(/ limit 100 offset \$\d+$/);
+  expect(reads[1]!.sql).toMatch(
+    /order by line\.(?:updated_at|status) (?:asc|desc)\s*, line\.user_id asc limit|order by line\.position (?:asc|desc) nulls last, line\.user_id asc limit/,
   );
   expect(
     fixture.statements.filter(
@@ -378,7 +387,7 @@ for (const renderer of ["Hono", "Kit"] as const) {
       const reads = rosterReads(fixture);
       expect(reads[0]!.params).toContain(`%${"界".repeat(128)}%`);
       expect(where(reads[0]!.sql)).toMatch(/"rsvps"\."status" = \$\d+/);
-      expect(reads[1]!.sql).toContain('order by "rsvps"."updated_at" desc, "rsvps"."user_id"');
+      expect(reads[1]!.sql).toMatch(/order by line\.updated_at desc\s*, line\.user_id asc/);
       expect(reads[1]!.sql).not.toMatch(/drop table|9007199254740991/i);
       const offsetSlot = reads[1]!.sql.match(/ offset \$(\d+)/)?.[1];
       expect(offsetSlot ? reads[1]!.params[Number(offsetSlot) - 1] : 0).toBe(0);
@@ -401,6 +410,139 @@ for (const renderer of ["Hono", "Kit"] as const) {
       expect(normalizedLink(clear!.href).has("roster_status")).toBe(false);
       expect(fixture.audits).toEqual([]);
       assertBounded(fixture);
+    });
+
+    it("WQ-R01 waitlisted rows show their global queue rank on the first facet page", async () => {
+      const fixture = rosterDb();
+      const response = await readRoster(
+        renderer,
+        fixture,
+        qs({ roster_status: "waitlisted" }),
+        kit,
+      );
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      const rows = displayedRows(html);
+      expect(rows).toHaveLength(100);
+      expect(rows.map((r) => r[3])).toEqual(Array.from({ length: 100 }, (_, i) => `#${i + 1}`));
+      expect(text(rosterHtml(html))).toContain("so numbers can skip.");
+      expect(text(rosterHtml(html))).toMatch(
+        /Paused or closed queues don(?:'|&#39;|&#x27;)t advance\./,
+      );
+      expect(html).toContain('aria-label="Sort by waitlist position ascending"');
+      expect(html).toContain('rel="stylesheet" href="/styles.css"');
+      expect(html).toMatch(/Answered[\s\S]*Waitlist position/);
+      assertBounded(fixture);
+    });
+
+    it("WQ-R02 a member search never renumbers the queue it narrows", async () => {
+      const fixture = rosterDb();
+      const searched = displayedRows(
+        await (
+          await readRoster(
+            renderer,
+            fixture,
+            qs({
+              roster_status: "waitlisted",
+              roster_q: "1",
+              roster_sort: "waitlist",
+              roster_order: "asc",
+            }),
+            kit,
+          )
+        ).text(),
+      );
+      const matches = Array.from({ length: 105 }, (_, i) => i).filter((i) =>
+        String(i).includes("1"),
+      );
+      expect(searched).toHaveLength(matches.length);
+      expect(searched.map((r) => [r[0], r[3]])).toEqual(
+        matches.map((i) => [`${needle} ${i}`, `#${i + 1}`]),
+      );
+    });
+
+    it("WQ-R03 non-waitlisted rows show a dash, never a queue number", async () => {
+      const fixture = rosterDb();
+      const response = await readRoster(renderer, fixture, "", kit);
+      expect(response.status).toBe(200);
+      const html = await response.text();
+      const rows = displayedRows(html);
+      expect(rows).toHaveLength(100);
+      for (const row of rows) {
+        if (row[1] === "waitlisted") expect(row[3]).toMatch(/^#\d+$/);
+        else expect(row[3]).toBe("— Not waitlisted");
+      }
+      expect(rosterHtml(html)).toContain('<span aria-hidden="true">—</span>');
+      expect(rosterHtml(html)).toContain('<span class="sr-only">Not waitlisted</span>');
+      // The nameless legacy import sits on the last page, labeled and unranked.
+      const last = await readRoster(renderer, rosterDb(), qs({ roster_page: "5" }), kit);
+      const orphans = displayedRows(await last.text()).filter((r) => r[0] === "Unknown member");
+      expect(orphans).toHaveLength(1);
+      expect(orphans[0]![3]).toBe("— Not waitlisted");
+      assertBounded(fixture);
+    });
+
+    it("WQ-R04 the waitlist sort header orders by queue rank with nulls last", async () => {
+      const fixture = rosterDb();
+      const desc = await readRoster(
+        renderer,
+        fixture,
+        qs({ roster_status: "waitlisted", roster_sort: "waitlist", roster_order: "desc" }),
+        kit,
+      );
+      expect(desc.status).toBe(200);
+      const descHtml = await desc.text();
+      const descRows = displayedRows(descHtml);
+      expect(descRows.map((r) => [r[0], r[3]])).toEqual(
+        Array.from({ length: 100 }, (_, i) => [`${needle} ${104 - i}`, `#${105 - i}`]),
+      );
+      const ascFixture = rosterDb();
+      const asc = await readRoster(
+        renderer,
+        ascFixture,
+        qs({ roster_status: "waitlisted", roster_sort: "waitlist", roster_order: "asc" }),
+        kit,
+      );
+      expect(displayedRows(await asc.text()).map((r) => [r[0], r[3]])).toEqual(
+        Array.from({ length: 100 }, (_, i) => [`${needle} ${i}`, `#${i + 1}`]),
+      );
+      assertBounded(ascFixture);
+      for (const order of ["asc", "desc"]) {
+        const page = await readRoster(
+          renderer,
+          rosterDb(),
+          qs({
+            roster_status: "waitlisted",
+            roster_sort: "waitlist",
+            roster_order: order,
+            roster_page: "2",
+          }),
+          kit,
+        );
+        expect(displayedRows(await page.text()).map((r) => [r[0], r[3]])).toEqual(
+          Array.from({ length: 5 }, (_, i) => {
+            const index = order === "asc" ? 100 + i : 4 - i;
+            return [`${needle} ${index}`, `#${index + 1}`];
+          }),
+        );
+      }
+      const section = rosterHtml(await (await readRoster(renderer, rosterDb(), "", kit)).text());
+      const header = links(section).find(
+        (l) => normalizedLink(l.href).get("roster_sort") === "waitlist",
+      );
+      expect(header?.label).toMatch(/waitlist/i);
+      const active = links(rosterHtml(descHtml)).find(
+        (l) => normalizedLink(l.href).get("roster_sort") === "waitlist",
+      );
+      expect(normalizedLink(active!.href).get("roster_order")).toBe("asc");
+      assertBounded(fixture);
+    });
+
+    it("WQ-R05 the empty roster spans all four columns", async () => {
+      const fixture = rosterDb({ noAnswers: true });
+      const response = await readRoster(renderer, fixture, "roster_status=going", kit);
+      expect(response.status).toBe(200);
+      expect(await response.text()).toContain('colspan="4"');
     });
 
     it("RAF-C02 CONTROL all answers and bounded literal member search still work", async () => {

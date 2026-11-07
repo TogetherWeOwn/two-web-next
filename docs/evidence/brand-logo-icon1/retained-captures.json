@@ -1,0 +1,207 @@
+{
+  "headSha": "a513f5ae8e6f0bc70714f3a5f582c9d1400529c6",
+  "runId": 42310900115,
+  "runAttempt": 1,
+  "artifactId": 13548672752,
+  "artifactName": "brand-header-captures-42310900115-1",
+  "artifactSha256": "02921111c20f70f85573102b58f43e294882d22255533ce766c156043adcac38",
+  "jobUrl": "https://github.com/TogetherWeOwn/two-web-next/actions/runs/42310900115/job/128211868039",
+  "files": [
+    {
+      "file": "brand-hono-guest-about-1280.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-about-1280.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "a4a67dc38149e51b546a174637bb24e4e0ff6eef3486c86a062cf9ba28d2b1df"
+    },
+    {
+      "file": "brand-hono-guest-about-360.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-about-360.png",
+      "width": 360,
+      "height": 844,
+      "sha256": "b9b4b30c97ae1c54e3096956f6475c67599dab33c6a355adfc7eba835754acd4"
+    },
+    {
+      "file": "brand-hono-guest-about-390.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-about-390.png",
+      "width": 390,
+      "height": 844,
+      "sha256": "dc3ecd26b9a79c899cb69345dd89ddab2ae39f1b02a522fbdc4abc05dbad3483"
+    },
+    {
+      "file": "brand-hono-guest-about-768.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-about-768.png",
+      "width": 768,
+      "height": 844,
+      "sha256": "62a0d348650f17d338f2aa7bb865fdb006fc36fcf01a6d6ef9e2bd955b677858"
+    },
+    {
+      "file": "brand-hono-guest-events-1280.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-events-1280.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "c362cc51da7fc942bf76ad2ce7c362d3aaeedcda2ad4f07a4cae788fe6d6eb7c"
+    },
+    {
+      "file": "brand-hono-guest-events-360.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-events-360.png",
+      "width": 360,
+      "height": 844,
+      "sha256": "cd8b9b9b790edcf72a7506bb9c80d28bab19c55c5f7c31abf022bc4e10aa7faf"
+    },
+    {
+      "file": "brand-hono-guest-events-390.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-events-390.png",
+      "width": 390,
+      "height": 844,
+      "sha256": "01f7938f5c1335070618aa9925f9309ff37a5a7fd85fe807e213f6f03d558a34"
+    },
+    {
+      "file": "brand-hono-guest-events-768.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-events-768.png",
+      "width": 768,
+      "height": 844,
+      "sha256": "483284dfbf69cdb5b8d90f46e17987f11be8f164b05e1bf2b771b42587d1c1bf"
+    },
+    {
+      "file": "brand-hono-guest-home-1280.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-home-1280.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "fca4f9cbff97ab5cf93f7421e7f33f5ac0b1e07d9af102829ded2de1c8dcc448"
+    },
+    {
+      "file": "brand-hono-guest-home-360.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-home-360.png",
+      "width": 360,
+      "height": 844,
+      "sha256": "e211d6e87a642fd7e103757e8064c0369213e851381091dcda491e9b734560ef"
+    },
+    {
+      "file": "brand-hono-guest-home-390.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-home-390.png",
+      "width": 390,
+      "height": 844,
+      "sha256": "31aea6799d601771bb44d2a88cd32908cce637217fdafab85fbcd8b4bf0a1df1"
+    },
+    {
+      "file": "brand-hono-guest-home-768.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-home-768.png",
+      "width": 768,
+      "height": 844,
+      "sha256": "0d686c2818fd308ef6003f93dc4e0c72cdb24445faaeab0e0a0fab846d655906"
+    },
+    {
+      "file": "brand-hono-guest-join-1280.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-join-1280.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "071c263032c152690925a4d10ed1f881c5dcce698f58fa0cd1a70ccc80e318fd"
+    },
+    {
+      "file": "brand-hono-guest-join-360.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-join-360.png",
+      "width": 360,
+      "height": 844,
+      "sha256": "b637474ae28a58599566a0f6fd556975f2a719b39c5456d05ceff7d45184b3c6"
+    },
+    {
+      "file": "brand-hono-guest-join-390.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-join-390.png",
+      "width": 390,
+      "height": 844,
+      "sha256": "ec453eb906fd9715b1ef1c13069aead7bba8ce2313086a939193b5958923beba"
+    },
+    {
+      "file": "brand-hono-guest-join-768.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-guest-join-768.png",
+      "width": 768,
+      "height": 844,
+      "sha256": "be958a790278b6820c7cdbd30fe5a791d010dabcde3eaaefefebe07fc0ce1397"
+    },
+    {
+      "file": "brand-hono-member-board-1280.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-member-board-1280.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "19a38e9b2ebb6fb47d63c84734ae2dea3735a1655ed7c5cb00886c9afcb0ecd5"
+    },
+    {
+      "file": "brand-hono-member-board-360.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-member-board-360.png",
+      "width": 360,
+      "height": 844,
+      "sha256": "81cbb3b93e2e02957d8166df52e1ed3e22a06da0e521c7114b2b928b3d013f4f"
+    },
+    {
+      "file": "brand-hono-member-board-390.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-member-board-390.png",
+      "width": 390,
+      "height": 844,
+      "sha256": "6871637512ed7e770e368a6ab50a3d3f7abb7d01980c0f2723575c1930353bb0"
+    },
+    {
+      "file": "brand-hono-member-board-768.png",
+      "sourcePath": "parity-hono-brand-header-p-588c2-ber-chrome-at-narrow-widths-chromium/brand-hono-member-board-768.png",
+      "width": 768,
+      "height": 844,
+      "sha256": "c192abbfb25edd3fef913ac7272c7dbe618425926c6d6eb69089282ef06d4bf7"
+    },
+    {
+      "file": "brand-kit-guest-events-1280.png",
+      "sourcePath": "parity-kit-brand-header-pr-77808-ber-chrome-at-narrow-widths-chromium/brand-kit-guest-events-1280.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "c362cc51da7fc942bf76ad2ce7c362d3aaeedcda2ad4f07a4cae788fe6d6eb7c"
+    },
+    {
+      "file": "brand-kit-guest-events-360.png",
+      "sourcePath": "parity-kit-brand-header-pr-77808-ber-chrome-at-narrow-widths-chromium/brand-kit-guest-events-360.png",
+      "width": 360,
+      "height": 844,
+      "sha256": "cd8b9b9b790edcf72a7506bb9c80d28bab19c55c5f7c31abf022bc4e10aa7faf"
+    },
+    {
+      "file": "brand-kit-guest-events-390.png",
+      "sourcePath": "parity-kit-brand-header-pr-77808-ber-chrome-at-narrow-widths-chromium/brand-kit-guest-events-390.png",
+      "width": 390,
+      "height": 844,
+      "sha256": "01f7938f5c1335070618aa9925f9309ff37a5a7fd85fe807e213f6f03d558a34"
+    },
+    {
+      "file": "brand-kit-guest-events-768.png",
+      "sourcePath": "parity-kit-brand-header-pr-77808-ber-chrome-at-narrow-widths-chromium/brand-kit-guest-events-768.png",
+      "width": 768,
+      "height": 844,
+      "sha256": "483284dfbf69cdb5b8d90f46e17987f11be8f164b05e1bf2b771b42587d1c1bf"
+    },
+    {
+      "file": "brand-kit-member-board-1280.png",
+      "sourcePath": "parity-kit-brand-header-pr-77808-ber-chrome-at-narrow-widths-chromium/brand-kit-member-board-1280.png",
+      "width": 1280,
+      "height": 800,
+      "sha256": "0d521bd2723d733582a737344622258f7dd971864a2e55fe5cc97fa5c81394b5"
+    },
+    {
+      "file": "brand-kit-member-board-360.png",
+      "sourcePath": "parity-kit-brand-header-pr-77808-ber-chrome-at-narrow-widths-chromium/brand-kit-member-board-360.png",
+      "width": 360,
+      "height": 844,
+      "sha256": "4d6253555b31b06e1b8ca7f79ff5537ea6697496faba15910729172b54c52f63"
+    },
+    {
+      "file": "brand-kit-member-board-390.png",
+      "sourcePath": "parity-kit-brand-header-pr-77808-ber-chrome-at-narrow-widths-chromium/brand-kit-member-board-390.png",
+      "width": 390,
+      "height": 844,
+      "sha256": "832d82a237d97cc2c7be2778fe6b5f22c8b653c1346799f811f2e51c52b8f8ba"
+    },
+    {
+      "file": "brand-kit-member-board-768.png",
+      "sourcePath": "parity-kit-brand-header-pr-77808-ber-chrome-at-narrow-widths-chromium/brand-kit-member-board-768.png",
+      "width": 768,
+      "height": 844,
+      "sha256": "f8a719fd3423211fa36a47ad7a41ac24a89c3605b2ca12a9a2197938b79ee9ea"
+    }
+  ]
+}
