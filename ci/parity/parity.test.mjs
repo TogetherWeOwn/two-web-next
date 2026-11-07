@@ -1,9 +1,16 @@
 // Route-parity tooling selftests: no Worker, no database.
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { test } from "node:test";
-import { compareRecordings, diffResponse, parseExceptions, report } from "./compare.mjs";
+import {
+  compareRecordings,
+  diffResponse,
+  loadRecording,
+  parseExceptions,
+  report,
+} from "./compare.mjs";
+import { expandRecording, goldenJson, packRecording } from "./golden.mjs";
 import {
   ASSET_ETAG_MASK,
   clientAddress,
@@ -14,7 +21,6 @@ import {
   normalizeHeaders,
   normalizeSetCookie,
 } from "./normalize.mjs";
-import { goldenJson } from "./record.mjs";
 import { signedCookieNames } from "./signed-cookies.mjs";
 import { buildVectors, concretePath, listPublicFiles, slug } from "./vectors.mjs";
 
@@ -265,12 +271,39 @@ test("signed-cookie vectors cover every cookie the card names", () => {
 
 test("goldens are written one vector per line and round-trip", () => {
   const vectors = { GET: { response: { status: 200 } }, HEAD: { response: { status: 200 } } };
-  const text = goldenJson({ file: "routes/about" }, "vectors", vectors);
+  const text = goldenJson({ file: "routes/about" }, { vectors });
   assert.deepEqual(JSON.parse(text), { file: "routes/about", vectors });
   assert.equal(text.trimEnd().split("\n").length, 7);
   const coverage = [{ entry: "GET /", file: "routes/root", vector: "GET" }];
-  assert.deepEqual(JSON.parse(goldenJson({ schema: 1 }, "coverage", coverage)), {
+  assert.deepEqual(JSON.parse(goldenJson({ schema: 1 }, { shared: {}, coverage })), {
     schema: 1,
+    shared: {},
     coverage,
   });
+});
+
+test("the shared table round-trips the committed goldens and rejects bad references", () => {
+  const [pinned] = readdirSync(join(repo, "test/fixtures/parity")).filter((name) =>
+    name.startsWith("hono-"),
+  );
+  const dir = join(repo, "test/fixtures/parity", pinned);
+  const index = JSON.parse(readFileSync(join(dir, "index.json"), "utf8"));
+  const expanded = loadRecording(dir);
+  assert.equal(
+    [...expanded.values()].reduce((sum, vectors) => sum + Object.keys(vectors).length, 0),
+    index.vectorCount,
+  );
+  const repacked = packRecording(expanded);
+  assert.deepEqual(repacked.shared, index.shared);
+  assert.deepEqual(expandRecording(repacked.files, repacked.shared), expanded);
+
+  const record = { request: { headers: { a: "1" } }, response: { status: 200, headers: {} } };
+  const { shared, files } = packRecording(new Map([["routes/about", { GET: record }]]));
+  assert.deepEqual(expandRecording(files, shared).get("routes/about").GET, record);
+  const [key] = Object.keys(shared);
+  const { [key]: _, ...dangling } = shared;
+  assert.throws(() => expandRecording(files, dangling), /missing shared key/);
+  assert.throws(() => expandRecording(files, { ...shared, ffffffffffffffff: {} }), /unused/);
+  const inline = new Map([["routes/about", { GET: record }]]);
+  assert.throws(() => expandRecording(inline, shared), /not a shared-table reference/);
 });

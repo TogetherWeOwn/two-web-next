@@ -9,12 +9,13 @@
 // With --config the candidate is recorded first, from any Worker config.
 // Differences listed in the approved-exceptions table of
 // docs/kit-parity-gates.md are reported but do not fail; everything else does.
-import { readFileSync, readdirSync, statSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { mkdtemp } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { expandRecording } from "./golden.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 export const EXCEPTIONS_DOC = "docs/kit-parity-gates.md";
@@ -74,7 +75,9 @@ export function loadRecording(dir) {
     }
   };
   walk(dir);
-  return files;
+  const index = join(dir, "index.json");
+  const { shared } = existsSync(index) ? JSON.parse(readFileSync(index, "utf8")) : {};
+  return shared ? expandRecording(files, shared) : files;
 }
 
 const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);

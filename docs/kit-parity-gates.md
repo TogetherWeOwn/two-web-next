@@ -195,11 +195,15 @@ differs before its hook runs (trailing-slash 308, method handling, automatic
   `drizzle`, `wrangler.jsonc`, `package-lock.json`). `index.json` records the
   git trees of those inputs and of the harness, plus the coverage map. To
   re-record, copy the `route-parity-<sha>` artifact from the `check` job into
-  that directory unchanged. The recorder writes one vector per line, so a
-  changed vector is a one-line diff and the set stays under GitHub's
-  20,000-line pull request diff limit (past it the diff API returns 406 and
-  Devin Review fails without reviewing). Biome skips these directories for the
-  same reason. The checks compare parsed JSON. The committed set was
+  that directory unchanged. The recorder (`ci/parity/golden.mjs`) writes one
+  vector per line and stores each request header set, response header set,
+  Set-Cookie list and body descriptor once, in the `shared` table of
+  `index.json`, keyed by a sha256 prefix; a vector holds only `"=<key>"`.
+  `loadRecording` expands the table before any comparison and fails on a
+  missing key or an unused entry. This keeps a re-record diff small (a changed
+  CSP is one table line) and the set under GitHub's 20,000-line pull request
+  diff limit; past it the diff API returns 406 and Devin Review fails without
+  reviewing. Biome skips these directories. The committed set was
   recorded at `226cbb91368f33babe7d90ac4b51f5203c6c0e2c`.
 - `test/fixtures/parity/signed-cookies.json` holds `hono/cookie` vectors for
   every cookie `src/` signs (`node ci/parity/signed-cookies.mjs --write`).
