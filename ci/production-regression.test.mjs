@@ -837,6 +837,13 @@ test("queue compatibility is tested by the blocking original-workflow linter and
   assert.match(harness, /debug\.ReadBuildInfo\(\)/);
   assert.match(harness, /info\.Main\.Version != "\(devel\)"/);
   assert.match(harness, /TestDetectAbsentReleaseNotFound/);
+  assert.ok(
+    harness.includes('stdout.String() != "No new release was found\\n" || stderr.Len() != 0'),
+  );
+  assert.match(build, /chmod -R u\+w "\$work\/modules"/);
+  assert.match(build, /\[\[ ! -e "\$work" \]\]/);
+  assert.match(build, /tee "\$work\/\$label-tests\.log" \|\| status=\$\?/);
+  assert.match(build, /return "\$status"/);
   assert.match(harness, /t\.Cleanup\(func\(\)/);
   assert.match(harness, /http\.DefaultTransport = previous/);
   assert.match(harness, /req\.Method != http\.MethodHead/);

@@ -29,9 +29,9 @@ unchanged:
   exact malformed HEAD request and returns a populated synthetic 400 response.
   It rejects other requests without network fallback, asserts interception, and
   restores the transport with `t.Cleanup`. Original exit-1 and diagnostic
-  assertions remain. A separate 404 control requires exit 0 with no non-2xx
-  diagnostic or released URL. Package tests have no parallel execution; the
-  harness refuses `.Parallel()` in that package before running the suite.
+  assertions remain. A separate 404 control requires exit 0, exactly the normal
+  `No new release was found` line, and empty stderr. Package tests have no parallel
+  execution; the harness refuses `.Parallel()` in that package before running the suite.
 
 These changes repair observed source-archive/Go/live-response assumptions while
 preserving the upstream test inventory and error assertions. The failed live-HTTP

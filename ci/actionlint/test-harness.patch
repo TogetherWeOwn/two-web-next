@@ -99,8 +99,8 @@
 +	if status != 0 {
 +		t.Fatal("exit status is not 0:", status)
 +	}
-+	if stdout.Len() != 0 || strings.Contains(stderr.String(), "was not successful") {
-+		t.Fatalf("absent release produced output or non-2xx diagnostic: stdout=%q stderr=%q", stdout.String(), stderr.String())
++	if stdout.String() != "No new release was found\n" || stderr.Len() != 0 {
++		t.Fatalf("unexpected absent-release result: stdout=%q stderr=%q", stdout.String(), stderr.String())
 +	}
 +}
 +

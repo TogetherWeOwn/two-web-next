@@ -4,7 +4,15 @@ set -euo pipefail
 [[ "${GITHUB_ACTIONS:-}" == true ]] || { printf '%s\n' 'Run this gate in GitHub Actions.' >&2; exit 1; }
 root=$(git rev-parse --show-toplevel)
 work=$(mktemp -d "${RUNNER_TEMP:?}/actionlint-queue.XXXXXX")
-trap 'rm -rf -- "$work"' EXIT
+cleanup() {
+  local status=$?
+  # Go's module cache is read-only, including its versioned directories.
+  chmod -R u+w "$work/modules"
+  rm -rf -- "$work"
+  [[ ! -e "$work" ]]
+  exit "$status"
+}
+trap cleanup EXIT
 mkdir "$work/source" "$work/toolchain" "$work/modules" "$work/cache"
 
 curl -fsSL --retry 2 --connect-timeout 20 --max-time 180 \
@@ -35,7 +43,7 @@ sha256sum -c "$work/modules.sha256"
 [[ -d "$src/.github/workflows" && ! -e "$src/.git" ]]
 mkdir "$src/.git"
 printf '%s  %s\n' \
-  d3338ce18c573250c580a1176f2c15b1251f6f432716e33cb17c3cdeae1130c0 "$root/ci/actionlint/test-harness.patch" \
+  3d2c2906c267b0954a2f634f7628e8ec3e4066884448384a43742ffaa9904d71 "$root/ci/actionlint/test-harness.patch" \
   5469da536031422230495284312dd17e25ab8f0554443b837fe210fb4881eb27 "$root/ci/actionlint/queue.patch" | sha256sum -c -
 sha256sum "$src/ast.go" "$src/parse.go" > "$work/grammar.sha256"
 apply_patch() {
@@ -48,9 +56,9 @@ apply_patch() {
   git -C "$src" apply "$patch"
 }
 run_tests() {
-  local label="$1"
+  local label="$1" status=0
   printf 'Full upstream inventory: %s\n' "$label"
-  "$go" -C "$src" test -count=1 -v ./... | tee "$work/$label-tests.log"
+  "$go" -C "$src" test -count=1 -v ./... | tee "$work/$label-tests.log" || status=$?
   node --input-type=module - "$work/$label-tests.log" <<'JS'
 import { readFileSync } from 'node:fs';
 const log = readFileSync(process.argv[2], 'utf8');
@@ -59,6 +67,7 @@ console.log(`Upstream results (including subtests): ${count('PASS')} passed, ${c
 JS
   "$go" -C "$src" mod verify
   sha256sum -c "$work/modules.sha256"
+  return "$status"
 }
 # The scoped DefaultTransport fixture must never overlap a parallel test.
 if grep -RnE '\.Parallel[[:space:]]*\(' "$src/scripts/generate-popular-actions" --include='*_test.go'; then
