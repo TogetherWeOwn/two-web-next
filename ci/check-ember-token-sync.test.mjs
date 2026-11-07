@@ -1,0 +1,559 @@
+import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
+import {
+  cpSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
+import { gzipSync } from "node:zlib";
+import test from "node:test";
+import {
+  ARTIFACTS,
+  HONO_CONSUMERS,
+  ROLES,
+  build,
+  generate,
+  parseKit,
+  roleDeclarations,
+} from "./build-ember-tokens.mjs";
+import { CHROME_CONSUMERS, check } from "./check-ember-token-sync.mjs";
+
+const ROOT = fileURLToPath(new URL("../", import.meta.url));
+const SCRIPT = join(ROOT, "ci/check-ember-token-sync.mjs");
+const KIT = "vendor/design-kit/tokens.css";
+
+function lastJsonLine(out) {
+  return JSON.parse(out.trim().split("\n").at(-1));
+}
+
+// Scratch root with only the generator inputs; artifacts are not copied.
+function withScratch(fn) {
+  const root = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "ember-sync-"));
+  try {
+    cpSync(join(ROOT, "vendor/design-kit"), join(root, "vendor/design-kit"), { recursive: true });
+    for (const path of HONO_CONSUMERS) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      cpSync(join(ROOT, path), join(root, path));
+    }
+    mkdirSync(join(root, "public"), { recursive: true });
+    mkdirSync(join(root, "web/src"), { recursive: true });
+    mkdirSync(join(root, "src"), { recursive: true });
+    for (const path of CHROME_CONSUMERS) cpSync(join(ROOT, path), join(root, path));
+    return fn(root);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+const kitCss = () => readFileSync(join(ROOT, KIT), "utf8");
+const realKit = () => parseKit(kitCss());
+const mutateKit = (root, edit) =>
+  writeFileSync(join(root, KIT), edit(readFileSync(join(root, KIT), "utf8")));
+
+test("generation is exact, repeatable and leaves the real repo untouched", () => {
+  const before = ARTIFACTS.map((path) => readFileSync(join(ROOT, path), "utf8"));
+  const first = generate(ROOT);
+  const second = generate(ROOT);
+  assert.deepEqual([...first.keys()], ARTIFACTS);
+  ARTIFACTS.forEach((path, index) => {
+    assert.equal(first.get(path), second.get(path), `${path} repeatable`);
+    assert.equal(first.get(path), before[index], `${path} checked in matches generation`);
+  });
+  withScratch((root) => {
+    build(root);
+    const once = ARTIFACTS.map((path) => readFileSync(join(root, path), "utf8"));
+    build(root);
+    assert.deepEqual(
+      ARTIFACTS.map((path) => readFileSync(join(root, path), "utf8")),
+      once,
+    );
+    assert.equal(check(root).ok, true);
+  });
+  assert.deepEqual(
+    ARTIFACTS.map((path) => readFileSync(join(ROOT, path), "utf8")),
+    before,
+  );
+});
+
+test("generated Hono sheets fit every original raw and gzip ceiling", () => {
+  const outputs = generate(ROOT);
+  for (const [path, raw, gzip] of [
+    ["public/styles.css", 6144, 2048],
+    ["public/theme-tokens.css", 1536, 512],
+    ["public/theme.css", 15360, 3584],
+  ]) {
+    const bytes = Buffer.from(outputs.get(path) ?? readFileSync(join(ROOT, path), "utf8"));
+    assert.ok(bytes.length <= raw, `${path}: ${bytes.length} raw bytes exceeds ${raw}`);
+    assert.ok(gzipSync(bytes).length <= gzip, `${path}: gzip exceeds ${gzip}`);
+  }
+});
+
+test("Hono exposes each consumed role once and omits unread roles", () => {
+  const outputs = generate(ROOT);
+  const css = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"]
+    .map((path) => outputs.get(path))
+    .join("\n")
+    .split("@media(prefers-reduced-motion:reduce)")[0];
+  const consumers = HONO_CONSUMERS.map((path) => readFileSync(join(ROOT, path), "utf8")).join("\n");
+  for (const [alias] of ROLES) {
+    const consumed = new RegExp(`var\\(\\s*--${alias}(?=[\\s,)])`).test(consumers);
+    assert.equal([...css.matchAll(new RegExp(`--${alias}:`, "g"))].length, consumed ? 1 : 0, alias);
+  }
+  for (const alias of ["hair1", "hair2"]) {
+    assert.ok(!outputs.get("public/theme-tokens.css").includes(`--${alias}:`));
+    assert.ok(!outputs.get("public/theme.css").includes(`--${alias}:`));
+    assert.ok(!outputs.get("web/src/ember-theme.css").includes(`--${alias}:`));
+    assert.ok(outputs.get("web/src/ember-theme.css").includes(`--color-${alias}:`));
+  }
+  const styles = outputs.get("public/styles.css");
+  assert.ok(!styles.includes("--font-size-hero:"));
+  assert.ok(!outputs.get("public/theme.css").includes("--font-size-hero:"));
+  assert.ok(!outputs.get("public/theme-tokens.css").includes("--font-size-hero:"));
+  assert.ok(outputs.get("web/src/ember-theme.css").includes("--text-hero:"));
+});
+
+test("new authored role reads regenerate aliases and reject stale artifacts", () => {
+  withScratch((root) => {
+    for (const path of HONO_CONSUMERS) {
+      build(root);
+      const file = join(root, path);
+      const before = readFileSync(file, "utf8");
+      writeFileSync(file, `${before}\n.probe{padding:var( --space-4 )}`);
+      assert.throws(() => check(root), /generated token drift/);
+      const styles = generate(root).get("public/styles.css");
+      assert.equal([...styles.matchAll(/--space-4:16px/g)].length, 1, path);
+      writeFileSync(file, before);
+    }
+  });
+});
+
+test("missing authored consumers fail before writing artifacts", () => {
+  withScratch((root) => {
+    for (const path of HONO_CONSUMERS) {
+      const file = join(root, path);
+      const before = readFileSync(file, "utf8");
+      rmSync(file);
+      assert.throws(() => build(root), /ENOENT/, path);
+      for (const artifact of ARTIFACTS) assert.ok(!existsSync(join(root, artifact)));
+      writeFileSync(file, before);
+    }
+  });
+});
+
+test("every required role group resolves from the kit", () => {
+  const roles = roleDeclarations(realKit());
+  const aliases = new Set(roles.map(([alias]) => alias));
+  assert.equal(aliases.size, ROLES.length);
+  const groups = {
+    ground: /^g[0-4]$/,
+    hair: /^hair[12]$/,
+    text: /^t[123]$/,
+    accent: /^(ember|on-accent|accent-hi|border)$/,
+    status: /^(live|echo|ok|danger|warn)(-bg)?$/,
+    focus: /^focus-/,
+    space: /^space-/,
+    radius: /^radius-/,
+    fontSize: /^font-size-/,
+    tracking: /^tracking-/,
+    family: /^font-(display|ui|accent|data)$/,
+    weight: /^font-weight-/,
+    width: /^font-width-/,
+    lineHeight: /^line-height-/,
+    motion: /^motion-/,
+    gradient: /^gradient-brand$/,
+  };
+  for (const [group, pattern] of Object.entries(groups)) {
+    assert.ok(
+      [...aliases].some((alias) => pattern.test(alias)),
+      `role group ${group} present`,
+    );
+  }
+  for (const [alias, , value] of roles) assert.ok(value, `${alias} has a value`);
+  assert.match(roles.find(([alias]) => alias === "font-display")[2], /Mona Sans Fallback/);
+});
+
+test("a missing kit role fails generation", () => {
+  withScratch((root) => {
+    mutateKit(root, (css) => css.replace(/\s*--two-color-ground-3:[^;]*;/, ""));
+    assert.throws(() => build(root), /missing kit role --two-color-ground-3/);
+    for (const path of ARTIFACTS) assert.ok(!existsSync(join(root, path)), `${path} not written`);
+  });
+  assert.throws(() => roleDeclarations(realKit(), [["x", "color-nope"]]), /missing kit role/);
+});
+
+test("alias collisions and invalid aliases are rejected", () => {
+  const kit = realKit();
+  assert.throws(
+    () =>
+      roleDeclarations(kit, [
+        ["g0", "color-ground-0"],
+        ["g0", "color-ground-1"],
+      ]),
+    /alias collision/,
+  );
+  assert.throws(() => roleDeclarations(kit, [["Bad Alias", "color-ground-0"]]), /invalid alias/);
+});
+
+test("duplicate and unknown kit CSS structure is rejected", () => {
+  const css = kitCss();
+  assert.throws(
+    () => parseKit(css.replace("--two-page:", "--two-surface: #000;\n  --two-page:")),
+    /duplicate kit declaration/,
+  );
+  assert.throws(() => parseKit(`${css}\n.extra { color: red; }`), /unknown kit CSS structure/);
+  assert.throws(() => parseKit(":root { color-scheme: dark; }"), /unknown kit CSS structure/);
+  assert.throws(
+    () => parseKit(css.replace("color-scheme: dark", "color-scheme: light")),
+    /dark only/,
+  );
+  assert.throws(
+    () => parseKit(css.replace("--two-page: #15100f", "--two-page: var(--x)")),
+    /unresolved or unsafe/,
+  );
+  assert.throws(
+    () =>
+      parseKit(
+        css.replace(
+          /(prefers-reduced-motion: reduce\) \{\s*:root \{)/,
+          "$1\n    --two-page: #000;",
+        ),
+      ),
+    /unknown reduced-motion role/,
+  );
+  withScratch((root) => {
+    mutateKit(root, (text) => `${text}\n.extra { color: red; }`);
+    assert.throws(() => build(root), /unknown kit CSS structure/);
+  });
+});
+
+test("base and reduced-motion declarations stay separate", () => {
+  const kit = realKit();
+  assert.ok(kit.reduced.size > 0);
+  for (const name of kit.reduced.keys()) {
+    assert.ok(name.startsWith("--two-motion-"), name);
+    assert.ok(kit.base.has(name), `${name} has a base value`);
+    assert.notEqual(kit.base.get(name), kit.reduced.get(name), `${name} reduced differs from base`);
+  }
+  const out = generate(ROOT);
+  const hono = out.get("public/theme.css");
+  const [baseCss, reducedCss] = hono.split("@media(prefers-reduced-motion:reduce)");
+  assert.ok(reducedCss, "reduced-motion block emitted");
+  assert.match(baseCss, /--motion-duration-base:\.16s/, "minified base keeps the kit duration");
+  const reducedBlock = reducedCss.slice(0, reducedCss.indexOf("}}") + 2);
+  assert.ok(reducedBlock.includes("--motion-duration-base:0ms"));
+  assert.ok(reducedBlock.includes("--motion-ease:linear"));
+  assert.ok(!hono.includes("--motion-duration-fast:"), "unread motion roles are omitted");
+  assert.ok(
+    !/--(g0|t1|space-1|ember)\b/.test(reducedBlock),
+    "reduced block holds only motion roles",
+  );
+  assert.ok(
+    !baseCss.includes("--motion-duration-base:0ms"),
+    "base block keeps non-reduced motion values",
+  );
+});
+
+test("missing, stale and edited artifacts each fail the check", () => {
+  withScratch((root) => {
+    assert.throws(() => check(root), /ENOENT|generated token drift/, "missing before build");
+    build(root);
+    assert.equal(check(root).ok, true);
+    for (const path of ARTIFACTS) {
+      const file = join(root, path);
+      const good = readFileSync(file, "utf8");
+      try {
+        rmSync(file);
+        assert.throws(() => check(root), /ENOENT|generated token drift/, `${path} missing`);
+        writeFileSync(file, `${good}\n/* edited */`);
+        assert.throws(
+          () => check(root),
+          { message: `generated token drift: ${path}` },
+          `${path} edited`,
+        );
+        writeFileSync(file, "");
+        assert.throws(() => check(root), /generated token drift/, `${path} emptied`);
+      } finally {
+        writeFileSync(file, good);
+      }
+      assert.equal(check(root).ok, true, `${path} restored`);
+    }
+  });
+});
+
+test("stale artifacts after a kit or theme source change fail the check", () => {
+  withScratch((root) => {
+    build(root);
+    mutateKit(root, (css) => css.replace("#f6f1ea", "#ffffff"));
+    assert.throws(() => check(root), /generated token drift/, "kit value change");
+    mutateKit(root, (css) => css.replace("#ffffff", "#f6f1ea"));
+    assert.equal(check(root).ok, true);
+    const theme = join(root, "assets/theme.css");
+    writeFileSync(theme, `${readFileSync(theme, "utf8")}\n.ember-sync-probe{color:#123456}\n`);
+    assert.throws(() => check(root), /generated token drift: public\/theme\.css/);
+    build(root);
+    const shared = join(root, "assets/styles.css");
+    writeFileSync(shared, `${readFileSync(shared, "utf8")}\n.ember-shared-probe{color:#123456}\n`);
+    assert.throws(() => check(root), /generated token drift: public\/styles\.css/);
+  });
+});
+
+for (const [directory, hooks] of [
+  [".", ["postinstall", "predev"]],
+  ["web", ["postinstall", "prebuild"]],
+]) {
+  for (const hook of hooks) {
+    test(`${directory} ${hook} rejects drift without repairing tracked outputs`, () => {
+      withScratch((root) => {
+        mkdirSync(join(root, "ci"));
+        mkdirSync(join(root, "src"), { recursive: true });
+        for (const path of [
+          "package.json",
+          "web/package.json",
+          "ci/build-ember-tokens.mjs",
+          "ci/build-leaf-css.mjs",
+          "public/styles.css",
+        ]) {
+          cpSync(join(ROOT, path), join(root, path));
+        }
+        symlinkSync(join(ROOT, "node_modules"), join(root, "node_modules"), "dir");
+        build(root);
+        const run = () =>
+          execFileSync("npm", ["run", hook, "--ignore-scripts"], {
+            cwd: join(root, directory),
+            encoding: "utf8",
+            stdio: ["ignore", "pipe", "pipe"],
+            timeout: 30_000,
+          });
+        const leaf = join(root, "src/leaf-critical-css.ts");
+        const assertRejected = () => {
+          const before = ARTIFACTS.map((path) =>
+            existsSync(join(root, path)) ? readFileSync(join(root, path), "utf8") : null,
+          );
+          writeFileSync(leaf, "leaf must not be regenerated after adapter failure");
+          assert.throws(run, (error) => {
+            assert.equal(error.status, 1);
+            assert.match(error.stderr, /generated token drift|ENOENT/);
+            return true;
+          });
+          assert.deepEqual(
+            ARTIFACTS.map((path) =>
+              existsSync(join(root, path)) ? readFileSync(join(root, path), "utf8") : null,
+            ),
+            before,
+            "tracked artifacts remain untouched, including missing outputs",
+          );
+          assert.equal(
+            readFileSync(leaf, "utf8"),
+            "leaf must not be regenerated after adapter failure",
+          );
+        };
+        for (const path of ARTIFACTS) {
+          const file = join(root, path);
+          const good = readFileSync(file, "utf8");
+          writeFileSync(file, `${good}\n/* stale */`);
+          assertRejected();
+          rmSync(file);
+          assertRejected();
+          writeFileSync(file, good);
+        }
+        const theme = join(root, "assets/theme.css");
+        const source = readFileSync(theme, "utf8");
+        writeFileSync(theme, `${source}\n.ember-lifecycle-probe{color:#123456}`);
+        assertRejected();
+        writeFileSync(theme, source);
+        run();
+        assert.equal(check(root).ok, true);
+        assert.match(readFileSync(leaf, "utf8"), /^\/\/ GENERATED from public\/styles\.css/);
+      });
+    });
+  }
+}
+
+test("ember token sync selftest passes on the wired sheets", () => {
+  const out = execFileSync("node", [SCRIPT, "--selftest"], { encoding: "utf8" });
+  const parsed = lastJsonLine(out);
+  assert.equal(parsed.ok, true);
+  assert.equal(parsed.mode, "selftest");
+  assert.match(parsed.summary, /ember token sync selftest ok/);
+});
+
+test("ember token sync check passes on the wired sheets", () => {
+  const out = execFileSync("node", [SCRIPT], { encoding: "utf8" });
+  const parsed = lastJsonLine(out);
+  assert.equal(parsed.ok, true);
+  assert.match(parsed.summary, /ember token sync ok/);
+});
+
+test("browser chrome consumers reject edited, missing and duplicate ground values", () => {
+  withScratch((root) => {
+    build(root);
+    for (const path of CHROME_CONSUMERS) {
+      const file = join(root, path);
+      const good = readFileSync(file, "utf8");
+      writeFileSync(file, good.replaceAll("#15100f", "#121719"));
+      assert.throws(() => check(root), /browser chrome token drift/, path);
+      writeFileSync(file, path.endsWith("webmanifest") ? "{}" : "");
+      assert.throws(() => check(root), /browser chrome token drift/, `${path} missing role`);
+      if (!path.endsWith("webmanifest")) {
+        writeFileSync(file, good + '\n<meta name="theme-color" content="#15100f" />');
+        assert.throws(() => check(root), /browser chrome token drift/, `${path} duplicate role`);
+      }
+      writeFileSync(file, good);
+      assert.equal(check(root).ok, true);
+    }
+  });
+});
+
+test("catastrophic fallback palette and focus are generated with their CSP hash", () => {
+  const outputs = generate(ROOT);
+  const html = outputs.get("web/src/error.html");
+  const module = outputs.get("src/ember-fallback-style.ts");
+  const style = html.match(/<style>([^]*?)<\/style>/)[1];
+  assert.ok(module.includes(JSON.stringify(style)));
+  assert.ok(style.includes(`background:${realKit().base.get("--two-color-ground-0")}`));
+  assert.ok(style.includes(`color:${realKit().base.get("--two-color-text-1")}`));
+  assert.ok(style.includes("outline:2px solid #ff9c36;outline-offset:3px"));
+  assert.ok(style.includes("outline-color:Highlight"));
+  withScratch((root) => {
+    mutateKit(root, (css) => css.replaceAll("#ff9c36", "#ffffff"));
+    const changed = generate(root);
+    assert.notEqual(changed.get("src/ember-fallback-style.ts"), module);
+    assert.ok(changed.get("web/src/error.html").includes("outline:2px solid #ffffff"));
+  });
+});
+
+test("both stacks use the kit UI family and Hono body metrics", () => {
+  const outputs = generate(ROOT);
+  const hono = outputs.get("public/theme.css");
+  assert.match(
+    hono,
+    /font:var\(--font-size-body\)\/var\(--line-height-body\) system-ui,sans-serif/,
+  );
+  assert.match(hono, /\.base-theme:not\(\.content-theme\)\{font-family:var\(--font-ui\)/);
+  assert.equal(realKit().base.get("--two-font-ui"), realKit().base.get("--two-font-display"));
+  assert.match(outputs.get("web/src/ember-theme.css"), /--font-sans:var\(--font-ui\)/);
+});
+
+test("equal UI/display stacks share bytes but divergent pinned roles remain independent", () => {
+  assert.match(generate(ROOT).get("public/theme.css"), /--font-ui:var\(--font-display\)/);
+  withScratch((root) => {
+    mutateKit(root, (css) => css.replace(/--two-font-ui:[^;]+;/, "--two-font-ui:system-ui;"));
+    const output = generate(root).get("public/theme.css");
+    assert.match(output, /--font-ui:system-ui/);
+    assert.ok(!output.includes("--font-ui:var(--font-display)"));
+  });
+});
+
+test("a consumed UI stack does not depend on an omitted display alias", () => {
+  withScratch((root) => {
+    for (const path of HONO_CONSUMERS) {
+      const file = join(root, path);
+      writeFileSync(
+        file,
+        readFileSync(file, "utf8").replaceAll("var(--font-display)", "system-ui"),
+      );
+    }
+    const css = generate(root).get("public/theme.css");
+    assert.ok(!css.includes("--font-display:"));
+    assert.ok(!css.includes("--font-ui:var(--font-display)"));
+    assert.match(css, /--font-ui:[^;]*Mona Sans/);
+  });
+});
+
+test("new motion reads restore base and reduced values without empty rules", () => {
+  withScratch((root) => {
+    const file = join(root, "assets/theme.css");
+    writeFileSync(
+      file,
+      `${readFileSync(file, "utf8")}\n.probe{transition:all var(--motion-duration-fast)}`,
+    );
+    const css = generate(root).get("public/theme.css");
+    assert.match(css, /--motion-duration-fast:\.12s/);
+    assert.match(
+      css,
+      /@media\(prefers-reduced-motion:reduce\)\{\.base-theme\{[^}]*--motion-duration-fast:0ms/,
+    );
+    for (const path of HONO_CONSUMERS) writeFileSync(join(root, path), ".probe{display:block}");
+    const empty = generate(root);
+    assert.ok(!empty.get("public/theme.css").includes("@media(prefers-reduced-motion:reduce)"));
+    assert.ok(!empty.get("public/theme.css").includes(".base-theme{}"));
+    assert.ok(!empty.get("public/styles.css").includes(".base-theme{}"));
+  });
+});
+
+test("Kit exposes every utility role and Hono keeps only consumed author aliases", () => {
+  const outputs = generate(ROOT);
+  const css = outputs.get("web/src/ember-theme.css");
+  const served = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"]
+    .map((path) => outputs.get(path))
+    .join("\n");
+  assert.ok(!css.includes("@theme static"), "unused utilities are not forced into the bundle");
+  for (const [alias] of ROLES) {
+    const utility =
+      /^(g\d|hair\d|t\d|ember|on-accent|accent-hi|border|live|echo|ok|danger|warn|focus-ring)/.test(
+        alias,
+      )
+        ? `color-${alias}`
+        : alias.replace(/^font-size-/, "text-").replace(/^line-height-/, "leading-");
+    assert.ok(css.includes(`--${utility}:`), `${alias} remains available to Tailwind`);
+  }
+  for (const [alias, utility] of [
+    ["focus-ring", "color-focus-ring"],
+    ["focus-ring-on-accent", "color-focus-ring-on-accent"],
+    ["on-accent", "color-on-accent"],
+    ["accent-hi", "color-accent-hi"],
+    ["font-size-body", "text-body"],
+    ["line-height-body", "leading-body"],
+  ]) {
+    assert.ok(css.includes(`--${utility}:`), `${utility} remains available to Tailwind`);
+    assert.equal(
+      served.includes(`--${alias}:`),
+      alias !== "focus-ring-on-accent",
+      `${alias} is emitted in Hono only when consumed by author rules`,
+    );
+  }
+});
+
+test("authored event and profile rules reference the family role", () => {
+  for (const path of ["public/event-theme.css", "public/profile-theme.css"]) {
+    const css = readFileSync(join(ROOT, path), "utf8");
+    assert.ok(css.includes("var(--font-display)"), path);
+    assert.ok(!css.includes("Mona Sans"), path);
+  }
+});
+
+test("themed focus and accent controls use their semantic roles", () => {
+  const css = generate(ROOT).get("public/theme.css");
+  assert.match(css, /outline:var\(--focus-width\) solid var\(--focus-ring\)/);
+  assert.match(
+    css,
+    /\.base-theme \.btn:hover\{background:var\(--accent-hi\);color:var\(--on-accent\)/,
+  );
+  assert.ok(!css.includes("brightness("));
+  const source = readFileSync(join(ROOT, "assets/styles.css"), "utf8");
+  assert.match(source, /\.home-event-link:focus-visible[^}]+var\(--focus-ring,var\(--brand\)\)/);
+  const event = readFileSync(join(ROOT, "public/event-theme.css"), "utf8");
+  assert.match(event, /background: var\(--brand\); color: var\(--on-accent\)/);
+});
+
+test("unknown flags are a usage error", () => {
+  assert.throws(
+    () =>
+      execFileSync("node", [SCRIPT, "--bogus"], {
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "pipe"],
+      }),
+    (error) => {
+      assert.equal(error.status, 2);
+      return true;
+    },
+  );
+});

@@ -338,12 +338,11 @@ describe("Kit gone alternatives acceptance", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const bytes = new Uint8Array(await response.arrayBuffer());
-    // Re-captured for the Logo/Icon 1 brand swap: the 410 page carries the
-    // site header (new lockup) and the og:image card. Verified byte-identical
-    // replication on origin/main first (old pin reproduced), so the delta is
-    // only the brand assets.
+    // Re-captured after combining the Ember Hours font/theme chrome with
+    // Logo/Icon 1's header lockup, favicon and og:image card. The gone-page
+    // content and response headers retain their existing contract.
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-      "701022368cfb98a8d8eb32e8bf5d2570993d9875e52904be755a5d3218a6e2c0",
+      "7e28057541da30169b345bc703590961439daf421bbf771eee354999d64ea92c",
     );
   });
 

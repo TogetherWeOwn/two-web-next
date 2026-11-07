@@ -1,14 +1,123 @@
 # Homepage theme
 
-The purchased HTML landing page is the visual foundation for the homepage. Its centered landing composition, condensed uppercase typography, dark surfaces, lime palette (#a3ff12), square buttons, mirrored angular side details and compact account treatment are adapted to Hono SSR in `src/pages.tsx` and `public/theme.css`. The account reference contributes styling only: Discord OAuth, sessions, guild joins and logout remain the existing flows. There is no password/registration form.
+The homepage retains its existing centered composition, uppercase display typography, square buttons, angular side details and compact account treatment. The Ember Hours migration replaces its palette and font foundation with pinned design-kit outputs without rebuilding the layout. Hono SSR lives in `src/pages.tsx`; readable theme rules live in `assets/theme.css`. Discord OAuth, sessions, guild joins and logout remain the existing flows. There is no password/registration form.
 
-The homepage, `/about`, `/faq`, `/rules`, `/privacy`, the `/join` landing, the community schedule (`/events`, `/events/past`), event detail/cancelled pages and branded error/OAuth recovery shells opt into the stylesheet through `Layout.theme`. The homepage and four content leaves (`/about`, `/faq`, `/rules`, `/privacy`) render it as a single generated inline `<style>` block (`src/leaf-critical-css.ts`, git-ignored build output regenerated on every install via `npm run build:leaf-css`) allowlisted in `style-src` by its sha256 hash instead of a render-blocking stylesheet request; other themed routes keep the external stylesheet. They share the presentational `SiteHeader` and `SiteFooter`; error/recovery composition uses `RecoveryShell` without reading sessions or requiring a database. The content leaves use compact information navigation with a current-page indicator and readable policy text; Join uses a split content/preview layout that stacks on mobile. The 404 keeps optional event suggestions and labelled GET search below the centered status hero. The maintenance header and primary action link directly to the configured Discord invite, not OAuth. Member profiles opt into the base tokens through `theme="profile"` with layout details in the separate `profile-theme.css` sheet; the schedule does the same through `theme="schedule"` and `schedule-theme.css`, and event pages through `theme="event"` and `event-theme.css`. Other routes, including admin, retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
+The homepage, `/about`, `/faq`, `/rules`, `/privacy`, the `/join` landing, the community schedule (`/events`, `/events/past`), event detail/cancelled pages and branded error/OAuth recovery shells opt into the stylesheet through `Layout.theme`. The homepage and four content leaves (`/about`, `/faq`, `/rules`, `/privacy`) render it as a single generated inline `<style>` block (`src/leaf-critical-css.ts`, git-ignored build output regenerated on every install after adapter validation) allowlisted in `style-src` by its sha256 hash instead of a render-blocking stylesheet request; other themed routes keep the external stylesheet. They share the presentational `SiteHeader` and `SiteFooter`; error/recovery composition uses `RecoveryShell` without reading sessions or requiring a database. The content leaves use compact information navigation with a current-page indicator and readable policy text; Join uses a split content/preview layout that stacks on mobile. The 404 keeps optional event suggestions and labelled GET search below the centered status hero. The maintenance header and primary action link directly to the configured Discord invite, not OAuth. Member profiles opt into the base tokens through `theme="profile"` with layout details in the separate `profile-theme.css` sheet; the schedule does the same through `theme="schedule"` and `schedule-theme.css`, and event pages through `theme="event"` and `event-theme.css`. Other routes, including admin, retain their current layouts. Wrangler serves the external stylesheet, fonts and logos through the existing `public/` asset binding. No Bootstrap, jQuery, preloader, custom cursor, animation bundle, sample photos, original brand marks or third-party template folders ship. The decorative hero uses neutral CSS shapes instead of stock imagery. Feature images continue through the shared same-origin/approved public host policy, including validated configured hosts.
+
+## Ember Hours token migration (two-design-kit v0.2.3)
+
+`ci/build-ember-tokens.mjs` generates both consumer adapters from the exact
+vendored `vendor/design-kit/tokens.css` at `VERSION`. Its value-free mapping
+selects web roles, preserves media contexts and rejects missing roles,
+duplicate declarations, alias collisions and unsupported input structures.
+No palette or type values are copied into consumer source files.
+
+The generated `public/theme-tokens.css` is the compact operator-hook facade,
+including palette, state and focus roles. The generated `public/styles.css`
+composes scoped type-scale, tracking, numeric spacing and radius roles with
+readable `assets/styles.css`; `public/theme.css` composes the remaining roles
+with `assets/theme.css` rules. All three existing sheets use the locked esbuild
+and retain their original raw and gzip ceilings, without an extra request or
+changes to unthemed legacy pages. Kit imports the generated
+`web/src/ember-theme.css` from `app.css`: demand-driven `@theme` definitions,
+unlayered hook mappings and foundation aliases. The shared author aliases for
+type, space, family and motion come from the already-served `styles.css` and
+`theme.css`, instead of a duplicate bridge that forces unused utilities into the
+client bundle. Kit keeps its existing surface/raised distinction rather than
+adopting Hono's page/surface mapping. The three-file critical-bundle mechanism,
+CSP hashing and external/inline route selection stay unchanged.
+
+Explicit `build:assets` and root `build:leaf-css` regenerate the tracked
+adapters. Root postinstall/predev and Kit postinstall/prebuild run the adapter
+in `--check` mode before `ci/build-leaf-css.mjs`: stale or missing tracked
+outputs fail without being repaired, preserving the committed-byte drift gate
+through installation and CI builds. Only the ignored critical-CSS module is
+written by those lifecycle hooks. The leaf generator stays pure Node builtins
+(no esbuild) so `ci/leaf-css-review.mjs` can run it in dependency-free scratch
+snapshots; the adapter requires installed esbuild. Two independent checks
+run in `npm run check`: `ci/check-design-kit-drift.mjs` verifies tag bytes,
+and `ci/check-ember-token-sync.mjs` regenerates and compares **all bytes of
+all six artifacts**, including reduced-motion rules, fallback HTML and its
+matching CSP style hash. `build:assets:check`
+also checks those artifacts. A kit update is VERSION + exact re-vendor +
+regeneration, never manual literal edits.
+
+Hono (`public/theme-tokens.css`, base and schedule blocks):
+
+| hook | old ramp | kit literal |
+| --- | --- | --- |
+| `--color-text` | `#f5f6fb` | `#f6f1ea` (text-1) |
+| `--color-page` | `#151720` | `#15100f` (ground-0) |
+| `--color-accent` | `#a3ff12` (lime) | `#ff9c36` (ember) |
+| `--color-muted` | `#c6cbea` | `#d2c7bd` (text-2) |
+| `--color-surface` | `#222430` | `#1c1614` (ground-1) |
+| `--color-border` | `#41465c` | `#85766b` (control border) |
+| `--font-display` | Rajdhani `Display` stack | kit `Mona Sans` stack with the measured local `'Mona Sans Fallback'` |
+
+Kit (`web/src/ember-theme.css` generated `@theme`, utility names unchanged):
+
+| token | old ramp | kit literal |
+| --- | --- | --- |
+| `--color-lobby-surface` | `#121719` | `#1c1614` |
+| `--color-lobby-raised` | `#1e292c` | `#241c19` |
+| `--color-lobby-ink` | `#f5f5eb` | `#f6f1ea` |
+| `--color-lobby-muted` | `#b5c1c1` | `#d2c7bd` |
+| `--color-lobby-accent` | `#c2f45b` | `#ff9c36` |
+| `--color-lobby-on-accent` | `#14200a` | `#1d0b00` |
+| `--color-lobby-line` | `#4b5b5d` | `#85766b` |
+| `--color-lobby-focus` | `#ffffff` | `#ff9c36` |
+| `--font-display` | Rajdhani `Display` stack | `Mona Sans, "Mona Sans Fallback", system-ui, sans-serif` |
+
+Focus is the 2 px ember ring with 3 px offset (forced-colors: `Highlight`);
+`color-scheme: dark` is declared. Contrast: every served text pair clears
+4.5:1 and the control border clears 3:1 (`test/ember-contrast.test.ts`
+recomputes the ratios from the sheet with independent luminance math); echo
+violet never appears as text (it fails 4.5:1 on overlay, so the test fails
+closed on any echo text usage). Full declared table: the kit's
+`docs/tokens.md` §1.8 at the pinned tag.
+
+Fonts: variable Mona Sans (preloaded once, `swap`, metric-matched local
+fallback) for display and UI; Instrument Serif Italic and Fragment Mono ship
+as `optional`, never-preloaded faces. Provenance, subsets and reproduction
+in `public/fonts/OFL-SOURCES.txt`. The variable face covers wght 200-900
+from the single fetch, which is what lets the homepage LCP ratchets re-base
+down instead of up.
+
+Install chrome follows the page ground: the `theme-color` meta and
+`public/site.webmanifest` `background_color`/`theme_color` are ground-0
+`#15100f`, pinned by `test/n2-manifest-errors.test.ts`. Icon URLs, sizes,
+and manifest identity are unchanged.
+
+Kit exposes the complete selected web role set as on-demand color utilities
+(`bg-g0`, `text-t1`, `text-live`), type utilities (`text-hero`,
+`leading-heading`) and existing `lobby-*` utilities. The shared Hono sheets
+emit only aliases read by the authored files listed in `HONO_CONSUMERS` in
+`ci/build-ember-tokens.mjs`, alongside the preserved color hooks and brand ramp.
+Names otherwise drop the kit's `two-` prefix. Add a new consumer sheet to that
+list before using a role there; regeneration restores newly consumed aliases
+from the pinned kit, and drift checks reject stale output. Unread type, spacing,
+radius, palette and motion declarations do not inflate inlined leaf CSS.
+Reduced-motion overrides for consumed aliases stay separate from base values.
+Existing button transitions consume the generated duration and ease only under
+`no-preference`; focus width/offset come from kit roles.
+
+`--font-display` and the distinct v0.2.3 `--font-ui` role preserve the kit family
+order and insert the measured local Mona fallback once. Body text consumes
+`--font-ui`; headings and existing display rules retain `--font-display`. Equal
+pinned stacks share an alias to save bytes, but generation keeps the UI role
+independent if the upstream stacks diverge. Kit's `font-sans` consumes the UI
+role. The migration preserves existing layouts, body sizes and the system-font content leaves;
+it does not add a serif phrase, state badge or gradient to existing content.
+Future surfaces consume the generated roles rather than inventing styles.
+The gradient remains restricted to logo/Now/bot marks; echo violet must
+never be used as text on `g3`. Legacy light/admin shells do not inherit the
+scoped Hono roles. Unthemed global focus and error-search rules stay as-is.
 
 ## Assets
 
-- `public/fonts/display-latin-{500,700}.woff2`: Latin Rajdhani from `@fontsource/rajdhani` 5.3.0 (OFL-1.1). Its unmodified font license is retained in `public/fonts/LICENSE.txt`. Two weights total roughly 31 KB. No remote font origin.
-- `public/logo.svg` (Logo 1 horizontal lockup), `public/favicon.svg` / `public/favicon.ico` (Icon 1), `public/icons/*.png` (Icon 1 install icons) and `public/og-1200x630.png` (share card): the owner's Logo/Icon 1 brand art, dark-background variants for the dark UI. The icon stays inside the maskable safe area. Install icon URLs, sizes and manifest identity are unchanged; the manifest additionally lists the SVG favicon. The brand ramp lives in `public/theme-tokens.css` as three color tokens (`--color-brand-ember/magenta/violet`); the same stops ship baked in the artwork, and no gradient token ships.
-- `public/theme.css`: adapted, explicitly opted-in base-theme rules (home, content/join, recovery), under 12 KB uncompressed. Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
+- `public/fonts/mona-sans-latin-var.woff2`, `instrument-serif-latin-400-italic.woff2`, `fragment-mono-latin-400.woff2`: self-hosted OFL-1.1 families for the Ember Hours migration (variable Mona Sans plus subset serif/mono, ~119 KB total). Provenance in `public/fonts/OFL-SOURCES.txt`, full license texts in `public/fonts/LICENSE.txt`, byte pins in `test/pinned-assets.test.ts`. The retired Rajdhani statics (`display-latin-{500,700}.woff2`) are removed. No remote font origin.
+- `public/logo.svg` (Logo 1 horizontal lockup), `public/favicon.svg` / `public/favicon.ico` (Icon 1), `public/icons/*.png` (Icon 1 install icons) and `public/og-1200x630.png` (share card): the owner's Logo/Icon 1 brand art, dark-background variants for the dark UI. The icon stays inside the maskable safe area. Install icon URLs, sizes and manifest identity are unchanged; the manifest additionally lists the SVG favicon. The brand ramp lives in `public/theme-tokens.css` as three color aliases (`--color-brand-ember/magenta/violet`) generated from the pinned kit's `color-grad-*` roles; the same stops ship baked in the artwork. The existing lockup crop below 30rem is retained in `assets/theme.css`.
+- `public/theme.css`: generated from `assets/theme.css` and pinned kit roles, with the unchanged 13 KB uncompressed ceiling (four kit §2 faces plus focus/forced-colors). Only hover/active feedback, with transitions gated by reduced-motion preference. No client script.
 - `public/profile-theme.css`: profile-only layout under 8 KB, loaded only when `theme="profile"`.
 - `public/schedule-theme.css`: schedule-only layout under 6 KB, loaded only when `theme="schedule"`. Every rule is scoped to `.events-page`, so the shared chrome stays in `theme.css`.
 
