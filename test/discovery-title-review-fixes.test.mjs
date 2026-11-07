@@ -8,13 +8,18 @@ import { fileURLToPath } from "node:url";
 import { build } from "esbuild";
 import { beforeAll, describe, expect, it } from "vitest";
 import { matchQuery } from "../src/events/search-log";
-import { HotzoneSignalPage, renderHotzoneGrid } from "../src/hotzones/pages";
+import { EventsCalendarPage } from "../src/events/pages-calendar-screen";
+import { PastEventsPage } from "../src/events/pages-past";
+import { HotzoneSignalPage, HotzonesIndexPage, renderHotzoneGrid } from "../src/hotzones/pages";
+import { renderEventsHtml } from "../src/kit-events-html";
 import { eventsTitle, hotzoneSignalTitle, pastEventsTitle } from "../src/seo";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 const webRequire = createRequire(join(root, "web/package.json"));
 const { compile } = webRequire("svelte/compiler");
 let renderSignalKit;
+let renderArchiveKit;
+let renderIndexKit;
 
 beforeAll(async () => {
   const { outputFiles } = await build({
@@ -22,6 +27,14 @@ beforeAll(async () => {
       contents: `
         import { render } from "svelte/server";
         import Signal from "./web/src/routes/hotzones/[signal]/+page.svelte";
+        import Archive from "./web/src/routes/events/past/+page.svelte";
+        import Index from "./web/src/routes/hotzones/+page.svelte";
+        const page = (C, data) => {
+          const result = render(C, { props: { data } });
+          return '<!doctype html><html><head>' + result.head + '</head><body>' + result.body + '</body></html>';
+        };
+        export const renderArchiveKit = (data) => page(Archive, data);
+        export const renderIndexKit = (data) => page(Index, data);
         export function renderSignalKit(data) {
           const result = render(Signal, { props: { data } });
           return '<!doctype html><html><head>' + result.head + '</head><body>' + result.body + '</body></html>';
@@ -54,7 +67,7 @@ beforeAll(async () => {
       },
     ],
   });
-  ({ renderSignalKit } = await import(
+  ({ renderSignalKit, renderArchiveKit, renderIndexKit } = await import(
     `data:text/javascript;base64,${Buffer.from(outputFiles[0].text).toString("base64")}`
   ));
 });
@@ -159,5 +172,76 @@ describe("hot-zone signal page titles", () => {
     expect(q3.match(/<title>([^<]*)<\/title>/)?.[1]).toBe(
       "joins hot zone — 2030-Q3 — Together We Own",
     );
+  });
+});
+
+describe("discovery page titles render on both twins", () => {
+  const appUrl = "https://titles.example.test";
+  const titleOf = (html) => html.match(/<title>([^<]*)<\/title>/)?.[1];
+  const grid = Array.from({ length: 7 }, () => Array(24).fill(0));
+
+  it.each([
+    ["calendar", "2030-06", "", "Events — June 2030 — Together We Own"],
+    ["list", "2030-06", "chess", "Events matching “chess” — Together We Own"],
+  ])("titles the %s events page (q=%j)", async (view, month, q, title) => {
+    const state = { view, month, q, past: false, page: 1 };
+    const model = {
+      state,
+      upcoming: [],
+      past: [],
+      zone: "UTC",
+      totalPages: 0,
+      emptyState: null,
+      discordFailed: false,
+      games: [],
+      gameFilter: null,
+      member: false,
+      inviteUrl: "https://discord.example.test/invite",
+      appUrl,
+    };
+    const now = new Date("2030-06-15T12:00:00Z");
+    const hono = await EventsCalendarPage({ ...model, now }).toString();
+    const kitData = { ...model, now, session: null, loginReturnTo: "/events", queryTooLong: false };
+    const kit = await renderEventsHtml(kitData, {});
+    expect(titleOf(hono)).toBe(title);
+    expect(titleOf(kit.body)).toBe(title);
+  });
+
+  it.each([
+    [1, "", "Past events — Together We Own"],
+    [3, "", "Past events — page 3 — Together We Own"],
+    [1, "chess", "Past events matching “chess” — Together We Own"],
+  ])("titles the archive page %i (q=%j)", async (page, q, title) => {
+    const data = { rows: [], page, hasMore: false, totalPages: 0, appUrl, q };
+    expect(titleOf(await PastEventsPage(data).toString())).toBe(title);
+    expect(titleOf(renderArchiveKit(data))).toBe(title);
+  });
+
+  it.each([
+    ["all", "Hot zones — Together We Own"],
+    ["2030-Q2", "Hot zones — 2030-Q2 — Together We Own"],
+  ])("titles the hot zones index for season %s", async (season, title) => {
+    const hono = await HotzonesIndexPage({
+      appUrl,
+      season,
+      joins: grid,
+      joinsTotal: 0,
+      eventCount: 0,
+      voice: grid,
+      games: grid,
+    }).toString();
+    const kit = renderIndexKit({
+      appUrl,
+      season,
+      joinsHtml: "",
+      joinsTotal: 0,
+      eventCount: 0,
+      voiceHtml: "",
+      gamesHtml: "",
+      retentionNote: null,
+      periodPickerHtml: "",
+    });
+    expect(titleOf(hono)).toBe(title);
+    expect(titleOf(kit)).toBe(title);
   });
 });

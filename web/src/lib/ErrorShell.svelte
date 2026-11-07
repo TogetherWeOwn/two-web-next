@@ -54,7 +54,7 @@ const isOutage = $derived(OUTAGE_CODES.includes(code));
 {/snippet}
 
 <Shell
-  title={copy.title}
+  title={copy.documentTitle ?? copy.title}
   robots="noindex, nofollow"
   theme="home"
   accountChrome={isOutage ? outageAccount : undefined}
