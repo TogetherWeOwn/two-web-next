@@ -60,9 +60,9 @@ test(`homepage featured evidence: ${state}`, async ({ page }) => {
         const response = await page.goto("/");
         expect(response?.status()).toBe(200);
         await page.waitForLoadState("networkidle");
-        await expect(page.getByRole("heading", { name: "Community games", exact: true })).toHaveCount(
-          state === "empty" || state === "read-failure" ? 0 : 1,
-        );
+        await expect(
+          page.getByRole("heading", { name: "Community games", exact: true }),
+        ).toHaveCount(state === "empty" || state === "read-failure" ? 0 : 1);
         await expect(page.getByText("X".repeat(256), { exact: true })).toHaveCount(
           state === "oversized" && phase === "before" ? 1 : 0,
         );

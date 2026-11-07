@@ -226,6 +226,7 @@ jobs:
             for state in populated empty oversized expired saturated read-failure; do
               FEATURED_CAPTURE_PHASE="$phase" FEATURED_CAPTURE_STATE="$state" \
                 npx playwright test --config playwright.featured-capture.config.ts
+
             done
           done
       - name: Upload featured homepage evidence
