@@ -52,21 +52,29 @@ function childEnv(dir: string): NodeJS.ProcessEnv {
 // Execute the actual consumer shell under runner flags, substituting only
 // scanner/sleep executables. The node shim runs real CLIs with the
 // child-only offline safety fence.
-function workflowGateUnderRunner(first: unknown, second: unknown, scannerExit = 0) {
+function workflowStepUnderRunner(step: string, first: unknown, second: unknown, scannerExit = 0) {
   return scratch((dir) => {
     const workflow = readFileSync(resolve(root, ".github/workflows/zap-staging.yml"), "utf8");
+    const name = step.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
     const block = workflow.match(
-      /      - name: Gate[^\n]*\n        run: \|\n([\s\S]*?)(?=      - (?:name|uses):|$)/,
+      new RegExp(
+        `      - name: ${name}[^\\n]*\\n        run: \\|\\n([\\s\\S]*?)(?=      - (?:name|uses):|$)`,
+      ),
     );
-    expect(block, "fixture must find the existing Gate run block").not.toBeNull();
+    expect(block, `fixture must find the existing ${step} run block`).not.toBeNull();
     const script = (block?.[1] ?? "")
       .split("\n")
       .map((line) => line.replace(/^          /, ""))
       .join("\n");
     // Containment prerequisite, not a source-text feature assertion: this fixture
     // executes only the simple consumer block, never shell expansions or raw sockets.
-    expect(script.replaceAll("/dev/null", "")).not.toMatch(/\/dev\/|`|\$\(|<\(|>\(/);
-    expect(script).not.toMatch(/(?:^|[;|&\n])\s*(?:"|')?\/(?:bin|usr|opt|tmp|paperclip)\//m);
+    // Full-line comments never execute, so they may quote shell syntax.
+    const code = script
+      .split("\n")
+      .filter((line) => !/^\s*#/.test(line))
+      .join("\n");
+    expect(code.replaceAll("/dev/null", "")).not.toMatch(/\/dev\/|`|\$\(|<\(|>\(/);
+    expect(code).not.toMatch(/(?:^|[;|&\n])\s*(?:"|')?\/(?:bin|usr|opt|tmp|paperclip)\//m);
     mkdirSync(join(dir, "bin"));
     mkdirSync(join(dir, "zap"));
     // Do not inherit a PATH containing curl/wget/scanner executables.
@@ -134,6 +142,11 @@ function workflowGateUnderRunner(first: unknown, second: unknown, scannerExit = 
     };
   });
 }
+
+const workflowGateUnderRunner = (first: unknown, second: unknown, scannerExit = 0) =>
+  workflowStepUnderRunner("Gate", first, second, scannerExit);
+const workflowScanUnderRunner = (scannerExit: number) =>
+  workflowStepUnderRunner("ZAP baseline (passive)", report([]), report([]), scannerExit);
 
 describe("ZAP workflow consumer under runner errexit", () => {
   it("pins runner shell fidelity: bare capture dies, || capture survives", () => {
@@ -210,6 +223,20 @@ describe("ZAP workflow consumer under runner errexit", () => {
     expect(result.output).toContain("First scan verdict:");
     expect(result.output).toContain("zap-baseline.py exited 3");
     expect(result.output).not.toContain("Re-scan verdict:");
+  });
+
+  it("names the scanner exit code when the first scan errors under runner errexit", () => {
+    const result = workflowScanUnderRunner(3);
+    expect(result.status, result.output).toBe(1);
+    expect(result.scans).toBe(1);
+    expect(result.output).toContain("zap-baseline.py exited 3");
+  });
+
+  it("first scan with FAIL rules (exit 2) hands the report to the gate", () => {
+    const result = workflowScanUnderRunner(2);
+    expect(result.status, result.output).toBe(0);
+    expect(result.scans).toBe(1);
+    expect(result.output).not.toContain("zap-baseline.py exited");
   });
 
   it("forged non-PII High fails closed without a rescan under runner errexit", () => {
