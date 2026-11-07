@@ -464,7 +464,10 @@ describe("resolveKitEventEdit: rosterHtml is the shared EventRosterSection rende
   it("matches the Hono section for empty, unmatched-search and past-end states", async () => {
     const cases: [Record<string, string>, { rows: KitEventEditRosterRow[]; total: number }][] = [
       [{}, { rows: [], total: 0 }],
-      [{ roster_q: "nobody", roster_status: "going" }, { rows: [], total: 0 }],
+      [
+        { roster_q: "nobody", roster_status: "going" },
+        { rows: [], total: 0 },
+      ],
       [{ roster_page: "5" }, { rows: [], total: 2 }],
     ];
     for (const [query, list] of cases) {
