@@ -358,6 +358,7 @@ exactly once.
 | `src/return-journey.ts` | auth |
 | `src/roles.ts` | auth |
 | `src/route-ownership.ts` | entry |
+| `src/date-stamp.ts` | content |
 | `src/faq-content.ts` | content |
 | `src/faq-last-reviewed.ts` | content |
 | `src/rules-content.ts` | content |
