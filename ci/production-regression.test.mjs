@@ -564,6 +564,17 @@ const revisionOptions = (commit) => ({
   },
 });
 
+test("staging scope classifies the deployed diff without executing candidate scripts", () => {
+  const workflow = read("../.github/workflows/e2e-staging.yml");
+  const scope = workflow.split("\n  scope:\n")[1].split("\n  zap-baseline:\n")[0];
+  assert.equal((scope.match(/uses: actions\/checkout@/g) ?? []).length, 1);
+  assert.match(scope, /ref: \$\{\{ github\.sha \}\}\n {10}fetch-depth: 0/);
+  assert.doesNotMatch(scope, /ref: \$\{\{ steps\.target\.outputs\.sha \}\}/);
+  assert.match(scope, /HEAD_SHA: \$\{\{ steps\.target\.outputs\.sha \}\}/);
+  assert.match(scope, /git diff --name-status -M "\$HEAD_SHA~1" "\$HEAD_SHA"/);
+  assert.match(scope, /bash ci\/change-scope\.sh "\$RUNNER_TEMP\/deployed-files\.tsv"/);
+});
+
 test("staging qualification preserves the deployed SHA through checker checkout and ledger consumption", async () => {
   const workflow = read("../.github/workflows/e2e-staging.yml");
   assert.match(workflow, /sha: \$\{\{ steps\.target\.outputs\.sha \}\}/);
