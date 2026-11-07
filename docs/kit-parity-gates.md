@@ -164,7 +164,8 @@ differs before its hook runs (trailing-slash 308, method handling, automatic
 - `ci/parity/record.mjs` runs the target Worker under `wrangler dev --local`
   (never `vite dev`) behind `ci/parity/harness.ts`. Each run gets a fresh clone
   of one migrated template database seeded by `ci/parity/fixture.mjs` (the
-  `e2e/seed.mjs` events plus member, moderator and expired sessions). The
+  `e2e/seed.mjs` events plus member, moderator and expired sessions). Seeded
+  event timestamps are fixed, because the feeds publish `updated_at`. The
   harness freezes the JS clock at 2026-07-01T12:00:00Z, reseeds
   `crypto.getRandomValues`/`randomUUID` per vector, derives `cf-ray` and the
   throttle client key from the vector id, and answers outbound fetches only
@@ -186,7 +187,9 @@ differs before its hook runs (trailing-slash 308, method handling, automatic
   route and its tail alert-line label (`tail/worker.ts` `ALERT_ROUTES`), any
   `error.alert` route and the outbound calls attempted. `date`,
   `x-request-id` and `cf-ray` values, cookie values, CSP nonces and the
-  `Retry-After` value are masked.
+  `Retry-After` value are masked. So are 32-hex asset `ETag` values: under
+  `wrangler dev` they hash the file's absolute path and mtime, which change
+  with every checkout. The app's own 64-hex sha256 ETags are kept.
 - Goldens live in `test/fixtures/parity/hono-<sha>/`, where `<sha>` is the
   newest commit that changed a runtime input (`src`, `public`, `tail`,
   `drizzle`, `wrangler.jsonc`, `package-lock.json`). `index.json` records the

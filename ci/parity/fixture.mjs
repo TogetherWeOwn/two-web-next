@@ -15,6 +15,10 @@ export const WRONG_QA_TOKEN = "parity-wrong-qa-token-same-length-as-the-real-one
 export const SESSION_COOKIE = "__Host-two_session";
 const FAR_FUTURE = "2099-12-31T00:00:00Z";
 const LONG_PAST = "2020-01-02T00:00:00Z";
+// Feeds publish updated_at (iCal DTSTAMP and SEQUENCE, RSS lastBuildDate,
+// sitemap lastmod), so a column default of now() would change the goldens on
+// every recording day. Pinned before the harness epoch.
+const SEEDED_AT = "2026-06-01T00:00:00Z";
 
 /** Minted bearer shape (`two_` + 43 base64url characters). */
 const token = (label) => `two_${label.padEnd(43, "0")}`;
@@ -88,8 +92,10 @@ export async function seedTemplate(sql) {
   ];
   for (const [key, title, starts, ends] of events) {
     await sql`
-      insert into events (event_key, title, description, starts_at, ends_at, timezone, status, capacity, rsvp_open)
-      values (${key}, ${title}, 'Route-parity fixture', ${starts}, ${ends}, 'UTC', 'published', 10, true)`;
+      insert into events (event_key, title, description, starts_at, ends_at, timezone, status, capacity, rsvp_open,
+        created_at, updated_at)
+      values (${key}, ${title}, 'Route-parity fixture', ${starts}, ${ends}, 'UTC', 'published', 10, true,
+        ${SEEDED_AT}, ${SEEDED_AT})`;
   }
   for (const [name, session] of Object.entries(SESSIONS)) {
     const hash = await hashToken(session.token);

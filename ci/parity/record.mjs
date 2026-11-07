@@ -27,7 +27,14 @@ import {
   refreshClone,
   seedTemplate,
 } from "./fixture.mjs";
-import { MASK, clientAddress, describeBody, normalizeHeaders, stableHex } from "./normalize.mjs";
+import {
+  ASSET_ETAG_MASK,
+  MASK,
+  clientAddress,
+  describeBody,
+  normalizeHeaders,
+  stableHex,
+} from "./normalize.mjs";
 import { buildVectors, loadVectorInputs } from "./vectors.mjs";
 
 export const repo = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
@@ -336,7 +343,12 @@ export async function record({ out, runs = 1, targetConfig = "wrangler.jsonc", d
     pinnedSha: runtimePin(),
     inputs: inputTrees(),
     epoch: "2026-07-01T12:00:00.000Z",
-    masked: { headers: ["date", "x-request-id", "cf-ray"], cookieValues: MASK, nonces: MASK },
+    masked: {
+      headers: ["date", "x-request-id", "cf-ray"],
+      assetEtags: ASSET_ETAG_MASK,
+      cookieValues: MASK,
+      nonces: MASK,
+    },
     vectorCount: vectors.length,
   };
   const template = `two_parity_${process.pid}`;

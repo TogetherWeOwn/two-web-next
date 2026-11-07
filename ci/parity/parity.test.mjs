@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { test } from "node:test";
 import { compareRecordings, diffResponse, parseExceptions, report } from "./compare.mjs";
 import {
+  ASSET_ETAG_MASK,
   clientAddress,
   describeBody,
   jsonShape,
@@ -158,6 +159,14 @@ test("headers keep the contract and mask per-request values", () => {
   assert.equal(out.route, "/events/:key");
   assert.deepEqual(out.outbound, ["GET https://discord.com/api"]);
   assert.deepEqual(normalizeSetCookie("flag").name, "flag");
+});
+
+test("dev asset ETags are masked; the app's sha256 ETags are kept", () => {
+  const etag = (value) => normalizeHeaders(["ETag", value]).headers.etag;
+  assert.equal(etag('"5b20db3024084b7736ae40940ade9026"'), `"${ASSET_ETAG_MASK}"`);
+  assert.equal(etag('W/"5b20db3024084b7736ae40940ade9026"'), `W/"${ASSET_ETAG_MASK}"`);
+  const app = `"${"a".repeat(64)}"`;
+  assert.equal(etag(app), app);
 });
 
 test("bodies hash after masking nonces and the request id; JSON keeps a shape", () => {

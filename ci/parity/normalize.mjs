@@ -10,6 +10,12 @@ export const HARNESS_HEADERS = ["x-parity-route", "x-parity-alerts", "x-parity-o
 const CSP_HEADERS = new Set(["content-security-policy", "content-security-policy-report-only"]);
 const NONCE_SOURCE = /'nonce-[^']*'/g;
 const NONCE_ATTRIBUTE = /\bnonce="[^"]*"/g;
+// `wrangler dev` asset ETags hash the absolute file path and its mtime
+// (miniflare's asset manifest), so they change with every checkout. Deployed
+// assets hash content instead. The app's own ETags are 64-hex sha256, so the
+// 32-hex form identifies the asset layer; the W/ prefix and quotes are kept.
+const ASSET_ETAG = /^(W\/)?"[0-9a-f]{32}"$/;
+export const ASSET_ETAG_MASK = "<asset-etag>";
 const TEXTUAL =
   /^(text\/|application\/(json|[\w.+-]*\+json|javascript|xml|[\w.+-]*\+xml|x-ndjson|manifest\+json))/i;
 
@@ -36,6 +42,7 @@ export function normalizeHeaders(rawHeaders) {
     if (MASKED_HEADERS.has(name)) value = MASK;
     else if (CSP_HEADERS.has(name)) value = value.replace(NONCE_SOURCE, `'nonce-${MASK}'`);
     else if (name === "retry-after" && /^\d+$/.test(value)) value = "<seconds>";
+    else if (name === "etag") value = value.replace(ASSET_ETAG, `$1"${ASSET_ETAG_MASK}"`);
     headers[name] = name in headers ? `${headers[name]}, ${value}` : value;
   }
   const sorted = Object.fromEntries(
