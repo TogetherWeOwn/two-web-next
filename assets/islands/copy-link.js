@@ -1,11 +1,11 @@
-// SSR leaves a usable canonical link. Enhance only when both link and status exist.
+// SSR leaves a selectable URL. Reveal copying only when the control and status exist.
 (() => {
   const q = (s) => document.querySelector(s);
   let link = q("[data-copy-link]");
   let toast = q("[data-copy-toast]");
   if (!link || !toast) return;
   const feed = link.getAttribute("data-copy-feed") != null;
-  if (feed) link.hidden = false;
+  link.hidden = false;
   const manual = "Select the feed URL and copy it manually in your calendar app.";
   // Unsettled clipboard promises get truthful feedback at 5 s; the feedback contract caps this at 10 s.
   const feedbackDeadlineMs = 5000;
