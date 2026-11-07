@@ -140,7 +140,8 @@ describe("performance budgets snapshot path", () => {
       .split("    name: staging-journeys\n")[1]
       ?.split("\n  staging-quality:\n")[0];
     expect(journeysBlock, "staging-journeys job block").toBeDefined();
-    expect(journeysBlock!).toContain("needs.scope.outputs.skip_e2e != 'true'");
+    expect(journeysBlock!).not.toContain("skip_e2e");
+    expect(journeysBlock!).toContain("needs: scope");
     const qualityBlock = stagingWorkflow.split("    name: staging-quality\n")[1];
     expect(qualityBlock, "staging-quality job block").toBeDefined();
     expect(qualityBlock!).not.toContain("skip_e2e");
