@@ -64,14 +64,19 @@ function replaceParam(template, value) {
     .join("/");
 }
 
-/** Stable, collision-checked file stem for a route template or static path. */
+/**
+ * Stable, collision-checked file stem for a route template or static path.
+ * Never starts with a dot: actions/upload-artifact drops hidden files, so a
+ * `.well-known/...` golden would silently vanish from the recording artifact.
+ */
 export function slug(path) {
   if (path === "/") return "root";
   return path
     .slice(1)
     .replace(/\*/g, "ALL")
     .replace(/[{}\\+]/g, "")
-    .replace(/[^A-Za-z0-9._-]+/g, "_");
+    .replace(/[^A-Za-z0-9._-]+/g, "_")
+    .replace(/^\./, "_");
 }
 
 const isBearer = (auth) => auth.endsWith("-bearer");

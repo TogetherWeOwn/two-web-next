@@ -104,6 +104,7 @@ test("path helpers are concrete and collision-free", () => {
   assert.equal(concretePath("/admin/*"), "/admin/parity-unregistered");
   assert.equal(slug("/"), "root");
   assert.notEqual(slug("/members/"), slug("/members/*"));
+  assert.equal(slug("/.well-known/security.txt"), "_well-known_security.txt");
   assert.throws(() => concretePath("/x/:unknown"), /No parity value/);
   assert.throws(
     () =>
