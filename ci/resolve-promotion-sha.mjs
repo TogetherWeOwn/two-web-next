@@ -8,7 +8,9 @@
 //   e2e-staging.yml run-name: e2e-staging <deploy run-name>
 // so an e2e-staging display_title ends in the commit its journeys exercised.
 // The newest post-deploy run for a commit decides it: a later unfinished, failed
-// or skipped run is not outvoted by an older pass of the same commit.
+// or skipped run is not outvoted by an older pass of the same commit. A commit
+// with any failed run, or any run past its first attempt, is never promoted:
+// staging that went red is fixed forward on a new commit (isRedStagingRun).
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { stagingQualityJob, stagingQualitySteps } from "./production-deploy-gate.mjs";
@@ -29,8 +31,15 @@ function runCompletedAtMs(run) {
   return Date.parse(stamp);
 }
 
-function isRedStagingRun(run) {
-  return run?.status === "completed" && RED_CONCLUSIONS.has(run?.conclusion);
+// Fix forward, never re-run: a red staging verdict on a commit is answered by
+// a new commit, not by re-running until green. GitHub's run list shows only a
+// run's latest attempt, so the failed attempt a re-run replaced is invisible:
+// any run past its first attempt counts as red, whatever its status, and so
+// does a run with no attempt number (fails closed). Shared with the
+// production deploy gate so both promotion paths apply one rule.
+export function isRedStagingRun(run) {
+  if (run?.run_attempt !== 1) return true;
+  return run.status === "completed" && RED_CONCLUSIONS.has(run.conclusion);
 }
 
 // Run-names (see the workflow headers): the deployed commit is the title's SHA.
@@ -57,10 +66,10 @@ export async function resolvePromotionSha({
     if (!response.ok) throw new Error(`Promotion lookup failed (HTTP ${response.status})`);
     return response.json();
   }
-  const decided = new Set();
-  // Newest-first: any red run blocks every older candidate, so automatic
-  // promotion never rides an older green while staging is currently red.
-  let seenNewerRed = false;
+  // Every page is read before deciding: an older red run of a commit (a
+  // re-run deploy starts a fresh e2e-staging run) must disqualify its newer
+  // green, and only the full list shows it.
+  const runs = [];
   for (let page = 1; page <= pages; page += 1) {
     const query = new URLSearchParams({
       branch: "main",
@@ -68,47 +77,56 @@ export async function resolvePromotionSha({
       per_page: "20",
       page: String(page),
     });
-    const { workflow_runs: runs = [] } = await get(
+    const { workflow_runs: batch = [] } = await get(
       `/actions/workflows/e2e-staging.yml/runs?${query}`,
     );
-    if (!runs.length) break;
-    for (const run of runs) {
-      if (isRedStagingRun(run)) seenNewerRed = true;
-      const sha = titleSha.exec(run.display_title ?? "")?.[1];
-      if (!sha || decided.has(sha)) continue;
-      decided.add(sha);
-      if (run.status !== "completed" || run.conclusion !== "success") continue;
-      // A newer red staging run blocks this older green: staging is not
-      // currently healthy, so there is nothing safe to promote automatically.
-      if (seenNewerRed) continue;
-      // Soak: the green must be at least 30 minutes old, so a just-passed
-      // staging has time to reveal a flake before it rides to production.
-      // A missing or unparsable timestamp fails closed (not promotable).
-      const completedAt = runCompletedAtMs(run);
-      if (!Number.isFinite(completedAt) || nowMs - completedAt < PROMOTION_SOAK_MS) continue;
-      const { jobs = [] } = await get(`/actions/runs/${run.id}/jobs?per_page=100`);
-      // Both gates must have passed on this deploy: journeys and the web quality gate.
-      // The quality evidence must match the production gate exactly: one
-      // stagingQualityJob whose stagingQualitySteps both executed successfully.
-      // A green job with skipped/failed/missing Lighthouse steps is ineligible
-      // evidence, like any other valid ineligibility, and falls through to an
-      // older eligible SHA (or null) instead of refusing the whole selection.
-      const journeysOk = jobs.some(
-        (job) =>
-          (job.name === "staging-journeys" || job.name.startsWith("staging-journeys / ")) &&
-          job.conclusion === "success",
-      );
-      if (!journeysOk) continue;
-      const qualityJobs = jobs.filter((job) => job.name === stagingQualityJob);
-      if (qualityJobs.length !== 1) continue;
-      const [quality] = qualityJobs;
-      if (quality.conclusion !== "success") continue;
-      const executed = stagingQualitySteps.every((name) =>
-        (quality.steps ?? []).some((step) => step.name === name && step.conclusion === "success"),
-      );
-      if (!executed) continue;
-      return sha;
-    }
+    if (!batch.length) break;
+    runs.push(...batch);
+  }
+  const titleShaOf = (run) => titleSha.exec(run.display_title ?? "")?.[1];
+  const redShas = new Set(runs.filter(isRedStagingRun).map(titleShaOf).filter(Boolean));
+  const decided = new Set();
+  // Newest-first: any red run blocks every older candidate, so automatic
+  // promotion never rides an older green while staging is currently red.
+  let seenNewerRed = false;
+  for (const run of runs) {
+    if (isRedStagingRun(run)) seenNewerRed = true;
+    const sha = titleShaOf(run);
+    if (!sha || decided.has(sha)) continue;
+    decided.add(sha);
+    if (run.status !== "completed" || run.conclusion !== "success") continue;
+    // A newer red staging run blocks this older green: staging is not
+    // currently healthy, so there is nothing safe to promote automatically.
+    if (seenNewerRed) continue;
+    // A commit with any red or re-run staging verdict is never evidence.
+    if (redShas.has(sha)) continue;
+    // Soak: the green must be at least 30 minutes old, so a just-passed
+    // staging has time to reveal a flake before it rides to production.
+    // A missing or unparsable timestamp fails closed (not promotable).
+    const completedAt = runCompletedAtMs(run);
+    if (!Number.isFinite(completedAt) || nowMs - completedAt < PROMOTION_SOAK_MS) continue;
+    const { jobs = [] } = await get(`/actions/runs/${run.id}/jobs?per_page=100`);
+    // Both gates must have passed on this deploy: journeys and the web quality gate.
+    // The quality evidence must match the production gate exactly: one
+    // stagingQualityJob whose stagingQualitySteps both executed successfully.
+    // A green job with skipped/failed/missing Lighthouse steps is ineligible
+    // evidence, like any other valid ineligibility, and falls through to an
+    // older eligible SHA (or null) instead of refusing the whole selection.
+    const journeysOk = jobs.some(
+      (job) =>
+        (job.name === "staging-journeys" || job.name.startsWith("staging-journeys / ")) &&
+        job.conclusion === "success",
+    );
+    if (!journeysOk) continue;
+    const qualityJobs = jobs.filter((job) => job.name === stagingQualityJob);
+    if (qualityJobs.length !== 1) continue;
+    const [quality] = qualityJobs;
+    if (quality.conclusion !== "success") continue;
+    const executed = stagingQualitySteps.every((name) =>
+      (quality.steps ?? []).some((step) => step.name === name && step.conclusion === "success"),
+    );
+    if (!executed) continue;
+    return sha;
   }
   return null;
 }
@@ -129,7 +147,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       // A manual dispatch with no candidate is still an error.
       if (!input && process.env.GITHUB_EVENT_NAME !== "workflow_dispatch") {
         console.log(
-          "No soaked green staging commit to promote (need a 30-minute-old success with no newer red run); skipping",
+          "No soaked green staging commit to promote (need a 30-minute-old first-attempt success with no red or re-run staging run on it or newer); skipping",
         );
         appendFileSync(process.env.GITHUB_OUTPUT, "sha=\n");
         process.exit(0);

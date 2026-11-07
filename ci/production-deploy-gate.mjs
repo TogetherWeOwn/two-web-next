@@ -3,7 +3,12 @@ import { appendFileSync, mkdirSync, readFileSync, writeFileSync } from "node:fs"
 import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { APEX_ORIGIN } from "./operator-constants.mjs";
-import { deployTitle, e2eTitle, PROMOTION_SOAK_MS } from "./resolve-promotion-sha.mjs";
+import {
+  deployTitle,
+  e2eTitle,
+  isRedStagingRun,
+  PROMOTION_SOAK_MS,
+} from "./resolve-promotion-sha.mjs";
 import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
@@ -377,6 +382,18 @@ function requireExecutedStagingQuality(jobs, runId) {
   }
 }
 
+// Fix forward, never re-run: a commit with any red e2e-staging run, or any run
+// past its first attempt, is refused in both approval modes. A red staging
+// gate is answered by a new commit; re-running until green is not evidence.
+function refuseRedOrRerunStaging(runs, sha) {
+  const red = runs.filter(isRedStagingRun);
+  if (red.length) {
+    throw new Error(
+      `e2e-staging.yml run ${red[0].id} on ${sha} failed or was re-run (attempt ${red[0].run_attempt ?? "unknown"}): fix forward with a new commit, never re-run staging until green`,
+    );
+  }
+}
+
 // Automated approval evidence: for each staging workflow, the most recent run on
 // the deployment SHA must be a completed success. An older success does not
 // count if a later run on the same SHA failed or is still running.
@@ -384,7 +401,8 @@ function requireExecutedStagingQuality(jobs, runId) {
 // main's tip when they triggered, not the deployed commit. Their run-names carry
 // the deployed SHA (deploy <sha>, e2e-staging deploy <sha>); evidence joins on
 // that. The newest run per title decides, and the e2e run must have actually
-// passed staging-journeys (it concludes success with the job skipped).
+// passed staging-journeys (it concludes success with the job skipped), and no
+// e2e-staging run on the SHA may be red or a re-run (refuseRedOrRerunStaging).
 // Automatic promotion, including an explicit-SHA dispatch, also requires the
 // e2e-staging pass to have soaked for PROMOTION_SOAK_MS (30 minutes), the same
 // floor the automatic resolver applies. A reviewer approval stands in for the
@@ -444,6 +462,7 @@ export async function requireStagingEvidence(
       throw new Error(`Latest ${file} run on the deployment SHA is not successful`);
     }
     if (file === "e2e-staging.yml") {
+      refuseRedOrRerunStaging(runs, sha);
       const completedAt = Date.parse(latest.updated_at ?? "");
       if (!Number.isFinite(completedAt) || nowMs - completedAt < PROMOTION_SOAK_MS) {
         throw new Error(
@@ -471,6 +490,7 @@ export async function requireStagingSoakIfEvident(
   { token, fetchImpl = fetch, nowMs = Date.now() } = {},
 ) {
   const title = e2eTitle(sha);
+  const named = [];
   const passed = [];
   for (let page = 1; page <= 3; page += 1) {
     const query = new URLSearchParams({ branch: "main", per_page: "100", page: String(page) });
@@ -499,10 +519,14 @@ export async function requireStagingSoakIfEvident(
       ) {
         throw new Error("e2e-staging.yml evidence revision/branch/workflow mismatch");
       }
+      named.push(run);
       if (run.status === "completed" && run.conclusion === "success") passed.push(run);
     }
     if (batch.length < 100) break;
   }
+  // A reviewer approval stands in for missing staging evidence, never for red
+  // evidence: a red or re-run staging verdict is fixed forward on a new commit.
+  refuseRedOrRerunStaging(named, sha);
   if (!passed.length) return null;
   const latest = passed.reduce((a, b) => (b.id > a.id ? b : a));
   const completedAt = Date.parse(latest.updated_at ?? "");

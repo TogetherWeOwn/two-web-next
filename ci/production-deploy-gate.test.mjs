@@ -1197,6 +1197,7 @@ function stagingRun(file, id, overrides = {}) {
     head_repository: { full_name: "fixture/repo" },
     status: "completed",
     conclusion: "success",
+    run_attempt: 1,
     // Long past the 30-minute soak floor unless a test overrides it.
     updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
@@ -1346,6 +1347,25 @@ for (const [name, pattern, mutate] of [
       (s.jobs = withQuality(
         qualityJob({ steps: qualitySteps({ [stagingQualitySteps[1]]: "failure" }) }),
       )),
+  ],
+  [
+    "an e2e-staging pass on a re-run attempt (red then re-run until green)",
+    /e2e-staging\.yml run 200 on [0-9a-f]{40} failed or was re-run \(attempt 2\)/,
+    (s) => (s["e2e-staging.yml"][0].run_attempt = 2),
+  ],
+  [
+    "an e2e-staging pass with no attempt number",
+    /e2e-staging\.yml run 200 on [0-9a-f]{40} failed or was re-run \(attempt unknown\)/,
+    (s) => delete s["e2e-staging.yml"][0].run_attempt,
+  ],
+  [
+    "a newer first-attempt pass over an older failed run of the same SHA",
+    /e2e-staging\.yml run 200 on [0-9a-f]{40} failed or was re-run/,
+    (s) => {
+      s["e2e-staging.yml"][0].conclusion = "failure";
+      s["e2e-staging.yml"].push(stagingRun("e2e-staging.yml", 201));
+      s.jobs = { 201: e2eJobs() };
+    },
   ],
   [
     "evidence from another branch",

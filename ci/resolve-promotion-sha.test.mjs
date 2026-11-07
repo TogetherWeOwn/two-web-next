@@ -62,6 +62,7 @@ const run = (id, deployed, conclusion = "success", status = "completed", updated
   display_title: `e2e-staging deploy ${deployed}`,
   status,
   conclusion,
+  run_attempt: 1,
   updated_at,
 });
 const resolve = (runs, jobs, nowMs) =>
@@ -600,6 +601,52 @@ test("a newer cancelled run does not block the older green", async () => {
   assert.equal(await resolve([run(3, A, "cancelled"), run(2, B)], { 2: "success" }), B);
 });
 
+// Fix forward, never re-run: a red staging verdict is answered by a new
+// commit. The run list shows only a run's latest attempt, so a re-run (attempt
+// 2+) is red evidence itself, for its commit and for every older candidate.
+
+test("a green re-run attempt is never promoted and blocks older greens (red then re-run until green)", async () => {
+  // Run 42301172423 on 9ee70484: attempt 1 failed staging-quality, attempt 2 passed.
+  for (const run_attempt of [2, 3, undefined]) {
+    assert.equal(
+      await resolve([{ ...run(3, A), run_attempt }, run(2, B)], { 3: "success", 2: "success" }),
+      null,
+      `attempt ${run_attempt}`,
+    );
+  }
+});
+
+test("a re-run still in progress blocks older greens", async () => {
+  assert.equal(
+    await resolve([{ ...run(3, A, null, "in_progress"), run_attempt: 2 }, run(2, B)], {
+      2: "success",
+    }),
+    null,
+  );
+});
+
+test("an older failed run of a commit disqualifies its newer first-attempt pass", async () => {
+  // A re-run deploy starts a fresh e2e-staging run (attempt 1) for the same
+  // commit; the older red verdict still stands. B is older than the red run.
+  assert.equal(
+    await resolve([run(4, A), run(3, A, "failure"), run(2, B)], { 4: "success", 2: "success" }),
+    null,
+  );
+});
+
+test("an older red run on a later page still disqualifies the newer pass of its commit", async () => {
+  const C = "c".repeat(40);
+  const filler = Array.from({ length: 19 }, (_, i) => run(200 - i, C));
+  assert.equal(
+    await resolve([run(300, A), ...filler, run(3, A, "failure")], { 300: "success" }),
+    null,
+  );
+});
+
+test("a cancelled first attempt of the same commit does not disqualify its pass", async () => {
+  assert.equal(await resolve([run(4, A), run(3, A, "cancelled")], { 4: "success" }), A);
+});
+
 // Spawned resolver CLI tests: per-event behavior pins, not source greps.
 // Inverting the empty-input clean skip (automatic exit 0 with an empty sha)
 // or breaking explicit-sha dispatch must fail here.
@@ -635,6 +682,7 @@ function cliRun(id, deployed, at) {
     display_title: `e2e-staging deploy ${deployed}`,
     status: "completed",
     conclusion: "success",
+    run_attempt: 1,
     updated_at: at,
   };
 }

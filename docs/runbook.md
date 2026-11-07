@@ -755,6 +755,15 @@ when a staging pass for the candidate exists, it must still have soaked 30
 minutes; a promotion with no staging evidence yet rides on the reviewer's
 approval alone.
 
+Both modes refuse a candidate with red staging evidence: any failed or
+timed-out `e2e-staging` run that names it, or any run past its first attempt.
+GitHub's run list shows only a run's latest attempt, so a re-run that turned
+green hides the red attempt it replaced; the gate counts the re-run itself as
+red. A reviewer approval stands in for missing staging evidence, never for red
+evidence. Fix forward: land a new commit and promote it once its own staging
+run passes on the first attempt. A re-run can still diagnose a flake, but its
+green is not promotion evidence.
+
 #### Deploy notify
 
 The last job of every attempted promotion (`deploy-notify`) and of every
