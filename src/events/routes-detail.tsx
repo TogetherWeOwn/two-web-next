@@ -1,3 +1,4 @@
+import { renderDate } from "../render-clock";
 // Detail event routes: GET /events/:key (JSON) and GET /e/:key (HTML).
 // Split out of src/events/routes.tsx; behavior unchanged.
 import { dbFor } from "../admin/db";
@@ -98,6 +99,10 @@ export function registerDetailRoutes(
   });
 
   app.get("/e/:key", async (c) => {
+    const now =
+      typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true
+        ? renderDate(c.req.raw, c.env)
+        : undefined;
     const limited = await publicReadGuard(c);
     if (limited) return limited;
     let viewer: string | null = null;
@@ -160,7 +165,7 @@ export function registerDetailRoutes(
             c.header("cache-control", "private, no-store");
             let related: EventLink[] = [];
             try {
-              related = await listRelatedEvents(db, e);
+              related = await listRelatedEvents(db, e, now);
             } catch {
               related = [];
             }
@@ -211,11 +216,11 @@ export function registerDetailRoutes(
           // rail), and both reads stay nonSensitive published-only, so no
           // private bytes release and no audit row is skipped. Viewer reads
           // below stay closed: their throws still refuse.
-          const neighborsSettled = getEventNeighbors(db, e).then(
+          const neighborsSettled = getEventNeighbors(db, e, now).then(
             (neighbors) => neighbors,
             (): EventNeighbors => ({ previous: null, next: null }),
           );
-          const relatedSettled = listRelatedEvents(db, e).then(
+          const relatedSettled = listRelatedEvents(db, e, now).then(
             (related) => related,
             (): EventLink[] => [],
           );
@@ -270,6 +275,7 @@ export function registerDetailRoutes(
           return bufferedMemberHtml(
             c,
             <EventPage
+              now={now}
               e={e}
               review={wantsReview ? savedEventReview(e, new Date()) : undefined}
               neighbors={neighbors}
