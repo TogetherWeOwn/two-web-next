@@ -13,7 +13,7 @@ import { waitForNoLockWaiters } from "./helpers/wait-for-no-lock-waiters";
 import { createMemorySessionStore, hashToken, newSessionToken } from "../src/sessions";
 import type { Env } from "../src/env";
 import type { EnvWithAdminDb } from "../src/admin/db";
-import { __resetHomeGuestCacheForTests } from "../src/home-cache";
+import { __resetHomeGuestCacheForTests, cachedFeatured } from "../src/home-cache";
 
 const now = new Date("2026-09-30T12:00:00Z");
 const before = new Date(now.getTime() - 1000);
@@ -413,5 +413,138 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
     const res = await home();
     expect(res.status).toBe(200);
     expect(await res.text()).not.toContain('data-testid="featured-content"');
+  });
+
+  describe("row and text bounds", () => {
+    const cap = featuredReads.FEATURED_ROW_CAP;
+    const cached = (at: Date) =>
+      cachedFeatured({ ...env, ADMIN_DB: fixture.db } as EnvWithAdminDb, async () => fixture.db, at);
+    const bulk = (count: number, make: (i: number) => Partial<typeof featuredContents.$inferInsert>) =>
+      fixture.db.insert(featuredContents).values(
+        Array.from({ length: count }, (_, i) => ({
+          title: `Row ${i}`,
+          isPublished: true,
+          ...make(i),
+        })),
+      );
+    const readers = {
+      published: (at: Date, status?: { saturated: boolean }) =>
+        featuredReads.listPublishedFeatured(fixture.db, at, status),
+      visible: (at: Date) => listVisibleFeatured(fixture.db, at),
+    };
+
+    it("returns the first cap rows by position then id from both readers", async () => {
+      const inserted = await bulk(cap + 5, (i) => ({ position: (cap + 5 - i) % 7 }))
+        .returning();
+      const expected = [...inserted]
+        .sort((a, b) => a.position - b.position || a.id - b.id)
+        .slice(0, cap)
+        .map((row) => row.id);
+      expect(cap).toBe(100);
+      for (const read of Object.values(readers)) {
+        const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+        expect((await read(now)).map((row) => row.id)).toEqual(expected);
+        expect(warn).toHaveBeenCalledOnce();
+        expect(warn).toHaveBeenCalledWith(expect.any(String), { limit: 100, returned: 100 });
+        warn.mockRestore();
+      }
+    });
+
+    it("does not warn or report saturation at exactly the cap", async () => {
+      await bulk(cap, () => ({}));
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const status = { saturated: true };
+      expect(await readers.published(now, status)).toHaveLength(cap);
+      expect(status.saturated).toBe(false);
+      expect(await readers.visible(now)).toHaveLength(cap);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    const bounds = [
+      ["title", 255],
+      ["url", 255],
+      ["imageUrl", 255],
+      ["imageAlt", 255],
+      ["body", 1000],
+    ] as const;
+    it.each(bounds)("skips a whole row whose %s exceeds %i characters", async (field, max) => {
+      // Multibyte values at exactly the limit count characters, not bytes or UTF-16 units.
+      const exact = { é: "é".repeat(max), "😀": "😀".repeat(max) };
+      const mk = (title: string, value: string) =>
+        field === "title" ? { title: value } : { title, [field]: value };
+      await fixture.db.insert(featuredContents).values([
+        { ...mk("over", "x".repeat(max + 1)), isPublished: true, position: 1 },
+        { ...mk("over-multibyte", "😀".repeat(max + 1)), isPublished: true, position: 2 },
+        { ...mk("exact-latin", exact["é"]), isPublished: true, position: 3 },
+        { ...mk("exact-astral", exact["😀"]), isPublished: true, position: 4 },
+        { title: "plain", isPublished: true, position: 5 },
+      ]);
+      for (const read of Object.values(readers)) {
+        const rows = await read(now);
+        expect(rows).toHaveLength(3);
+        const titles = rows.map((row) => row.title);
+        expect(titles).not.toContain("over");
+        expect(titles).not.toContain("over-multibyte");
+        expect(titles).toContain("plain");
+        // The url policy may drop an unsafe stored link; the row itself stays.
+        if (field !== "url") {
+          const values = rows.slice(0, 2).map((row) => String(row[field]));
+          expect(values).toEqual([exact["é"], exact["😀"]]);
+        }
+      }
+    });
+
+    it("keeps null optional fields", async () => {
+      await fixture.db
+        .insert(featuredContents)
+        .values({ title: "Nulls", isPublished: true, body: null, imageAlt: null });
+      for (const read of Object.values(readers))
+        expect((await read(now)).map((row) => row.title)).toEqual(["Nulls"]);
+    });
+
+    it("does not let expired rows beyond the cap crowd out current or future rows", async () => {
+      await bulk(cap + 1, () => ({ position: 0, endsAt: before }));
+      await fixture.db.insert(featuredContents).values([
+        { title: "Exact end", isPublished: true, position: 0, endsAt: now },
+        { title: "Current", isPublished: true, position: 1 },
+        { title: "Future", isPublished: true, position: 2, startsAt: after },
+      ]);
+      const status = { saturated: true };
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const base = await readers.published(now, status);
+      expect(base.map((row) => row.title)).toEqual(["Current", "Future"]);
+      expect(status.saturated).toBe(false);
+      const live = await cached(now);
+      expect(live.map((row) => row.title)).toEqual(["Current"]);
+      // The public DTO carries the six display fields, never the window bounds.
+      expect(Object.keys(live[0]!).sort()).toEqual(
+        ["body", "id", "imageAlt", "imageUrl", "title", "url"].sort(),
+      );
+      // The cached base keeps the future row: it appears once its start passes.
+      expect((await cached(new Date(after.getTime() + 1))).map((row) => row.title)).toEqual([
+        "Current",
+        "Future",
+      ]);
+      expect(warn).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the visible reader when future rows saturate the base, without caching it", async () => {
+      await bulk(cap, (i) => ({ title: `Future ${i}`, position: i, startsAt: after }));
+      await fixture.db
+        .insert(featuredContents)
+        .values({ title: "Live beyond cap", isPublished: true, position: cap + 50 });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const status = { saturated: false };
+      const base = await readers.published(now, status);
+      expect(status.saturated).toBe(true);
+      expect(base.every((row) => row.title.startsWith("Future"))).toBe(true);
+      expect((await cached(now)).map((row) => row.title)).toEqual(["Live beyond cap"]);
+      // A poisoned stored base would now hide the live row from a repeat request.
+      expect((await cached(now)).map((row) => row.title)).toEqual(["Live beyond cap"]);
+      const later = await cached(new Date(after.getTime() + 1));
+      expect(later).toHaveLength(cap);
+      expect(later.every((row) => row.title.startsWith("Future"))).toBe(true);
+      warn.mockRestore();
+    });
   });
 });
