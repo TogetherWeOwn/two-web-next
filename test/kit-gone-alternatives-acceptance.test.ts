@@ -338,11 +338,12 @@ describe("Kit gone alternatives acceptance", () => {
     expect(response.headers.get("cache-control")).toBe("private, no-store");
     expect(response.headers.get("x-robots-tag")).toBe("noindex, nofollow");
     const bytes = new Uint8Array(await response.arrayBuffer());
-    // Re-captured with main 4cd035fd8 merged. The delta from the prior pin is
-    // main 48e55e5d6 (final attendance line in src/events/pages-gone.tsx); this
-    // change leaves Hono source identical to that main commit.
+    // Re-captured for the Logo/Icon 1 brand swap: the 410 page carries the
+    // site header (new lockup) and the og:image card. Verified byte-identical
+    // replication on origin/main first (old pin reproduced), so the delta is
+    // only the brand assets.
     expect(createHash("sha256").update(bytes).digest("hex")).toBe(
-      "2001bedeed052bd720d8946ad1814b8a165c018b45ca120be55328a8a90f3bcf",
+      "701022368cfb98a8d8eb32e8bf5d2570993d9875e52904be755a5d3218a6e2c0",
     );
   });
 

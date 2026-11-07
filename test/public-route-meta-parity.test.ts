@@ -221,7 +221,7 @@ function expectHead(
       `<meta name="robots" content="${robots}"/>`,
     ]);
   expect(html, "og:image").toContain(
-    `property="og:image" content="${new URL("/icons/icon-512.png", canonical).href}"`,
+    `property="og:image" content="${new URL("/og-1200x630.png", canonical).href}"`,
   );
   expect(html, "og:image:alt").toContain(
     'property="og:image:alt" content="Together We Own community logo"',
