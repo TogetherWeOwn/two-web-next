@@ -78,8 +78,14 @@ describe("featured transfer bounds (local transport)", () => {
       ([message]) => message === "Home featured unavailable; serving the fallback.",
     );
     expect(failures).toEqual([
-      ["Home featured unavailable; serving the fallback.", { request_id: undefined, exception: "ReadFailure" }],
-      ["Home featured unavailable; serving the fallback.", { request_id: undefined, exception: "ReadFailure" }],
+      [
+        "Home featured unavailable; serving the fallback.",
+        { request_id: undefined, exception: "ReadFailure" },
+      ],
+      [
+        "Home featured unavailable; serving the fallback.",
+        { request_id: undefined, exception: "ReadFailure" },
+      ],
     ]);
     expect(JSON.stringify(warn.mock.calls)).not.toContain("private driver detail");
   });

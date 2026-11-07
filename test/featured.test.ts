@@ -418,8 +418,15 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
   describe("row and text bounds", () => {
     const cap = featuredReads.FEATURED_ROW_CAP;
     const cached = (at: Date) =>
-      cachedFeatured({ ...env, ADMIN_DB: fixture.db } as EnvWithAdminDb, async () => fixture.db, at);
-    const bulk = (count: number, make: (i: number) => Partial<typeof featuredContents.$inferInsert>) =>
+      cachedFeatured(
+        { ...env, ADMIN_DB: fixture.db } as EnvWithAdminDb,
+        async () => fixture.db,
+        at,
+      );
+    const bulk = (
+      count: number,
+      make: (i: number) => Partial<typeof featuredContents.$inferInsert>,
+    ) =>
       fixture.db.insert(featuredContents).values(
         Array.from({ length: count }, (_, i) => ({
           title: `Row ${i}`,
@@ -434,8 +441,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
     };
 
     it("returns the first cap rows by position then id from both readers", async () => {
-      const inserted = await bulk(cap + 5, (i) => ({ position: (cap + 5 - i) % 7 }))
-        .returning();
+      const inserted = await bulk(cap + 5, (i) => ({ position: (cap + 5 - i) % 7 })).returning();
       const expected = [...inserted]
         .sort((a, b) => a.position - b.position || a.id - b.id)
         .slice(0, cap)
