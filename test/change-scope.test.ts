@@ -865,7 +865,9 @@ describe("e2e-staging scope gate", () => {
     expect(scopeJob).toContain("docs_only:");
     expect(scopeJob).toContain("skip_e2e:");
     expect(scopeJob).not.toContain("pulls/$PR_NUMBER/files");
-    expect(scopeJob).toContain("workflow_run.head_sha");
+    expect(scopeJob).toContain("node ci/staging-qualification.mjs");
+    expect(scopeJob).toContain("HEAD_SHA: ${{ steps.target.outputs.sha }}");
+    expect(scopeJob).not.toContain("workflow_run.head_sha");
     expect(scopeJob).toContain("git diff --name-status");
     expect(journeys).toMatch(/\n    needs: scope\n/);
     expect(journeys).not.toMatch(/needs\.scope\.outputs\.skip_e2e/);

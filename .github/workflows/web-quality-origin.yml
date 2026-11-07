@@ -7,6 +7,10 @@ name: web-quality-origin
 on:
   workflow_call:
     inputs:
+      checkout_ref:
+        type: string
+        required: false
+        default: ""
       origin:
         type: string
         required: true
@@ -40,11 +44,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.checkout_ref || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24
-          cache: npm
+      # Candidate checkers must not write default-branch caches.
       - run: npm ci --include=dev --no-audit --no-fund
       - name: Install Chromium
         run: |

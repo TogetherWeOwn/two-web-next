@@ -21,6 +21,7 @@ import {
   stagingSoakSample,
   sumScriptErrors,
 } from "./production-deploy-gate.mjs";
+import { qualificationTarget, requireQualificationRevision } from "./staging-qualification.mjs";
 
 const SHA = "a".repeat(40);
 const ACCOUNT = "0123456789abcdef0123456789abcdef";
@@ -511,10 +512,7 @@ test("e2e-staging records the passive set for every promotable deploy", () => {
   );
   assert.doesNotMatch(job, /needs\.scope\.outputs\.skip_e2e/);
   assert.match(job, /needs: scope\n/);
-  assert.match(
-    job,
-    /ref: \$\{\{ github\.event_name == 'workflow_run' && github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}/,
-  );
+  assert.match(job, /ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/);
   assert.match(
     job,
     /node bin\/smoke\.mjs https:\/\/next\.togetherweown\.com --ledger passive\/smoke\.json/,
@@ -529,10 +527,139 @@ test("e2e-staging records the passive set for every promotable deploy", () => {
   assert.match(job, /SMOKE_ALLOW_MISSING_BASELINE: "1"/);
   assert.match(job, /name: staging-passive-ledger-\$\{\{ github\.run_id \}\}/);
   assert.ok(!/secrets\./.test(job), "the passive set needs no secrets");
-  // The job checks out the workflow_run head, so it must not write caches
+  // The job checks out the deployed candidate, so it must not write caches
   // (CodeQL cache-poisoning): no setup-node npm cache, no actions/cache.
   assert.ok(!/cache: npm/.test(job), "the passive set must not use the npm cache");
   assert.ok(!/uses: actions\/cache@/.test(job), "the passive set must not write caches");
+});
+
+function qualificationContext() {
+  return {
+    eventName: "workflow_run",
+    repository: "fixture/repo",
+    ref: "refs/heads/main",
+    sha: "c".repeat(40),
+    event: {
+      repository: { full_name: "fixture/repo" },
+      workflow_run: {
+        event: "workflow_run",
+        path: ".github/workflows/deploy.yml",
+        status: "completed",
+        conclusion: "success",
+        head_branch: "main",
+        head_repository: { full_name: "fixture/repo" },
+        head_sha: "b".repeat(40),
+        display_title: `deploy ${SHA}`,
+      },
+    },
+  };
+}
+
+const revisionOptions = (commit) => ({
+  log: () => {},
+  fetchImpl: async (url, init) => {
+    assert.equal(String(url), "https://next.togetherweown.com/up");
+    assert.equal(init.redirect, "manual");
+    return { json: async () => ({ revision: { version_id: VERSION, commit } }) };
+  },
+});
+
+test("staging qualification preserves the deployed SHA through checker checkout and ledger consumption", async () => {
+  const workflow = read("../.github/workflows/e2e-staging.yml");
+  assert.match(workflow, /sha: \$\{\{ steps\.target\.outputs\.sha \}\}/);
+  assert.match(workflow, /run: node ci\/staging-qualification\.mjs\n/);
+  assert.doesNotMatch(workflow, /workflow_run\.head_sha/);
+  assert.match(workflow, /HEAD_SHA: \$\{\{ steps\.target\.outputs\.sha \}\}/);
+  const passive = workflow.split("\n  staging-passive:\n")[1].split("\n  staging-journeys:\n")[0];
+  assert.match(passive, /ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/);
+  assert.match(passive, /DEPLOYED_SHA: \$\{\{ needs\.scope\.outputs\.sha \}\}/);
+  const target = qualificationTarget(qualificationContext());
+  assert.equal(
+    target,
+    SHA,
+    "CI/deployed A, deploy API head B, and e2e API head C must still qualify A",
+  );
+  await requireQualificationRevision(target, revisionOptions(target));
+  // Execute the workflow's actual commit-file writer, then feed that identity
+  // through the production artifact reader rather than just resolver selection.
+  const writer = passive.match(/          (printf [^\n]+ > passive\/commit)/)?.[1];
+  assert.ok(writer);
+  const dir = mkdtempSync(join(tmpdir(), "qualification-"));
+  const result = spawnSync("bash", ["-euc", `mkdir passive; ${writer}`], {
+    cwd: dir,
+    encoding: "utf8",
+    env: { PATH: process.env.PATH, DEPLOYED_SHA: target },
+  });
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(
+    await fetchLedgers({
+      runs: [e2eRun(9, { head_sha: "c".repeat(40) })],
+      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+      commit: readFileSync(join(dir, "passive/commit"), "utf8").trim(),
+    }),
+    { runId: 9, artifactId: 77 },
+  );
+});
+
+test("staging qualification refuses A after B replaces it and locks every measurement against deploys", async () => {
+  const workflow = read("../.github/workflows/e2e-staging.yml");
+  const deploy = read("../.github/workflows/deploy.yml");
+  assert.match(deploy, /concurrency:\n {6}group: deploy-staging\n {6}cancel-in-progress: false/);
+  assert.match(workflow, /concurrency:\n[\s\S]*?group: >-\n[\s\S]*?'deploy-staging'/);
+  assert.match(workflow, /cancel-in-progress: false/);
+  for (const job of ["zap-baseline", "staging-passive", "staging-journeys", "staging-quality"]) {
+    const body = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [\w-]+:\n/)[0];
+    assert.match(body, /needs: scope\n/, `${job} must await the under-lock identity check`);
+    assert.match(body, /(?:ref|checkout_ref): \$\{\{ needs\.scope\.outputs\.sha \}\}/);
+  }
+  assert.match(
+    workflow,
+    /needs: \[scope, zap-baseline, staging-passive, staging-journeys, staging-quality\]/,
+  );
+  assert.match(workflow, /run: node ci\/staging-qualification\.mjs --verify/);
+  const target = qualificationTarget(qualificationContext());
+  await requireQualificationRevision(target, revisionOptions(SHA));
+  await assert.rejects(
+    requireQualificationRevision(target, revisionOptions("b".repeat(40))),
+    /expected a{40}/,
+  );
+  // An unreadable/malformed marker must fail, not credit B's healthy pages.
+  await assert.rejects(
+    requireQualificationRevision(target, revisionOptions(null)),
+    /expected a{40}/,
+  );
+  await assert.rejects(
+    requireQualificationRevision(target, {
+      log: () => {},
+      fetchImpl: async () => {
+        throw new Error("offline");
+      },
+    }),
+    /request failed/,
+  );
+});
+
+test("qualification target refuses malformed or foreign deploy identities and non-main dispatches", () => {
+  for (const patch of [
+    { display_title: `deploy ${SHA} extra` },
+    { display_title: null },
+    { display_title: `deploy ${"A".repeat(40)}` },
+    { conclusion: "failure" },
+    { head_branch: "feature" },
+    { path: ".github/workflows/ci.yml" },
+    { head_repository: { full_name: "other/repo" } },
+    { event: "pull_request" },
+  ]) {
+    const context = qualificationContext();
+    Object.assign(context.event.workflow_run, patch);
+    assert.throws(() => qualificationTarget(context));
+  }
+  const manual = { ...qualificationContext(), eventName: "workflow_dispatch", sha: SHA };
+  assert.equal(qualificationTarget(manual), SHA);
+  assert.throws(() => qualificationTarget({ ...manual, ref: "refs/heads/feature" }), /main-only/);
+  assert.throws(() => qualificationTarget({ ...manual, sha: "bad" }), /Invalid deployed/);
+  assert.throws(() => qualificationTarget({ ...manual, repository: "other/repo" }), /repository/);
+  assert.throws(() => qualificationTarget({ ...manual, eventName: "push" }), /Unsupported/);
 });
 
 test("watch config writes the journey ledger only when asked", () => {

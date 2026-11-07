@@ -135,6 +135,18 @@ it grants no authorization. If matching evidence cannot be obtained, hold that
 candidate's promotion; do not stage an unmerged head or infer a pass from a
 skip.
 
+Qualification resolves the deployed SHA from the validated `deploy <sha>`
+run title, not the deploy run's API `head_sha` (which can name a newer main
+commit). Scope, candidate checkers and the passive ledger use that one SHA.
+The whole qualification workflow shares the staging deploy job's
+`deploy-staging` concurrency group. It verifies the staging revision before
+any measurement and again after all jobs pass, while holding that lock. GitHub
+does not guarantee FIFO order: if a newer deploy wins the lock first, the
+superseded candidate fails qualification instead of borrowing its replacement's
+results. The lock covers dependency installation, journeys, passive checks,
+quality and ZAP; do not move it to individual measurement jobs. Out-of-band
+staging mutations must not bypass this coordination.
+
 This changes when staging evidence is required, not the pipeline or other
 merge/release gates. No red deterministic gate is waived, no pipeline skip/no-op
 is authorized, and every other production deploy still requires Release Manager

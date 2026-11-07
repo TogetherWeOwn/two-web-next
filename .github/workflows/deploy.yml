@@ -34,6 +34,8 @@ jobs:
        github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     # Rejected completion events must not replace a successful pending deploy.
+    # e2e-staging holds this same group for its entire qualification workflow,
+    # so no staging mutation can overlap candidate measurements.
     concurrency:
       group: deploy-staging
       cancel-in-progress: false
