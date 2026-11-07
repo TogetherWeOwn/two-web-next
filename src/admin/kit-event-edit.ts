@@ -47,6 +47,7 @@ import {
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { rosterWaitlistHint } from "./roster-copy";
 import { formatAdminTime } from "./chronology";
 import { renderSavedEventNoticeHtml } from "./pages/event-form-review";
 import { EventRosterSection } from "./pages/event-form-roster";
@@ -63,12 +64,13 @@ export type KitEventEditValues = {
   capacity: string;
 };
 
-/** One roster row as the Hono table renders it: display name, status and the
- * ISO instant, or null when the stored timestamp is unusable. The member
- * identifier stays out of the view and the shared roster HTML. */
+/** One roster row as the Hono table renders it: display name, status, global
+ * waitlist position and ISO instant (null when the stored time is unusable).
+ * The member identifier stays out of the view and shared roster HTML. */
 export type KitEventEditRosterEntry = {
   member: string;
   status: string;
+  waitlistPosition: number | null;
   answeredAt: string | null;
 };
 
@@ -110,6 +112,7 @@ export type KitEventEditRosterView = {
   /** Past-end and zero-row copy, exactly like the Hono section; null when rows render. */
   emptyText: string | null;
   sortHeaders: KitEventEditSortHeader[];
+  waitlistHint: string;
   /** The Hono-owned GET search target, with its roster anchor. */
   searchAction: string;
 };
@@ -165,6 +168,7 @@ export type KitEventEditRosterRow = {
   username: string | null;
   status: string;
   answeredAt: Date;
+  waitlistPosition?: number | null;
 };
 
 export type KitEventEditDeps = {
@@ -237,6 +241,9 @@ export async function resolveKitEventEdit(
   const entries = roster.rows.map((r) => ({
     member: r.username?.trim() || "Unknown member",
     status: r.status,
+    // Rendered only for waitlisted rows: the window rank is global, but a
+    // non-waitlisted row must never show a queue number.
+    waitlistPosition: r.status === "waitlisted" ? (r.waitlistPosition ?? null) : null,
     answeredAt: formatAdminTime(r.answeredAt).iso,
   }));
   const rangeStart = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + 1 : 0;
@@ -323,7 +330,9 @@ export async function resolveKitEventEdit(
         sortHeaders: [
           sortHeader(row.eventKey, query, "status", "Status"),
           sortHeader(row.eventKey, query, "answered", "Answered (UTC)"),
+          sortHeader(row.eventKey, query, "waitlist", "Waitlist position"),
         ],
+        waitlistHint: rosterWaitlistHint,
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,
       },

@@ -189,11 +189,24 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
       if (sql.startsWith("select count(*)")) return [{ n: selected.length }];
       const order = unquoted.match(
         ranked
-          ? /order by line\.(status|updated_at) (asc|desc)\s*, line\.user_id asc limit/
+          ? /order by line\.(status|updated_at|position) (asc|desc)( nulls last)?\s*, line\.user_id asc limit/
           : /order by rsvps\.(status|updated_at) (asc|desc), rsvps\.user_id(?: asc)? limit/,
       );
       if (!order) throw new Error("fixture requires deterministic roster order");
       selected = selected.sort((a, b) => {
+        // The waitlist sort is nulls-last in both directions, like the SQL.
+        if (order[1]!.startsWith("position")) {
+          if (a.position === null || b.position === null)
+            return (
+              (a.position === null ? 1 : 0) - (b.position === null ? 1 : 0) ||
+              a.userId.localeCompare(b.userId)
+            );
+          const flip = unquoted.includes("line.position desc") ? -1 : 1;
+          return (
+            (a.position < b.position ? -1 : a.position > b.position ? 1 : 0) * flip ||
+            a.userId.localeCompare(b.userId)
+          );
+        }
         const left = order[1] === "status" ? a.status : a.answeredAt.toISOString();
         const right = order[1] === "status" ? b.status : b.answeredAt.toISOString();
         const primary = left < right ? -1 : left > right ? 1 : 0;
@@ -249,7 +262,7 @@ export async function compileRosterKit() {
   bridgeModules.env = `export const env=${JSON.stringify(env)};`;
   const built = await build({
     stdin: {
-      contents: `import {state} from "bridge"; import {load} from ${JSON.stringify(load)}; import {load as layout} from ${JSON.stringify(layout)}; import P from ${JSON.stringify(page)}; import {render} from "svelte/server"; export function configure(deps){Object.assign(state,deps);} export {load,layout}; export const html=(data)=>render(P,{props:{data}}).body;`,
+      contents: `import {state} from "bridge"; import {load} from ${JSON.stringify(load)}; import {load as layout} from ${JSON.stringify(layout)}; import P from ${JSON.stringify(page)}; import {render} from "svelte/server"; export function configure(deps){Object.assign(state,deps);} export {load,layout}; export function html(data){const {head,body}=render(P,{props:{data}}); return state.template.replace(/%sveltekit\\.(head|body)%/g,(_match,part)=>part==='head'?head:body);}`,
       resolveDir: root,
       sourcefile: "roster-status-ssr.mjs",
     },
@@ -297,7 +310,12 @@ export async function compileRosterKit() {
   const compiled = await import(
     `data:text/javascript;base64,${Buffer.from(built.outputFiles[0]!.text).toString("base64")}`
   );
-  compiled.configure({ dbFor, listRoster, getEvent });
+  compiled.configure({
+    dbFor,
+    listRoster,
+    getEvent,
+    template: readFileSync(join(root, "web/src/app.html"), "utf8"),
+  });
   return compiled as {
     load: (event: {
       parent: () => Promise<unknown>;

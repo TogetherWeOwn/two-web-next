@@ -2,6 +2,7 @@
 // arbitrary raw queries. A classification still permits exactly one statement.
 import { Column, getTableName, is } from "drizzle-orm";
 import { refuseMemberRead, type NonSensitiveRead } from "../member-reads";
+import { rankedRosterPrefix } from "./roster-statement";
 
 export type SelectedField = { path: string[]; field: unknown };
 export const normalizedStatement = (statement: string) => statement.trim().replace(/\s+/g, " ");
@@ -124,8 +125,9 @@ export function rawMemberOwner(statement: string): string | undefined {
   // return computed queue ranks. Its user_id owns the joined username too.
   // Filters run outside the window; sorts are fixed tokens, never arbitrary SQL.
   if (
-    /^select line\.user_id, users\.username, line\.status, line\.updated_at, line\.position from \( select rsvps\.user_id, rsvps\.status, rsvps\.updated_at, case when rsvps\.status = 'waitlisted' then row_number\(\) over \(partition by rsvps\.status order by rsvps\.created_at, coalesce\(rsvps\.legacy_id, rsvps\.id\), rsvps\.id\)::int end as position from rsvps inner join events on events\.id = rsvps\.event_id where events\.event_key = \$1 \) line left join users on users\.id = line\.user_id(?: where (?:line\.status = \$2(?: and users\.username ilike \$3)?|users\.username ilike \$2))? order by (?:line\.position (?:asc|desc) nulls last,|line\.(?:status|updated_at) (?:asc|desc) ,) line\.user_id asc limit 100 offset \$\d+$/.test(
-      query,
+    query.startsWith(rankedRosterPrefix) &&
+    /^ \$1 \) line left join users on users\.id = line\.user_id(?: where (?:line\.status = \$2(?: and users\.username ilike \$3)?|users\.username ilike \$2))? order by (?:line\.position (?:asc|desc) nulls last,|line\.(?:status|updated_at) (?:asc|desc) ,) line\.user_id asc limit 100 offset \$\d+$/.test(
+      query.slice(rankedRosterPrefix.length),
     )
   )
     return "user_id";
