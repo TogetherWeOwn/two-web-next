@@ -65,7 +65,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"2844da2bdfdd3246f8110ba36bcb45c0\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -109,7 +109,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"2844da2bdfdd3246f8110ba36bcb45c0\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -153,7 +153,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"2844da2bdfdd3246f8110ba36bcb45c0\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -184,7 +184,7 @@
         "path": "/event-theme.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"2844da2bdfdd3246f8110ba36bcb45c0\""
+          "if-none-match": "\"9a9c687348351fbc80a9388066212963\""
         }
       },
       "response": {
@@ -197,7 +197,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"2844da2bdfdd3246f8110ba36bcb45c0\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -241,7 +241,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"2844da2bdfdd3246f8110ba36bcb45c0\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -272,7 +272,7 @@
         "path": "/event-theme.css",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"2844da2bdfdd3246f8110ba36bcb45c0\""
+          "if-none-match": "W/\"9a9c687348351fbc80a9388066212963\""
         }
       },
       "response": {
@@ -285,7 +285,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"2844da2bdfdd3246f8110ba36bcb45c0\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -370,7 +370,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"2844da2bdfdd3246f8110ba36bcb45c0\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",

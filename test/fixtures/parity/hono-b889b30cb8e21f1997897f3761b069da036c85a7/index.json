@@ -9,13 +9,14 @@
     "drizzle": "031d5018d193a61bbddf9916442dc91651ef9f41",
     "wrangler.jsonc": "40a40b113c517397d98bf0184caed974040573cb",
     "package-lock.json": "c2267d54dab37f5a89a3a47fb379ca3230328428",
-    "ci/parity": "074d95050b2c3dd191cfcba80e594547c53baa21",
+    "ci/parity": "0753a1a2e72b55ce3ff245bfa15d06746c5e2e05",
     "e2e/discord-stub.ts": "a37723f3558d0a03119c43d644aa21f277a4a7bc",
     "test/fixtures/route-inventory.json": "2429171542e53dd0a71286c6863399def23ada50"
   },
   "epoch": "2026-07-01T12:00:00.000Z",
   "masked": {
     "headers": ["date", "x-request-id", "cf-ray"],
+    "assetEtags": "<asset-etag>",
     "cookieValues": "<masked>",
     "nonces": "<masked>"
   },

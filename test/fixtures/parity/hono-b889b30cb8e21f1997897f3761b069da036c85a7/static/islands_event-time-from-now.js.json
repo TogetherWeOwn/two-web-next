@@ -65,7 +65,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"344f25b5893c55c24828f0ee21920b7a\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -109,7 +109,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"344f25b5893c55c24828f0ee21920b7a\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -153,7 +153,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"344f25b5893c55c24828f0ee21920b7a\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -184,7 +184,7 @@
         "path": "/islands/event-time-from-now.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"344f25b5893c55c24828f0ee21920b7a\""
+          "if-none-match": "\"44588d021b0e32b25903d0c34f27033e\""
         }
       },
       "response": {
@@ -197,7 +197,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"344f25b5893c55c24828f0ee21920b7a\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -241,7 +241,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"344f25b5893c55c24828f0ee21920b7a\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -272,7 +272,7 @@
         "path": "/islands/event-time-from-now.js",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"344f25b5893c55c24828f0ee21920b7a\""
+          "if-none-match": "W/\"44588d021b0e32b25903d0c34f27033e\""
         }
       },
       "response": {
@@ -285,7 +285,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"344f25b5893c55c24828f0ee21920b7a\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -370,7 +370,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"344f25b5893c55c24828f0ee21920b7a\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",

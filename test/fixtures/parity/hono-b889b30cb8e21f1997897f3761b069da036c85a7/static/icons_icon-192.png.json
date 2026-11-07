@@ -65,7 +65,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"252d2fd53520724ec10b39b0eb0e9ffc\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -109,7 +109,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"252d2fd53520724ec10b39b0eb0e9ffc\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -153,7 +153,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"252d2fd53520724ec10b39b0eb0e9ffc\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -184,7 +184,7 @@
         "path": "/icons/icon-192.png",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"252d2fd53520724ec10b39b0eb0e9ffc\""
+          "if-none-match": "\"8d649a4244f5ba8ba2fa3575da76a4c2\""
         }
       },
       "response": {
@@ -197,7 +197,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"252d2fd53520724ec10b39b0eb0e9ffc\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -241,7 +241,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"252d2fd53520724ec10b39b0eb0e9ffc\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -272,7 +272,7 @@
         "path": "/icons/icon-192.png",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"252d2fd53520724ec10b39b0eb0e9ffc\""
+          "if-none-match": "W/\"8d649a4244f5ba8ba2fa3575da76a4c2\""
         }
       },
       "response": {
@@ -285,7 +285,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"252d2fd53520724ec10b39b0eb0e9ffc\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -370,7 +370,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"252d2fd53520724ec10b39b0eb0e9ffc\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",

@@ -65,7 +65,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"f97cc81a497aaf0328577c5520abbfa2\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -128,7 +128,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"f97cc81a497aaf0328577c5520abbfa2\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -191,7 +191,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"f97cc81a497aaf0328577c5520abbfa2\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -241,7 +241,7 @@
         "path": "/site.webmanifest",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "\"f97cc81a497aaf0328577c5520abbfa2\""
+          "if-none-match": "\"c4a521f0543ba760847e4809bbebc945\""
         }
       },
       "response": {
@@ -254,7 +254,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"f97cc81a497aaf0328577c5520abbfa2\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -298,7 +298,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"f97cc81a497aaf0328577c5520abbfa2\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -348,7 +348,7 @@
         "path": "/site.webmanifest",
         "headers": {
           "accept": "*/*",
-          "if-none-match": "W/\"f97cc81a497aaf0328577c5520abbfa2\""
+          "if-none-match": "W/\"c4a521f0543ba760847e4809bbebc945\""
         }
       },
       "response": {
@@ -361,7 +361,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"f97cc81a497aaf0328577c5520abbfa2\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
@@ -446,7 +446,7 @@
           "cross-origin-embedder-policy": "credentialless",
           "cross-origin-opener-policy": "same-origin",
           "cross-origin-resource-policy": "same-origin",
-          "etag": "\"f97cc81a497aaf0328577c5520abbfa2\"",
+          "etag": "\"<asset-etag>\"",
           "origin-agent-cluster": "?1",
           "permissions-policy": "camera=(), microphone=(), geolocation=()",
           "referrer-policy": "strict-origin-when-cross-origin",
