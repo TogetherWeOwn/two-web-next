@@ -146,7 +146,7 @@ test("already-live defaults fail closed on unreadable or malformed current main"
       }),
     );
   }
-  for (const extra of [{ GITHUB_TOKEN: "" }, { GITHUB_REPOSITORY: "../other" }]) {
+  for (const extra of [{ GITHUB_TOKEN: "" }, { GITHUB_REPOSITORY: "o/r/extra" }]) {
     await assert.rejects(
       checkPromotionAncestry(envFor("schedule", LIVE, LIVE, extra), {
         fetchImpl: noFetch().fetchImpl,
