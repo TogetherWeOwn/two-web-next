@@ -11,6 +11,9 @@
   --muted: var(--color-muted);
   --surface: var(--color-surface);
   --line: var(--color-border);
+  --color-brand-ember: #ff9c36;
+  --color-brand-magenta: #ff0e52;
+  --color-brand-violet: #5701ae;
   min-height: 100vh;
   background: var(--color-page);
   color: var(--color-text);

@@ -87,7 +87,7 @@ export const EventRosterSection: FC<{
                 }
               />
               <TableSortHeader
-                label="Answered"
+                label="Answered (UTC)"
                 active={rosterQuery.sort === "answered"}
                 order={rosterQuery.order}
                 url={(order) =>

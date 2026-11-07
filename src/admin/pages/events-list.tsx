@@ -8,9 +8,12 @@ import {
   eventListUrl,
   eventListHasFilters,
   eventListClearUrl,
+  pageTitleDuplicates,
+  sameTitleSuffix,
   type EventListQuery,
   type EventSort,
 } from "../event-list";
+import { sortHeaderAriaLabel } from "../table-list";
 import { RsvpAction, Shell } from "./shell";
 
 const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuery }> = ({
@@ -27,7 +30,7 @@ const EventSortHeader: FC<{ label: string; sort: EventSort; query: EventListQuer
     >
       <a
         href={eventListUrl(query, { sort, order, page: 1 })}
-        aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}
+        aria-label={sortHeaderAriaLabel(label, order)}
       >
         {label}
         {active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
@@ -54,11 +57,19 @@ const EventFillCell: FC<{ row: EventListRow }> = ({ row }) => (
   </td>
 );
 
-export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNext: boolean }> = ({
-  rows,
-  query,
-  hasNext,
-}) => (
+// §4a: the ISO disambiguator matches the Starts (UTC) cell; unrenderable
+// starts take no suffix.
+const eventRowIso = (r: EventListRow): string | null =>
+  Number.isFinite(r.startsAt.getTime()) ? r.startsAt.toISOString() : null;
+
+export const EventsPage: FC<{
+  rows: EventListRow[];
+  query: EventListQuery;
+  hasNext: boolean;
+  // Same-title rows share one page; precomputed once so every action name on
+  // the page uses the same duplicate set. Defaults to the rendered rows.
+  duplicates?: ReadonlySet<string>;
+}> = ({ rows, query, hasNext, duplicates = pageTitleDuplicates(rows) }) => (
   <Shell title="Events">
     <section>
       <h1>Events</h1>
@@ -200,20 +211,38 @@ export const EventsPage: FC<{ rows: EventListRow[]; query: EventListQuery; hasNe
                   <EventFillCell row={r} />
                   <td>
                     {r.status === "draft" ? (
+                      <a
+                        class="link"
+                        href={`/e/${encodeURIComponent(r.eventKey)}?review=1`}
+                        aria-label={`Review ${r.title}${sameTitleSuffix(r.title, eventRowIso(r), duplicates)}`}
+                        data-testid="review-event"
+                      >
+                        Review
+                      </a>
+                    ) : null}
+                    {r.status === "draft" ? (
                       <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
-                        <button type="submit" class="link">
+                        <button
+                          type="submit"
+                          class="link"
+                          aria-label={`Publish ${r.title}${sameTitleSuffix(r.title, eventRowIso(r), duplicates)}`}
+                        >
                           Publish
                         </button>
                       </form>
                     ) : null}
                     {r.status === "draft" || r.status === "published" ? (
                       <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                        <button type="submit" class="link">
+                        <button
+                          type="submit"
+                          class="link"
+                          aria-label={`Cancel ${r.title}${sameTitleSuffix(r.title, eventRowIso(r), duplicates)}`}
+                        >
                           Cancel
                         </button>
                       </form>
                     ) : null}
-                    <RsvpAction row={r} />
+                    <RsvpAction row={r} duplicates={duplicates} />
                   </td>
                 </tr>
               ))

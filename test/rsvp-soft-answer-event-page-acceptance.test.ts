@@ -76,6 +76,7 @@ import { createMemorySessionStore, hashToken, newSessionToken } from "../src/ses
 import { RsvpButton } from "../src/events/rsvp-button";
 import type { PublicEvent, ViewerRsvp } from "../src/events/reads";
 import { resolveKitEventDetail, type KitEventDetailStore } from "../src/events/kit-detail";
+import { withEventDetailHtml } from "../src/events/detail-leaves";
 import type { KitEventDetailModel } from "../src/events/kit-detail";
 import type { KitRequestSession } from "../src/kit-session";
 import { dispatchRsvpSync, withdrawRsvp, writeRsvp } from "../src/events/rsvp";
@@ -147,7 +148,7 @@ const FULL = { capacity: 2, goingCount: 2, goingOccupancy: 2 } as const;
 const PAST_END = new Date("2020-01-10T22:00:00Z");
 
 function kitModel(over: Partial<KitEventDetailModel> = {}): KitEventDetailModel {
-  return {
+  return withEventDetailHtml({
     eventKey: KEY,
     title: "Squad night",
     game: null,
@@ -195,7 +196,7 @@ function kitModel(over: Partial<KitEventDetailModel> = {}): KitEventDetailModel 
     jsonLd: "{}",
     siteJsonLd: "{}",
     ...over,
-  };
+  });
 }
 
 const maybeAnswer: ViewerRsvp = { status: "maybe", syncedToDiscordAt: null };
