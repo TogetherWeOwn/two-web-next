@@ -30,8 +30,8 @@ export function fail(fields: FieldErrors): never {
 }
 
 // Legacy NoControlCharacters: allow tab/LF/CR, genuine emoji ZWJ sequences
-// and orthographic joiners, but refuse other Cc and targeted invisible/bidi
-// format chars.
+// and orthographic joiners, but refuse other Cc and invisible/bidi format
+// chars.
 // Shared with the machine ingress (validateFields) so both writers apply one
 // rule; check the raw submitted text, not its trimmed value (trim removes BOM).
 //
@@ -119,10 +119,27 @@ function isAdmitted(chars: string[], i: number): boolean {
   return j >= 0 && k < chars.length && joinsLeft(chars[j]!) && joinsRight(chars[k]!);
 }
 
+// Default_Ignorable_Code_Point (UCD 17.0.0 DerivedCoreProperties) minus the
+// joiners and variation selectors handled below, plus the interlinear
+// annotation controls: bidi controls and marks (LRM, RLM, ALM), ZWSP, BOM,
+// soft hyphen, CGJ, word joiner and invisible operators, Hangul fillers,
+// Khmer inherent vowels, Mongolian vowel separator and tag characters. A tag
+// is admitted only inside an emoji subdivision flag (U+1F3F4, 2-6 tag
+// letters or digits, CANCEL TAG); TAG_FLAG removes those before the test.
+const INVISIBLE =
+  /[\u00AD\u034F\u061C\u115F\u1160\u17B4\u17B5\u180E\u200B\u200E\u200F\u202A-\u202E\u2060-\u206F\u3164\uFEFF\uFFA0\uFFF0-\uFFFB\u{1BCA0}-\u{1BCA3}\u{1D173}-\u{1D17A}\u{E0000}-\u{E00FF}\u{E01F0}-\u{E0FFF}]/u;
+const TAG_FLAG = /\u{1F3F4}[\u{E0030}-\u{E0039}\u{E0061}-\u{E007A}]{2,6}\u{E007F}/gu;
+// A variation selector (standardized, ideographic or Mongolian FVS) must
+// follow a base character: a leading or stacked run is invisible and can
+// carry hidden data.
+const STACKED_SELECTOR =
+  /(?:^|[\uFE00-\uFE0F\u180B-\u180D\u180F\u{E0100}-\u{E01EF}])[\uFE00-\uFE0F\u180B-\u180D\u180F\u{E0100}-\u{E01EF}]/u;
+
 export function containsControlCharacters(value: string): boolean {
   const stripped = value.replace(/[\t\n\r]/g, "");
   if (/\p{Cc}/u.test(stripped)) return true;
-  if (/[\u{202A}-\u{202E}\u{2066}-\u{2069}\u{200B}\u{FEFF}]/u.test(value)) return true;
+  if (INVISIBLE.test(value.replace(TAG_FLAG, ""))) return true;
+  if (STACKED_SELECTOR.test(value)) return true;
   if (!/[\u200C\u200D]/u.test(value)) return false;
 
   // Record only the ZWJ offsets admitted by complete emoji matches, without

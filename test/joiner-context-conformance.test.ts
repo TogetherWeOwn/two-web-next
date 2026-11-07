@@ -34,12 +34,19 @@ const entries = readFileSync(
 
 // These are independently forbidden by the Cc/bidi/invisible policy, even
 // when the UCD calls them transparent. Exempting a joiner must not erase them.
+// Transparent variation selectors stay admitted: each follows a base here.
+const FORBIDDEN_TRANSPARENT = new Set([0xad, 0x34f, 0x61c, 0x17b4, 0x17b5, 0x180e, 0x200b]);
 function forbiddenElsewhere(cp: number): boolean {
   return (
+    FORBIDDEN_TRANSPARENT.has(cp) ||
+    (cp >= 0x200e && cp <= 0x200f) ||
     (cp >= 0x202a && cp <= 0x202e) ||
-    (cp >= 0x2066 && cp <= 0x2069) ||
-    cp === 0x200b ||
-    cp === 0xfeff
+    (cp >= 0x2060 && cp <= 0x206f) ||
+    cp === 0xfeff ||
+    (cp >= 0xfff9 && cp <= 0xfffb) ||
+    (cp >= 0x1bca0 && cp <= 0x1bca3) ||
+    (cp >= 0x1d173 && cp <= 0x1d17a) ||
+    (cp >= 0xe0000 && cp <= 0xe0fff && !(cp >= 0xe0100 && cp <= 0xe01ef))
   );
 }
 
