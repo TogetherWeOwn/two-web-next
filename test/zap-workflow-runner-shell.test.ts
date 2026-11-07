@@ -117,7 +117,21 @@ function workflowGateUnderRunner(first: unknown, second: unknown) {
     const retryInput = existsSync(join(dir, "retry-input"))
       ? readFileSync(join(dir, "retry-input"), "utf8")
       : "";
-    return { status: result.status, scans, retryInput, output: result.stdout + result.stderr };
+    const summary = existsSync(join(dir, "summary.md"))
+      ? readFileSync(join(dir, "summary.md"), "utf8")
+      : "";
+    const verdicts = result.stdout
+      .split("\n")
+      .filter((line) => line.startsWith("{"))
+      .map((line) => JSON.parse(line));
+    return {
+      status: result.status,
+      scans,
+      retryInput,
+      summary,
+      verdicts,
+      output: result.stdout + result.stderr,
+    };
   });
 }
 
@@ -164,10 +178,35 @@ describe("ZAP workflow consumer under runner errexit", () => {
     expect(result.scans).toBe(1);
   });
 
+  it("logs and summarizes both public-safe verdicts when the rescan fails", () => {
+    const secret = "4111111111111111 at https://scan.example.invalid/private?card=1";
+    const result = workflowGateUnderRunner(
+      report([pii({ name: secret })]),
+      report([high({ name: secret })]),
+    );
+    expect(result.status, result.output).toBe(1);
+    expect(result.output).toContain("First scan verdict:");
+    expect(result.output).toContain("Re-scan verdict:");
+    expect(result.verdicts.map((v) => [v.error_code, v.alerts.map((a) => a.plugin_id)])).toEqual([
+      ["pii_high", ["10062"]],
+      ["high_alert", ["40012"]],
+    ]);
+    expect(result.summary.match(/^## ZAP baseline/gm)).toHaveLength(2);
+    expect(result.summary).toContain("Re-scan after a lone PII Disclosure (10062) High");
+    expect(result.summary).toContain("| High | 40012 | Cross Site Scripting | 1 |");
+    // Report text (instance evidence, URLs, matched values) never reaches the log or summary.
+    expect(result.output).not.toContain("4111111111111111");
+    expect(result.summary).not.toContain("4111111111111111");
+    expect(result.output + result.summary).not.toContain("example.invalid/private");
+  });
+
   it("forged non-PII High fails closed without a rescan under runner errexit", () => {
     const forged = "untrusted\n| High | 10062 | PII Disclosure | 1 |\n::notice::PASS";
     const result = workflowGateUnderRunner(report([high({ name: forged })]), report([]));
     expect(result.status, result.output).toBe(1);
     expect(result.scans).toBe(0);
+    expect(result.verdicts.map((v) => v.error_code)).toEqual(["high_alert"]);
+    expect(result.output).not.toContain("untrusted");
+    expect(result.output).not.toContain("::notice::");
   });
 });
