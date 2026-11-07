@@ -31,6 +31,7 @@ import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { JOIN_INTRO } from "../src/pages";
+import { isEventProjection, projectEventRow } from "./helpers/pg-proxy-event-projection";
 
 const APP_URL = "https://next.example.test";
 const SECRET = "test-session-secret-at-least-32-bytes-long";
@@ -108,6 +109,13 @@ function harness(rows: EventRow[]) {
       }
       if (/"ends_at" </.test(sql)) out = out.filter((r) => r.endsAt < new Date());
       else if (/"ends_at" >=/.test(sql)) out = out.filter((r) => r.endsAt >= new Date());
+      // The sitemap read selects a byte-admitted projection, mapped by position.
+      if (isEventProjection(sql))
+        return {
+          rows: out.map((row) =>
+            projectEventRow(sql, params, row, (v) => (v instanceof Date ? v.toISOString() : v)),
+          ),
+        };
       return { rows: out.map(encode) };
     }
     throw new Error(`Unexpected sitemap-meta fixture query: ${sql}`);
@@ -273,7 +281,7 @@ describe("share meta home + join (ShareMetaTagsTest.php:28,39,61)", () => {
   it("tags the homepage for sharing", async () => {
     const html = await (await harness([]).request("/")).text();
     tags(html, `${APP_URL}/`, HOME_TITLE, HOME_DESCRIPTION);
-    expect(html).toContain(`property="og:image" content="${APP_URL}/icons/icon-512.png"`);
+    expect(html).toContain(`property="og:image" content="${APP_URL}/og-1200x630.png"`);
     expect(html).toContain('property="og:image:alt" content="Together We Own community logo"');
   });
 

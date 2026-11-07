@@ -80,6 +80,8 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
       const draft = await insert("draft");
       const published = (await transitionEvent(fixture.db, actor, KEY, "published")).row;
       expect(published.icsSequence).toBeGreaterThan(draft.icsSequence);
+      expect(published.updatedAt).toEqual(new Date(NOW.getTime() + 1));
+      let updatedAt = published.updatedAt;
       let response = await request(path);
       expect(response.status).toBe(200);
       let body = await response.text();
@@ -87,6 +89,8 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
       let etag = response.headers.get("etag")!;
       for (const title of ["First rapid edit", "Second rapid edit"]) {
         const saved = (await updateEvent(fixture.db, actor, KEY, { ...input, title })).row;
+        expect(saved.updatedAt).toEqual(new Date(updatedAt.getTime() + 1));
+        updatedAt = saved.updatedAt;
         response = await request(path, { headers: { "if-none-match": etag } });
         expect(response.status).toBe(200);
         const next = await response.text();
@@ -110,7 +114,7 @@ describe.skipIf(!process.env.DATABASE_URL)("database-owned ICS revisions", () =>
       expect(sequence(latest)).toBe(cancelled.icsSequence - ICS_SEQUENCE_BASE);
       expect(property(latest, "STATUS")).toBe("CANCELLED");
       expect(property(latest, "UID")).toBe(uid);
-      expect(cancelled.updatedAt).toEqual(NOW);
+      expect(cancelled.updatedAt).toEqual(new Date(updatedAt.getTime() + 1));
       expect(response.headers.get("etag")).not.toBe(etag);
       const currentEtag = response.headers.get("etag")!;
       vi.setSystemTime(new Date(NOW.getTime() + 300_000));

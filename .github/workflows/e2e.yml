@@ -28,6 +28,15 @@ on:
   schedule:
     - cron: "29 2 * * *"
   workflow_dispatch:
+    inputs:
+      waitlist_capture_base:
+        description: "Optional 40-character base SHA for waitlist before evidence"
+        required: false
+        type: string
+      featured_capture_base:
+        description: "Optional 40-character base SHA for featured before/after evidence"
+        required: false
+        type: string
 
 permissions:
   contents: read
@@ -197,12 +206,69 @@ jobs:
             playwright-chromium-${{ runner.os }}-
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
+      - name: Featured homepage before/after evidence
+        if: github.event_name == 'workflow_dispatch' && inputs.featured_capture_base != ''
+        env:
+          CAPTURE_BASE: ${{ inputs.featured_capture_base }}
+          FEATURED_CAPTURE_DIR: ${{ runner.temp }}/featured-home-evidence
+        run: |
+          set -euo pipefail
+          [[ "$CAPTURE_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git fetch --no-tags --depth=1 origin "$CAPTURE_BASE"
+          # Only the two changed runtime modules differ; the capture harness stays at head.
+          trap 'git restore --source=HEAD -- src/featured.ts src/home-cache.ts' EXIT
+          for phase in before after; do
+            if [ "$phase" = before ]; then
+              for file in src/featured.ts src/home-cache.ts; do
+                git show "$CAPTURE_BASE:$file" > "$file"
+              done
+            else
+              git restore --source=HEAD -- src/featured.ts src/home-cache.ts
+            fi
+            mkdir -p "$FEATURED_CAPTURE_DIR/$phase"
+            sha256sum src/featured.ts src/home-cache.ts > "$FEATURED_CAPTURE_DIR/$phase/runtime-sha256.txt"
+            for state in populated empty oversized expired saturated read-failure; do
+              FEATURED_CAPTURE_PHASE="$phase" FEATURED_CAPTURE_STATE="$state" \
+                npx playwright test --config playwright.featured-capture.config.ts
+
+            done
+          done
+      - name: Upload featured homepage evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.featured_capture_base != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: featured-home-evidence-${{ github.sha }}
+          path: ${{ runner.temp }}/featured-home-evidence/
+          if-no-files-found: error
+          retention-days: 7
       # Kit visuals run against the freshly seeded state before browser
       # journeys create disposable events and RSVPs (docs/kit-parity-gates.md).
       - name: Install Kit workspace dependencies
         run: npm ci --prefix web --include=dev --no-audit --no-fund
       - name: Build Kit worker
         run: npm run build --prefix web
+      - name: Waitlist roster before evidence
+        if: github.event_name == 'workflow_dispatch' && inputs.waitlist_capture_base != ''
+        env:
+          CAPTURE_BASE: ${{ inputs.waitlist_capture_base }}
+          WAITLIST_CAPTURE_BEFORE: "true"
+          WAITLIST_CAPTURE_OUTPUT: ${{ runner.temp }}/waitlist-before
+        run: |
+          set -euo pipefail
+          [[ "$CAPTURE_BASE" =~ ^[0-9a-f]{40}$ ]] || exit 1
+          git fetch --no-tags --depth=1 origin "$CAPTURE_BASE"
+          files=(src/admin/kit-event-edit.ts src/admin/pages/event-form-roster.tsx 'web/src/routes/admin/events/[key]/+page.svelte')
+          trap 'git restore --source=HEAD -- "${files[@]}"' EXIT
+          for file in "${files[@]}"; do git show "$CAPTURE_BASE:$file" > "$file"; done
+          npx playwright test --config playwright.waitlist-capture.config.ts
+      - name: Upload waitlist before evidence
+        if: always() && github.event_name == 'workflow_dispatch' && inputs.waitlist_capture_base != ''
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: waitlist-roster-before-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/waitlist-before/**/waitlist-*.png
+          if-no-files-found: error
+          retention-days: 7
       - name: Kit visual regression
         run: npx playwright test --config playwright.kit-visual.config.ts
       # Hono visual regression also runs before the mutating journeys.
@@ -289,6 +355,32 @@ jobs:
             echo "$new"
             exit 1
           fi
+      - name: Saved review screenshots
+        if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'test/rsvp-pending-control-')) }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: saved-review-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            test-results/**/attachments/hono-review-*.png
+            test-results-kit-parity/**/attachments/kit-review-*.png
+          if-no-files-found: error
+          retention-days: 7
+      - name: Waitlist roster screenshot evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: waitlist-roster-evidence-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results/**/waitlist-*.png
+          if-no-files-found: ignore
+          retention-days: 7
+      - name: Brand header captures
+        if: ${{ always() && !cancelled() }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: brand-header-captures-${{ github.run_id }}-${{ github.run_attempt }}
+          path: test-results-kit-parity/**/brand-*.png
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Failure traces and report
         if: ${{ failure() && !(github.event_name == 'workflow_dispatch' && startsWith(github.ref_name, 'test/rsvp-pending-control-')) }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

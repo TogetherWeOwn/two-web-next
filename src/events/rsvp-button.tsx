@@ -21,6 +21,7 @@ import {
   rsvpClosedCopy,
   rsvpFullCapCopy,
   waitlistPositionCopy,
+  type RsvpClosedReason,
 } from "../islands/contracts";
 import type { PublicEvent, ViewerRsvp } from "./reads";
 import { rsvpActionHref } from "./attendee-paths";
@@ -53,6 +54,29 @@ export const RsvpButton: FC<{
         : e.status !== "published" || e.endsAt <= now
           ? "past"
           : null;
+  return (
+    <RsvpControl
+      e={e}
+      closed={closed}
+      member={member}
+      answer={answer}
+      returnTo={returnTo}
+      waitlistPosition={waitlistPosition}
+      attendeePage={attendeePage}
+    />
+  );
+};
+
+/** Escaped presentation of the server's one-clock verdict, shared with Kit. */
+export const RsvpControl: FC<{
+  e: Pick<PublicEvent, "eventKey" | "goingOccupancy" | "capacity" | "rsvpOpen">;
+  closed: RsvpClosedReason | null;
+  member: boolean;
+  answer: ViewerRsvp | null;
+  returnTo: string;
+  waitlistPosition?: number | null;
+  attendeePage?: number;
+}> = ({ e, closed, member, answer, returnTo, waitlistPosition = null, attendeePage = 1 }) => {
   // Seat-accurate verdict: occupancy counts every going row like the write
   // path, so the CTA never offers a seat a nameless row already holds. The
   // visible "N going" label stays on the attributable `goingCount`.

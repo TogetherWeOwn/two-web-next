@@ -136,7 +136,7 @@ describe("share meta (TOG-5624)", () => {
       "Together We Own — the lobby is open",
       "We spent most of our life private. Now you can just turn up.",
     );
-    expect(html).toContain(`property="og:image" content="${APP_URL}/icons/icon-512.png"`);
+    expect(html).toContain(`property="og:image" content="${APP_URL}/og-1200x630.png"`);
     expect(html).toContain('property="og:image:alt" content="Together We Own community logo"');
   });
 

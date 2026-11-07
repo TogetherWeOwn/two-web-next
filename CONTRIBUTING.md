@@ -64,16 +64,84 @@ The repository rulesets enforce the following on `main`:
 
 - `pr-conventions`: `pr-lint` must pass.
 
-**Who merges.** The final-stage reviewer squash-merges the pinned, settled head before approving
-the final native review stage; the author merges only when there is no review
-stage. Every required check must be green and every finding fixed or answered
-with evidence. A merge to `main` reaches production (ci, then deploy, then
-e2e-staging, then deploy-production), including a docs-only merge, so it needs
-the Release Manager's exact-head authorization through `request_confirmation`
-on a child card assigned and addressed to the Release Manager. Any new head
-invalidates that authorization. Every other production deploy, including manual
-dispatch or promotion, keeps the same production approval gate. Actions evidence
-changes where verification runs, not who may authorize or merge a release.
+**Who merges.** When native review stages apply, the final-stage reviewer
+squash-merges the exact reviewed head before closing the task; without a review
+stage, the author merges. Every required check must be green on that head and
+every review finding must be fixed or answered with evidence. Pin the merge to
+that SHA; do not approve a final stage and leave an open PR for the author.
+
+A merge to `main` reaches production through CI, staging deploy, e2e-staging and
+automatic production promotion, so it needs a fresh Release Manager
+`request_confirmation` for that PR's exact head on a child confirmation card
+assigned and addressed to the Release Manager. Every other production deploy,
+including manual dispatch or promotion, also needs Release Manager confirmation.
+Any push changes the head and requires a new exact-head confirmation. Record the
+confirmation and pinned squash SHA in the release log.
+
+### Merge and production staging evidence
+
+For `TogetherWeOwn/two-web-next` and `TogetherWeOwn/two-bot-next`, staging is
+satisfied by the automatic **post-merge, pre-production** staging/e2e/soak gate.
+A staging run for an unmerged PR head is not required before merge: staging
+accepts only `main`-ancestor SHAs. This applies regardless of the diff's file
+types; artifact equality is not a prerequisite for removing that pre-merge
+requirement. Do not demand paired artifact hashes or a comparison to current
+`main` as a substitute merge prerequisite.
+
+Before merge, require:
+
+1. **Exact-head checks and review.** All required checks listed above (`ci-ok`,
+   `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review`) pass on the
+   exact PR head. Every finding is fixed or answered with evidence, and applicable
+   security reviews, rulesets and native review stages are complete.
+   Record exact-head GitHub Actions run/job links and conclusions; local output
+   does not replace required Actions evidence.
+2. **Fresh production confirmation.** Obtain a new per-PR exact-head Release
+   Manager `request_confirmation` on a child card assigned and addressed to the
+   Release Manager. Include the migration ledger evidence or "no migration",
+   known-good rollback target, and the automatic post-merge staging path. The
+   staging item is met by that path, not by a claimed pass for the unmerged head.
+   Any push requires a new exact-head confirmation.
+3. **Pinned handoff and retained safeguards.** The final-stage reviewer, or the
+   author when no native review stage applies, squash-merges only the reviewed
+   and confirmed head, with the merge pinned to that SHA. Record the
+   confirmation and squash SHA in the release log. Incident, freeze and hold
+   safeguards, identity/capability holds and rollback requirements still apply.
+   An otherwise mergeable PR need not be restacked solely because `main` moved.
+
+After merge, the resulting **exact `main` SHA** must pass the existing full CI,
+staging deploy, staging e2e and soak gates before automatic production
+promotion. Here the path is [deploy.yml](.github/workflows/deploy.yml),
+[e2e-staging.yml](.github/workflows/e2e-staging.yml), then the promotion guard in
+[deploy-production.yml](.github/workflows/deploy-production.yml). Record the
+candidate SHA and matching Actions run/job links as that evidence becomes
+available; a PR-head pass or a different `main` SHA does not qualify the
+production candidate. See the [deployment runbook](docs/runbook.md#deploy-and-record-the-rollback-pointer)
+for the existing staging, promotion, migration and rollback checks. Missing or
+failing post-merge qualification holds production promotion, not a request to
+stage the unmerged PR first.
+
+The automatic path is not a promise that every merged SHA becomes eligible.
+Currently `e2e-staging.yml` scope-skips `staging-journeys` and `staging-passive`
+for docs/test-only deploys. Those skips are not passing qualification evidence;
+`ci/resolve-promotion-sha.mjs` requires successful journeys and executed quality
+checks in a post-deploy `workflow_run`, plus soak, for automatic selection.
+If releasing a scope-skipped candidate, run `e2e-staging` by manual dispatch
+from the matching deployed `main` revision after merge to obtain the missing
+journey/passive evidence. The automatic resolver does not select manual-dispatch
+runs, so this does not itself make that SHA auto-promotable. Any explicit
+production dispatch requires its own exact-SHA Release Manager confirmation
+and all existing promotion, migration and rollback guards. If matching evidence
+cannot be obtained, hold that candidate's promotion; do not stage an unmerged
+head, infer a pass from a skip, or change a workflow in this documentation PR.
+
+This changes when staging evidence is required, not the pipeline or other
+merge/release gates. No red deterministic gate is waived, no pipeline skip/no-op
+is authorized, and every other production deploy still requires Release Manager
+confirmation. Previously rejected requests remain historical rejections, not
+retroactive approvals: resubmit each candidate for fresh exact-head confirmation.
+This documentation grants no merge or production permission, including for a PR
+documenting it.
 
 ### Pull-request size labels (advisory)
 

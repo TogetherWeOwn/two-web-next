@@ -25,6 +25,16 @@ function assertShell(html: string) {
   expect(html).toMatch(
     /<body(?: class="base-theme (?:homepage|content|join|profile|schedule|event)-theme")?>\s*<a class="skip-link" href="#main">Skip to content<\/a>/,
   );
+  // Head icons: the SVG favicon leads, the PNG fallbacks stay declared.
+  const svgIcon = html.indexOf('<link rel="icon" href="/favicon.svg" type="image/svg+xml"');
+  const pngIcon = html.indexOf(
+    '<link rel="icon" href="/icons/icon-192.png" type="image/png" sizes="192x192"',
+  );
+  expect(svgIcon).toBeGreaterThan(-1);
+  expect(pngIcon).toBeGreaterThan(svgIcon);
+  expect(html).toContain(
+    '<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" sizes="180x180"',
+  );
   for (const nav of html.match(/<nav\b[^>]*>/g) ?? []) expect(nav).toMatch(/aria-label="[^"]+"/);
   if (html.includes("base-theme content-theme")) {
     // Content leaves inline the stylesheets instead of linking them; the

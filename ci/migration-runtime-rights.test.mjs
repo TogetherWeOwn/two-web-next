@@ -726,6 +726,36 @@ test("allows no runtime or PUBLIC rights on the migration ledger objects", () =>
       privilege_type: "SELECT",
       is_grantable: false,
     },
+    // The catalog query flags effective runtime access (inherited, assumable,
+    // or runtime-administered membership); the validator refuses the flag.
+    {
+      object_name: "__drizzle_migrations",
+      grantee: "ledger_group",
+      privilege_type: "OWNER",
+      is_grantable: true,
+      runtime_access: true,
+    },
+    // The drizzle schema itself: ownership or CREATE lets the holder drop
+    // and recreate the ledger.
+    {
+      object_name: "schema drizzle",
+      grantee: "two_web_app",
+      privilege_type: "CREATE",
+      is_grantable: false,
+    },
+    {
+      object_name: "schema drizzle",
+      grantee: "PUBLIC",
+      privilege_type: "USAGE",
+      is_grantable: false,
+    },
+    {
+      object_name: "schema drizzle",
+      grantee: "schema_owner_group",
+      privilege_type: "OWNER",
+      is_grantable: true,
+      runtime_access: true,
+    },
   ]) {
     assert.match(
       validateLedgerAclRows([row]).join("\n"),

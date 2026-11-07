@@ -9,9 +9,10 @@
 //   enforce (exit 2). Supported metadata ($comment, startup) stays valid.
 //   Unknown measurement sections never silently drop work. Invalid plans fail
 //   before artifact measurement and never emit an overall fits message.
-// - Preserve numeric ceilings, per-file gzip/count rules, sourcemap exclusion,
+// - Preserve hard numeric ceilings, per-file gzip/count rules, sourcemap exclusion,
 //   startup contract, missing/empty/incomplete-enumeration controls, and actual
-//   breach results. Exits: 0 fit, 1 measured breach, 2 invalid plan or missing
+//   breach results. Only server gzip is advisory: warn with measured fields and
+//   bounded warnings. Exits: 0 fit or advisory, 1 hard breach, 2 invalid plan or missing
 //   evidence. Missing canonical Worker file is missing evidence (2), not breach.
 // - Versioned `--format json` (two tokens) with stable group/check IDs, measured
 //   counts/bytes when measured, fixed error.code, and concrete next_action.
@@ -135,7 +136,7 @@ function assertJsonReport({ parsed, stdout, stderr, status, check, groupIds, che
   const seenChecks = [];
   for (const group of parsed.groups) {
     assert.ok(
-      ["pass", "fail", "cannot-enforce"].includes(group.status),
+      ["pass", "warn", "fail", "cannot-enforce"].includes(group.status),
       `${label}: group ${group.id} needs a stable status`,
     );
     assert.ok(
@@ -145,10 +146,10 @@ function assertJsonReport({ parsed, stdout, stderr, status, check, groupIds, che
     for (const c of group.checks) {
       seenChecks.push(c.id);
       assert.ok(
-        ["pass", "fail", "cannot-enforce"].includes(c.status),
+        ["pass", "warn", "fail", "cannot-enforce"].includes(c.status),
         `${label}: check ${c.id} needs a stable status`,
       );
-      if (c.status === "pass" || c.status === "fail") {
+      if (c.status === "pass" || c.status === "warn" || c.status === "fail") {
         assert.equal(
           typeof c.rawBytes,
           "number",
@@ -554,6 +555,92 @@ test("RED kit: --format json emits versioned report with stable IDs (exit 0)", (
     label: "kit json fit",
   });
 });
+
+test("kit JSON contract: gzip-only warning retains measured fields and exits 0", (t) => {
+  const fx = makeKitFixture({
+    budgetMutate: (b) => {
+      b.server.js.maxGzipBytes -= 1;
+    },
+  });
+  t.after(() => cleanup(fx.root));
+  const result = runCli(kitScript, ["--root", fx.root, "--format", "json"]);
+  assert.equal(result.status, 0, result.stderr);
+  const parsed = parseCliJson(result, "kit json warning");
+  const contract = {
+    parsed,
+    stdout: result.stdout,
+    stderr: result.stderr,
+    status: 0,
+    check: "kit-perf",
+    groupIds: KIT_GROUP_IDS,
+    checkIds: KIT_CHECK_IDS,
+    label: "kit json warning",
+  };
+  assertJsonReport(contract);
+  const server = checkById(parsed, "kit.server.js", "kit json warning");
+  assert.equal(server.status, "warn");
+  assert.equal(parsed.groups.find((g) => g.id === "kit.server.js").status, "warn");
+  assert.equal(server.rawBytes, SERVER_BODY.length);
+  assert.equal(server.gzipBytes, gzipSync(SERVER_BODY).length);
+  assert.equal(server.files, 1);
+  assert.ok(
+    parsed.groups.filter((g) => g.id !== "kit.server.js").every((g) => g.status === "pass"),
+  );
+  assert.equal(parsed.warnings.length, 1);
+  assert.match(parsed.warnings[0], /warning: server js.*gzip.*advisory/i);
+  assert.ok(parsed.warnings[0].length <= 500);
+  assert.match(result.stderr, /warning: server js/i);
+  for (const field of ["rawBytes", "gzipBytes"]) {
+    const incomplete = structuredClone(parsed);
+    delete checkById(incomplete, "kit.server.js", "incomplete warning")[field];
+    assert.throws(
+      () => assertJsonReport({ ...contract, parsed: incomplete }),
+      new RegExp(`measured check kit\\.server\\.js must carry ${field}`),
+    );
+  }
+});
+
+for (const dimension of ["raw", "files", "client gzip", "entry gzip"]) {
+  test(`kit JSON contract: server gzip warning cannot mask ${dimension} failure`, (t) => {
+    const fx = makeKitFixture({
+      server: [
+        { name: "chunks/server.js", body: SERVER_BODY },
+        { name: "chunks/second.js", body: SMALL_BODY },
+      ],
+      budgetMutate: (b) => {
+        b.server.js.maxGzipBytes -= 1;
+        if (dimension === "raw") b.server.js.maxRawBytes -= 1;
+        if (dimension === "files") b.server.js.maxFiles -= 1;
+        if (dimension === "client gzip") b.client.js.maxGzipBytes -= 1;
+        if (dimension === "entry gzip") b.worker["_worker.js"].maxGzipBytes -= 1;
+      },
+    });
+    t.after(() => cleanup(fx.root));
+    const result = runCli(kitScript, ["--root", fx.root, "--format", "json"]);
+    assert.equal(result.status, 1, result.stderr);
+    const parsed = parseCliJson(result, `kit json warning + ${dimension}`);
+    assertJsonReport({
+      parsed,
+      stdout: result.stdout,
+      stderr: result.stderr,
+      status: 1,
+      check: "kit-perf",
+      groupIds: KIT_GROUP_IDS,
+      checkIds: KIT_CHECK_IDS,
+      label: `kit json warning + ${dimension}`,
+    });
+    const failingId =
+      dimension === "client gzip"
+        ? "kit.client.js"
+        : dimension === "entry gzip"
+          ? "kit.worker._worker.js"
+          : "kit.server.js";
+    assert.equal(checkById(parsed, failingId, dimension).status, "fail");
+    assert.equal(parsed.warnings.length, 1);
+    assert.match(parsed.warnings[0], /warning: server js.*advisory/i);
+    assert.ok(parsed.warnings[0].length <= 500);
+  });
+}
 
 test("RED kit: --format json on invalid plan carries INVALID_PLAN + next_action (2)", (t) => {
   const fx = makeKitFixture({

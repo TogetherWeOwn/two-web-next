@@ -41,7 +41,13 @@ PRs, logs or command arguments.
   backstop (keeping manual dispatch), gated by
   `PRODUCTION_DEPLOY_ENABLED`, the live `production` Environment's protection,
   exact-SHA CI and the Hyperdrive sentinel check, with a 30-minute staging
-  soak, already-live skip, pending-migration stop and `PRODUCTION_HOLD_UNTIL`. By default, protection requires
+  soak, already-live skip, pending-migration stop and `PRODUCTION_HOLD_UNTIL`.
+  Default selection (including an empty-SHA dispatch) also requires a known live
+  commit and verified forward ancestry before candidate checkout; behind,
+  divergent or unproven ancestry is refused. An explicit matching dispatch SHA
+  retains the separately authorized recovery route and all its other gates
+  ([ancestry contract](./runbook.md#default-promotion-ancestry-admission)).
+  By default, protection requires
   reviewers with self-review prevented; with `PRODUCTION_AUTO_APPROVE=true`, the
   gate instead requires a main-only deployment policy and successful staging
   deploy and `e2e-staging` runs on the same SHA, with an executed, passing
@@ -101,6 +107,7 @@ an actual code fallback or a checked-in Wrangler value, not a recommended value.
 | `FREEZE_BANNER_DATES` | Optional public var | dev/staging/prod | Unset; no banner | Human freeze window carried verbatim into the cutover freeze banner (e.g. `12–14 Oct UTC`). HTML-escaped before render; blank means no banner even when the flag is on. |
 | `KIT_PARITY_FIXTURE_EVENT_DETAIL` | Optional flag var (runtime-only, never Worker config) | local Kit parity fixture only; leave unset in dev/staging/prod | Unset; the shipped manifest keeps the live event detail (GET /e/:key) on Hono | Only exact `true` on a generated worker whose `APP_URL` is an http loopback enables the detail in the fixture manifest (`fixtureManifestFor`); any other value or a non-loopback/deployed `APP_URL` leaves the shipped manifest untouched. Enabling the shipped entry is the separate RSVP-companion rollout. |
 | `KIT_PARITY_FIXTURE_MEMBER_BOARD` | Optional flag var (runtime-only, never Worker config) | local Kit parity fixture only; leave unset in dev/staging/prod | Unset; the shipped manifest owns the member board on Kit (the fixture flag is redundant for this entry) | Only exact `true` on a generated worker whose `APP_URL` is an http loopback enables the board in the fixture manifest (`fixtureManifestFor`); any other value or a non-loopback/deployed `APP_URL` leaves the shipped manifest untouched. Returning the shipped entry to `enabled: false` restores Hono ownership as the rollback. |
+| `SSR_CAPTURE_FIXTURE` | Optional flag var (runtime-only, never Worker config) | generated local capture build only; leave unset in dev/staging/prod | Off | Only exact `true`, a local-only compile-time build gate, a canonical HTTP loopback `APP_URL`, and a matching request URL origin enable the fixed display snapshot. Deployed builds cannot activate it through bindings or request input. Unsupported capture rows fail qualification; auth, expiry, writes, jobs, database time and cache TTLs stay real. See [SSR capture clock](ssr-capture-clock.md). |
 | `WEBMCP_PILOT_ENABLED` | Optional flag var | dev/staging: opt-in; prod: keep disabled pending separate authorization | Off | Only exact `true` or `1` injects the model-context island on the four pilot pages (`/`, `/events`, `/e/:key`, `/join`); unset or anything else leaves pages byte-identical. Reads no session, cookie or database, so it adds no session-dependent markup of its own: every viewer gets the same island. |
 | `E2E_PUBLIC_READ_BUDGET` | Optional positive-integer var (CI loopback workers only) | `e2e/wrangler.jsonc` and the generated Kit fixture (`ci/kit-worker-dev.mjs`) only; leave unset in dev/staging/prod | `60` | Absent/invalid/nonpositive values keep the production 60; both loopback workers set `600` so the sequential suites stop tripping the shared off-edge `anon` bucket. No deployed config sets this var. |
 | `AGENT_DB` | Optional connection-string binding | dev: test injection; staging/prod: leave unbound so ingress shares the public events database | Unbound in Wrangler; falls back to the shared web database (`DATABASE_URL`, then `DB`) | When bound it overrides the shared database for ingress only (grants/audits/replays and events must then live there). Unbound with no shared database returns 503 `ingress_unavailable`; DB execution failures return 500 and never fail over. |

@@ -156,6 +156,12 @@ function stubProductionApi(evidence, seen = {}) {
       seen.environment = (seen.environment ?? 0) + 1;
       return { ok: true, json: async () => protectedEnvironment };
     }
+    if (/\/commits\/[0-9a-f]{40}$/.test(parsed.pathname)) {
+      return {
+        ok: true,
+        json: async () => ({ commit: { committer: { date: "2025-12-01T00:00:00Z" } } }),
+      };
+    }
     if (parsed.pathname.endsWith("/workflows/e2e-staging.yml/runs")) {
       // Reviewer mode ages a staging pass when one names the SHA; this stub
       // models a reviewer-approved promotion with no staging evidence yet.
@@ -1197,6 +1203,7 @@ function stagingRun(file, id, overrides = {}) {
     head_repository: { full_name: "fixture/repo" },
     status: "completed",
     conclusion: "success",
+    run_attempt: 1,
     // Long past the 30-minute soak floor unless a test overrides it.
     updated_at: "2026-01-01T00:00:00Z",
     ...overrides,
@@ -1228,13 +1235,20 @@ function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
       seen.environment = (seen.environment ?? 0) + 1;
       return { ok: true, json: async () => environment };
     }
+    if (/\/commits\/[0-9a-f]{40}$/.test(parsed.pathname)) {
+      return {
+        ok: true,
+        json: async () => ({ commit: { committer: { date: "2025-12-01T00:00:00Z" } } }),
+      };
+    }
     for (const file of ["deploy.yml", "e2e-staging.yml"]) {
       if (parsed.pathname.endsWith(`/workflows/${file}/runs`)) {
         seen[file] = (seen[file] ?? 0) + 1;
         // head_sha is main's tip for workflow_run runs: never filter on it.
         assert.equal(parsed.searchParams.get("head_sha"), null);
         assert.equal(parsed.searchParams.get("branch"), "main");
-        const runs = parsed.searchParams.get("page") === "1" ? staging[file] : [];
+        const page = Number(parsed.searchParams.get("page"));
+        const runs = (staging[file] ?? []).slice((page - 1) * 100, page * 100);
         return { ok: true, json: async () => ({ total_count: runs.length, workflow_runs: runs }) };
       }
     }
@@ -1346,6 +1360,36 @@ for (const [name, pattern, mutate] of [
       (s.jobs = withQuality(
         qualityJob({ steps: qualitySteps({ [stagingQualitySteps[1]]: "failure" }) }),
       )),
+  ],
+  [
+    "an e2e-staging pass on a re-run attempt (red then re-run until green)",
+    /e2e-staging\.yml run 200 on [0-9a-f]{40} failed or was re-run \(attempt 2\)/,
+    (s) => (s["e2e-staging.yml"][0].run_attempt = 2),
+  ],
+  [
+    "an e2e-staging pass with no attempt number",
+    /e2e-staging\.yml run 200 on [0-9a-f]{40} failed or was re-run \(attempt unknown\)/,
+    (s) => delete s["e2e-staging.yml"][0].run_attempt,
+  ],
+  [
+    "a newer first-attempt pass over an older failed run of the same SHA",
+    /e2e-staging\.yml run 200 on [0-9a-f]{40} failed or was re-run/,
+    (s) => {
+      s["e2e-staging.yml"][0].conclusion = "failure";
+      s["e2e-staging.yml"].push(stagingRun("e2e-staging.yml", 201));
+      s.jobs = { 201: e2eJobs() };
+    },
+  ],
+  [
+    "an older failed run of the SHA more than 300 runs back",
+    /e2e-staging\.yml run 1 on [0-9a-f]{40} failed or was re-run/,
+    (s) => {
+      const other = { display_title: `e2e-staging deploy ${"e".repeat(40)}` };
+      for (let id = 500; id > 150; id -= 1) {
+        s["e2e-staging.yml"].push(stagingRun("e2e-staging.yml", id, other));
+      }
+      s["e2e-staging.yml"].push(stagingRun("e2e-staging.yml", 1, { conclusion: "failure" }));
+    },
   ],
   [
     "evidence from another branch",

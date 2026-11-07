@@ -1,15 +1,12 @@
 // route-inventory: GET /events.rss
 // Real route, read admission and RSS builder; injected pg-proxy, no database/network.
-import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import app from "./app";
 import { APP_URL, KEY, OTHER_KEY, type CalendarRow, calendarRow } from "./helpers/ics-wire-fixture";
-
-const columns = Object.keys(getTableColumns(events)) as (keyof CalendarRow)[];
+import { encodeEventRow } from "./helpers/pg-proxy-event-projection";
 
 function fixture(rows: CalendarRow[]) {
   const query = vi.fn(async (sql: string, params: unknown[]) => {
@@ -25,14 +22,13 @@ function fixture(rows: CalendarRow[]) {
       rows: rows
         .filter((row) => row.status === "published" && row.endsAt >= new Date(cutoff))
         .map((row) =>
-          columns.map((key) => {
-            const value = row[key];
-            return value instanceof Date
+          encodeEventRow(sql, params, row, (value) =>
+            value instanceof Date
               ? Number.isFinite(value.getTime())
                 ? value.toISOString()
                 : "infinity"
-              : value;
-          }),
+              : value,
+          ),
         ),
     };
   });

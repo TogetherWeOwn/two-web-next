@@ -46,7 +46,7 @@ let {
       >{/if}
   </nav>
   <a class="brand" href="/" aria-label="Together We Own homepage">
-    <img src="/logo.svg" width="64" height="64" alt="Together We Own" />
+    <img src="/logo.svg" width="180" height="50" alt="Together We Own" />
   </a>
   {#if !hideAccount}
     <nav class="header-account" aria-label="Account">
