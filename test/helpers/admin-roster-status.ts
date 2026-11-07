@@ -262,7 +262,7 @@ export async function compileRosterKit() {
   bridgeModules.env = `export const env=${JSON.stringify(env)};`;
   const built = await build({
     stdin: {
-      contents: `import {state} from "bridge"; import {load} from ${JSON.stringify(load)}; import {load as layout} from ${JSON.stringify(layout)}; import P from ${JSON.stringify(page)}; import {render} from "svelte/server"; export function configure(deps){Object.assign(state,deps);} export {load,layout}; const template=${JSON.stringify(readFileSync(join(root, "web/src/app.html"), "utf8"))}; export function html(data){const {head,body}=render(P,{props:{data}}); return template.replace(/%sveltekit\\.(head|body)%/g,(_match,part)=>part==='head'?head:body);}`,
+      contents: `import {state} from "bridge"; import {load} from ${JSON.stringify(load)}; import {load as layout} from ${JSON.stringify(layout)}; import P from ${JSON.stringify(page)}; import {render} from "svelte/server"; export function configure(deps){Object.assign(state,deps);} export {load,layout}; export function html(data){const {head,body}=render(P,{props:{data}}); return state.template.replace(/%sveltekit\\.(head|body)%/g,(_match,part)=>part==='head'?head:body);}`,
       resolveDir: root,
       sourcefile: "roster-status-ssr.mjs",
     },
@@ -310,7 +310,12 @@ export async function compileRosterKit() {
   const compiled = await import(
     `data:text/javascript;base64,${Buffer.from(built.outputFiles[0]!.text).toString("base64")}`
   );
-  compiled.configure({ dbFor, listRoster, getEvent });
+  compiled.configure({
+    dbFor,
+    listRoster,
+    getEvent,
+    template: readFileSync(join(root, "web/src/app.html"), "utf8"),
+  });
   return compiled as {
     load: (event: {
       parent: () => Promise<unknown>;
