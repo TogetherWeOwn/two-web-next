@@ -451,7 +451,7 @@ async function commitLockedUpdate(
       join_instructions: input.join_instructions ?? null,
       capacity: input.capacity,
       // A moderator edit must invalidate an agent's full-field stale write.
-      agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
+      agentVersion: locked.agentVersion + (locked.agentGrantId === null ? 0 : 1),
       updatedAt: new Date(),
     })
     .where(eq(events.eventKey, eventKey))
@@ -463,8 +463,7 @@ async function commitLockedUpdate(
     row as unknown as Record<string, unknown>,
   );
   if (Object.keys(changes).length > 0) {
-    await tx.insert(activityLog).values({
-      logName: "default",
+    await audit(tx, {
       description: `updated event ${row.title}`,
       subjectType: "Event",
       subjectId: row.eventKey,
@@ -484,11 +483,12 @@ async function commitLockedUpdate(
 }
 
 /**
- * A parent whose times moved reprograms the future: children not yet started
- * shift by the difference between their old and new scheduled instants. This
- * preserves individual deviations while keeping the weekly host-local time
- * across offset transitions. Started or finished instances keep their times.
- * Returns the write-backs the shifted mirrored children owe.
+ * A parent whose times or timezone moved reprograms the future: children not
+ * yet started shift by the difference between their old and new scheduled
+ * instants, and follow a parent timezone change. This preserves individual
+ * deviations while keeping the weekly host-local time across offset
+ * transitions. Started or finished instances keep their times. Returns the
+ * write-backs the retimed mirrored children owe.
  */
 async function shiftFutureChildren(
   tx: Writer,
@@ -500,7 +500,9 @@ async function shiftFutureChildren(
   // Preserve that child column, while still applying any finite peer delta.
   const delta = (column: "startsAt" | "endsAt") =>
     Number.isFinite(old[column].getTime()) ? parent[column].getTime() - old[column].getTime() : 0;
-  if (delta("startsAt") === 0 && delta("endsAt") === 0) return [];
+  // A timezone-only edit still moves children to the new zone's wall time.
+  if (delta("startsAt") === 0 && delta("endsAt") === 0 && parent.timezone === old.timezone)
+    return [];
   const lockedChildren = await tx
     .select()
     .from(events)
@@ -541,13 +543,25 @@ async function shiftFutureChildren(
   }
   const owed: NonNullable<WriteBack>[] = [];
   for (const child of children) {
+    const startsAt = shift(child, "startsAt");
+    const endsAt = shift(child, "endsAt");
+    const timezone = parent.timezone === old.timezone ? child.timezone : parent.timezone;
+    const retimed = +startsAt !== +child.startsAt || +endsAt !== +child.endsAt;
+    // Unchanged children owe nothing: no write, version bump or write-back.
+    if (!retimed && timezone === child.timezone) continue;
     const [moved] = await tx
       .update(events)
       .set({
-        startsAt: shift(child, "startsAt"),
-        endsAt: shift(child, "endsAt"),
-        agentVersion: child.agentGrantId === null ? child.agentVersion : child.agentVersion + 1,
+        startsAt,
+        endsAt,
+        timezone,
+        agentVersion: child.agentVersion + (child.agentGrantId === null ? 0 : 1),
         updatedAt: new Date(),
+        // Discord stores instants only, but the revision trigger counts a zone
+        // change. A synced child acknowledges it under its row lock; an
+        // unrelated unsynced change stays due for reconciliation.
+        syncedRevision:
+          child.syncedRevision + (retimed || child.syncedRevision !== child.syncRevision ? 0 : 1),
       })
       .where(eq(events.id, child.id))
       .returning();
@@ -557,8 +571,7 @@ async function shiftFutureChildren(
       moved as unknown as Record<string, unknown>,
     );
     if (Object.keys(changes).length > 0) {
-      await tx.insert(activityLog).values({
-        logName: "default",
+      await audit(tx, {
         description: `updated event ${moved.title}`,
         subjectType: "Event",
         subjectId: moved.eventKey,
@@ -567,7 +580,7 @@ async function shiftFutureChildren(
       });
     }
     const status = toEventStatus(child.status);
-    if (isMirrored(status)) owed.push({ eventKey: child.eventKey, status });
+    if (retimed && isMirrored(status)) owed.push({ eventKey: child.eventKey, status });
   }
   return owed;
 }
@@ -615,7 +628,7 @@ export async function transitionEvent(
       .update(events)
       .set({
         status: target,
-        agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
+        agentVersion: locked.agentVersion + (locked.agentGrantId === null ? 0 : 1),
         updatedAt: new Date(),
       })
       .where(eq(events.eventKey, eventKey))
