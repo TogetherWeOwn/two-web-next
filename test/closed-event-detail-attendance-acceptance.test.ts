@@ -893,9 +893,12 @@ describe("keyboard and no-JS detail journeys (CONTROL: green before and after)",
     expect(html).toContain(
       '<p role="status" aria-live="polite" data-testid="event-device-timezone-starts-status"></p>',
     );
-    // Share and calendar targets are native anchors: keyboard-reachable with
-    // no JS enhancement.
-    expect(html).toMatch(/<a href="[^"]*" data-copy-link=[^>]*data-testid="event-copy-link">/);
+    // The readonly URL supports manual copying without JS; Copy stays hidden
+    // until enhanced. Calendar links remain native anchors.
+    expect(html).toMatch(/<a href="[^"]*" data-copy-link=[^>]*data-testid="event-copy-link" hidden/);
+    expect(html).toContain('<label for="event-link-url">Event link</label>');
+    expect(html).toMatch(/<input[^>]*data-testid="event-link-url"[^>]*readonly/);
+    expect(html).toContain('data-testid="event-manual-copy"');
     expect(html).toContain('data-testid="event-ics"');
     expect(html).not.toMatch(/\son(?:click|keydown)=/);
   }

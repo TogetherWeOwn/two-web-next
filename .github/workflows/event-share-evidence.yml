@@ -13,6 +13,9 @@ on:
       - ci/event-native-share-browser.test.mjs
 permissions:
   contents: read
+concurrency:
+  group: event-share-evidence-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
 jobs:
   capture:
     runs-on: ubuntu-latest
