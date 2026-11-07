@@ -1,8 +1,8 @@
-import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { parseSigned, serializeSigned } from "hono/utils/cookie";
 import { describe, expect, it } from "vitest";
 import app from "./app";
+import { encodeEventRow } from "./helpers/pg-proxy-event-projection";
 import { AUTH_STATUS_COOKIE } from "../src/auth-status";
 import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -49,11 +49,10 @@ function fixture(status: "draft" | "published" = "draft", clock: () => number = 
     createdAt: new Date("2026-10-01T00:00:00Z"),
     updatedAt: new Date("2026-10-01T00:00:00Z"),
   };
-  const columns = Object.keys(getTableColumns(events)) as (keyof typeof row)[];
-  const values = columns.map((key) =>
-    row[key] instanceof Date ? (row[key] as Date).toISOString() : row[key],
-  );
   const db = drizzle(async (sql, params) => {
+    const values = encodeEventRow(sql, params, row, (value) =>
+      value instanceof Date ? value.toISOString() : value,
+    );
     if (sql.includes('from "events"') && sql.includes('"event_key" =')) {
       return { rows: params[0] === KEY ? [values] : [] };
     }

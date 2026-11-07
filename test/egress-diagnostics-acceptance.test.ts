@@ -437,7 +437,26 @@ describe("window omission diagnostics are independent of builder timestamp/SEQUE
     ]);
     const output = await listFeed(source.db, ["published", "cancelled"], NOW);
     expect(output.map((entry) => entry.eventKey)).toEqual([key(2), key(5)]);
-    expect(output).toEqual([row(2), row(5)]);
+    // The feed read transfers only the columns the builders render.
+    const feedColumns = [
+      "id",
+      "eventKey",
+      "title",
+      "game",
+      "description",
+      "timezone",
+      "location",
+      "organizer_name",
+      "status",
+      "capacity",
+      "startsAt",
+      "endsAt",
+      "updatedAt",
+      "icsSequence",
+    ] as const;
+    const projected = (event: Row) =>
+      Object.fromEntries(feedColumns.map((column) => [column, event[column] ?? null]));
+    expect(output).toEqual([projected(row(2)), projected(row(5))]);
     expectQuery(source.seen, "feed", ["published", "cancelled"]);
     expect(logs).toEqual([[FEED_SKIP, { skipped: 3 }]]);
   });
