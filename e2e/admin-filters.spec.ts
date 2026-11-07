@@ -85,10 +85,10 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
-        await test.info().attach(`hono-review-${state}-${viewport.width}`, {
-          body: await page.screenshot({ fullPage: true }),
-          contentType: "image/png",
-        });
+        const name = `hono-review-${state}-${viewport.width}`;
+        const path = test.info().outputPath(`${name}.png`);
+        await page.screenshot({ path, fullPage: true });
+        await test.info().attach(name, { path, contentType: "image/png" });
       }
     };
     // Review always reads the saved row, even when the editor is dirty.

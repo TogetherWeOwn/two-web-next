@@ -1598,10 +1598,10 @@ test("Kit saved review states at desktop and mobile widths", async ({ browser })
         { width: 390, height: 844 },
       ]) {
         await page.setViewportSize(viewport);
-        await test.info().attach(`kit-review-${state}-${viewport.width}`, {
-          body: await page.screenshot({ fullPage: true }),
-          contentType: "image/png",
-        });
+        const name = `kit-review-${state}-${viewport.width}`;
+        const path = test.info().outputPath(`${name}.png`);
+        await page.screenshot({ path, fullPage: true });
+        await test.info().attach(name, { path, contentType: "image/png" });
       }
     }
   } finally {
