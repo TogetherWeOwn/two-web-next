@@ -760,7 +760,10 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
       expect(cancel.status).toBe(200);
       expect(cancel.body).toMatchObject({ event_key, status: "cancelled" });
       expect((await rowOf(event_key)).status).toBe("cancelled");
-      expect(writeBack).toHaveBeenCalledExactlyOnceWith({ eventKey: event_key, status: "cancelled" });
+      expect(writeBack).toHaveBeenCalledExactlyOnceWith({
+        eventKey: event_key,
+        status: "cancelled",
+      });
       for (const op of ["publish", "cancel"]) {
         const again = await call(op, { event_key });
         expect(again.status).toBe(409);
