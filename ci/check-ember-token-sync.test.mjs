@@ -17,6 +17,7 @@ import { gzipSync } from "node:zlib";
 import test from "node:test";
 import {
   ARTIFACTS,
+  HONO_CONSUMERS,
   ROLES,
   build,
   generate,
@@ -38,9 +39,10 @@ function withScratch(fn) {
   const root = mkdtempSync(join(process.env.PAPERCLIP_RUN_SCRATCH_DIR || tmpdir(), "ember-sync-"));
   try {
     cpSync(join(ROOT, "vendor/design-kit"), join(root, "vendor/design-kit"), { recursive: true });
-    mkdirSync(join(root, "assets"), { recursive: true });
-    cpSync(join(ROOT, "assets/theme.css"), join(root, "assets/theme.css"));
-    cpSync(join(ROOT, "assets/styles.css"), join(root, "assets/styles.css"));
+    for (const path of HONO_CONSUMERS) {
+      mkdirSync(dirname(join(root, path)), { recursive: true });
+      cpSync(join(ROOT, path), join(root, path));
+    }
     mkdirSync(join(root, "public"), { recursive: true });
     mkdirSync(join(root, "web/src"), { recursive: true });
     mkdirSync(join(root, "src"), { recursive: true });
@@ -94,24 +96,56 @@ test("generated Hono sheets fit every original raw and gzip ceiling", () => {
   }
 });
 
-test("Hono exposes each role once across the existing three-sheet bundle", () => {
+test("Hono exposes each consumed role once and omits unread roles", () => {
   const outputs = generate(ROOT);
   const css = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"]
     .map((path) => outputs.get(path))
     .join("\n")
     .split("@media(prefers-reduced-motion:reduce)")[0];
+  const consumers = HONO_CONSUMERS.map((path) => readFileSync(join(ROOT, path), "utf8")).join("\n");
   for (const [alias] of ROLES) {
-    assert.equal([...css.matchAll(new RegExp(`--${alias}:`, "g"))].length, 1, alias);
+    const consumed = new RegExp(`var\\(\\s*--${alias}(?=[\\s,)])`).test(consumers);
+    assert.equal([...css.matchAll(new RegExp(`--${alias}:`, "g"))].length, consumed ? 1 : 0, alias);
   }
   for (const alias of ["hair1", "hair2"]) {
     assert.ok(!outputs.get("public/theme-tokens.css").includes(`--${alias}:`));
-    assert.ok(outputs.get("public/theme.css").includes(`--${alias}:`));
+    assert.ok(!outputs.get("public/theme.css").includes(`--${alias}:`));
     assert.ok(!outputs.get("web/src/ember-theme.css").includes(`--${alias}:`));
+    assert.ok(outputs.get("web/src/ember-theme.css").includes(`--color-${alias}:`));
   }
   const styles = outputs.get("public/styles.css");
-  assert.match(styles, /\.base-theme\{[^}]*--font-size-hero:/);
+  assert.ok(!styles.includes("--font-size-hero:"));
   assert.ok(!outputs.get("public/theme.css").includes("--font-size-hero:"));
   assert.ok(!outputs.get("public/theme-tokens.css").includes("--font-size-hero:"));
+  assert.ok(outputs.get("web/src/ember-theme.css").includes("--text-hero:"));
+});
+
+test("new authored role reads regenerate aliases and reject stale artifacts", () => {
+  withScratch((root) => {
+    for (const path of HONO_CONSUMERS) {
+      build(root);
+      const file = join(root, path);
+      const before = readFileSync(file, "utf8");
+      writeFileSync(file, `${before}\n.probe{padding:var( --space-4 )}`);
+      assert.throws(() => check(root), /generated token drift/);
+      const styles = generate(root).get("public/styles.css");
+      assert.equal([...styles.matchAll(/--space-4:16px/g)].length, 1, path);
+      writeFileSync(file, before);
+    }
+  });
+});
+
+test("missing authored consumers fail before writing artifacts", () => {
+  withScratch((root) => {
+    for (const path of HONO_CONSUMERS) {
+      const file = join(root, path);
+      const before = readFileSync(file, "utf8");
+      rmSync(file);
+      assert.throws(() => build(root), /ENOENT/, path);
+      for (const artifact of ARTIFACTS) assert.ok(!existsSync(join(root, artifact)));
+      writeFileSync(file, before);
+    }
+  });
 });
 
 test("every required role group resolves from the kit", () => {
@@ -212,15 +246,17 @@ test("base and reduced-motion declarations stay separate", () => {
   const hono = out.get("public/theme.css");
   const [baseCss, reducedCss] = hono.split("@media(prefers-reduced-motion:reduce)");
   assert.ok(reducedCss, "reduced-motion block emitted");
-  assert.match(baseCss, /--motion-duration-fast:\.12s/, "minified base keeps the kit duration");
+  assert.match(baseCss, /--motion-duration-base:\.16s/, "minified base keeps the kit duration");
   const reducedBlock = reducedCss.slice(0, reducedCss.indexOf("}}") + 2);
-  assert.ok(reducedBlock.includes("--motion-duration-fast:0ms"));
+  assert.ok(reducedBlock.includes("--motion-duration-base:0ms"));
+  assert.ok(reducedBlock.includes("--motion-ease:linear"));
+  assert.ok(!hono.includes("--motion-duration-fast:"), "unread motion roles are omitted");
   assert.ok(
     !/--(g0|t1|space-1|ember)\b/.test(reducedBlock),
     "reduced block holds only motion roles",
   );
   assert.ok(
-    !baseCss.includes("--motion-duration-fast:0ms"),
+    !baseCss.includes("--motion-duration-base:0ms"),
     "base block keeps non-reduced motion values",
   );
 });
@@ -416,14 +452,59 @@ test("equal UI/display stacks share bytes but divergent pinned roles remain inde
   });
 });
 
-test("Kit exposes utility roles and reuses the served sheets' semantic aliases", () => {
+test("a consumed UI stack does not depend on an omitted display alias", () => {
+  withScratch((root) => {
+    for (const path of HONO_CONSUMERS) {
+      const file = join(root, path);
+      writeFileSync(
+        file,
+        readFileSync(file, "utf8").replaceAll("var(--font-display)", "system-ui"),
+      );
+    }
+    const css = generate(root).get("public/theme.css");
+    assert.ok(!css.includes("--font-display:"));
+    assert.ok(!css.includes("--font-ui:var(--font-display)"));
+    assert.match(css, /--font-ui:[^;]*Mona Sans/);
+  });
+});
+
+test("new motion reads restore base and reduced values without empty rules", () => {
+  withScratch((root) => {
+    const file = join(root, "assets/theme.css");
+    writeFileSync(
+      file,
+      `${readFileSync(file, "utf8")}\n.probe{transition:all var(--motion-duration-fast)}`,
+    );
+    const css = generate(root).get("public/theme.css");
+    assert.match(css, /--motion-duration-fast:\.12s/);
+    assert.match(
+      css,
+      /@media\(prefers-reduced-motion:reduce\)\{\.base-theme\{[^}]*--motion-duration-fast:0ms/,
+    );
+    for (const path of HONO_CONSUMERS) writeFileSync(join(root, path), ".probe{display:block}");
+    const empty = generate(root);
+    assert.ok(!empty.get("public/theme.css").includes("@media(prefers-reduced-motion:reduce)"));
+    assert.ok(!empty.get("public/theme.css").includes(".base-theme{}"));
+    assert.ok(!empty.get("public/styles.css").includes(".base-theme{}"));
+  });
+});
+
+test("Kit exposes every utility role and Hono keeps only consumed author aliases", () => {
   const outputs = generate(ROOT);
   const css = outputs.get("web/src/ember-theme.css");
-  const served = [css, outputs.get("public/styles.css"), outputs.get("public/theme.css")].join(
-    "\n",
-  );
+  const served = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"]
+    .map((path) => outputs.get(path))
+    .join("\n");
   assert.ok(!css.includes("@theme static"), "unused utilities are not forced into the bundle");
-  for (const [alias] of ROLES) assert.ok(served.includes(`--${alias}:`), alias);
+  for (const [alias] of ROLES) {
+    const utility =
+      /^(g\d|hair\d|t\d|ember|on-accent|accent-hi|border|live|echo|ok|danger|warn|focus-ring)/.test(
+        alias,
+      )
+        ? `color-${alias}`
+        : alias.replace(/^font-size-/, "text-").replace(/^line-height-/, "leading-");
+    assert.ok(css.includes(`--${utility}:`), `${alias} remains available to Tailwind`);
+  }
   for (const [alias, utility] of [
     ["focus-ring", "color-focus-ring"],
     ["focus-ring-on-accent", "color-focus-ring-on-accent"],
@@ -433,7 +514,11 @@ test("Kit exposes utility roles and reuses the served sheets' semantic aliases",
     ["line-height-body", "leading-body"],
   ]) {
     assert.ok(css.includes(`--${utility}:`), `${utility} remains available to Tailwind`);
-    assert.ok(served.includes(`--${alias}:`), `${alias} remains available to author rules`);
+    assert.equal(
+      served.includes(`--${alias}:`),
+      alias !== "focus-ring-on-accent",
+      `${alias} is emitted in Hono only when consumed by author rules`,
+    );
   }
 });
 

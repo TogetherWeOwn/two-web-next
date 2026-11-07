@@ -24,7 +24,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import assert from "node:assert/strict";
 import { loadBundleBudgets } from "./budget-fragments.mjs";
-import { ARTIFACTS, build as buildEmberTokens } from "./build-ember-tokens.mjs";
+import { ARTIFACTS, HONO_CONSUMERS, build as buildEmberTokens } from "./build-ember-tokens.mjs";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const esbuild = join(repoRoot, "node_modules", ".bin", "esbuild");
@@ -212,9 +212,9 @@ function selftest() {
     cpSync(join(repoRoot, "assets"), join(scratch, "assets"), { recursive: true });
     cpSync(join(repoRoot, "public"), join(scratch, "public"), { recursive: true });
     cpSync(join(repoRoot, "vendor"), join(scratch, "vendor"), { recursive: true });
-    for (const artifact of ARTIFACTS) {
-      mkdirSync(dirname(join(scratch, artifact)), { recursive: true });
-      copyFileSync(join(repoRoot, artifact), join(scratch, artifact));
+    for (const path of [...HONO_CONSUMERS, ...ARTIFACTS]) {
+      mkdirSync(dirname(join(scratch, path)), { recursive: true });
+      copyFileSync(join(repoRoot, path), join(scratch, path));
     }
     mkdirSync(join(scratch, "ci", "budgets"), { recursive: true });
     cpSync(join(repoRoot, "ci", "budgets", "bundle"), join(scratch, "ci", "budgets", "bundle"), {

@@ -88,15 +88,18 @@ Install chrome follows the page ground: the `theme-color` meta and
 `#15100f`, pinned by `test/n2-manifest-errors.test.ts`. Icon URLs, sizes,
 and manifest identity are unchanged.
 
-The served `.base-theme` roles include `--g0`–`--g4`, `--hair1`/`--hair2`,
-`--t1`–`--t3`, ember/on-accent/hover/control/focus roles, the live/echo/ok/warn/
-danger foreground/background pairs, `--gradient-brand`, and the complete web
-type, spacing, radius and motion groups. Names otherwise drop the kit's
-`two-` prefix. Kit exposes matching color utilities (`bg-g0`, `text-t1`,
-`text-live`), type utilities (`text-hero`, `leading-heading`) and existing
-`lobby-*` utilities. Reduced-motion overrides stay separate from base values
-in both stacks. Existing button transitions consume the generated duration
-and ease only under `no-preference`; focus width/offset come from kit roles.
+Kit exposes the complete selected web role set as on-demand color utilities
+(`bg-g0`, `text-t1`, `text-live`), type utilities (`text-hero`,
+`leading-heading`) and existing `lobby-*` utilities. The shared Hono sheets
+emit only aliases read by the authored files listed in `HONO_CONSUMERS` in
+`ci/build-ember-tokens.mjs`, alongside the preserved color hooks and brand ramp.
+Names otherwise drop the kit's `two-` prefix. Add a new consumer sheet to that
+list before using a role there; regeneration restores newly consumed aliases
+from the pinned kit, and drift checks reject stale output. Unread type, spacing,
+radius, palette and motion declarations do not inflate inlined leaf CSS.
+Reduced-motion overrides for consumed aliases stay separate from base values.
+Existing button transitions consume the generated duration and ease only under
+`no-preference`; focus width/offset come from kit roles.
 
 `--font-display` and the distinct v0.2.3 `--font-ui` role preserve the kit family
 order and insert the measured local Mona fallback once. Body text consumes

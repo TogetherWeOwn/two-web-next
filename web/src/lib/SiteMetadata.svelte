@@ -77,7 +77,7 @@ const themeStylesheet = $derived(
     <link rel="stylesheet" href="/styles.css" />
     <link rel="preload" href="/fonts/mona-sans-latin-var.woff2" as="font" type="font/woff2" crossorigin="anonymous" />
     <!-- Kit's generated @theme supplies utilities and foundation aliases;
-      styles.css and theme.css supply shared type, space and motion aliases.
+      styles.css and theme.css supply aliases consumed by shared author rules.
       theme-tokens.css stays Hono-only outside the inlined leaf block. -->
     <link rel="stylesheet" href="/theme.css" />
   {/if}

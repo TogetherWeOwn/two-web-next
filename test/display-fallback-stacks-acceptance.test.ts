@@ -127,9 +127,9 @@ describe("--font-display token", () => {
 });
 
 describe("no hardcoded hex in theme sheets", () => {
-  // public/theme.css leads with the generated base role block (the kit's
-  // colour roles, hex by design) followed by the minified authored sheet.
-  // The block is exempt here; its exactness is gated separately.
+  // public/theme.css leads with the consumed generated font/motion roles,
+  // followed by the minified authored sheet. The generated block's exactness
+  // and consumer-driven role selection are gated separately.
   const GENERATED_ROLE_BLOCK =
     /^\.base-theme\{[^{}]*\}@media\(prefers-reduced-motion:reduce\)\{\.base-theme\{[^{}]*\}\}/;
 
@@ -141,7 +141,11 @@ describe("no hardcoded hex in theme sheets", () => {
     const served = stripComments(sheet("theme.css"));
     const block = served.match(GENERATED_ROLE_BLOCK);
     expect(block).not.toBeNull();
-    expect(block?.[0].match(HEX_LITERAL)?.length ?? 0).toBeGreaterThan(0);
+    expect(block?.[0]).toContain("--font-display:");
+    expect(block?.[0]).toContain("--font-ui:var(--font-display)");
+    expect(block?.[0]).toContain("--motion-duration-base:.16s");
+    expect(block?.[0]).toContain("--motion-duration-base:0ms");
+    expect(block?.[0].match(HEX_LITERAL) ?? []).toEqual([]);
     const violations: string[] = [];
     for (const hex of served.replace(GENERATED_ROLE_BLOCK, "").match(HEX_LITERAL) ?? []) {
       violations.push(`theme.css: ${hex}`);

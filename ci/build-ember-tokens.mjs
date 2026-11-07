@@ -16,6 +16,18 @@ export const ARTIFACTS = [
   "web/src/error.html",
 ];
 
+// Authored consumers of the shared Hono sheets (also loaded by the Kit shell).
+// Add new consumer sheets here so token drift checks include their role reads.
+export const HONO_CONSUMERS = [
+  "assets/styles.css",
+  "assets/theme.css",
+  "assets/admin-rsvp-review.css",
+  "public/event-theme.css",
+  "public/profile-theme.css",
+  "public/schedule-theme.css",
+  "web/src/app.css",
+];
+
 // Value-free role selection and aliasing. Omit Discord/layout/avatar roles and
 // duplicate semantic synonyms, never a required web role or its media override.
 export const ROLES = [
@@ -179,6 +191,15 @@ export function generate(root = ROOT) {
   if (!/^v\d+\.\d+\.\d+$/.test(version)) throw new Error("invalid design-kit VERSION");
   const kit = parseKit(readFileSync(join(root, "vendor/design-kit/tokens.css"), "utf8"));
   const roles = roleDeclarations(kit);
+  const consumers = new Map(
+    HONO_CONSUMERS.map((path) => [path, readFileSync(join(root, path), "utf8")]),
+  );
+  const consumed = new Set(
+    [...consumers.values()].flatMap((css) =>
+      [...css.matchAll(/var\(\s*--([\w-]+)/g)].map((match) => match[1]),
+    ),
+  );
+  const honoRoles = roles.filter(([alias]) => consumed.has(alias));
   const get = (name) => {
     const value = kit.base.get(`--two-${name}`);
     if (value === undefined) throw new Error(`missing kit role --two-${name}`);
@@ -206,21 +227,22 @@ export function generate(root = ROOT) {
     selected
       .map(([alias, , value]) => {
         // Share equal pinned stacks, but follow either role if the kit diverges.
-        return `--${alias}:${alias === "font-ui" && value === display ? "var(--font-display)" : value};`;
+        return `--${alias}:${alias === "font-ui" && value === display && selected.some(([name]) => name === "font-display") ? "var(--font-display)" : value};`;
       })
       .join("");
   const brand = ["ember", "magenta", "violet"]
     .map((name) => `--color-brand-${name}:${get(`color-grad-${name}`)};`)
     .join("");
-  const facade = `.base-theme{${hooks("")}${aliases}${brand}color-scheme:dark;${declarations(roles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}}`;
-  const reduced = roles
+  const facade = `.base-theme{${hooks("")}${aliases}${brand}color-scheme:dark;${declarations(honoRoles.filter(foundation))}}${schedule}{${hooks("schedule-")}${aliases}}`;
+  const reduced = honoRoles
     .filter(([, source]) => kit.reduced.has(`--two-${source}`))
     .map(([alias, source]) => `--${alias}:${kit.reduced.get(`--two-${source}`)};`)
     .join("");
-  const sharedCss = `.base-theme{${declarations(roles.filter(shared))}}`;
-  const roleCss = `.base-theme{${declarations(roles.filter((role) => !foundation(role) && !shared(role)))}}@media(prefers-reduced-motion:reduce){.base-theme{${reduced}}}`;
-  const source = readFileSync(join(root, "assets/theme.css"), "utf8");
-  const sharedSource = readFileSync(join(root, "assets/styles.css"), "utf8");
+  const scoped = (selected) => (selected.length ? `.base-theme{${declarations(selected)}}` : "");
+  const sharedCss = scoped(honoRoles.filter(shared));
+  const roleCss = `${scoped(honoRoles.filter((role) => !foundation(role) && !shared(role)))}${reduced ? `@media(prefers-reduced-motion:reduce){.base-theme{${reduced}}}` : ""}`;
+  const source = consumers.get("assets/theme.css");
+  const sharedSource = consumers.get("assets/styles.css");
   const compact = (css) =>
     transformSync(css, { loader: "css", minify: true, legalComments: "none" }).code;
   const kitColors = [
@@ -244,8 +266,8 @@ export function generate(root = ROOT) {
     if (alias.startsWith("line-height-")) return alias.replace("line-height-", "leading-");
     return alias;
   };
-  // Tailwind emits utility roles on demand. Shared author sheets already expose
-  // every type/space/motion alias; keep only their missing foundation here.
+  // Tailwind emits the full utility set on demand. Shared author sheets supply
+  // only aliases read by authored rules; keep Kit's foundation bridge intact.
   // Forcing every utility plus a second alias bridge duplicates those bytes.
   const kitCss = `/* GENERATED from two-design-kit ${version}; run node ci/build-ember-tokens.mjs. */\n@theme{${kitColors.map(([alias, source]) => `--color-lobby-${alias}:${get(source)};`).join("")}${roles.map(([alias, , value]) => `--${utility(alias)}:${value};`).join("")}--font-sans:var(--font-ui);}\n.base-theme{${hooks("", true)}${aliases}${declarations(roles.filter(foundation))}}\n${schedule}{${hooks("schedule-", true)}}\n`;
   const validation = transformSync(kitCss, { loader: "css", logLevel: "silent" });
