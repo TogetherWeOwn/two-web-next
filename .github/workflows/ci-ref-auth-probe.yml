@@ -1,0 +1,150 @@
+name: ci-ref-auth-probe
+
+# Diagnostic only: never publish a Release or a CalVer ref.
+on:
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Full lowercase 40-hex main-ancestor SHA to tag
+        type: string
+        required: true
+      arm:
+        description: Positive control (1), older target (2), or run-head test (3)
+        type: choice
+        options: ["1", "2", "3"]
+        required: true
+
+permissions: {}
+
+concurrency:
+  group: ci-ref-auth-probe
+  cancel-in-progress: false
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: write
+    steps:
+      - name: Create an isolated annotated tag
+        id: probe
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          TARGET_SHA: ${{ inputs.target_sha }}
+          PROBE_ARM: ${{ inputs.arm }}
+          PROBE_RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const target = process.env.TARGET_SHA;
+            const arm = process.env.PROBE_ARM;
+            const attempt = process.env.PROBE_RUN_ATTEMPT;
+            if (owner !== 'TogetherWeOwn' || repo !== 'two-web-next' ||
+                context.eventName !== 'workflow_dispatch' || target?.length !== 40 ||
+                !/^[0-9a-f]{40}$/.test(target) || !['1', '2', '3'].includes(arm) ||
+                !Number.isSafeInteger(context.runId) || context.runId < 1 ||
+                !Number.isSafeInteger(Number(attempt)) || Number(attempt) < 1 ||
+                String(Number(attempt)) !== attempt) {
+              throw new Error('Invalid probe context or inputs');
+            }
+            const request = async (route, args = {}) => {
+              try {
+                const response = await github.request(route, {
+                  owner, repo, ...args, request: { timeout: 15000 }
+                });
+                core.info(JSON.stringify({ route, status: response.status, body: response.data }));
+                return response;
+              } catch (error) {
+                // Only the API response body, never request headers or the token.
+                core.info(JSON.stringify({ route, status: error.status ?? null,
+                  body: error.response?.data ?? null }));
+                throw new Error(`Probe API request failed: HTTP ${error.status ?? 'unknown'}`);
+              }
+            };
+            const main = await request('GET /repos/{owner}/{repo}/git/ref/{ref}', { ref: 'heads/main' });
+            const mainSha = main.data.object?.sha;
+            if (!/^[0-9a-f]{40}$/.test(mainSha ?? '')) throw new Error('Invalid main SHA');
+            const comparison = await request('GET /repos/{owner}/{repo}/compare/{basehead}', {
+              basehead: `${target}...${mainSha}`, per_page: 1
+            });
+            if (!['ahead', 'identical'].includes(comparison.data.status) ||
+                comparison.data.merge_base_commit?.sha !== target) {
+              throw new Error('Target is not a main ancestor');
+            }
+            const tag = `ci-probe/ref-auth/${context.runId}-${process.env.PROBE_RUN_ATTEMPT}-${arm}`;
+            const ref = `refs/tags/${tag}`;
+            // No overwrite or retry. Each attempt owns a different diagnostic ref.
+            try {
+              await github.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+                owner, repo, ref: `tags/${tag}`, request: { timeout: 15000 }
+              });
+              throw new Error('Probe ref already exists');
+            } catch (error) {
+              if (error.status !== 404) throw new Error('Probe ref is not confirmed absent');
+            }
+            core.setOutput('ref', ref);
+            const proof = { arm, target, main: mainSha, run_head: context.sha, run_ref: context.ref, ref };
+            await core.summary.addCodeBlock(JSON.stringify(proof, null, 2), 'json').write();
+            const object = await request('POST /repos/{owner}/{repo}/git/tags', {
+              tag, message: `Isolated ref authorization probe ${context.runId}-${process.env.PROBE_RUN_ATTEMPT}-${arm}`,
+              object: target, type: 'commit'
+            });
+            if (object.status !== 201 || !/^[0-9a-f]{40}$/.test(object.data.sha ?? '')) {
+              throw new Error('Invalid created tag object');
+            }
+            core.setOutput('tag_sha', object.data.sha);
+            const created = await request('POST /repos/{owner}/{repo}/git/refs', {
+              ref, sha: object.data.sha
+            });
+            if (created.status !== 201 || created.data.ref !== ref ||
+                created.data.object?.sha !== object.data.sha) {
+              throw new Error('Invalid created tag ref');
+            }
+      - name: Remove and verify the owned probe ref
+        if: ${{ always() }}
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
+        env:
+          PROBE_REF: ${{ steps.probe.outputs.ref }}
+          PROBE_TAG_SHA: ${{ steps.probe.outputs.tag_sha }}
+          PROBE_ARM: ${{ inputs.arm }}
+          PROBE_RUN_ATTEMPT: ${{ github.run_attempt }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const ref = process.env.PROBE_REF;
+            const sha = process.env.PROBE_TAG_SHA;
+            if (!ref || !sha) {
+              core.info('No owned tag object/ref to clean up');
+              return;
+            }
+            const expected = `refs/tags/ci-probe/ref-auth/${context.runId}-${process.env.PROBE_RUN_ATTEMPT}-${process.env.PROBE_ARM}`;
+            if (owner !== 'TogetherWeOwn' || repo !== 'two-web-next' || ref !== expected ||
+                !/^[0-9a-f]{40}$/.test(sha)) throw new Error('Invalid cleanup identity');
+            const shortRef = ref.slice('refs/'.length);
+            const read = async () => {
+              try {
+                return await github.request('GET /repos/{owner}/{repo}/git/ref/{ref}', {
+                  owner, repo, ref: shortRef, request: { timeout: 15000 }
+                });
+              } catch (error) {
+                if (error.status === 404) return null;
+                core.info(JSON.stringify({ status: error.status ?? null, body: error.response?.data ?? null }));
+                throw new Error('Cannot verify probe ref');
+              }
+            };
+            const existing = await read();
+            if (existing) {
+              if (existing.data.ref !== ref || existing.data.object?.type !== 'tag' ||
+                  existing.data.object?.sha !== sha) throw new Error('Ref is not owned by this attempt');
+              try {
+                await github.request('DELETE /repos/{owner}/{repo}/git/refs/{ref}', {
+                  owner, repo, ref: shortRef, request: { timeout: 15000 }
+                });
+              } catch (error) {
+                core.info(JSON.stringify({ status: error.status ?? null, body: error.response?.data ?? null }));
+                throw new Error('Probe cleanup failed');
+              }
+            }
+            if (await read()) throw new Error('Probe ref remains after cleanup');
+            await core.summary.addCodeBlock(JSON.stringify({ ref, cleanup: 'confirmed absent' }), 'json').write();
