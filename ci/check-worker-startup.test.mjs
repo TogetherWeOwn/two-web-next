@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  copyFileSync,
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { after, describe, test } from "node:test";
@@ -229,6 +240,65 @@ describe("summarizeProfile", () => {
   });
   test("rejects idle-only profile", () => {
     assert.throws(() => summarizeProfile(profile([[2, 5000]])), /Incomplete CPU profile timing/);
+  });
+  for (const [name, field, value, message] of [
+    [
+      "non-integer node id",
+      "samples",
+      1.5,
+      "Invalid CPU profile sample: non-integer node id at sample 1 (1.5)",
+    ],
+    ["unknown node", "samples", 999, "Invalid CPU profile sample: unknown node 999 at sample 1"],
+    [
+      "non-finite timeDelta",
+      "timeDeltas",
+      Infinity,
+      "Invalid CPU profile sample: non-finite timeDelta at sample 1 (Infinity)",
+    ],
+    [
+      "negative timeDelta",
+      "timeDeltas",
+      -5,
+      "Invalid CPU profile sample: negative timeDelta -5 at sample 1",
+    ],
+  ]) {
+    test(`names ${name} and the offending sample index`, () => {
+      const p = work(50000);
+      p[field][1] = value;
+      assert.throws(() => summarizeProfile(p), { message });
+    });
+  }
+  test("still rejects the NaN delta regression without rendering it as null", () => {
+    const p = work(50000);
+    p.timeDeltas[0] = NaN;
+    assert.throws(() => summarizeProfile(p), {
+      message: "Invalid CPU profile sample: non-finite timeDelta at sample 0 (NaN)",
+    });
+  });
+  test("reports the first failing class in sample validation order", () => {
+    const p = work(50000);
+    p.samples[0] = "5";
+    p.timeDeltas[0] = -5;
+    assert.throws(() => summarizeProfile(p), {
+      message: 'Invalid CPU profile sample: non-integer node id at sample 0 ("5")',
+    });
+    p.samples[0] = 999;
+    assert.throws(() => summarizeProfile(p), {
+      message: "Invalid CPU profile sample: unknown node 999 at sample 0",
+    });
+  });
+  test("bounds JSON-rendered values and falls back for unstringifiable values", () => {
+    const p = work(50000);
+    for (const [value, rendered] of [
+      ["x".repeat(100), JSON.stringify("x".repeat(100)).slice(0, 64)],
+      [undefined, "undefined"],
+      [1n, "1"],
+    ]) {
+      p.timeDeltas[0] = value;
+      assert.throws(() => summarizeProfile(p), {
+        message: `Invalid CPU profile sample: non-finite timeDelta at sample 0 (${rendered})`,
+      });
+    }
   });
   const bad = {
     "null profile": () => null,
@@ -555,7 +625,7 @@ describe("validateEvidence strictness", () => {
     ev.runs[0].profileSha256 = sha256(b[0]);
     assert.throws(
       () => validateEvidence(ev, IDENTITY, b, BUDGET),
-      /Invalid CPU profile sample\/delta pair/,
+      /Invalid CPU profile sample: negative timeDelta -5 at sample 0/,
     );
   });
   test("empty profile buffer", () => {
@@ -754,7 +824,7 @@ describe("collect orchestration", () => {
     const h = harness({ profiles: [bad, work(1), work(1)] });
     await assert.rejects(
       collect({ outdir: h.outdir, budget: BUDGET, identity: {}, cli, run: h.run }),
-      /Invalid CPU profile sample\/delta pair/,
+      /Invalid CPU profile sample: unknown node 999 at sample 0/,
     );
     assert.equal(h.calls.length, 2);
   });
@@ -821,6 +891,94 @@ describe("collect orchestration", () => {
   });
 });
 
+async function withSelftestEvidence(
+  cwd,
+  run,
+  evidenceDir = process.env.WORKER_STARTUP_SELFTEST_EVIDENCE_DIR,
+) {
+  try {
+    return await run();
+  } catch (error) {
+    try {
+      if (evidenceDir) {
+        mkdirSync(evidenceDir, { recursive: true });
+        for (const file of readdirSync(cwd, { withFileTypes: true })) {
+          if (
+            file.isFile() &&
+            (/^cold-.*\.(cpuprofile|json)$/.test(file.name) || file.name === "checkpoint.json")
+          )
+            copyFileSync(join(cwd, file.name), join(evidenceDir, file.name));
+        }
+      }
+    } catch {
+      // Retention is best-effort and must not replace the collection failure.
+      process.stderr.write("Could not retain startup selftest evidence\n");
+    }
+    throw error;
+  }
+}
+
+describe("selftest evidence retention", () => {
+  test("copies only regular allowlisted files and rethrows the original error", async () => {
+    const cwd = mkdtempSync(join(tmp, "retention-source-"));
+    const evidenceDir = join(tmp, "retention-output", "nested");
+    const allowed = ["cold-1.cpuprofile", "cold-2.cpuprofile", "cold-1.json", "checkpoint.json"];
+    for (const file of [
+      ...allowed,
+      ".env",
+      ".env.local",
+      "empty.env",
+      "owned-runtime",
+      "worker.bundle",
+      "control.bundle",
+      "control.cpuprofile",
+      "report.json",
+      "cold-1.json.env",
+    ])
+      writeFileSync(join(cwd, file), `fixture ${file}`);
+    mkdirSync(join(cwd, "cold-directory.json"));
+    writeFileSync(join(cwd, "cold-directory.json", "nested.json"), "not evidence");
+    symlinkSync(join(cwd, ".env"), join(cwd, "cold-link.json"));
+    const original = new Error("original collection failure");
+    await assert.rejects(
+      withSelftestEvidence(
+        cwd,
+        async () => {
+          throw original;
+        },
+        evidenceDir,
+      ),
+      (error) => error === original,
+    );
+    assert.deepEqual(readdirSync(evidenceDir).sort(), [...allowed].sort());
+    for (const file of allowed)
+      assert.deepEqual(readFileSync(join(evidenceDir, file)), readFileSync(join(cwd, file)));
+  });
+  test("does not create evidence on success", async () => {
+    const evidenceDir = join(tmp, "retention-success");
+    const result = {};
+    assert.equal(await withSelftestEvidence(tmp, async () => result, evidenceDir), result);
+    assert.equal(existsSync(evidenceDir), false);
+  });
+  test("retention disabled or failing still rethrows the original error", async () => {
+    const original = new Error("original collection failure");
+    const notDirectory = join(tmp, "retention-not-directory");
+    writeFileSync(notDirectory, "fixture");
+    for (const evidenceDir of ["", notDirectory]) {
+      await assert.rejects(
+        withSelftestEvidence(
+          tmp,
+          async () => {
+            throw original;
+          },
+          evidenceDir,
+        ),
+        (error) => error === original,
+      );
+    }
+  });
+});
+
 test("pinned real Wrangler loader cannot restore ignored dotenv runtime overrides", {
   timeout: 60000,
 }, async () => {
@@ -853,18 +1011,20 @@ test("pinned real Wrangler loader cannot restore ignored dotenv runtime override
   assert.equal(existsSync(marker), true, "control must execute the owned override");
   rmSync(marker);
   const calls = [];
-  const evidence = await collect({
-    outdir: cwd,
-    budget: BUDGET,
-    identity: {},
-    cli,
-    run: async (command, args, options) => {
-      calls.push({ command, args });
-      if (args.includes("deploy")) {
-        writeFileSync(args[args.indexOf("--outfile") + 1], loaderUpload);
-      } else await runCommand(command, args, { ...options, cwd });
-    },
-  });
+  const evidence = await withSelftestEvidence(cwd, () =>
+    collect({
+      outdir: cwd,
+      budget: BUDGET,
+      identity: {},
+      cli,
+      run: async (command, args, options) => {
+        calls.push({ command, args });
+        if (args.includes("deploy")) {
+          writeFileSync(args[args.indexOf("--outfile") + 1], loaderUpload);
+        } else await runCommand(command, args, { ...options, cwd });
+      },
+    }),
+  );
   assert.equal(existsSync(marker), false, "ignored dotenv must not change the runtime");
   assert.equal(evidence.runs.length, 3);
   assertCommands(evidence.identity.commands, calls, cwd);
