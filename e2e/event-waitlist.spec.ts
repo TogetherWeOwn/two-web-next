@@ -75,9 +75,12 @@ async function createDraft(admin: Page, stem: string, capacity: number): Promise
   await admin.getByLabel("Location", { exact: true }).fill("Community voice");
   await admin.getByLabel("Capacity (empty = unlimited)").fill(String(capacity));
   await admin.getByRole("button", { name: "Create draft", exact: true }).click();
-  await expect(admin).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}$/);
+  // Create redirects to the saved-draft review, which may carry `?saved=1`;
+  // read the key from the pathname so the query never leaks into it.
+  await expect(admin).toHaveURL(/\/admin\/events\/[0-9A-HJKMNP-TV-Z]{26}(?:\?saved=1)?$/);
   const eventKey = new URL(admin.url()).pathname.split("/").at(-1);
   expect(eventKey).toBeDefined();
+  expect(eventKey).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
   await expect(admin.getByRole("heading", { name: "Status: draft", exact: true })).toBeVisible();
   return eventKey as string;
 }

@@ -8,7 +8,8 @@ import { cloneElement, isValidElement } from "hono/jsx";
 import { SkipLink } from "../../pages";
 import { rsvpPauseReviewCopy } from "../rsvp-review";
 import type { EventRow } from "../store";
-import type { SortOrder } from "../table-list";
+import { sortHeaderAriaLabel, type SortOrder } from "../table-list";
+import { sameTitleSuffix } from "../event-list";
 
 export const TableSortHeader: FC<{
   label: string;
@@ -19,10 +20,7 @@ export const TableSortHeader: FC<{
   const next = active && order === "asc" ? "desc" : "asc";
   return (
     <th scope="col" aria-sort={active ? (order === "asc" ? "ascending" : "descending") : "none"}>
-      <a
-        href={url(next)}
-        aria-label={`Sort by ${label.toLowerCase()} ${next === "asc" ? "ascending" : "descending"}`}
-      >
+      <a href={url(next)} aria-label={sortHeaderAriaLabel(label, next)}>
         {label}
         {active ? (order === "asc" ? " ↑" : " ↓") : ""}
       </a>
@@ -89,7 +87,10 @@ export const ErrorPage: FC<{ heading: string; detail?: string; recovery?: Recove
   </Shell>
 );
 
-export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
+export const RsvpAction: FC<{ row: EventRow; duplicates?: ReadonlySet<string> }> = ({
+  row,
+  duplicates = new Set(),
+}) => {
   // An unrenderable end (Invalid Date) is not a live event: every comparison
   // with it is false, so without the finite check it would look unended.
   if (
@@ -98,10 +99,19 @@ export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
     row.endsAt <= new Date()
   )
     return null;
+  // §4a: the disambiguator matches the Starts (UTC) cell; unrenderable
+  // starts take no suffix. Single-event surfaces pass no duplicates.
+  const iso = Number.isFinite(row.startsAt.getTime()) ? row.startsAt.toISOString() : null;
+  const suffix = sameTitleSuffix(row.title, iso, duplicates);
   if (!row.rsvpOpen) {
     return (
       <form method="post" action={`/admin/events/${row.eventKey}/rsvp-reopen`}>
-        <button type="submit" class="link" data-testid="rsvp-reopen">
+        <button
+          type="submit"
+          class="link"
+          data-testid="rsvp-reopen"
+          aria-label={`Reopen RSVPs for ${row.title}${suffix}`}
+        >
           Reopen RSVPs
         </button>
       </form>
@@ -113,7 +123,7 @@ export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
   const copy = rsvpPauseReviewCopy;
   return (
     <details class="rsvp-review" data-testid="rsvp-pause-review">
-      <summary aria-label={`${copy.summary}: ${row.title}`}>{copy.summary}</summary>
+      <summary aria-label={`${copy.summary}: ${row.title}${suffix}`}>{copy.summary}</summary>
       <p>
         {copy.target}: <strong>{row.title}</strong>
       </p>
@@ -121,7 +131,12 @@ export const RsvpAction: FC<{ row: EventRow }> = ({ row }) => {
       <p>{copy.consequence}</p>
       <p>{copy.keep}</p>
       <form method="post" action={`/admin/events/${row.eventKey}/rsvp-pause`}>
-        <button type="submit" class="btn" data-testid="rsvp-pause">
+        <button
+          type="submit"
+          class="btn"
+          data-testid="rsvp-pause"
+          aria-label={`Pause RSVPs for ${row.title}${suffix}`}
+        >
           {copy.final}
         </button>
       </form>

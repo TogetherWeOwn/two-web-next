@@ -186,6 +186,25 @@ class DocsClassification(unittest.TestCase):
         self.assertIn("title", low, "template must note the title always fails")
         self.assertIn("empty body", low, "template must note an empty body always fails")
 
+    def test_template_carries_attestation_section(self):
+        """The template must offer the org Attestation section and keep its field syntax."""
+        text = TEMPLATE.read_text(encoding="utf-8")
+        self.assertIn("\n## Attestation\n", text, "template must carry the Attestation heading")
+        att = text.split("\n## Attestation\n", 1)[1]
+        self.assertRegex(att, r"(?m)^risk_tier: <T0\|T1\|T2>$")
+        self.assertRegex(att, r"(?m)^### Claims$")
+        self.assertRegex(att, r"(?m)^- C1: ")
+        self.assertRegex(att, r"(?m)^### Tests$")
+        self.assertRegex(att, r"(?m)^- C1 \| test=.+ \| failed_before=not-run \| proof=")
+        self.assertRegex(att, r"(?m)^### High-risk checklist$")
+        for n in range(1, 9):
+            self.assertRegex(att, rf"(?m)^- \[ \] D{n}: ", f"checklist must keep D{n}")
+
+    def test_template_does_not_call_attestation_optional(self):
+        """The opening guidance must name Attestation so it is not read as an optional section."""
+        opening = TEMPLATE.read_text(encoding="utf-8").split("-->", 1)[0]
+        self.assertIn("attestation", opening.lower())
+
 
 class CheckerBehaviorMatchesDocs(unittest.TestCase):
     def test_title_and_empty_body_fail_in_configured_mode(self):

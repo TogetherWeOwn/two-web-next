@@ -5,10 +5,13 @@
 // substring appears in the request URL wins; `sequence` serves one entry per
 // call in order (for retry tests); `fail: true` rejects like a transport
 // error. Anything unmatched rejects so a test never touches the network.
+import { appendFileSync } from "node:fs";
+
 const stubs = JSON.parse(process.env.FETCH_STUB_JSON ?? "[]");
 const calls = new Map();
 globalThis.fetch = async (input) => {
   const url = String(input?.url ?? input);
+  if (process.env.FETCH_STUB_LOG) appendFileSync(process.env.FETCH_STUB_LOG, `${url}\n`);
   for (const stub of stubs) {
     if (url.includes(stub.match)) {
       const n = (calls.get(stub.match) ?? 0) + 1;

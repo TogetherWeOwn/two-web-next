@@ -38,6 +38,7 @@ import {
   rosterRangeText,
   rosterRecovery,
   rosterUrl,
+  sortHeaderAriaLabel,
   type ListParams,
   type RosterQuery,
   type RosterSort,
@@ -46,6 +47,7 @@ import {
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { renderSavedEventNoticeHtml } from "./pages/event-form-review";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -130,6 +132,7 @@ export type KitEventEditView = {
    * the page injects it via {@html} so the client bundle carries no review
    * strings or disclosure markup (client gzip ceiling). */
   pauseReviewHtml: string | null;
+  savedNoticeHtml: string | null;
 };
 
 export type KitEventEditOutcome =
@@ -187,7 +190,7 @@ function sortHeader(eventKey: string, query: RosterQuery, key: RosterSort, label
       | "ascending"
       | "descending"
       | "none",
-    linkLabel: `Sort by ${label.toLowerCase()} ${next === "asc" ? "ascending" : "descending"}`,
+    linkLabel: sortHeaderAriaLabel(label, next),
     marker: active ? (query.order === "asc" ? " ↑" : " ↓") : "",
   };
 }
@@ -255,6 +258,10 @@ export async function resolveKitEventEdit(
       key: row.eventKey,
       title: row.title,
       status: row.status,
+      savedNoticeHtml:
+        rawQuery.saved === "1" && row.status === "draft"
+          ? renderSavedEventNoticeHtml(row.eventKey)
+          : null,
       values: {
         title: row.title,
         game: row.game ?? "",
@@ -303,7 +310,7 @@ export async function resolveKitEventEdit(
             : null,
         sortHeaders: [
           sortHeader(row.eventKey, query, "status", "Status"),
-          sortHeader(row.eventKey, query, "answered", "Answered"),
+          sortHeader(row.eventKey, query, "answered", "Answered (UTC)"),
         ],
         // The Hono edit action, unencoded like the Hono page's own form target.
         searchAction: `/admin/events/${row.eventKey}#rsvp-roster`,

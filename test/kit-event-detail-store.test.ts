@@ -8,6 +8,7 @@ vi.mock("../src/admin/db", () => ({ dbFor: vi.fn() }));
 vi.mock("../src/events/reads", () => ({
   ATTENDEE_PAGE_SIZE: 100,
   getPublicEvent: vi.fn(),
+  getEventForModeratorReview: vi.fn(),
   getEventNeighbors: vi.fn(),
   listRelatedEvents: vi.fn(),
   listGoingAttendees: vi.fn(),
@@ -21,6 +22,7 @@ import { dbFor } from "../src/admin/db";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import {
+  getEventForModeratorReview,
   getEventNeighbors,
   getPublicEvent,
   getViewerRsvp,
@@ -78,6 +80,24 @@ describe("kit event-detail production store", () => {
     vi.mocked(cachedNotFoundSuggestions).mockResolvedValueOnce(suggestions);
     await expect(store.suggestionsFn(env, "/e/key")).resolves.toBe(suggestions);
     expect(cachedNotFoundSuggestions).toHaveBeenCalledWith(env, "/e/key");
+  });
+
+  it("binds the moderator review read to the unfiltered review lookup only", async () => {
+    vi.mocked(getPublicEvent).mockClear();
+    vi.mocked(getEventForModeratorReview).mockClear();
+    const store = kitEventDetailStore(env);
+    expect(store.getReviewEventFn).toBeTypeOf("function");
+    const event = { id: 8 } as NonNullable<Awaited<ReturnType<typeof getEventForModeratorReview>>>;
+    vi.mocked(getEventForModeratorReview).mockResolvedValueOnce(event);
+    await expect(store.getReviewEventFn!(db, "review-key")).resolves.toBe(event);
+    expect(getEventForModeratorReview).toHaveBeenCalledTimes(1);
+    expect(getEventForModeratorReview).toHaveBeenCalledWith(db, "review-key");
+    expect(getPublicEvent).not.toHaveBeenCalled();
+    // The ordinary read stays on the filtered public lookup.
+    vi.mocked(getPublicEvent).mockResolvedValueOnce(null);
+    await expect(store.getEventFn(db, "plain-key")).resolves.toBeNull();
+    expect(getPublicEvent).toHaveBeenCalledWith(db, "plain-key");
+    expect(getEventForModeratorReview).toHaveBeenCalledTimes(1);
   });
 
   it("answers no waitlist position without a signed-in viewer", async () => {

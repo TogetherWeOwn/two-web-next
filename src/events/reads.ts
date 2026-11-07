@@ -640,6 +640,16 @@ export async function withGoingCount(
   return (await withGoing(db, [row]))[0]!;
 }
 
+/** Review callers must authorize the moderator before this read. Preserve an
+ * unreadable saved window so the review can link to its editor corrections;
+ * ordinary public reads below retain their renderability filter. */
+export async function getEventForModeratorReview(db: Db, key: string): Promise<PublicEvent | null> {
+  const [row] = await nonSensitiveRead("events", () =>
+    db.select().from(events).where(eq(events.eventKey, key)),
+  );
+  return row ? withGoingCount(db, row) : null;
+}
+
 export async function getPublicEvent(db: Db, key: string): Promise<PublicEvent | null> {
   const [row] = await nonSensitiveRead("events", () =>
     db.select().from(events).where(eq(events.eventKey, key)),

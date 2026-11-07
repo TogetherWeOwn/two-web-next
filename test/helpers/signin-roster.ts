@@ -46,7 +46,7 @@ export function signinEnv(extra: Record<string, unknown> = {}): Env {
     DISCORD_BOT_TOKEN: "bot-token",
     SESSION_SECRET: SECRET,
     DISCORD_MODERATOR_ROLE_IDS: MOD_ROLE,
-    QA_AUTH_TOKEN: "qa-fixture-token",
+    QA_AUTH_TOKEN: "qa-fixture-token-with-32-plus-characters",
     SESSION_STORE: createMemorySessionStore(),
     THROTTLE_STORE: async () => null,
     JOIN_DEPS: { store: async () => null },
@@ -103,7 +103,7 @@ export async function prepareSignin(caller: SigninCaller, env: Env, priorCookie 
           method: "POST",
           headers: {
             origin: env.APP_URL,
-            [QA_HEADER]: "qa-fixture-token",
+            [QA_HEADER]: "qa-fixture-token-with-32-plus-characters",
             cookie: priorCookie,
             "X-Request-ID": REQUEST_ID,
           },
