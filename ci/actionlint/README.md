@@ -2,11 +2,42 @@
 
 Workflow lint builds **patched actionlint v1.7.7**, not the stock release binary.
 `build.sh` runs only in GitHub Actions, on the blocking scope → ci-ok path. It
-checks the immutable source archive, applies `queue.patch` without fuzz, keeps
-upstream go.mod/go.sum unchanged, runs the upstream tests and added parser tests,
-builds the CLI, exercises positive/negative CLI fixtures, and lints all original
-workflow files. No workflow transformation or diagnostic suppression is used.
-The existing `-shellcheck= -pyflakes=` settings are unchanged.
+checks the immutable source archive, builds the stock CLI before either patch,
+and applies checksum-pinned `test-harness.patch` with exact applicability. It runs
+the full upstream inventory on stock grammar, applies `queue.patch` with the
+same strict checks, and runs the full inventory again plus added parser tests.
+It keeps upstream go.mod/go.sum unchanged, builds the patched CLI, exercises
+positive/negative CLI fixtures, and lints all original workflow files. Verbose
+Actions logs and per-pass counts distinguish executed tests from skips. No
+workflow transformation or diagnostic suppression is used. The existing
+`-shellcheck= -pyflakes=` settings are unchanged.
+
+The separate test-only compatibility patch carries three enumerated source-build
+harness corrections, not production changes or a claim that upstream tests are
+unchanged:
+
+- An empty disposable source-directory `.git` marker restores project discovery
+  for the documentation test. The archive must already have `.github/workflows`;
+  an existing `.git` fails. No repository is initialized or host metadata copied.
+  Archive checksums, not this marker, establish provenance. `-buildvcs=false`
+  prevents Go from treating the empty fixture marker as a repository to stamp;
+  it does not inject or normalize the version checked by the SARIF test.
+- Only the SARIF golden's driver version changes from blank to `(devel)`. The
+  test requires `debug.ReadBuildInfo()` to report exactly `(devel)` before the
+  original complete parsed-object comparison; unexpected build metadata fails.
+- A scoped standard-library `http.DefaultTransport` fixture intercepts only the
+  exact malformed HEAD request and returns a populated synthetic 400 response.
+  It rejects other requests without network fallback, asserts interception, and
+  restores the transport with `t.Cleanup`. Original exit-1 and diagnostic
+  assertions remain. A separate 404 control requires exit 0 with no non-2xx
+  diagnostic or released URL. Package tests have no parallel execution; the
+  harness refuses `.Parallel()` in that package before running the suite.
+
+These changes repair observed source-archive/Go/live-response assumptions while
+preserving the upstream test inventory and error assertions. The failed live-HTTP
+fixture's remote status was not observed; a historical 404 is not claimed. Both
+patches are applicability-checked against the same immutable source, and no
+optional-tool skip is added or counted as executed coverage.
 
 The carried patch adds only a typed pending-queue policy, literal `single`/`max`
 parsing and the `max`/cancellation incompatibility check. Existing unknown-key

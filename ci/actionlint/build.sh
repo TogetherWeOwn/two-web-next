@@ -19,7 +19,8 @@ tar -xzf "$work/go.tgz" -C "$work/toolchain"
 export GOROOT="$work/toolchain/go"
 go="$GOROOT/bin/go"
 export GOENV=off GOTOOLCHAIN=local GOWORK=off CGO_ENABLED=0
-export GOFLAGS=-mod=readonly GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
+# Archive provenance is the pinned checksum, not VCS metadata from the fixture marker.
+export GOFLAGS='-mod=readonly -buildvcs=false' GOPROXY=https://proxy.golang.org GOSUMDB=sum.golang.org
 export GOPRIVATE= GONOPROXY= GONOSUMDB=
 export GOMODCACHE="$work/modules" GOCACHE="$work/cache"
 "$go" version
@@ -30,12 +31,50 @@ sha256sum "$src/go.mod" "$src/go.sum" > "$work/modules.sha256"
 "$go" -C "$src" mod verify
 sha256sum -c "$work/modules.sha256"
 
-git -C "$src" apply --check "$root/ci/actionlint/queue.patch"
-git -C "$src" apply "$root/ci/actionlint/queue.patch"
+# Archive-only fixture precondition; never initialize a repository or copy metadata.
+[[ -d "$src/.github/workflows" && ! -e "$src/.git" ]]
+mkdir "$src/.git"
+printf '%s  %s\n' \
+  d3338ce18c573250c580a1176f2c15b1251f6f432716e33cb17c3cdeae1130c0 "$root/ci/actionlint/test-harness.patch" \
+  5469da536031422230495284312dd17e25ab8f0554443b837fe210fb4881eb27 "$root/ci/actionlint/queue.patch" | sha256sum -c -
+sha256sum "$src/ast.go" "$src/parse.go" > "$work/grammar.sha256"
+apply_patch() {
+  local patch="$root/ci/actionlint/$1.patch"
+  git -C "$src" apply --check --verbose "$patch" > "$work/apply.log" 2>&1
+  if grep -Ei 'offset|fuzz|already applied' "$work/apply.log"; then
+    printf '%s\n' 'Patch requires exact source applicability.' >&2
+    exit 1
+  fi
+  git -C "$src" apply "$patch"
+}
+run_tests() {
+  local label="$1"
+  printf 'Full upstream inventory: %s\n' "$label"
+  "$go" -C "$src" test -count=1 -v ./... | tee "$work/$label-tests.log"
+  node --input-type=module - "$work/$label-tests.log" <<'JS'
+import { readFileSync } from 'node:fs';
+const log = readFileSync(process.argv[2], 'utf8');
+const count = (status) => [...log.matchAll(new RegExp(`^\\s*--- ${status}:`, 'gm'))].length;
+console.log(`Upstream results (including subtests): ${count('PASS')} passed, ${count('FAIL')} failed, ${count('SKIP')} skipped`);
+JS
+  "$go" -C "$src" mod verify
+  sha256sum -c "$work/modules.sha256"
+}
+# The scoped DefaultTransport fixture must never overlap a parallel test.
+if grep -RnE '\.Parallel[[:space:]]*\(' "$src/scripts/generate-popular-actions" --include='*_test.go'; then
+  printf '%s\n' 'HTTP fixture requires serial package tests.' >&2
+  exit 1
+fi
+# Full inventory on stock grammar isolates the enumerated environment repair.
+apply_patch test-harness
+run_tests stock
+sha256sum -c "$work/grammar.sha256"
+apply_patch queue
+[[ ! -e "$src/concurrency_queue_test.go" && ! -e "$src/queue-cases.json" ]]
 cp "$root/ci/actionlint/concurrency_queue_test.go" "$src/concurrency_queue_test.go"
 cp "$root/ci/actionlint/queue-cases.json" "$src/queue-cases.json"
-# Run every upstream test unchanged, plus the added parser matrix.
-"$go" -C "$src" test -count=1 -v ./...
+# Full inventory again, now including the added parser matrix.
+run_tests queue
 "$go" -C "$src" build -trimpath -o "$work/actionlint" ./cmd/actionlint
 "$go" -C "$src" mod verify
 sha256sum -c "$work/modules.sha256"

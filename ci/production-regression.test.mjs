@@ -813,6 +813,39 @@ test("queue compatibility is tested by the blocking original-workflow linter and
   assert.match(scope, /run: bash ci\/actionlint\/build\.sh/);
   assert.match(build, /git -C "\$src" apply --check/);
   assert.match(build, /test -count=1 -v \.\/\.\.\./);
+  assert.match(build, /\[\[ -d "\$src\/\.github\/workflows" && ! -e "\$src\/\.git" \]\]/);
+  assert.match(build, /mkdir "\$src\/\.git"/);
+  assert.match(build, /apply --check --verbose/);
+  assert.match(build, /'offset\|fuzz\|already applied'/);
+  assert.match(build, /HTTP fixture requires serial package tests/);
+  assert.match(build, /apply_patch test-harness\nrun_tests stock/);
+  assert.match(build, /run_tests stock\nsha256sum -c "\$work\/grammar\.sha256"\napply_patch queue/);
+  assert.match(build, /run_tests queue/);
+  assert.ok(
+    build.indexOf('build -trimpath -o "$work/stock-actionlint"') <
+      build.indexOf("apply_patch test-harness"),
+  );
+  const harness = read("./actionlint/test-harness.patch");
+  assert.deepEqual(
+    [...harness.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((match) => match[1]),
+    [
+      "linter_test.go",
+      "testdata/format/test.sarif",
+      "scripts/generate-popular-actions/main_test.go",
+    ],
+  );
+  assert.match(harness, /debug\.ReadBuildInfo\(\)/);
+  assert.match(harness, /info\.Main\.Version != "\(devel\)"/);
+  assert.match(harness, /TestDetectAbsentReleaseNotFound/);
+  assert.match(harness, /t\.Cleanup\(func\(\)/);
+  assert.match(harness, /http\.DefaultTransport = previous/);
+  assert.match(harness, /req\.Method != http\.MethodHead/);
+  assert.doesNotMatch(harness, /^\+.*(?:t\.Skip|t\.Parallel|http\.DefaultClient)/m);
+  // No existing Go assertion or production implementation is removed.
+  assert.deepEqual(
+    harness.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("---")),
+    ['-          "version": "",'],
+  );
   assert.match(
     build,
     /node "\$root\/ci\/actionlint\/queue-cli\.mjs" "\$work\/stock-actionlint" "\$work\/actionlint"/,
