@@ -194,13 +194,11 @@ export function generate(root = ROOT) {
       })
       .join("");
   // Keep palette/interaction roles in the facade and type scale in the shared
-  // sheet; other roles live beside theme rules. All three sheets are already
-  // served together. Scoping keeps legacy pages unchanged and fits the original
-  // raw AND gzip ceilings without a new request or a budget increase.
+  // sheet; hairlines and other roles live beside theme rules. All three sheets
+  // are already served together. Scoping keeps legacy pages unchanged and fits
+  // the original raw AND gzip ceilings without a new request or a budget increase.
   const foundation = ([alias]) =>
-    /^(g\d$|t\d$|hair\d$|ember$|on-accent$|accent-hi$|border$|live|echo|ok|danger|warn|focus-)/.test(
-      alias,
-    );
+    /^(g\d$|t\d$|ember$|on-accent$|accent-hi$|border$|live|echo|ok|danger|warn|focus-)/.test(alias);
   const shared = ([alias]) =>
     /^(font-size-|font-weight-|font-width-|line-height-|tracking-|space-\d+$|radius-)/.test(alias);
   const display = roles.find(([name]) => name === "font-display")[2];

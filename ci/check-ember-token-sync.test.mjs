@@ -103,6 +103,11 @@ test("Hono exposes each role once across the existing three-sheet bundle", () =>
   for (const [alias] of ROLES) {
     assert.equal([...css.matchAll(new RegExp(`--${alias}:`, "g"))].length, 1, alias);
   }
+  for (const alias of ["hair1", "hair2"]) {
+    assert.ok(!outputs.get("public/theme-tokens.css").includes(`--${alias}:`));
+    assert.ok(outputs.get("public/theme.css").includes(`--${alias}:`));
+    assert.ok(!outputs.get("web/src/ember-theme.css").includes(`--${alias}:`));
+  }
   const styles = outputs.get("public/styles.css");
   assert.match(styles, /\.base-theme\{[^}]*--font-size-hero:/);
   assert.ok(!outputs.get("public/theme.css").includes("--font-size-hero:"));
