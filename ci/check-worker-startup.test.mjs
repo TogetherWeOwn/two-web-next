@@ -308,11 +308,74 @@ describe("summarizeProfile", () => {
     assert.equal(s.sampledMs, 193.996);
     assert.equal(s.idleMs, 1.998);
     assert.equal(s.gcMs, 0);
-    assert.equal(s[METRIC], 191.998);
-    assert.equal(s.unsampledMs, 0.002);
+    assert.equal(s[METRIC], 192);
+    assert.equal(s.unsampledMs, 0);
     assert.equal(s.reversals, 2);
     assert.equal(s.maxReversalUs, 2);
   });
+  test("a reversed idle tail does not reject valid work when raw sampled time is below idle", () => {
+    const p = profile([
+      ...Array.from({ length: 48 }, (_, i) => [5, i === 0 ? 1 : 0]),
+      [2, 1000],
+      [5, -1000],
+    ]);
+    p.endTime = p.startTime + 1001;
+    const s = summarizeProfile(p);
+    assert.equal(s[METRIC], 0.001);
+    assert.equal(s.sampledMs, 0.001);
+    assert.equal(s.idleMs, 1);
+    assert.equal(s.unsampledMs, 0);
+  });
+  for (const [delta, message] of [
+    [-1001, "reversal 1001 us exceeds 1000 us"],
+    [-1, "reversal count 1 exceeds 0"],
+  ]) {
+    test(`absolute timestamp rounding cannot hide ${message}`, () => {
+      const p = profile(
+        [
+          [5, 2048],
+          [5, delta],
+        ],
+        { start: 2 ** 63 },
+      );
+      p.endTime = p.startTime + 4096;
+      assert.throws(() => summarizeProfile(p), {
+        message: `Invalid CPU profile sample: ${message} at sample 1`,
+      });
+    });
+  }
+  test("relative attribution preserves allowed reversals and idle intervals at a large origin", () => {
+    for (const steps of [
+      [
+        [5, 2048],
+        [2, 1000],
+      ],
+      [[5, 2048], [3, -1000], ...Array.from({ length: 48 }, () => [5, 0])],
+    ]) {
+      const ordinary = profile(steps, { start: 0 });
+      ordinary.endTime = 4096;
+      const large = { ...ordinary, startTime: 2 ** 63, endTime: 2 ** 63 + 4096 };
+      assert.deepEqual(summarizeProfile(large), summarizeProfile(ordinary));
+    }
+  });
+  for (const steps of [
+    [
+      [5, 4096],
+      [5, 1],
+    ],
+    [
+      [5, 0],
+      [5, -1],
+    ],
+  ]) {
+    test(`absolute timestamp rounding cannot hide a window escape of ${steps[1][1]} us`, () => {
+      const p = profile(steps, { start: 2 ** 63 });
+      p.endTime = p.startTime + 4096;
+      assert.throws(() => summarizeProfile(p), {
+        message: "Invalid CPU profile sample: timestamp outside profile window at sample 1",
+      });
+    });
+  }
   test("accepts a reversal of exactly 1000 us", () => {
     const s = summarizeProfile(reversalProfile(50, [1], 1000));
     assert.equal(s.reversals, 1);
@@ -592,6 +655,33 @@ describe("validateEvidence verdict boundaries", () => {
       }
     });
   }
+  test("a final reversal after an idle tail cannot hide a startup-budget breach", () => {
+    const p = profile(
+      [
+        ...Array.from({ length: 48 }, (_, i) => [5, i === 0 ? 42500 : 14000]),
+        [2, 1000],
+        [5, -1000],
+      ],
+      { start: 0 },
+    );
+    p.endTime = 701500;
+    const s = summarizeProfile(p);
+    assert.equal(s[METRIC], 700.5);
+    assert.equal(s.sampledMs, 700.5);
+    assert.equal(s.idleMs, 1);
+    assert.equal(s.unsampledMs, 0);
+    const bufs = [buf(work(50000)), buf(p), buf(work(60000))];
+    const ev = makeEvidence(bufs);
+    assert.equal(ev.maximumMs, 700.5);
+    assert.equal(ev.status, "fail");
+    assert.equal(validateEvidence(ev, IDENTITY, bufs, BUDGET), "fail");
+    ev.maximumMs = 699.5;
+    ev.status = "warn";
+    assert.throws(
+      () => validateEvidence(ev, IDENTITY, bufs, BUDGET),
+      /Incorrect local startup verdict/,
+    );
+  });
   test("a low maximum run cannot hide behind low others and vice versa", () => {
     const bufs = threeBufs(399999, 399999, 400000);
     assert.equal(validateEvidence(makeEvidence(bufs), IDENTITY, bufs, BUDGET), "warn");

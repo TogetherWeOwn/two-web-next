@@ -140,11 +140,17 @@ drains samples by code-event id rather than timestamp (see
 and [workerd's V8 pin](https://github.com/cloudflare/workerd/blob/v1.20261101.1/build/deps/v8.MODULE.bazel)).
 Small timestamp reversals are accepted only up to 1,000 us each and
 `min(3, floor(0.02 * sample count))` per profile; fewer than 50 samples allow none.
-Samples are stable-sorted by timestamp, with each sorted interval charged to
-that sample's node as before. Sampled time remains the raw delta sum, and the
-`sampledUs <= windowUs + 1000` check is unchanged. Each numeric run and the human
-summary report `reversals` and `maxReversalUs`. Larger, excessive or out-of-window
-reversals fail with the offending sample index; no samples are replaced or retried.
+Reversal size/count are checked on raw adjacent deltas before adding the absolute
+origin can round a reversal away. Cumulative offsets must also stay in the window.
+Samples are stable-sorted by their cumulative offsets (equivalent to timestamps
+without absolute-origin rounding), with each sorted interval charged to that
+sample's node as before. Non-idle time and `unsampledMs` use that sorted interval
+horizon, which can exceed the last raw timestamp when the profile ends in a
+reversal. `sampledMs` remains the raw delta sum, and the
+`sampledUs <= windowUs + 1000` check is unchanged; it is evidence, not the sorted
+attribution horizon. Each numeric run and the human summary report `reversals`
+and `maxReversalUs`. Larger, excessive or out-of-window reversals fail with the
+offending sample index; no samples are replaced or retried.
 Pinned Wrangler only rejects module
 failure when unsupported bindings exist, so upload admission deliberately requires
 an unsupported Hyperdrive binding; a future change must replace this failure

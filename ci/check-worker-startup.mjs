@@ -101,7 +101,7 @@ export function summarizeProfile(profile) {
   let sampledUs = 0;
   let reversals = 0;
   let maxReversalUs = 0;
-  let previousTimestamp = profile.startTime;
+  const windowUs = profile.endTime - profile.startTime;
   const maxReversals = Math.min(3, Math.floor(0.02 * profile.samples.length));
   const samples = [];
   for (let i = 0; i < profile.samples.length; i++) {
@@ -119,12 +119,18 @@ export function summarizeProfile(profile) {
       );
     sampledUs += delta;
     const timestamp = profile.startTime + sampledUs;
-    if (timestamp < profile.startTime || timestamp > profile.endTime)
+    if (
+      sampledUs < 0 ||
+      sampledUs > windowUs ||
+      timestamp < profile.startTime ||
+      timestamp > profile.endTime
+    )
       throw new Error(
         `Invalid CPU profile sample: timestamp outside profile window at sample ${i}`,
       );
-    if (timestamp < previousTimestamp) {
-      const reversalUs = previousTimestamp - timestamp;
+    // The raw adjacent step retains reversals even when absolute timestamps round to a tie.
+    if (delta < 0) {
+      const reversalUs = -delta;
       if (reversalUs > 1000)
         throw new Error(
           `Invalid CPU profile sample: reversal ${reversalUs} us exceeds 1000 us at sample ${i}`,
@@ -136,34 +142,32 @@ export function summarizeProfile(profile) {
           `Invalid CPU profile sample: reversal count ${reversals} exceeds ${maxReversals} at sample ${i}`,
         );
     }
-    samples.push({ timestamp, id, sampleIndex: i });
-    previousTimestamp = timestamp;
+    samples.push({ offsetUs: sampledUs, id, sampleIndex: i });
   }
-  // V8 drains samples by code-event id, not timestamp. Preserve ties' original order.
-  samples.sort((a, b) => a.timestamp - b.timestamp || a.sampleIndex - b.sampleIndex);
+  // V8 drains by code-event id. Sort relative times to avoid absolute-timestamp rounding.
+  samples.sort((a, b) => a.offsetUs - b.offsetUs || a.sampleIndex - b.sampleIndex);
   let idleUs = 0;
   let gcUs = 0;
-  previousTimestamp = profile.startTime;
+  let attributedUs = 0;
   for (const sample of samples) {
-    const delta = sample.timestamp - previousTimestamp;
+    const delta = sample.offsetUs - attributedUs;
     const node = nodes.get(sample.id);
     if (node.callFrame.functionName === "(idle)") idleUs += delta;
     if (node.callFrame.functionName === "(garbage collector)") gcUs += delta;
-    previousTimestamp = sample.timestamp;
+    attributedUs = sample.offsetUs;
   }
-  const windowUs = profile.endTime - profile.startTime;
   requireValue(
-    finite(sampledUs) && sampledUs > 0 && sampledUs <= windowUs + 1000 && sampledUs > idleUs,
+    finite(sampledUs) && sampledUs > 0 && sampledUs <= windowUs + 1000 && attributedUs > idleUs,
     "Incomplete CPU profile timing",
   );
   return {
-    [METRIC]: (sampledUs - idleUs) / 1000,
+    [METRIC]: (attributedUs - idleUs) / 1000,
     sampledMs: sampledUs / 1000,
     idleMs: idleUs / 1000,
     gcMs: gcUs / 1000,
     windowMs: windowUs / 1000,
-    // Sampling may leave a valid unsampled tail; retain it, do not call it CPU.
-    unsampledMs: Math.max(0, windowUs - sampledUs) / 1000,
+    // The sorted horizon includes a reversed raw tail; only time beyond it is unsampled.
+    unsampledMs: Math.max(0, windowUs - attributedUs) / 1000,
     samples: profile.samples.length,
     reversals,
     maxReversalUs,
