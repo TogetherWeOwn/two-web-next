@@ -47,7 +47,9 @@ import {
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
+import { formatAdminTime } from "./chronology";
 import { renderSavedEventNoticeHtml } from "./pages/event-form-review";
+import { EventRosterSection } from "./pages/event-form-roster";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -62,13 +64,12 @@ export type KitEventEditValues = {
 };
 
 /** One roster row as the Hono table renders it: display name, status and the
- * ISO instant. The member identifier stays out of the view: Hono uses it only
- * as a vnode key, never as rendered text, so the Svelte page keys rows by
- * their instant and index instead. */
+ * ISO instant, or null when the stored timestamp is unusable. The member
+ * identifier stays out of the view and the shared roster HTML. */
 export type KitEventEditRosterEntry = {
   member: string;
   status: string;
-  answeredAt: string;
+  answeredAt: string | null;
 };
 
 /** One roster sort header, mirroring the Hono TableSortHeader copy exactly. */
@@ -128,6 +129,8 @@ export type KitEventEditView = {
   seriesNote: string | null;
   endsAt: string;
   roster: KitEventEditRosterView;
+  /** Shared escaped, read-only roster markup; the Kit route has csr=false. */
+  rosterHtml: string;
   /** Pre-rendered pause-review HTML when rsvpAction is rsvp-pause, else null;
    * the page injects it via {@html} so the client bundle carries no review
    * strings or disclosure markup (client gzip ceiling). */
@@ -234,7 +237,7 @@ export async function resolveKitEventEdit(
   const entries = roster.rows.map((r) => ({
     member: r.username?.trim() || "Unknown member",
     status: r.status,
-    answeredAt: r.answeredAt.toISOString(),
+    answeredAt: formatAdminTime(r.answeredAt).iso,
   }));
   const rangeStart = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + 1 : 0;
   const rangeEnd = entries.length > 0 ? (query.page - 1) * ROSTER_PAGE_SIZE + entries.length : 0;
@@ -284,6 +287,15 @@ export async function resolveKitEventEdit(
         ? `Part of a ${row.recurrenceFrequency} series. Moving this event moves the not-yet-started occurrences by the same amount.`
         : null,
       endsAt: endFinite ? row.endsAt.toISOString() : "",
+      rosterHtml: String(
+        EventRosterSection({
+          eventKey: row.eventKey,
+          action: `/admin/events/${row.eventKey}`,
+          roster: roster.rows,
+          rosterTotal: roster.total,
+          rosterQuery: query,
+        }),
+      ),
       roster: {
         total: roster.total,
         query,
