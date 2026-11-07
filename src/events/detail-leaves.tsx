@@ -31,7 +31,16 @@ export interface DetailRosterModel {
   goingCount: number;
 }
 
-export interface DetailLeavesModel extends DetailMetadataModel, DetailRosterModel {
+export interface DetailShareModel {
+  status: string;
+  title: string;
+  canonical: string;
+  icsUrl: string;
+  googleCalendarUrl: string | null;
+}
+
+export interface DetailLeavesModel
+  extends DetailMetadataModel, DetailRosterModel, DetailShareModel {
   rsvpOpen: boolean;
   rsvpClosed: RsvpClosedReason | null;
   answer: ViewerRsvp | null;
@@ -44,7 +53,83 @@ export interface EventDetailHtml {
   metadata: string;
   rsvp: string;
   roster: string;
+  share: string;
 }
+
+export const EventShare: FC<{ model: DetailShareModel }> = ({ model }) => (
+  <section class="event-share" aria-labelledby="event-share-heading">
+    <h2 id="event-share-heading">Save the date</h2>
+    {model.status === "draft" ? (
+      <p data-testid="event-share-draft-note">
+        Calendar and share links open once this event is published. Members can&apos;t open a
+        draft yet.
+      </p>
+    ) : (
+      <>
+        <p>
+          <a href={model.icsUrl} data-testid="event-ics">
+            Add to calendar (.ics)
+          </a>
+          {model.googleCalendarUrl ? (
+            <>
+              {" · "}
+              <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
+                Google Calendar
+              </a>
+            </>
+          ) : null}
+          {model.status === "published" ? (
+            <>
+              <span hidden data-native-share-sep aria-hidden="true">
+                {" · "}
+              </span>
+              <button
+                type="button"
+                hidden
+                data-native-share
+                data-share-title={model.title}
+                data-share-url={model.canonical}
+                data-testid="event-share"
+              >
+                Share
+              </button>
+            </>
+          ) : null}
+        </p>
+        <div>
+          <label for="event-link-url">Event link</label>
+          <input
+            id="event-link-url"
+            data-testid="event-link-url"
+            type="text"
+            value={model.canonical}
+            readonly
+          />
+          <a
+            href={model.canonical}
+            data-copy-link={model.canonical}
+            data-testid="event-copy-link"
+            hidden
+          >
+            Copy link
+          </a>
+        </div>
+        <p data-testid="event-manual-copy">
+          Select the event link and copy it manually to share it.
+        </p>
+        <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
+        {model.status === "published" ? (
+          <p
+            role="status"
+            aria-live="polite"
+            data-testid="event-share-status"
+            data-native-share-status
+          ></p>
+        ) : null}
+      </>
+    )}
+  </section>
+);
 
 export const EventMetadata: FC<{
   model: DetailMetadataModel;
@@ -301,6 +386,7 @@ export function withEventDetailHtml<T extends DetailLeavesModel>(
             />
           ).toString(),
       roster: (<EventRoster model={model} />).toString(),
+      share: (<EventShare model={model} />).toString(),
     },
   };
 }
