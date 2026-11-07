@@ -27,6 +27,7 @@ import {
   setRsvpOpen,
   transitionEvent,
 } from "../src/admin/store";
+import { dispatchWriteBack } from "../src/admin/writeback";
 import { ValidationError } from "../src/admin/validation";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { events } from "../src/db/admin-schema";
@@ -46,6 +47,8 @@ vi.mock("../src/admin/store", async (importOriginal) => ({
   duplicateEvent: vi.fn(),
   recordAccess: vi.fn(),
 }));
+
+vi.mock("../src/admin/writeback", () => ({ dispatchWriteBack: vi.fn() }));
 
 const pg = vi.hoisted(() => ({ audit: vi.fn(), end: vi.fn(), factory: vi.fn() }));
 vi.mock("postgres", () => ({ default: pg.factory }));
@@ -488,6 +491,33 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
       expect(dbTouched).not.toHaveBeenCalled();
     },
   );
+
+  it("publish: unreadable saved times on a direct publish are a 422 with the reason and recovery links, one throttle hit and no dispatch", async () => {
+    vi.mocked(transitionEvent).mockRejectedValueOnce(
+      new ValidationError({ dates: "The saved event times cannot be read." }),
+    );
+    const throttle = throttleFixture(0);
+    const { app, cookie, bindings } = await mounted(MODERATOR, throttle);
+    const response = await app.request(
+      `/events/${KEY}/publish`,
+      postAction(env.APP_URL, cookie),
+      bindings,
+    );
+    expect(response.status).toBe(422);
+    const body = await response.text();
+    expect(body).toContain("The saved event times cannot be read.");
+    expect(body).toContain(`/admin/events/${KEY}`);
+    expect(body).toContain("Back to the event");
+    expect(body).toContain("/admin/events");
+    expect(body).toContain("Back to events");
+    expect(throttle.count()).toBe(1);
+    expectAdminWriteBucket(throttle);
+    expect(transitionEvent).toHaveBeenCalledOnce();
+    expect(dispatchWriteBack).not.toHaveBeenCalled();
+    expect(setRsvpOpen).not.toHaveBeenCalled();
+    expect(duplicateEvent).not.toHaveBeenCalled();
+    expect(dbTouched).not.toHaveBeenCalled();
+  });
 
   it("redispatch: moderator validation failure under-cap is still a 422 with zero throttle spend, no candidate load", async () => {
     const throttle = throttleFixture(0);

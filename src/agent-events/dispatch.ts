@@ -182,7 +182,7 @@ export async function execute(
     }
     const [u] =
       await tx`UPDATE events SET title=${f.title}, game=${f.game}, description=${f.description}, starts_at=${startsAt.toISOString()}, ends_at=${endsAt.toISOString()},
-                         timezone=${f.timezone}, location=${f.location}, capacity=${f.capacity}, agent_version = agent_version + 1, updated_at = now()
+                         timezone=${f.timezone}, location=${f.location}, capacity=${f.capacity}, agent_version = agent_version + 1, updated_at = greatest(now(), date_trunc('milliseconds', updated_at) + interval '1 millisecond')
                          WHERE event_key = ${ek} AND agent_version = ${doc.version as number} RETURNING status, agent_version`;
     if (!u)
       return denyOutcome(
@@ -238,7 +238,7 @@ export async function execute(
       ek,
     );
   }
-  await tx`UPDATE events SET status = ${next}, updated_at = now() WHERE event_key = ${ek}`;
+  await tx`UPDATE events SET status = ${next}, updated_at = greatest(now(), date_trunc('milliseconds', updated_at) + interval '1 millisecond') WHERE event_key = ${ek}`;
   return done(200, { event_key: ek, status: next }, ek, writeBackFor(ek, next));
 }
 

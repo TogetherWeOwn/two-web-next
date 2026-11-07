@@ -657,7 +657,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
               c,
               422,
               "That transition is not allowed",
-              err.fields.status ?? err.fields.ends_at ?? err.fields.rsvp_open,
+              err.fields.status ?? err.fields.ends_at ?? err.fields.dates ?? err.fields.rsvp_open,
               // Nothing changed. Offer plain GET links back to the event and
               // the list; never a form that would retry the refused POST.
               [

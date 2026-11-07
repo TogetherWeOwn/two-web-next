@@ -33,6 +33,7 @@ import {
   listEvents,
   materializeMissingInstances,
   materializeRecurringSeries,
+  patchEvent,
   recordAccess,
   transitionEvent,
   updateEvent,
@@ -666,6 +667,103 @@ describe.skipIf(!process.env.DATABASE_URL)("admin store failure and rollback pat
       await expect(
         transitionEvent(db, actor, row.eventKey, "cancelled", "ignored"),
       ).resolves.toMatchObject({ row: { status: "cancelled" } });
+    });
+
+    // Date is frozen (fake timers, Date only) at or before the stored updatedAt,
+    // modelling a skewed worker clock: a save must still advance the stamp.
+    async function withFrozenClock<T>(at: Date, run: () => Promise<T>): Promise<T> {
+      vi.useFakeTimers({ toFake: ["Date"] });
+      try {
+        vi.setSystemTime(at);
+        return await run();
+      } finally {
+        vi.useRealTimers();
+      }
+    }
+    const publishedAudits = async () =>
+      (await auditDescriptions(db)).filter((d) => d.startsWith("published event"));
+
+    describe.each([
+      ["equal to", 0],
+      ["before", -60_000],
+    ])("with the clock frozen %s the previous updatedAt", (_label, offsetMs) => {
+      it.each([
+        [
+          "updateEvent",
+          (key: string, title: string) =>
+            updateEvent(db, actor, key, parseEventForm({ ...FORM, title })),
+        ],
+        ["patchEvent", (key: string, title: string) => patchEvent(db, actor, key, { title })],
+      ])(
+        "%s strictly advances updatedAt, stays unique, and voids the old review stamp",
+        async (_name, save) => {
+          const future = new Date(Math.ceil(Date.now() / 1000) * 1000 + 3_600_000);
+          const row = await seedEvent({
+            eventKey: "01K00000000000000000000021",
+            location: "Hall",
+            updatedAt: future,
+          });
+          const reviewed = stamp(row);
+          const frozen = new Date(future.getTime() + offsetMs);
+          const { first, second } = await withFrozenClock(frozen, async () => ({
+            first: (await save(row.eventKey, "Saved once")).row,
+            second: (await save(row.eventKey, "Saved twice")).row,
+          }));
+          expect(first.updatedAt.getTime()).toBeGreaterThanOrEqual(future.getTime() + 1);
+          expect(second.updatedAt.getTime()).toBeGreaterThanOrEqual(first.updatedAt.getTime() + 1);
+          const stored = await reload(row.eventKey);
+          expect(stored.updatedAt.getTime()).toBe(second.updatedAt.getTime());
+          expect(stored.title).toBe("Saved twice");
+
+          // The pre-save review stamp no longer matches: publication is refused untouched.
+          const before = await reload(row.eventKey);
+          const auditsBefore = await auditDescriptions(db);
+          await expect(
+            transitionEvent(db, actor, row.eventKey, "published", reviewed),
+          ).rejects.toMatchObject({ fields: { reviewed_updated_at: expect.any(String) } });
+          expect(await reload(row.eventKey)).toEqual(before);
+          expect(before.status).toBe("draft");
+          expect(await auditDescriptions(db)).toEqual(auditsBefore);
+          expect(await publishedAudits()).toEqual([]);
+          const viaRoute = await post(`/events/${row.eventKey}/publish`, {
+            review: "1",
+            reviewed_updated_at: reviewed,
+          });
+          expect(viaRoute.status).toBe(303);
+          expect(viaRoute.headers.get("location")).toBe(
+            `/e/${row.eventKey}?review=1&publish_error=stale`,
+          );
+          expect(await reload(row.eventKey)).toEqual(before);
+          expect(await publishedAudits()).toEqual([]);
+        },
+      );
+    });
+
+    it("advances a shifted child's updatedAt past a future stamp under a frozen clock", async () => {
+      const parsed = parseEventForm(FORM);
+      const { row: parent } = await createEvent(db, actor, parsed, {
+        frequency: "weekly" as const,
+        count: 2,
+        endsOn: null,
+      });
+      const [child] = await db.select().from(events).where(eq(events.parentEventId, parent.id));
+      const future = new Date(Math.ceil(Date.now() / 1000) * 1000 + 3_600_000);
+      await db.update(events).set({ updatedAt: future }).where(eq(events.id, child!.id));
+      await withFrozenClock(future, () =>
+        updateEvent(
+          db,
+          actor,
+          parent.eventKey,
+          parseEventForm({
+            ...FORM,
+            starts_at: "2099-11-04 21:00",
+            ends_at: "2099-11-04 23:00",
+          }),
+        ),
+      );
+      const [moved] = await db.select().from(events).where(eq(events.id, child!.id));
+      expect(moved?.startsAt.toISOString()).toBe("2099-11-11T21:00:00.000Z");
+      expect(moved?.updatedAt.getTime()).toBeGreaterThanOrEqual(future.getTime() + 1);
     });
 
     it("judges the stamp after the row lock: a writer committing during the wait wins", async () => {

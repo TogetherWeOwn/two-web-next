@@ -412,6 +412,13 @@ export async function patchEvent(
   return result;
 }
 
+// A locked write must invalidate review even within one millisecond or when
+// the worker clock moves backwards. Nonfinite imported stamps can be repaired.
+function nextUpdatedAt(row: EventRow, now = new Date()): Date {
+  const previous = row.updatedAt.getTime();
+  return new Date(Math.max(now.getTime(), Number.isFinite(previous) ? previous + 1 : 0));
+}
+
 async function commitLockedUpdate(
   tx: Writer,
   actor: Actor,
@@ -452,7 +459,7 @@ async function commitLockedUpdate(
       capacity: input.capacity,
       // A moderator edit must invalidate an agent's full-field stale write.
       agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
-      updatedAt: new Date(),
+      updatedAt: nextUpdatedAt(locked),
     })
     .where(eq(events.eventKey, eventKey))
     .returning();
@@ -547,7 +554,7 @@ async function shiftFutureChildren(
         startsAt: shift(child, "startsAt"),
         endsAt: shift(child, "endsAt"),
         agentVersion: child.agentGrantId === null ? child.agentVersion : child.agentVersion + 1,
-        updatedAt: new Date(),
+        updatedAt: nextUpdatedAt(child),
       })
       .where(eq(events.id, child.id))
       .returning();
@@ -633,7 +640,7 @@ export async function transitionEvent(
       .set({
         status: target,
         agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
-        updatedAt: new Date(),
+        updatedAt: nextUpdatedAt(locked),
       })
       .where(eq(events.eventKey, eventKey))
       .returning();
@@ -693,7 +700,7 @@ export async function setRsvpOpen(
     if (locked.rsvpOpen === open) return { row: locked, writeBack: null };
     const [row] = await tx
       .update(events)
-      .set({ rsvpOpen: open, updatedAt: now })
+      .set({ rsvpOpen: open, updatedAt: nextUpdatedAt(locked, now) })
       .where(eq(events.eventKey, eventKey))
       .returning();
     if (!row) throw new Error("event RSVP toggle returned no row");
