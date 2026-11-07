@@ -118,6 +118,7 @@ describe("saved-event review shared publish markup", () => {
 
   it("renders a publish form carrying the review flag and the reviewed timestamp", () => {
     const html = renderSavedEventReviewHtml(draft(), "actions");
+    expect(html).toContain('class="review-actions" data-testid="event-review-actions"');
     expect(html).toContain(`method="post"`);
     expect(html).toContain(`action="/admin/events/${row.eventKey}/publish"`);
     expect(html).toContain('name="review" value="1"');

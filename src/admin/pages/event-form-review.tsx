@@ -52,7 +52,7 @@ export const EventReviewSection: FC<{ review: SavedEventReview; part?: ReviewPar
   }
   if (part === "actions") {
     return (
-      <div data-testid="event-review-actions">
+      <div class="review-actions" data-testid="event-review-actions">
         <div class="actions">
           {review.isDraft ? (
             <form method="post" action={review.publishHref}>
