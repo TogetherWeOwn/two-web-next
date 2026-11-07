@@ -28,8 +28,9 @@ that changed something.
   `{status: {before, after}}`; imported legacy rows keep the spatie
   `{attributes, old}` shape. The runner accepts both. An event counts
   once, at its first publish ever, and only when that first publish falls
-  inside the window: the query also reads earlier publish rows, so an
-  event republished inside the window after an earlier publish is left out.
+  inside the window: for events that publish inside the window, the query
+  also reads their earlier publish rows, so an event republished inside the
+  window after an earlier publish is left out.
 - **Re-edit:** a moderator content edit of the same event at time `t` with
   `publish < t ≤ publish + 60 minutes` — the app's `updated event …`
   rows, or a legacy `updated` row, that changed a content field. The app
