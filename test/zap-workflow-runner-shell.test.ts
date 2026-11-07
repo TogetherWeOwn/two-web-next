@@ -52,7 +52,7 @@ function childEnv(dir: string): NodeJS.ProcessEnv {
 // Execute the actual consumer shell under runner flags, substituting only
 // scanner/sleep executables. The node shim runs real CLIs with the
 // child-only offline safety fence.
-function workflowGateUnderRunner(first: unknown, second: unknown) {
+function workflowGateUnderRunner(first: unknown, second: unknown, scannerExit = 0) {
   return scratch((dir) => {
     const workflow = readFileSync(resolve(root, ".github/workflows/zap-staging.yml"), "utf8");
     const block = workflow.match(
@@ -88,7 +88,7 @@ function workflowGateUnderRunner(first: unknown, second: unknown) {
     writeFileSync(join(dir, "bin", "sleep"), "#!/bin/sh\nexit 0\n", { mode: 0o755 });
     writeFileSync(
       join(dir, "bin", "docker"),
-      `#!/bin/sh\nprintf 'fixture-rescan\\n' >> "$RUNNER_TEMP/scans"\ncp "$RUNNER_TEMP/second.json" "$RUNNER_TEMP/zap/zap-report.json"\n`,
+      `#!/bin/sh\nprintf 'fixture-rescan\\n' >> "$RUNNER_TEMP/scans"\ncp "$RUNNER_TEMP/second.json" "$RUNNER_TEMP/zap/zap-report.json"\nexit ${scannerExit}\n`,
       { mode: 0o755 },
     );
     const result = spawnSync("/bin/bash", [...RUNNER_BASH, script], {
@@ -201,6 +201,15 @@ describe("ZAP workflow consumer under runner errexit", () => {
     expect(result.output).not.toContain("4111111111111111");
     expect(result.summary).not.toContain("4111111111111111");
     expect(result.output + result.summary).not.toContain("example.invalid/private");
+  });
+
+  it("names the scanner exit code when the rescan errors under runner errexit", () => {
+    const result = workflowGateUnderRunner(report([pii()]), report([]), 3);
+    expect(result.status, result.output).toBe(1);
+    expect(result.scans).toBe(1);
+    expect(result.output).toContain("First scan verdict:");
+    expect(result.output).toContain("zap-baseline.py exited 3");
+    expect(result.output).not.toContain("Re-scan verdict:");
   });
 
   it("forged non-PII High fails closed without a rescan under runner errexit", () => {
