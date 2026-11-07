@@ -472,5 +472,61 @@ for path in \
   expect_policy_scan "parity: approved value remains detected at ${path}" "${parity_policy}" 1 "${expected}"
 done
 
+# -- render-clock fixture: exact rule/path/value and base-policy admission -----
+clock_path="test/render-clock-routes.test.ts"
+clock_key="$(printf '%s' 01ARZ3NDEKTSV4RRFFQ69G5 FA X)"
+plant_clock_key() {
+  mkdir -p "${repo}/$(dirname "$1")"
+  printf 'const EVENT_KEY = "%s";\n' "${clock_key}" > "${repo}/$1"
+}
+new_repo clock-approved
+plant_clock_key "${clock_path}"
+base_commit
+expect_policy_scan "clock: stock detects the synthetic event key" "${work}/stock.toml" 1 \
+  '[["generic-api-key","test/render-clock-routes.test.ts",1]]'
+expect_policy_scan "clock: candidate excludes only the exact fixture" "${hono_policy}" 0 '[]'
+printf '\nconst EVENT_KEY = "%s";\n' "${clock_key}" > "${repo}/${clock_path}"
+pr_commit
+expect_policy_scan "clock: exception survives a new commit and line number" "${hono_policy}" 0 '[]'
+
+new_repo clock-other-secrets
+mkdir -p "${repo}/test"
+printf 'const NEIGHBOUR_KEY = "%s";\napi_key = "%s"\nvalue = "%s"\nconst PREFIXED_KEY = "x%s";\nconst SUFFIXED_KEY = "%sx";\n' \
+  "$(printf '%s' 01ARZ3NDEKTSV4RRFFQ69G5 FA Y)" \
+  "$(printf 'render clock negative-control fixture' | sha256sum | cut -c1-32 | base64 -w0)" \
+  "${token}" "${clock_key}" "${clock_key}" > "${repo}/${clock_path}"
+base_commit
+expect_policy_scan "clock: nearby, unrelated, longer values and another rule remain detected" \
+  "${hono_policy}" 1 \
+  '[["generic-api-key","test/render-clock-routes.test.ts",1],["generic-api-key","test/render-clock-routes.test.ts",2],["github-pat","test/render-clock-routes.test.ts",3],["generic-api-key","test/render-clock-routes.test.ts",4],["generic-api-key","test/render-clock-routes.test.ts",5]]'
+
+for path in \
+  test/other.test.ts \
+  nested/test/render-clock-routes.test.ts \
+  test/render-clock-routes.test.ts.bak \
+  test/render-clock-routesXtest.ts \
+  test/render-clock-routes.testXts; do
+  new_repo "clock-path-${cases}"
+  plant_clock_key "${path}"
+  base_commit
+  expected="$(printf '[["generic-api-key","%s",1]]' "${path}")"
+  expect_policy_scan "clock: approved value remains detected at ${path}" "${hono_policy}" 1 "${expected}"
+done
+
+new_repo clock-pr-policy
+write_stock_config
+base_commit
+plant_clock_key "${clock_path}"
+cp "${hono_policy}" "${repo}/.gitleaks.toml"
+pr_commit
+expect "clock: candidate policy cannot exempt its own PR" 1 "$(scan_rc pull_request)"
+
+new_repo clock-base-policy
+cp "${hono_policy}" "${repo}/.gitleaks.toml"
+base_commit
+plant_clock_key "${clock_path}"
+pr_commit
+expect "clock: merged base policy admits the fixture history" 0 "$(scan_rc pull_request)"
+
 printf '\n%d cases, %d failed\n' "${cases}" "${failures}"
 [[ "${failures}" -eq 0 ]]

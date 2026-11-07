@@ -26,6 +26,21 @@ const step = (name: string): string => {
 };
 
 describe("gitleaks fixture policy", () => {
+  it("keeps the render-clock fixture exception limited to the exact rule, path and secret", () => {
+    const entries = policy
+      .split(/\r?\n\[\[allowlists\]\]\r?\n/)
+      .map((entry) => entry.trim())
+      .filter((entry) => entry.includes("Synthetic ULID event key in the render-clock route fixture"));
+    expect(entries).toEqual([
+      String.raw`description = "Synthetic ULID event key in the render-clock route fixture (fakeDb only), not a credential"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+regexes = ['''^01ARZ3NDEKTSV4RRFFQ69G5FAX$''']
+paths = ['''^test/render-clock-routes\.test\.ts$''']`,
+    ]);
+  });
+
   it("keeps the parity fixture exception limited to the exact rule, path and secret", () => {
     const entries = policy
       .split(/\r?\n\[\[allowlists\]\]\r?\n/)
