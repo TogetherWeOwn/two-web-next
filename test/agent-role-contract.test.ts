@@ -6,7 +6,7 @@ const role = (name: string) =>
   readFileSync(new URL(`../.claude/agents/${name}.md`, import.meta.url), "utf8");
 
 const metadata = (source: string, key: string) => {
-  const frontmatter = source.split("---\n")[1];
+  const frontmatter = source.replace(/\r\n/g, "\n").split("---\n")[1];
   return frontmatter
     ?.split("\n")
     .find((line) => line.startsWith(`${key}: `))
@@ -14,6 +14,12 @@ const metadata = (source: string, key: string) => {
 };
 
 describe("repository delegation contract", () => {
+  it.each(["\n", "\r\n"])("reads metadata with %j line endings", (newline) => {
+    const source = ["---", "model: gpt-6.1-sol", "tools: Read, Grep", "---", "Body"].join(newline);
+    expect(metadata(source, "model")).toBe("gpt-6.1-sol");
+    expect(metadata(source, "tools")).toBe("Read, Grep");
+  });
+
   it("retains the configured model routes and tool lists", () => {
     const builder = role("builder");
     const reviewer = role("cross-reviewer");

@@ -84,6 +84,17 @@ results without changing the event's canonical or share URLs.
 
 ## Develop and test safely
 
+**AI contributors:** full suites and CI gates run only on GitHub Actions for
+the exact PR head. Push to the PR branch, keep the PR draft while incomplete,
+and record exact-head Actions run/job links and conclusions. The local command
+examples below document human development tooling; they do not authorize agent
+full-suite or CI-mirror execution, including in Boat, through a fallback or by
+the delegated builder's caller. Local agent test execution is limited to an
+authorized focused reproduction of one failing test or crate, with the guarded
+heavy-build controls in [AGENTS.md](AGENTS.md#commands). See the
+[verification workflow](CONTRIBUTING.md#verify-a-change-before-opening-a-pr).
+All database-safety and merge/release gates still apply.
+
 Use Node **22.23.0+ on the 22.x line, or 24+** (CI uses Node 24; the probe CLIs
 require default native TypeScript stripping, not early Node 22/23 releases).
 The 22 floor is 22.23.0, the 22.x release verified end to end here:
