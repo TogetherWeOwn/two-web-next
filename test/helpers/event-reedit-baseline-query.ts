@@ -5,7 +5,6 @@
 // describe, which owns and resets the fixture: the floor guard counts any added
 // conditional skip in a new test file, so this reuses that existing gate.
 import { describe, expect, it } from "vitest";
-// @ts-expect-error standalone mjs has no type declarations
 import { computeReeditShare, fetchActivityRows } from "../../bin/event-reedit-baseline.mjs";
 import { activityLog } from "../../src/db/admin-schema";
 import type { MemberDataFixture } from "./member-data-db";
@@ -48,6 +47,11 @@ export function registerEventReeditBaselineQuery(fixture: () => MemberDataFixtur
         row("noop", "2026-10-04T10:10:00Z", "updated event Noop", {
           updatedAt: { before: "2026-10-04T10:00:00.000Z", after: "2026-10-04T10:10:00.000Z" },
         }),
+        // History for an event with no publish inside the window is never fetched.
+        row("dormant", "2026-09-10T10:00:00Z", "published event Dormant", published),
+        row("dormant", "2026-10-05T10:00:00Z", "updated event Dormant", {
+          title: { before: "a", after: "b" },
+        }),
         // Pre-window edits are never fetched.
         row("old", "2026-09-20T10:00:00Z", "updated event Old", {
           title: { before: "a", after: "b" },
@@ -56,6 +60,7 @@ export function registerEventReeditBaselineQuery(fixture: () => MemberDataFixtur
 
       const rows = await fetchActivityRows(client, { windowStart, fetchEnd });
       expect(rows.some((r: { subjectId: string }) => r.subjectId === "old")).toBe(false);
+      expect(rows.filter((r: { subjectId: string }) => r.subjectId === "dormant")).toHaveLength(1);
       expect(rows.filter((r: { subjectId: string }) => r.subjectId === "again")).toHaveLength(3);
 
       const report = computeReeditShare(rows, { windowStart, windowEnd, observedUntil: fetchEnd });
