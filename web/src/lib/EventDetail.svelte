@@ -190,42 +190,7 @@ const detailIslands = [
         </section>
       {/if}
     </div>
-    <section class="event-share" aria-labelledby="event-share-heading">
-      <h2 id="event-share-heading">Save the date</h2>
-      <p>
-        <a href={model.icsUrl} data-testid="event-ics">Add to calendar (.ics)</a>
-        {#if model.googleCalendarUrl}
-          {" · "}
-          <a href={model.googleCalendarUrl} data-testid="event-google-calendar" rel="noopener">
-            Google Calendar
-          </a>
-        {/if}
-        {" · "}
-        <a href={model.copyLink} data-copy-link={model.copyLink} data-testid="event-copy-link">
-          Copy link
-        </a>
-        {#if model.status === "published"}<span hidden data-native-share-sep aria-hidden="true">{" · "}</span><button
-            type="button"
-            hidden
-            data-native-share
-            data-share-title={model.title}
-            data-share-url={model.canonical}
-            data-testid="event-share"
-          >
-            Share
-          </button>
-        {/if}
-      </p>
-      <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
-      {#if model.status === "published"}
-        <p
-          role="status"
-          aria-live="polite"
-          data-testid="event-share-status"
-          data-native-share-status
-        ></p>
-      {/if}
-    </section>
+    {@html model.detailHtml.share}
   </div>
   {@html model.detailHtml.roster}
   {@html detailIslands}

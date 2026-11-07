@@ -391,7 +391,7 @@ jobs:
         run: |
           mkdir -p artifacts/a11y
           node --import tsx --test --test-reporter=tap --test-reporter-destination=artifacts/a11y/event-native-share.tap ci/event-native-share-browser.test.mjs
-          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-native-share.tap "Native event sharing" 34
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/event-native-share.tap "Native event sharing" 44
       - name: Kit error shell rendered accessibility (SSR fixtures, no network or DB)
         env:
           KIT_ERROR_SHELL_BROWSER_TESTS: "true"
@@ -629,6 +629,9 @@ jobs:
       - name: Install Kit workspace dependencies
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm ci --prefix web --include=dev --no-audit --no-fund
+      - name: Admin waitlist DB-free regression
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: env -u DATABASE_URL node node_modules/vitest/vitest.mjs run test/admin.test.ts test/admin-waitlist-order-postgres-acceptance.test.ts test/admin-waitlist-classifier.test.ts
       - name: Kit public payload contract (hostile fixtures, no network or DB)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: npm run check:kit-payloads
