@@ -541,7 +541,7 @@ test("themed focus and accent controls use their semantic roles", () => {
   const source = readFileSync(join(ROOT, "assets/styles.css"), "utf8");
   assert.match(source, /\.home-event-link:focus-visible[^}]+var\(--focus-ring,var\(--brand\)\)/);
   const event = readFileSync(join(ROOT, "public/event-theme.css"), "utf8");
-  assert.match(event, /background: var\(--brand\); color: var\(--on-accent\)/);
+  assert.match(event, /background:\s*var\(--brand\);\s*color:\s*var\(--on-accent\)/);
 });
 
 test("unknown flags are a usage error", () => {
