@@ -32,6 +32,7 @@ import {
   MASK,
   clientAddress,
   describeBody,
+  maskAssetEtag,
   normalizeHeaders,
   stableHex,
 } from "./normalize.mjs";
@@ -197,6 +198,8 @@ function requestRecord(vector, headers) {
   delete kept["x-parity-client"];
   if (kept.cookie) kept.cookie = `<identity:${vector.identity}>`;
   if (kept["x-two-qa-auth"]) kept["x-two-qa-auth"] = `<qa-token:${vector.qaToken}>`;
+  // The If-None-Match vectors echo the ETag the target served, so the same mask applies.
+  if (kept["if-none-match"]) kept["if-none-match"] = maskAssetEtag(kept["if-none-match"]);
   if (vector.bodyBytes) kept["content-length"] = String(vector.bodyBytes);
   return { method: vector.method, path: vector.path, headers: kept };
 }

@@ -10,6 +10,7 @@ import {
   describeBody,
   jsonShape,
   MASK,
+  maskAssetEtag,
   normalizeHeaders,
   normalizeSetCookie,
 } from "./normalize.mjs";
@@ -168,6 +169,8 @@ test("dev asset ETags are masked; the app's sha256 ETags are kept", () => {
   assert.equal(etag('W/"5b20db3024084b7736ae40940ade9026"'), `W/"${ASSET_ETAG_MASK}"`);
   const app = `"${"a".repeat(64)}"`;
   assert.equal(etag(app), app);
+  assert.equal(maskAssetEtag('W/"5b20db3024084b7736ae40940ade9026"'), `W/"${ASSET_ETAG_MASK}"`);
+  assert.equal(maskAssetEtag("*"), "*");
 });
 
 test("bodies hash after masking nonces and the request id; JSON keeps a shape", () => {

@@ -16,6 +16,11 @@ const NONCE_ATTRIBUTE = /\bnonce="[^"]*"/g;
 // 32-hex form identifies the asset layer; the W/ prefix and quotes are kept.
 const ASSET_ETAG = /^(W\/)?"[0-9a-f]{32}"$/;
 export const ASSET_ETAG_MASK = "<asset-etag>";
+
+/** Masks a `wrangler dev` asset ETag; any other value is returned unchanged. */
+export function maskAssetEtag(value) {
+  return value.replace(ASSET_ETAG, `$1"${ASSET_ETAG_MASK}"`);
+}
 const TEXTUAL =
   /^(text\/|application\/(json|[\w.+-]*\+json|javascript|xml|[\w.+-]*\+xml|x-ndjson|manifest\+json))/i;
 
@@ -42,7 +47,7 @@ export function normalizeHeaders(rawHeaders) {
     if (MASKED_HEADERS.has(name)) value = MASK;
     else if (CSP_HEADERS.has(name)) value = value.replace(NONCE_SOURCE, `'nonce-${MASK}'`);
     else if (name === "retry-after" && /^\d+$/.test(value)) value = "<seconds>";
-    else if (name === "etag") value = value.replace(ASSET_ETAG, `$1"${ASSET_ETAG_MASK}"`);
+    else if (name === "etag") value = maskAssetEtag(value);
     headers[name] = name in headers ? `${headers[name]}, ${value}` : value;
   }
   const sorted = Object.fromEntries(
