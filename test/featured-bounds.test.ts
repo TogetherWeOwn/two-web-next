@@ -1,7 +1,7 @@
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import type { EnvWithAdminDb } from "../src/admin/db";
 import type { Db } from "../src/db/index";
-import type { Env } from "../src/env";
 import { FEATURED_ROW_CAP, listPublishedFeatured, listVisibleFeatured } from "../src/featured";
 import { __resetHomeGuestCacheForTests, cachedFeatured } from "../src/home-cache";
 
@@ -67,7 +67,16 @@ describe("featured transfer bounds (local transport)", () => {
   it("does not cache a saturated base, including when the fallback read fails", async () => {
     const { db, queries } = fixture(true);
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const env = { ADMIN_DB: db } as Env;
+    const env: EnvWithAdminDb = {
+      APP_URL: "https://next.example.test",
+      DISCORD_CLIENT_ID: "client-id",
+      DISCORD_CLIENT_SECRET: "client-secret",
+      DISCORD_GUILD_ID: "guild-id",
+      DISCORD_INVITE_URL: "https://discord.gg/invite",
+      DISCORD_BOT_TOKEN: "bot-token",
+      SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
+      ADMIN_DB: db,
+    };
     const open = vi.fn(async () => db);
     for (let attempt = 0; attempt < 2; attempt++) {
       expect(await cachedFeatured(env, open, now, undefined, "unsafe request id!")).toEqual([]);
