@@ -3,11 +3,9 @@
 // Catches lost/LIKE game predicates, post-LIMIT filtering, unsafe scope labels,
 // all-games fallbacks and validators that are not bound to the response bytes.
 import { createHash } from "node:crypto";
-import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
 import type { Env } from "../src/env";
 import { createMemorySessionStore, newSessionToken } from "../src/sessions";
@@ -16,14 +14,13 @@ import {
   APP_URL,
   KEY,
   OTHER_KEY,
-  type CalendarRow,
   calendarBytes,
   calendarRow,
   healthyVevent,
 } from "./helpers/ics-wire-fixture";
+import { encodeEventRow } from "./helpers/pg-proxy-event-projection";
 
 const NOW = new Date("2026-07-15T19:00:00Z");
-const columns = Object.keys(getTableColumns(events)) as (keyof CalendarRow)[];
 const scopePath = (game: string) => `/events.ics?${new URLSearchParams({ game })}`;
 const unfold = (body: string) => body.replace(/\r\n[ \t]/g, "");
 const property = (body: string, name: string) =>
@@ -55,10 +52,9 @@ function fixture(rows = [calendarRow({ game: "Helldivers 2" })]) {
     if (limit) result = result.slice(0, Number(params[Number(limit[1]) - 1]));
     return {
       rows: result.map((row) =>
-        columns.map((key) => {
-          const value = row[key];
-          return value instanceof Date ? value.toISOString() : value;
-        }),
+        encodeEventRow(sql, params, row, (value) =>
+          value instanceof Date ? value.toISOString() : value,
+        ),
       ),
     };
   });

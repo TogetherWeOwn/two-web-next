@@ -1184,16 +1184,84 @@ export async function sitemapEvents(
   }));
 }
 
-/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. An optional game narrows to one stored game in the same SQL WHERE, before the cap. */
+/**
+ * Feed text budgets: the admin form's code-point write maxima at 4 UTF-8
+ * bytes each (title/game 100, description 1000, location 255, organizer 500).
+ * Timezone is an IANA name; 256 bytes is far above any real one.
+ */
+export const FEED_EGRESS_TEXT_MAX_BYTES = {
+  eventKey: EGRESS_EVENT_KEY_MAX_BYTES,
+  title: 400,
+  game: 400,
+  description: 4000,
+  timezone: 256,
+  location: 1020,
+  organizer_name: 2000,
+} as const;
+
+const feedText = {
+  eventKey: events.eventKey,
+  title: events.title,
+  game: events.game,
+  description: events.description,
+  timezone: events.timezone,
+  location: events.location,
+  organizer_name: events.organizer_name,
+} as const;
+
+const admittedFeedText = <K extends keyof typeof feedText>(key: K) =>
+  sql<
+    (typeof events.$inferSelect)[K]
+  >`case when octet_length(${feedText[key]}) <= ${FEED_EGRESS_TEXT_MAX_BYTES[key]} then ${feedText[key]} end`;
+
+// Nullable columns read NULL both when empty and when refused, so one marker
+// decides refusal: true unless some stored value is over its budget.
+const feedTextFits = sql<boolean>`(${sql.join(
+  (Object.keys(feedText) as (keyof typeof feedText)[]).map(
+    (key) => sql`octet_length(${feedText[key]}) > ${FEED_EGRESS_TEXT_MAX_BYTES[key]}`,
+  ),
+  sql` or `,
+)}) is not true`;
+
+/** The columns the RSS, ICS and Markdown collection builders render. */
+export type FeedEventRow = Pick<
+  typeof events.$inferSelect,
+  | keyof typeof feedText
+  | "id"
+  | "status"
+  | "capacity"
+  | "startsAt"
+  | "endsAt"
+  | "updatedAt"
+  | "icsSequence"
+>;
+
+/** Feed scope: upcoming, finite boundaries, ends_at >= now, soonest first. Equal starts break ties by id for a deterministic total order. `statuses` differs for RSS vs ICS. Capped in SQL at FEED_EGRESS_LIMIT. An optional game narrows to one stored game in the same SQL WHERE, before the cap. Text is byte-admitted as for the sitemap. */
 export async function listFeed(
   db: Db,
   statuses: ("published" | "cancelled")[],
   now = new Date(),
   game: string | null = null,
-): Promise<Array<typeof events.$inferSelect>> {
+): Promise<FeedEventRow[]> {
   const gameClause = gameCondition(game);
   const rows = await db
-    .select()
+    .select({
+      id: events.id,
+      eventKey: admittedFeedText("eventKey"),
+      title: admittedFeedText("title"),
+      game: admittedFeedText("game"),
+      description: admittedFeedText("description"),
+      timezone: admittedFeedText("timezone"),
+      location: admittedFeedText("location"),
+      organizer_name: admittedFeedText("organizer_name"),
+      status: events.status,
+      capacity: events.capacity,
+      startsAt: events.startsAt,
+      endsAt: events.endsAt,
+      updatedAt: events.updatedAt,
+      icsSequence: events.icsSequence,
+      textFits: feedTextFits,
+    })
     .from(events)
     .where(
       and(
@@ -1206,14 +1274,16 @@ export async function listFeed(
     .orderBy(asc(events.startsAt), asc(events.id))
     .limit(FEED_EGRESS_LIMIT);
   warnEgressCapacity("feed", rows.length);
+  const admitted = rows.filter((r) => r.textFits === true);
+  warnEgressTextRefusal("feed", rows.length - admitted.length);
   // Feed builders stringify date parts without throwing, so without this the
   // export would serve corrupt `NaN` instants instead of failing loudly.
-  const renderable = rows.filter(isRenderableEventWindow);
-  const skipped = rows.length - renderable.length;
+  const renderable = admitted.filter(isRenderableEventWindow);
+  const skipped = admitted.length - renderable.length;
   if (skipped > 0) {
     console.warn("listFeed skipped unrenderable rows.", { skipped });
   }
-  return renderable;
+  return renderable.map(({ textFits: _, ...row }) => row);
 }
 
 export async function getEventRow(db: Db, key: string): Promise<typeof events.$inferSelect | null> {

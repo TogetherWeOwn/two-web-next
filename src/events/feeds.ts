@@ -1,11 +1,9 @@
 // W9 calendar feeds: pure builders ported byte-for-byte from two-web's
 // EventIcs / EventRss / EventSubscribe / EventGoogleCalendar. No query, no auth, no HTTP.
-import type { events } from "../db/admin-schema";
 import { containsControlCharacters } from "../admin/validation-shared";
 import { stripTrailingSlash } from "../seo";
+import type { FeedEventRow as EventRow } from "./reads";
 import { rssXml as xml } from "./rss-xml";
-
-type EventRow = typeof events.$inferSelect;
 
 export const SITE_NAME = "Together We Own";
 
