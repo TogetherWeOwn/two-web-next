@@ -77,12 +77,33 @@ const WOMAN_TECHNOLOGIST = String.fromCodePoint(0x1f469, 0x200d, 0x1f4bb);
 // Persian "books" (ZWNJ between joining letters).
 const SINHALA = String.fromCodePoint(0x0dc1, 0x0dca, 0x200d, 0x0dbb, 0x0dd3);
 const PERSIAN_BOOKS = String.fromCodePoint(0x06a9, 0x062a, 0x0627, 0x0628, 0x200c, 0x0647, 0x0627);
+// Emoji subdivision flag (England): black flag + tag "gbeng" + CANCEL TAG.
+// Tags are refused everywhere else, so this pins the one admitted shape.
+const ENGLAND = String.fromCodePoint(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067, 0xe007f);
+// One variation selector after its base: emoji presentation (heart + VS16),
+// a keycap, and a Japanese ideographic variation sequence (U+845B + VS17).
+const HEART = String.fromCodePoint(0x2764, 0xfe0f);
+const KEYCAP = String.fromCodePoint(0x23, 0xfe0f, 0x20e3);
+const KUZU_IVS = String.fromCodePoint(0x845b, 0xe0100);
 
 const NAMED = [
   { label: "bidi override U+202E", char: BIDI_OVERRIDE },
   { label: "bidi isolate U+2066", char: BIDI_ISOLATE },
   { label: "zero-width space U+200B", char: ZWSP },
   { label: "BOM U+FEFF", char: BOM },
+  { label: "left-to-right mark U+200E", char: String.fromCodePoint(0x200e) },
+  { label: "right-to-left mark U+200F", char: String.fromCodePoint(0x200f) },
+  { label: "Arabic letter mark U+061C", char: String.fromCodePoint(0x061c) },
+  { label: "word joiner U+2060", char: String.fromCodePoint(0x2060) },
+  { label: "invisible plus U+2064", char: String.fromCodePoint(0x2064) },
+  { label: "soft hyphen U+00AD", char: String.fromCodePoint(0x00ad) },
+  { label: "Mongolian vowel separator U+180E", char: String.fromCodePoint(0x180e) },
+  { label: "Hangul filler U+3164", char: String.fromCodePoint(0x3164) },
+  { label: "Hangul choseong filler U+115F", char: String.fromCodePoint(0x115f) },
+  { label: "Hangul jungseong filler U+1160", char: String.fromCodePoint(0x1160) },
+  { label: "halfwidth Hangul filler U+FFA0", char: String.fromCodePoint(0xffa0) },
+  { label: "stray tag letter U+E0041", char: String.fromCodePoint(0xe0041) },
+  { label: "stray CANCEL TAG U+E007F", char: String.fromCodePoint(0xe007f) },
 ] as const;
 
 const MESSAGE_NAMES_THE_CLASS = /invisible|directional/i;
@@ -289,6 +310,48 @@ describe("validateProfile keeps accepting what the shared rule admits (controls)
     });
   });
 
+  it("accepts subdivision flags and single variation selectors, refuses stray tags and stacks", () => {
+    for (const value of [
+      ENGLAND,
+      `Go ${ENGLAND}!`,
+      HEART,
+      KEYCAP,
+      KUZU_IVS,
+      `${KUZU_IVS}${HEART}`,
+    ]) {
+      expect(validateProfile({ ...valid, bio: value })).toEqual({
+        ok: true,
+        attrs: { ...valid, bio: value },
+      });
+      expect(validateProfile({ ...valid, games: [value] }).ok).toBe(true);
+    }
+    const F = String.fromCodePoint;
+    for (const value of [
+      // A flag whose tag run carries hidden text, an unterminated tag run,
+      // a tag run on a non-flag base, a leading selector, stacked selectors.
+      F(0x1f3f4, 0xe0068, 0xe0069, 0xe0064, 0xe0064, 0xe0065, 0xe006e, 0xe0021, 0xe007f),
+      F(0x1f3f4, 0xe0067, 0xe0062, 0xe0065, 0xe006e, 0xe0067),
+      F(0x61, 0xe0067, 0xe0062, 0xe007f),
+      `${F(0xfe0f)}Halo`,
+      F(0x61, 0xfe0f, 0xfe0f),
+      F(0x845b, 0xe0100, 0xe0101),
+    ]) {
+      expectRefusal(validateProfile({ ...valid, bio: value }), "bio");
+      expectRefusal(validateProfile({ ...valid, games: [value] }), "games");
+    }
+  });
+
+  it("still accepts Hebrew, Arabic and Hangul text without marks or fillers", () => {
+    const F = String.fromCodePoint;
+    for (const value of [
+      F(0x05e9, 0x05dc, 0x05d5, 0x05dd),
+      F(0x0645, 0x0631, 0x062d, 0x0628, 0x0627, 0x0020, 0x0661, 0x0662),
+      F(0xd55c, 0xad6d, 0xc5b4),
+    ]) {
+      expect(validateProfile({ ...valid, bio: value, games: [value] }).ok).toBe(true);
+    }
+  });
+
   it("still accepts empty/blank bio and games as empty, not as refusals", () => {
     expect(validateProfile({ ...valid, bio: "", games: [] })).toEqual({
       ok: true,
@@ -460,6 +523,14 @@ describe("profile write boundary refuses bidi/invisible text (in-memory fixtures
     expect(await res.json()).toEqual({ saved: true, message: "Profile saved." });
     expect(harness.save).toHaveBeenCalledTimes(1);
     expect(harness.store.rows.get(memberId)).toMatchObject({ bio, games: [FAMILY] });
+  });
+
+  it("still saves a subdivision flag and an ideographic variation sequence verbatim", async () => {
+    const harness = await routeSetup();
+    const bio = `From ${ENGLAND}, ${KUZU_IVS} ${HEART}`;
+    const res = await harness.jsonPatch({ bio, games: [KEYCAP], timezone: "UTC" });
+    expect(res.status).toBe(200);
+    expect(harness.store.rows.get(memberId)).toMatchObject({ bio, games: [KEYCAP] });
   });
 
   it("still saves Sinhala and Persian orthographic joiners verbatim on both write shapes", async () => {
