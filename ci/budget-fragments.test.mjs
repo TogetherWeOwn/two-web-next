@@ -192,13 +192,14 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // and 1220480; 1219584 rejects by 898 and 896).
 // 1222656 admits the pinned Ember migration (both frozen builds 1222251;
 // 1220608 rejects by 1643), with every other fragment unchanged.
-// 1226752 admits the RFC 5892 joiner tables in the shared text rule on top of
-// that (composed build 1226469 over main 161462d2; 1226240 rejects by 229).
-// 1227264 admits the profile bidi and invisible-character rule on top of that
-// (composed build 1226904 over main 161462d2; 1226752 rejects by 152).
+// 1228800 admits the RFC 5892 joiner tables in the shared text rule on top of
+// that (composed build 1228316 over main 2c86dc09; 1228288 rejects by 28).
+// 1229312 admits the profile bidi and invisible-character rule on top of that
+// (+435 over the joiner build; projected 1228751 over main 2c86dc09 leaves
+// 49 bytes at 1228800, too thin to absorb further main growth).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
   1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536,
-  1219584, 1220608, 1222656, 1226752, 1227264,
+  1219584, 1220608, 1222656, 1228800, 1229312,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -235,7 +236,7 @@ function assertShippingKitBudget(actual, approvedClient) {
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536, 1219584, 1220608, 1222656, 1226752, 1227264`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = approvedClient

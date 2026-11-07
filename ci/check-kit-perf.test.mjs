@@ -545,12 +545,12 @@ const SHIPPING_SERVER_RAW_CAP = JSON.parse(SHIPPING_BUDGET_BYTES.toString("utf8"
 const SHIPPING_SERVER_RAW_ALLOCATIONS = {
   1220608: { intervalBytes: 1220482, exactBytes: 1220608, overBytes: 1220609 },
   1222656: { intervalBytes: 1222251, exactBytes: 1222656, overBytes: 1222657 },
-  1226752: { intervalBytes: 1226469, exactBytes: 1226752, overBytes: 1226753 },
-  1227264: { intervalBytes: 1226904, exactBytes: 1227264, overBytes: 1227265 },
+  1228800: { intervalBytes: 1228316, exactBytes: 1228800, overBytes: 1228801 },
+  1229312: { intervalBytes: 1228751, exactBytes: 1229312, overBytes: 1229313 },
 };
 const SHIPPING_SERVER_RAW_UNSUPPORTED =
   `unsupported server raw allocation ${String(SHIPPING_SERVER_RAW_CAP)}: ` +
-  `expected one of 1220608, 1222656, 1226752, 1227264`;
+  `expected one of 1220608, 1222656, 1228800, 1229312`;
 
 test("shipping budget: server raw allocation is explicitly approved", () => {
   assert.ok(
