@@ -273,6 +273,7 @@
       root.dataset.query = query;
       live.canonical.href = incoming.href;
       live.og.content = incoming.href;
+      if (page.title) document.title = page.title;
       if (push) window.history.pushState(null, "", url.pathname + url.search);
       renderedAddress = pageAddress(url);
       feedback.textContent = "";

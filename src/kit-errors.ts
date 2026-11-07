@@ -18,12 +18,14 @@
 // title and lead below match that notice exactly, never outage copy.
 
 import { EVENTS_SEARCH_TOO_LONG_COPY } from "./islands/contracts";
+import { EVENTS_SEARCH_TOO_LONG_TITLE } from "./seo";
 
 export type KitErrorStatus = 400 | 404 | 403 | 410 | 422 | 429 | 500 | 503;
 
 export interface KitErrorCopy {
   code: string;
   title: string;
+  documentTitle?: string;
   lead: string;
 }
 
@@ -51,6 +53,7 @@ const COPY: Record<KitErrorStatus, KitErrorCopy> = {
   422: {
     code: "422",
     title: "Events",
+    documentTitle: EVENTS_SEARCH_TOO_LONG_TITLE,
     lead: EVENTS_SEARCH_TOO_LONG_COPY,
   },
   429: {

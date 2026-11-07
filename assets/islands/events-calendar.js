@@ -509,6 +509,7 @@
       var ogUrl = document.querySelector('meta[property="og:url"]');
       if (canonicalLink) canonicalLink.href = canonical.href;
       if (ogUrl) ogUrl.content = canonical.href;
+      if (page.title) document.title = page.title;
       if (push) window.history.pushState(null, "", url.pathname + url.search + url.hash);
       renderedAddress = pageAddress(url);
       // A navigation that commits while the box is still over the limit keeps naming it.
