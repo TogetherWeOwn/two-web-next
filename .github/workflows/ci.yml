@@ -805,6 +805,20 @@ jobs:
       - name: Production Kit Worker config dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: npx wrangler deploy --config web/wrangler.production.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-production-worker-dry-run"
+      - name: Production Kit fatal-response boundary (built Worker, local fixtures)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        timeout-minutes: 3
+        run: node --import tsx --test --test-timeout=150000 ci/kit-worker-fatal.test.mjs
+        env:
+          KIT_WORKER_FATAL_EVIDENCE_DIR: artifacts/kit-worker-fatal
+      - name: Production Kit fatal-response evidence
+        if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-worker-fatal-${{ github.sha }}
+          path: artifacts/kit-worker-fatal/
+          if-no-files-found: error
+          retention-days: 14
       - name: Production Kit all-family-off route parity
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         timeout-minutes: 15

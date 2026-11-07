@@ -30,6 +30,19 @@ build yet.
   (no Kit route ids), and `/about`, `/faq` and `/rules` keep the same Hono route
   label whether served directly or through the Hono catch-all dispatch.
 
+- The production Kit config enters through `web/worker.js`, which delegates
+  once to the unchanged adapter-generated Worker, then runs
+  `protectKitWorkerResponse`. Kit can render its fatal `error.html` or rebuild a
+  response after the hook has returned. This outer boundary restores missing
+  security headers without retrying the request. Complete Hono, Kit and asset
+  envelopes pass through unchanged, including their CSP, cache policy, cookies
+  and renderer label. Incomplete responses get the shared path/method policy,
+  no-store, origin/renderer labels and a safe request id; HTML errors carrying
+  the exact existing fallback style receive its existing hash allowlist. The
+  template, style bytes and allowlist are unchanged. Synthetic regression cases
+  and an Actions built-Worker fatal fixture are verification sources, not a
+  recorded PASS or independent Security approval.
+
 ## Unimplemented
 
 - Production Kit upload (`web/wrangler.production.jsonc` as a version of the

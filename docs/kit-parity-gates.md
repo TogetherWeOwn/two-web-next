@@ -281,6 +281,20 @@ still a parity difference: no exception is approved by implementing the header
 protection. Record its exact vector and obtain the required technical approval
 before adding any row below.
 
+The production config wraps the unmodified adapter entry with `web/worker.js`.
+Its outer response boundary covers Kit's fatal error rendering and post-hook
+rewrites. Responses with all shared security headers return untouched; a missing
+or empty security header triggers the complete path/method envelope, no-store,
+renderer/origin markers and safe request correlation. The exact existing fatal
+style hash is allowed only on HTML error bodies containing that style element.
+This is not a new parity exception or a change to the fatal template. Production
+parity now exercises that wrapper as the config entry. The separate built fatal
+fixture replaces only the compiled hook in an ephemeral bundle, throws before
+`resolve`, and checks Kit's real fatal HTML/JSON/HEAD responses through the same
+wrapper. It deploys nothing and uses no database or live credentials. Its
+`kit-worker-fatal-<sha>` evidence is a failure/success receipt, not a substitute
+for full inventory parity, independent Security review or release approval.
+
 These comparisons use ephemeral Actions-local Workers and databases. They do
 not start a staging service, attach alarms, provision resources or deploy a
 version. Staging qualification and rollback drills remain separate evidence;

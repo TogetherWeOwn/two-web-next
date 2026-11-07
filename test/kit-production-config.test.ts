@@ -20,12 +20,34 @@ describe("production Kit Worker config (web/wrangler.production.jsonc)", () => {
   it("uses the production script name and the Kit build output", () => {
     expect(kit.name).toBe("two-web-next-production");
     expect(kit.name).toBe(prod.name);
-    expect(kit.main).toBe(".svelte-kit/cloudflare/_worker.js");
+    expect(kit.main).toBe("worker.js");
+    const adapter = readWranglerConfig(read("web/wrangler.jsonc"));
+    expect(adapter.main).toBe(".svelte-kit/cloudflare/_worker.js");
+    const entry = read("web/worker.js");
+    expect(entry).toContain('import adapter from "./.svelte-kit/cloudflare/_worker.js"');
+    expect(entry).toContain('import { protectKitWorkerResponse } from "../src/kit-worker-response.ts"');
+    expect(entry).toContain(
+      "protectKitWorkerResponse(request, await adapter.fetch(request, env), env)",
+    );
     expect(kit.assets).toEqual({
       directory: ".svelte-kit/cloudflare",
       binding: "ASSETS",
       run_worker_first: true,
     });
+  });
+
+  it("requires the built fatal-response proof after the adapter build in Actions", () => {
+    const workflow = read(".github/workflows/ci.yml");
+    const build = workflow.indexOf("name: Kit adapter build and local startup diagnostic");
+    const fatal = workflow.indexOf("name: Production Kit fatal-response boundary");
+    const parity = workflow.indexOf("name: Production Kit all-family-off route parity");
+    expect(build).toBeGreaterThan(-1);
+    expect(fatal).toBeGreaterThan(build);
+    expect(parity).toBeGreaterThan(fatal);
+    expect(workflow).toContain(
+      "node --import tsx --test --test-timeout=150000 ci/kit-worker-fatal.test.mjs",
+    );
+    expect(workflow).toContain("KIT_WORKER_FATAL_EVIDENCE_DIR: artifacts/kit-worker-fatal");
   });
 
   it("preserves the production runtime settings", () => {
