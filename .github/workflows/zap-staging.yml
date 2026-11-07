@@ -11,9 +11,9 @@ name: zap-staging
 # false positives on synthetic numbers and the 3-minute spider covers a varying
 # URL subset per run, so a transient single 10062 that vanishes on re-scan is a
 # flake. Any other High, any budget breach, or a repeated 10062 still fails.
-# Public repo: standard GitHub-hosted runners; the job summary lists alert names
-# and counts only and the full report is never uploaded (artifacts are public
-# here).
+# Public repo: standard GitHub-hosted runners; the job summary and the log carry
+# only the public-safe verdict of each scan (plugin IDs, labels, risks and
+# counts), and the full report is never uploaded (artifacts are public here).
 
 on:
   workflow_call:
@@ -52,10 +52,11 @@ jobs:
         run: |
           set -uo pipefail
           mkdir -p "$RUNNER_TEMP/zap" && chmod 777 "$RUNNER_TEMP/zap"
+          rc=0
           # -I: warnings never set the exit code; ci/zap-gate.mjs decides. -m 3: spider minutes.
+          # `|| rc=$?` keeps the runner's errexit from skipping the diagnostic below.
           docker run --rm -v "$RUNNER_TEMP/zap:/zap/wrk:rw" "$ZAP_IMAGE" \
-            zap-baseline.py -t "$TARGET" -J zap-report.json -I -m 3 >/dev/null 2>&1
-          rc=$?
+            zap-baseline.py -t "$TARGET" -J zap-report.json -I -m 3 >/dev/null 2>&1 || rc=$?
           # 0 = no FAIL rules; 3 = scan error (no trustworthy report).
           if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then echo "zap-baseline.py exited $rc"; exit 1; fi
           test -s "$RUNNER_TEMP/zap/zap-report.json"
@@ -63,7 +64,10 @@ jobs:
         run: |
           set -uo pipefail
           rc=0
-          node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json --format json > "$RUNNER_TEMP/zap/verdict.json" || rc=$?
+          # The JSON verdict is public-safe (docs/zap-baseline.md): tee it to the
+          # log, which the API can read; zap-gate.mjs also writes the summary.
+          echo "First scan verdict:"
+          node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json --format json | tee "$RUNNER_TEMP/zap/verdict.json" || rc=$?
           if [ "$rc" -eq 0 ]; then exit 0; fi
           if [ "$rc" -ne 1 ]; then exit 1; fi
           if node ci/zap-retry-decision.mjs "$RUNNER_TEMP/zap/verdict.json"; then
@@ -71,12 +75,14 @@ jobs:
             # Brief pause lets per-minute throttle buckets decay before the re-scan.
             sleep 30
             mkdir -p "$RUNNER_TEMP/zap" && chmod 777 "$RUNNER_TEMP/zap"
+            rc=0
             docker run --rm -v "$RUNNER_TEMP/zap:/zap/wrk:rw" "$ZAP_IMAGE" \
-              zap-baseline.py -t "$TARGET" -J zap-report.json -I -m 3 >/dev/null 2>&1
-            rc=$?
+              zap-baseline.py -t "$TARGET" -J zap-report.json -I -m 3 >/dev/null 2>&1 || rc=$?
             if [ "$rc" -ne 0 ] && [ "$rc" -ne 2 ]; then echo "zap-baseline.py exited $rc"; exit 1; fi
             test -s "$RUNNER_TEMP/zap/zap-report.json"
-            node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json --format json > "$RUNNER_TEMP/zap/rescan-verdict.json"
+            echo "Re-scan verdict:"
+            printf '\nRe-scan after a lone PII Disclosure (10062) High; the section above is the first scan.\n\n' >> "$GITHUB_STEP_SUMMARY"
+            node ci/zap-gate.mjs "$RUNNER_TEMP/zap/zap-report.json" ci/zap-budget.json --format json | tee "$RUNNER_TEMP/zap/rescan-verdict.json"
           else
             exit 1
           fi

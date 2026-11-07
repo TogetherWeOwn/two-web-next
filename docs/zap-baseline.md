@@ -25,6 +25,14 @@ any other host.
   repeated 10062, any other High, or any budget breach still fails.
 - The summary also reports how many sites the scan covered
   (`Scanned N site(s)`), so a thin-spider run is visible next time.
+- The workflow prints the JSON verdict of each scan to the job log, under
+  `First scan verdict:` and `Re-scan verdict:`, and writes both Markdown verdicts to
+  the job summary, including when the gate fails. If the re-scan's
+  `zap-baseline.py` itself errors, the step fails before a re-scan verdict
+  exists and the log says `zap-baseline.py exited N`. Job summaries cannot be read
+  through the API, but logs can. The `error_code` shows whether a rescan failed
+  on 10062 again (`pii_high`), on another High (`high_alert`) or on a budget
+  breach (`budget_exceeded`).
 - Missing/malformed scan evidence, unknown risk codes and invalid budgets
   fail closed with a public-safe diagnostic instead of passing.
 - **Medium** and **Low** alert-type counts fail above `maxMedium` / `maxLow` in
