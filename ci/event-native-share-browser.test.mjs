@@ -2,7 +2,7 @@
 // Runs in browser-enabled CI with an executed-case verifier.
 // The Hono a11y/Lighthouse gates do not cover Kit.
 import assert from "node:assert/strict";
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile, readdir, mkdir } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { chromium, expect } from "@playwright/test";
@@ -20,13 +20,23 @@ import {
 } from "../test/fixtures/event-native-share.ts";
 
 let browser;
+let kitCss;
 const evidence = process.env.EVENT_NATIVE_SHARE_EVIDENCE_DIR;
 const ROOT = resolve("public");
 const SHARE_NAME = /^share(?: this)?(?: event)?$/i;
 const expectedPayload = { title: SHARE_TITLE, url: SHARE_CANONICAL };
 before(async () => {
   browser = await chromium.launch({ headless: true });
-  if (evidence) await mkdir(evidence, { recursive: true });
+  if (evidence) {
+    await mkdir(evidence, { recursive: true });
+    // Match kit-preview-e2e: component SSR omits +layout's compiled app.css.
+    // Capture the real Vite output, never raw Tailwind source or Hono tokens.
+    const assets = resolve("web/.svelte-kit/output/client/_app/immutable/assets");
+    const names = (await readdir(assets)).filter((name) => name.endsWith(".css")).sort();
+    assert.ok(names.length > 0, "Kit evidence requires built layout CSS");
+    const sheets = await Promise.all(names.map((name) => readFile(resolve(assets, name), "utf8")));
+    kitCss = sheets.join("\n");
+  }
 });
 after(async () => {
   await browser?.close();
@@ -137,7 +147,10 @@ async function open(t, view, options = {}) {
       await route.fulfill({
         status: fixture.status,
         contentType: "text/html; charset=utf-8",
-        body: fixture.html,
+        body:
+          view === "Kit" && evidence
+            ? fixture.html.replace("</head>", `<style>${kitCss}</style></head>`)
+            : fixture.html,
       });
       return;
     }
@@ -505,7 +518,10 @@ describe("Native event sharing", () => {
         await expect(field).toBeEnabled();
         await field.focus();
         await f.page.keyboard.press("ControlOrMeta+A");
-        assert.equal(await field.evaluate((node) => node.value.slice(node.selectionStart, node.selectionEnd)), SHARE_CANONICAL);
+        assert.equal(
+          await field.evaluate((node) => node.value.slice(node.selectionStart, node.selectionEnd)),
+          SHARE_CANONICAL,
+        );
         await expect(f.page.getByRole("link", { name: /copy link/i })).toHaveCount(0);
         assert.deepEqual(f.errors, []);
         assert.deepEqual(f.blocked, []);
@@ -517,11 +533,23 @@ describe("Native event sharing", () => {
         for (const status of ["published", "draft"]) {
           for (const javaScriptEnabled of [true, false]) {
             const f = await open(t, view, {
-              status, javaScriptEnabled, viewer: status === "draft" ? "moderator" : "guest",
+              status,
+              javaScriptEnabled,
+              viewer: status === "draft" ? "moderator" : "guest",
             });
-            for (const [width, height] of [[1280, 800], [390, 844]]) {
+            for (const [width, height] of [
+              [1280, 800],
+              [390, 844],
+            ]) {
               await f.page.setViewportSize({ width, height });
               await f.page.evaluate(() => document.fonts.ready);
+              assert.notEqual(
+                await f.page
+                  .locator(".base-theme")
+                  .evaluate((node) => getComputedStyle(node).getPropertyValue("--line").trim()),
+                "",
+                "capture must include the renderer's semantic border token",
+              );
               const name = `${view.toLowerCase()}-${status}-js-${javaScriptEnabled}-${width}x${height}`;
               await f.page.screenshot({ path: resolve(evidence, `${name}.png`), fullPage: true });
             }
