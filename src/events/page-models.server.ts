@@ -120,8 +120,15 @@ export async function loadCalendarPageModel(args: {
   // Only the web DB reads depend on the game list. Keep their whole pipeline
   // parallel with Discord, so a pending snapshot never delays the list reads.
   const canonicalRead = async () => {
-    const games = await listPublishedGames(db);
-    const gameFilter = resolveGameFilter(games, rawGame);
+    // A blank game input resolves to no filter whatever the list holds, so the
+    // facet read runs beside the page reads instead of ahead of them: one
+    // fewer sequential database round trip on the plain `/events` render.
+    const gamesRead = listPublishedGames(db);
+    // Observed here so a rank-jump failure cannot leave it unhandled; the
+    // Promise.all below still rejects with it.
+    gamesRead.catch(() => undefined);
+    const gameResolved = (rawGame ?? "").trim() === "" ? null : await gamesRead;
+    const gameFilter = resolveGameFilter(gameResolved ?? [], rawGame);
     const opts = { includeDrafts, search: match, game: gameFilter };
 
     // Grid day-jumps resolve the list page holding the card, even past page one.
@@ -132,7 +139,8 @@ export async function loadCalendarPageModel(args: {
     }
 
     // Independent reads start together like the homepage (perf(home) #856).
-    const [upcomingPage, localPast] = await Promise.all([
+    const [games, upcomingPage, localPast] = await Promise.all([
+      gamesRead,
       listUpcoming(db, now, opts, listPage),
       listCalendarPast(db, now, opts),
     ]);
