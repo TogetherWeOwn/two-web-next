@@ -496,9 +496,10 @@ printf 'const NEIGHBOUR_KEY = "%s";\napi_key = "%s"\nvalue = "%s"\nconst PREFIXE
   "$(printf 'render clock negative-control fixture' | sha256sum | cut -c1-32 | base64 -w0)" \
   "${token}" "${clock_key}" "${clock_key}" > "${repo}/${clock_path}"
 base_commit
+# The encoded negative control produces two generic-api-key findings on line 2.
 expect_policy_scan "clock: nearby, unrelated, longer values and another rule remain detected" \
   "${hono_policy}" 1 \
-  '[["generic-api-key","test/render-clock-routes.test.ts",1],["generic-api-key","test/render-clock-routes.test.ts",2],["github-pat","test/render-clock-routes.test.ts",3],["generic-api-key","test/render-clock-routes.test.ts",4],["generic-api-key","test/render-clock-routes.test.ts",5]]'
+  '[["generic-api-key","test/render-clock-routes.test.ts",1],["generic-api-key","test/render-clock-routes.test.ts",2],["generic-api-key","test/render-clock-routes.test.ts",2],["github-pat","test/render-clock-routes.test.ts",3],["generic-api-key","test/render-clock-routes.test.ts",4],["generic-api-key","test/render-clock-routes.test.ts",5]]'
 
 for path in \
   test/other.test.ts \
