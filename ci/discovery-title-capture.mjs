@@ -52,7 +52,7 @@ async function capture(page, renderer, stateId, viewport, interaction, httpStatu
     interaction,
     httpStatus,
     documentTitle: await page.title(),
-    h1: (await page.locator("h1").innerText()).trim(),
+    h1: (await page.locator("h1").textContent()).trim(),
     png,
     pngSha256: digest(bytes),
     capturedAt: new Date().toISOString(),
