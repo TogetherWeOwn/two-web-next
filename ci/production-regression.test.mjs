@@ -771,6 +771,45 @@ test("qualification CLI ignores an all-skipped deploy without reading the older 
   }
 });
 
+test("deployment admission enforces complete inventories at the 100-job boundary", async () => {
+  const jobs = [
+    deployedJob(),
+    ...Array.from({ length: 99 }, (_, index) => ({
+      name: `other-${index}`,
+      status: "completed",
+      conclusion: "success",
+    })),
+  ];
+  assert.equal(jobs.length, 100);
+  assert.equal(
+    await qualificationDeployment(qualificationContext(), deploymentOptions(jobs)),
+    SHA,
+    "a complete 100-job inventory must qualify",
+  );
+  const oversized = [...jobs, { name: "other-99", status: "completed", conclusion: "success" }];
+  assert.equal(oversized.length, 101);
+  await assert.rejects(
+    qualificationDeployment(qualificationContext(), deploymentOptions(oversized)),
+    /Incomplete staging deploy job evidence/,
+  );
+  for (const body of [
+    {},
+    { total_count: 1, jobs: null },
+    { total_count: 1, jobs: {} },
+    { total_count: "100", jobs },
+    { total_count: 101, jobs },
+    { total_count: 99, jobs },
+  ]) {
+    await assert.rejects(
+      qualificationDeployment(qualificationContext(), {
+        token: "fixture",
+        fetchImpl: async () => ({ ok: true, json: async () => body }),
+      }),
+      /Incomplete staging deploy job evidence/,
+    );
+  }
+});
+
 test("deployment admission refuses missing ambiguous or unexecuted deployment evidence", async () => {
   for (const jobs of [
     [],
