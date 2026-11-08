@@ -492,7 +492,7 @@ test("candidate named build suppresses implicit lifecycle hooks with native npm"
       private: true,
       scripts: {
         prebuild: 'node -e "process.exit(91)"',
-        build: 'node -e "require(\'node:fs\').writeFileSync(\'built.txt\', \'named build\')"',
+        build: "node -e \"require('node:fs').writeFileSync('built.txt', 'named build')\"",
         postbuild: 'node -e "process.exit(92)"',
       },
     }),

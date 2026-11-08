@@ -4,6 +4,17 @@ This page records only what is delivered. The production deploy still builds and
 uploads the Hono Worker; nothing in `deploy-production.yml` uploads the Kit
 build yet.
 
+## Latest verification
+
+[Actions 42534384202](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42534384202)
+on `3e56d02c6053f3a674bfc3c4871dc71c4efb62ed` failed both test legs at
+formatting: one quoted command string in the npm lifecycle fixture. The reported
+layout is corrected without changing its command bytes, behavior or assertions.
+Tests and Kit build/capture/rehearsal/fatal/parity steps were not reached; missing
+outputs are consequences, not runtime verdicts. Auxiliary jobs passed. The newly
+published authenticated-reader, generator and lifecycle controls remain untested.
+No local tests, lint, typecheck, build, install or deployment ran for this repair.
+
 ## Separated execution caller (not yet exercised)
 
 `ci/kit-canonical-execute.mjs` connects the existing source binder and
