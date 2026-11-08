@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -18,6 +18,7 @@ import { KIT_CHECK_IDS, KIT_GROUP_IDS } from "./bundle-inventory.mjs";
 import {
   executeCanonicalBuild,
   verifyCanonicalBudgetReport,
+  verifyCanonicalExecutionArtifactBytes,
   verifyCanonicalExecutionMembers,
 } from "./kit-canonical-execute.mjs";
 import { canonicalCellIdentity } from "./kit-canonical-source.mjs";
@@ -240,6 +241,152 @@ function memberFixture() {
     "executionSha256",
   );
   return { members, expected, authority, records, save, frozen };
+}
+
+const ZIP_BUILDER = `
+import base64, io, json, sys, warnings, zipfile
+warnings.simplefilter("ignore")
+out = io.BytesIO()
+with zipfile.ZipFile(out, "w") as archive:
+    for entry in json.load(sys.stdin):
+        info = zipfile.ZipInfo(entry["name"])
+        info.compress_type = entry.get("compression", zipfile.ZIP_DEFLATED)
+        info.external_attr = entry.get("mode", 0o100400) << 16
+        archive.writestr(info, base64.b64decode(entry["base64"]))
+sys.stdout.buffer.write(out.getvalue())
+`;
+
+function artifactFixture(mutate = () => {}) {
+  const f = memberFixture();
+  const entries = f.members.map(({ path, data }) => ({
+    name: path,
+    base64: data.toString("base64"),
+  }));
+  mutate(entries);
+  const archive = execFileSync("python3", ["-I", "-c", ZIP_BUILDER], {
+    input: JSON.stringify(entries),
+    timeout: 10_000,
+    maxBuffer: 8 * 1024 * 1024,
+    env: {},
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  return {
+    ...f,
+    archive,
+    expected: { ...f.expected, archiveBytes: archive.length, archiveSha256: sha256(archive) },
+  };
+}
+
+const ARTIFACT_FAILURE = "canonical separated artifact byte verification failed";
+
+test("separated ZIP binds the complete output without authenticating or qualifying it", () => {
+  const f = artifactFixture();
+  const result = verifyCanonicalExecutionArtifactBytes(f.archive, f.expected, f.authority);
+  assert.deepEqual(result.receipt, f.frozen);
+  assert.equal(result.archiveScope, "complete-separated-output");
+  assert.equal(result.archiveSha256, sha256(f.archive));
+  assert.equal(result.archiveBytes, f.archive.length);
+  assert.equal(result.identity.candidateSha, B);
+  assert.equal(result.identity.collectorSha, D);
+  assert.equal(result.reportTotalsVerified, true);
+  assert.equal(result.directoryEvidence, "receipt-declared");
+  assert.equal(result.authenticatedArchiveVerified, false);
+  assert.equal(result.sourceTreesVerified, false);
+  assert.equal(result.executionVerified, false);
+  assert.equal(result.qualified, false);
+});
+
+for (const field of [
+  "archiveSha256",
+  "bindingSha256",
+  "executionSha256",
+  "budgetSha256",
+  "journalSha256",
+  "receiptSha256",
+]) {
+  test(`separated ZIP refuses external ${field} drift`, () => {
+    const f = artifactFixture();
+    f.expected[field] = "0".repeat(64);
+    assert.throws(() => verifyCanonicalExecutionArtifactBytes(f.archive, f.expected, f.authority), {
+      message: ARTIFACT_FAILURE,
+    });
+  });
+}
+
+for (const path of [
+  "source-binding.json",
+  "execution.json",
+  "budget.json",
+  "capture/status.json",
+  "capture/bytes/receipt.json",
+]) {
+  test(`separated ZIP refuses missing ${path}`, () => {
+    const f = artifactFixture((entries) => {
+      entries.splice(entries.findIndex((entry) => entry.name === path), 1);
+    });
+    assert.throws(() => verifyCanonicalExecutionArtifactBytes(f.archive, f.expected, f.authority), {
+      message: ARTIFACT_FAILURE,
+    });
+  });
+}
+
+for (const kind of [
+  "duplicate",
+  "extra",
+  "raw-output",
+  "traversal",
+  "absolute",
+  "backslash",
+  "control",
+  "symlink",
+  "directory",
+  "compression",
+  "empty-document",
+  "invalid-document",
+  "changed-runtime",
+]) {
+  test(`separated ZIP refuses ${kind} members`, () => {
+    const f = artifactFixture((entries) => {
+      if (kind === "duplicate") entries.push(entries[0]);
+      if (kind === "extra") entries.push({ name: "extra.txt", base64: "eA==" });
+      if (kind === "raw-output") entries[0].name = "web/.svelte-kit/output/server/later.js";
+      if (kind === "traversal") entries[0].name = "capture/bytes/../outside.js";
+      if (kind === "absolute") entries[0].name = "/capture/bytes/worker.js";
+      if (kind === "backslash") entries[0].name = "capture/bytes/a\\\\b";
+      if (kind === "control") entries[0].name = "capture/bytes/a\u007fb";
+      if (kind === "symlink") entries[0].mode = 0o120777;
+      if (kind === "directory") entries[0].name += "/";
+      if (kind === "compression") entries[0].compression = 12;
+      if (kind === "empty-document" || kind === "invalid-document") {
+        entries.find((entry) => entry.name === "execution.json").base64 =
+          kind === "empty-document" ? "" : "ew==";
+      }
+      if (kind === "changed-runtime") entries[0].base64 = "eA==";
+    });
+    assert.throws(() => verifyCanonicalExecutionArtifactBytes(f.archive, f.expected, f.authority), {
+      message: ARTIFACT_FAILURE,
+    });
+  });
+}
+
+for (const kind of ["CRC", "encrypted", "member-bound", "archive-size"]) {
+  test(`separated ZIP refuses malformed ${kind} without exposing child output`, () => {
+    const f = artifactFixture();
+    const offset = f.archive.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    assert.ok(offset > 0);
+    if (kind === "CRC") {
+      f.archive.writeUInt32LE((f.archive.readUInt32LE(offset + 16) ^ 1) >>> 0, offset + 16);
+    }
+    if (kind === "encrypted") {
+      f.archive.writeUInt16LE(f.archive.readUInt16LE(offset + 8) | 1, offset + 8);
+    }
+    if (kind === "member-bound") f.archive.writeUInt32LE(64 * 1024 * 1024 + 1, offset + 24);
+    f.expected.archiveSha256 = sha256(f.archive);
+    if (kind === "archive-size") f.expected.archiveBytes++;
+    assert.throws(() => verifyCanonicalExecutionArtifactBytes(f.archive, f.expected, f.authority), {
+      message: ARTIFACT_FAILURE,
+    });
+  });
 }
 
 test("separated members bind capture and report without qualification", () => {

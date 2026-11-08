@@ -91,7 +91,7 @@ CANONICAL_JOURNAL = "artifacts/kit-canonical-capture/status.json"
 CANONICAL_ARCHIVE = 128 * 1024 * 1024
 
 
-def read_canonical_archive(data):
+def read_canonical_archive(data, separated=False):
     # Bound zipfile's central-directory allocation before it parses attacker data.
     import resource
     resource.setrlimit(resource.RLIMIT_AS, (2 * 1024**3, 2 * 1024**3))
@@ -118,9 +118,35 @@ def read_canonical_archive(data):
             total += entry.file_size
             if total > 768 * 1024 * 1024:
                 raise ValueError("archive expansion outside bounds")
-            if name.startswith(CANONICAL_PREFIX):
+            if separated or name.startswith(CANONICAL_PREFIX):
                 selected.append(entry)
                 selected_total += entry.file_size
+        if separated:
+            documents = {
+                "source-binding.json": 16 * 1024 * 1024,
+                "execution.json": 32 * 1024 * 1024,
+                "budget.json": 20 * 1024 * 1024,
+                "capture/status.json": 16384,
+                "capture/bytes/receipt.json": 8 * 1024 * 1024,
+            }
+            if not 5 < len(selected) <= 20010 or selected_total > MAX_TOTAL:
+                raise ValueError("separated members outside bounds")
+            if not documents.keys() <= set(names):
+                raise ValueError("separated documents missing")
+            members = []
+            for entry in sorted(selected, key=lambda item: item.filename):
+                name = entry.filename
+                if name in documents:
+                    if not 0 < entry.file_size <= documents[name]:
+                        raise ValueError("separated document outside bounds")
+                elif not name.startswith("capture/bytes/"):
+                    raise ValueError("unexpected separated member")
+                with archive.open(entry) as member:
+                    content = member.read(entry.file_size + 1)
+                if len(content) != entry.file_size:
+                    raise ValueError("member length mismatch")
+                members.append({"path": name, "type": "file", "base64": base64.b64encode(content).decode("ascii")})
+            return {"members": members}
         if (
             not 1 < len(selected) <= 20001
             or selected_total > 264 * 1024 * 1024
@@ -150,13 +176,14 @@ def read_canonical_archive(data):
 
 if __name__ == "__main__":
     canonical = sys.argv[1:] == ["--canonical"]
+    separated = sys.argv[1:] == ["--separated"]
     try:
-        if sys.argv[1:] and not canonical:
+        if sys.argv[1:] and not (canonical or separated):
             raise ValueError("unsupported profile")
-        limit = CANONICAL_ARCHIVE if canonical else MAX_ARCHIVE
+        limit = CANONICAL_ARCHIVE if canonical or separated else MAX_ARCHIVE
         data = sys.stdin.buffer.read(limit + 1)
-        result = read_canonical_archive(data) if canonical else read_archive(data)
+        result = read_canonical_archive(data, separated) if canonical or separated else read_archive(data)
         sys.stdout.write(json.dumps(result, ensure_ascii=True) + "\n")
     except (ValueError, OSError, RuntimeError, EOFError, MemoryError, OverflowError, zipfile.BadZipFile, NotImplementedError, zlib.error):
-        sys.stderr.write("invalid canonical archive\n" if canonical else "invalid pure-Hono archive\n")
+        sys.stderr.write("invalid canonical archive\n" if canonical or separated else "invalid pure-Hono archive\n")
         sys.exit(1)

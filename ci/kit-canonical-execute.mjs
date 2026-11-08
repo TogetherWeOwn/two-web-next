@@ -1,5 +1,6 @@
 // Execution entrypoint for reviewed collector code; never dispatched automatically.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -200,6 +201,53 @@ export function verifyCanonicalExecutionMembers(members, expected, authority) {
     };
   } catch {
     throw new Error("canonical separated execution member verification failed");
+  }
+}
+
+// Parse the complete separated output, not a prefix of a later build archive.
+// Supplied digests bind bytes but do not authenticate their source or execution.
+export function verifyCanonicalExecutionArtifactBytes(archive, expected, authority) {
+  try {
+    assert.ok(
+      Buffer.isBuffer(archive) && archive.length > 0 && archive.length <= 128 * 1024 * 1024,
+    );
+    assert.equal(archive.length, expected.archiveBytes);
+    assert.match(expected.archiveSha256, /^[0-9a-f]{64}$/);
+    assert.equal(sha256(archive), expected.archiveSha256);
+    const parsed = JSON.parse(
+      execFileSync(
+        "python3",
+        [
+          "-I",
+          fileURLToPath(new URL("./read-pure-hono-archive.py", import.meta.url)),
+          "--separated",
+        ],
+        {
+          input: archive,
+          timeout: 30_000,
+          maxBuffer: 384 * 1024 * 1024,
+          env: {},
+          cwd: ROOT,
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      ),
+    );
+    const members = parsed.members.map(({ path, type, base64 }) => ({
+      path,
+      type,
+      data: Buffer.from(base64, "base64"),
+    }));
+    const verified = verifyCanonicalExecutionMembers(members, expected, authority);
+    return {
+      ...verified,
+      evidence: "digest-bound-separated-execution-artifact-bytes",
+      archiveSha256: expected.archiveSha256,
+      archiveBytes: archive.length,
+      archiveScope: "complete-separated-output",
+    };
+  } catch {
+    throw new Error("canonical separated artifact byte verification failed");
   }
 }
 

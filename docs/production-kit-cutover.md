@@ -49,11 +49,21 @@ receipt digests; checks exact manifest membership and bounded regular-file bytes
 and recomputes the frozen per-file raw/gzip ledger through the existing verifier.
 It cross-checks candidate/collector identities, pristine binding, successful
 build-return journal, execution receipt and candidate report totals. Runtime and
-qualification claims still refuse. This does not parse a ZIP, authenticate a
-transport, reconstruct either Git source tree or certify candidate budget policy.
-The authenticated same-source reader remains deliberately unchanged; wiring a
-separated parser/transport is still unfinished. Twenty-four additional fixture
-registrations reuse the existing Actions command and have not run.
+qualification claims still refuse. It does not authenticate a transport,
+reconstruct either Git source tree or certify candidate budget policy.
+
+The same module now composes that verifier with the existing isolated Python ZIP
+reader's explicit `--separated` profile. It binds the complete archive size and
+SHA-256, requires the four documents and frozen receipt at their exact relative
+paths, and checks every member rather than selecting a diagnostic subtree.
+Unexpected, duplicate, unsafe, non-regular, encrypted or unsupported-compression
+entries and CRC/length/bounds failures refuse. Parsing has bounded memory, output
+and wall time; it never extracts or executes archived files, inherits no credential
+environment and returns only fixed diagnostics on failure. Twenty-nine new ZIP
+fixture registrations reuse the existing Actions invocation and have not run.
+The authenticated same-source reader remains deliberately unchanged. Separated
+transport/provenance integration is still unfinished; matching supplied digests
+alone authenticates neither the producer nor its execution.
 
 This is source preparation, **not an executed collection or reviewed D**. No
 Actions job invokes these phases yet. Candidate-owned installation, dependency
@@ -61,10 +71,24 @@ content and generator/process/tool/image/run proof, candidate-owned profiling,
 separated archive-reader integration and full independent report verification
 remain required before collecting B. The execution receipt explicitly keeps
 qualification, dependency verification and execution verification false. No B
-receipt or P admission is implied. New caller/capture/budget fixtures, including
-35 additional numeric-comparison and failure-propagation registrations, are unrun.
+receipt or P admission is implied. Numeric-comparison, member-binding and new ZIP
+fixtures remain unrun; published bind/build/candidate-budget fixtures passed in the
+prior-head Actions run below, without executing an actual separated collection.
 
 ## Observed verification
+
+[Actions 42522700142](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42522700142)
+at `8a1cec0a03bb2a53af9f8770d78abbe04e627394` completed with **success**.
+Main lint/type/coverage and Node 22 each passed 26,757 tests (676 skipped);
+all auxiliary jobs and `ci-ok` passed. Kit parity selftests passed 508/508,
+production-deploy selftests 169/169 and bundle-evidence fixtures 456/456.
+Canonical capture/finalization, frozen rehearsal, built fatal fixture and all
+3,313 all-off production-config parity vectors passed, with zero route/asset-header
+differences or approved exceptions. This ends the producer-preservation push
+serialization, not the recovery or release gate. Numeric-comparison, member-binding
+and ZIP additions after that head still require new exact-head Actions. No local
+tests, lint, typecheck, build or install ran; Node/Python syntax and whitespace checks
+passed. Production remains Hono, with no accepted D, B receipt or P admission.
 
 [Actions 42516366787](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42516366787/job/128840173408)
 at `203dec31a5b23f98b76a9a203ad3864eafa6b8e0` completed with **failure**.
