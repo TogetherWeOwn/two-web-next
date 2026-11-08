@@ -63,27 +63,39 @@ test("readiness: errors, bad status, unready envelopes and missing identity are 
   }
 });
 
-// A fake clock: each sleep advances time; probes and error-rate calls are scripted.
-function harness({ probes = () => ({ state: "ok" }), rates = () => ({ verdict: "pass" }) } = {}) {
-  let nowMs = Date.parse("2026-11-01T12:00:00Z");
-  const calls = { probe: 0, rate: [], sleeps: 0, log: [] };
+// Separate UTC and monotonic clocks; all I/O latency advances elapsed time.
+function harness({
+  probes = () => ({ state: "ok" }),
+  rates = () => ({ verdict: "pass" }),
+  probeSeconds = () => 0,
+  rateSeconds = () => 0,
+  wallOffset = () => 0,
+} = {}) {
+  const started = Date.parse("2026-11-01T12:00:00Z");
+  let elapsed = 0;
+  const calls = { probe: 0, rate: [], rateAt: [], probeAt: [], sleeps: 0, log: [] };
   const deps = {
-    now: () => new Date(nowMs),
+    now: () => new Date(started + elapsed * 1000 + wallOffset(elapsed) * 1000),
+    monotonicNow: () => 42_000 + elapsed * 1000,
     sleep: async (seconds) => {
       calls.sleeps += 1;
-      nowMs += seconds * 1000;
+      elapsed += seconds;
     },
     log: (line) => calls.log.push(line),
     probe: async () => {
+      calls.probeAt.push(elapsed);
       calls.probe += 1;
+      elapsed += probeSeconds(calls.probe);
       return probes(calls.probe);
     },
     errorRate: async (config) => {
+      calls.rateAt.push(elapsed);
       calls.rate.push(config);
+      elapsed += rateSeconds(calls.rate.length);
       return rates(calls.rate.length);
     },
   };
-  return { deps, calls };
+  return { deps, calls, elapsed: () => elapsed };
 }
 
 const config = {
@@ -111,6 +123,80 @@ test("a healthy release passes after 30 minutes of minute probes and five-minute
   assert.equal(first.windowStartIso, "2026-11-01T12:00:00.000Z");
   assert.equal(first.soakSeconds, 0);
   assert.equal(first.attempts, 1);
+});
+
+test("watch scheduling stays anchored despite realistic probe and query latency", async () => {
+  const { deps, calls, elapsed } = harness({
+    probeSeconds: () => 9,
+    rateSeconds: () => 20,
+  });
+  const result = await watchProduction(config, deps);
+  assert.deepEqual(calls.rateAt, [309, 609, 909, 1209, 1509, 1809]);
+  assert.deepEqual(calls.probeAt, Array.from({ length: 31 }, (_, n) => n * 60));
+  assert.equal(result.verdict, "pass");
+  assert.equal(result.judged, 6);
+  assert.equal(result.missed, 0);
+  assert.equal(elapsed(), 1829, "only the final probe/query latency extends completion");
+});
+
+test("wall-clock corrections cannot shorten or restart the actual watch", async () => {
+  for (const correction of [3600, -3600]) {
+    const { deps, calls, elapsed } = harness({
+      wallOffset: (seconds) => (seconds >= 120 ? correction : 0),
+    });
+    const result = await watchProduction(config, deps);
+    assert.equal(result.verdict, "pass");
+    assert.equal(elapsed(), 1800);
+    assert.equal(calls.probe, 31);
+    assert.deepEqual(calls.rateAt, [300, 600, 900, 1200, 1500, 1800]);
+    assert.ok(calls.rate.every((rate) => rate.windowStartIso === "2026-11-01T12:00:00.000Z"));
+  }
+});
+
+test("missed periodic opportunities remain incomplete despite later successful queries", async () => {
+  for (const delay of [700, 2000]) {
+    const { deps, calls } = harness({
+      rateSeconds: (n) => (n === 1 ? delay : 0),
+    });
+    const result = await watchProduction(config, deps);
+    assert.equal(result.verdict, "insufficient");
+    assert.equal(result.judged + result.missed, 6);
+    assert.equal(result.missed, delay === 700 ? 1 : 4);
+    assert.equal(calls.rate.length, result.judged, "never backfill missed slots with query bursts");
+    assert.ok(calls.log.some((line) => line.includes("scheduled error-rate opportunities missed")));
+    assert.ok(!calls.log.some((line) => line.includes("post-deploy watch passed")));
+  }
+});
+
+test("probe overruns also account for unavailable scheduled analytics opportunities", async () => {
+  const { deps, calls } = harness({ probeSeconds: (n) => (n === 2 ? 1000 : 0) });
+  const result = await watchProduction(config, deps);
+  assert.equal(result.verdict, "insufficient");
+  assert.equal(result.missed, 2);
+  assert.equal(result.judged, 4);
+  assert.deepEqual(calls.rateAt, [1060, 1200, 1500, 1800]);
+});
+
+test("a non-aligned duration retains one final opportunity at the original deadline", async () => {
+  const { deps, calls, elapsed } = harness();
+  const result = await watchProduction({ ...config, durationSeconds: 650 }, deps);
+  assert.equal(result.verdict, "pass");
+  assert.equal(result.missed, 0);
+  assert.deepEqual(calls.rateAt, [300, 600, 650]);
+  assert.equal(elapsed(), 650);
+});
+
+test("a later breach or supersession still takes priority over missed opportunities", async () => {
+  for (const state of ["breach", "superseded"]) {
+    const { deps, calls } = harness({
+      rateSeconds: (n) => (n === 1 ? 700 : 0),
+      rates: (n) => ({ verdict: state === "breach" && n === 2 ? "fail" : "pass" }),
+      probes: (n) =>
+        state === "superseded" && n === 7 ? { state: "superseded", reason: "other" } : { state: "ok" },
+    });
+    assert.equal((await watchProduction(config, deps)).verdict, state);
+    assert.ok(calls.probeAt.at(-1) < 1800);
+  }
 });
 
 test("three consecutive readiness misses breach; a single miss does not", async () => {
