@@ -101,6 +101,29 @@ describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
 
+- The existing `ci/kit-upload-rehearsal.mjs` now also exposes bounded canonical
+  byte-retention primitives. They copy all original files from the complete Kit
+  server, client and Cloudflare trees, preserving repository-relative paths and
+  hidden/non-budget members. An explicitly supplied canonical inventory selects
+  the separate Worker/server-JS/client-JS/client-CSS budget subsets. Every file
+  has raw size, independent `gzipSync(bytes)` size and SHA-256; groups and full
+  membership have exact counts/sums. The snapshot reader recomputes these rows
+  and rejects extra/missing/corrupt files, changed receipts, unsafe names,
+  symlinked files/ancestors, empty trees/directories and authority drift. Exclusive
+  creation does not overwrite an earlier capture. Node/zlib identities describe
+  only the process doing the measurement.
+  Fixtures are wired into Actions but **not run**. This is an unqualified byte
+  primitive, not a working independently pinned collector: there is no candidate
+  dispatch, automatic capture, collection or performance-cell acceptance yet.
+  The existing production rehearsal v1 receipt and uploader are unchanged.
+  Remaining integration must independently separate collector and candidate
+  sources, bind candidate-owned locks/config/checker/budgets and actual build
+  process/tool/image/run provenance, capture immediately before diagnostics can
+  change output, retain original failure statuses, and verify final archive
+  membership/digests and artifact identity. Neither the current branch nor a
+  helper receipt qualifies a baseline cell; required code/Security/QA/Actions
+  review must accept the actual immutable collector before collection.
+
 - `ci/kit-frozen-upload.mjs` prepares native identity association for the frozen
   input descriptor. It recomputes the descriptor from the supplied verified inputs,
   checked tool and serialized envelope, then requires exactly one native upload
