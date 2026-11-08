@@ -992,7 +992,12 @@ test("rollback workflow reuses the production gate with no wider permissions", (
       workflow.indexOf("      - name: Verify requested pure-Hono rollback archive (read-only)"),
       workflow.indexOf("      - name: Archive verified pure-Hono rollback receipt"),
     );
-    assert.ok(archive.includes(`${key}: \${{ secrets.PRODUCTION_${key} }}`));
+    assert.ok(
+      archive.includes(
+        `${key}: \${{ inputs.environment == 'production' && secrets.PRODUCTION_${key} || '' }}`,
+      ),
+    );
+    assert.ok(!archive.includes(`secrets.${key}`));
     assert.ok(archive.includes("assert.equal(process.env.ROLLBACK_ENVIRONMENT, 'production'"));
     assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 6);
     assert.equal((workflow.match(new RegExp(`secrets\\.${key}\\b`, "g")) ?? []).length, 5);

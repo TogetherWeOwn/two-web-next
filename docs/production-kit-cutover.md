@@ -43,6 +43,25 @@ receipt or P admission is implied. New caller/capture/budget fixtures are unrun.
 
 ## Observed verification
 
+[Actions 42516366787](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42516366787/job/128840173408)
+at `203dec31a5b23f98b76a9a203ad3864eafa6b8e0` completed with **failure**.
+Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
+auxiliary jobs passed. Canonical capture/finalization, frozen rehearsal, built
+fatal fixture and all 3,313 all-off production-config parity vectors passed,
+with zero route/asset-header differences or exceptions. Kit parity selftests,
+including the journal/authenticated-reader additions, passed 476/476. These are
+prior-head results, not operational qualification.
+
+The later production-deploy selftest passed 168 and failed one: its credential
+contract still expected the unguarded archive mapping removed by the preceding
+repair. The test now requires the exact production-only selector and explicitly
+rejects a staging-secret reference in that step. All credential reference counts,
+runtime refusals, rollback guards and workflow bytes remain unchanged. Focused
+reproduction of this one test failed before the correction and passed after.
+The separated caller and candidate-budget fixtures remain untested pending new
+exact-head Actions; no B collection, local full suite, lint, typecheck, build,
+installation or staging/production operation ran.
+
 [Actions 42511829980](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42511829980)
 at `d4cbb9144972b16613fae43934a8015e54e57c3c` completed with **failure**.
 Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
