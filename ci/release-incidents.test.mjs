@@ -536,6 +536,17 @@ test("workflow wiring preserves release dependencies and isolates issue-write pe
   const hold = job(observer, "observe-production");
   const stagingReport = job(observer, "observe");
   const finalReport = job(production, "incidents");
+  const byVisibility = `    runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
+  const prGuarded = `    runs-on: \${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
+  for (const block of [hold, stagingReport, finalReport]) {
+    assert.ok(block.includes(byVisibility), "trusted observer routes by repository visibility");
+  }
+  for (const id of ["selftest", "report"]) {
+    assert.ok(
+      job(rehearsal, id).includes(prGuarded),
+      "rehearsal keeps PR code off self-hosted runners",
+    );
+  }
   // No replaceable workflow-level pending slot, including events whose jobs skip.
   assert.doesNotMatch(observer, /\nconcurrency:/);
   assert.match(hold, /name == 'e2e-staging' && github\.event\.action == 'completed'/);

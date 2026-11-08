@@ -20,7 +20,7 @@ jobs:
       group: staging-incident-observation
       cancel-in-progress: false
       queue: max
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
@@ -55,7 +55,7 @@ jobs:
       group: production-incident-observation
       cancel-in-progress: false
       queue: max
-    runs-on: ubuntu-latest
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
     permissions:
       contents: read
