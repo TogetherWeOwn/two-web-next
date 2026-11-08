@@ -9,6 +9,7 @@ import {
   mkdirSync,
   openSync,
   readFileSync,
+  readdirSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
@@ -26,12 +27,12 @@ function realDirectory(path) {
   return absolute;
 }
 
-function workerBytes(path) {
+function outputBytes(path, maximum = 64 * 1024 * 1024) {
   realDirectory(dirname(path));
   const fd = openSync(path, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
   try {
     const stat = fstatSync(fd);
-    assert.ok(stat.isFile() && stat.size > 0 && stat.size <= 64 * 1024 * 1024);
+    assert.ok(stat.isFile() && stat.size > 0 && stat.size <= maximum);
     const bytes = readFileSync(fd);
     assert.equal(bytes.length, stat.size, "rehearsal output changed while reading");
     return bytes;
@@ -58,7 +59,7 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
       "frozen lock differs from checked installed tool",
     );
   }
-  const expectedWorker = workerBytes(join(frozen, "build/worker.js"));
+  const expectedWorker = outputBytes(join(frozen, "build/worker.js"));
   // A fresh cwd/HOME excludes project redirects, dotenv files and cached auth.
   // Explicit --config bypasses Wrangler's generated-config discovery. --assets
   // overrides only the directory, preserving the reviewed binding/router policy.
@@ -99,8 +100,17 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
   assert.ok(!child.error && !child.signal && child.status === 0, "frozen dry run failed");
   assert.deepEqual(verifyInputs(frozen, context), inputs, "snapshot changed during dry run");
   assert.deepEqual(verifyTool(base), tool, "checked tool changed during dry run");
-  const actualWorker = workerBytes(join(output, "output/worker.js"));
+  const emitted = realDirectory(join(output, "output"));
+  // This finite no-bundle contract permits one runtime module and Wrangler's
+  // explanatory README, not an unnoticed extra module, map or subdirectory.
+  assert.deepEqual(
+    readdirSync(emitted).sort(),
+    ["README.md", "worker.js"],
+    "unexpected frozen dry-run output membership",
+  );
+  const actualWorker = outputBytes(join(emitted, "worker.js"));
   assert.deepEqual(actualWorker, expectedWorker, "frozen dry run changed Worker bytes");
+  const readme = outputBytes(join(emitted, "README.md"), 64 * 1024);
   const receipt = {
     schema: "two.kit-frozen-rehearsal.v1",
     evidence: "frozen-input-dry-run-only",
@@ -111,6 +121,10 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
     snapshotSha256: sha256(JSON.stringify(inputs)),
     toolSha256: sha256(JSON.stringify(tool)),
     workerSha256: sha256(actualWorker),
+    emittedFiles: [
+      { path: "README.md", bytes: readme.length, sha256: sha256(readme) },
+      { path: "worker.js", bytes: actualWorker.length, sha256: sha256(actualWorker) },
+    ],
     invocation: {
       command: ["versions", "upload", "--dry-run", "--no-bundle"],
       entry: "build/worker.js",

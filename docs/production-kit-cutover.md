@@ -72,9 +72,15 @@ describe implementation-time evidence, not a green overall gate.
   containing no inherited credentials, Node preloads or Wrangler overrides.
   Execution is bounded to two minutes and 1 MiB captured output; no child output
   or auth/log cache is retained as evidence. Snapshot and tool are rechecked after
-  exit, and the emitted Worker must equal the frozen bytes. Only the digest-bound
-  receipt and dry-run output directory enter the existing Actions archive.
-  Fixtures and the real rehearsal are wired but **unrun**. This is not a native
+  exit, and the emitted Worker must equal the frozen bytes. The output directory
+  must contain exactly `worker.js` and Wrangler's non-empty README (at most
+  64 KiB), both regular files; extra files, hidden members, subdirectories and
+  symlinks fail. The receipt records both file sizes and digests. This finite
+  emitted-file contract matches the retained pinned-Wrangler replay, without
+  claiming to inspect the multipart upload form. Additional fixture controls
+  cover unexpected modules/maps/directories and malformed README entries.
+  Only the digest-bound receipt and dry-run output directory enter the existing
+  Actions archive. Fixtures and the real rehearsal are wired but **unrun**. This is not a native
   upload, selected-asset metadata, remote readback, complete normalized config,
   transitive/runtime attestation, custody or recovery qualification. Dry-run skips
   asset synchronization, so it cannot validate the live asset manifest/guards.

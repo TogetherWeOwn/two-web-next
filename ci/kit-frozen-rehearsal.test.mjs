@@ -16,6 +16,7 @@ import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const context = { sourceSha: "a".repeat(40), runId: "123", runAttempt: "1" };
 const worker = "export default { fetch() {} };\n";
+const readme = "Wrangler dry-run output.\n";
 
 function fixture(run) {
   const parent = mkdtempSync(join(tmpdir(), "kit-frozen-rehearsal-"));
@@ -53,6 +54,7 @@ function fixture(run) {
       calls.push({ command, args, options });
       mkdirSync(join(destination, "output"));
       writeFileSync(join(destination, "output/worker.js"), worker);
+      writeFileSync(join(destination, "output/README.md"), readme);
       return { status: 0, signal: null, stdout: "not evidence", stderr: "not evidence" };
     },
   };
@@ -95,6 +97,10 @@ test("snapshot rehearsal pins paths, dry-run flags, environment and bounded exec
     }
     assert.equal(receipt.schema, "two.kit-frozen-rehearsal.v1");
     assert.equal(receipt.workerSha256, sha256(worker));
+    assert.deepEqual(receipt.emittedFiles, [
+      { path: "README.md", bytes: Buffer.byteLength(readme), sha256: sha256(readme) },
+      { path: "worker.js", bytes: Buffer.byteLength(worker), sha256: sha256(worker) },
+    ]);
     assert.equal(receipt.snapshotSha256, sha256(JSON.stringify(f.inputs)));
     assert.equal(receipt.toolSha256, sha256(JSON.stringify(f.tool)));
     assert.deepEqual(JSON.parse(readFileSync(join(f.destination, "receipt.json"))), receipt);
@@ -174,9 +180,58 @@ test("symlinked output Worker refuses a receipt", () => {
     f.collaborators.run = () => {
       mkdirSync(join(f.destination, "output"));
       symlinkSync(join(f.snapshot, "build/worker.js"), join(f.destination, "output/worker.js"));
+      writeFileSync(join(f.destination, "output/README.md"), readme);
       return { status: 0 };
     };
     assert.throws(f.invoke);
+    assert.equal(existsSync(join(f.destination, "receipt.json")), false);
+  });
+});
+
+for (const name of ["extra.wasm", "extra.txt", "worker.js.map", ".hidden"]) {
+  test(`unexpected emitted member ${name} refuses a receipt`, () => {
+    fixture((f) => {
+      const run = f.collaborators.run;
+      f.collaborators.run = (...args) => {
+        const result = run(...args);
+        writeFileSync(join(f.destination, "output", name), "unexpected");
+        return result;
+      };
+      assert.throws(f.invoke, /unexpected frozen dry-run output membership/);
+      assert.equal(existsSync(join(f.destination, "receipt.json")), false);
+    });
+  });
+}
+
+for (const kind of ["directory", "missing", "empty", "oversized", "symlink"]) {
+  test(`invalid emitted README ${kind} refuses a receipt`, () => {
+    fixture((f) => {
+      const run = f.collaborators.run;
+      f.collaborators.run = (...args) => {
+        const result = run(...args);
+        const path = join(f.destination, "output/README.md");
+        rmSync(path);
+        if (kind === "directory") mkdirSync(path);
+        if (kind === "empty") writeFileSync(path, "");
+        if (kind === "oversized") writeFileSync(path, Buffer.alloc(64 * 1024 + 1));
+        if (kind === "symlink") symlinkSync(join(f.snapshot, "build/worker.js"), path);
+        return result;
+      };
+      assert.throws(f.invoke);
+      assert.equal(existsSync(join(f.destination, "receipt.json")), false);
+    });
+  });
+}
+
+test("unexpected emitted directory refuses a receipt", () => {
+  fixture((f) => {
+    const run = f.collaborators.run;
+    f.collaborators.run = (...args) => {
+      const result = run(...args);
+      mkdirSync(join(f.destination, "output/modules"));
+      return result;
+    };
+    assert.throws(f.invoke, /unexpected frozen dry-run output membership/);
     assert.equal(existsSync(join(f.destination, "receipt.json")), false);
   });
 });
