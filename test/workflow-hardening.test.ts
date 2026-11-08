@@ -257,7 +257,9 @@ describe("dispatch-only DB-free lane", () => {
   });
 
   it("always retains SHA-named evidence for fourteen days without hiding failures", () => {
-    const receipt = laneSteps.find((step) => step.name === "Record workflow outcomes even on failure");
+    const receipt = laneSteps.find(
+      (step) => step.name === "Record workflow outcomes even on failure",
+    );
     expect(receipt?.if).toBe("always()");
     expect(receipt?.run).toContain("artifacts/db-free/workflow-status.json");
     expect(receipt?.env?.VITEST_OUTCOME).toBe("${{ steps.vitest.outcome }}");
