@@ -150,6 +150,23 @@ promotion qualification, and isolated on-demand staging drills of both paths.
 Expiring Actions artifacts and mutable release attachments alone do not establish
 a durable retention policy. Secret values must not enter recovery archives.
 
+The Product Lead's proposed amendment is conditional on Engineering Lead technical
+acceptance. Its first revision was rejected, so the condition is not met and the
+literal acceptance requirement is unchanged. The revision must separate recorded
+original-UUID eligibility from qualification of the archive fallback: requiring an
+eligible original UUID for every promotion would defeat recovery after the native
+last-100 window. Explicit original-UUID ineligibility may select a qualified
+fallback; unknown eligibility or an unqualified selected path is not a pass.
+Both initial isolated staging drills remain required while the staging original
+UUID is eligible. The proposal must also name a verified archive custodian,
+supported retention mechanism, access controls and overwrite/deletion protection.
+Retirement of the recovery obligation needs a recorded acceptance-owner decision;
+any replacement must be technically accepted, retained and qualified before the
+previous required archive can be removed. These are outstanding contract
+corrections, not an implemented backend, an effective amendment or permission to
+create storage. Relevant environment changes invalidate qualification before
+promotion; re-uploading bytes under a new UUID does not cure incompatibility.
+
 Independent Actions, parity and source preparation may continue. Production stays
 Hono; no storage machinery, recovery substitution or production action is
 authorized by this status note. Existing QA/Security, exact-head checks, migration
