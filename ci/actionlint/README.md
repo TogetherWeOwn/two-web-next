@@ -63,7 +63,9 @@ not changed or counted as executed coverage.
 Retirement: replace this build/patch with a verified immutable upstream release
 once its parser accepts these queue literals, rejects the same invalid controls,
 and passes the repository's unchanged workflow lint. Keep the queue regression
-and native PR smoke. No separate scheduler or upstream contribution is required.
+and native CI syntax smoke on every event, including main pushes. Its skipped
+result is never a pass: both ci-ok and deployment admission require success.
+No separate scheduler or upstream contribution is required.
 
 Native semantics: [GitHub concurrency documentation](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency).
 `queue: max` retains at most 100 pending entries and cancels the new arrival at

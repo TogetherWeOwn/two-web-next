@@ -504,7 +504,7 @@ const incidentJourneys = {
   41547357384: "success",
 };
 
-function incidentStaging() {
+function incidentStaging({ bound = false } = {}) {
   return async (url) => {
     const { pathname, searchParams } = new URL(url);
     if (pathname.endsWith(`/commits/${OLDER}`)) {
@@ -520,6 +520,15 @@ function incidentStaging() {
       assert.equal(id, "41547357384", "skipped tips suppress older passes before job lookup");
       return okJson({
         jobs: [
+          ...(bound
+            ? [
+                {
+                  name: "qualification-revision",
+                  conclusion: "success",
+                  steps: [{ name: "Verify qualification revision", conclusion: "success" }],
+                },
+              ]
+            : []),
           { name: "staging-journeys", conclusion: incidentJourneys[id] },
           {
             name: stagingQualityJob,
@@ -533,15 +542,17 @@ function incidentStaging() {
   };
 }
 
-test("incident: the resolver picks the older passing candidate and the guard refuses it as behind live", async () => {
+test("incident: historical unbound runs are refused and even a bound older candidate stays behind live", async () => {
+  const options = { repository: "o/r", token: "t", nowMs: AT };
+  assert.equal(await resolvePromotionSha({ ...options, fetchImpl: incidentStaging() }), null);
+  // Counterfactual positive control only: add final binding, which did not
+  // exist in this incident. Do not turn historical unbound greens into passes.
   const resolved = await resolvePromotionSha({
-    repository: "o/r",
-    token: "t",
-    fetchImpl: incidentStaging(),
-    nowMs: AT,
+    ...options,
+    fetchImpl: incidentStaging({ bound: true }),
   });
-  // The newer skipped runs suppress the passes 41666047288 and 41584725863;
-  // the older passing run 41547357384 is what remains resolved.
+  // The newer skipped runs still suppress the passes 41666047288 and 41584725863;
+  // only the counterfactually bound older candidate remains.
   assert.equal(resolved, OLDER);
 
   for (const event of [...AUTOMATIC, "workflow_dispatch"]) {

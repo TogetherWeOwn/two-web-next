@@ -165,12 +165,13 @@ jobs:
         if: github.event_name == 'pull_request'
         run: bash ci/actionlint/build.sh
 
-  # Native parser proof only: pull requests parse and schedule a `queue: max`
-  # group here. It does not reproduce queue behavior or touch staging.
+  # Native parser proof only: every event parses and schedules a `queue: max`
+  # group here. It must run on main too: the staging gate requires every job
+  # in the main push run to conclude success, so a skipped job would refuse.
+  # It does not reproduce queue behavior or touch staging.
   queue-syntax-smoke:
     name: queue-syntax-smoke
     needs: scope
-    if: github.event_name == 'pull_request'
     concurrency:
       group: queue-syntax-${{ github.run_id }}-${{ github.run_attempt }}
       cancel-in-progress: false
@@ -1227,12 +1228,11 @@ jobs:
       # check. They moved here so `check` can start in parallel with those
       # jobs; the aggregate step below still re-checks the scope, check,
       # audit and performance verdicts.
-      # Runs only on pull requests; skipped is acceptable on any other event.
+      # Runs on every event; skipped is never acceptable.
       - name: Require successful queue syntax smoke
         env:
           QUEUE_SMOKE_RESULT: ${{ needs.queue-syntax-smoke.result }}
-          EVENT_NAME: ${{ github.event_name }}
-        run: test "$QUEUE_SMOKE_RESULT" = success || { test "$EVENT_NAME" != pull_request && test "$QUEUE_SMOKE_RESULT" = skipped; }
+        run: test "$QUEUE_SMOKE_RESULT" = success
       - name: Require successful docs-links
         env:
           DOCS_LINKS_RESULT: ${{ needs.docs-links.result }}

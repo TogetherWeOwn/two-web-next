@@ -68,6 +68,17 @@ function stub(runs, jobs, { history = runs, committed = "2025-12-01T00:00:00Z" }
       const qualitySteps = "qualitySteps" in spec ? spec.qualitySteps : lhSteps([]);
       const qualityJobs = spec.qualityJobs ?? (quality ? 1 : 0);
       const list = [];
+      const binding = "binding" in spec ? spec.binding : "success";
+      const bindingJobs = spec.bindingJobs ?? (binding ? 1 : 0);
+      for (let i = 0; i < bindingJobs; i++) {
+        list.push({
+          name: "qualification-revision",
+          conclusion: binding,
+          steps: [
+            { name: "Verify qualification revision", conclusion: spec.bindingStep ?? "success" },
+          ],
+        });
+      }
       if (spec.journeys) list.push({ name: "staging-journeys", conclusion: spec.journeys });
       for (let i = 0; i < qualityJobs; i++) {
         list.push({ name: stagingQualityJob, conclusion: quality, steps: qualitySteps });
@@ -95,6 +106,20 @@ const resolve = (runs, jobs, nowMs, history) =>
     fetchImpl: stub(runs, jobs, history),
     ...(nowMs ? { nowMs } : {}),
   });
+
+test("unbound historical green cannot qualify while a bound first-attempt green can", async () => {
+  const runs = [run(2, A)];
+  assert.equal(await resolve(runs, { 2: { journeys: "success", binding: null } }), null);
+  for (const patch of [
+    { binding: "skipped" },
+    { binding: "failure" },
+    { bindingJobs: 2 },
+    { bindingStep: "skipped" },
+  ]) {
+    assert.equal(await resolve(runs, { 2: { journeys: "success", ...patch } }), null);
+  }
+  assert.equal(await resolve(runs, { 2: "success" }), A);
+});
 
 test("promotes the deployed commit from the run-name, not the run's head_sha", async () => {
   assert.equal(await resolve([run(2, A)], { 2: "success" }), A);
@@ -169,8 +194,9 @@ test("recorded skipped journeys never qualify; falling back to live refuses newe
     ),
     /Default promotion stalled:.*already live, but main is/,
   );
-  // Positive control: executing the first-attempt journeys qualifies the title
-  // SHA, not the workflow_run API tip. No inherited runtime-tree evidence.
+  // Counterfactual positive control: executing first-attempt journeys AND the
+  // final candidate-binding check qualifies the title SHA, not the API tip.
+  // The recorded historical run did not have that binding; none is inferred.
   assert.equal(
     await resolve([recordedSkipped, older], { 42309290186: "success", 1: "success" }, recordedNow),
     "883466a687f80436169131166b8aabb9a5ab9008",
@@ -212,7 +238,7 @@ test("every successful main deploy runs journeys and passive ledgers regardless 
         assert.equal(
           runInNewContext(
             condition,
-            { github, needs: { scope: { outputs: { skip_e2e: skip } } } },
+            { github, needs: { scope: { outputs: { skip_e2e: skip, sha: A } } } },
             { timeout: 1000 },
           ),
           expected,
@@ -302,7 +328,7 @@ test("deploy.yml and e2e-staging.yml run-names carry the deployed SHA", () => {
   );
   assert.match(
     deploy,
-    /^run-name: deploy \$\{\{ github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}$/m,
+    /format\('deploy \{0\}', github\.event\.workflow_run\.head_sha \|\| github\.sha\)/,
   );
   assert.match(
     e2e,
@@ -862,6 +888,11 @@ function cliJobs(runId) {
     match: `/actions/runs/${runId}/jobs`,
     body: {
       jobs: [
+        {
+          name: "qualification-revision",
+          conclusion: "success",
+          steps: [{ name: "Verify qualification revision", conclusion: "success" }],
+        },
         { name: "staging-journeys", conclusion: "success" },
         {
           name: stagingQualityJob,

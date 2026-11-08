@@ -124,9 +124,12 @@ stage the unmerged PR first.
 successful `main` staging deploy, with no docs-only or test-only scope skip. A
 skipped job, including one from history, is never passing qualification
 evidence; `ci/resolve-promotion-sha.mjs` requires successful journeys and
-executed quality checks in a post-deploy `workflow_run`, plus soak, for
-automatic selection. A re-run or a run that went red is refused under the same
-shared policy. Default promotion fails, rather than quietly doing nothing, when
+executed quality checks in a post-deploy `workflow_run`, plus soak and a
+successful, unique `qualification-revision` job with its final revision check
+executed. The exact-SHA production gate requires the same binding evidence.
+Historical green runs without that final check remain unqualified; matching
+passive-ledger identity alone does not bind the measurements to the candidate.
+A re-run or a run that went red is refused under the same shared policy. Default promotion fails, rather than quietly doing nothing, when
 the selected target equals the live production commit but current `main`
 differs. The recovery route is an explicit-SHA `workflow_dispatch` of
 `deploy-production`, which needs its own exact-SHA Release Manager confirmation
@@ -137,7 +140,16 @@ skip.
 
 Qualification resolves the deployed SHA from the validated `deploy <sha>`
 run title, not the deploy run's API `head_sha` (which can name a newer main
-commit). Scope, candidate checkers and the passive ledger use that one SHA.
+commit). Completions outside the deploy job's trigger admission instead get
+`deploy ignored <run-id>` titles and cannot start qualification scope or name a
+candidate, even if the evidence API is unavailable. Scope also reads the
+triggering deploy attempt's jobs and requires
+one successful `deploy-staging` job with executed Worker-deploy and revision-check
+steps. An explicitly skipped deploy job (for example after scheduled or manual
+CI) produces no qualification target and skips every measurement; it never probes
+the older live revision or records a false-red candidate. Missing, ambiguous,
+truncated or unavailable deployment evidence fails closed. Scope, candidate
+checkers and the passive ledger use that one SHA.
 The whole qualification workflow shares the staging deploy job's
 `deploy-staging` concurrency group. It verifies the staging revision before
 any measurement and again after all jobs pass, while holding that lock. GitHub

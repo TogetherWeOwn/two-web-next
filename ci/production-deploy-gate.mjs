@@ -11,6 +11,7 @@ import {
   stagingRunsSinceCommit,
 } from "./resolve-promotion-sha.mjs";
 import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
+import { hasBoundQualification } from "./staging-qualification.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
 export const AUTOMATIC_PROMOTION_EVENTS = new Set([
@@ -494,6 +495,11 @@ export async function requireStagingEvidence(
         throw new Error(`e2e-staging.yml run ${latest.id} did not pass staging-journeys`);
       }
       requireExecutedStagingQuality(jobs, latest.id);
+      if (!hasBoundQualification(jobs)) {
+        throw new Error(
+          `e2e-staging.yml run ${latest.id} has missing, ambiguous or unsuccessful qualification-revision evidence`,
+        );
+      }
     }
     evidence.push({ workflow: file, runId: latest.id });
   }

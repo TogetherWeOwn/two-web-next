@@ -711,3 +711,84 @@ test("main CI runs are never cancelled in progress and finish in push order", ()
   assert.notEqual(groupOf(pr(7, "refs/pull/7/merge")), groupOf(pr(8, "refs/pull/8/merge")));
   assert.equal(cancelsOf(pr(7, "refs/pull/7/merge")), true);
 });
+
+// Derive the main-push job inventory and conclusions from the real ci.yml job
+// wiring (job-level `if`), then feed them to the real gate.
+function mainPushJobsFromCi(ciText) {
+  const jobsBlock = ciText.split(/^jobs:\n/m)[1];
+  assert.ok(jobsBlock, "ci.yml has a jobs block");
+  const pushOutputs = { draft: "false", full: "true", app: "true", db: "true" };
+  const jobs = [];
+  for (const chunk of jobsBlock.split(/^  (?=[\w-]+:\n)/m).filter(Boolean)) {
+    const id = chunk.match(/^([\w-]+):\n/)?.[1];
+    if (!id) continue;
+    const name = chunk.match(/^    name: (.+)$/m)?.[1].trim() ?? id;
+    const cond = chunk.match(/^    if: (.+)$/m)?.[1].trim();
+    let runs = true;
+    if (cond) {
+      const expr = cond
+        .replace(/^\$\{\{\s*([\s\S]*?)\s*\}\}$/, "$1")
+        .replace(/!cancelled\(\)/g, "true")
+        .replace(/needs\.scope\.outputs\.(\w+)/g, (_, key) => JSON.stringify(pushOutputs[key]))
+        .replace(/github\.event_name/g, '"push"');
+      assert.match(expr, /^[\w\s"'!=&|()]+$/, `Unevaluable job condition for ${id}: ${cond}`);
+      runs = Boolean(new Function(`return (${expr});`)());
+    }
+    jobs.push({ name, conclusion: runs ? "success" : "skipped" });
+  }
+  return jobs;
+}
+async function gateOverCiJobs(jobs) {
+  const ctx = context("workflow_run");
+  const evidence = {
+    total_count: jobs.length,
+    jobs: jobs.map((job) => ({
+      name: job.name,
+      head_sha: sha,
+      status: "completed",
+      conclusion: job.conclusion,
+    })),
+  };
+  const data = fixture();
+  return requireSuccessfulCi(ctx, {
+    token: "t",
+    fetchImpl: async (url) => {
+      const path = String(url);
+      const body = path.includes("/workflows/ci.yml/runs")
+        ? data.runs
+        : path.includes("/jobs")
+          ? evidence
+          : data.current;
+      return { ok: true, status: 200, json: async () => body };
+    },
+  });
+}
+
+test("main-push CI job wiring includes queue-syntax-smoke as success and the actual gate admits it", async () => {
+  const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const jobs = mainPushJobsFromCi(ci);
+  const smoke = jobs.find((job) => job.name === "queue-syntax-smoke");
+  assert.ok(smoke, "queue-syntax-smoke is part of the main inventory");
+  assert.equal(smoke.conclusion, "success");
+  assert.ok(
+    jobs.every((job) => job.conclusion === "success"),
+    JSON.stringify(jobs),
+  );
+  assert.match(
+    ci,
+    /QUEUE_SMOKE_RESULT: \$\{\{ needs\.queue-syntax-smoke\.result \}\}\n        run: test "\$QUEUE_SMOKE_RESULT" = success\n/,
+  );
+  await gateOverCiJobs(jobs);
+});
+
+test("PR-only queue-syntax-smoke wiring skips on main and the actual gate refuses", async () => {
+  const ci = readFileSync(join(root, ".github/workflows/ci.yml"), "utf8");
+  const regressed = ci.replace(
+    "  queue-syntax-smoke:\n    name: queue-syntax-smoke\n    needs: scope\n",
+    "  queue-syntax-smoke:\n    name: queue-syntax-smoke\n    needs: scope\n    if: github.event_name == 'pull_request'\n",
+  );
+  assert.notEqual(regressed, ci, "mutation applied");
+  const jobs = mainPushJobsFromCi(regressed);
+  assert.equal(jobs.find((job) => job.name === "queue-syntax-smoke").conclusion, "skipped");
+  await assert.rejects(gateOverCiJobs(jobs), /Full CI jobs are not successful/);
+});

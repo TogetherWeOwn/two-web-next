@@ -32,6 +32,7 @@ concurrency:
   group: >-
     ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
          (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+          !startsWith(github.event.workflow_run.display_title, 'deploy ignored ') &&
           github.event.workflow_run.head_branch == 'main' &&
           github.event.workflow_run.head_repository.full_name == github.repository)) &&
         'deploy-staging' || format('e2e-staging-ignored-{0}', github.run_id) }}
@@ -44,9 +45,13 @@ jobs:
   # and passive ledgers below run even for docs/test-only deployments.
   scope:
     name: scope
+    permissions:
+      contents: read
+      actions: read
     if: >-
       github.event_name == 'workflow_dispatch' ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       !startsWith(github.event.workflow_run.display_title, 'deploy ignored ') &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
@@ -64,9 +69,12 @@ jobs:
           persist-credentials: false
       - id: target
         run: node ci/staging-qualification.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       # Classify the deployed diff with trusted workflow scripts. Candidate
       # files remain Git objects, never executable scope-job code.
       - id: scope
+        if: steps.target.outputs.sha != ''
         env:
           HEAD_SHA: ${{ steps.target.outputs.sha }}
         run: |
@@ -92,10 +100,11 @@ jobs:
   zap-baseline:
     needs: scope
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+      needs.scope.outputs.sha != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     uses: ./.github/workflows/zap-staging.yml
     with:
       checkout_ref: ${{ needs.scope.outputs.sha }}
@@ -111,10 +120,11 @@ jobs:
     name: staging-passive
     needs: scope
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+      needs.scope.outputs.sha != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -167,10 +177,11 @@ jobs:
     name: staging-journeys
     needs: scope
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+      needs.scope.outputs.sha != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment:
@@ -251,10 +262,11 @@ jobs:
     name: staging-quality
     needs: scope
     if: >-
-      github.event_name == 'workflow_dispatch' ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+      needs.scope.outputs.sha != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     uses: ./.github/workflows/web-quality-origin.yml
     with:
       origin: https://next.togetherweown.com
@@ -271,6 +283,7 @@ jobs:
           persist-credentials: false
       # Retain the lock through the final identity check. A failed job or
       # identity check keeps the run red, so none of its evidence qualifies.
-      - run: node ci/staging-qualification.mjs --verify
+      - name: Verify qualification revision
+        run: node ci/staging-qualification.mjs --verify
         env:
           DEPLOYED_SHA: ${{ needs.scope.outputs.sha }}

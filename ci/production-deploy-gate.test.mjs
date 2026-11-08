@@ -1224,11 +1224,19 @@ function qualitySteps(conclusions = {}) {
 function qualityJob(overrides = {}) {
   return { name: stagingQualityJob, conclusion: "success", steps: qualitySteps(), ...overrides };
 }
+function bindingJob(overrides = {}) {
+  return {
+    name: "qualification-revision",
+    conclusion: "success",
+    steps: [{ name: "Verify qualification revision", conclusion: "success" }],
+    ...overrides,
+  };
+}
 function e2eJobs(journeys = "success") {
-  return [{ name: "staging-journeys", conclusion: journeys }, qualityJob()];
+  return [{ name: "staging-journeys", conclusion: journeys }, qualityJob(), bindingJob()];
 }
 function withQuality(quality) {
-  return { 200: [{ name: "staging-journeys", conclusion: "success" }, quality] };
+  return { 200: [{ name: "staging-journeys", conclusion: "success" }, quality, bindingJob()] };
 }
 function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
   const ci = stubProductionApi(ciEvidence());
@@ -1406,6 +1414,25 @@ for (const [name, pattern, mutate] of [
     await assert.rejects(checkAuto(staging), pattern);
   });
 }
+
+test("auto-approve refuses unbound historical greens despite matching passive ledger identity", async () => {
+  // The outer workflows, journeys, executed quality and soak all pass. A's
+  // retained passive/commit can also equal A even when historical checks saw B.
+  // Candidate binding must be proved before those ledgers can be consumed.
+  for (const binding of [
+    [],
+    [bindingJob({ conclusion: "skipped" })],
+    [bindingJob({ conclusion: "failure" })],
+    [bindingJob(), bindingJob()],
+    [bindingJob({ steps: [] })],
+    [bindingJob({ steps: [{ name: "Verify qualification revision", conclusion: "skipped" }] })],
+  ]) {
+    const staging = stagingEvidence();
+    staging.jobs = { 200: [...e2eJobs().slice(0, 2), ...binding] };
+    await assert.rejects(checkAuto(staging), /qualification-revision evidence/);
+  }
+  assert.equal((await checkAuto(stagingEvidence())).sha, dispatchSha);
+});
 
 test("auto-approve still requires the main-only branch policy", async () => {
   for (const environment of [
