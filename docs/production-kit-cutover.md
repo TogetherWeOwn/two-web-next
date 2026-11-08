@@ -23,13 +23,23 @@ A distinct separated-capture schema binds the candidate source SHA, collector
 workflow SHA, run/attempt and source-binding digest. Existing same-source archive
 readers deliberately do not accept this new schema as authenticated evidence.
 
+After successful immediate capture, the build phase invokes the candidate's own
+`check-kit-perf.mjs` JSON interface against the candidate root. Its relative
+imports resolve the candidate inventory and budget fragments, not collector
+copies. Full tracked source is rechecked before and after execution; only the
+bounded versioned report and exit code are retained, not free-form diagnostics.
+Budget exits 1/2 still finalize the already frozen capture and fail execution;
+neither checker nor finalizer is retried. A checker error remains the primary
+failure if finalization also fails. Successful execution binds the retained
+budget receipt's digest. Frozen-byte verification failure always refuses success.
+
 This is source preparation, **not an executed collection or reviewed D**. No
 Actions job invokes these phases yet. Candidate-owned installation, dependency
-content and generator/process/tool/image/run proof, candidate-owned profiling and
-budget execution, separated archive-reader integration and review remain required
-before collecting B. The execution receipt explicitly keeps qualification,
-dependency verification and execution verification false. No B receipt or P
-admission is implied. New caller/capture fixture registrations are unrun.
+content and generator/process/tool/image/run proof, candidate-owned profiling,
+separated archive-reader integration and independent report verification remain
+required before collecting B. The execution receipt explicitly keeps
+qualification, dependency verification and execution verification false. No B
+receipt or P admission is implied. New caller/capture/budget fixtures are unrun.
 
 ## Observed verification
 

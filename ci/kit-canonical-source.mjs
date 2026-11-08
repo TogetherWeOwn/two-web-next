@@ -423,6 +423,47 @@ export async function runCanonicalCandidateBuild(path, expectedSha, capture) {
   };
 }
 
+export async function runCanonicalCandidateBudget(path, expectedSha) {
+  const root = directory(path);
+  const source = inspectCanonicalSource(root, expectedSha);
+  const input = source.files.find((file) => file.path === "ci/check-kit-perf.mjs");
+  assert.ok(input && input.bytes > 0 && input.bytes <= 256 * 1024, "candidate checker missing");
+  const url = pathToFileURL(join(root, input.path));
+  url.searchParams.set("source", expectedSha);
+  let checker;
+  try {
+    checker = await import(url.href);
+  } catch {
+    throw new Error("candidate checker could not be loaded");
+  }
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  assert.equal(typeof checker.runJson, "function", "candidate checker interface missing");
+  let result;
+  try {
+    // The candidate resolves its own inventory, fragments and numeric ceilings.
+    // Never execute a collector checker against the candidate's build output.
+    result = checker.runJson(root);
+  } catch {
+    throw new Error("candidate checker execution failed");
+  }
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  assert.ok([0, 1, 2].includes(result?.code), "candidate checker exit invalid");
+  assert.ok(
+    result.report && !Array.isArray(result.report) && result.report.version === 1,
+    "candidate report invalid",
+  );
+  const report = JSON.stringify(result.report);
+  assert.ok(report && Buffer.byteLength(report) <= 1024 * 1024, "candidate report bound");
+  return {
+    evidence: "unqualified-candidate-budget-execution",
+    source,
+    input,
+    code: result.code,
+    report: JSON.parse(report),
+    executionVerified: false,
+  };
+}
+
 export function bindCanonicalSources(collectorPath, candidatePath, context) {
   const identity = canonicalCellIdentity(context);
   const collectorRoot = directory(collectorPath);

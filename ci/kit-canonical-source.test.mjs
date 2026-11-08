@@ -24,6 +24,7 @@ import {
   inspectCanonicalSource,
   loadCanonicalAuthority,
   loadCanonicalStartup,
+  runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
 } from "./kit-canonical-source.mjs";
 
@@ -536,6 +537,63 @@ test("candidate build rejects invalid callbacks and overlays before command invo
   );
   assert.equal(existsSync(calls), false);
   assert.equal(captured, false);
+});
+
+for (const code of [0, 1, 2]) {
+  test(`candidate budget executes its own checker and retains exit ${code}`, async () => {
+    const { root } = makeRepo("budget");
+    write(
+      root,
+      "ci/check-kit-perf.mjs",
+      `export function runJson(root) {
+      return { code: ${code}, report: { version: 1, candidateRoot: root } };
+    }`,
+    );
+    const sha = commitAll(root, "candidate checker fixture");
+    const result = await runCanonicalCandidateBudget(root, sha);
+    assert.equal(result.source.commit, sha);
+    assert.equal(result.input.path, "ci/check-kit-perf.mjs");
+    assert.equal(result.code, code);
+    assert.deepEqual(result.report, { version: 1, candidateRoot: root });
+    assert.equal(result.executionVerified, false);
+  });
+}
+
+for (const [name, module, error] of [
+  ["interface", "export const runJson = 1;", /interface missing/],
+  ["evaluation", 'throw new Error("PRIVATE");', /could not be loaded/],
+  ["execution", 'export function runJson() { throw new Error("PRIVATE"); }', /execution failed/],
+  ["exit", "export function runJson() { return { code: null }; }", /exit invalid/],
+  ["report", "export function runJson() { return { code: 0, report: null }; }", /report invalid/],
+  [
+    "bound",
+    `export function runJson() {
+    return { code: 0, report: { version: 1, value: "x".repeat(1048576) } };
+  }`,
+    /report bound/,
+  ],
+]) {
+  test(`candidate budget refuses ${name} failure`, async () => {
+    const { root } = makeRepo("budget-invalid");
+    write(root, "ci/check-kit-perf.mjs", module);
+    const sha = commitAll(root, "invalid checker fixture");
+    await assert.rejects(runCanonicalCandidateBudget(root, sha), error);
+  });
+}
+
+test("candidate budget rejects tracked mutation during checker execution", async () => {
+  const { root } = makeRepo("budget-drift");
+  write(
+    root,
+    "ci/check-kit-perf.mjs",
+    `import { writeFileSync } from "node:fs";
+    export function runJson(root) {
+      writeFileSync(root + "/README.md", "changed by candidate checker");
+      return { code: 0, report: { version: 1 } };
+    }`,
+  );
+  const sha = commitAll(root, "checker drift fixture");
+  await assert.rejects(runCanonicalCandidateBudget(root, sha), /dirty/);
 });
 
 test("canonicalCellIdentity permits only exact B commit and tree", () => {

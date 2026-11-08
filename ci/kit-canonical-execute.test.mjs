@@ -77,6 +77,12 @@ function fixture() {
       calls.push("returned");
       return { capture: result, executionVerified: false };
     },
+    budget: async (path, sha) => {
+      calls.push("budget");
+      assert.equal(path, candidate);
+      assert.equal(sha, B);
+      return { source, code: 0, report: { version: 1 }, executionVerified: false };
+    },
     capture: (path, output, context, inventory) => {
       calls.push("capture");
       assert.equal(path, candidate);
@@ -110,8 +116,15 @@ test("execution awaits capture and retains distinct source identities", async ()
     "capture",
     "returned",
     `inspect:${D}`,
+    "budget",
     "finalize",
+    `inspect:${D}`,
   ]);
+  assert.equal(result.budget.code, 0);
+  assert.equal(
+    result.budget.sha256,
+    sha256(readFileSync(join(f.args.destination, "budget.json"))),
+  );
   assert.equal(result.identity.candidateSha, B);
   assert.equal(result.identity.collectorSha, D);
   assert.equal(result.executionVerified, false);
@@ -179,6 +192,53 @@ test("execution refuses a missing build return rather than finalizing stale byte
   f.collaborators.build = async () => ({});
   await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /return not observed/);
   assert.equal(f.calls.includes("finalize"), false);
+});
+
+for (const code of [1, 2]) {
+  test(`execution retains failed candidate budget ${code} and still finalizes`, async () => {
+    const f = fixture();
+    const budget = f.collaborators.budget;
+    f.collaborators.budget = async (...args) => ({ ...(await budget(...args)), code });
+    await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /budget failed/);
+    assert.equal(f.calls.filter((call) => call === "budget").length, 1);
+    assert.equal(f.calls.includes("finalize"), true);
+    assert.equal(JSON.parse(readFileSync(join(f.args.destination, "budget.json"))).code, code);
+    assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+  });
+}
+
+test("execution preserves checker error when frozen-byte verification also fails", async () => {
+  const f = fixture();
+  const failure = new Error("candidate checker failure fixture");
+  f.collaborators.budget = async () => {
+    throw failure;
+  };
+  f.collaborators.finalize = async () => {
+    throw new Error("finalizer failure fixture");
+  };
+  await assert.rejects(
+    executeCanonicalBuild(f.args, f.collaborators),
+    (error) => error === failure,
+  );
+  assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+});
+
+test("execution never accepts successful budgets after failed finalization", async () => {
+  const f = fixture();
+  f.collaborators.finalize = async () => {
+    throw new Error("frozen bytes changed");
+  };
+  await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /frozen bytes changed/);
+  assert.equal(f.calls.includes("budget"), true);
+  assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+});
+
+test("execution refuses budget source substitution before writing a report", async () => {
+  const f = fixture();
+  f.collaborators.budget = async () => ({ source: f.binding.collector, code: 0 });
+  await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /budget source changed/);
+  assert.equal(f.calls.includes("finalize"), true);
+  assert.equal(existsSync(join(f.args.destination, "budget.json")), false);
 });
 
 test("execution CLI refuses invalid identity without exposing arguments", () => {

@@ -8,6 +8,7 @@ import {
   bindCanonicalSources,
   canonicalCellIdentity,
   inspectCanonicalSource,
+  runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
 } from "./kit-canonical-source.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
@@ -40,6 +41,7 @@ export async function executeCanonicalBuild(
   {
     inspect = inspectCanonicalSource,
     build = runCanonicalCandidateBuild,
+    budget = runCanonicalCandidateBudget,
     capture = captureCanonicalBuild,
     finalize = finalizeCanonicalCapture,
   } = {},
@@ -102,12 +104,32 @@ export async function executeCanonicalBuild(
   });
   assert.ok(authority, "build return not observed");
   assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
-  const journal = await finalize(
-    candidate,
-    capturePath,
-    { ...captureContext, producerOutcome: "success" },
-    authority,
-  );
+  let measured;
+  let budgetError;
+  try {
+    measured = await budget(candidate, identity.candidateSha);
+    assert.deepEqual(measured.source, source, "candidate budget source changed");
+    assert.ok([0, 1, 2].includes(measured.code), "candidate budget exit invalid");
+    writeFileSync(join(output, "budget.json"), encode(measured), { flag: "wx", mode: 0o600 });
+    assert.equal(measured.code, 0, "candidate budget failed");
+  } catch (error) {
+    budgetError = error;
+  }
+  // Even a failed budget must verify the already captured bytes, not recopy the
+  // now-observed output. A finalizer failure must not hide the original failure.
+  let journal;
+  try {
+    journal = await finalize(
+      candidate,
+      capturePath,
+      { ...captureContext, producerOutcome: "success" },
+      authority,
+    );
+  } catch (error) {
+    if (!budgetError) throw error;
+  }
+  if (budgetError) throw budgetError;
+  assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
   const receipt = {
     schema: "two.kit-canonical-execution.v1",
     evidence: "unqualified-source-separated-build-return",
@@ -116,6 +138,7 @@ export async function executeCanonicalBuild(
     runAttempt: context.runAttempt,
     sourceBindingSha256: bindingSha256,
     build: result,
+    budget: { code: measured.code, sha256: sha256(encode(measured)) },
     capture: journal,
     dependenciesVerified: false,
     executionVerified: false,
