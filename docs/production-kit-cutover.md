@@ -151,8 +151,16 @@ describe implementation-time evidence, not a green overall gate.
   locks, configs, checkers, budgets, fonts and generator inputs. This also detects
   changes hidden from Git status by index flags. Collector and candidate receipts
   retain separate commit/tree/parent/file inventories; B's source patch is empty.
-  This covers tracked sources only: ignored outputs/dependencies and the actual
-  build environment need separate proof. The real B-to-D positive binding is not
+  A separate post-install observer requires the same unchanged tracked source,
+  both real dependency directories and only the expected ignored generated CSS
+  module plus those directories. It records bounded, non-empty generated-module
+  and hidden npm-lock snapshots against the candidate's own generator/CSS and
+  manifest/lock input hashes, then repeats the source and snapshot checks. Extra
+  ignored env/build overlays, missing files and symlinked inputs fail. These are
+  observations only: dependency contents and actual generator execution remain
+  explicitly unverified. This observer is not installed-source execution or
+  build-environment proof, and its new fixtures have **not run**.
+  The real B-to-D positive binding is not
   exercised by the hermetic fixture repositories, which cannot recreate B's SHA.
   No checkouts, installs, builds, dispatches or collection are performed by this
   library. It is not wired to a candidate collection invocation yet. The eventual

@@ -173,6 +173,72 @@ export function inspectCanonicalPristineSource(path, expectedSha) {
   };
 }
 
+export function inspectCanonicalInstalledSource(path, expectedSha) {
+  const root = directory(path);
+  const source = inspectCanonicalSource(root, expectedSha);
+  const generatedPath = "src/leaf-critical-css.ts";
+  const dependencyPaths = ["node_modules", "web/node_modules"];
+  const inputPaths = [
+    "package.json",
+    "package-lock.json",
+    "web/package.json",
+    "web/package-lock.json",
+    "ci/build-leaf-css.mjs",
+    "public/styles.css",
+    "public/theme-tokens.css",
+    "public/theme.css",
+  ];
+  const inputs = inputPaths.map((path) => {
+    const file = source.files.find((file) => file.path === path);
+    assert.ok(file && file.bytes > 0, "candidate generator or install input missing");
+    return file;
+  });
+  assert.ok(
+    !source.files.some((file) => file.path === generatedPath),
+    "generated input unexpectedly tracked",
+  );
+  const observe = () => {
+    const ignored = git(root, [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--directory",
+      "-z",
+    ]).split("\0");
+    assert.equal(ignored.pop(), "", "missing post-install ignored inputs");
+    assert.deepEqual(
+      ignored.sort(),
+      [...dependencyPaths.map((path) => `${path}/`), generatedPath].sort(),
+      "unexpected post-install ignored inputs",
+    );
+    for (const path of dependencyPaths) directory(join(root, path));
+    return [generatedPath, ...dependencyPaths.map((path) => `${path}/.package-lock.json`)].map(
+      (path) => {
+        const bytes = sourceBytes(root, path, LIMITS.fileBytes);
+        assert.ok(bytes.length > 0, "empty generated input or installed lock");
+        return { path, bytes: bytes.length, sha256: sha256(bytes) };
+      },
+    );
+  };
+  const observed = observe();
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  assert.deepEqual(observe(), observed, "post-install inputs changed during observation");
+  return {
+    ...source,
+    installBoundary: {
+      evidence: "observed-post-install-inputs-only",
+      inputs,
+      generated: observed[0],
+      installedLocks: observed.slice(1),
+      // Lock snapshots are observations, not proof of installed package contents
+      // or that the candidate generator produced the observed CSS module.
+      dependenciesVerified: false,
+      generatorExecutionVerified: false,
+    },
+  };
+}
+
 export function bindCanonicalSources(collectorPath, candidatePath, context) {
   const identity = canonicalCellIdentity(context);
   const collectorRoot = directory(collectorPath);
