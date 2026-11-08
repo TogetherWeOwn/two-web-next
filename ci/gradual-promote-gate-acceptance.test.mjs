@@ -226,10 +226,18 @@ async function runGate(block, host, mutate = (script) => script) {
 
 test("gradual-promote defines exactly the three version-override gates, quoted", () => {
   const action = readAction();
+  const countOverrides = (source) =>
+    (source.replace(/^\s*#.*$/gm, "").match(/--version-override /g) ?? []).length;
   assert.equal(
-    (action.match(/--version-override /g) ?? []).length,
+    countOverrides(action),
     3,
     "expected exactly three --version-override gates (5, 50, 100 percent)",
+  );
+  assert.equal(countOverrides(`# --version-override documentation\n${action}`), 3);
+  assert.equal(
+    countOverrides(`${action}\n        node bin/smoke.mjs --version-override extra\n`),
+    4,
+    "an additional executable override must still be counted",
   );
   for (const id of GATE_IDS) {
     const block = gateBlock(action, id);

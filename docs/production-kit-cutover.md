@@ -6,6 +6,27 @@ build yet.
 
 ## Observed verification
 
+[Actions 42478341249](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42478341249)
+at `a8f26bb2d9e93e7cbd831901ce15fb075a19361a` completed with **failure**.
+Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
+auxiliary jobs passed. Kit typecheck/build, same-byte rehearsal, snapshot creation,
+and the real frozen-input rehearsal passed, including serialized config and
+prepared-input checks. Their fixture groups passed 24/24, 20/20, 42/42 and 29/29.
+The built fatal fixture and all 3,313 all-off production parity vectors passed;
+route and pre-hook asset-header comparisons had zero differences or exceptions.
+These are prior-head fixture results, not operational qualification.
+
+The later gradual-promotion acceptance step passed six tests and failed one:
+its whole-file override count included a new documentation comment in the
+unmodified shared-action mirror. Count non-comment source instead, retaining the
+exact three-gate requirement and every quoted-override assertion. Added controls
+prove a comment does not count and an additional executable override still does.
+Focused reproduction of that one failing test failed before and passed after.
+No action bytes, production guards or thresholds changed. The retained native
+identity and canonical-tree helpers are not covered by this older-head run;
+replacement exact-head Actions must verify them and this repair. No local full
+suite, lint, build, install, account probe or deployment ran.
+
 [Actions 42472988388](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42472988388)
 at `f3de951a239df18c61c090148cfd104d53881f96` completed with **failure**.
 Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
