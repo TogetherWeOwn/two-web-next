@@ -714,6 +714,10 @@ jobs:
         release,
       ]
     if: ${{ always() && needs.preflight.result != 'skipped' }}
+    concurrency:
+      group: production-incident-observation
+      cancel-in-progress: false
+      queue: max
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:

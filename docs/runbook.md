@@ -83,10 +83,20 @@ The sink follows the stable-key/deduplication pattern from
 
 Promotion reporting includes clean no-candidate skips, not just red runs. Each
 attempt compares the live production `/up` revision with current main.
-The independent observer also checks age on promotion `workflow_run: requested`
-events, including requests from the existing daily 14:17 UTC backstop. It does
-not wait for production Environment approval, deploy-job completion or the
-production concurrency group. No schedule is added or changed. On squash-only linear main, the
+The independent observer checks age on staging completion, within the supported
+three-hop chain (`ci → deploy → e2e-staging → observer`), even when automatic
+promotion waits for approval or concurrency. It also handles promotion
+`workflow_run: requested` events from the existing daily 14:17 UTC backstop and
+manual dispatch. Automatic promotion requests would require a fourth hop, so
+they are not relied on. Observation does not wait for production Environment
+approval, deploy-job completion, staging incident reporting or the production
+concurrency group. The observer and final production reporter share a job-level
+`production-incident-observation` concurrency group with `queue: max` and no
+cancellation; each reads live identity only after entering the group. Staging
+reporting uses a separate queued group. No workflow-level replaceable pending
+slot can discard a request in favor of a skipped completion event. GitHub bounds
+each queue to 100 pending jobs; excess jobs are cancelled, not observed. No
+schedule is added or changed. On squash-only linear main, the
 oldest pending commit's committer time is `held since`; age **strictly greater
 than six hours** opens `production held > 6h`. It records both SHAs, age and the
 failed step or candidate-selection reason (pending source runs link the active

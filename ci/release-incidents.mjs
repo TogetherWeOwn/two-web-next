@@ -177,9 +177,9 @@ export function githubApi(token, fetchImpl = fetch) {
   };
 }
 
-async function jobMeasurements(token, id) {
+export async function jobMeasurements(token, id, fetchImpl = fetch) {
   if (!Number.isSafeInteger(id) || id <= 0) return [];
-  const response = await fetch(
+  const response = await fetchImpl(
     `https://api.github.com/repos/TogetherWeOwn/two-web-next/actions/jobs/${id}/logs`,
     {
       redirect: "manual",
@@ -201,7 +201,7 @@ async function jobMeasurements(token, id) {
     throw new Error("Quality log redirect host refused");
   }
   // The signed log download gets no token and follows no further redirects.
-  const download = await fetch(location, {
+  const download = await fetchImpl(location, {
     redirect: "error",
     signal: AbortSignal.timeout(15_000),
   });
@@ -259,17 +259,22 @@ export async function report(
   if (!["staging", "promotion", "hold"].includes(env.INCIDENT_MODE) || !/^\d+$/.test(attempt ?? ""))
     throw new Error("Invalid incident report mode");
   const run = await api("GET", `/actions/runs/${runId}`);
+  const stagingSource = run.path === ".github/workflows/e2e-staging.yml";
+  const expectedSource =
+    env.INCIDENT_MODE === "hold"
+      ? stagingSource || run.path === ".github/workflows/deploy-production.yml"
+      : run.path ===
+        `.github/workflows/${env.INCIDENT_MODE === "staging" ? "e2e-staging" : "deploy-production"}.yml`;
   if (
     run.head_branch !== "main" ||
     run.head_repository?.full_name !== env.GITHUB_REPOSITORY ||
-    run.path !==
-      `.github/workflows/${env.INCIDENT_MODE === "staging" ? "e2e-staging" : "deploy-production"}.yml`
+    !expectedSource
   ) {
     throw new Error("Incident source is not the expected main workflow");
   }
   const jobs = env.INCIDENT_MODE === "hold" ? [] : await jobsFor(api, runId, attempt);
   const sha =
-    env.INCIDENT_MODE === "staging" && run.event === "workflow_run"
+    stagingSource && run.event === "workflow_run"
       ? /^e2e-staging deploy ([0-9a-f]{40})$/.exec(run.display_title ?? "")?.[1]
       : env.CANDIDATE_SHA || run.head_sha;
   if (!SHA.test(sha ?? "")) throw new Error("Missing tested commit identity");
@@ -335,7 +340,9 @@ export async function report(
     results["auto-rollback"]?.result !== "success";
   const reason =
     env.INCIDENT_MODE === "hold"
-      ? `Promotion requested (status ${text(run.status ?? "unknown")}); qualification, approval or deployment concurrency may still be pending. See the source run for the active hold.`
+      ? stagingSource
+        ? "Staging qualification completed; production qualification, soak, approval or deployment concurrency may still be pending. See the source run for staging evidence."
+        : `Promotion requested (status ${text(run.status ?? "unknown")}); qualification, approval or deployment concurrency may still be pending. See the source run for the active hold.`
       : results["post-deploy-watch"]?.outputs?.verdict === "superseded"
         ? "Promotion watch was superseded; candidate was not judged healthy."
         : failures.length

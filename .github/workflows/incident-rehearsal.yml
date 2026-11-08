@@ -22,7 +22,7 @@ permissions:
 
 concurrency:
   group: incident-rehearsal-${{ github.event_name }}-${{ github.event.pull_request.number || 'dispatch' }}
-  cancel-in-progress: false
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   selftest:

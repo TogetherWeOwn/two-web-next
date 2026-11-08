@@ -4,6 +4,7 @@ import { test } from "node:test";
 import {
   githubApi,
   heldProduction,
+  jobMeasurements,
   qualityMeasurements,
   report,
   syncIncident,
@@ -365,6 +366,35 @@ test("requested promotion observes age without waiting for jobs or inventing rec
   assert.ok(!f.calls.some((call) => call.path.includes("/jobs?")));
 });
 
+test("automatic staging completion observes a hold within the three-hop chain", async () => {
+  const f = fixture({
+    mode: "staging",
+    issues: [keyed(1, "production-promotion")],
+    metadata: { status: "completed" },
+    intercept(method, path) {
+      if (method === "GET" && path.includes("/jobs?"))
+        throw new Error("hold observation must not depend on staging job reporting");
+    },
+  });
+  await report(env("hold", { SOURCE_RUN_ID: "42", SOURCE_RUN_ATTEMPT: "1" }), {
+    api: f.api,
+    readLive: async () => LIVE,
+    nowMs: NOW,
+  });
+  assert.equal(f.state.issues[0].state, "open");
+  const held = f.state.issues.find((issue) => issue.title === "production held > 6h");
+  assert.ok(held);
+  assert.ok(held.body.includes(`SHA: ${LIVE}`));
+  assert.match(held.body, /Staging qualification completed/);
+  assert.ok(!f.calls.some((call) => call.path.includes("/jobs?")));
+});
+
+test("hold observation rejects workflows outside staging and promotion", async () => {
+  const f = fixture({ metadata: { path: ".github/workflows/untrusted.yml" } });
+  await assert.rejects(report(env("hold"), { api: f.api }), /expected main workflow/);
+  assert.equal(f.calls.filter((call) => call.method !== "GET").length, 0);
+});
+
 test("rehearsal failure, repeat and recovery exercise the real sink without live reads", async () => {
   const f = fixture();
   const options = {
@@ -395,6 +425,69 @@ test("API pins host, refuses redirects and never includes remote error bodies", 
   assert.equal(options.redirect, "error");
 });
 
+test("quality log redirect validation refuses untrusted destinations before download", async () => {
+  for (const location of [
+    "https://logs.example.org/log",
+    "https://blob.core.windows.net.evil.invalid/log",
+    "http://logs.blob.core.windows.net/log",
+    "https://user:password@logs.blob.core.windows.net/log",
+  ]) {
+    let calls = 0;
+    await assert.rejects(
+      jobMeasurements("fixture-token", 1, async () => {
+        calls++;
+        return new Response(null, { status: 302, headers: { location } });
+      }),
+      /redirect host refused/,
+    );
+    assert.equal(calls, 1);
+  }
+  await assert.rejects(
+    jobMeasurements("fixture-token", 1, async () => new Response("untrusted", { status: 200 })),
+    /redirect unavailable/,
+  );
+});
+
+test("signed log download has no token and refuses further redirects", async () => {
+  for (const host of ["logs.blob.core.windows.net", "logs.actions.githubusercontent.com"]) {
+    const calls = [];
+    const metrics = await jobMeasurements("fixture-token", 1, async (url, options) => {
+      calls.push({ url: String(url), options });
+      return calls.length === 1
+        ? new Response(null, { status: 302, headers: { location: `https://${host}/log` } })
+        : new Response("server-response-time maxNumericValue\nexpected: <=600\nfound: 660\n");
+    });
+    assert.equal(calls.length, 2);
+    assert.equal(new URL(calls[0].url).hostname, "api.github.com");
+    assert.equal(calls[0].options.headers.Authorization, "Bearer fixture-token");
+    assert.equal(calls[0].options.redirect, "manual");
+    assert.equal(calls[1].options.headers, undefined);
+    assert.equal(calls[1].options.redirect, "error");
+    assert.deepEqual(metrics, ["server-response-time: threshold <=600; measured 660"]);
+  }
+});
+
+test("API and log response caps reject oversized bodies", async () => {
+  const oversized = (limit) => new Response(new Uint8Array(limit + 1));
+  await assert.rejects(
+    githubApi("fixture-token", async () => oversized(2 * 1024 * 1024))("GET", "/issues"),
+    /exceeded response size cap/,
+  );
+  let calls = 0;
+  await assert.rejects(
+    jobMeasurements("fixture-token", 1, async () => {
+      calls++;
+      return calls === 1
+        ? new Response(null, {
+            status: 302,
+            headers: { location: "https://logs.blob.core.windows.net/log" },
+          })
+        : oversized(8 * 1024 * 1024);
+    }),
+    /exceeded response size cap/,
+  );
+});
+
 test("workflow wiring preserves release dependencies and isolates issue-write permission", () => {
   const read = (file) =>
     readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8");
@@ -414,4 +507,25 @@ test("workflow wiring preserves release dependencies and isolates issue-write pe
   assert.match(production, /RESULTS_JSON: \$\{\{ toJSON\(needs\) \}\}/);
   assert.match(rehearsal, /INCIDENT_MODE: rehearsal/);
   assert.doesNotMatch(rehearsal, /environment:|secrets\.|wrangler|DATABASE_URL/);
+  assert.match(rehearsal, /cancel-in-progress: \$\{\{ github\.event_name == 'pull_request' \}\}/);
+  const job = (workflow, id) =>
+    workflow.split(`\n  ${id}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0] ?? "";
+  const hold = job(observer, "observe-production");
+  const stagingReport = job(observer, "observe");
+  const finalReport = job(production, "incidents");
+  // No replaceable workflow-level pending slot, including events whose jobs skip.
+  assert.doesNotMatch(observer, /\nconcurrency:/);
+  assert.match(hold, /name == 'e2e-staging' && github\.event\.action == 'completed'/);
+  assert.match(hold, /name == 'deploy-production' && github\.event\.action == 'requested'/);
+  assert.match(hold, /INCIDENT_MODE: hold/);
+  for (const block of [hold, finalReport]) {
+    assert.match(
+      block,
+      /concurrency:\n      group: production-incident-observation\n      cancel-in-progress: false\n      queue: max/,
+    );
+  }
+  assert.match(stagingReport, /group: staging-incident-observation/);
+  assert.match(stagingReport, /queue: max/);
+  assert.doesNotMatch(hold, /needs:|environment:|secrets\./);
+  assert.doesNotMatch(production, /needs: (?:incidents|\[[^\n]*incidents)/);
 });
