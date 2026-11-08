@@ -4,6 +4,7 @@
 // independent per-file gzip, exclusive frozen snapshot, and a verifier that
 // recomputes everything from the copied bytes.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
@@ -29,6 +30,7 @@ import {
   createCanonicalReceipt,
   freezeCanonicalBuild,
   verifyCanonicalArchiveMembers,
+  verifyCanonicalArtifactBytes,
   verifyCanonicalBuild,
 } from "./kit-upload-rehearsal.mjs";
 
@@ -185,6 +187,178 @@ function editReceipt(destination, mutate) {
   mutate(receipt);
   overwrite(path, JSON.stringify(receipt, null, 2));
 }
+
+const ARCHIVE_PREFIX = "artifacts/kit-canonical-capture/bytes/";
+const ARCHIVE_FAILURE = "canonical artifact byte verification failed";
+const ZIP_BUILDER = `
+import base64, io, json, sys, warnings, zipfile
+warnings.simplefilter("ignore")
+out = io.BytesIO()
+with zipfile.ZipFile(out, "w") as archive:
+    for entry in json.load(sys.stdin):
+        info = zipfile.ZipInfo(entry["name"])
+        info.compress_type = entry.get("compression", zipfile.ZIP_DEFLATED)
+        info.external_attr = entry.get("mode", 0o100400) << 16
+        archive.writestr(info, base64.b64decode(entry["base64"]))
+sys.stdout.buffer.write(out.getvalue())
+`;
+
+function canonicalZip(entries) {
+  return execFileSync("python3", ["-I", "-c", ZIP_BUILDER], {
+    input: JSON.stringify(entries),
+    timeout: 10_000,
+    maxBuffer: 8 * 1024 * 1024,
+    env: {},
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+}
+
+function archiveFixture(mutate = () => {}) {
+  const root = makeRoot("zip-root");
+  mkdirSync(join(root, SERVER, "empty"));
+  const receipt = createCanonicalReceipt(root, authority());
+  const receiptBytes = Buffer.from(`${JSON.stringify(receipt)}\n`);
+  const entries = receipt.files.map(({ path }) => ({
+    name: `${ARCHIVE_PREFIX}${path}`,
+    base64: readFileSync(join(root, path)).toString("base64"),
+  }));
+  entries.push({ name: `${ARCHIVE_PREFIX}receipt.json`, base64: receiptBytes.toString("base64") });
+  // This artifact contains other diagnostic trees; only the fixed capture
+  // subtree is verified. It is never substituted by later raw build output.
+  entries.push({ name: "web/.svelte-kit/output/server/later.js", base64: "eA==" });
+  mutate(entries);
+  const archive = canonicalZip(entries);
+  const expected = {
+    archiveBytes: archive.length,
+    archiveSha256: createHash("sha256").update(archive).digest("hex"),
+    receiptSha256: createHash("sha256").update(receiptBytes).digest("hex"),
+    sourceSha: "a".repeat(40),
+    runId: "123",
+    runAttempt: "2",
+    artifactName: `kit-production-bundle-build-${"a".repeat(40)}-123-2`,
+  };
+  return { archive, expected, receipt };
+}
+
+test("canonical artifact parser verifies bytes without claiming authentication", () => {
+  const { archive, expected, receipt } = archiveFixture();
+  const verified = verifyCanonicalArtifactBytes(archive, expected, authority());
+  assert.deepEqual(verified.receipt, receipt);
+  assert.equal(verified.archiveSha256, expected.archiveSha256);
+  assert.equal(verified.verifiedPrefix, ARCHIVE_PREFIX);
+  assert.equal(verified.directoryEvidence, "receipt-declared");
+  assert.equal(verified.authenticatedArchiveVerified, false);
+  assert.equal(verified.qualified, false);
+});
+
+for (const key of [
+  "archiveBytes",
+  "archiveSha256",
+  "receiptSha256",
+  "artifactName",
+  "sourceSha",
+  "runId",
+  "runAttempt",
+]) {
+  test(`canonical artifact parser rejects mismatched ${key}`, () => {
+    const { archive, expected } = archiveFixture();
+    expected[key] = key === "archiveBytes" ? expected[key] + 1 : "invalid";
+    assert.throws(() => verifyCanonicalArtifactBytes(archive, expected, authority()), {
+      message: ARCHIVE_FAILURE,
+    });
+  });
+}
+
+for (const [name, mutate] of Object.entries({
+  duplicate: (entries) => entries.push(entries[0]),
+  missing: (entries) => entries.shift(),
+  "missing receipt": (entries) =>
+    entries.splice(
+      entries.findIndex((e) => e.name.endsWith("/receipt.json")),
+      1,
+    ),
+  "extra selected file": (entries) =>
+    entries.push({ name: `${ARCHIVE_PREFIX}extra`, base64: "eA==" }),
+  traversal: (entries) => {
+    entries[0].name = `${ARCHIVE_PREFIX}../private`;
+  },
+  absolute: (entries) => {
+    entries[0].name = "/private";
+  },
+  backslash: (entries) => {
+    entries[0].name = "private\\\\file";
+  },
+  "symlink selected": (entries) => {
+    entries[0].mode = 0o120777;
+  },
+  "symlink outside selected": (entries) => {
+    entries.at(-1).mode = 0o120777;
+  },
+  directory: (entries) => {
+    entries[0].name += "/";
+    entries[0].mode = 0o040700;
+  },
+  "unsupported compression": (entries) => {
+    entries[0].compression = 12;
+  },
+  "changed raw byte": (entries) => {
+    entries[0].base64 = "eA==";
+  },
+  "only later output": (entries) => {
+    for (const entry of entries) entry.name = entry.name.replace(ARCHIVE_PREFIX, "later/");
+  },
+})) {
+  test(`canonical artifact parser refuses ${name} with sanitized failure`, () => {
+    const { archive, expected } = archiveFixture(mutate);
+    assert.throws(() => verifyCanonicalArtifactBytes(archive, expected, authority()), {
+      message: ARCHIVE_FAILURE,
+    });
+  });
+}
+
+for (const [name, mutate] of Object.entries({
+  CRC: (zip, offset) => {
+    zip.writeUInt32LE((zip.readUInt32LE(offset + 16) ^ 1) >>> 0, offset + 16);
+  },
+  encrypted: (zip, offset) => {
+    zip.writeUInt16LE(zip.readUInt16LE(offset + 8) | 1, offset + 8);
+  },
+  "member bound": (zip, offset) => {
+    zip.writeUInt32LE(64 * 1024 * 1024 + 1, offset + 24);
+  },
+  "NUL path": (zip, offset) => {
+    zip[offset + 46] = 0;
+  },
+})) {
+  test(`canonical artifact parser rejects malformed ZIP ${name}`, () => {
+    const { archive, expected } = archiveFixture();
+    const offset = archive.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+    assert.ok(offset > 0);
+    mutate(archive, offset);
+    expected.archiveSha256 = createHash("sha256").update(archive).digest("hex");
+    assert.throws(() => verifyCanonicalArtifactBytes(archive, expected, authority()), {
+      message: ARCHIVE_FAILURE,
+    });
+  });
+}
+
+test("canonical artifact parser rejects invalid and truncated ZIP without leaking child output", () => {
+  const fixture = archiveFixture();
+  for (const archive of [
+    Buffer.alloc(0),
+    Buffer.from("private detail"),
+    fixture.archive.subarray(0, 40),
+  ]) {
+    const expected = {
+      ...fixture.expected,
+      archiveBytes: archive.length,
+      archiveSha256: createHash("sha256").update(archive).digest("hex"),
+    };
+    assert.throws(() => verifyCanonicalArtifactBytes(archive, expected, authority()), {
+      message: ARCHIVE_FAILURE,
+    });
+  }
+});
 
 test("createCanonicalReceipt returns the exact unqualified receipt for full trees", async () => {
   const root = makeRoot();

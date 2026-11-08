@@ -12,11 +12,26 @@ expected receipt SHA-256, recomputes independent gzip/SHA-256 rows and exact
 membership/groups/totals using the capture semantics, and rejects malformed or
 colliding declared topology. Reproduction requires the recorded Node/zlib
 identity; a different runtime refuses instead of relabelling the measurement.
-Empty directories remain **receipt-declared**, not observed ZIP entries. This
-library does not parse ZIP, authenticate archive metadata or attest a build; its
-bounded transport/parser and source-separated caller integration remain unfinished.
-New fixtures use the existing Actions invocation and have not run yet. No local
-suite, lint, build or installation ran.
+Empty directories remain **receipt-declared**, not observed ZIP entries.
+
+The existing data-only ZIP inspector now has a canonical profile, composed with
+that member verifier. It checks the complete ZIP digest/size and explicit
+SHA/run/attempt-keyed artifact name against supplied expectations, then reads only
+`artifacts/kit-canonical-capture/bytes/`. Later raw output never substitutes for
+that frozen subtree. Both profiles share regular-file/compression validation;
+the Hono profile retains its flat membership contract. The canonical profile
+bounds compressed bytes, entries, expanded sizes, child memory/time and output;
+unsafe paths, duplicate names, aliases, encrypted/unsupported entries, invalid
+CRC/lengths and receipt/member drift refuse. The child uses Python isolated mode,
+no credential environment and a trusted cwd; it never extracts or executes bytes.
+
+This is **digest-bound byte verification**, not authentication: the caller must
+obtain the expected digests and capture identity through trusted channels. The
+result explicitly keeps authentication and qualification false. Other artifact
+subtrees are not content-verified. Authenticated retrieval/journal binding and
+source-separated caller integration remain unfinished. New parser/member fixtures
+use the existing Actions invocation and have not run yet. No local suite, lint,
+build or installation ran.
 
 [Actions 42500235397](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42500235397)
 at `94d8f758ac8d3191d01f8d94a744df9d3b50b5d7` completed with **failure**.

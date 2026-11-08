@@ -1,5 +1,6 @@
 // Build-only receipt. Neither this tree nor a dry run proves what Cloudflare uploaded.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import {
   closeSync,
   constants,
@@ -307,6 +308,61 @@ export function verifyCanonicalArchiveMembers(members, authority, receiptSha256)
     authenticatedArchiveVerified: false,
     qualified: false,
   };
+}
+
+// The expected digests/identity must come from authenticated metadata and a
+// separately trusted capture journal. Matching supplied values is not authentication.
+export function verifyCanonicalArtifactBytes(archive, expected, authority) {
+  try {
+    assert.ok(
+      Buffer.isBuffer(archive) && archive.length > 0 && archive.length <= 128 * 1024 * 1024,
+    );
+    assert.equal(archive.length, expected.archiveBytes);
+    assert.match(expected.archiveSha256, /^[0-9a-f]{64}$/);
+    assert.equal(sha256(archive), expected.archiveSha256);
+    assert.match(expected.sourceSha, /^[0-9a-f]{40}$/);
+    assert.match(expected.runId, /^[1-9][0-9]*$/);
+    assert.match(expected.runAttempt, /^[1-9][0-9]*$/);
+    assert.equal(
+      expected.artifactName,
+      `kit-production-bundle-build-${expected.sourceSha}-${expected.runId}-${expected.runAttempt}`,
+    );
+    const parsed = JSON.parse(
+      execFileSync(
+        "python3",
+        [
+          "-I",
+          fileURLToPath(new URL("./read-pure-hono-archive.py", import.meta.url)),
+          "--canonical",
+        ],
+        {
+          input: archive,
+          timeout: 30_000,
+          maxBuffer: 384 * 1024 * 1024,
+          env: {},
+          cwd: fileURLToPath(new URL(".", import.meta.url)),
+          encoding: "utf8",
+          stdio: ["pipe", "pipe", "pipe"],
+        },
+      ),
+    );
+    const members = parsed.map(({ path, type, base64 }) => ({
+      path,
+      type,
+      data: Buffer.from(base64, "base64"),
+    }));
+    const verified = verifyCanonicalArchiveMembers(members, authority, expected.receiptSha256);
+    return {
+      ...verified,
+      evidence: "digest-bound-canonical-artifact-bytes",
+      artifactName: expected.artifactName,
+      archiveSha256: expected.archiveSha256,
+      archiveBytes: archive.length,
+      verifiedPrefix: "artifacts/kit-canonical-capture/bytes/",
+    };
+  } catch {
+    throw new Error("canonical artifact byte verification failed");
+  }
 }
 
 export function verifyCanonicalBuild(directory, authority) {
