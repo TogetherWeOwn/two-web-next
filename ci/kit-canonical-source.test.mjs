@@ -403,11 +403,18 @@ test("installed source rejects an absent pinned generator and an untracked overl
   assert.throws(() => inspectCanonicalInstalledSource(extra.root, extra.sha), /dirty/);
 });
 
-function candidateBuildRepo({ fail = false, drift = null } = {}) {
+function candidateBuildRepo({ fail = false, drift = null, generator = {} } = {}) {
   const { root } = installedRepo();
   const calls = join(fixtureRoot("build-calls"), "call.json");
-  const run = `export async function runCommand(command, args, options) {
-    writeFileSync(${JSON.stringify(calls)}, JSON.stringify({ command, args, options }));
+  const run = `const calls = [];
+  export async function runCommand(command, args, options) {
+    calls.push({ command, args, options });
+    writeFileSync(${JSON.stringify(calls)}, JSON.stringify(calls));
+    if (args[0] === "ci/build-leaf-css.mjs") {
+      ${generator.drift ? `writeFileSync(${JSON.stringify(join(root, generator.drift))}, "generator fixture drift");` : ""}
+      ${generator.fail ? 'throw new Error("private generator fixture detail");' : ""}
+      return;
+    }
     ${drift ? `writeFileSync(${JSON.stringify(join(root, drift))}, "changed by fixture");` : ""}
     ${fail ? 'throw new Error("candidate build failed");' : ""}
   }`;
@@ -429,11 +436,18 @@ test("candidate build invokes candidate command and awaits its capture boundary"
   const { root, sha, calls } = candidateBuildRepo();
   let captured = false;
   const result = await runCanonicalCandidateBuild(root, sha, async (context) => {
-    assert.deepEqual(JSON.parse(readFileSync(calls, "utf8")), {
-      command: "npm",
-      args: ["run", "build", "--prefix", "web"],
-      options: { cwd: root, timeoutMs: 240000, maxBytes: 2097152 },
-    });
+    assert.deepEqual(JSON.parse(readFileSync(calls, "utf8")), [
+      {
+        command: process.execPath,
+        args: ["ci/build-leaf-css.mjs"],
+        options: { cwd: root, timeoutMs: 30000, maxBytes: 2097152 },
+      },
+      {
+        command: "npm",
+        args: ["run", "build", "--prefix", "web"],
+        options: { cwd: root, timeoutMs: 240000, maxBytes: 2097152 },
+      },
+    ]);
     assert.equal(context.root, root);
     assert.equal(context.producerOutcome, "success");
     assert.equal(context.authority.KIT_WORKER_PATH, "web/.svelte-kit/cloudflare/_worker.js");
@@ -449,9 +463,50 @@ test("candidate build invokes candidate command and awaits its capture boundary"
   assert.equal(result.source.commit, sha);
   assert.equal(result.startupInputs.length, 3);
   assert.equal(result.authorityInput.path, "ci/bundle-inventory.mjs");
+  assert.deepEqual(result.generator, {
+    evidence: "unqualified-candidate-generator-return",
+    command: {
+      executable: process.execPath,
+      args: ["ci/build-leaf-css.mjs"],
+      cwd: "candidate-root",
+      timeoutMs: 30000,
+      maxBytes: 2097152,
+    },
+    input: result.installBoundary.inputs.find((file) => file.path === "ci/build-leaf-css.mjs"),
+    output: result.installBoundary.generated,
+    matchesObservedOutput: true,
+    executionVerified: false,
+  });
   assert.equal(result.dependenciesVerified, false);
   assert.equal(result.executionVerified, false);
 });
+
+for (const generator of [
+  { fail: true },
+  { drift: "src/leaf-critical-css.ts" },
+  { drift: "node_modules/.package-lock.json" },
+  { drift: "web/node_modules/.package-lock.json" },
+  { drift: "public/theme.css" },
+  { drift: "web/.env.local" },
+]) {
+  test(`candidate generator refuses before build/capture ${JSON.stringify(generator)}`, async () => {
+    const { root, sha, calls } = candidateBuildRepo({ generator });
+    let captured = false;
+    await assert.rejects(
+      runCanonicalCandidateBuild(root, sha, () => {
+        captured = true;
+      }),
+      generator.fail
+        ? { message: "candidate generator execution failed" }
+        : /candidate generator inputs or output changed|dirty|unexpected post-install/,
+    );
+    const invoked = JSON.parse(readFileSync(calls, "utf8"));
+    assert.equal(invoked.length, 1);
+    assert.equal(invoked[0].command, process.execPath);
+    assert.deepEqual(invoked[0].args, ["ci/build-leaf-css.mjs"]);
+    assert.equal(captured, false);
+  });
+}
 
 test("candidate build captures before rejecting tracked source drift", async () => {
   const { root, sha } = candidateBuildRepo({ drift: "README.md" });

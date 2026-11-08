@@ -17,6 +17,17 @@ Neither phase creates, clones, checks out or installs a source tree.
 
 The build CLI refuses unexpected environment keys; the pipeline must launch it
 with an explicitly credential-free environment. Child failure is not retried.
+Before the adapter build, the candidate interface now invokes its pinned
+`ci/build-leaf-css.mjs` through its own bounded command runner and the current Node
+executable. It then rechecks the complete tracked source, allowed ignored-input
+set, generated module and both installed lock snapshots. Regeneration must match
+the pre-observed bytes; changed output is rejected, never silently adopted as an
+installation repair. A failed generator or changed input prevents build/capture.
+The unqualified build receipt records that command, pinned generator input and
+matching output digest, without claiming dependency or runtime integrity. Six new
+negative-control registrations and the expanded command-order/receipt fixture use
+the existing Actions suite; they have not run. This does not install dependencies,
+verify npm lifecycle execution or provide an admitted collection caller.
 Capture runs at the candidate build-return callback, before source rechecks;
 failed or partial captures remain on disk rather than becoming success receipts.
 A distinct separated-capture schema binds the candidate source SHA, collector
