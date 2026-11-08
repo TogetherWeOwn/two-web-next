@@ -1064,7 +1064,7 @@ jobs:
         run: npx wrangler deploy --dry-run --env production --outdir dist-production --metafile dist-production/bundle-meta.json
       - name: Worker bundle evidence selftest (offline fixtures, no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs ci/pure-hono-archive.test.mjs ci/read-pure-hono-archive.test.mjs
+        run: node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs ci/pure-hono-archive.test.mjs ci/read-pure-hono-archive.test.mjs ci/verify-pure-hono-archive.test.mjs
       - name: Verify production build inventory and prebuilt upload equivalence (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |

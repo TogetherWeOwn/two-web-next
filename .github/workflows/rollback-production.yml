@@ -20,6 +20,16 @@ on:
         description: "Recorded known-good Worker Version ID (lowercase UUID from `wrangler versions list`)"
         required: true
         type: string
+      pure_hono_pointer:
+        description: "Optional pure-Hono pointer JSON; requires pure_hono_artifact_id and must name version_id. Verification does not establish permanent retention"
+        required: false
+        type: string
+        default: ""
+      pure_hono_artifact_id:
+        description: "Authenticated successful main production run's bundle artifact id for the pure-Hono pointer"
+        required: false
+        type: string
+        default: ""
       dry_run:
         description: "Validate only: run the gates, credential, live-version and target-secret checks, then stop before any rollback or smoke. No versions deploy, no migrations, no notification"
         required: false
@@ -52,6 +62,16 @@ on:
         default: ""
       rollback_commit:
         description: "Commit associated with the Worker Version being restored; empty sends sha null"
+        required: false
+        type: string
+        default: ""
+      pure_hono_pointer:
+        description: "Optional pure-Hono pointer JSON; requires pure_hono_artifact_id and must name version_id"
+        required: false
+        type: string
+        default: ""
+      pure_hono_artifact_id:
+        description: "Successful main production run's bundle artifact id; not permanent retention"
         required: false
         type: string
         default: ""
@@ -204,6 +224,41 @@ jobs:
           # staging via declared call secret, direct repo secret on manual dispatch.
           CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || inputs.environment != 'production' && secrets.CLOUDFLARE_API_TOKEN || '' }}
           CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || inputs.environment != 'production' && secrets.CLOUDFLARE_ACCOUNT_ID || '' }}
+      - name: Verify requested pure-Hono rollback archive (read-only)
+        if: ${{ inputs.pure_hono_pointer != '' || inputs.pure_hono_artifact_id != '' }}
+        id: pure-hono
+        shell: bash
+        run: |
+          set -euo pipefail
+          node <<'NODE'
+          const assert = require('node:assert/strict');
+          assert.equal(process.env.ROLLBACK_ENVIRONMENT, 'production', 'pure-Hono evidence is production-only');
+          assert.ok(process.env.PURE_HONO_POINTER && Buffer.byteLength(process.env.PURE_HONO_POINTER) <= 16384, 'missing or oversized pure-Hono pointer');
+          assert.match(process.env.PURE_HONO_ARTIFACT_ID, /^[1-9][0-9]{0,19}$/);
+          NODE
+          evidence_root="$(mktemp -d "$RUNNER_TEMP/pure-hono-verify.XXXXXX")"
+          mkdir -m 700 "$evidence_root/archive"
+          POINTER_PATH="$evidence_root/pointer.json" node <<'NODE'
+          require('node:fs').writeFileSync(process.env.POINTER_PATH, process.env.PURE_HONO_POINTER, { flag: 'wx', mode: 0o600 });
+          NODE
+          node ci/verify-pure-hono-archive.mjs "$evidence_root/pointer.json" "$PURE_HONO_ARTIFACT_ID" "$evidence_root/archive"
+          printf 'receipt=%s/archive/verified.json\n' "$evidence_root" >> "$GITHUB_OUTPUT"
+        env:
+          PURE_HONO_POINTER: ${{ inputs.pure_hono_pointer }}
+          PURE_HONO_ARTIFACT_ID: ${{ inputs.pure_hono_artifact_id }}
+          ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
+          ROLLBACK_ENVIRONMENT: ${{ inputs.environment }}
+          GITHUB_TOKEN: ${{ github.token }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+      - name: Archive verified pure-Hono rollback receipt
+        if: ${{ steps.pure-hono.outcome == 'success' }}
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: pure-hono-rollback-verification-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ steps.pure-hono.outputs.receipt }}
+          if-no-files-found: error
+          retention-days: 30
       - name: Refuse when an unexpected version is live
         # Automation passes expected_current_version_id: roll back only while
         # that version serves, report skip when version_id already serves,

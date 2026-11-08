@@ -845,6 +845,42 @@ describe("workflow evidence wiring", () => {
     assert.equal(steps[archive].with["retention-days"], 30);
   });
 
+  test("optional pure-Hono archive proof is version-pinned before any rollback, including dry runs", () => {
+    const rollback = workflow("rollback-production");
+    for (const trigger of ["workflow_dispatch", "workflow_call"]) {
+      for (const name of ["pure_hono_pointer", "pure_hono_artifact_id"]) {
+        const input = rollback.on[trigger].inputs[name];
+        assert.equal(input.type, "string");
+        assert.equal(input.default, "");
+        assert.equal(input.required, false);
+      }
+    }
+    const steps = rollback.jobs["rollback-production"].steps;
+    const index = steps.findIndex((step) => step.id === "pure-hono");
+    const proof = steps[index];
+    assert.ok(index > steps.findIndex((step) => step.name?.includes("Cloudflare credentials")));
+    for (const name of ["Refuse when an unexpected", "Require rollback target", "Dry run report"])
+      assert.ok(index < steps.findIndex((step) => step.name?.startsWith(name)));
+    assert.equal(
+      proof.if,
+      "${{ inputs.pure_hono_pointer != '' || inputs.pure_hono_artifact_id != '' }}",
+    );
+    assert.equal(proof.shell, "bash");
+    assert.equal(proof.env.ROLLBACK_VERSION_ID, "${{ inputs.version_id }}");
+    assert.equal(proof.env.GITHUB_TOKEN, "${{ github.token }}");
+    assert.equal(proof.env.PURE_HONO_POINTER, "${{ inputs.pure_hono_pointer }}");
+    assert.match(proof.run, /mktemp -d/);
+    assert.match(proof.run, /mkdir -m 700/);
+    assert.match(proof.run, /ROLLBACK_ENVIRONMENT, 'production'/);
+    assert.match(proof.run, /ci\/verify-pure-hono-archive\.mjs/);
+    assert.doesNotMatch(proof.run, /\$\{\{|wrangler|versions deploy/);
+    const archive = steps[index + 1];
+    assert.equal(archive.uses, artifactPin);
+    assert.equal(archive.if, "${{ steps.pure-hono.outcome == 'success' }}");
+    assert.equal(archive.with.path, "${{ steps.pure-hono.outputs.receipt }}");
+    assert.equal(archive.with["if-no-files-found"], "error");
+  });
+
   test("Kit dry-run and replay steps explicitly select Bash for pipefail in containers", () => {
     const steps = workflow("ci").jobs.check.steps;
     for (const name of [
@@ -879,7 +915,7 @@ describe("workflow evidence wiring", () => {
       steps.some(
         (step) =>
           step.run ===
-          "node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs ci/pure-hono-archive.test.mjs ci/read-pure-hono-archive.test.mjs",
+          "node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs ci/pure-hono-archive.test.mjs ci/read-pure-hono-archive.test.mjs ci/verify-pure-hono-archive.test.mjs",
       ),
     );
   });

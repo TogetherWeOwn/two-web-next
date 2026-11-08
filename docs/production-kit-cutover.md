@@ -97,7 +97,7 @@ build yet.
   do not retry, and errors never echo remote bodies, signed URLs or tokens. The
   destination is created exclusively after byte verification, with no extraction
   or execution. Fixture tests are wired into Actions, not observed passing. No
-  production consumer invokes this helper yet. The separate
+  production-deploy step invokes this helper yet. The separate
   `ci/read-pure-hono-archive.py` reads only the exact flat Hono archive members in
   memory, rejecting duplicate or unsafe names, special files, encryption,
   unsupported compression, CRC failures and oversized expansion. It never extracts
@@ -110,9 +110,25 @@ build yet.
   independent source recomputation, remote byte readback or permanent retention.
   The Python child gets no inherited environment credentials or downloaded cwd.
   Fixtures are wired into the existing Actions evidence step; results are unobserved.
-  Production does not consume this new helper yet. Permanent storage and integrated
-  trusted cross-run consumption remain unimplemented; an expiring archive or
-  arbitrary JSON file proves neither.
+- `ci/verify-pure-hono-archive.mjs` composes authenticated download, bounded archive
+  inspection and a fresh named native version read. It pins the pointer's UUID to
+  the separately requested rollback UUID before any download, requires a new empty
+  private directory and writes only an exclusive private verification receipt.
+  The pointer file is bounded to 16 KiB and must be a regular non-symlink file;
+  downloaded files never become code, working directories or subprocess arguments.
+  Errors and child output are sanitized. Injected collaborator and CLI-refusal
+  fixtures are wired into Actions; they have not run.
+  `rollback-production.yml` optionally accepts `pure_hono_pointer` (JSON) and
+  `pure_hono_artifact_id` together. Supplying either requires both and restricts the
+  evidence check to production; it runs after credential validation but before the
+  live-version guard, target-secret check, dry-run report or rollback. The verified
+  receipt alone is archived for 30 days, not the downloaded archive or native body.
+  Existing callers that supply neither keep the ordinary rollback path and all its
+  guards. This makes cross-run verification available for the requested pure-Hono
+  rollback dry run; it is not a mandatory Kit promotion gate or an observed drill.
+  No verification or native lookup has run against production for this change.
+  Permanent storage remains unimplemented: an expiring archive or arbitrary JSON
+  file proves no retained rollback capability.
 
 ## Unimplemented
 
