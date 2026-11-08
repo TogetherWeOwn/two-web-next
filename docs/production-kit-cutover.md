@@ -160,6 +160,16 @@ describe implementation-time evidence, not a green overall gate.
   observations only: dependency contents and actual generator execution remain
   explicitly unverified. This observer is not installed-source execution or
   build-environment proof, and its new fixtures have **not run**.
+  A source-bound authority loader now imports the candidate's own pinned
+  `ci/bundle-inventory.mjs` in place, using a commit-specific module URL. It
+  rechecks the entire source inventory after evaluation and exposes only frozen
+  path/group constants plus the source and authority-file digests. Missing,
+  altered, aliased, malformed or unsupported inputs refuse; module import errors
+  are sanitized. This loads candidate code, not downloaded artifact data. The
+  retention primitive still validates its canonical path/group contract. The
+  loader does not execute the candidate checker, prove installed dependencies or
+  runtime integrity, or supply the separated build caller. Its eight new test
+  registrations use the existing Actions suite and have **not run**.
   The real B-to-D positive binding is not
   exercised by the hermetic fixture repositories, which cannot recreate B's SHA.
   No checkouts, installs, builds, dispatches or collection are performed by this

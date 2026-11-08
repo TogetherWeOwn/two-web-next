@@ -12,6 +12,7 @@ import {
   realpathSync,
 } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const BASELINE = {
@@ -137,6 +138,50 @@ export function inspectCanonicalSource(path, expectedSha) {
     parents: parents ? parents.split(" ") : [],
     files,
     filesSha256: sha256(JSON.stringify(files)),
+  };
+}
+
+export async function loadCanonicalAuthority(path, expectedSha) {
+  const root = directory(path);
+  const source = inspectCanonicalSource(root, expectedSha);
+  const input = source.files.find((file) => file.path === "ci/bundle-inventory.mjs");
+  assert.ok(input && input.bytes > 0 && input.bytes <= 256 * 1024, "candidate authority missing");
+  // Import the candidate's pinned authority in place, never a collector copy.
+  // A commit-specific URL also prevents a cached earlier revision at this path
+  // from silently supplying the inventory after a supported checkout changes.
+  const url = pathToFileURL(join(root, input.path));
+  url.searchParams.set("source", expectedSha);
+  let module;
+  try {
+    module = await import(url.href);
+  } catch {
+    throw new Error("candidate authority could not be loaded");
+  }
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  assert.equal(module.JSON_VERSION, 1, "unsupported candidate authority version");
+  const authority = {};
+  for (const key of ["KIT_WORKER_PATH", "KIT_SERVER_DIR", "KIT_CLIENT_DIR"]) {
+    assert.ok(
+      typeof module[key] === "string" && module[key].length > 0 && module[key].length <= 1024,
+      "invalid candidate authority path",
+    );
+    authority[key] = module[key];
+  }
+  assert.ok(
+    Array.isArray(module.KIT_GROUP_IDS) &&
+      module.KIT_GROUP_IDS.length === 4 &&
+      module.KIT_GROUP_IDS.every((id) => typeof id === "string" && /^[a-z.]{1,64}$/.test(id)) &&
+      new Set(module.KIT_GROUP_IDS).size === 4,
+    "invalid candidate authority groups",
+  );
+  authority.KIT_GROUP_IDS = Object.freeze([...module.KIT_GROUP_IDS]);
+  return {
+    evidence: "source-bound-candidate-authority-only",
+    source,
+    input,
+    // Retention still validates the canonical path/group contract. Loading does
+    // not execute the checker, establish tool provenance or admit collection.
+    authority: Object.freeze(authority),
   };
 }
 

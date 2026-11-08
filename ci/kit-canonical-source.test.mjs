@@ -21,6 +21,7 @@ import {
   inspectCanonicalInstalledSource,
   inspectCanonicalPristineSource,
   inspectCanonicalSource,
+  loadCanonicalAuthority,
 } from "./kit-canonical-source.mjs";
 
 const B_COMMIT = "1fe09ab868a6fea4a7873e4a096523b78747b232";
@@ -96,6 +97,93 @@ function makeRepo(name) {
 }
 
 const sha256Hex = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+const AUTHORITY_MODULE = `export const JSON_VERSION = 1;
+export const KIT_WORKER_PATH = "web/.svelte-kit/cloudflare/_worker.js";
+export const KIT_SERVER_DIR = "web/.svelte-kit/output/server";
+export const KIT_CLIENT_DIR = "web/.svelte-kit/output/client/_app";
+export const KIT_GROUP_IDS = ["kit.worker", "kit.server.js", "kit.client.js", "kit.client.css"];
+`;
+
+function authorityRepo(content = AUTHORITY_MODULE) {
+  const { root } = makeRepo("authority");
+  write(root, "ci/bundle-inventory.mjs", content);
+  return { root, sha: commitAll(root, "authority input") };
+}
+
+test("candidate authority loads pinned candidate bytes without overlays", async () => {
+  const { root, sha } = authorityRepo();
+  const before = inspectCanonicalSource(root, sha);
+  const receipt = await loadCanonicalAuthority(root, sha);
+  assert.equal(receipt.evidence, "source-bound-candidate-authority-only");
+  assert.deepEqual(receipt.source, before);
+  assert.deepEqual(
+    receipt.input,
+    before.files.find((file) => file.path === "ci/bundle-inventory.mjs"),
+  );
+  assert.equal(receipt.input.sha256, sha256Hex(AUTHORITY_MODULE));
+  assert.equal(receipt.authority.KIT_SERVER_DIR, "web/.svelte-kit/output/server");
+  assert.deepEqual(receipt.authority.KIT_GROUP_IDS, [
+    "kit.worker",
+    "kit.server.js",
+    "kit.client.js",
+    "kit.client.css",
+  ]);
+  assert.ok(Object.isFrozen(receipt.authority));
+  assert.ok(Object.isFrozen(receipt.authority.KIT_GROUP_IDS));
+  assert.deepEqual(inspectCanonicalSource(root, sha), before);
+  assert.equal(git(root, "status", "--porcelain", "--untracked-files=all"), "");
+});
+
+test("candidate authority cache is pinned to the actual source revision", async () => {
+  const { root, sha } = authorityRepo();
+  await loadCanonicalAuthority(root, sha);
+  write(root, "ci/bundle-inventory.mjs", AUTHORITY_MODULE.replace("= 1;", "= 2;"));
+  const changed = commitAll(root, "unsupported authority revision");
+  await assert.rejects(loadCanonicalAuthority(root, changed), /unsupported candidate authority/);
+  await assert.rejects(loadCanonicalAuthority(root, sha), /source HEAD mismatch/);
+});
+
+test("candidate authority refuses missing, aliased or altered inputs", async () => {
+  const missing = makeRepo("missing-authority");
+  await assert.rejects(loadCanonicalAuthority(missing.root, missing.sha), /authority missing/);
+  const changed = authorityRepo();
+  write(changed.root, "ci/bundle-inventory.mjs", "throw new Error('must not run');\n");
+  git(changed.root, "update-index", "--assume-unchanged", "ci/bundle-inventory.mjs");
+  await assert.rejects(
+    loadCanonicalAuthority(changed.root, changed.sha),
+    /tracked source bytes differ/,
+  );
+  const alias = authorityRepo();
+  unlinkSync(join(alias.root, "ci/bundle-inventory.mjs"));
+  symlinkSync(join(alias.root, "README.md"), join(alias.root, "ci/bundle-inventory.mjs"));
+  await assert.rejects(loadCanonicalAuthority(alias.root, alias.sha));
+});
+
+for (const content of [
+  "export const JSON_VERSION = 1;\n",
+  AUTHORITY_MODULE.replace('"web/.svelte-kit/output/server"', "null"),
+  AUTHORITY_MODULE.replace('"kit.client.css"', '"kit.client.js"'),
+  AUTHORITY_MODULE.replace('"kit.client.css"', "7"),
+]) {
+  test(`authority rejects malformed exports ${sha256Hex(content).slice(0, 8)}`, async () => {
+    const { root, sha } = authorityRepo(content);
+    await assert.rejects(loadCanonicalAuthority(root, sha), /invalid candidate authority/);
+  });
+}
+
+test("authority sanitizes import errors and refuses evaluation-time drift", async () => {
+  const invalid = authorityRepo("throw new Error('private fixture detail');\n");
+  await assert.rejects(loadCanonicalAuthority(invalid.root, invalid.sha), (error) => {
+    assert.equal(error.message, "candidate authority could not be loaded");
+    assert.ok(!error.message.includes("private fixture detail"));
+    return true;
+  });
+  const changed = authorityRepo(`import { writeFileSync } from "node:fs";
+writeFileSync(new URL("../README.md", import.meta.url), "changed fixture");
+${AUTHORITY_MODULE}`);
+  await assert.rejects(loadCanonicalAuthority(changed.root, changed.sha), /dirty/);
+});
 
 function installedRepo() {
   const { root } = makeRepo("installed");
