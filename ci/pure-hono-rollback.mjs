@@ -117,7 +117,11 @@ export function verifyPureHonoProvenance(pointer, run, artifact) {
   assert.equal(artifact.workflow_run?.id, run.id, "wrong artifact run");
   assert.equal(artifact.workflow_run?.head_sha, run.head_sha, "wrong artifact workflow SHA");
   assert.equal(artifact.workflow_run?.head_branch, "main", "wrong artifact branch");
-  assert.equal(artifact.workflow_run?.repository_id, run.repository.id, "wrong artifact repository");
+  assert.equal(
+    artifact.workflow_run?.repository_id,
+    run.repository.id,
+    "wrong artifact repository",
+  );
   assert.equal(
     artifact.workflow_run?.head_repository_id,
     run.repository.id,

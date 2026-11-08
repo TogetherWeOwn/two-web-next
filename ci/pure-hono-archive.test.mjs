@@ -255,9 +255,7 @@ describe("downloadPureHonoArchive", () => {
   };
   for (const [name, change] of Object.entries(artifactCases)) {
     test(`rejects artifact: ${name}`, async () => {
-      await rejectsSanitized(
-        happyRoutes({ [`${API}/artifacts/456`]: json(makeArtifact(change)) }),
-      );
+      await rejectsSanitized(happyRoutes({ [`${API}/artifacts/456`]: json(makeArtifact(change)) }));
     });
   }
 
@@ -275,7 +273,10 @@ describe("downloadPureHonoArchive", () => {
   test("rejects an oversize archive body by the actual stream limit", async () => {
     const body = new Response(new Uint8Array(64 * 1024 * 1024 + 1));
     const calls = await rejectsSanitized(happyRoutes({ [SIGNED]: body }));
-    assert.ok(calls.some((call) => call.url === SIGNED), "signed stage reached");
+    assert.ok(
+      calls.some((call) => call.url === SIGNED),
+      "signed stage reached",
+    );
   });
 
   const withLength = (body, headers) => new Response(body, { status: 200, headers });
@@ -286,7 +287,10 @@ describe("downloadPureHonoArchive", () => {
         [SIGNED]: withLength(BODY, { "content-length": String(64 * 1024 * 1024 + 1) }),
       }),
     );
-    assert.ok(calls.some((call) => call.url === SIGNED), "signed stage reached");
+    assert.ok(
+      calls.some((call) => call.url === SIGNED),
+      "signed stage reached",
+    );
   });
 
   test("rejects an identity body differing from its content-length", async () => {
@@ -295,7 +299,10 @@ describe("downloadPureHonoArchive", () => {
         [SIGNED]: withLength(BODY, { "content-length": String(BODY.length + 1) }),
       }),
     );
-    assert.ok(calls.some((call) => call.url === SIGNED), "signed stage reached");
+    assert.ok(
+      calls.some((call) => call.url === SIGNED),
+      "signed stage reached",
+    );
   });
 
   for (const declared of ["abc", "-1", "1.5", "1e3", "0x10", "12, 12"]) {
@@ -303,7 +310,10 @@ describe("downloadPureHonoArchive", () => {
       const calls = await rejectsSanitized(
         happyRoutes({ [SIGNED]: withLength(BODY, { "content-length": declared }) }),
       );
-      assert.ok(calls.some((call) => call.url === SIGNED), "signed stage reached");
+      assert.ok(
+        calls.some((call) => call.url === SIGNED),
+        "signed stage reached",
+      );
     });
   }
 
@@ -327,7 +337,7 @@ describe("downloadPureHonoArchive", () => {
 
   const locations = {
     "http scheme": "http://productionresults.blob.core.windows.net/a",
-    "credentials": "https://user:pw@productionresults.blob.core.windows.net/a",
+    credentials: "https://user:pw@productionresults.blob.core.windows.net/a",
     "nonstandard port": "https://productionresults.blob.core.windows.net:8443/a",
     "hash fragment": "https://productionresults.blob.core.windows.net/a#frag",
     "unrelated host": "https://evil.example.com/a",
@@ -361,8 +371,7 @@ describe("downloadPureHonoArchive", () => {
 
   for (const status of [200, 301, 303, 307, 308]) {
     test(`requires a 302 from the zip endpoint, not ${status}`, async () => {
-      const response =
-        status === 200 ? new Response(BODY, { status }) : redirect(SIGNED, status);
+      const response = status === 200 ? new Response(BODY, { status }) : redirect(SIGNED, status);
       await rejectsSanitized(happyRoutes({ [`${API}/artifacts/456/zip`]: response }));
     });
   }

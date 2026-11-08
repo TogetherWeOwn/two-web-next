@@ -360,7 +360,9 @@ describe("verifyPureHonoProvenance", () => {
     "wrong run url": {
       html_url: "https://github.com/TogetherWeOwn/two-web-next/actions/runs/124",
     },
-    "foreign run url": { html_url: "https://example.com/TogetherWeOwn/two-web-next/actions/runs/123" },
+    "foreign run url": {
+      html_url: "https://example.com/TogetherWeOwn/two-web-next/actions/runs/123",
+    },
     "missing run url": { html_url: undefined },
   };
   for (const [name, change] of Object.entries(runCases)) {

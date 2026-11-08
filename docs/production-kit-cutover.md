@@ -125,3 +125,11 @@ Its retained adapter archive contains `_worker.js`, `_headers`, `.assetsignore`,
 rehearsal receipt. It is not complete cutover/rehearsal evidence. No fatal-response,
 production parity or upload-rehearsal PASS is recorded here. No staging or
 production workflow or rollback drill has run for this change.
+
+The subsequent [Actions 42442355577](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42442355577)
+at `cbd9d3e9118521fbbde367c118c2d18378e8a762` failed the main and Node 22 lint
+gates on formatting in three rollback-evidence files. Scope, docs-links,
+bundle-budget, accessibility and Lighthouse passed. Tests and Kit build/rehearsal,
+fatal-response and production parity steps were not reached. The reported layouts
+are corrected without changing behavior or assertions; corrected results remain
+unobserved. Its artifact list contains no complete adapter tree or rehearsal receipt.
