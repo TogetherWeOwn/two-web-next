@@ -130,6 +130,32 @@ build yet.
   Permanent storage remains unimplemented: an expiring archive or arbitrary JSON
   file proves no retained rollback capability.
 
+## Unsupported acceptance boundary
+
+Cloudflare's [rollback contract](https://developers.cloudflare.com/workers/configuration/versions-and-deployments/rollbacks/)
+limits rollback to the 100 most recently published versions. No supported
+indefinite pin for the original pure-Hono UUID has been established. This limits
+rollback eligibility; it does not establish when stored version bytes are deleted.
+A successful lookup today, an annotation, a saved UUID or `expiresAt: null` cannot
+prove indefinite deployability. Re-upload creates a new UUID, so durable bundle
+storage alone cannot satisfy an indefinite original-UUID rollback requirement.
+
+The cutover cannot be accepted against that literal requirement. Any replacement
+with durable, qualified pure-Hono recoverability needs an explicit acceptance-spec
+amendment and technical acceptance of the concrete recovery contract; none is
+approved here. Original-UUID rollback and archive-to-new-UUID recovery must remain
+distinct. A replacement would need trusted bundle and complete asset retention,
+config/runtime and resource/schema/secret compatibility, mandatory fail-closed
+promotion qualification, and isolated on-demand staging drills of both paths.
+Expiring Actions artifacts and mutable release attachments alone do not establish
+a durable retention policy. Secret values must not enter recovery archives.
+
+Independent Actions, parity and source preparation may continue. Production stays
+Hono; no storage machinery, recovery substitution or production action is
+authorized by this status note. Existing QA/Security, exact-head checks, migration
+and rollback guards, gradual rollout/watch and Release Manager gates remain.
+Calendar waiting cannot resolve this platform limit and is not reinstated.
+
 ## Unimplemented
 
 - Production Kit upload (`web/wrangler.production.jsonc` as a version of the
