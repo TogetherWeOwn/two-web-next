@@ -844,6 +844,12 @@ jobs:
           node --test ci/kit-frozen-inputs.test.mjs
           node ci/kit-frozen-inputs.mjs freeze artifacts/kit-production-worker-dry-run artifacts/kit-production-worker-replay artifacts/kit-frozen-inputs
           node ci/kit-frozen-inputs.mjs verify artifacts/kit-frozen-inputs
+      - name: Production Kit frozen-input rehearsal (no deploy)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        timeout-minutes: 3
+        run: |
+          node --test ci/kit-frozen-rehearsal.test.mjs
+          node ci/kit-frozen-rehearsal.mjs artifacts/kit-frozen-inputs artifacts/kit-frozen-rehearsal
       - name: Production Kit bundle build evidence
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -854,6 +860,8 @@ jobs:
             artifacts/kit-production-worker-replay/
             artifacts/kit-upload-rehearsal/
             artifacts/kit-frozen-inputs/
+            artifacts/kit-frozen-rehearsal/receipt.json
+            artifacts/kit-frozen-rehearsal/output/
             web/.svelte-kit/cloudflare/
           # Adapter control files (for example .assetsignore) are build evidence.
           include-hidden-files: true

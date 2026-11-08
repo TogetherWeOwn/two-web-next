@@ -62,6 +62,24 @@ describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
 
+- `ci/kit-frozen-rehearsal.mjs` adds a second, dry-run-only `versions upload`
+  that consumes the reverified snapshot's built Worker, source config and complete
+  adapter directory. Explicit absolute entry/config/asset paths avoid original
+  source inputs and generated-config discovery. The `--assets` override changes
+  only the directory; the reviewed binding and Worker-first policy remain in the
+  config. Installed-tool lock digests must match the frozen locks. The child gets
+  a fresh cwd, HOME, XDG config and temp directory, with an explicit environment
+  containing no inherited credentials, Node preloads or Wrangler overrides.
+  Execution is bounded to two minutes and 1 MiB captured output; no child output
+  or auth/log cache is retained as evidence. Snapshot and tool are rechecked after
+  exit, and the emitted Worker must equal the frozen bytes. Only the digest-bound
+  receipt and dry-run output directory enter the existing Actions archive.
+  Fixtures and the real rehearsal are wired but **unrun**. This is not a native
+  upload, selected-asset metadata, remote readback, complete normalized config,
+  transitive/runtime attestation, custody or recovery qualification. Dry-run skips
+  asset synchronization, so it cannot validate the live asset manifest/guards.
+  Production upload and the required-but-absent recovery verifier are unchanged.
+
 - `ci/kit-wrangler-tool.mjs` compares the root installed Wrangler package's exact
   published file membership, sizes and SHA-256 digests against the checked-in
   `ci/kit-wrangler-package-pin.json`. The pin was computed without extraction or
