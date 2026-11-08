@@ -98,6 +98,7 @@ Install development dependencies even when
 
 ```sh
 npm ci --include=dev
+npx playwright install chromium  # required by annotated-diff qualification in npm run check
 cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
 

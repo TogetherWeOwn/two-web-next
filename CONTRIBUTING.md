@@ -377,6 +377,7 @@ releases used SemVer, from `v1.0.0` at the production cutover (2026-10-18) to
 
 ```sh
 npm ci --include=dev
+npx playwright install chromium  # required by annotated-diff qualification in npm run check
 cp .dev.vars.example .dev.vars   # fill in locally; never commit
 npm run dev
 npm run format                   # formatting only; never rewrites lint violations

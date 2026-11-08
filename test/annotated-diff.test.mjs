@@ -8,6 +8,9 @@ import { afterAll, describe, expect, it } from "vitest";
 import {
   THRESHOLDS,
   attribute,
+  check,
+  markdownFiles,
+  verifyMarkdown,
   contrast,
   diffHunks,
   digest,
@@ -41,6 +44,68 @@ const png = (width, height, fill = [255, 255, 255], paint = () => null) => {
 };
 const square = (x0, y0, size) => (x, y) =>
   x >= x0 && x < x0 + size && y >= y0 && y < y0 + size ? [0, 0, 0] : null;
+
+describe("readiness lifecycle", () => {
+  it("revokes readiness before missing or malformed labels and invalid status can fail", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "annotated-readiness-"));
+    const file = path.join(dir, "annotated-diff.manifest.json");
+    try {
+      for (const mode of ["missing", "malformed", "invalid-status"]) {
+        fs.writeFileSync(
+          file,
+          JSON.stringify({
+            status: mode === "invalid-status" ? "invalid" : "gallery_ready",
+            checks: { passed: true },
+            judge_eligible: true,
+          }),
+        );
+        if (mode !== "missing") fs.writeFileSync(path.join(dir, "labels.todo.json"), "{");
+        await expect(check({ dir })).rejects.toThrow();
+        expect(JSON.parse(fs.readFileSync(file, "utf8"))).toMatchObject({
+          status: "checking",
+          checks: { passed: false },
+          judge_eligible: false,
+        });
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("delivered Markdown integrity", () => {
+  it("reconstructs facts-only, gallery and same-length PR content rather than trusting stored legends", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "annotated-markdown-"));
+    const manifest = {
+      capture_spec_hash: "spec",
+      capture_spec: { runtime: { playwright: "pinned", os_image: "pinned" }, seed: "fixture" },
+      views: [
+        {
+          id: "view",
+          alt: "View: no changes",
+          items: [],
+          legend: "No surviving visual changes.",
+          judge_legend: "No surviving visual changes.",
+        },
+      ],
+    };
+    const files = markdownFiles(manifest);
+    try {
+      for (const [file, text] of Object.entries(files))
+        fs.writeFileSync(path.join(dir, file), text);
+      expect(await verifyMarkdown(dir, manifest)).toBe(true);
+      for (const [file, text] of Object.entries(files)) {
+        fs.writeFileSync(path.join(dir, file), text.replace("No surviving", "No remaining"));
+        expect(await verifyMarkdown(dir, manifest), file).toBe(false);
+        fs.writeFileSync(path.join(dir, file), text);
+      }
+      manifest.views[0].judge_legend = "Author advocacy";
+      expect(await verifyMarkdown(dir, manifest)).toBe(false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
 
 describe("normalizeIntent", () => {
   const compound = {
@@ -234,6 +299,32 @@ describe("validateLabels", () => {
     expect(() =>
       validateLabels(items, withSecond({ label: "No visible evidence" }), names),
     ).toThrow();
+  });
+
+  it("requires no-visible-evidence wording even for a measured regionless style claim", () => {
+    const item = { ...items[0], status: "unverified_claim" };
+    for (const key of ["label", "rationale"])
+      expect(() =>
+        validateLabels(
+          [item],
+          [
+            {
+              id: item.id,
+              label: "No visible evidence",
+              rationale: "",
+              [key]: "Padding changed from 8px to 12px",
+            },
+          ],
+          names,
+        ),
+      ).toThrow(/Unreconciled wording/);
+    expect(
+      validateLabels(
+        [item],
+        [{ id: item.id, label: "No visible evidence", rationale: "Card no visible change" }],
+        names,
+      ),
+    ).toBe(true);
   });
 
   it("limits an unverified item with no deltas to no-change wording", () => {
@@ -739,6 +830,25 @@ describe("geometry and geometryCheck", () => {
     expect(d.halves.after.y).toBe(d.header + 832 + d.gap);
   });
 
+  it("routes bottom-edge strips in both prescribed layouts without relaxing geometry checks", () => {
+    for (const [width, height] of [
+      [390, 844],
+      [1280, 832],
+    ]) {
+      const v = makeView({ width, height });
+      const box = { x: 150, y: height - 5, w: 40, h: 5 };
+      v.items = [
+        {
+          ...v.items[0],
+          regions: [{ id: "bottom", bbox_css: box, half: "both", before: box, after: box }],
+        },
+      ];
+      v.geometry = geometry(v);
+      expect(v.geometry.marks).toHaveLength(2);
+      expect(geometryCheck(v)).toBe(true);
+    }
+  });
+
   it("marks both halves of every region and no unverified claim", () => {
     const v = makeView();
     expect(v.geometry.marks).toHaveLength(4);
@@ -927,6 +1037,13 @@ describe("regionTargets", () => {
     });
   });
 
+  it("keeps an unrelated middle region when neither moved endpoint intersects it", () => {
+    const middle = { x: 80, y: 40, w: 20, h: 20 };
+    expect(
+      regionTargets(middle, { before: at(0, 40, 20, 20), after: at(160, 40, 20, 20) }, view),
+    ).toEqual({ before: middle, after: middle });
+  });
+
   it("clips projected targets to the view", () => {
     const t = regionTargets(box, { before: at(100, 100), after: at(100, 140) }, view);
     expect(t.before).toEqual({ x: 100, y: 90, w: 50, h: 60 });
@@ -1000,6 +1117,69 @@ describe("attribution audit regressions", () => {
     ...extra,
   });
   const itemFor = (items, region) => items.find((i) => i.regions.some((r) => r.id === region.id));
+
+  it("does not explain an independent move with a simultaneous opacity claim", () => {
+    const before = node("card", 2, { x: 50, y: 40, w: 20, h: 20 }, { opacity: "0.4" });
+    const after = { ...before, rect: { ...before.rect, x: 150 }, style: { opacity: "1" } };
+    const region = { id: "r", bbox_css: before.rect };
+    const { items } = attribute(
+      [before],
+      [after],
+      [region],
+      claimOf("op", "#card", "opacity"),
+      hunks,
+      "h",
+      view,
+    );
+    expect(itemFor(items, region).status).toBe("unexplained");
+    expect(items.find((i) => i.intent_ref === "op").status).toBe("unverified_claim");
+  });
+
+  it("does not attribute the empty span between moved endpoints to a deep claimed element", () => {
+    const a = node("moving", 5, { x: 0, y: 40, w: 20, h: 20 }, { opacity: "0.4" });
+    const b = { ...a, rect: { ...a.rect, x: 160 }, style: { opacity: "1" } };
+    const middle = { id: "middle", bbox_css: { x: 80, y: 40, w: 20, h: 20 } };
+    const out = attribute(
+      [a],
+      [b],
+      [middle],
+      claimOf("op", "#moving", "opacity"),
+      hunks,
+      "h",
+      view,
+    );
+    expect(itemFor(out.items, middle)).toMatchObject({ status: "unexplained", element: null });
+    const sibling = node("sibling", 2, middle.bbox_css, { color: "red" });
+    const changed = { ...sibling, style: { color: "blue" } };
+    const withSibling = attribute(
+      [a, sibling],
+      [b, changed],
+      [middle],
+      claimOf("op", "#moving", "opacity"),
+      hunks,
+      "h",
+      view,
+    );
+    expect(itemFor(withSibling.items, middle).element.selector).toBe("#sibling");
+  });
+
+  it("keeps ambiguous overlay and media pixels unexplained instead of preferring a claim", () => {
+    const box = { x: 40, y: 40, w: 40, h: 40 };
+    const image = node("image", 2, box, {}, { tag: "img" });
+    const overlay = node("overlay", 3, box, { opacity: "0.4" });
+    const region = { id: "media", bbox_css: box };
+    const { items } = attribute(
+      [image, overlay],
+      [image, { ...overlay, style: { opacity: "1" } }],
+      [region],
+      claimOf("op", "#overlay", "opacity"),
+      hunks,
+      "h",
+      view,
+    );
+    expect(itemFor(items, region)).toMatchObject({ status: "unexplained", element: null });
+    expect(items.find((i) => i.intent_ref === "op").verification.valid).toBe(true);
+  });
 
   it("does not let a deeper claimed opacity change hide a shallower sibling in a merged region", () => {
     const a = png(80, 40);

@@ -17,6 +17,7 @@ import {
   attribute,
   diffHunks,
   hash,
+  reconcileInputs,
 } from "../run.mjs";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
@@ -311,7 +312,14 @@ margin-top: ${moved ? 40 : 0}px;
 }
 [data-testid="type"] { position: absolute; top: 1050px; left: 180px; font-family: ${fallback ? "Missing, Inter" : "Rajdhani"}; }
 #volatile { position: absolute; top: 1250px; left: 40px; width: 80px; height: 30px; background: red; }
-</style></head><body><h1>Capture paths</h1><div id="anchor"></div><div data-testid="moving" aria-label="Swatch"></div><div data-testid="type">Typography</div><div id="volatile">Masked</div><!-- ${comment} --></body></html>`;
+@keyframes fade { from { opacity: 0.4; } to { opacity: 1; } }
+[data-testid="animation"] { position: absolute; top: 1150px; left: 280px; width: 40px; height: 40px; background: black; animation: fade 100000s forwards; }
+</style></head><body><h1>Capture paths</h1><div id="anchor"></div><div data-testid="moving" aria-label="Swatch"></div><div data-testid="type">Typography</div><div id="volatile">Masked</div><div data-testid="animation" aria-label="Animation"></div><script>
+const animated = document.querySelector('[data-testid="animation"]');
+const chained = () => animated.animate([{ opacity: 0.5 }, { opacity: 1 }], { duration: 100000000, fill: 'forwards' });
+animated.getAnimations()[0].finished.then(chained);
+addEventListener('scroll', chained, { once: true });
+</script><!-- ${comment} --></body></html>`;
 const audits = [];
 await new Promise((resolve) => server.listen(new URL(url).port, "127.0.0.1", resolve));
 try {
@@ -385,10 +393,26 @@ try {
       assert.equal(a.coordinate_space, frozen.fullPage ? "document" : "viewport");
       const old = a.elements.find((e) => e.testid === "moving");
       const next = b.elements.find((e) => e.testid === "moving");
+      assert.equal(
+        old.flow.inset[2],
+        "auto",
+        "Keep authored auto constraints, not resolved opposite insets",
+      );
+      assert.deepEqual(next.flow.inset, old.flow.inset);
       assert.equal(old.rect.y, 1100 - (frozen.fullPage ? 0 : a.scrollY));
       assert.equal(next.rect.y - old.rect.y, mode === "zero" ? 0 : 40);
       assert.equal(a.mask_rects[0].y, 1250 - (frozen.fullPage ? 0 : a.scrollY));
       const image = PNG.sync.read(await fs.readFile(path.join(dir, "base", `${v.id}.png`)));
+      const animated = a.elements.find((e) => e.testid === "animation");
+      assert.equal(animated.style.opacity, "1", "DOM facts must use the forwards-fill endpoint");
+      const animatedPixel =
+        (Math.round((animated.rect.y + 20) * v.dpr) * image.width + 300 * v.dpr) * 4;
+      assert.deepEqual(
+        [...image.data.subarray(animatedPixel, animatedPixel + 4)],
+        [0, 0, 0, 255],
+        "Animation facts must agree with captured pixels",
+      );
+      assert.equal(b.elements.find((e) => e.testid === "animation").style.opacity, "1");
       const point = (Math.round((a.mask_rects[0].y + 10) * v.dpr) * image.width + 50 * v.dpr) * 4;
       assert.deepEqual([...image.data.subarray(point, point + 4)], [0, 0, 0, 255]);
       assert(a.font_evidence.some((f) => f.family === "Rajdhani" && f.verified));
@@ -496,6 +520,53 @@ try {
       } finally {
         await fs.writeFile(probePath, originalProbe);
         await fs.writeFile(manifestPath, originalManifest);
+      }
+      const hunks = diffHunks(source, base, head);
+      for (const patch of [
+        { blind: false },
+        { blind_reverse: !checked.views[0].blind_reverse },
+        { source_id: frozen.views[1].id },
+        { crop: { x: 0, y: 0, w: 20, h: 20 } },
+        { layout: "stacked" },
+        { route: "/different" },
+        { theme: "different" },
+        { alt: "Invented alternative text" },
+      ]) {
+        const tampered = structuredClone(checked);
+        Object.assign(tampered.views[0], patch);
+        await fs.writeFile(manifestPath, JSON.stringify(tampered));
+        await assert.rejects(
+          () => render({ dir, author: "fixture:deterministic" }),
+          /Presentation differs/,
+        );
+        const invalid = JSON.parse(await fs.readFile(manifestPath));
+        assert.equal(invalid.checks.passed, false);
+        assert.equal(invalid.judge_eligible, false);
+        assert.equal(
+          (await reconcileInputs(dir, tampered, hunks)).ownershipValid,
+          false,
+          JSON.stringify(patch),
+        );
+      }
+      const swapped = structuredClone(checked);
+      swapped.blind_mapping =
+        swapped.blind_mapping.A === "base" ? { A: "head", B: "base" } : { A: "base", B: "head" };
+      assert.equal((await reconcileInputs(dir, swapped, hunks)).ownershipValid, false);
+      await fs.writeFile(manifestPath, originalManifest);
+      for (const file of [`${frozen.views[0].id}.judge.md`, "gallery.md", "pr-section.md"]) {
+        const target = path.join(dir, file);
+        const original = await fs.readFile(target, "utf8");
+        try {
+          await fs.writeFile(target, original.replace("No surviving", "No remaining"));
+          const invalid = await check({ dir });
+          assert.equal(invalid.checks.accessible, false, file);
+          assert.equal(invalid.checks.passed, false);
+          assert.equal(invalid.judge_eligible, false);
+          assert.equal(invalid.status, "checks_failed");
+        } finally {
+          await fs.writeFile(target, original);
+          await fs.writeFile(manifestPath, originalManifest);
+        }
       }
       assert.equal((await check({ dir })).checks.passed, true);
       audits.push({

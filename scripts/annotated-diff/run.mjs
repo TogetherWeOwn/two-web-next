@@ -194,6 +194,29 @@ export function validateSpec(s) {
   assert(s.blind === undefined || typeof s.blind === "boolean");
 }
 
+export async function normalizeMotion(page) {
+  await page.evaluate(async () => {
+    const active = () =>
+      document.getAnimations().filter((a) => !["finished", "idle"].includes(a.playState));
+    for (let pass = 0; pass < 16; pass++) {
+      for (const animation of active()) {
+        if (animation.effect?.getComputedTiming().endTime === Infinity) animation.cancel();
+        else animation.finish();
+      }
+      // Completion callbacks can start another animation; settle them before inventorying again.
+      await new Promise(requestAnimationFrame);
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      if (!active().length) {
+        const style = document.createElement("style");
+        style.textContent = "*, *::before, *::after { transition-property: none !important; }";
+        document.head.append(style);
+        return;
+      }
+    }
+    throw new Error("Capture animations did not settle");
+  });
+}
+
 // Capture only already-provisioned, clean source checkouts. This tool never creates worktrees.
 export async function capture({ spec, sourceRoot, sha, url, out }) {
   validateSpec(spec);
@@ -237,11 +260,14 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
           });
           assert(response?.ok(), "Capture route did not load");
           if (spec.style) await page.addStyleTag({ content: spec.style });
+          await normalizeMotion(page);
           await page.evaluate(() => document.fonts.ready);
           assert.equal(await page.locator('[aria-busy="true"]').count(), 0, "Page is busy");
           const anchor = page.locator(view.anchor);
           assert.equal(await anchor.count(), 1);
           await anchor.scrollIntoViewIfNeeded();
+          await normalizeMotion(page);
+          await page.evaluate(() => document.fonts.ready);
           const maskRects = [];
           for (const mask of view.masks) {
             const nodes = page.locator(mask.selector);
@@ -294,6 +320,9 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
                     flow: {
                       parent: cssPath(e.parentElement),
                       position: s.position,
+                      inset: ["top", "right", "bottom", "left"].map((p) =>
+                        e.computedStyleMap().get(p).toString(),
+                      ),
                       float: s.cssFloat,
                       transform: s.transform,
                       translate: s.translate,
@@ -732,6 +761,7 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
       confidence,
       delta,
       size,
+      moved: !!moved,
       text_delta: a && b && a.text !== b.text ? { old: a.text, new: b.text } : null,
       shift: !!(a && b && moved && !size && !delta.length && a.text === b.text),
       change: !a
@@ -844,6 +874,7 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
         residual: [
           ...m.delta.filter((d) => !ownDelta.includes(d)),
           ...(m.text_delta && claim.change !== "text" ? [{ prop: "text" }] : []),
+          ...(m.moved && !marginMotion(m, ownDelta) ? [{ prop: "position" }] : []),
         ],
       });
   }
@@ -898,11 +929,14 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
   for (const region of regions) {
     const scores = matches
       .map((m) => {
-        const boxes = [m.before?.rect, m.after?.rect].filter(Boolean),
-          bounds = boxes.reduce(union);
+        const boxes = [m.before?.rect, m.after?.rect].filter(Boolean);
         return {
           m,
-          score: overlap(region.bbox_css, bounds) / (area(union(region.bbox_css, bounds)) || 1),
+          score: Math.max(
+            ...boxes.map(
+              (box) => overlap(region.bbox_css, box) / (area(union(region.bbox_css, box)) || 1),
+            ),
+          ),
           depth: (m.after || m.before).depth,
         };
       })
@@ -1028,12 +1062,36 @@ function element(e) {
   return { selector: e.selector, role: e.role, name: e.name };
 }
 
+function marginMotion(m, deltas) {
+  const a = m.before,
+    b = m.after;
+  if (
+    !a?.flow?.inset ||
+    !b?.flow?.inset ||
+    !same(a.flow, b.flow) ||
+    ![a, b].every((e) =>
+      ["transform", "translate", "rotate", "scale"].every((p) => e.flow[p] === "none"),
+    )
+  )
+    return false;
+  // Only a measured, claimed margin displacement with unchanged positioning is derived here.
+  return [
+    ["x", "margin-left"],
+    ["y", "margin-top"],
+  ].every(([axis, prop]) => {
+    const delta = deltas.find((d) => d.prop === prop);
+    return (
+      b.rect[axis] - a.rect[axis] === (delta ? parseFloat(delta.new) - parseFloat(delta.old) : 0)
+    );
+  });
+}
+
 function aggregateAncestor(ancestor, descendant) {
   if (
     !descendant ||
     ancestor === descendant ||
     ancestor.text_delta ||
-    ancestor.shift ||
+    ancestor.moved ||
     !ancestor.delta.length
   )
     return false;
@@ -1065,6 +1123,7 @@ export function regionTargets(box, match, view) {
   const pad = THRESHOLDS.dilation + THRESHOLDS.padding;
   const oldPatch = intersect(box, expand(a, pad));
   const newPatch = intersect(box, expand(b, pad));
+  if (!area(oldPatch) && !area(newPatch)) return { before: box, after: box };
   const translate = (r, x, y) => ({ ...r, x: r.x + x, y: r.y + y });
   const join = (patches) => patches.filter((r) => area(r) > 0).reduce(union);
   const bounds = rect(0, 0, view.width, view.height);
@@ -1094,7 +1153,7 @@ export function validateLabels(items, labels, names) {
       templates.add(phrase.toLowerCase());
       if (item.element?.name) templates.add(`${item.element.name} ${phrase}`.toLowerCase());
     };
-    for (const d of item.style_delta) {
+    for (const d of item.status === "unverified_claim" ? [] : item.style_delta) {
       const aliases = new Set([d.prop, d.prop.replaceAll("-", " ")]);
       if (/^(padding|margin)-/.test(d.prop)) aliases.add(d.prop.split("-")[0]);
       if (/^border-.*-radius$/.test(d.prop)) aliases.add("border radius");
@@ -1209,6 +1268,7 @@ export function splitView(view) {
     crop.h = Math.min(view.height - crop.y, Math.ceil(crop.h));
     part.source_id = view.id;
     part.id = `${view.id}-part-${n + 1}`;
+    part.mask = `${part.id}.mask.png`;
     part.crop = crop;
     part.capture_viewport = { width: view.width, height: view.height };
     part.layout = view.width === 390 ? "side-by-side" : "stacked";
@@ -1260,6 +1320,24 @@ async function capturedImage(dir, half, view) {
     })
     .png()
     .toBuffer();
+}
+
+function comparisonView(view, spec, mapping, images, items, diff, base, head) {
+  return {
+    ...view,
+    blind: !!spec.blind,
+    blind_reverse: mapping?.A === "head",
+    height: Math.max(...images.map((p) => p.height)) / view.dpr,
+    items,
+    regions: diff.regions,
+    pixel_passes: diff.passes,
+    element_names: [...new Set([...base.elements, ...head.elements].map((e) => e.name))],
+    mask: `${view.id}.mask.png`,
+    images: [],
+    alt: `${view.id} ${view.theme}: ${items.length} changes, ${items.filter((i) => i.status === "unexplained").length} unexplained; see list below`,
+    unexplained_count: items.filter((i) => i.status === "unexplained").length,
+    unverified_claims: items.filter((i) => i.status === "unverified_claim").length,
+  };
 }
 
 export async function compare({ dir, root, intent }) {
@@ -1361,21 +1439,16 @@ export async function compare({ dir, root, intent }) {
     );
     const mask = `${view.id}.mask.png`;
     await fs.writeFile(path.join(dir, mask), diff.mask);
-    const output = {
-      ...view,
-      blind: !!a.spec.blind,
-      blind_reverse: result.blind_mapping?.A === "head",
-      height: Math.max(...images.map((p) => p.height)) / view.dpr,
-      items: attribution.items,
-      regions: diff.regions,
-      pixel_passes: diff.passes,
-      element_names: [...new Set([...base.elements, ...head.elements].map((e) => e.name))],
-      mask,
-      images: [],
-      alt: `${view.id} ${view.theme}: ${attribution.items.length} changes, ${attribution.items.filter((i) => i.status === "unexplained").length} unexplained; see list below`,
-      unexplained_count: attribution.items.filter((i) => i.status === "unexplained").length,
-      unverified_claims: attribution.items.filter((i) => i.status === "unverified_claim").length,
-    };
+    const output = comparisonView(
+      view,
+      a.spec,
+      result.blind_mapping,
+      images,
+      attribution.items,
+      diff,
+      base,
+      head,
+    );
     let parts;
     try {
       parts = splitView(output);
@@ -1404,6 +1477,17 @@ export async function compare({ dir, root, intent }) {
       result.views.push(part);
     }
   }
+  await write(path.join(dir, "comparison.json"), {
+    base: a.sha,
+    head: b.sha,
+    capture_spec_hash: a.spec_hash,
+    blind_mapping: result.blind_mapping,
+    presentation: result.views.map(presentation),
+  });
+  result.capture_inputs.push({
+    file: "comparison.json",
+    sha256: hash(await fs.readFile(path.join(dir, "comparison.json"))),
+  });
   await write(path.join(dir, "annotated-diff.manifest.json"), result);
   if (result.status === "capture_invalid")
     throw new Error(`capture_invalid: ${canonical(result.flake_probe)}`);
@@ -1478,6 +1562,35 @@ const escMd = (text) =>
     .replace(/[\\`*_{}\[\]()<>#!|]/g, (c) => String.fromCharCode(92) + c)
     .replace(/[\n\r]/g, " ");
 
+function legend(view, judge = false) {
+  return (
+    view.items
+      .map((i) =>
+        judge
+          ? `${i.n}. ${escMd(facts(i, view))}`
+          : `${i.n}. **${escMd(i.label)}** — ${escMd(facts(i, view))}${i.rationale ? ` — ${escMd(i.rationale)}` : ""}`,
+      )
+      .join("\n") || "No surviving visual changes."
+  );
+}
+
+export function markdownFiles(manifest) {
+  const files = {};
+  let markdown = `## Before / after\n\nCapture spec: \`${manifest.capture_spec_hash}\` · ${manifest.capture_spec.runtime.playwright} · ${manifest.capture_spec.runtime.os_image} · seeded ${manifest.capture_spec.seed}\n\n`;
+  for (const view of manifest.views) {
+    files[`${view.id}.judge.md`] =
+      `![${view.alt}](${view.id}.judge.png)\n\n${legend(view, true)}\n`;
+    markdown += `![${view.alt}](${view.id}.annotated.png)\n\n${legend(view)}\n\n[Clean pair](${view.id}.clean.png) · [Raw mask](${view.id}.mask.png) · [Facts-only comparison](${view.id}.judge.md)\n\n`;
+  }
+  return { ...files, "pr-section.md": markdown, "gallery.md": markdown };
+}
+
+export async function verifyMarkdown(dir, manifest) {
+  for (const [file, expected] of Object.entries(markdownFiles(manifest)))
+    if ((await fs.readFile(path.join(dir, file), "utf8")) !== expected) return false;
+  return manifest.views.every((v) => v.legend === legend(v) && v.judge_legend === legend(v, true));
+}
+
 export function segmentHitsRect(line, box) {
   let lo = 0,
     hi = 1;
@@ -1529,7 +1642,7 @@ export function geometry(view) {
   for (const { item, region, bbox } of pool) {
     const choices = [];
     for (const side of ["left", "right"]) {
-      const first = Math.max(15, bbox.y + bbox.h / 2, last[side] + 30);
+      const first = Math.max(15, Math.min(view.height - 15, bbox.y + bbox.h / 2), last[side] + 30);
       for (let by = first; by <= view.height - 15; by += 15) {
         const proposed = [];
         for (const half of ["before", "after"]) {
@@ -1828,6 +1941,12 @@ export async function render({ dir, author = "unattributed" }) {
   );
   manifest.labelling_mode = author === "fixture:deterministic" ? "fixture" : "model";
   assert(same(await runtime(), manifest.capture_spec.runtime), "Render runtime changed");
+  const receipt = await read(path.join(dir, "comparison.json"));
+  assert(
+    same(receipt.blind_mapping, manifest.blind_mapping) &&
+      same(receipt.presentation, manifest.views.map(presentation)),
+    "Presentation differs from frozen comparison inputs",
+  );
   const labels = await read(path.join(dir, "labels.todo.json"));
   for (const view of manifest.views) {
     validateLabels(
@@ -1860,7 +1979,6 @@ export async function render({ dir, author = "unattributed" }) {
   );
   manifest.palette = palette(allPng);
   const browser = await chromium.launch({ args: manifest.capture_spec.runtime.flags });
-  let markdown = `## Before / after\n\nCapture spec: \`${manifest.capture_spec_hash}\` · ${manifest.capture_spec.runtime.playwright} · ${manifest.capture_spec.runtime.os_image} · seeded ${manifest.capture_spec.seed}\n\n`;
   try {
     for (const view of manifest.views) {
       view.images = [];
@@ -1897,29 +2015,17 @@ export async function render({ dir, author = "unattributed" }) {
           height: p.height,
         });
       }
-      view.legend =
-        view.items
-          .map(
-            (i) =>
-              `${i.n}. **${escMd(i.label)}** — ${escMd(facts(i, view))}${i.rationale ? ` — ${escMd(i.rationale)}` : ""}`,
-          )
-          .join("\n") || "No surviving visual changes.";
-      view.judge_legend =
-        view.items.map((i) => `${i.n}. ${escMd(facts(i, view))}`).join("\n") ||
-        "No surviving visual changes.";
-      await fs.writeFile(
-        path.join(dir, `${view.id}.judge.md`),
-        `![${view.alt}](${view.id}.judge.png)\n\n${view.judge_legend}\n`,
-      );
-      markdown += `![${view.alt}](${view.id}.annotated.png)\n\n${view.legend}\n\n[Clean pair](${view.id}.clean.png) · [Raw mask](${view.id}.mask.png) · [Facts-only comparison](${view.id}.judge.md)\n\n`;
+      view.legend = legend(view);
+      view.judge_legend = legend(view, true);
     }
   } finally {
     await browser.close();
   }
-  manifest.pr_body_chars = markdown.length;
+  const documents = markdownFiles(manifest);
+  manifest.pr_body_chars = documents["pr-section.md"].length;
   manifest.status = "rendered";
-  await fs.writeFile(path.join(dir, "pr-section.md"), markdown);
-  await fs.writeFile(path.join(dir, "gallery.md"), markdown);
+  for (const [file, text] of Object.entries(documents))
+    await fs.writeFile(path.join(dir, file), text);
   await write(path.join(dir, "annotated-diff.manifest.json"), manifest);
   return manifest;
 }
@@ -2045,10 +2151,46 @@ async function verifyRender(dir, manifest) {
   return { reproducible, geometryValid };
 }
 
-async function reconcileInputs(dir, manifest, hunks) {
-  let captureValid = true,
-    ownershipValid = true,
+function presentation(view) {
+  return Object.fromEntries(
+    Object.entries(view).filter(
+      ([key]) =>
+        ![
+          "items",
+          "images",
+          "legend",
+          "judge_legend",
+          "geometry",
+          "reproducible",
+          "contrast_samples",
+        ].includes(key),
+    ),
+  );
+}
+
+export async function reconcileInputs(dir, manifest, hunks) {
+  const receipt = await read(path.join(dir, "comparison.json"));
+  const captures = await Promise.all(
+    ["base", "head"].map((half) => read(path.join(dir, half, "capture.json"))),
+  );
+  const mapping = receipt.blind_mapping;
+  let captureValid =
+      captures.every(
+        (c, n) =>
+          c.sha === (n ? manifest.head : manifest.base) &&
+          same(c.spec, manifest.capture_spec) &&
+          c.spec_hash === digest(c.spec),
+      ) &&
+      receipt.base === manifest.base &&
+      receipt.head === manifest.head &&
+      receipt.capture_spec_hash === manifest.capture_spec_hash,
+    ownershipValid =
+      same(mapping, manifest.blind_mapping) &&
+      (manifest.capture_spec.blind
+        ? same(mapping, { A: "base", B: "head" }) || same(mapping, { A: "head", B: "base" })
+        : mapping === null),
     expectedCount = 0;
+  const expectedIds = [];
   const projectItem = (i) =>
     Object.fromEntries(
       Object.entries(i).filter(
@@ -2091,21 +2233,17 @@ async function reconcileInputs(dir, manifest, hunks) {
       manifest.head,
       { ...view, height: Math.max(images[0].height, images[1].height) / view.dpr },
     );
-    const expected = splitView({
-      ...view,
-      height: Math.max(...images.map((p) => p.height)) / view.dpr,
-      items,
-      regions: diff.regions,
-    });
+    const expected = splitView(
+      comparisonView(view, manifest.capture_spec, mapping, images, items, diff, a, b),
+    );
     expectedCount += expected.length;
+    expectedIds.push(...expected.map((part) => part.id));
     for (const part of expected) {
       const actual = manifest.views.find((v) => v.id === part.id);
       ownershipValid &&=
         !!actual &&
-        same(part.regions, actual.regions) &&
-        same(part.items.map(projectItem), actual.items.map(projectItem)) &&
-        part.width === actual.width &&
-        part.height === actual.height;
+        same(presentation(part), presentation(actual)) &&
+        same(part.items.map(projectItem), actual.items.map(projectItem));
       if (!actual) continue;
       let mask = diff.mask;
       if (part.crop) {
@@ -2133,18 +2271,23 @@ async function reconcileInputs(dir, manifest, hunks) {
     ownershipValid:
       ownershipValid &&
       expectedCount === manifest.views.length &&
+      same(
+        expectedIds,
+        manifest.views.map((v) => v.id),
+      ) &&
       new Set(manifest.views.map((v) => v.id)).size === expectedCount,
   };
 }
 
 export async function check({ dir, root }) {
-  const m = await read(path.join(dir, "annotated-diff.manifest.json")),
-    labels = await read(path.join(dir, "labels.todo.json"));
-  assert(["rendered", "checking", "checks_failed", "gallery_ready"].includes(m.status));
+  const m = await read(path.join(dir, "annotated-diff.manifest.json"));
+  const previousStatus = m.status;
   m.status = "checking";
   m.checks = { passed: false };
   m.judge_eligible = false;
   await write(path.join(dir, "annotated-diff.manifest.json"), m);
+  assert(["rendered", "checking", "checks_failed", "gallery_ready"].includes(previousStatus));
+  const labels = await read(path.join(dir, "labels.todo.json"));
   validateSpec(m.capture_spec);
   assert(same(await runtime(), m.capture_spec.runtime), "Check runtime changed");
   const hunks = diffHunks(root || path.resolve(dir, m.repository), m.base, m.head);
@@ -2207,21 +2350,27 @@ export async function check({ dir, root }) {
   } catch {
     checks.wording = false;
   }
-  const rendering = await verifyRender(dir, m);
+  const markdownValid = await verifyMarkdown(dir, m);
+  const rendering =
+    Object.values(checks).every(Boolean) && markdownValid
+      ? await verifyRender(dir, m)
+      : { reproducible: false, geometryValid: false };
   checks.geometry = rendering.geometryValid && m.views.every(geometryCheck);
   checks.contrast = true;
   const markdown = await fs.readFile(path.join(dir, "pr-section.md"), "utf8");
   checks.limits = m.pr_body_chars === markdown.length && markdown.length <= 60_000;
   checks.reproducible = rendering.reproducible && m.views.every((v) => v.reproducible);
-  checks.accessible = m.views.every(
-    (v) =>
-      v.alt.length <= 155 &&
-      !v.alt.startsWith("Image of") &&
-      v.legend &&
-      (v.items.length === 0
-        ? v.legend === "No surviving visual changes."
-        : v.legend.split("\n").length === v.items.length),
-  );
+  checks.accessible =
+    markdownValid &&
+    m.views.every(
+      (v) =>
+        v.alt.length <= 155 &&
+        !v.alt.startsWith("Image of") &&
+        v.legend &&
+        (v.items.length === 0
+          ? v.legend === "No surviving visual changes."
+          : v.legend.split("\n").length === v.items.length),
+    );
   for (const v of m.views) {
     checks.limits &&= v.items.length <= 8;
     for (const image of v.images) {
