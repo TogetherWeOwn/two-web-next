@@ -5,7 +5,7 @@ import path from "node:path";
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
 import sharp from "sharp";
-import { afterAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   THRESHOLDS,
   attribute,
@@ -744,6 +744,25 @@ describe("parity", () => {
       reasons: [],
       flake_regions: 0,
     });
+  });
+
+  it("proves byte-identical probes without serializing an unused mask", () => {
+    const write = vi.spyOn(PNG.sync, "write").mockImplementation(() => {
+      throw new Error("Unexpected probe mask encoding");
+    });
+    try {
+      expect(run(meta(), meta({ sha: "b" }), meta()).flake_regions).toBe(0);
+      expect(write).not.toHaveBeenCalled();
+      expect(() =>
+        run(meta(), meta({ sha: "b" }), meta(), [
+          { width: 8001, height: 8000, data: Buffer.alloc(0) },
+          { width: 8001, height: 8000, data: Buffer.alloc(0) },
+          { width: 8001, height: 8000, data: Buffer.alloc(0) },
+        ]),
+      ).toThrow(/bounded pixel workspace/);
+    } finally {
+      write.mockRestore();
+    }
   });
 
   it("flags unequal spec hashes", () => {

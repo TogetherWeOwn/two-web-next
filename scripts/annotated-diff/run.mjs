@@ -652,7 +652,13 @@ export function parity(spec, a, b, probe, images) {
     reasons.push("image_size");
   let flake = null;
   if (!reasons.includes("image_size")) {
-    flake = regions(images[0], images[2], a.view.dpr, spec.fullPage).regions.length;
+    assert(
+      images[0].width * images[0].height <= 64_000_000,
+      "Image exceeds bounded pixel workspace",
+    );
+    flake = images[0].data.equals(images[2].data)
+      ? 0
+      : regions(images[0], images[2], a.view.dpr, spec.fullPage).regions.length;
     if (flake) reasons.push("flake");
   }
   return { status: reasons.length ? "capture_invalid" : "valid", reasons, flake_regions: flake };
@@ -2096,7 +2102,7 @@ export async function render({ dir, author = "unattributed" }) {
       view.geometry = full.geometry;
       for (const [file, buffer] of await outputImages(dir, view, full, judge)) {
         await fs.writeFile(path.join(dir, file), buffer);
-        const p = PNG.sync.read(buffer);
+        const p = await sharp(buffer).metadata();
         view.images.push({
           file,
           sha256: hash(buffer),
@@ -2120,17 +2126,20 @@ export async function render({ dir, author = "unattributed" }) {
   return manifest;
 }
 async function outputImages(dir, view, full, judge) {
+  const halves = await Promise.all(
+    (view.blind_reverse ? ["head", "base"] : ["base", "head"]).map((half) =>
+      capturedImage(dir, half, view),
+    ),
+  );
   return [
     [`${view.id}.annotated.png`, full.buffer],
     [`${view.id}.judge.png`, judge.buffer],
-    [`${view.id}.clean.png`, await cleanPair(dir, view)],
+    [`${view.id}.clean.png`, await cleanPair(view, halves)],
     [`${view.id}.mask.png`, await fs.readFile(path.join(dir, view.mask))],
-    ...(await Promise.all(
-      (view.blind_reverse ? ["head", "base"] : ["base", "head"]).map(async (half, n) => [
-        `${view.id}.${view.blind ? ["A", "B"][n] : ["before", "after"][n]}.png`,
-        await capturedImage(dir, half, view),
-      ]),
-    )),
+    ...halves.map((buffer, n) => [
+      `${view.id}.${view.blind ? ["A", "B"][n] : ["before", "after"][n]}.png`,
+      buffer,
+    ]),
     ...full.insets.map((i, n) => [`${view.id}.inset-${n + 1}.png`, i.buffer]),
   ];
 }
@@ -2141,7 +2150,7 @@ export async function verifyImages(dir, view, full, judge) {
     return false;
   for (const [file, buffer] of expected) {
     const image = view.images.find((i) => i.file === file);
-    const png = PNG.sync.read(buffer);
+    const png = await sharp(buffer).metadata();
     if (
       image.sha256 !== hash(buffer) ||
       image.bytes !== buffer.length ||
@@ -2154,12 +2163,7 @@ export async function verifyImages(dir, view, full, judge) {
   return true;
 }
 
-async function cleanPair(dir, view) {
-  const inputs = await Promise.all(
-    (view.blind_reverse ? ["head", "base"] : ["base", "head"]).map((h) =>
-      capturedImage(dir, h, view),
-    ),
-  );
+async function cleanPair(view, inputs) {
   const resized = await Promise.all(
     inputs.map((b) => sharp(b).resize({ width: view.width }).png().toBuffer()),
   );
@@ -2503,7 +2507,7 @@ export async function check({ dir, root }) {
     checks.limits &&= v.items.length <= 8;
     for (const image of v.images) {
       const buffer = await fs.readFile(path.join(dir, image.file));
-      const actual = PNG.sync.read(buffer);
+      const actual = await sharp(buffer).metadata();
       checks.reproducible &&=
         hash(buffer) === image.sha256 &&
         buffer.length === image.bytes &&
