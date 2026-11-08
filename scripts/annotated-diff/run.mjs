@@ -287,6 +287,18 @@ export async function captureDOM(page, { font, masks = [], fullPage = false }) {
         if (!e.parentElement || e === document.body) return "body";
         return `${cssPath(e.parentElement)} > ${e.tagName.toLowerCase()}:nth-child(${[...e.parentElement.children].indexOf(e) + 1})`;
       };
+      const pseudos = (e, s, suppressed) =>
+        ["::before", "::after", "::marker"].filter((pseudo) => {
+          const p = getComputedStyle(e, pseudo);
+          return (
+            !suppressed &&
+            p.display !== "none" &&
+            ((pseudo === "::marker" &&
+              s.display === "list-item" &&
+              (s.listStyleType !== "none" || s.listStyleImage !== "none")) ||
+              !["none", "normal"].includes(p.content))
+          );
+        });
       const elements = nodes
         .map((e) => {
           const r = e.getBoundingClientRect(),
@@ -350,32 +362,41 @@ export async function captureDOM(page, { font, masks = [], fullPage = false }) {
                   : s.getPropertyValue(p),
               ]),
             ),
-            pseudos: ["::before", "::after", "::marker"].filter((pseudo) => {
-              const p = getComputedStyle(e, pseudo);
-              return (
-                !suppressed &&
-                p.display !== "none" &&
-                ((pseudo === "::marker" &&
-                  s.display === "list-item" &&
-                  (s.listStyleType !== "none" || s.listStyleImage !== "none")) ||
-                  !["none", "normal"].includes(p.content))
-              );
-            }),
+            pseudos: pseudos(e, s, suppressed),
           };
         })
-        .filter((e) => (e.rect.w > 0 && e.rect.h > 0) || e.pseudos.length);
+        .filter((e) => (e.rect.w > 0 && e.rect.h > 0) || e.pseudos.length || e.tag === "svg");
+      // Root paint has no attributable box. Keep sentinels even for zero-size roots.
+      for (const e of [document.documentElement, document.body]) {
+        const s = getComputedStyle(e);
+        elements.push({
+          root_paint_sentinel: e.tagName.toLowerCase(),
+          pseudos: pseudos(
+            e,
+            s,
+            s.display === "none" ||
+              getComputedStyle(document.documentElement).display === "none" ||
+              masks.some((m) => e.closest(m.selector)),
+          ),
+        });
+      }
       return {
         elements,
         fonts_loaded:
           document.fonts.check(`16px "${font}"`) &&
           elements.some(
-            (e) => e.style["font-family"].split(",")[0].replaceAll('"', "").trim() === font,
+            (e) =>
+              !e.root_paint_sentinel &&
+              e.style["font-family"].split(",")[0].replaceAll('"', "").trim() === font,
           ),
         scrollY,
         scrollX,
         coordinate_space: fullPage ? "document" : "viewport",
         title: document.title,
-        text: elements.map((e) => e.text).join(" "),
+        text: elements
+          .filter((e) => !e.root_paint_sentinel)
+          .map((e) => e.text)
+          .join(" "),
         seed: document.documentElement.dataset.captureSeed || null,
       };
     },
@@ -839,6 +860,7 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
     ["after", head],
   ])
     for (const el of elements) {
+      if (el.root_paint_sentinel) continue;
       if (!inventory.has(el.key)) inventory.set(el.key, { before: [], after: [] });
       inventory.get(el.key)[half].push(el);
     }
@@ -1062,6 +1084,12 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
       }
     }
   }
+  const missingRootPaint = [base, head].some((nodes) =>
+    ["html", "body"].some((tag) => {
+      const roots = nodes.filter((e) => e.root_paint_sentinel === tag);
+      return roots.length !== 1 || !Array.isArray(roots[0].pseudos);
+    }),
+  );
   const unknown = new Map();
   for (const region of regions) {
     const scores = matches
@@ -1079,15 +1107,18 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
       })
       .filter((x) => x.score > 0)
       .sort((a, b) => b.depth - a.depth || b.score - a.score);
-    // Pseudo paint has no measured bounds and can overflow its host. Fail closed view-wide.
-    // Media bounds alone cannot exclude independent content replacement, including SVG paths.
-    const domless = [...base, ...head].some(
-      (e) =>
-        e.pseudos?.length ||
-        ((["canvas", "video", "img", "svg"].includes(e.tag) ||
-          Object.values(e.paint || {}).some((value) => /url\(/i.test(value))) &&
-          overlap(e.rect, region.bbox_css) > 0),
-    );
+    // Generated paint and SVG may overflow any host bounds. Fail closed view-wide.
+    // Other media bounds cannot exclude independent content replacement on overlap.
+    const domless =
+      missingRootPaint ||
+      [...base, ...head].some(
+        (e) =>
+          e.pseudos?.length ||
+          e.tag === "svg" ||
+          ((["canvas", "video", "img"].includes(e.tag) ||
+            Object.values(e.paint || {}).some((value) => /url\(/i.test(value))) &&
+            overlap(e.rect, region.bbox_css) > 0),
+      );
     const best = domless ? null : scores[0]?.m;
     const causes = candidates.filter((c) => c.m === best);
     const contributors = scores.filter((s) => !aggregateAncestor(s.m, best));
@@ -1247,6 +1278,7 @@ function aggregateAncestor(ancestor, descendant) {
         a &&
         d &&
         d.ancestors?.includes(a.selector) &&
+        a.text === "" &&
         a.style["background-color"] === "rgba(0, 0, 0, 0)" &&
         a.style["box-shadow"] === "none" &&
         !a.pseudos?.length &&
@@ -1492,7 +1524,13 @@ function comparisonView(view, spec, mapping, images, items, diff, base, head) {
     items,
     regions: diff.regions,
     pixel_passes: diff.passes,
-    element_names: [...new Set([...base.elements, ...head.elements].map((e) => e.name))],
+    element_names: [
+      ...new Set(
+        [...base.elements, ...head.elements]
+          .filter((e) => !e.root_paint_sentinel)
+          .map((e) => e.name),
+      ),
+    ],
     mask: `${view.id}.mask.png`,
     images: [],
     alt: `${view.id} ${view.theme}: ${items.length} changes, ${items.filter((i) => i.status === "unexplained").length} unexplained; see list below`,

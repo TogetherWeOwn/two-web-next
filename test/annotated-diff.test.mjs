@@ -8,7 +8,7 @@ import sharp from "sharp";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import {
   THRESHOLDS,
-  attribute,
+  attribute as productionAttribute,
   check,
   markdownFiles,
   verifyMarkdown,
@@ -33,6 +33,13 @@ import {
   validateLabels,
   validateSpec,
 } from "../scripts/annotated-diff/run.mjs";
+
+// Synthetic unit inventories explicitly assume both roots were inspected without generated paint.
+// Production capture and missing-sentinel controls live in fixture/paint.mjs.
+const attribute = (base, head, ...args) => {
+  const roots = ["html", "body"].map((tag) => ({ root_paint_sentinel: tag, pseudos: [] }));
+  return productionAttribute([...base, ...roots], [...head, ...roots], ...args);
+};
 
 const png = (width, height, fill = [255, 255, 255], paint = () => null) => {
   const p = new PNG({ width, height });
@@ -1524,8 +1531,15 @@ describe("attribution audit regressions", () => {
       "mix-blend-mode": "normal",
       "outline-width": "0px",
     };
-    for (const kind of ["transparent", "gradient", "missing-evidence"]) {
+    for (const kind of [
+      "transparent",
+      "gradient",
+      "missing-evidence",
+      "direct-text",
+      "missing-text",
+    ]) {
       const parent = node("parent", 1, box, style, {
+        text: kind === "missing-text" ? undefined : kind === "direct-text" ? "unchanged text" : "",
         paint:
           kind === "missing-evidence"
             ? {}
