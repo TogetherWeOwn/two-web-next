@@ -1,7 +1,12 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import { describe, test } from "node:test";
 import { REQUIRED_PRODUCTION_SECRETS } from "./check-production-secrets.mjs";
-import { createPureHonoRollback, verifyPureHonoRollback } from "./pure-hono-rollback.mjs";
+import {
+  createPureHonoRollback,
+  readPureHonoVersion,
+  verifyPureHonoRollback,
+} from "./pure-hono-rollback.mjs";
 import { SCHEMA, deploymentReceipt, sha256, uploadReceipt } from "./worker-bundle-evidence.mjs";
 
 const SHA = "a".repeat(40);
@@ -240,6 +245,123 @@ describe("verifyPureHonoRollback", () => {
   test("rejects when the native version no longer matches", () => {
     assert.throws(() =>
       verifyPureHonoRollback(pointer, verified, deployed, makeNative({ id: OTHER_VERSION })),
+    );
+  });
+});
+
+describe("readPureHonoVersion", () => {
+  const FAILURE = "native pure-Hono version lookup failed";
+  const MARKER = "SECRET_MARKER_8f3a1c";
+
+  test("runs the exact wrangler command and returns the parsed object", () => {
+    const calls = [];
+    const native = makeNative();
+    const execute = (...args) => {
+      calls.push(args);
+      return JSON.stringify(native);
+    };
+    assert.deepEqual(readPureHonoVersion(VERSION, execute), native);
+    assert.deepEqual(calls, [
+      [
+        "npx",
+        ["wrangler", "versions", "view", VERSION, "--name", "two-web-next-production", "--json"],
+        {
+          encoding: "utf8",
+          timeout: 60_000,
+          maxBuffer: 1024 * 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      ],
+    ]);
+  });
+
+  for (const [name, id] of Object.entries({
+    "uppercase UUID": "AAAAAAAA-2222-4333-8444-555555555555",
+    "empty string": "",
+    "non-UUID": "not-a-uuid",
+    "option-like": "--name",
+    "trailing newline": `${VERSION}\n`,
+    "leading space": ` ${VERSION}`,
+    "shell metacharacters": `${VERSION};id`,
+    "appended argument": `${VERSION} --json`,
+    "non-string": null,
+  })) {
+    test(`rejects ${name} without invoking the child process`, () => {
+      let called = false;
+      const execute = () => {
+        called = true;
+        return "{}";
+      };
+      assert.throws(() => readPureHonoVersion(id, execute));
+      assert.equal(called, false);
+    });
+  }
+
+  test("throws the fixed failure for malformed JSON without echoing the body", () => {
+    const execute = () => `{not json ${MARKER}`;
+    assert.throws(
+      () => readPureHonoVersion(VERSION, execute),
+      (error) => {
+        assert.equal(error.message, FAILURE);
+        assert.ok(!String(error.message).includes(MARKER));
+        return true;
+      },
+    );
+  });
+
+  test("never surfaces child process error output", () => {
+    const execute = () => {
+      const error = new Error(`Command failed: ${MARKER}`);
+      error.stdout = MARKER;
+      error.stderr = MARKER;
+      throw error;
+    };
+    assert.throws(
+      () => readPureHonoVersion(VERSION, execute),
+      (error) => {
+        assert.equal(error.message, FAILURE);
+        assert.ok(!String(error.stack ?? "").includes(MARKER));
+        assert.ok(!JSON.stringify(error).includes(MARKER));
+        return true;
+      },
+    );
+  });
+});
+
+describe("production workflow wiring", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/deploy-production.yml", import.meta.url),
+    "utf8",
+  );
+  const stepStart = (name) => workflow.indexOf(`      - name: ${name}\n`);
+  const BIND = "Bind bundle evidence to the smoke-verified promoted version";
+  const CAPTURE = "Capture native pure-Hono rollback evidence";
+  const ARCHIVE = "Archive production bundle inventory and receipts";
+
+  test("captures native rollback evidence between the bind and archive steps", () => {
+    const bind = stepStart(BIND);
+    const capture = stepStart(CAPTURE);
+    const archive = stepStart(ARCHIVE);
+    assert.ok(bind >= 0 && capture >= 0 && archive >= 0);
+    assert.ok(bind < capture && capture < archive);
+    assert.equal(workflow.indexOf(`      - name: ${CAPTURE}\n`, capture + 1), -1);
+  });
+
+  test("runs the capture command with the build sha and production credentials", () => {
+    const capture = stepStart(CAPTURE);
+    const block = workflow.slice(capture, stepStart(ARCHIVE));
+    assert.match(
+      block,
+      /run: node workflow-tip\/ci\/pure-hono-rollback\.mjs capture dist-production dist-production\/pure-hono-rollback\.json\n/,
+    );
+    assert.match(block, /BUILD_SHA: \$\{\{ needs\.preflight\.outputs\.sha \}\}/);
+    assert.match(
+      block,
+      /CLOUDFLARE_API_TOKEN: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_API_TOKEN \}\}/,
+    );
+    assert.match(
+      block,
+      /CLOUDFLARE_ACCOUNT_ID: \$\{\{ secrets\.PRODUCTION_CLOUDFLARE_ACCOUNT_ID \}\}/,
     );
   });
 });

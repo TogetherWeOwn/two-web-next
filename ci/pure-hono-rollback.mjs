@@ -1,6 +1,7 @@
 // A Kit build with every family off is not a pure-Hono rollback target.
 // Create this record only from reverified Hono evidence and a named version read.
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -77,16 +78,42 @@ export function verifyPureHonoRollback(pointer, verified, deployed, nativeVersio
   return pointer;
 }
 
-function main() {
-  const [command, directory, nativePath, pointerPath, ...extra] = process.argv.slice(2);
-  assert.ok(
-    ["create", "verify"].includes(command) &&
-      directory &&
-      nativePath &&
-      pointerPath &&
-      !extra.length,
-    "usage: pure-hono-rollback.mjs create|verify <build-dir> <native-version.json> <pointer.json>",
+export function readPureHonoVersion(versionId, execute = execFileSync) {
+  assert.match(
+    versionId,
+    /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/,
+    "invalid pure-Hono version ID",
   );
+  assert.equal(versionId.length, 36, "invalid pure-Hono version ID");
+  try {
+    return JSON.parse(
+      execute(
+        "npx",
+        ["wrangler", "versions", "view", versionId, "--name", "two-web-next-production", "--json"],
+        {
+          encoding: "utf8",
+          timeout: 60_000,
+          maxBuffer: 1024 * 1024,
+          stdio: ["ignore", "pipe", "pipe"],
+        },
+      ),
+    );
+  } catch {
+    throw new Error("native pure-Hono version lookup failed");
+  }
+}
+
+function main() {
+  const [command, directory, third, fourth, ...extra] = process.argv.slice(2);
+  const capture = command === "capture";
+  assert.ok(
+    directory &&
+      third &&
+      !extra.length &&
+      (capture ? !fourth : ["create", "verify"].includes(command) && fourth),
+    "usage: pure-hono-rollback.mjs capture <build-dir> <pointer.json> OR create|verify <build-dir> <native-version.json> <pointer.json>",
+  );
+  const pointerPath = capture ? third : fourth;
   const verified = verifyInventory(process.cwd(), directory, {
     sourceSha: process.env.BUILD_SHA,
     runId: process.env.GITHUB_RUN_ID,
@@ -95,10 +122,15 @@ function main() {
     environment: "production",
   });
   const deployed = JSON.parse(readFileSync(resolve(directory, "deployed.json"), "utf8"));
-  const nativeRaw = readFileSync(nativePath);
-  assert.ok(nativeRaw.length <= 1024 * 1024, "native version response too large");
-  const nativeVersion = JSON.parse(nativeRaw.toString("utf8"));
-  if (command === "create") {
+  let nativeVersion;
+  if (capture) {
+    nativeVersion = readPureHonoVersion(deployed.versionId);
+  } else {
+    const nativeRaw = readFileSync(third);
+    assert.ok(nativeRaw.length <= 1024 * 1024, "native version response too large");
+    nativeVersion = JSON.parse(nativeRaw.toString("utf8"));
+  }
+  if (capture || command === "create") {
     const pointer = createPureHonoRollback(verified, deployed, nativeVersion);
     writeFileSync(pointerPath, `${JSON.stringify(pointer, null, 2)}\n`, { flag: "wx" });
   } else {

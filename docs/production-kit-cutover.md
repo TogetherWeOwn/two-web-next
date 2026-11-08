@@ -75,11 +75,16 @@ build yet.
   unknown runtime externals and inventories without the Hono entry/package.
   The sanitized record includes the original bundle/inventory digests and
   `expiresAt: null`; exact verification rejects added fields or any expiry.
-  This is source preparation only: Actions fixture tests are wired but unobserved.
-  No native version has been read, no target classified, and no permanent storage
-  or production-workflow consumption is implemented. The calling workflow must
-  establish trusted successful-run provenance and use the named production script
-  for its native version read; an arbitrary JSON file cannot establish either.
+  The production workflow now invokes `capture` only after its Hono bundle is
+  bound to the smoke-verified promoted UUID. Capture reads that exact UUID from
+  `two-web-next-production` using a bounded, captured Wrangler subprocess, then
+  validates its tag and required secret names. Only the sanitized pointer enters
+  the existing 30-day bundle archive; native binding values and child-process
+  output are neither printed nor archived. The lookup and workflow fixture tests
+  are wired into Actions but their result is unobserved. No native version has
+  been read or target classified for this change. Permanent storage and trusted
+  successful-run provenance for later cross-run consumption remain unimplemented;
+  an expiring archive or arbitrary JSON file cannot establish either.
 
 ## Unimplemented
 

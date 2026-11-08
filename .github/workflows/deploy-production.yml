@@ -604,6 +604,15 @@ jobs:
         env:
           BUILD_SHA: ${{ needs.preflight.outputs.sha }}
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
+      - name: Capture native pure-Hono rollback evidence
+        # The current upload remains Hono. Do not classify a Kit all-off build
+        # as pure Hono. Only the digest-bound pointer is archived, never the
+        # native response's binding values. This archive still expires.
+        run: node workflow-tip/ci/pure-hono-rollback.mjs capture dist-production dist-production/pure-hono-rollback.json
+        env:
+          BUILD_SHA: ${{ needs.preflight.outputs.sha }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Archive production bundle inventory and receipts
         if: ${{ !cancelled() && steps.inventory.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
