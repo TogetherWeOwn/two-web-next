@@ -488,6 +488,29 @@ test("API and log response caps reject oversized bodies", async () => {
   );
 });
 
+test("queued observers retain blocking original-workflow lint and every-event native syntax smoke", () => {
+  const ci = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const job = (id) => ci.split(`\n  ${id}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0] ?? "";
+  const scope = job("scope");
+  assert.match(scope, /timeout-minutes: 15/);
+  assert.match(
+    scope,
+    /name: Lint workflows \(actionlint\)\n        if: github.event_name == 'pull_request'\n        run: bash ci\/actionlint\/build.sh/,
+  );
+  const smoke = job("queue-syntax-smoke");
+  assert.match(smoke, /needs: scope/);
+  assert.match(
+    smoke,
+    /group: queue-syntax-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+  );
+  assert.match(smoke, /cancel-in-progress: false\n      queue: max/);
+  assert.match(smoke, /permissions: \{\}/);
+  assert.doesNotMatch(smoke, /if:|uses:|secrets\.|environment:/);
+  assert.match(job("ci-ok"), /needs:[\s\S]*queue-syntax-smoke/);
+  assert.match(job("ci-ok"), /QUEUE_SMOKE_RESULT: \$\{\{ needs\.queue-syntax-smoke\.result \}\}/);
+  assert.match(job("ci-ok"), /run: test "\$QUEUE_SMOKE_RESULT" = success/);
+});
+
 test("workflow wiring preserves release dependencies and isolates issue-write permission", () => {
   const read = (file) =>
     readFileSync(new URL(`../.github/workflows/${file}`, import.meta.url), "utf8");
