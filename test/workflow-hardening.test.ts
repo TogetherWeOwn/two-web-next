@@ -31,7 +31,10 @@ const laneSource = readFileSync(join(dir, "db-free-lane.yml"), "utf8");
 const lane = parse(laneSource) as {
   on: Record<string, { inputs: Record<string, unknown> }>;
   permissions: Record<string, string>;
-  jobs: Record<string, { steps: LaneStep[]; "runs-on": string; "timeout-minutes": number }>;
+  jobs: Record<
+    string,
+    { steps: LaneStep[]; "runs-on": string; "timeout-minutes": number; "cache-mode": string }
+  >;
 };
 const laneJob = lane.jobs["db-free"];
 const laneSteps = laneJob?.steps ?? [];
@@ -168,7 +171,12 @@ describe("dispatch-only DB-free lane", () => {
   it("uses a bounded hosted runner with read-only contents and no secrets or services", () => {
     expect(Object.keys(lane).sort()).toEqual(["jobs", "name", "on", "permissions"]);
     expect(lane.permissions).toEqual({ contents: "read" });
-    expect(Object.keys(laneJob ?? {}).sort()).toEqual(["runs-on", "steps", "timeout-minutes"]);
+    expect(Object.keys(laneJob ?? {}).sort()).toEqual([
+      "cache-mode",
+      "runs-on",
+      "steps",
+      "timeout-minutes",
+    ]);
     expect(laneJob?.["runs-on"]).toBe("ubuntu-latest");
     expect(laneJob?.["timeout-minutes"]).toBe(45);
     expect(laneSource).not.toMatch(/secrets\s*[.[]|github\.token|continue-on-error/);
@@ -178,6 +186,10 @@ describe("dispatch-only DB-free lane", () => {
       "actions/upload-artifact",
     ]);
     for (const step of laneSteps) expect(step.run ?? "").not.toContain("${{");
+  });
+
+  it("denies cache restore and save capability for the entire arbitrary-SHA job", () => {
+    expect(laneJob?.["cache-mode"]).toBe("none");
   });
 
   it("rejects malformed SHA values in the actual pre-checkout shell", () => {
