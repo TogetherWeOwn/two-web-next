@@ -16,6 +16,7 @@ import {
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyFrozenKitInputs } from "./kit-frozen-inputs.mjs";
+import { createKitFrozenIntent } from "./kit-frozen-intent.mjs";
 import { verifyKitMultipartModules } from "./kit-multipart-modules.mjs";
 import { verifyWranglerTool } from "./kit-wrangler-tool.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
@@ -146,6 +147,7 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
     toolSha256: sha256(JSON.stringify(tool)),
     workerSha256: sha256(actualWorker),
     multipart,
+    intent: createKitFrozenIntent(inputs, tool, multipart),
     emittedFiles: [
       { path: "README.md", bytes: readme.length, sha256: sha256(readme) },
       { path: "worker.js", bytes: actualWorker.length, sha256: sha256(actualWorker) },

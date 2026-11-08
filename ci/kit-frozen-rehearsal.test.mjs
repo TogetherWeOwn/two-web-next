@@ -59,6 +59,9 @@ function fixture(run) {
   mkdirSync(join(snapshot, "build"), { recursive: true });
   writeFileSync(join(snapshot, "build/worker.js"), worker);
   const tool = {
+    schema: "two.kit-wrangler-tool.v1",
+    name: "wrangler",
+    version: "4.156.1",
     entry: "node_modules/wrangler/bin/wrangler.js",
     locks: ["package-lock.json", "web/package-lock.json"].map((path) => ({
       path,
@@ -67,8 +70,11 @@ function fixture(run) {
     })),
   };
   const inputs = {
+    schema: "two.kit-frozen-inputs.v1",
     ...context,
     target: "two-web-next-production",
+    workerSha256: sha256(worker),
+    assets: { schema: "two.kit-complete-assets.v1", treeSha256: sha256("fixture assets") },
     sourceConfig: structuredClone(sourceConfig),
     files: tool.locks.map((lock) => ({ ...lock, path: `source/${lock.path}` })),
   };
@@ -141,6 +147,13 @@ test("snapshot rehearsal pins paths, dry-run flags, environment and bounded exec
     ]);
     assert.equal(receipt.snapshotSha256, sha256(JSON.stringify(f.inputs)));
     assert.equal(receipt.toolSha256, sha256(JSON.stringify(f.tool)));
+    assert.equal(receipt.intent.snapshotSha256, receipt.snapshotSha256);
+    assert.equal(receipt.intent.toolSha256, receipt.toolSha256);
+    assert.equal(receipt.intent.workerSha256, receipt.workerSha256);
+    assert.equal(receipt.intent.multipartSha256, sha256(JSON.stringify(receipt.multipart)));
+    assert.equal(receipt.intent.serializedConfigSha256, receipt.multipart.config.configSha256);
+    const { intentSha256, ...intentFields } = receipt.intent;
+    assert.equal(intentSha256, sha256(JSON.stringify(intentFields)));
     assert.deepEqual(JSON.parse(readFileSync(join(f.destination, "receipt.json"))), receipt);
     assert.doesNotMatch(JSON.stringify(receipt), /not evidence|versionId|qualified|native/i);
   });
@@ -341,6 +354,8 @@ test("Actions runs frozen rehearsal after snapshot verification and retains only
   );
   const archive = workflow.indexOf("      - name: Production Kit bundle build evidence");
   assert.ok(verified >= 0 && tests > verified && replay > tests && archive > replay);
+  const intentTests = workflow.indexOf("node --test ci/kit-frozen-intent.test.mjs");
+  assert.ok(intentTests > verified && intentTests < tests);
   assert.ok(workflow.includes("node --test ci/kit-multipart-config.test.mjs"));
   assert.ok(workflow.includes("node --test ci/kit-multipart-modules.test.mjs"));
   assert.ok(!workflow.includes("            artifacts/kit-frozen-rehearsal/private/"));

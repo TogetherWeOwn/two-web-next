@@ -850,6 +850,7 @@ jobs:
         run: |
           node --test ci/kit-multipart-config.test.mjs
           node --test ci/kit-multipart-modules.test.mjs
+          node --test ci/kit-frozen-intent.test.mjs
           node --test ci/kit-frozen-rehearsal.test.mjs
           node ci/kit-frozen-rehearsal.mjs artifacts/kit-frozen-inputs artifacts/kit-frozen-rehearsal
       - name: Production Kit bundle build evidence

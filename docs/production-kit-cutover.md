@@ -6,12 +6,13 @@ build yet.
 
 ## Observed verification
 
-Serialized-config checks below are newly prepared and **untested**. Published
+Serialized-config checks and the prepared-input descriptor below are newly
+prepared and **untested**. Published
 [Actions 42472988388](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42472988388)
 at `f3de951a239df18c61c090148cfd104d53881f96` was still running at inspection:
-main and Node 22 suites were executing; scope, docs-links, bundle-budget and
-accessibility passed, with Lighthouse still running. No current-head completed
-suite, frozen rehearsal, parity or overall PASS is claimed. Only replacement of
+main and Node 22 suites were executing; scope, docs-links, bundle-budget,
+accessibility and Lighthouse passed. No current-head completed suite, frozen
+rehearsal, parity or overall PASS is claimed. Only replacement of
 that same-branch cancel-in-progress producer is deferred until completion,
 concrete required-leg failure or its existing main-job timeout; independent
 source preparation continues. The pending config checks add no deploy or
@@ -87,6 +88,20 @@ corrected overall CI remains unobserved. Earlier unobserved-result notes below
 describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
+
+- `ci/kit-frozen-intent.mjs` constructs a digest-bound prepared-input descriptor
+  only after the rehearsal rechecks the snapshot, checked Wrangler and serialized
+  module/config. The retained rehearsal receipt includes its SHA/run/attempt,
+  target, snapshot/tool/Worker/asset-input/serialized-config/multipart digests and
+  portable intended upload paths, no-bundle flag, default environment and absence
+  of a name override. A final digest binds the complete descriptor. The constructor
+  also checks lock agreement and the serialized module identity, with fixed
+  diagnostics. Fixture tests and the integration assertions are wired but unrun.
+  This descriptor is **not an executed upload**, authenticated provenance, a
+  complete runtime/environment qualification or a grant to upload. The production
+  uploader does not consume it yet; intent-to-native-UUID/tag association and all
+  custody/qualification/release guards remain unfinished. The recorded hashes
+  associate already-verified objects; arbitrary supplied JSON is not verification.
 
 - `ci/kit-frozen-rehearsal.mjs` adds a second, dry-run-only `versions upload`
   that consumes the reverified snapshot's built Worker, source config and complete
