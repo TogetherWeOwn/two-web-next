@@ -180,7 +180,7 @@ test("status journal is created before capture and only ever replaces itself", (
   captureCanonicalBuild(root, dest, context(), observedAuthority);
   assert.ok(observations > 0);
   assert.deepEqual(readdirSync(dest).sort(), ["bytes", "status.json"]);
-  // A started journal has the same shape the complete one extends.
+  // A failed journal adds only a fixed failure code to the original fields.
   const failedDest = target();
   rmSync(join(root, CLIENT_TREE), { recursive: true });
   assert.throws(() => captureCanonicalBuild(root, failedDest, context(), authority()));
@@ -189,6 +189,7 @@ test("status journal is created before capture and only ever replaces itself", (
     "capture",
     "captureBoundary",
     "evidence",
+    "failureCode",
     "producerOutcome",
     "qualified",
     "receipt",
@@ -221,6 +222,41 @@ test("a missing group retains a failed status and no receipt", () => {
     assert.equal(journal.receipt, null, name);
     assert.equal(existsSync(join(dest, "bytes/receipt.json")), false, name);
   }
+});
+
+test("capture failure codes are finite and do not expose exception details", () => {
+  for (const [name, mutate, expected] of [
+    ["empty", (root) => mkdirSync(join(root, SERVER, "empty")), "empty-directory"],
+    ["missing", (root) => rmSync(join(root, SERVER), { recursive: true }), "filesystem-missing"],
+    ["group", (root) => unlinkSync(join(root, WORKER)), "group-missing"],
+  ]) {
+    const root = makeRoot(name);
+    mutate(root);
+    const dest = target(name);
+    assert.throws(
+      () => captureCanonicalBuild(root, dest, context(), authority()),
+      /canonical byte capture failed/,
+    );
+    const journal = status(dest);
+    assert.equal(journal.capture, "failed");
+    assert.equal(journal.failureCode, expected);
+    assert.equal(journal.receipt, null);
+    assert.equal(journal.qualified, false);
+  }
+  const root = makeRoot("private-error");
+  const dest = target("private-error");
+  const injected = {
+    ...authority(),
+    get KIT_WORKER_PATH() {
+      throw Object.assign(new Error("private/path/generated-value"), { code: "private-code" });
+    },
+  };
+  assert.throws(
+    () => captureCanonicalBuild(root, dest, context(), injected),
+    /canonical byte capture failed/,
+  );
+  assert.equal(status(dest).failureCode, "unclassified");
+  assert.doesNotMatch(readFileSync(join(dest, "status.json"), "utf8"), /private/);
 });
 
 test("symlinked output is rejected and retained as failed", () => {

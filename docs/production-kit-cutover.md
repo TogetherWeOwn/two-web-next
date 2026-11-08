@@ -6,6 +6,27 @@ build yet.
 
 ## Observed verification
 
+[Actions 42495258968](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42495258968)
+at `8c19ae5c8c38da45d3f61974fa2424d2f40b6b67` completed with **failure**.
+Main lint/type/coverage and Node 22 each passed 26,757 tests (676 skipped);
+all auxiliary jobs passed. The startup diagnostic stopped at its build stage,
+but the retained canonical journal specifically records a successful build
+return followed by **failed byte capture**. It has no receipt or frozen bytes.
+Later frozen rehearsal, built fatal and production parity steps were not reached;
+missing artifacts do not establish runtime verdicts.
+
+Authenticated startup and build archives matched their metadata digests. A
+bounded data-only reproduction of the 320 raw server/client/Cloudflare files
+passed canonical file/group validation. No downloaded code was executed. This
+does not reproduce the original directory topology: artifact upload omits empty
+directory entries and does not establish the source filesystem's alias state.
+The precise failing invariant is therefore **unknown**, not repaired or waived.
+The journal now records only a fixed failure classification, never arbitrary
+exception text, paths, generated contents or child output. Empty directories,
+aliases and incomplete groups still fail; unknown exceptions remain unclassified.
+New diagnostic and retained source-observer/authority fixtures await exact-head
+Actions. No local suite, lint, build, install or deployment ran.
+
 [Actions 42478341249](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42478341249)
 at `a8f26bb2d9e93e7cbd831901ce15fb075a19361a` completed with **failure**.
 Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
