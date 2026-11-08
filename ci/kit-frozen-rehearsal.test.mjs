@@ -56,8 +56,7 @@ function fixture(run) {
       return { status: 0, signal: null, stdout: "not evidence", stderr: "not evidence" };
     },
   };
-  const invoke = () =>
-    rehearseFrozenKitInputs(root, snapshot, destination, context, collaborators);
+  const invoke = () => rehearseFrozenKitInputs(root, snapshot, destination, context, collaborators);
   try {
     run({ root, snapshot, destination, tool, inputs, collaborators, calls, invoke });
   } finally {
