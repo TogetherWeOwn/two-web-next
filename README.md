@@ -162,6 +162,7 @@ and rendering proofs in `test/admin-featured-unpublish-acceptance.test.ts`
 and `test/admin-featured-unpublish-invariants.test.ts` remain ungated. This
 preserves the DB-free lane without adding a conditional skip. It does not
 replace disposable-DB verification or browser evidence.
+Dispatch [db-free-lane](.github/workflows/db-free-lane.yml) with a full lowercase `sha` for report-only Actions evidence (full Vitest config, no database configuration, SHA-named JSON artifacts retained for 14 days); repository write access is required.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
