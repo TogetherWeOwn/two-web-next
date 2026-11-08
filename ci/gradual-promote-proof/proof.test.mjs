@@ -404,7 +404,7 @@ test("workflow pins the exact central action and keeps production unreachable", 
   );
   // The unchanged pinned action, invoked exactly once.
   assert.equal(workflow.split(PINNED_ACTION).length - 1, 1);
-  assert.match(PINNED_ACTION, /@89c290be20c0044efaf6916f28341c76e75fff06$/);
+  assert.match(PINNED_ACTION, /@97cadcb231e55fad95cbc6468be078ecef571bc2$/);
   // Manual dispatch from main only: no other trigger keys in the on: block.
   const onBlock = workflow.match(/^on:\n([\s\S]*?)\n\npermissions:/m)?.[1] ?? "";
   assert.match(onBlock, /workflow_dispatch:/);
@@ -460,8 +460,8 @@ test("proof pin equals the production deploy pin so they cannot drift", () => {
     assert.equal(matches.length, 1, `${label} must contain exactly one active pin`);
     return matches[0];
   };
-  // Per-caller inputs that must differ: deployment identity, credentials,
-  // and the proof's indexability lock. Anything else must match exactly.
+  // Deployment identity, credentials, indexability and the synthetic-only
+  // recovery scope differ. Everything else must match exactly.
   const PER_CALLER_INPUTS = new Set([
     "worker-name",
     "version-tag",
@@ -469,6 +469,7 @@ test("proof pin equals the production deploy pin so they cannot drift", () => {
     "api-token",
     "account-id",
     "allow-indexable",
+    "require-pre-promotion-verifier",
   ]);
   const extractActiveWith = (source, label) => {
     const lines = source.split("\n");
@@ -507,5 +508,7 @@ test("proof pin equals the production deploy pin so they cannot drift", () => {
   assert.equal(proofPin, PINNED_ACTION);
   const productionWith = extractActiveWith(deploy, "production workflow");
   const proofWith = extractActiveWith(workflow, "proof workflow");
+  assert.equal(productionWith["require-pre-promotion-verifier"], '"true"');
+  assert.equal(proofWith["require-pre-promotion-verifier"], '"false"');
   assert.deepEqual(stripPerCaller(proofWith), stripPerCaller(productionWith));
 });

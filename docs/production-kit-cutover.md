@@ -6,6 +6,30 @@ build yet.
 
 ## Observed verification
 
+[Actions 42505212059](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42505212059)
+at `401b3fb250d920a0c8cf5f98cf5d2b6f025b69e1` completed with **failure**.
+Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
+auxiliary jobs passed. Corrected immediate canonical capture and finalization,
+frozen-input rehearsal, built fatal fixture and all 3,313 production-config
+all-off parity vectors passed, with zero route/asset-header differences or
+exceptions. The retained build archive's 14,096,921 bytes and SHA-256 matched
+authenticated metadata. Its capture status records build success and complete
+build-return capture, with receipt digest
+`50b9d196ca9cd2314384b36d0b7ab4cdfb6f376945165bfc6fbe212b33f70048`.
+This is same-source diagnostic evidence, not accepted source-separated collection.
+
+The later synthetic promotion harness passed 12 tests and failed one because its
+older action pin differed from production. The proof now pins the same reviewed
+v0.9.1 bytes. Its data-free synthetic target explicitly leaves the optional
+pre-promotion verifier off; production still explicitly requires it. The pin and
+shared-input equality assertions remain, with separate exact assertions for that
+caller-specific requirement. Focused reproduction of the single failing test
+failed before and passed after the repair. An intermediate diagnostic also failed
+on an incorrect input name, corrected to the action's declared input. No updated
+live proof run or production recovery qualification is claimed. Replacement
+exact-head Actions must test the retained archive-verification additions and this
+repair. No local full suite, lint, build or installation ran.
+
 The existing retention module also exposes data-only canonical archive-member
 verification. It takes bounded, already-parsed regular-file bytes and an explicit
 expected receipt SHA-256, recomputes independent gzip/SHA-256 rows and exact

@@ -10,7 +10,7 @@ production Workers, any database, or any custom domain.
 
 | Thing | Value |
 | --- | --- |
-| Action under test | `TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06` (unchanged; invoked once from the proof workflow) |
+| Action under test | `TogetherWeOwn/.github/actions/gradual-promote@97cadcb231e55fad95cbc6468be078ecef571bc2` (v0.9.1; invoked once from the proof workflow) |
 | Caller workflow | `.github/workflows/gradual-promote-proof.yml` (`workflow_dispatch` only, `main` only) |
 | Synthetic Worker | `two-gradual-promote-proof` on workers.dev |
 | Fixture | `ci/gradual-promote-proof/fixture.mjs` (no imports, no data bindings) |
@@ -25,6 +25,12 @@ the same synthetic Worker, so both halves resolve to the isolated target.
 `proof-lib.mjs` refuses any config that adds routes, custom domains,
 queues, Hyperdrive, services, assets, tail consumers, triggers, or any
 other environment.
+
+The proof and production callers pin the same reviewed action bytes. Only this
+disposable, data-free synthetic caller sets `require-pre-promotion-verifier: "false"`;
+production explicitly requires it. This harness does not qualify production
+archive recovery, custody or either cutover recovery drill. No live proof run on
+the updated pin is claimed by the source change.
 
 ## What each run does
 
