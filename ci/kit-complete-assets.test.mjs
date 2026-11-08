@@ -132,7 +132,8 @@ test("rejects unknown ignore patterns, negation, prefix and final newline", asyn
     `# comment${KIT_ASSETSIGNORE}`,
     KIT_ASSETSIGNORE.slice(1),
     `\n_worker.js\n_headers\n_redirects`,
-    KIT_ASSETSIGNORE.replace("\n", "\r\n"),
+    "\r\n_worker.js\n_routes.json\n_headers\n_redirects",
+    KIT_ASSETSIGNORE.replaceAll("\n", "\r\n"),
     "",
   ]) {
     await rejects({ ...baseFiles(), ".assetsignore": bytes });
@@ -235,7 +236,7 @@ test("rejects case-insensitive collisions", async () => {
 
 test("rejects unknown extensions and accepts the allowlist", async () => {
   await rejects({ ...baseFiles(), "file.exe": "x" });
-  await rejects({ ...baseFiles(), "noext": "x" });
+  await rejects({ ...baseFiles(), noext: "x" });
   await rejects({ ...baseFiles(), "map.js.map": "x" });
   const expected = {
     "a.js": "text/javascript; charset=utf-8",

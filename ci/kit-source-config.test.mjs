@@ -258,6 +258,8 @@ test("Actions run this test and write the source-config artifact", () => {
   const text = readFileSync(join(repo, ".github/workflows/ci.yml"), "utf8");
   assert.ok(text.includes("node --test ci/kit-source-config.test.mjs"));
   assert.ok(
-    text.includes("node ci/kit-source-config.mjs artifacts/kit-upload-rehearsal/source-config.json"),
+    text.includes(
+      "node ci/kit-source-config.mjs artifacts/kit-upload-rehearsal/source-config.json",
+    ),
   );
 });

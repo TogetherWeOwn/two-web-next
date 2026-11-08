@@ -108,7 +108,10 @@ export function classifyKitAssets(directory) {
       publicAssets.push({ url: `/${file.member}`, ...file, mime });
     }
   }
-  assert.ok(modules.some((file) => file.bytes > 0), "missing or empty adapter Worker");
+  assert.ok(
+    modules.some((file) => file.bytes > 0),
+    "missing or empty adapter Worker",
+  );
   assert.ok(
     publicAssets.some((file) => file.member.startsWith("_app/immutable/") && file.bytes > 0),
     "immutable assets missing or empty",

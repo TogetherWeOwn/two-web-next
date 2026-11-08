@@ -6,6 +6,17 @@ build yet.
 
 ## Observed verification
 
+[Actions run 42461060087](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42461060087)
+at `7cba241d11a8ffa51932199a54d6df60b4a73a71` failed both test legs at lint.
+Five local files and the byte-identical central `pre-promotion-check.mjs` mirror
+failed formatting. The local layouts are repaired; the immutable producer needs
+a reviewed format-compatible publication before the mirror can change. No lint
+exclusion or locally edited action copy is introduced. Tests, Kit build, classifier,
+source-config and parity steps were not reached on that head; missing artifacts
+are consequences, not runtime verdicts. The new frozen-input helper and fixtures
+below have not run. Syntax, whitespace and workflow YAML parsing passed locally;
+no local suite, lint, build, install or deployment ran.
+
 [Actions run 42456798269](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42456798269)
 at `457b6d5e7fa813852a469b3cc7f986d22520546f` also failed overall. Main coverage
 passed 26,757 tests (676 skipped); Node 22 and auxiliary jobs passed. Kit
@@ -38,6 +49,22 @@ corrected overall CI remains unobserved. Earlier unobserved-result notes below
 describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
+
+- `ci/kit-frozen-inputs.mjs` creates a new, exclusive local snapshot of both
+  dry-run output trees, the complete adapter tree and six fixed source inputs
+  (both source configs, wrapper, headers and lockfiles). It reuses the finite
+  asset/source-config contracts, checks Worker/replay equality, rejects unsafe
+  paths/symlinks/non-regular files and bounds file counts and bytes. Copied files
+  are 0444 and directories 0555; exact file/directory membership, digests, context
+  and modes are recomputed after locking. Copies are not links. Source changes
+  during copying fail; the job must still exclude concurrent input writers.
+  Actions fixture/snapshot/verification and artifact retention are wired but
+  **unrun**. The owner can reverse these modes; they are neither WORM nor custody.
+  An archive transport may discard modes and must restore and reverify them
+  before any future use. This snapshot is build-input evidence only, not
+  Wrangler-normalized config, executable integrity, an upload intent/native UUID,
+  attestation, durable recovery retention or current-environment qualification.
+  Production upload does not consume it yet.
 
 - The production promotion caller pins the unmodified central action at
   `d32f6c5a90d5e83f51b7421b357f574e12548224` (`v0.9.0`). The complete five-file
@@ -292,9 +319,10 @@ snapshot. The pure-Hono profile remains separate and unimplemented. No counts
 are hardcoded as file allowlists. Unsupported layout/ignore changes require a
 reviewed profile, not an ignore rewrite or general gitignore implementation.
 
-Still required before upload acceptance: read-only complete snapshot and exact
-membership re-verification, effective module/config/control semantics, invoked
-Wrangler/lock integrity, digest-bound intent and guarded native version/tag
+Still required before upload acceptance: observed snapshot/negative-control
+results and an uploader that consumes only the reverified snapshot, effective
+module/config/control semantics, invoked Wrangler/lock integrity, digest-bound
+intent and guarded native version/tag
 readback, then attested successful-main custody and actual recovery drills.
 Pinned upload may patch service/environment tags; non-versioned routes, tail,
 jobs, schedules and settings need current identity/preservation evidence rather

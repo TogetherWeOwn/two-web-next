@@ -7,7 +7,10 @@ import { sha256 } from "./worker-bundle-evidence.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
 function exactKeys(value, keys, label) {
-  assert.ok(value && typeof value === "object" && !Array.isArray(value), `${label} object required`);
+  assert.ok(
+    value && typeof value === "object" && !Array.isArray(value),
+    `${label} object required`,
+  );
   assert.deepEqual(Object.keys(value).sort(), [...keys].sort(), `unreviewed ${label} fields`);
 }
 
@@ -69,7 +72,10 @@ export function verifyKitSourceConfig(root, kit) {
   );
   for (const [name, value] of Object.entries(production.vars)) {
     assert.equal(typeof value, "string", "source vars must be strings");
-    assert.ok(!name.startsWith("KIT_ROUTE_") && name !== "QA_AUTH_TOKEN", "unexpected baseline var");
+    assert.ok(
+      !name.startsWith("KIT_ROUTE_") && name !== "QA_AUTH_TOKEN",
+      "unexpected baseline var",
+    );
   }
   const expected = {
     $schema: root.$schema,

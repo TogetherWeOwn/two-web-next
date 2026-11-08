@@ -1574,10 +1574,7 @@ test("each gradual stage also judges the new version's live error rate before ro
   assert.equal((action.match(/id: error-rate-(5|50|100)\n/g) ?? []).length, 3);
   // End-of-line anchor: a trailing `|| true` on the run line would
   // neutralize the gate while an unanchored count stays green.
-  assert.equal(
-    (action.match(/node "\$ACTION_PATH\/error-rate-gate\.mjs"$/gm) ?? []).length,
-    3,
-  );
+  assert.equal((action.match(/node "\$ACTION_PATH\/error-rate-gate\.mjs"$/gm) ?? []).length, 3);
   // The gate reads analytics with the same caller-supplied token/account
   // pair as the wrangler steps; the rehearsal-only fixture override must
   // never be reachable from the production promotion path.
