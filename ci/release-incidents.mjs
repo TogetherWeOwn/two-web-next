@@ -239,7 +239,10 @@ export async function report(
     !/^\d+$/.test(env.GITHUB_RUN_ID ?? "")
   )
     throw new Error("Missing incident reporter context");
-  const link = `https://github.com/TogetherWeOwn/two-web-next/actions/runs/${env.GITHUB_RUN_ID}`;
+  const runId = env.SOURCE_RUN_ID || env.GITHUB_RUN_ID;
+  const attempt = env.SOURCE_RUN_ATTEMPT || env.GITHUB_RUN_ATTEMPT;
+  if (!/^\d+$/.test(runId)) throw new Error("Invalid source run identity");
+  const link = `https://github.com/TogetherWeOwn/two-web-next/actions/runs/${runId}`;
   if (env.INCIDENT_MODE === "rehearsal") {
     if (!SHA.test(env.GITHUB_SHA ?? "") || !["true", "false"].includes(env.FORCE_FAIL)) {
       throw new Error("Invalid incident rehearsal input");
@@ -253,12 +256,9 @@ export async function report(
     });
     return;
   }
-  if (
-    !["staging", "promotion"].includes(env.INCIDENT_MODE) ||
-    !/^\d+$/.test(env.GITHUB_RUN_ATTEMPT ?? "")
-  )
+  if (!["staging", "promotion", "hold"].includes(env.INCIDENT_MODE) || !/^\d+$/.test(attempt ?? ""))
     throw new Error("Invalid incident report mode");
-  const run = await api("GET", `/actions/runs/${env.GITHUB_RUN_ID}`);
+  const run = await api("GET", `/actions/runs/${runId}`);
   if (
     run.head_branch !== "main" ||
     run.head_repository?.full_name !== env.GITHUB_REPOSITORY ||
@@ -267,13 +267,13 @@ export async function report(
   ) {
     throw new Error("Incident source is not the expected main workflow");
   }
-  const jobs = await jobsFor(api, env.GITHUB_RUN_ID, env.GITHUB_RUN_ATTEMPT);
+  const jobs = env.INCIDENT_MODE === "hold" ? [] : await jobsFor(api, runId, attempt);
   const sha =
     env.INCIDENT_MODE === "staging" && run.event === "workflow_run"
       ? /^e2e-staging deploy ([0-9a-f]{40})$/.exec(run.display_title ?? "")?.[1]
       : env.CANDIDATE_SHA || run.head_sha;
   if (!SHA.test(sha ?? "")) throw new Error("Missing tested commit identity");
-  const evidence = `Run: ${link}/attempts/${env.GITHUB_RUN_ATTEMPT}\nSHA: ${sha}`;
+  const evidence = `Run: ${link}/attempts/${attempt}\nSHA: ${sha}`;
   const failures = jobs.filter((job) => RED.has(job.conclusion));
   const details = failures
     .map((job) => {
@@ -331,14 +331,20 @@ export async function report(
   const promoted =
     results["deploy-production"]?.result === "success" &&
     results["post-deploy-watch"]?.result === "success" &&
+    results["post-deploy-watch"]?.outputs?.verdict === "pass" &&
     results["auto-rollback"]?.result !== "success";
-  const reason = failures.length
-    ? details
-    : env.ALREADY_LIVE === "true"
-      ? "Resolved candidate is already live."
-      : promoted
-        ? "Promotion and post-deploy watch passed."
-        : "Promotion held: no eligible soaked staging candidate (gate red, missing qualification or soak pending).";
+  const reason =
+    env.INCIDENT_MODE === "hold"
+      ? `Promotion requested (status ${text(run.status ?? "unknown")}); qualification, approval or deployment concurrency may still be pending. See the source run for the active hold.`
+      : results["post-deploy-watch"]?.outputs?.verdict === "superseded"
+        ? "Promotion watch was superseded; candidate was not judged healthy."
+        : failures.length
+          ? details
+          : env.ALREADY_LIVE === "true"
+            ? "Resolved candidate is already live."
+            : promoted
+              ? "Promotion and post-deploy watch passed."
+              : "Promotion held: no eligible soaked staging candidate (gate red, missing qualification or soak pending).";
   // Every attempt, including the existing scheduled backstop, observes backlog age.
   // Squash-only main is linear; the compare API's first commit is the oldest waiting main commit.
   let observation;
@@ -357,13 +363,14 @@ export async function report(
     observation = null;
   }
   const current = observation && observation.liveSha === observation.mainSha;
-  await syncIncident({
-    api,
-    key: "production-promotion",
-    title: "production promotion failed or held",
-    body: `${evidence}\n\n${current ? "Production is current with main." : reason}\nRequired: successful promotion and watch, candidate already live, or no pending main commits.`,
-    recovered: !failures.length && (promoted || env.ALREADY_LIVE === "true" || current),
-  });
+  if (env.INCIDENT_MODE !== "hold")
+    await syncIncident({
+      api,
+      key: "production-promotion",
+      title: "production promotion failed or held",
+      body: `${evidence}\n\n${current ? "Production is current with main." : reason}\nRequired: successful promotion and watch, candidate already live, or no pending main commits.`,
+      recovered: !failures.length && (promoted || env.ALREADY_LIVE === "true" || current),
+    });
   await syncIncident({
     api,
     key: "production-hold-evidence",

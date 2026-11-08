@@ -326,6 +326,45 @@ test("promotion guard failure records failing step and actual candidate even whe
   assert.match(incident.body, /production-preflight.*required success/);
 });
 
+test("superseded successful watch cannot recover a promotion incident", async () => {
+  const f = fixture({ issues: [keyed(1, "production-promotion")] });
+  await report(
+    env("promotion", {
+      RESULTS_JSON: JSON.stringify({
+        "deploy-production": { result: "success" },
+        "post-deploy-watch": { result: "success", outputs: { verdict: "superseded" } },
+        "auto-rollback": { result: "skipped" },
+      }),
+    }),
+    { api: f.api, readLive: async () => LIVE, nowMs: NOW },
+  );
+  assert.equal(f.state.issues[0].state, "open");
+  assert.ok(f.calls.some((call) => call.path === "/issues/1/comments"));
+  assert.doesNotMatch(
+    f.calls.find((call) => call.path === "/issues/1/comments").body.body,
+    /watch passed/,
+  );
+});
+
+test("requested promotion observes age without waiting for jobs or inventing recovery", async () => {
+  const f = fixture({
+    issues: [keyed(1, "production-promotion")],
+    metadata: { status: "waiting" },
+    intercept(method, path) {
+      if (method === "GET" && path.includes("/jobs?"))
+        throw new Error("approval hold: jobs are not complete");
+    },
+  });
+  await report(env("hold", { GITHUB_RUN_ID: "99", SOURCE_RUN_ID: "42", SOURCE_RUN_ATTEMPT: "1" }), {
+    api: f.api,
+    readLive: async () => LIVE,
+    nowMs: NOW,
+  });
+  assert.equal(f.state.issues[0].state, "open");
+  assert.ok(f.state.issues.some((issue) => issue.title === "production held > 6h"));
+  assert.ok(!f.calls.some((call) => call.path.includes("/jobs?")));
+});
+
 test("rehearsal failure, repeat and recovery exercise the real sink without live reads", async () => {
   const f = fixture();
   const options = {
@@ -362,10 +401,14 @@ test("workflow wiring preserves release dependencies and isolates issue-write pe
   const staging = read("e2e-staging.yml");
   const production = read("deploy-production.yml");
   const rehearsal = read("incident-rehearsal.yml");
-  assert.match(
-    staging,
-    /needs: \[scope, staging-journeys, staging-quality, staging-passive, zap-baseline\]/,
-  );
+  const observer = read("release-incidents.yml");
+  assert.doesNotMatch(staging, /issues: write|release-incidents\.mjs/);
+  assert.match(observer, /workflows: \[e2e-staging, deploy-production\]/);
+  assert.match(observer, /types: \[requested, completed\]/);
+  assert.match(observer, /github\.event\.action == 'requested'/);
+  assert.doesNotMatch(observer, /needs:|environment:|secrets\.|schedule:/);
+  assert.match(observer, /ref: \$\{\{ github\.workflow_sha \}\}/);
+  assert.match(observer, /SOURCE_RUN_ID: \$\{\{ github\.event\.workflow_run\.id \}\}/);
   assert.match(production, /always\(\) && needs.preflight.result != 'skipped'/);
   assert.equal((production.match(/issues: write/g) ?? []).length, 1);
   assert.match(production, /RESULTS_JSON: \$\{\{ toJSON\(needs\) \}\}/);

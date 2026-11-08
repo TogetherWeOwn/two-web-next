@@ -6,6 +6,7 @@ on:
     paths:
       - ci/release-incidents*.mjs
       - .github/workflows/incident-rehearsal.yml
+      - .github/workflows/release-incidents.yml
       - .github/workflows/e2e-staging.yml
       - .github/workflows/deploy-production.yml
   workflow_dispatch:

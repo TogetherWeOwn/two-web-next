@@ -290,31 +290,3 @@ jobs:
     with:
       origin: https://next.togetherweown.com
       candidate_sha: ${{ needs.scope.outputs.sha }}
-
-  incidents:
-    name: staging-incidents
-    needs: [scope, staging-journeys, staging-quality, staging-passive, zap-baseline]
-    if: >-
-      always() && (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' ||
-      github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
-      github.event.workflow_run.head_branch == 'main' &&
-      github.event.workflow_run.head_repository.full_name == github.repository)
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    permissions:
-      contents: read
-      actions: read
-      issues: write
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24
-      - name: Report failed gates or recovery
-        run: node ci/release-incidents.mjs
-        env:
-          INCIDENT_MODE: staging
-          GITHUB_TOKEN: ${{ github.token }}

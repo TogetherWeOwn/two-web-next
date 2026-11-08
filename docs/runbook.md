@@ -70,24 +70,30 @@ are not incident entries; read those sections directly when that work is authori
 
 ## Release-gate incidents
 
-The final reporting jobs in [e2e-staging](../.github/workflows/e2e-staging.yml)
-and [deploy-production](../.github/workflows/deploy-production.yml) use
+The downstream [staging observer](../.github/workflows/release-incidents.yml)
+and final reporting job in [deploy-production](../.github/workflows/deploy-production.yml) use
 [the release incident reporter](../ci/release-incidents.mjs). They create the
 `incident` label when missing and open one stable-key issue per failed gate:
 `staging-quality`, `staging-journeys`, `e2e-staging`, or `production-promotion`.
 Repeated failures comment on the open issue. The next executed green gate
-comments **Recovered** and closes it; skipped jobs are not recovery evidence.
+comments **Recovered** and closes it; skipped jobs and a superseded watch are
+not recovery evidence. A clean promotion needs the watch's explicit `pass` verdict.
 The sink follows the stable-key/deduplication pattern from
 [two-bot-next](https://github.com/TogetherWeOwn/two-bot-next/blob/main/scripts/incident_issue.py).
 
 Promotion reporting includes clean no-candidate skips, not just red runs. Each
-attempt, including the existing daily 14:17 UTC backstop, compares the live
-production `/up` revision with current main. On squash-only linear main, the
+attempt compares the live production `/up` revision with current main.
+The independent observer also checks age on promotion `workflow_run: requested`
+events, including requests from the existing daily 14:17 UTC backstop. It does
+not wait for production Environment approval, deploy-job completion or the
+production concurrency group. No schedule is added or changed. On squash-only linear main, the
 oldest pending commit's committer time is `held since`; age **strictly greater
 than six hours** opens `production held > 6h`. It records both SHAs, age and the
-failed step or candidate-selection reason. This is evaluated at workflow
-completion, not by a new hourly scheduler, so it is not a six-hour notification
-SLA. Partial promotion recalculates age from the oldest still-pending commit.
+failed step or candidate-selection reason (pending source runs link the active
+hold for investigation). Checks occur on request/completion events, not on a
+new hourly scheduler, so this is not a six-hour notification SLA. Staging
+observation runs downstream: an Issues API outage fails reporting visibly but
+cannot turn an otherwise-green staging qualification run red. Partial promotion recalculates age from the oldest still-pending commit.
 Missing identity/ancestry/date evidence raises a separate incident and fails
 reporting; it never clears the existing held-production incident.
 
