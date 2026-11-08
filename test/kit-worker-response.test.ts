@@ -199,7 +199,7 @@ describe("protectKitWorkerResponse missing envelope", () => {
     });
 
     expect(out.headers.get("x-robots-tag")).toBe("noindex, nofollow");
-    expect(out.headers.get("content-type")).toBe("text/html; charset=utf-8");
+    expect(out.headers.get("content-type")).toBe("text/html; charset=UTF-8");
   });
 
   it("returns a null body for HEAD without inventing one or the fallback hash", async () => {
@@ -287,15 +287,16 @@ describe("protectKitWorkerResponse missing envelope", () => {
   });
 
   it("emits configured featured image hosts in img-src", async () => {
-    const hosts = "images.example.test, cdn.example.org";
+    const hosts = "images.example.com, cdn.example.org, rejected.example.test";
     const out = await protectKitWorkerResponse(
       req(`${PROD_URL}/events`),
       new Response("{}", { status: 500, headers: { "content-type": "application/json" } }),
       { APP_URL: PROD_URL, FEATURED_IMAGE_HOSTS: hosts },
     );
     expectEnvelope(out, "/events", { hosts });
-    expect(cspOf(out)).toContain("https://images.example.test");
+    expect(cspOf(out)).toContain("https://images.example.com");
     expect(cspOf(out)).toContain("https://cdn.example.org");
+    expect(cspOf(out)).not.toContain("https://rejected.example.test");
   });
 
   it("uses the framed CSP only for GET /join", async () => {

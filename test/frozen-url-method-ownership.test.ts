@@ -129,7 +129,7 @@ describe("frozen URL method ownership matrix", () => {
   );
 
   it.each(ROUTE_MANIFEST.map((entry) => [entry.path] as const))(
-    "query, trailing slash and data suffix follow the page for %s",
+    "query and data suffix follow the page; trailing slash stays Hono for %s",
     (pattern) => {
       // The pure decision takes a bare path; the query half of this pin goes
       // through decideOwner with a real Request, exactly as the hook calls it,
@@ -138,7 +138,9 @@ describe("frozen URL method ownership matrix", () => {
       const enabled: OwnedRoute[] = [{ method: "GET", path: pattern, enabled: true }];
       const get = (url: string) => new Request(`http://localhost${url}`, { method: "GET" });
       expect(decideOwner(get(`${path}?page=2`), enabled)).toBe("kit");
-      expect(resolveRouteOwner({ method: "GET", path: `${path}/` }, enabled)).toBe("kit");
+      expect(resolveRouteOwner({ method: "GET", path: `${path}/` }, enabled)).toBe("hono");
+      expect(resolveRouteOwner({ method: "HEAD", path: `${path}/` }, enabled)).toBe("hono");
+      expect(decideOwner(get(`${path}/?page=2`), enabled)).toBe("hono");
       expect(resolveRouteOwner({ method: "GET", path: `${path}/__data.json` }, enabled)).toBe(
         "kit",
       );

@@ -16,6 +16,7 @@ import { Context } from "hono";
 import { deleteCookie } from "hono/cookie";
 import type { AccessSink } from "./access-log";
 import {
+  PRODUCTION_APEX,
   isContentLeafPath,
   isKitFallbackDocument,
   robotsTagFor,
@@ -341,7 +342,7 @@ export function productionManifestFor(env: {
   KIT_ROUTE_ARCHIVE?: string;
   KIT_ROUTE_STATIC?: string;
 }): OwnedRoute[] | undefined {
-  const productionUrl = "https://togetherweown.com";
+  const productionUrl = `https://${PRODUCTION_APEX}`;
   let app: URL;
   try {
     app = new URL(env.APP_URL ?? "");

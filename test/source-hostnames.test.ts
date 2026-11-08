@@ -42,9 +42,8 @@ const REVIEWED_PINS: Pin[] = [
   },
   {
     file: "src/headers.ts",
-    line: 'const PRODUCTION_APEX = "togetherweown.com";',
-    reason:
-      "Only the production apex may be indexed; every other host gets noindex (fails closed).",
+    line: 'export const PRODUCTION_APEX = "togetherweown.com";',
+    reason: "Canonical apex for indexing and production route rollout; other hosts fail closed.",
   },
   {
     file: "src/probes/internal-action-drill.ts",
