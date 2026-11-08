@@ -562,6 +562,22 @@ try {
           JSON.stringify(patch),
         );
       }
+      const receiptPath = path.join(dir, "comparison.json");
+      const originalReceipt = await fs.readFile(receiptPath);
+      try {
+        const tampered = structuredClone(checked);
+        tampered.views[0].route = "/different";
+        const receipt = JSON.parse(originalReceipt);
+        receipt.presentation[0].route = "/different";
+        await fs.writeFile(receiptPath, JSON.stringify(receipt));
+        assert.equal(
+          (await reconcileInputs(dir, tampered, hunks)).ownershipValid,
+          false,
+          "Matching presentation receipts must still be independently reconciled",
+        );
+      } finally {
+        await fs.writeFile(receiptPath, originalReceipt);
+      }
       const swapped = structuredClone(checked);
       swapped.blind_mapping =
         swapped.blind_mapping.A === "base" ? { A: "head", B: "base" } : { A: "base", B: "head" };

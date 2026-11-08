@@ -21,6 +21,7 @@ import {
   parity,
   parityPair,
   regionTargets,
+  reconcileInputs,
   regions,
   segmentsCross,
   segmentHitsRect,
@@ -46,6 +47,35 @@ const square = (x0, y0, size) => (x, y) =>
   x >= x0 && x < x0 + size && y >= y0 && y < y0 + size ? [0, 0, 0] : null;
 
 describe("readiness lifecycle", () => {
+  it("rejects changed presentation before expensive capture reconciliation", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "annotated-presentation-"));
+    const manifest = {
+      blind_mapping: { A: "base", B: "head" },
+      views: [{ id: "fixture", route: "/", items: [] }],
+    };
+    try {
+      fs.writeFileSync(
+        path.join(dir, "comparison.json"),
+        JSON.stringify({
+          blind_mapping: manifest.blind_mapping,
+          presentation: [{ id: "fixture", route: "/" }],
+        }),
+      );
+      for (const patch of [
+        { blind_mapping: { A: "head", B: "base" } },
+        { views: [{ id: "fixture", route: "/changed", items: [] }] },
+      ]) {
+        await expect(reconcileInputs(dir, { ...manifest, ...patch }, [])).resolves.toEqual({
+          captureValid: false,
+          ownershipValid: false,
+        });
+      }
+      // Matching receipts must still read the independent capture inputs.
+      await expect(reconcileInputs(dir, manifest, [])).rejects.toThrow(/ENOENT/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("revokes readiness before missing or malformed labels and invalid status can fail", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "annotated-readiness-"));
     const file = path.join(dir, "annotated-diff.manifest.json");

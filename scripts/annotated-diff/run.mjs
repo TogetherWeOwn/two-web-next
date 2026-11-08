@@ -1962,13 +1962,13 @@ export async function render({ dir, author = "unattributed" }) {
     "Supply the actual served label model id; fixture runs are explicitly non-model",
   );
   manifest.labelling_mode = author === "fixture:deterministic" ? "fixture" : "model";
-  assert(same(await runtime(), manifest.capture_spec.runtime), "Render runtime changed");
   const receipt = await read(path.join(dir, "comparison.json"));
   assert(
     same(receipt.blind_mapping, manifest.blind_mapping) &&
       same(receipt.presentation, manifest.views.map(presentation)),
     "Presentation differs from frozen comparison inputs",
   );
+  assert(same(await runtime(), manifest.capture_spec.runtime), "Render runtime changed");
   const labels = await read(path.join(dir, "labels.todo.json"));
   for (const view of manifest.views) {
     validateLabels(
@@ -2192,6 +2192,11 @@ function presentation(view) {
 
 export async function reconcileInputs(dir, manifest, hunks) {
   const receipt = await read(path.join(dir, "comparison.json"));
+  if (
+    !same(receipt.blind_mapping, manifest.blind_mapping) ||
+    !same(receipt.presentation, manifest.views.map(presentation))
+  )
+    return { captureValid: false, ownershipValid: false };
   const captures = await Promise.all(
     ["base", "head"].map((half) => read(path.join(dir, half, "capture.json"))),
   );
@@ -2334,9 +2339,6 @@ export async function check({ dir, root }) {
         (i) => (i.element && i.match_confidence === "high") || i.status !== "explained",
       ),
   );
-  const reconciliation = await reconcileInputs(dir, m, hunks);
-  checks.capture &&= reconciliation.captureValid;
-  checks.coverage &&= reconciliation.ownershipValid;
   checks.claims = m.views.every((v) =>
     v.items.every((i) =>
       i.regions.length > 0 ? i.status !== "unverified_claim" : i.status === "unverified_claim",
@@ -2373,6 +2375,13 @@ export async function check({ dir, root }) {
     checks.wording = false;
   }
   const markdownValid = await verifyMarkdown(dir, m);
+  // Never spend pixel reconciliation on a render that already cannot pass.
+  const reconciliation =
+    Object.values(checks).every(Boolean) && markdownValid
+      ? await reconcileInputs(dir, m, hunks)
+      : { captureValid: false, ownershipValid: false };
+  checks.capture &&= reconciliation.captureValid;
+  checks.coverage &&= reconciliation.ownershipValid;
   const rendering =
     Object.values(checks).every(Boolean) && markdownValid
       ? await verifyRender(dir, m)
