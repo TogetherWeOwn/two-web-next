@@ -122,6 +122,23 @@ describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
 
+- `ci/kit-canonical-capture.mjs` wires the existing byte primitive immediately
+  after the combined adapter-build/local-startup step, before contrast, budgets
+  or production dry-run/replay. Its exclusive diagnostic directory journals
+  started, complete, failed or unavailable capture, the producer outcome,
+  explicit source/workflow SHA and run/attempt, and a receipt size/digest only
+  after complete snapshot readback. A failed producer still fails even if bytes
+  can be retained; skipped/cancelled producers never copy stale output. The
+  existing always-run bundle archive now includes the snapshot/status and all
+  three raw emitted trees, including hidden files and partial outputs. No
+  original startup, budget, parity or production gate is suppressed.
+  Fixtures are authored but not executed. This is **same-source CI diagnostic
+  retention**, not admitted B collection, accepted D or build-process provenance.
+  In particular, it runs after the combined startup diagnostic, not at the
+  instant the build process returns. The separated candidate/collector build
+  interface must still capture at that earlier boundary and independently bind
+  process/tool/image/input identities and final archive identity.
+
 - `ci/kit-canonical-source.mjs` supplies a source-identity boundary for future
   separate Actions checkouts. Both full commit SHAs are explicit; only the fixed
   baseline B commit/tree has a mapping. Floating/default identities, unknown cells,
@@ -154,8 +171,8 @@ describe implementation-time evidence, not a green overall gate.
   creation does not overwrite an earlier capture. Node/zlib identities describe
   only the process doing the measurement.
   Fixtures are wired into Actions but **not run**. This is an unqualified byte
-  primitive, not a working independently pinned collector: there is no candidate
-  dispatch, automatic capture, collection or performance-cell acceptance yet.
+  primitive, not a working independently pinned collector: there is no separated
+  candidate dispatch, admitted collection or performance-cell acceptance yet.
   The existing production rehearsal v1 receipt and uploader are unchanged.
   Remaining integration must independently separate collector and candidate
   sources, bind candidate-owned locks/config/checker/budgets and actual build
