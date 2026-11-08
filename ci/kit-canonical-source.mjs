@@ -140,6 +140,39 @@ export function inspectCanonicalSource(path, expectedSha) {
   };
 }
 
+export function inspectCanonicalPristineSource(path, expectedSha) {
+  const root = directory(path);
+  const inspectExtras = () => {
+    // status excludes ignored inputs: stale CSS, dependency trees and local env
+    // files can otherwise affect a nominally clean candidate before installation.
+    // --directory also reports ignored empty directories and nested repositories.
+    const ignored = git(root, [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--directory",
+      "-z",
+    ]);
+    assert.ok(ignored === "", "candidate has ignored pre-install inputs");
+    const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+    assert.ok(untracked === "", "candidate has untracked pre-install inputs");
+  };
+  // Inventory tracked bytes between two overlay checks. No cleanup or source
+  // repair is allowed here: unsupported candidate execution must stop instead.
+  inspectExtras();
+  const source = inspectCanonicalSource(root, expectedSha);
+  inspectExtras();
+  return {
+    ...source,
+    installBoundary: {
+      evidence: "observed-pristine-pre-install-source-only",
+      ignoredEntries: 0,
+      untrackedEntries: 0,
+    },
+  };
+}
+
 export function bindCanonicalSources(collectorPath, candidatePath, context) {
   const identity = canonicalCellIdentity(context);
   const collectorRoot = directory(collectorPath);
@@ -155,7 +188,7 @@ export function bindCanonicalSources(collectorPath, candidatePath, context) {
     );
   }
   const collector = inspectCanonicalSource(collectorRoot, identity.collectorSha);
-  const candidate = inspectCanonicalSource(candidateRoot, identity.candidateSha);
+  const candidate = inspectCanonicalPristineSource(candidateRoot, identity.candidateSha);
   assert.equal(candidate.tree, identity.candidateTree, "canonical candidate tree mismatch");
   assert.ok(
     collector.files.some((file) => file.path === ".github/workflows/ci.yml"),
@@ -164,7 +197,7 @@ export function bindCanonicalSources(collectorPath, candidatePath, context) {
   return {
     schema: "two.kit-canonical-source.v1",
     evidence: "unqualified-source-identity-only",
-    // Ignored outputs/dependencies and the actual build environment need separate proof.
+    // Post-install generated inputs/dependencies and build environment need separate proof.
     trackedFilesOnly: true,
     cell: identity.cell,
     collector,

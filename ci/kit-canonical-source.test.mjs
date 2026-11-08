@@ -18,6 +18,7 @@ import { after, test } from "node:test";
 import {
   bindCanonicalSources,
   canonicalCellIdentity,
+  inspectCanonicalPristineSource,
   inspectCanonicalSource,
 } from "./kit-canonical-source.mjs";
 
@@ -196,6 +197,87 @@ test("inspectCanonicalSource allows generated ignored output", () => {
   assert.equal(git(root, "status", "--porcelain=v1", "--untracked-files=all"), "");
   const receipt = inspectCanonicalSource(root, sha);
   assert.ok(!receipt.files.some((file) => file.path.startsWith("dist/")));
+});
+
+test("pristine candidate inspection retains pinned bytes and explicit empty input boundary", () => {
+  const { root, sha } = makeRepo("pristine");
+  assert.deepEqual(inspectCanonicalPristineSource(root, sha), {
+    ...inspectCanonicalSource(root, sha),
+    installBoundary: {
+      evidence: "observed-pristine-pre-install-source-only",
+      ignoredEntries: 0,
+      untrackedEntries: 0,
+    },
+  });
+});
+
+for (const path of [
+  "src/leaf-critical-css.ts",
+  "node_modules/injected/index.js",
+  "web/node_modules/injected/index.js",
+  "web/.svelte-kit/output/server/index.js",
+  ".dev.vars",
+  ".env",
+]) {
+  test(`pristine candidate refuses ignored input ${path} without deleting or exposing it`, () => {
+    const { root } = makeRepo("pristine-ignored");
+    write(root, ".gitignore", `${FILES[".gitignore"]}${path}\n`);
+    const sha = commitAll(root, "declare ignored input");
+    write(root, path, "inert private fixture marker\n");
+    assert.equal(git(root, "status", "--porcelain=v1", "--untracked-files=all"), "");
+    assert.throws(
+      () => inspectCanonicalPristineSource(root, sha),
+      (error) => {
+        assert.match(error.message, /candidate has ignored pre-install inputs/);
+        assert.ok(!error.message.includes(path));
+        assert.ok(!error.message.includes("private fixture marker"));
+        return true;
+      },
+    );
+    assert.equal(readFileSync(join(root, path), "utf8"), "inert private fixture marker\n");
+    assert.equal(inspectCanonicalSource(root, sha).commit, sha);
+  });
+}
+
+test("pristine candidate rejects ignored empty directories and nested repositories", () => {
+  for (const nestedRepo of [false, true]) {
+    const { root, sha } = makeRepo("pristine-dir");
+    mkdirSync(join(root, "dist"));
+    if (nestedRepo) git(join(root, "dist"), "init", "-q");
+    assert.throws(
+      () => inspectCanonicalPristineSource(root, sha),
+      /candidate has ignored pre-install inputs/,
+    );
+  }
+});
+
+test("pristine candidate catches local exclude rules and ignored symlink overlays", () => {
+  const { root, sha } = makeRepo("pristine-local-exclude");
+  write(root, ".git/info/exclude", "local-overlay\n");
+  symlinkSync("README.md", join(root, "local-overlay"));
+  assert.equal(git(root, "status", "--porcelain=v1", "--untracked-files=all"), "");
+  assert.throws(
+    () => inspectCanonicalPristineSource(root, sha),
+    /candidate has ignored pre-install inputs/,
+  );
+});
+
+test("pristine candidate still refuses untracked, hidden tracked and wrong-head inputs", () => {
+  const extra = makeRepo("pristine-untracked");
+  write(extra.root, "overlay.txt", "inert\n");
+  assert.throws(
+    () => inspectCanonicalPristineSource(extra.root, extra.sha),
+    /candidate has untracked pre-install inputs/,
+  );
+  const hidden = makeRepo("pristine-hidden");
+  write(hidden.root, "src/index.txt", "hidden drift\n");
+  git(hidden.root, "update-index", "--assume-unchanged", "src/index.txt");
+  assert.throws(
+    () => inspectCanonicalPristineSource(hidden.root, hidden.sha),
+    /tracked source bytes differ from pinned tree/,
+  );
+  const wrong = makeRepo("pristine-head");
+  assert.throws(() => inspectCanonicalPristineSource(wrong.root, OTHER_SHA), /HEAD mismatch/);
 });
 
 test("inspectCanonicalSource rejects bad expected SHAs and wrong HEAD", () => {
@@ -398,6 +480,21 @@ test("bindCanonicalSources rejects equal and nested roots before inspecting sour
   assert.throws(
     () => bindCanonicalSources(join(root, "src"), root, bContext),
     /separate and non-nested/,
+  );
+});
+
+test("bindCanonicalSources enforces the candidate pre-install boundary", () => {
+  const collector = makeRepo("bind-pristine-collector");
+  const candidate = makeRepo("bind-pristine-candidate");
+  write(candidate.root, "dist/stale.js", "inert stale fixture\n");
+  assert.throws(
+    () =>
+      bindCanonicalSources(collector.root, candidate.root, {
+        cell: "B",
+        candidateSha: B_COMMIT,
+        collectorSha: collector.sha,
+      }),
+    /candidate has ignored pre-install inputs/,
   );
 });
 
