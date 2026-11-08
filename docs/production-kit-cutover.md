@@ -9,9 +9,10 @@ build yet.
 [Actions run 42461060087](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42461060087)
 at `7cba241d11a8ffa51932199a54d6df60b4a73a71` failed both test legs at lint.
 Five local files and the byte-identical central `pre-promotion-check.mjs` mirror
-failed formatting. The local layouts are repaired; the immutable producer needs
-a reviewed format-compatible publication before the mirror can change. No lint
-exclusion or locally edited action copy is introduced. Tests, Kit build, classifier,
+failed formatting. The local layouts are repaired; the reviewed format-compatible
+producer is now adopted at immutable v0.9.1 below. All five published files were
+independently verified; only the verifier's formatting differs. No lint exclusion
+or locally edited action fork is introduced. Tests, Kit build, classifier,
 source-config and parity steps were not reached on that head; missing artifacts
 are consequences, not runtime verdicts. The new frozen-input helper and fixtures
 below have not run. Syntax, whitespace and workflow YAML parsing passed locally;
@@ -50,6 +51,30 @@ describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
 
+- `ci/kit-wrangler-tool.mjs` compares the root installed Wrangler package's exact
+  published file membership, sizes and SHA-256 digests against the checked-in
+  `ci/kit-wrangler-package-pin.json`. The pin was computed without extraction or
+  execution from the 4.156.1 registry archive after verifying its SHA-512 SRI
+  against both lockfiles. The 30 published regular files include the actual
+  `bin/wrangler.js` launcher and `wrangler-dist/cli.js` runtime. Both locks must
+  retain the version, resolved URL, integrity and entry mapping; installed package
+  identity/entry mapping, unsafe paths, symlinks (including ancestors), unexpected
+  directories and missing/extra/changed files fail. Actions invokes that checked
+  launcher directly through Node for the production Kit build and same-byte
+  rehearsal, avoiding npx resolution/acquisition, and compares tool/lock receipts
+  before build, before replay and after replay. Inherited NODE_OPTIONS/NODE_PATH
+  must be empty in both steps. Fixtures and real-package checks are wired but
+  **unrun**; the installed package is absent from this source worktree.
+  npm's root nested `node_modules` subtree is explicitly excluded: it contains
+  separate transitive packages, not published Wrangler files. This is NOT their
+  integrity proof, Node runtime attestation, complete effective-environment
+  evidence, protection against a concurrent install, or proof of a production
+  upload. The trusted job must exclude concurrent package writers. No dependency
+  was installed/updated; production upload is unchanged. Future upload-intent
+  integration must bind these receipts and the remaining dependency/runtime/env
+  evidence rather than treating a version string or this package check as the
+  whole toolchain qualification.
+
 - `ci/kit-frozen-inputs.mjs` creates a new, exclusive local snapshot of both
   dry-run output trees, the complete adapter tree and six fixed source inputs
   (both source configs, wrapper, headers and lockfiles). It reuses the finite
@@ -67,7 +92,7 @@ describe implementation-time evidence, not a green overall gate.
   Production upload does not consume it yet.
 
 - The production promotion caller pins the unmodified central action at
-  `d32f6c5a90d5e83f51b7421b357f574e12548224` (`v0.9.0`). The complete five-file
+  `97cadcb231e55fad95cbc6468be078ecef571bc2` (`v0.9.1`). The complete five-file
   hermetic mirror includes its README and pre-promotion runner, with raw hashes
   and the normalized manifest hash appended to the existing SHA mapping. The
   delivered analytics helper includes the independently reviewed observation-budget

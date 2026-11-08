@@ -1,0 +1,159 @@
+{
+  "schema": "two.wrangler-package-pin.v1",
+  "name": "wrangler",
+  "version": "4.156.1",
+  "resolved": "https://registry.npmjs.org/wrangler/-/wrangler-4.156.1.tgz",
+  "integrity": "sha512-aZngeNRosSVly6wgxpaJAtFPtEoyM3hD8mLMMcHNXTnofMq4ZN+RMXOdHETyttNP+//+mfiD1hb5E8YFtiMMRQ==",
+  "files": [
+    {
+      "path": "README.md",
+      "bytes": 2996,
+      "sha256": "34bd4f9f21c0e3c9dabd4bcc9b0e4c63a9c9fdfcea1aeaba552523cdcc71cc1d"
+    },
+    {
+      "path": "bin/cf-wrangler.js",
+      "bytes": 3216,
+      "sha256": "88a2228a12ec8fff1e5a29ac7421ab38e1ad04a570b5ebfeb1d28f77796dc895"
+    },
+    {
+      "path": "bin/wrangler.js",
+      "bytes": 3088,
+      "sha256": "780661a508810f3b65786895b1ca9aacbc4f55d329ae6b8c1e49ec8433569f77"
+    },
+    {
+      "path": "config-schema.json",
+      "bytes": 374790,
+      "sha256": "b8838c61180c78251ed7400efa21d5785b1ab99014356d022a38e9b66cafb483"
+    },
+    {
+      "path": "kv-asset-handler.js",
+      "bytes": 46,
+      "sha256": "6f1fde6806a68eaa919a699f2af7e95f93fd0bdcb8c6d717042cb6c01bf3e11f"
+    },
+    {
+      "path": "package.json",
+      "bytes": 6935,
+      "sha256": "78a893577d27ef6a670d04396231cb35bc05d90aa8e685865995814ba03c7feb"
+    },
+    {
+      "path": "templates/checked-fetch.js",
+      "bytes": 822,
+      "sha256": "903607e07decdc5226344846be2599813ff9fb135d295d1416053210536653b6"
+    },
+    {
+      "path": "templates/middleware/common.ts",
+      "bytes": 1837,
+      "sha256": "145d9d09411948a86c55689bd2ac729297259a2dd3491ee91d963c04b3e3bd87"
+    },
+    {
+      "path": "templates/middleware/loader-modules.ts",
+      "bytes": 3815,
+      "sha256": "d6f7d092636eff0bb86f20612d136aab02b8f46a9005c5a74fb4b8e5f7e41498"
+    },
+    {
+      "path": "templates/middleware/loader-sw.ts",
+      "bytes": 7400,
+      "sha256": "586ccc567e44062274f0fbb38874c86986a5c548e42e4c317f67a9122a75381b"
+    },
+    {
+      "path": "templates/middleware/middleware-ensure-req-body-drained.ts",
+      "bytes": 463,
+      "sha256": "161d2d0ec418a0fd243aca68d7981973bc2debface0785f466db609e67900e83"
+    },
+    {
+      "path": "templates/middleware/middleware-miniflare3-json-error.ts",
+      "bytes": 1277,
+      "sha256": "f391b766d919e9c5f9374e972d29c18ee302f4f9c3e22e7fb0a28fc3fc24abc1"
+    },
+    {
+      "path": "templates/middleware/middleware-patch-console-prefix.ts",
+      "bytes": 561,
+      "sha256": "f213c8187beac030c1da33175a767e91f0655703f2ca481392f143d449499297"
+    },
+    {
+      "path": "templates/middleware/middleware-pretty-error.ts",
+      "bytes": 1011,
+      "sha256": "6c15d320a0c150eac09db4c9e75725fd24a33c78695c758d4eb09f64452b21b8"
+    },
+    {
+      "path": "templates/middleware/middleware-scheduled.ts",
+      "bytes": 1040,
+      "sha256": "3bf519476a8c4b69491218fe1aa42c4f769e9ddc12ac8b8b5e30ca584a6ff446"
+    },
+    {
+      "path": "templates/modules-watch-stub.js",
+      "bytes": 254,
+      "sha256": "085f6df95ebf78e7a3fa21f105ac80e80611aa30756bcd15b2af45e2b315a366"
+    },
+    {
+      "path": "templates/no-op-worker.js",
+      "bytes": 147,
+      "sha256": "7c9ff6cccf70379acdda4ac4e631542572b7bb8dac6a59ea1f0b415cd36fc6bc"
+    },
+    {
+      "path": "templates/pages-dev-pipeline.ts",
+      "bytes": 843,
+      "sha256": "90bde248506965565eab15836f4bd4bd5436c35f217f6f77fe6422a81ce9c5e5"
+    },
+    {
+      "path": "templates/pages-dev-util.ts",
+      "bytes": 1554,
+      "sha256": "000e5d1634879510274a1056ee148c61a063bf5e18b795838052a80a5bc11975"
+    },
+    {
+      "path": "templates/pages-shim.ts",
+      "bytes": 354,
+      "sha256": "0c525b0ff043431a3ee59fd55dccf4ff56dac44434c487ed36f277bbe68a1970"
+    },
+    {
+      "path": "templates/pages-template-plugin.ts",
+      "bytes": 5544,
+      "sha256": "a3a44a2b3571e0b8b41f3d2e302dd15692415d5195cb0241c4fe651f750bd011"
+    },
+    {
+      "path": "templates/pages-template-worker.ts",
+      "bytes": 6655,
+      "sha256": "0a86a1559a1863d733042f1dc5952a5dcd110047f47ddb5c60c8b4ff4cdc24f2"
+    },
+    {
+      "path": "wrangler-dist/InspectorProxyWorker.js",
+      "bytes": 17110,
+      "sha256": "1bc761dd2b501e17225a5b7f8b72d4dec5d54a393fea4949d7466e0259355a44"
+    },
+    {
+      "path": "wrangler-dist/ProxyWorker.js",
+      "bytes": 11048,
+      "sha256": "7a0a693c443f641f585255eef296130ce9637cfbf151f3b7e824c60b56e6340b"
+    },
+    {
+      "path": "wrangler-dist/cli.d.ts",
+      "bytes": 153786,
+      "sha256": "bc2b462fc28c5a28c0388b2681b3d3a06710a4614757e542ac64afa51f23547f"
+    },
+    {
+      "path": "wrangler-dist/cli.js",
+      "bytes": 15109269,
+      "sha256": "47fe4b6ddacd2a5861bd5f6957217718a48b106f208b2dc21546bbee51a0cb8b"
+    },
+    {
+      "path": "wrangler-dist/experimental-config.d.mts",
+      "bytes": 3739,
+      "sha256": "95ec713d4ef05a5f505944ead002b442eeaa469281bb56ecedf79d4aaa985bda"
+    },
+    {
+      "path": "wrangler-dist/experimental-config.d.mts.map",
+      "bytes": 87244,
+      "sha256": "c7e6ceec9e2744e808a2802fee657f309ab13a92a532c27a84a29b0da75a23eb"
+    },
+    {
+      "path": "wrangler-dist/experimental-config.mjs",
+      "bytes": 210,
+      "sha256": "923b9bd0297172d2b7fc34145b442890ba7b7ccb6be6137798e48aa9d8e8b05e"
+    },
+    {
+      "path": "wrangler-dist/experimental-config.mjs.map",
+      "bytes": 842,
+      "sha256": "44d2d23cbe5ad1b130fd227a745c67282d177ebf2b6091544862ed559ae1dc3c"
+    }
+  ]
+}

@@ -83,7 +83,7 @@ describe("production Kit Worker config (web/wrangler.production.jsonc)", () => {
       '--metafile "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/bundle-meta.json"',
     );
     expect(steps).toContain(
-      'npx wrangler versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js"',
+      'node node_modules/wrangler/bin/wrangler.js versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js"',
     );
     expect(steps).toContain(
       'cmp "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js" "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay/worker.js"',

@@ -35,6 +35,15 @@ const gradualPromoteHashesByRef: Record<
     readme: "0ba2f259c89acea835af0cf221758dca9181f7f67a3addec1631eb95f85eeed3",
     precheck: "400f6ed0d1ac01735188f520bda52e0aef5741bda773b2a966d42bf99e977526",
   },
+  // v0.9.1: producer-only formatting; older mappings remain immutable.
+  "97cadcb231e55fad95cbc6468be078ecef571bc2": {
+    helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
+    manifest: "e2f34a41d902be69371342c1fbc37f6cabf07ddc697fe60c3ebf4278cd2ae92a",
+    gate: "629091bf134d50211759bca63b7b6fe7c812187c2858c9b369be237514d7b7bf",
+    action: "8c4a5794658bf5330d425ad82edb38ae0b3e35b993a336bcc1260dbd4e294bfc",
+    readme: "0ba2f259c89acea835af0cf221758dca9181f7f67a3addec1631eb95f85eeed3",
+    precheck: "9d61c85f02c461fdd002a6c09ea2a0da6fe220f8ca6f27d7357b7b1413074bce",
+  },
 };
 
 function rawSha256(path: string) {
@@ -621,7 +630,7 @@ describe("production deploy smoke (offline)", () => {
   it("probes the apex origin with the indexable posture, never staging", () => {
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
     expect(workflow).toContain(
-      "uses: TogetherWeOwn/.github/actions/gradual-promote@d32f6c5a90d5e83f51b7421b357f574e12548224 # v0.9.0",
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@97cadcb231e55fad95cbc6468be078ecef571bc2 # v0.9.1",
     );
     const centralActionRef = workflow.match(
       /uses: TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/,

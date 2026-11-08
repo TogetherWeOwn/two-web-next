@@ -807,8 +807,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run"
-          npx wrangler deploy --config web/wrangler.production.jsonc --dry-run --outdir "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run" --metafile "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/bundle-meta.json"
+          test -z "${NODE_OPTIONS:-}"
+          test -z "${NODE_PATH:-}"
+          node --test ci/kit-wrangler-tool.test.mjs
+          mkdir -p artifacts/kit-upload-rehearsal "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run"
+          node ci/kit-wrangler-tool.mjs artifacts/kit-upload-rehearsal/tool-before-build.json
+          node node_modules/wrangler/bin/wrangler.js deploy --config web/wrangler.production.jsonc --dry-run --outdir "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run" --metafile "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/bundle-meta.json"
       - name: Production Kit complete asset classification (build inputs only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |
@@ -822,7 +826,13 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js" --outdir "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay"
+          test -z "${NODE_OPTIONS:-}"
+          test -z "${NODE_PATH:-}"
+          node ci/kit-wrangler-tool.mjs artifacts/kit-upload-rehearsal/tool-before-replay.json
+          cmp artifacts/kit-upload-rehearsal/tool-before-build.json artifacts/kit-upload-rehearsal/tool-before-replay.json
+          node node_modules/wrangler/bin/wrangler.js versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js" --outdir "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay"
+          node ci/kit-wrangler-tool.mjs artifacts/kit-upload-rehearsal/tool-after-replay.json
+          cmp artifacts/kit-upload-rehearsal/tool-before-build.json artifacts/kit-upload-rehearsal/tool-after-replay.json
           cmp "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js" "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay/worker.js"
           mkdir -p artifacts/kit-upload-rehearsal
           node ci/kit-upload-rehearsal.mjs "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run" "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay" artifacts/kit-upload-rehearsal/receipt.json

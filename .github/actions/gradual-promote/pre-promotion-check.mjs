@@ -4,14 +4,26 @@ import { spawn } from "node:child_process";
 import { lstatSync, realpathSync } from "node:fs";
 import { isAbsolute, join } from "node:path";
 import { fileURLToPath } from "node:url";
-import { assertErrorRateIdentifiers, assertRollbackVersionId, assertVersionTag, GRADUAL_STEPS } from "./gradual-promote.mjs";
+import {
+  assertErrorRateIdentifiers,
+  assertRollbackVersionId,
+  assertVersionTag,
+  GRADUAL_STEPS,
+} from "./gradual-promote.mjs";
 
 async function trackedEntry(workspace, path, env) {
   return new Promise((resolve, reject) => {
     const deadline = performance.now() + 5000;
-    const child = spawn("git", ["-C", workspace, "ls-files", "--stage", "-z", "--error-unmatch", "--", path], {
-      env, shell: false, detached: true, stdio: ["ignore", "pipe", "ignore"],
-    });
+    const child = spawn(
+      "git",
+      ["-C", workspace, "ls-files", "--stage", "-z", "--error-unmatch", "--", path],
+      {
+        env,
+        shell: false,
+        detached: true,
+        stdio: ["ignore", "pipe", "ignore"],
+      },
+    );
     let settled = false;
     let output = "";
     let size = 0;
@@ -23,7 +35,11 @@ async function trackedEntry(workspace, path, env) {
       process.removeListener("SIGINT", cancel);
       // Hard-kill the entire metadata group, including descendants retaining pipes.
       if (child.pid) {
-        try { process.kill(-child.pid, "SIGKILL"); } catch { /* group already exited */ }
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          /* group already exited */
+        }
       }
       child.stdout.destroy();
       if (success) resolve(output);
@@ -40,7 +56,9 @@ async function trackedEntry(workspace, path, env) {
       else output += chunk;
     });
     child.once("error", cancel);
-    child.once("close", (code, signal) => finish(code === 0 && !signal && performance.now() < deadline));
+    child.once("close", (code, signal) =>
+      finish(code === 0 && !signal && performance.now() < deadline),
+    );
   });
 }
 
@@ -53,11 +71,15 @@ export async function verifierConfig(env, platform = process.platform) {
   }
   const path = env.PRE_PROMOTION_VERIFIER ?? "";
   if (!path && required === "false") return null;
-  if (platform === "win32") throw new Error("configured verification requires POSIX process groups");
+  if (platform === "win32")
+    throw new Error("configured verification requires POSIX process groups");
   // No absolute paths, traversal, empty components, option/pathspec syntax,
   // shell metacharacters or non-module executables. Check every component.
   const parts = path.split("/");
-  if (!path.endsWith(".mjs") || parts.some((p) => !/^[A-Za-z0-9_.-]+$/.test(p) || p === "." || p === ".." || p === ".git")) {
+  if (
+    !path.endsWith(".mjs") ||
+    parts.some((p) => !/^[A-Za-z0-9_.-]+$/.test(p) || p === "." || p === ".." || p === ".git")
+  ) {
     throw new Error("verifier must be a repository-relative checked-in .mjs module");
   }
   if (!env.GITHUB_WORKSPACE || !isAbsolute(env.GITHUB_WORKSPACE)) {
@@ -71,13 +93,18 @@ export async function verifierConfig(env, platform = process.platform) {
     for (const [index, part] of parts.entries()) {
       file = join(file, part);
       const stat = lstatSync(file);
-      if (stat.isSymbolicLink() || (index === parts.length - 1 ? !stat.isFile() : !stat.isDirectory())) {
+      if (
+        stat.isSymbolicLink() ||
+        (index === parts.length - 1 ? !stat.isFile() : !stat.isDirectory())
+      ) {
         throw new Error("unsafe file type");
       }
     }
     // Git's index proves the entry is checked in. Ignore ambient GIT_* overrides
     // so a caller's unrelated worktree settings cannot select another index.
-    const gitEnv = Object.fromEntries(Object.entries(env).filter(([key]) => !key.startsWith("GIT_")));
+    const gitEnv = Object.fromEntries(
+      Object.entries(env).filter(([key]) => !key.startsWith("GIT_")),
+    );
     const indexed = (await trackedEntry(workspace, path, gitEnv)).split("\0");
     // A pathspec also matches descendants; exit zero alone is insufficient.
     const entry = indexed[0]?.match(/^(100644|100755) [0-9a-f]+ 0\t(.+)$/);
@@ -87,7 +114,11 @@ export async function verifierConfig(env, platform = process.platform) {
   } catch {
     throw new Error("verifier is unavailable, unsafe or not checked in");
   }
-  assertErrorRateIdentifiers({ accountId: env.CLOUDFLARE_ACCOUNT_ID, scriptName: env.WORKER_NAME, versionId: env.NEW_VERSION });
+  assertErrorRateIdentifiers({
+    accountId: env.CLOUDFLARE_ACCOUNT_ID,
+    scriptName: env.WORKER_NAME,
+    versionId: env.NEW_VERSION,
+  });
   assertRollbackVersionId(env.PREV_VERSION);
   assertVersionTag(env.VERSION_TAG);
   const percentage = Number(env.PROMOTION_PERCENTAGE);
@@ -95,15 +126,33 @@ export async function verifierConfig(env, platform = process.platform) {
     throw new Error("invalid verifier promotion stage");
   }
   return {
-    workspace, file, timeoutMs: Number(timeout) * 1000,
-    args: ["--candidate-version-id", env.NEW_VERSION, "--candidate-tag", env.VERSION_TAG,
-      "--worker-name", env.WORKER_NAME, "--account-id", env.CLOUDFLARE_ACCOUNT_ID,
-      "--environment", "production", "--percentage", String(percentage),
-      "--previous-version-id", env.PREV_VERSION],
+    workspace,
+    file,
+    timeoutMs: Number(timeout) * 1000,
+    args: [
+      "--candidate-version-id",
+      env.NEW_VERSION,
+      "--candidate-tag",
+      env.VERSION_TAG,
+      "--worker-name",
+      env.WORKER_NAME,
+      "--account-id",
+      env.CLOUDFLARE_ACCOUNT_ID,
+      "--environment",
+      "production",
+      "--percentage",
+      String(percentage),
+      "--previous-version-id",
+      env.PREV_VERSION,
+    ],
   };
 }
 
-export async function runPrePromotionCheck(env, spawnImpl = spawn, monotonicNow = () => performance.now()) {
+export async function runPrePromotionCheck(
+  env,
+  spawnImpl = spawn,
+  monotonicNow = () => performance.now(),
+) {
   const config = await verifierConfig(env);
   if (!config) return;
   await new Promise((resolve, reject) => {
@@ -111,7 +160,11 @@ export async function runPrePromotionCheck(env, spawnImpl = spawn, monotonicNow 
     let child;
     try {
       child = spawnImpl(process.execPath, ["--", config.file, ...config.args], {
-        cwd: config.workspace, env, shell: false, detached: true, stdio: "ignore",
+        cwd: config.workspace,
+        env,
+        shell: false,
+        detached: true,
+        stdio: "ignore",
       });
     } catch {
       reject(new Error("pre-promotion verifier could not start"));
@@ -120,10 +173,17 @@ export async function runPrePromotionCheck(env, spawnImpl = spawn, monotonicNow 
     let failureReason;
     const kill = () => {
       if (child.pid) {
-        try { process.kill(-child.pid, "SIGKILL"); } catch { /* group already exited */ }
+        try {
+          process.kill(-child.pid, "SIGKILL");
+        } catch {
+          /* group already exited */
+        }
       }
     };
-    const abort = (reason) => { failureReason ??= reason; kill(); };
+    const abort = (reason) => {
+      failureReason ??= reason;
+      kill();
+    };
     const cancel = () => abort("was cancelled");
     const timer = setTimeout(() => abort("timed out"), Math.max(0, deadline - monotonicNow()));
     process.once("SIGTERM", cancel);
@@ -141,7 +201,8 @@ export async function runPrePromotionCheck(env, spawnImpl = spawn, monotonicNow 
     child.once("close", (code, signal) => {
       cleanup();
       if (!failureReason && monotonicNow() >= deadline) failureReason = "timed out";
-      if (failureReason || signal || code !== 0) reject(new Error(`pre-promotion verifier ${failureReason ?? "failed"}`));
+      if (failureReason || signal || code !== 0)
+        reject(new Error(`pre-promotion verifier ${failureReason ?? "failed"}`));
       else resolve();
     });
   });
