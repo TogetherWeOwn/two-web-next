@@ -76,6 +76,8 @@ export function createInventory(root, directory, context) {
     "inventory.json",
     "upload.json",
     "deployed.json",
+    // Non-runtime sidecar; pure-hono-rollback.mjs verifies it separately.
+    "pure-hono-rollback.json",
   ]);
   for (const name of readdirSync(build))
     assert.ok(allowed.has(name), `untracked bundle file: ${name}`);

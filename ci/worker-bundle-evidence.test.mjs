@@ -256,6 +256,16 @@ describe("createInventory and verifyInventory", () => {
     assert.equal(verified.inventorySha256, sha256(raw));
   });
 
+  test("reverifies the inventory after capture adds its non-runtime rollback sidecar", () => {
+    const root = fixture();
+    const inventory = saved(root);
+    put(root, `${DIR}/pure-hono-rollback.json`, JSON.stringify({ unverified: "sidecar" }));
+    assert.deepEqual(verifyInventory(root, DIR, context).inventory, inventory);
+    assert.ok(!inventory.outputs.some((output) => output.path === "pure-hono-rollback.json"));
+    put(root, `${DIR}/extra-runtime.js`, "export default {};\n");
+    assert.throws(() => verifyInventory(root, DIR, context), /untracked bundle file/);
+  });
+
   test("records scoped and pnpm package roots with manifest identity and version", () => {
     const inv = createInventory(fixture(), DIR, context);
     const byRoot = Object.fromEntries(inv.packages.map((p) => [p.manifest.path, p]));

@@ -5,6 +5,7 @@ import { REQUIRED_PRODUCTION_SECRETS } from "./check-production-secrets.mjs";
 import {
   createPureHonoRollback,
   readPureHonoVersion,
+  verifyPureHonoProvenance,
   verifyPureHonoRollback,
 } from "./pure-hono-rollback.mjs";
 import { SCHEMA, deploymentReceipt, sha256, uploadReceipt } from "./worker-bundle-evidence.mjs";
@@ -245,6 +246,190 @@ describe("verifyPureHonoRollback", () => {
   test("rejects when the native version no longer matches", () => {
     assert.throws(() =>
       verifyPureHonoRollback(pointer, verified, deployed, makeNative({ id: OTHER_VERSION })),
+    );
+  });
+});
+
+describe("verifyPureHonoProvenance", () => {
+  const REPO = "TogetherWeOwn/two-web-next";
+  const WORKFLOW = ".github/workflows/deploy-production.yml";
+  const RUN_URL = "https://github.com/TogetherWeOwn/two-web-next/actions/runs/123";
+  const ARTIFACT_NAME = `worker-bundle-production-${SHA}-123-1`;
+  const pointer = create();
+
+  const makeRun = (overrides = {}) => ({
+    id: 123,
+    run_attempt: 1,
+    head_sha: SHA,
+    repository: { id: 42, full_name: REPO },
+    head_repository: { id: 42, full_name: REPO },
+    path: WORKFLOW,
+    head_branch: "main",
+    status: "completed",
+    conclusion: "success",
+    event: "workflow_dispatch",
+    html_url: RUN_URL,
+    ...overrides,
+  });
+  const makeArtifact = (overrides = {}) => ({
+    id: 456,
+    name: ARTIFACT_NAME,
+    expired: false,
+    size_in_bytes: 1024,
+    workflow_run: {
+      id: 123,
+      head_sha: SHA,
+      head_branch: "main",
+      repository_id: 42,
+      head_repository_id: 42,
+    },
+    ...overrides,
+  });
+  const expected = {
+    repository: REPO,
+    workflow: WORKFLOW,
+    runId: "123",
+    runAttempt: "1",
+    sourceSha: SHA,
+    workflowSha: SHA,
+    artifactId: "456",
+    artifactName: ARTIFACT_NAME,
+    runUrl: RUN_URL,
+  };
+
+  for (const event of ["workflow_dispatch", "workflow_run", "schedule"]) {
+    test(`accepts a ${event} run and returns sanitized provenance`, () => {
+      assert.deepEqual(
+        verifyPureHonoProvenance(pointer, makeRun({ event }), makeArtifact()),
+        expected,
+      );
+    });
+  }
+
+  test("accepts a workflow tip sha that differs from the candidate pointer sha", () => {
+    const tip = "d".repeat(40);
+    const artifact = makeArtifact();
+    artifact.workflow_run = { ...artifact.workflow_run, head_sha: tip };
+    assert.deepEqual(verifyPureHonoProvenance(pointer, makeRun({ head_sha: tip }), artifact), {
+      ...expected,
+      sourceSha: SHA,
+      workflowSha: tip,
+    });
+  });
+
+  const runCases = {
+    "wrong run id": { id: 124 },
+    "string run id": { id: "123" },
+    "missing run id": { id: undefined },
+    "null run id": { id: null },
+    "fractional run id": { id: 123.5 },
+    "stale attempt": { run_attempt: 2 },
+    "string attempt": { run_attempt: "1" },
+    "missing attempt": { run_attempt: undefined },
+    "head sha differing from artifact workflow run sha": { head_sha: "d".repeat(40) },
+    "short head sha": { head_sha: "abc123" },
+    "uppercase head sha": { head_sha: "A".repeat(40) },
+    "non-hex head sha": { head_sha: "g".repeat(40) },
+    "null head sha": { head_sha: null },
+    "missing head sha": { head_sha: undefined },
+    "fork repository name": { repository: { id: 42, full_name: "attacker/two-web-next" } },
+    "fork head repository name": {
+      head_repository: { id: 42, full_name: "attacker/two-web-next" },
+    },
+    "different repository id": { repository: { id: 43, full_name: REPO } },
+    "different head repository id": { head_repository: { id: 43, full_name: REPO } },
+    "missing repository id": { repository: { full_name: REPO } },
+    "missing head repository id": { head_repository: { full_name: REPO } },
+    "string repository id": { repository: { id: "42", full_name: REPO } },
+    "null repository": { repository: null },
+    "null head repository": { head_repository: null },
+    "missing head repository": { head_repository: undefined },
+    "wrong workflow path": { path: ".github/workflows/deploy-staging.yml" },
+    "missing workflow path": { path: undefined },
+    "wrong branch": { head_branch: "feature" },
+    "null branch": { head_branch: null },
+    "pending status": { status: "in_progress" },
+    "queued status": { status: "queued" },
+    "failed conclusion": { conclusion: "failure" },
+    "cancelled conclusion": { conclusion: "cancelled" },
+    "null conclusion": { conclusion: null },
+    "pull request event": { event: "pull_request" },
+    "pull request target event": { event: "pull_request_target" },
+    "push event": { event: "push" },
+    "missing event": { event: undefined },
+    "wrong run url": {
+      html_url: "https://github.com/TogetherWeOwn/two-web-next/actions/runs/124",
+    },
+    "foreign run url": { html_url: "https://example.com/TogetherWeOwn/two-web-next/actions/runs/123" },
+    "missing run url": { html_url: undefined },
+  };
+  for (const [name, change] of Object.entries(runCases)) {
+    test(`rejects a run with ${name}`, () => {
+      assert.throws(() => verifyPureHonoProvenance(pointer, makeRun(change), makeArtifact()));
+    });
+  }
+
+  const artifactCases = {
+    "zero id": { id: 0 },
+    "negative id": { id: -1 },
+    "fractional id": { id: 1.5 },
+    "unsafe integer id": { id: Number.MAX_SAFE_INTEGER + 1 },
+    "string id": { id: "456" },
+    "missing id": { id: undefined },
+    "null id": { id: null },
+    "stale sha in name": { name: `worker-bundle-production-${"d".repeat(40)}-123-1` },
+    "stale run in name": { name: `worker-bundle-production-${SHA}-122-1` },
+    "stale attempt in name": { name: `worker-bundle-production-${SHA}-123-2` },
+    "wrong name prefix": { name: `worker-bundle-staging-${SHA}-123-1` },
+    "missing name": { name: undefined },
+    "expired artifact": { expired: true },
+    "string expired": { expired: "false" },
+    "missing expired": { expired: undefined },
+    "null expired": { expired: null },
+    "zero size": { size_in_bytes: 0 },
+    "negative size": { size_in_bytes: -1 },
+    "fractional size": { size_in_bytes: 1.5 },
+    "unsafe size": { size_in_bytes: Number.MAX_SAFE_INTEGER + 1 },
+    "string size": { size_in_bytes: "1024" },
+    "missing size": { size_in_bytes: undefined },
+    "null workflow run": { workflow_run: null },
+    "missing workflow run": { workflow_run: undefined },
+    "wrong workflow run id": {
+      workflow_run: { ...makeArtifact().workflow_run, id: 124 },
+    },
+    "stale workflow run sha": {
+      workflow_run: { ...makeArtifact().workflow_run, head_sha: "d".repeat(40) },
+    },
+    "wrong workflow run branch": {
+      workflow_run: { ...makeArtifact().workflow_run, head_branch: "feature" },
+    },
+    "wrong workflow run repository id": {
+      workflow_run: { ...makeArtifact().workflow_run, repository_id: 43 },
+    },
+    "wrong workflow run head repository id": {
+      workflow_run: { ...makeArtifact().workflow_run, head_repository_id: 43 },
+    },
+    "missing workflow run repository id": {
+      workflow_run: { ...makeArtifact().workflow_run, repository_id: undefined },
+    },
+    "null workflow run head repository id": {
+      workflow_run: { ...makeArtifact().workflow_run, head_repository_id: null },
+    },
+  };
+  for (const [name, change] of Object.entries(artifactCases)) {
+    test(`rejects an artifact with ${name}`, () => {
+      assert.throws(() => verifyPureHonoProvenance(pointer, makeRun(), makeArtifact(change)));
+    });
+  }
+
+  test("rejects absent run and artifact metadata", () => {
+    assert.throws(() => verifyPureHonoProvenance(pointer, null, makeArtifact()));
+    assert.throws(() => verifyPureHonoProvenance(pointer, makeRun(), null));
+  });
+
+  test("rejects a pointer for a different run", () => {
+    assert.throws(() =>
+      verifyPureHonoProvenance({ ...pointer, runId: "122" }, makeRun(), makeArtifact()),
     );
   });
 });

@@ -78,6 +78,64 @@ export function verifyPureHonoRollback(pointer, verified, deployed, nativeVersio
   return pointer;
 }
 
+// Callers must obtain both metadata objects from authenticated GitHub API reads,
+// not from the downloaded archive. This does not verify the archive's bytes or
+// replace verifyPureHonoRollback; successful metadata alone cannot authorize Kit.
+export function verifyPureHonoProvenance(pointer, run, artifact) {
+  const repository = "TogetherWeOwn/two-web-next";
+  const workflow = ".github/workflows/deploy-production.yml";
+  assert.match(pointer?.sourceSha, /^[0-9a-f]{40}$/, "invalid rollback source SHA");
+  assert.match(pointer?.runId, /^[1-9][0-9]*$/, "invalid rollback run ID");
+  assert.match(pointer?.runAttempt, /^[1-9][0-9]*$/, "invalid rollback run attempt");
+  for (const value of [
+    run?.id,
+    run?.run_attempt,
+    run?.repository?.id,
+    artifact?.id,
+    artifact?.size_in_bytes,
+  ])
+    assert.ok(Number.isSafeInteger(value) && value > 0, "invalid GitHub metadata ID or size");
+  assert.equal(String(run.id), pointer.runId, "wrong producer run");
+  assert.equal(String(run.run_attempt), pointer.runAttempt, "wrong producer attempt");
+  assert.equal(run.repository.full_name, repository, "wrong producer repository");
+  assert.equal(run.head_repository?.full_name, repository, "fork producer");
+  assert.equal(run.head_repository?.id, run.repository.id, "fork repository ID");
+  assert.equal(run.path, workflow, "wrong producer workflow");
+  assert.equal(run.head_branch, "main", "untrusted producer branch");
+  assert.match(run.head_sha, /^[0-9a-f]{40}$/, "invalid producer workflow SHA");
+  assert.equal(run.status, "completed", "unfinished producer run");
+  assert.equal(run.conclusion, "success", "unsuccessful producer run");
+  assert.ok(
+    ["workflow_dispatch", "workflow_run", "schedule"].includes(run.event),
+    "untrusted producer event",
+  );
+  const runUrl = `https://github.com/${repository}/actions/runs/${pointer.runId}`;
+  assert.equal(run.html_url, runUrl, "wrong producer URL");
+  const artifactName = `worker-bundle-production-${pointer.sourceSha}-${pointer.runId}-${pointer.runAttempt}`;
+  assert.equal(artifact.name, artifactName, "wrong rollback artifact");
+  assert.equal(artifact.expired, false, "expired rollback artifact");
+  assert.equal(artifact.workflow_run?.id, run.id, "wrong artifact run");
+  assert.equal(artifact.workflow_run?.head_sha, run.head_sha, "wrong artifact workflow SHA");
+  assert.equal(artifact.workflow_run?.head_branch, "main", "wrong artifact branch");
+  assert.equal(artifact.workflow_run?.repository_id, run.repository.id, "wrong artifact repository");
+  assert.equal(
+    artifact.workflow_run?.head_repository_id,
+    run.repository.id,
+    "fork artifact repository",
+  );
+  return {
+    repository,
+    workflow,
+    runId: pointer.runId,
+    runAttempt: pointer.runAttempt,
+    sourceSha: pointer.sourceSha,
+    workflowSha: run.head_sha,
+    artifactId: String(artifact.id),
+    artifactName,
+    runUrl,
+  };
+}
+
 export function readPureHonoVersion(versionId, execute = execFileSync) {
   assert.match(
     versionId,

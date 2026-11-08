@@ -82,9 +82,18 @@ build yet.
   the existing 30-day bundle archive; native binding values and child-process
   output are neither printed nor archived. The lookup and workflow fixture tests
   are wired into Actions but their result is unobserved. No native version has
-  been read or target classified for this change. Permanent storage and trusted
-  successful-run provenance for later cross-run consumption remain unimplemented;
-  an expiring archive or arbitrary JSON file cannot establish either.
+  been read or target classified for this change. The inventory can be reverified
+  after capture adds its exact non-runtime pointer sidecar; additional runtime
+  files still fail closed, and the pointer needs its own separate verification.
+  The exported `verifyPureHonoProvenance` checks authenticated GitHub run/artifact
+  metadata for the expected repository, main-only production workflow, successful
+  supported event, exact run/attempt and candidate-keyed archive name. It binds
+  the artifact's workflow SHA to the producer's workflow tip, which may differ
+  from the promoted candidate SHA. Its negative-control tests are prepared, not
+  observed passing. This validator is not wired to authenticated metadata reads
+  or archive download/verification yet; metadata supplied inside an archive is
+  not trusted. Permanent storage and trusted cross-run consumption remain
+  unimplemented; an expiring archive or arbitrary JSON file proves neither.
 
 ## Unimplemented
 
