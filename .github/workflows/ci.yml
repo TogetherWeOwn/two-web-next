@@ -813,8 +813,10 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |
           node --test ci/kit-complete-assets.test.mjs
+          node --test ci/kit-source-config.test.mjs
           mkdir -p artifacts/kit-upload-rehearsal
           node ci/kit-complete-assets.mjs web/.svelte-kit/cloudflare artifacts/kit-upload-rehearsal/public-assets.json
+          node ci/kit-source-config.mjs artifacts/kit-upload-rehearsal/source-config.json
       - name: Production Kit same-byte upload rehearsal (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         shell: bash

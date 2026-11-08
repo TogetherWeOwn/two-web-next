@@ -27,6 +27,18 @@ describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
 
+- `ci/kit-source-config.mjs` checks the all-off Kit source configuration against
+  an explicit projection of the root pure-Hono production configuration. Unknown
+  top-level/environment fields, extra Kit overrides, family enablement and changes
+  to the declared compatibility, asset routing, bindings, jobs or tail fail the
+  source contract. Actions retains `source-config.json` with both raw config
+  digests and separately declared non-versioned routes/tail/triggers. Its fixtures
+  and real-config invocation are wired but have not run. This is source-config
+  evidence only: it does not establish Wrangler-normalized defaults, actual CLI
+  overrides/environment, strict native binding/secret inheritance or preservation
+  of current live settings. Frozen snapshot, invoked-tool verification and
+  archive-to-upload association remain separate unfinished requirements.
+
 - `deploy-production.yml` has a `kit_route_family` dispatch input (`hono`,
   `archive`, `archive-static`; default `hono`). Schedule and `workflow_run`
   promotions always use `hono`. Preflight validates the value with
