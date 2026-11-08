@@ -709,6 +709,51 @@ describe("diffHunks and attribution of code references", () => {
     expect(hunks.has("c.css")).toBe(false);
   });
 
+  it("does not attribute diff content or unsupported file headers to another file", () => {
+    const { root } = fixture();
+    const quoted = ["c\tname.css", 'd"name.css', "e\\name.css"];
+    const original = "one\ntwo\nthree\nfour\nfive\nsix\nseven\neight\n";
+    fs.writeFileSync(path.join(root, "a.css"), original);
+    for (const file of [...quoted, "z-deleted.css"])
+      fs.writeFileSync(path.join(root, file), original);
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "header controls");
+    const base = git(root, "rev-parse", "HEAD");
+    fs.writeFileSync(
+      path.join(root, "a.css"),
+      original.replace("one", "++ b/b.css").replace("eight", "EIGHT"),
+    );
+    for (const file of quoted)
+      fs.writeFileSync(path.join(root, file), original.replace("eight", "EIGHT"));
+    fs.unlinkSync(path.join(root, "z-deleted.css"));
+    git(root, "add", ".");
+    git(root, "commit", "-qm", "changed header controls");
+    const head = git(root, "rev-parse", "HEAD");
+    const hunks = diffHunks(root, base, head);
+    expect([...hunks]).toEqual([
+      [
+        "a.css",
+        [
+          [1, 2],
+          [8, 9],
+        ],
+      ],
+    ]);
+    for (const file of ["a.css", "b.css", ...quoted, "z-deleted.css"]) {
+      const intent = normalizeIntent([
+        { id: "pad", claim: "c", selector: "#card", prop: "padding-top", file, line: 8 },
+      ]);
+      const { items } = attribute([el("8px")], [el("12px")], [], intent, hunks, head, view);
+      if (file === "a.css") {
+        expect(items[0].code_ref).toMatchObject({ file, line: 8, in_diff: true });
+        expect(items[0].verification.valid).toBe(true);
+      } else {
+        expect(items[0].code_ref).toBe("unresolved");
+        expect(items[0].verification.valid).toBe(false);
+      }
+    }
+  });
+
   it("rejects non-sha revisions", () => {
     const { root } = fixture();
     expect(() => diffHunks(root, "HEAD", "HEAD~1")).toThrow();

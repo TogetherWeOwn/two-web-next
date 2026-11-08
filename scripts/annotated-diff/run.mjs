@@ -720,10 +720,21 @@ export function diffHunks(root, base, head) {
     "--",
   );
   const lines = new Map();
-  let file = null;
+  let file = null,
+    header = false;
   for (const line of diff.split("\n")) {
-    if (line.startsWith("+++ b/")) file = line.slice(6);
+    if (line.startsWith("diff --git ")) {
+      file = null;
+      header = true;
+      continue;
+    }
+    if (header && line.startsWith("+++ ")) {
+      // Quoted paths and deletions stay unresolved, never inheriting another file.
+      file = line.startsWith("+++ b/") ? line.slice(6) : null;
+      continue;
+    }
     const h = /^@@ -\d+(?:,\d+)? \+(\d+)(?:,(\d+))? @@/.exec(line);
+    if (h) header = false;
     if (h && file) {
       if (!lines.has(file)) lines.set(file, []);
       lines.get(file).push([+h[1], +h[1] + +(h[2] ?? 1)]);
