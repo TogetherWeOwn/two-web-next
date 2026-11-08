@@ -73,7 +73,10 @@ export function verifyWranglerTool(root, expected = pin) {
     "package file pin must be unique and sorted",
   );
   for (const required of ["package.json", "bin/wrangler.js", "wrangler-dist/cli.js"]) {
-    assert.ok(expected.files.some((file) => file.path === required), "required tool member missing");
+    assert.ok(
+      expected.files.some((file) => file.path === required),
+      "required tool member missing",
+    );
   }
   const expectedDirectories = new Set();
   for (const file of expected.files) {
@@ -120,7 +123,11 @@ export function verifyWranglerTool(root, expected = pin) {
     }
   }
   walk(directory, "");
-  assert.deepEqual(directories.sort(), [...expectedDirectories].sort(), "unreviewed tool directories");
+  assert.deepEqual(
+    directories.sort(),
+    [...expectedDirectories].sort(),
+    "unreviewed tool directories",
+  );
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   assert.deepEqual(files, expected.files, "installed Wrangler differs from published package");
   const installed = JSON.parse(readRegular(join(directory, "package.json")).toString("utf8"));

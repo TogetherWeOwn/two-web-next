@@ -211,7 +211,10 @@ describe("verifyWranglerTool", () => {
 
     test(`rejects ${lock} missing the wrangler entry`, async () => {
       const root = await fixture();
-      await writeFile(join(root, lock), `${JSON.stringify({ lockfileVersion: 3, packages: {} })}\n`);
+      await writeFile(
+        join(root, lock),
+        `${JSON.stringify({ lockfileVersion: 3, packages: {} })}\n`,
+      );
       await rejects(root);
     });
   }
@@ -236,7 +239,10 @@ describe("verifyWranglerTool", () => {
   test("rejects a pin that disagrees with the locks", async () => {
     const root = await fixture();
     await rejects(root, { ...pin(), version: "4.156.2" });
-    await rejects(root, { ...pin(), integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}` });
+    await rejects(root, {
+      ...pin(),
+      integrity: `sha512-${Buffer.alloc(64, 9).toString("base64")}`,
+    });
   });
 
   describe("symlinks", () => {
@@ -300,7 +306,12 @@ describe("verifyWranglerTool", () => {
 
   test("rejects an unsafe pin path", async () => {
     const root = await fixture();
-    for (const path of ["../package.json", "/etc/passwd", "bin/../package.json", "bin\\wrangler.js"]) {
+    for (const path of [
+      "../package.json",
+      "/etc/passwd",
+      "bin/../package.json",
+      "bin\\wrangler.js",
+    ]) {
       const p = pin();
       p.files.push({ path, bytes: 1, sha256: sha("x") });
       await rejects(root, p);
@@ -312,7 +323,10 @@ describe("verifyWranglerTool", () => {
     await rejects(root, { ...pin(), schema: "other" });
     await rejects(root, { ...pin(), name: "other" });
     await rejects(root, { ...pin(), files: [] });
-    await rejects(root, { ...pin(), files: pin().files.filter((f) => f.path !== "bin/wrangler.js") });
+    await rejects(root, {
+      ...pin(),
+      files: pin().files.filter((f) => f.path !== "bin/wrangler.js"),
+    });
     await rejects(root, {
       ...pin(),
       files: pin().files.map((f) => ({ ...f, bytes: 32 * 1024 * 1024 + 1 })),

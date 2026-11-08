@@ -6,6 +6,17 @@ build yet.
 
 ## Observed verification
 
+[Actions run 42464735477](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42464735477)
+at `f6908d1c1f9abc02445f88107ca03522914d43d4` failed the Node 22 lint step
+on formatting in `kit-frozen-inputs.mjs`, `kit-wrangler-tool.mjs` and its fixture
+file. Tests did not execute in that leg. The exact reported layouts are repaired
+without behavior, assertion or gate changes. Scope, docs-links and bundle-budget
+passed; the main check, accessibility and Lighthouse were still running at
+inspection. No new full-suite, installed-tool, snapshot or parity pass is claimed.
+The adopted shared-action mirror was not among the reported formatter failures.
+Syntax and whitespace checks passed locally; replacement Actions must verify the
+correction. No local suite, lint, build, install or deployment ran.
+
 [Actions run 42461060087](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42461060087)
 at `7cba241d11a8ffa51932199a54d6df60b4a73a71` failed both test legs at lint.
 Five local files and the byte-identical central `pre-promotion-check.mjs` mirror

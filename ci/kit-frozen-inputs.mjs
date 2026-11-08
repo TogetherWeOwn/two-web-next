@@ -189,9 +189,9 @@ export function freezeKitInputs(root, buildDirectory, replayDirectory, destinati
   const manifest = evidence(output, context, false);
   assert.deepEqual(
     manifest.files,
-    copies.map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 })).sort((a, b) =>
-      a.path < b.path ? -1 : a.path > b.path ? 1 : 0,
-    ),
+    copies
+      .map(({ path, bytes, sha256 }) => ({ path, bytes, sha256 }))
+      .sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0)),
     "snapshot copy differs from inputs",
   );
   // Catch changes during copying; the consuming job must not share these inputs
@@ -199,10 +199,12 @@ export function freezeKitInputs(root, buildDirectory, replayDirectory, destinati
   for (const [prefix, path] of locations) {
     assert.deepEqual(
       inventory(path).files,
-      manifest.files.filter((file) => file.path.startsWith(`${prefix}/`)).map((file) => ({
-        ...file,
-        path: file.path.slice(prefix.length + 1),
-      })),
+      manifest.files
+        .filter((file) => file.path.startsWith(`${prefix}/`))
+        .map((file) => ({
+          ...file,
+          path: file.path.slice(prefix.length + 1),
+        })),
       "input tree changed during snapshot",
     );
   }
