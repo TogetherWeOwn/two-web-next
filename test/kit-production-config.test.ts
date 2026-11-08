@@ -80,18 +80,19 @@ describe("production Kit Worker config (web/wrangler.production.jsonc)", () => {
     expect(fatal).toBeGreaterThan(archive);
     const steps = workflow.slice(build, fatal);
     expect(steps).toContain(
-      '--metafile "$RUNNER_TEMP/kit-production-worker-dry-run/bundle-meta.json"',
+      '--metafile "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/bundle-meta.json"',
     );
     expect(steps).toContain(
-      'npx wrangler versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$RUNNER_TEMP/kit-production-worker-dry-run/worker.js"',
+      'npx wrangler versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js"',
     );
     expect(steps).toContain(
-      'cmp "$RUNNER_TEMP/kit-production-worker-dry-run/worker.js" "$RUNNER_TEMP/kit-production-worker-replay/worker.js"',
+      'cmp "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js" "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay/worker.js"',
     );
     expect(steps).toContain("if-no-files-found: error");
     expect(steps).not.toContain("continue-on-error");
-    expect(steps).toContain("${{ runner.temp }}/kit-production-worker-dry-run/");
-    expect(steps).toContain("${{ runner.temp }}/kit-production-worker-replay/");
+    expect(steps).toContain("artifacts/kit-production-worker-dry-run/");
+    expect(steps).toContain("artifacts/kit-production-worker-replay/");
+    expect(steps).not.toContain("${{ runner.temp }}");
   });
 
   it("preserves the production runtime settings", () => {

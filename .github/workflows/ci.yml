@@ -807,26 +807,26 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          mkdir -p "$RUNNER_TEMP/kit-production-worker-dry-run"
-          npx wrangler deploy --config web/wrangler.production.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-production-worker-dry-run" --metafile "$RUNNER_TEMP/kit-production-worker-dry-run/bundle-meta.json"
+          mkdir -p "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run"
+          npx wrangler deploy --config web/wrangler.production.jsonc --dry-run --outdir "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run" --metafile "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/bundle-meta.json"
       - name: Production Kit same-byte upload rehearsal (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         shell: bash
         run: |
           set -euo pipefail
-          npx wrangler versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$RUNNER_TEMP/kit-production-worker-dry-run/worker.js" --outdir "$RUNNER_TEMP/kit-production-worker-replay"
-          cmp "$RUNNER_TEMP/kit-production-worker-dry-run/worker.js" "$RUNNER_TEMP/kit-production-worker-replay/worker.js"
+          npx wrangler versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js" --outdir "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay"
+          cmp "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js" "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay/worker.js"
           mkdir -p artifacts/kit-upload-rehearsal
-          node ci/kit-upload-rehearsal.mjs "$RUNNER_TEMP/kit-production-worker-dry-run" "$RUNNER_TEMP/kit-production-worker-replay" artifacts/kit-upload-rehearsal/receipt.json
-          BUILD_SHA="$GITHUB_SHA" node ci/kit-upload-evidence.mjs verify "$RUNNER_TEMP/kit-production-worker-dry-run" "$RUNNER_TEMP/kit-production-worker-replay" artifacts/kit-upload-rehearsal/receipt.json
+          node ci/kit-upload-rehearsal.mjs "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run" "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay" artifacts/kit-upload-rehearsal/receipt.json
+          BUILD_SHA="$GITHUB_SHA" node ci/kit-upload-evidence.mjs verify "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run" "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay" artifacts/kit-upload-rehearsal/receipt.json
       - name: Production Kit bundle build evidence
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: kit-production-bundle-build-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/kit-production-worker-dry-run/
-            ${{ runner.temp }}/kit-production-worker-replay/
+            artifacts/kit-production-worker-dry-run/
+            artifacts/kit-production-worker-replay/
             artifacts/kit-upload-rehearsal/
             web/.svelte-kit/cloudflare/
           # Adapter control files (for example .assetsignore) are build evidence.

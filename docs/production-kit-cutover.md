@@ -142,6 +142,38 @@ build yet.
 
 ## Status
 
+[Actions 42443536920](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42443536920)
+at `fcd64cb306de8c1ac177f10865e4ff2091b65932` passed the main lint/type/coverage
+step, Node 22 compatibility, Kit typecheck, production-config build/rehearsal and
+built fatal-response proof. Both suites reported 26,722 passed / 676 skipped.
+The full production comparison failed: 3,313 vectors, 258 differences and zero
+approved exceptions. All 57 generated-asset header paths passed. The differences
+are Hono-owned admin/member data redirects rewritten by Kit after the hook, plus
+Discord fixture reads on `/events` and `/`. The production entry now bypasses Kit
+only for Hono-owned production data requests, using the existing ownership
+manifest and the unchanged Hono handler. Ordinary documents and Kit-owned data
+still enter the adapter. The parity harness assigns its healthy-empty Discord
+seam onto the original environment so both ambient Kit and Hono reads see it.
+Corrected runtime results remain unobserved; the comparison is not weakened.
+
+The [retained archive](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42443536920/artifacts/13603722222)
+has SHA-256 `ba0379b4116596db275b91f65f1725f0c0c0c75b7a0d4a611b3bec91609c5bae`.
+All 97 adapter-tree and four dry-run member hashes match the rehearsal receipt.
+The two replay members are absent despite the successful executed rehearsal.
+Build/replay output and artifact inputs now share workspace-relative storage,
+avoiding the container's mismatched host `runner.temp` paths; corrected retention
+has not been observed. This expiring archive is not permanent rollback storage.
+
+The optional rollback archive consumer validates the requested UUID separately
+from the pointer, checks authenticated archive contents and native version
+identity, and writes a sanitized private receipt before the existing rollback
+guards. It is not yet a required Kit promotion gate. Production still uploads
+Hono. Permanent retention, Kit deployment integration, drills, complete parity,
+independent review and all exact-head release gates remain unfinished. No staging
+or production workflow or rollback drill has run for this change.
+
+### Earlier producer results
+
 Branch-dispatch [Actions 42438575212](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42438575212)
 at `98ca49a7438853e9460951252709c03e036047a5` passed the main lint/type/coverage
 step, Node 22 compatibility and Kit typecheck (zero errors/warnings). It failed

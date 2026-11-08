@@ -97,6 +97,13 @@ test("both loopback parity workers inject the same healthy-empty Discord seam", 
     /env\.DISCORD_EVENTS = \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \};/,
   );
   assert.doesNotMatch(worker, /\{\s*\.\.\.env,\s*DISCORD_EVENTS/);
+  const harness = readFileSync(new URL("./parity/harness.ts", import.meta.url), "utf8");
+  assert.match(
+    harness,
+    /env\.DISCORD_EVENTS = \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \};/,
+  );
+  assert.doesNotMatch(harness, /\{\s*\.\.\.env,\s*DISCORD_EVENTS/);
+  assert.match(harness, /inner\.fetch\(mapped, env as never, ctx\)/);
   const hono = readFileSync(new URL("../e2e/worker.ts", import.meta.url), "utf8");
   assert.match(
     hono,
