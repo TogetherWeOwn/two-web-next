@@ -76,11 +76,19 @@ describe implementation-time evidence, not a green overall gate.
   must contain exactly `worker.js` and Wrangler's non-empty README (at most
   64 KiB), both regular files; extra files, hidden members, subdirectories and
   symlinks fail. The receipt records both file sizes and digests. This finite
-  emitted-file contract matches the retained pinned-Wrangler replay, without
-  claiming to inspect the multipart upload form. Additional fixture controls
-  cover unexpected modules/maps/directories and malformed README entries.
-  Only the digest-bound receipt and dry-run output directory enter the existing
-  Actions archive. Fixtures and the real rehearsal are wired but **unrun**. This is not a native
+  emitted-file contract matches the retained pinned-Wrangler replay. Additional
+  fixture controls cover unexpected modules/maps/directories and malformed README
+  entries. The rehearsal also requests Wrangler's supported `--outfile` into a
+  private, unarchived path. `ci/kit-multipart-modules.mjs` requires exactly the
+  metadata part and one byte-identical `worker.js` module with the reviewed MIME
+  type. It rejects extra parts, unexpected headers/framing and malformed or
+  oversized metadata; only metadata digests and bounded binding names/types enter
+  the receipt. Raw metadata is unlinked on success, child failure or parse failure.
+  This checks the finite module envelope, **not** all effective metadata values,
+  native asset selection, inherited remote bindings or non-versioned settings.
+  Unknown metadata fields are not qualified merely by hashing them. Only the
+  digest-bound receipt and dry-run output directory enter the existing Actions
+  archive. Fixtures and the real rehearsal are wired but **unrun**. This is not a native
   upload, selected-asset metadata, remote readback, complete normalized config,
   transitive/runtime attestation, custody or recovery qualification. Dry-run skips
   asset synchronization, so it cannot validate the live asset manifest/guards.

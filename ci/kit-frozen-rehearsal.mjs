@@ -10,11 +10,13 @@ import {
   openSync,
   readFileSync,
   readdirSync,
+  unlinkSync,
   writeFileSync,
 } from "node:fs";
 import { dirname, join, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { verifyFrozenKitInputs } from "./kit-frozen-inputs.mjs";
+import { verifyKitMultipartModules } from "./kit-multipart-modules.mjs";
 import { verifyWranglerTool } from "./kit-wrangler-tool.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
@@ -64,7 +66,10 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
   // Explicit --config bypasses Wrangler's generated-config discovery. --assets
   // overrides only the directory, preserving the reviewed binding/router policy.
   mkdirSync(output, { mode: 0o700 });
-  for (const path of ["home", "tmp", "config"]) mkdirSync(join(output, path), { mode: 0o700 });
+  for (const path of ["home", "tmp", "config", "private"]) {
+    mkdirSync(join(output, path), { mode: 0o700 });
+  }
+  const multipartPath = join(output, "private/form-data");
   const args = [
     join(base, tool.entry),
     "versions",
@@ -78,6 +83,8 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
     join(frozen, "adapter"),
     "--outdir",
     join(output, "output"),
+    "--outfile",
+    multipartPath,
   ];
   const env = {
     CI: "true",
@@ -88,16 +95,28 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
     CLOUDFLARE_SEND_METRICS: "false",
     WRANGLER_SEND_METRICS: "false",
   };
-  const child = run(process.execPath, args, {
-    cwd: output,
-    env,
-    stdio: ["ignore", "pipe", "pipe"],
-    timeout: 120000,
-    maxBuffer: 1024 * 1024,
-    windowsHide: true,
-  });
-  // Do not print or retain child output, cached state or diagnostic log files.
-  assert.ok(!child.error && !child.signal && child.status === 0, "frozen dry run failed");
+  let multipart;
+  try {
+    const child = run(process.execPath, args, {
+      cwd: output,
+      env,
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: 120000,
+      maxBuffer: 1024 * 1024,
+      windowsHide: true,
+    });
+    // Do not print or retain child output, cached state or diagnostic log files.
+    assert.ok(!child.error && !child.signal && child.status === 0, "frozen dry run failed");
+    multipart = verifyKitMultipartModules(
+      outputBytes(multipartPath, 65 * 1024 * 1024),
+      expectedWorker,
+    );
+  } finally {
+    // Raw metadata may contain binding values. Unlink even on child/parser failure;
+    // only the sanitized projection below can enter the retained receipt.
+    const raw = lstatSync(multipartPath, { throwIfNoEntry: false });
+    if (raw) unlinkSync(multipartPath);
+  }
   assert.deepEqual(verifyInputs(frozen, context), inputs, "snapshot changed during dry run");
   assert.deepEqual(verifyTool(base), tool, "checked tool changed during dry run");
   const emitted = realDirectory(join(output, "output"));
@@ -121,6 +140,7 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
     snapshotSha256: sha256(JSON.stringify(inputs)),
     toolSha256: sha256(JSON.stringify(tool)),
     workerSha256: sha256(actualWorker),
+    multipart,
     emittedFiles: [
       { path: "README.md", bytes: readme.length, sha256: sha256(readme) },
       { path: "worker.js", bytes: actualWorker.length, sha256: sha256(actualWorker) },

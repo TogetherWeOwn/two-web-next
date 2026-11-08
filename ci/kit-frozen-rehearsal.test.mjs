@@ -17,6 +17,12 @@ import { sha256 } from "./worker-bundle-evidence.mjs";
 const context = { sourceSha: "a".repeat(40), runId: "123", runAttempt: "1" };
 const worker = "export default { fetch() {} };\n";
 const readme = "Wrangler dry-run output.\n";
+const form = Buffer.from(
+  '--fixture\r\nContent-Disposition: form-data; name="metadata"\r\n\r\n' +
+    '{"main_module":"worker.js","bindings":[]}\r\n--fixture\r\n' +
+    'Content-Disposition: form-data; name="worker.js"; filename="worker.js"\r\n' +
+    `Content-Type: application/javascript+module\r\n\r\n${worker}\r\n--fixture--`,
+);
 
 function fixture(run) {
   const parent = mkdtempSync(join(tmpdir(), "kit-frozen-rehearsal-"));
@@ -55,6 +61,7 @@ function fixture(run) {
       mkdirSync(join(destination, "output"));
       writeFileSync(join(destination, "output/worker.js"), worker);
       writeFileSync(join(destination, "output/README.md"), readme);
+      writeFileSync(join(destination, "private/form-data"), form);
       return { status: 0, signal: null, stdout: "not evidence", stderr: "not evidence" };
     },
   };
@@ -84,6 +91,8 @@ test("snapshot rehearsal pins paths, dry-run flags, environment and bounded exec
       join(f.snapshot, "adapter"),
       "--outdir",
       join(f.destination, "output"),
+      "--outfile",
+      join(f.destination, "private/form-data"),
     ]);
     assert.equal(options.cwd, f.destination);
     assert.equal(options.env.HOME, join(f.destination, "home"));
@@ -97,6 +106,8 @@ test("snapshot rehearsal pins paths, dry-run flags, environment and bounded exec
     }
     assert.equal(receipt.schema, "two.kit-frozen-rehearsal.v1");
     assert.equal(receipt.workerSha256, sha256(worker));
+    assert.equal(receipt.multipart.worker.sha256, sha256(worker));
+    assert.equal(existsSync(join(f.destination, "private/form-data")), false);
     assert.deepEqual(receipt.emittedFiles, [
       { path: "README.md", bytes: Buffer.byteLength(readme), sha256: sha256(readme) },
       { path: "worker.js", bytes: Buffer.byteLength(worker), sha256: sha256(worker) },
@@ -162,6 +173,28 @@ for (const result of [{ status: 1 }, { status: null, signal: "SIGTERM" }, { erro
   });
 }
 
+for (const kind of ["child-failure", "parser-failure", "missing", "symlink", "oversized"]) {
+  test(`multipart ${kind} refuses evidence and removes raw bytes`, () => {
+    fixture((f) => {
+      const run = f.collaborators.run;
+      f.collaborators.run = (...args) => {
+        const result = run(...args);
+        const path = join(f.destination, "private/form-data");
+        if (kind === "child-failure") return { status: 1 };
+        if (kind === "parser-failure") writeFileSync(path, "private malformed metadata");
+        if (kind === "missing" || kind === "symlink") rmSync(path);
+        if (kind === "symlink") symlinkSync(join(f.snapshot, "build/worker.js"), path);
+        if (kind === "oversized") writeFileSync(path, Buffer.alloc(65 * 1024 * 1024 + 1));
+        return result;
+      };
+      assert.throws(f.invoke);
+      assert.equal(existsSync(join(f.destination, "private/form-data")), false);
+      assert.equal(existsSync(join(f.destination, "receipt.json")), false);
+      assert.equal(readFileSync(join(f.snapshot, "build/worker.js"), "utf8"), worker);
+    });
+  });
+}
+
 test("changed output Worker refuses a receipt", () => {
   fixture((f) => {
     const run = f.collaborators.run;
@@ -181,6 +214,7 @@ test("symlinked output Worker refuses a receipt", () => {
       mkdirSync(join(f.destination, "output"));
       symlinkSync(join(f.snapshot, "build/worker.js"), join(f.destination, "output/worker.js"));
       writeFileSync(join(f.destination, "output/README.md"), readme);
+      writeFileSync(join(f.destination, "private/form-data"), form);
       return { status: 0 };
     };
     assert.throws(f.invoke);
@@ -255,6 +289,8 @@ test("Actions runs frozen rehearsal after snapshot verification and retains only
   );
   const archive = workflow.indexOf("      - name: Production Kit bundle build evidence");
   assert.ok(verified >= 0 && tests > verified && replay > tests && archive > replay);
+  assert.ok(workflow.includes("node --test ci/kit-multipart-modules.test.mjs"));
+  assert.ok(!workflow.includes("            artifacts/kit-frozen-rehearsal/private/"));
   assert.ok(workflow.includes("            artifacts/kit-frozen-rehearsal/receipt.json"));
   assert.ok(workflow.includes("            artifacts/kit-frozen-rehearsal/output/"));
   assert.ok(!workflow.includes("            artifacts/kit-frozen-rehearsal/\n"));

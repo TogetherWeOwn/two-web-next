@@ -848,6 +848,7 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         timeout-minutes: 3
         run: |
+          node --test ci/kit-multipart-modules.test.mjs
           node --test ci/kit-frozen-rehearsal.test.mjs
           node ci/kit-frozen-rehearsal.mjs artifacts/kit-frozen-inputs artifacts/kit-frozen-rehearsal
       - name: Production Kit bundle build evidence
