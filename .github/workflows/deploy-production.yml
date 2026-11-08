@@ -699,6 +699,44 @@ jobs:
       promotion_run_id: ${{ github.run_id }}
       promotion_run_attempt: ${{ github.run_attempt }}
 
+  incidents:
+    name: production-incidents
+    # Includes green no-candidate runs: a clean resolver skip can still hold production.
+    # Reporting has no deploy secrets and is not a prerequisite of any release job.
+    needs:
+      [
+        preflight,
+        staging-soak,
+        regression,
+        deploy-production,
+        post-deploy-watch,
+        auto-rollback,
+        release,
+      ]
+    if: ${{ always() && needs.preflight.result != 'skipped' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Report promotion holds, failures or recovery
+        run: node ci/release-incidents.mjs
+        env:
+          INCIDENT_MODE: promotion
+          CANDIDATE_SHA: ${{ needs.preflight.outputs.sha }}
+          ALREADY_LIVE: ${{ needs.preflight.outputs.already_live }}
+          RESULTS_JSON: ${{ toJSON(needs) }}
+          GITHUB_TOKEN: ${{ github.token }}
+
   notify:
     name: deploy-notify
     # Final step of every attempted promotion: POST the commit, version,

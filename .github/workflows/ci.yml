@@ -984,6 +984,9 @@ jobs:
       - name: Production regression check selftest (stubbed APIs and ledgers, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/production-regression.test.mjs
+      - name: Release incident reporter selftest (stubbed APIs, no deployment)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: node --test ci/release-incidents.test.mjs
       - name: Deploy notify selftest (stubbed webhook, no secrets or network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/deploy-notify.test.mjs

@@ -68,6 +68,49 @@ Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
 [security.txt expiry review and renewal](#securitytxt-expiry-review-and-renewal)
 are not incident entries; read those sections directly when that work is authorized.
 
+## Release-gate incidents
+
+The final reporting jobs in [e2e-staging](../.github/workflows/e2e-staging.yml)
+and [deploy-production](../.github/workflows/deploy-production.yml) use
+[the release incident reporter](../ci/release-incidents.mjs). They create the
+`incident` label when missing and open one stable-key issue per failed gate:
+`staging-quality`, `staging-journeys`, `e2e-staging`, or `production-promotion`.
+Repeated failures comment on the open issue. The next executed green gate
+comments **Recovered** and closes it; skipped jobs are not recovery evidence.
+The sink follows the stable-key/deduplication pattern from
+[two-bot-next](https://github.com/TogetherWeOwn/two-bot-next/blob/main/scripts/incident_issue.py).
+
+Promotion reporting includes clean no-candidate skips, not just red runs. Each
+attempt, including the existing daily 14:17 UTC backstop, compares the live
+production `/up` revision with current main. On squash-only linear main, the
+oldest pending commit's committer time is `held since`; age **strictly greater
+than six hours** opens `production held > 6h`. It records both SHAs, age and the
+failed step or candidate-selection reason. This is evaluated at workflow
+completion, not by a new hourly scheduler, so it is not a six-hour notification
+SLA. Partial promotion recalculates age from the oldest still-pending commit.
+Missing identity/ancestry/date evidence raises a separate incident and fails
+reporting; it never clears the existing held-production incident.
+
+Issues include run/attempt links, the tested or candidate SHA, failed job/step
+and required versus observed outcome. Quality failures additionally extract
+allowlisted numeric Lighthouse assertion values when available. Raw logs,
+member content, URLs from logs and arbitrary remote errors are never copied.
+If the log is unavailable, the issue says so and links the source run instead
+of inventing measurements. Reporting has only job-scoped `issues: write`,
+Actions/contents read and no deployment or environment secret. It does not
+change qualification, production guards, runtime startup, expiry or scheduling.
+No staging/preview runtime or recurring always-on service is added.
+
+After merge, use [incident-rehearsal](../.github/workflows/incident-rehearsal.yml)
+with `force_fail=true` twice, then `false`. This is a throwaway, report-only
+staging-failure simulation: it never contacts staging, production or a database.
+Check one labelled rehearsal issue, a repeat comment and a recovery closure.
+Before recovery, retain the issue URL and confirm that incident intake maps it
+to an assigned response card within one hour; record that routine run and card
+in the private delivery evidence. A fixture-test pass alone proves no live
+issue creation or intake. Every production merge/deploy still follows the
+exact-head review, confirmation and release gates above.
+
 ## Safety and escalation
 
 - **Read the incident/release authorization first.** Commands labelled remote
