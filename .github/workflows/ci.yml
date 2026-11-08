@@ -804,12 +804,14 @@ jobs:
         run: npx wrangler deploy --config web/wrangler.staging.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-staging-worker-dry-run"
       - name: Production Kit Worker config dry run (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        shell: bash
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/kit-production-worker-dry-run"
           npx wrangler deploy --config web/wrangler.production.jsonc --dry-run --outdir "$RUNNER_TEMP/kit-production-worker-dry-run" --metafile "$RUNNER_TEMP/kit-production-worker-dry-run/bundle-meta.json"
       - name: Production Kit same-byte upload rehearsal (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        shell: bash
         run: |
           set -euo pipefail
           npx wrangler versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$RUNNER_TEMP/kit-production-worker-dry-run/worker.js" --outdir "$RUNNER_TEMP/kit-production-worker-replay"
@@ -1062,7 +1064,7 @@ jobs:
         run: npx wrangler deploy --dry-run --env production --outdir dist-production --metafile dist-production/bundle-meta.json
       - name: Worker bundle evidence selftest (offline fixtures, no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs
+        run: node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs ci/pure-hono-archive.test.mjs
       - name: Verify production build inventory and prebuilt upload equivalence (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |

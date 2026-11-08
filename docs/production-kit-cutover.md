@@ -90,10 +90,17 @@ build yet.
   supported event, exact run/attempt and candidate-keyed archive name. It binds
   the artifact's workflow SHA to the producer's workflow tip, which may differ
   from the promoted candidate SHA. Its negative-control tests are prepared, not
-  observed passing. This validator is not wired to authenticated metadata reads
-  or archive download/verification yet; metadata supplied inside an archive is
-  not trusted. Permanent storage and trusted cross-run consumption remain
-  unimplemented; an expiring archive or arbitrary JSON file proves neither.
+  observed passing. `ci/pure-hono-archive.mjs` now composes that validator with
+  authenticated, bounded GitHub run/artifact reads and a digest/size-checked zip
+  download. Only the fixed GitHub API receives the bearer token; the allowed
+  HTTPS artifact host receives no token and cannot redirect. Failed credentials
+  do not retry, and errors never echo remote bodies, signed URLs or tokens. The
+  destination is created exclusively after byte verification, with no extraction
+  or execution. Fixture tests are wired into Actions, not observed passing. No
+  production consumer invokes this helper yet; archive contents still require
+  separate verification and native version readback. Permanent storage and
+  trusted cross-run consumption remain unimplemented; an expiring archive or
+  arbitrary JSON file proves neither.
 
 ## Unimplemented
 
@@ -107,6 +114,14 @@ build yet.
 
 ## Status
 
-Full branch-dispatch Actions verification has been requested; no runtime,
-parity or upload-rehearsal PASS is recorded here. No staging or production
-workflow or rollback drill has run for this change.
+Branch-dispatch [Actions 42438575212](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42438575212)
+at `98ca49a7438853e9460951252709c03e036047a5` passed the main lint/type/coverage
+step, Node 22 compatibility and Kit typecheck (zero errors/warnings). It failed
+before the production-config Wrangler dry run: the container's default `sh`
+rejected `set -o pipefail`. Both production dry-run/replay steps now select Bash
+explicitly, with a regression contract; the corrected result is not observed.
+Its retained adapter archive contains `_worker.js`, `_headers`, `.assetsignore`,
+`version.json` and immutable assets, but no production dry-run outputs or upload
+rehearsal receipt. It is not complete cutover/rehearsal evidence. No fatal-response,
+production parity or upload-rehearsal PASS is recorded here. No staging or
+production workflow or rollback drill has run for this change.

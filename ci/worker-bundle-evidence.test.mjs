@@ -845,6 +845,19 @@ describe("workflow evidence wiring", () => {
     assert.equal(steps[archive].with["retention-days"], 30);
   });
 
+  test("Kit dry-run and replay steps explicitly select Bash for pipefail in containers", () => {
+    const steps = workflow("ci").jobs.check.steps;
+    for (const name of [
+      "Production Kit Worker config dry run (no deploy)",
+      "Production Kit same-byte upload rehearsal (no deploy)",
+    ]) {
+      const step = steps.find((item) => item.name === name);
+      assert.ok(step, `${name} step missing`);
+      assert.equal(step.shell, "bash");
+      assert.match(step.run, /set -euo pipefail/);
+    }
+  });
+
   test("CI creates build-only evidence and checks pinned no-bundle equivalence", () => {
     const steps = workflow("ci").jobs.check.steps;
     const pilot = steps.find((step) => step.name?.startsWith("Verify production build inventory"));
@@ -866,7 +879,7 @@ describe("workflow evidence wiring", () => {
       steps.some(
         (step) =>
           step.run ===
-          "node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs",
+          "node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs ci/pure-hono-archive.test.mjs",
       ),
     );
   });
