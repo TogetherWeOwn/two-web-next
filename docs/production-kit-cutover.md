@@ -97,8 +97,20 @@ build yet.
   do not retry, and errors never echo remote bodies, signed URLs or tokens. The
   destination is created exclusively after byte verification, with no extraction
   or execution. Fixture tests are wired into Actions, not observed passing. No
-  production consumer invokes this helper yet; archive contents still require
-  separate verification and native version readback. Permanent storage and
+  production consumer invokes this helper yet. The separate
+  `ci/read-pure-hono-archive.py` reads only the exact flat Hono archive members in
+  memory, rejecting duplicate or unsafe names, special files, encryption,
+  unsupported compression, CRC failures and oversized expansion. It never extracts
+  or executes archive files. `ci/pure-hono-archive-contents.mjs` checks those member
+  hashes against the inventory, metafile, upload/deployed receipts and supplied
+  rollback pointer, then requires a fresh native version object through the existing
+  tag/secret checks. It consumes the authenticated transport receipt; historical
+  source/dependency input verification belongs to that trusted successful producer,
+  not this consumer. Its result is an authenticated-producer archive receipt, not
+  independent source recomputation, remote byte readback or permanent retention.
+  The Python child gets no inherited environment credentials or downloaded cwd.
+  Fixtures are wired into the existing Actions evidence step; results are unobserved.
+  Production does not consume this new helper yet. Permanent storage and integrated
   trusted cross-run consumption remain unimplemented; an expiring archive or
   arbitrary JSON file proves neither.
 

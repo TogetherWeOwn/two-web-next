@@ -879,7 +879,7 @@ describe("workflow evidence wiring", () => {
       steps.some(
         (step) =>
           step.run ===
-          "node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs ci/pure-hono-archive.test.mjs",
+          "node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs ci/pure-hono-archive.test.mjs ci/read-pure-hono-archive.test.mjs",
       ),
     );
   });
