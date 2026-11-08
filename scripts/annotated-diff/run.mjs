@@ -54,6 +54,21 @@ export const STYLES = [
   "width",
   "height",
 ];
+// Residual evidence only: these properties never qualify an intent as explained.
+const PAINT_GUARDS = [
+  "background-image",
+  "background-size",
+  "background-position",
+  "background-repeat",
+  "background-blend-mode",
+  "border-image-source",
+  "filter",
+  "backdrop-filter",
+  "clip-path",
+  "mask-image",
+  "mix-blend-mode",
+  "text-shadow",
+];
 export const hash = (value) => createHash("sha256").update(value).digest("hex");
 const canonical = (x) =>
   JSON.stringify(x, (_, v) =>
@@ -305,7 +320,7 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
             }
           }
           const dom = await page.evaluate(
-            ({ props, font, masks, fullPage }) => {
+            ({ props, paintProps, font, masks, fullPage }) => {
               const nodes = [...document.querySelectorAll("body *")].filter(
                 (e) =>
                   !["SCRIPT", "STYLE", "LINK", "META"].includes(e.tagName) &&
@@ -368,6 +383,7 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
                       h: r.height,
                     },
                     style: Object.fromEntries(props.map((p) => [p, s.getPropertyValue(p)])),
+                    paint: Object.fromEntries(paintProps.map((p) => [p, s.getPropertyValue(p)])),
                   };
                 })
                 .filter((e) => e.rect.w > 0 && e.rect.h > 0);
@@ -386,7 +402,13 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
                 seed: document.documentElement.dataset.captureSeed || null,
               };
             },
-            { props: STYLES, font: view.expectedFont, masks: view.masks, fullPage: spec.fullPage },
+            {
+              props: STYLES,
+              paintProps: PAINT_GUARDS,
+              font: view.expectedFont,
+              masks: view.masks,
+              fullPage: spec.fullPage,
+            },
           );
           const fontNodes = dom.elements.filter((e) => e.text);
           dom.font_evidence = [];
@@ -785,6 +807,14 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
             new: b.style[prop],
           }))
         : [];
+    const paint_delta =
+      a && b
+        ? PAINT_GUARDS.filter((p) => a.paint?.[p] !== b.paint?.[p]).map((prop) => ({
+            prop,
+            old: a.paint?.[prop],
+            new: b.paint?.[prop],
+          }))
+        : [];
     const size = a && b && (a.rect.w !== b.rect.w || a.rect.h !== b.rect.h);
     const moved = a && b && (a.rect.x !== b.rect.x || a.rect.y !== b.rect.y);
     const matched = {
@@ -793,15 +823,24 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
       selector: node.selector,
       confidence,
       delta,
+      paint_delta,
       size,
       moved: !!moved,
       text_delta: a && b && a.text !== b.text ? { old: a.text, new: b.text } : null,
-      shift: !!(a && b && moved && !size && !delta.length && a.text === b.text),
+      shift: !!(
+        a &&
+        b &&
+        moved &&
+        !size &&
+        !delta.length &&
+        !paint_delta.length &&
+        a.text === b.text
+      ),
       change: !a
         ? "added"
         : !b
           ? "removed"
-          : delta.length
+          : delta.length || paint_delta.length
             ? "style"
             : a.text !== b.text
               ? "text"
@@ -810,7 +849,15 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
                 : "unchanged",
     };
     allMatches.push(matched);
-    if (!a || !b || delta.length || a.text !== b.text || moved || confidence === "low")
+    if (
+      !a ||
+      !b ||
+      delta.length ||
+      paint_delta.length ||
+      a.text !== b.text ||
+      moved ||
+      confidence === "low"
+    )
       matches.push(matched);
   }
   const items = [],
@@ -880,6 +927,7 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
         : { selector: claim.selector, role: null, name: claim.id },
       match_confidence: m?.confidence || "low",
       style_delta: ownDelta,
+      paint_delta: m?.paint_delta || [],
       text_delta: m?.text_delta || null,
       contributors: [],
       token: null,
@@ -906,6 +954,7 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
         valid,
         residual: [
           ...m.delta.filter((d) => !ownDelta.includes(d)),
+          ...m.paint_delta,
           ...(m.text_delta && claim.change !== "text" ? [{ prop: "text" }] : []),
           ...(m.moved && !marginMotion(m, ownDelta) ? [{ prop: "position" }] : []),
         ],
@@ -975,12 +1024,12 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
       })
       .filter((x) => x.score > 0)
       .sort((a, b) => b.depth - a.depth || b.score - a.score);
-    // Canvas/image pixels are not changes to the enclosing DOM element's appearance.
+    // Style deltas cannot exclude independent canvas/video/image content replacement.
     const domless = [...base, ...head].some(
       (e) =>
-        ["canvas", "video", "img"].includes(e.tag) &&
-        overlap(e.rect, region.bbox_css) > 0 &&
-        !matches.some((m) => m.selector === e.selector),
+        (["canvas", "video", "img"].includes(e.tag) ||
+          Object.values(e.paint || {}).some((value) => /url\(/i.test(value))) &&
+        overlap(e.rect, region.bbox_css) > 0,
     );
     const best = domless ? null : scores[0]?.m;
     const causes = candidates.filter((c) => c.m === best);
@@ -1011,11 +1060,13 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
           match_confidence:
             ambiguous || best?.confidence === "low" ? "low" : best ? "high" : "none",
           style_delta: deltas,
+          paint_delta: best?.paint_delta || [],
           text_delta: best?.text_delta || null,
           contributors: ambiguous
             ? contributors.map(({ m }) => ({
                 element: element(m.after || m.before),
                 style_delta: m.delta,
+                paint_delta: m.paint_delta,
                 text_delta: m.text_delta,
               }))
             : [],
@@ -1043,14 +1094,16 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
             item.contributors.push({
               element: element(m.after || m.before),
               style_delta: m.delta,
+              paint_delta: m.paint_delta,
               text_delta: m.text_delta,
             });
     } else item.status = "explained";
     const presence = ambiguous ? contributors.map((s) => s.m) : best ? [best] : [];
-    const hasBefore = !presence.length || presence.some((m) => m.before);
-    const hasAfter = !presence.length || presence.some((m) => m.after);
-    const half = hasBefore && hasAfter ? "both" : hasBefore ? "before" : "after";
     const targets = regionTargets(region.bbox_css, ambiguous ? null : best, view);
+    const hasBefore = !!targets.before && (!presence.length || presence.some((m) => m.before));
+    const hasAfter = !!targets.after && (!presence.length || presence.some((m) => m.after));
+    assert(hasBefore || hasAfter, "Region has no visible target");
+    const half = hasBefore && hasAfter ? "both" : hasBefore ? "before" : "after";
     const r = {
       ...region,
       half,
@@ -1124,6 +1177,7 @@ function aggregateAncestor(ancestor, descendant) {
     !descendant ||
     ancestor === descendant ||
     ancestor.text_delta ||
+    ancestor.paint_delta.length ||
     ancestor.moved ||
     !ancestor.delta.length
   )
@@ -1160,9 +1214,13 @@ export function regionTargets(box, match, view) {
   const translate = (r, x, y) => ({ ...r, x: r.x + x, y: r.y + y });
   const join = (patches) => patches.filter((r) => area(r) > 0).reduce(union);
   const bounds = rect(0, 0, view.width, view.height);
+  const visible = (r) => {
+    const clipped = intersect(r, bounds);
+    return area(clipped) ? clipped : null;
+  };
   return {
-    before: intersect(join([oldPatch, translate(newPatch, -dx, -dy)]), bounds),
-    after: intersect(join([translate(oldPatch, dx, dy), newPatch]), bounds),
+    before: visible(join([oldPatch, translate(newPatch, -dx, -dy)])),
+    after: visible(join([translate(oldPatch, dx, dy), newPatch])),
   };
 }
 
@@ -1228,7 +1286,8 @@ export function validateLabels(items, labels, names) {
       );
       for (const value of numeric)
         assert(allowedNumbers.has(value.toLowerCase()), `Invented value: ${value}`);
-      for (const name of names)
+      // Exact fact-bound templates use ordinary words, not references to other nodes.
+      for (const name of templates.has(text.toLowerCase()) ? [] : names)
         if (name && name !== item.element?.name && name.length > 2)
           assert(
             !text.toLowerCase().includes(name.toLowerCase()),
@@ -1373,13 +1432,23 @@ function comparisonView(view, spec, mapping, images, items, diff, base, head) {
   };
 }
 
-export async function compare({ dir, root, intent }) {
-  await write(path.join(dir, "annotated-diff.manifest.json"), {
-    schema: "annotated-diff/v0",
-    status: "diffing",
+export async function compare({ dir, root, intent, intentFile }) {
+  const manifestPath = path.join(dir, "annotated-diff.manifest.json");
+  let prior;
+  try {
+    prior = await read(manifestPath);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+  }
+  await write(manifestPath, {
+    ...(prior || { schema: "annotated-diff/v0" }),
+    status: ["capture_invalid", "too_many_regions"].includes(prior?.status)
+      ? prior.status
+      : "diffing",
     checks: { passed: false },
     judge_eligible: false,
   });
+  if (intentFile !== undefined) intent = await read(intentFile);
   const a = await read(path.join(dir, "base/capture.json")),
     b = await read(path.join(dir, "head/capture.json"));
   validateSpec(a.spec);
@@ -1582,7 +1651,7 @@ const textFact = (delta, view) =>
     ? ` · text: ${JSON.stringify(view.blind_reverse ? delta.new : delta.old)} → ${JSON.stringify(view.blind_reverse ? delta.old : delta.new)}`
     : "";
 const facts = (item, view = {}) =>
-  `${item.status.toUpperCase()} · ${item.element?.name || "Image change"} · ${item.style_delta.map((d) => `${d.prop}: ${view.blind_reverse ? d.new : d.old} → ${view.blind_reverse ? d.old : d.new}`).join("; ") || (view.blind && ["added", "removed"].includes(item.change) ? `present in ${(item.change === "added") !== view.blind_reverse ? "B" : "A"} only` : item.change)}${textFact(item.text_delta, view)}${(item.contributors || []).map((c) => ` · contributor ${c.element.name}: ${c.style_delta.map((d) => `${d.prop}: ${view.blind_reverse ? d.new : d.old} → ${view.blind_reverse ? d.old : d.new}`).join("; ")}${textFact(c.text_delta, view)}`).join("")}${item.token ? ` · ${item.token}` : ""}${item.scope === "global" ? " · applies across the view" : ""}${item.shifts.map((s) => ` · ${s.element.name} shift (${view.blind_reverse ? -s.dx : s.dx}, ${view.blind_reverse ? -s.dy : s.dy}) CSS px`).join("")} · ${
+  `${item.status.toUpperCase()} · ${item.element?.name || "Image change"} · ${[...item.style_delta, ...(item.paint_delta || [])].map((d) => `${d.prop}: ${view.blind_reverse ? d.new : d.old} → ${view.blind_reverse ? d.old : d.new}`).join("; ") || (view.blind && ["added", "removed"].includes(item.change) ? `present in ${(item.change === "added") !== view.blind_reverse ? "B" : "A"} only` : item.change)}${textFact(item.text_delta, view)}${(item.contributors || []).map((c) => ` · contributor ${c.element.name}: ${[...c.style_delta, ...(c.paint_delta || [])].map((d) => `${d.prop}: ${view.blind_reverse ? d.new : d.old} → ${view.blind_reverse ? d.old : d.new}`).join("; ")}${textFact(c.text_delta, view)}`).join("")}${item.token ? ` · ${item.token}` : ""}${item.scope === "global" ? " · applies across the view" : ""}${item.shifts.map((s) => ` · ${s.element.name} shift (${view.blind_reverse ? -s.dx : s.dx}, ${view.blind_reverse ? -s.dy : s.dy}) CSS px`).join("")} · ${
     [item.code_ref, ...item.code_refs.map((r) => r.code_ref)]
       .filter((r) => r !== "unresolved")
       .map((r) => `${r.file}:${r.line}`)
@@ -2025,19 +2094,7 @@ export async function render({ dir, author = "unattributed" }) {
         judge.buffer.equals(judgeAgain.buffer) &&
         full.insets.every((i, n) => i.buffer.equals(again.insets[n].buffer));
       view.geometry = full.geometry;
-      for (const [file, buffer] of [
-        [`${view.id}.annotated.png`, full.buffer],
-        [`${view.id}.judge.png`, judge.buffer],
-        [`${view.id}.clean.png`, await cleanPair(dir, view)],
-        [`${view.id}.mask.png`, await fs.readFile(path.join(dir, view.mask))],
-        ...(await Promise.all(
-          (view.blind_reverse ? ["head", "base"] : ["base", "head"]).map(async (half, n) => [
-            `${view.id}.${view.blind ? ["A", "B"][n] : ["before", "after"][n]}.png`,
-            await capturedImage(dir, half, view),
-          ]),
-        )),
-        ...full.insets.map((i, n) => [`${view.id}.inset-${n + 1}.png`, i.buffer]),
-      ]) {
+      for (const [file, buffer] of await outputImages(dir, view, full, judge)) {
         await fs.writeFile(path.join(dir, file), buffer);
         const p = PNG.sync.read(buffer);
         view.images.push({
@@ -2062,6 +2119,41 @@ export async function render({ dir, author = "unattributed" }) {
   await write(path.join(dir, "annotated-diff.manifest.json"), manifest);
   return manifest;
 }
+async function outputImages(dir, view, full, judge) {
+  return [
+    [`${view.id}.annotated.png`, full.buffer],
+    [`${view.id}.judge.png`, judge.buffer],
+    [`${view.id}.clean.png`, await cleanPair(dir, view)],
+    [`${view.id}.mask.png`, await fs.readFile(path.join(dir, view.mask))],
+    ...(await Promise.all(
+      (view.blind_reverse ? ["head", "base"] : ["base", "head"]).map(async (half, n) => [
+        `${view.id}.${view.blind ? ["A", "B"][n] : ["before", "after"][n]}.png`,
+        await capturedImage(dir, half, view),
+      ]),
+    )),
+    ...full.insets.map((i, n) => [`${view.id}.inset-${n + 1}.png`, i.buffer]),
+  ];
+}
+
+export async function verifyImages(dir, view, full, judge) {
+  const expected = await outputImages(dir, view, full, judge);
+  if (!same(view.images.map((i) => i.file).sort(), expected.map(([file]) => file).sort()))
+    return false;
+  for (const [file, buffer] of expected) {
+    const image = view.images.find((i) => i.file === file);
+    const png = PNG.sync.read(buffer);
+    if (
+      image.sha256 !== hash(buffer) ||
+      image.bytes !== buffer.length ||
+      image.width !== png.width ||
+      image.height !== png.height ||
+      !buffer.equals(await fs.readFile(path.join(dir, file)))
+    )
+      return false;
+  }
+  return true;
+}
+
 async function cleanPair(dir, view) {
   const inputs = await Promise.all(
     (view.blind_reverse ? ["head", "base"] : ["base", "head"]).map((h) =>
@@ -2169,13 +2261,7 @@ async function verifyRender(dir, manifest) {
     for (const view of manifest.views) {
       const full = await renderView(browser, dir, manifest, view, manifest.palette, false),
         judge = await renderView(browser, dir, manifest, view, manifest.palette, true);
-      reproducible &&=
-        full.buffer.equals(await fs.readFile(path.join(dir, `${view.id}.annotated.png`))) &&
-        judge.buffer.equals(await fs.readFile(path.join(dir, `${view.id}.judge.png`)));
-      for (const [n, inset] of full.insets.entries())
-        reproducible &&= inset.buffer.equals(
-          await fs.readFile(path.join(dir, `${view.id}.inset-${n + 1}.png`)),
-        );
+      reproducible &&= await verifyImages(dir, view, full, judge);
       geometryValid &&= same(full.geometry, view.geometry);
     }
   } finally {
@@ -2490,7 +2576,7 @@ async function main() {
     return compare({
       dir: args.dir,
       root: args.repo || process.cwd(),
-      intent: await read(args.intent),
+      intentFile: args.intent,
     });
   if (command === "render") return render({ dir: args.dir, author: args.author });
   if (command === "check") {

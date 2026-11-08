@@ -1,9 +1,10 @@
-import { execFileSync } from "node:child_process";
+import { execFileSync, spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import pixelmatch from "pixelmatch";
 import { PNG } from "pngjs";
+import sharp from "sharp";
 import { afterAll, describe, expect, it } from "vitest";
 import {
   THRESHOLDS,
@@ -11,6 +12,8 @@ import {
   check,
   markdownFiles,
   verifyMarkdown,
+  verifyImages,
+  hash,
   contrast,
   diffHunks,
   digest,
@@ -48,6 +51,40 @@ const square = (x0, y0, size) => (x, y) =>
   x >= x0 && x < x0 + size && y >= y0 && y < y0 + size ? [0, 0, 0] : null;
 
 describe("readiness lifecycle", () => {
+  it("revokes readiness before CLI intent loading without losing prohibited capture failures", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "annotated-intent-"));
+    const file = path.join(dir, "annotated-diff.manifest.json");
+    const intent = path.join(dir, "intent.json");
+    try {
+      for (const mode of ["missing", "malformed"]) {
+        if (mode === "malformed") fs.writeFileSync(intent, "{");
+        for (const status of ["gallery_ready", "capture_invalid", "too_many_regions"]) {
+          const prior = {
+            status,
+            reasons: ["Original failure"],
+            checks: { passed: true },
+            judge_eligible: true,
+          };
+          fs.writeFileSync(file, JSON.stringify(prior));
+          const result = spawnSync(
+            process.execPath,
+            ["scripts/annotated-diff/run.mjs", "diff", "--dir", dir, "--intent", intent],
+            { encoding: "utf8", timeout: 10_000 },
+          );
+          expect(result.status).toBe(1);
+          expect(result.stderr).toMatch(mode === "missing" ? /ENOENT/ : /JSON|property/);
+          expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual({
+            ...prior,
+            status: status === "gallery_ready" ? "diffing" : status,
+            checks: { passed: false },
+            judge_eligible: false,
+          });
+        }
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
   it("rejects changed presentation before expensive capture reconciliation", async () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "annotated-presentation-"));
     const manifest = {
@@ -126,6 +163,115 @@ describe("readiness lifecycle", () => {
         });
         expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(rejected);
         expect(fs.readdirSync(dir)).toEqual(["annotated-diff.manifest.json"]);
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("delivered image inventory integrity", () => {
+  it("requires clean pairs and both exported halves with capture-derived bytes and metadata", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "annotated-companions-"));
+    const record = (file, buffer) => {
+      const image = PNG.sync.read(buffer);
+      return {
+        file,
+        sha256: hash(buffer),
+        bytes: buffer.length,
+        width: image.width,
+        height: image.height,
+      };
+    };
+    try {
+      for (const half of ["base", "head"]) fs.mkdirSync(path.join(dir, half));
+      const source = [
+        PNG.sync.write(png(8, 8, [255, 0, 0])),
+        PNG.sync.write(png(8, 8, [0, 0, 255])),
+      ];
+      source.forEach((buffer, n) =>
+        fs.writeFileSync(path.join(dir, n ? "head" : "base", "source.png"), buffer),
+      );
+      for (const blind of [false, true]) {
+        for (const layout of ["stacked", "side-by-side"]) {
+          const view = {
+            id: "v",
+            source_id: "source",
+            width: 4,
+            height: 4,
+            dpr: 2,
+            crop: { x: 0, y: 0, w: 4, h: 4 },
+            layout,
+            blind,
+            blind_reverse: blind,
+            mask: "v.mask.png",
+            images: [],
+          };
+          const full = {
+            buffer: PNG.sync.write(png(4, 4)),
+            insets: [{ buffer: PNG.sync.write(png(3, 3)) }],
+          };
+          const judge = { buffer: full.buffer };
+          const ordered = blind ? [...source].reverse() : source;
+          const resized = await Promise.all(
+            ordered.map((b) => sharp(b).resize({ width: 4 }).png().toBuffer()),
+          );
+          const clean = await sharp({
+            create: {
+              width: layout === "stacked" ? 4 : 8,
+              height: layout === "stacked" ? 8 : 4,
+              channels: 4,
+              background: "white",
+            },
+          })
+            .composite(
+              resized.map((input, n) => ({
+                input,
+                left: layout === "stacked" ? 0 : n * 4,
+                top: layout === "stacked" ? n * 4 : 0,
+              })),
+            )
+            .png()
+            .toBuffer();
+          const files = [
+            ["v.annotated.png", full.buffer],
+            ["v.judge.png", judge.buffer],
+            ["v.clean.png", clean],
+            ["v.mask.png", full.buffer],
+            ["v.inset-1.png", full.insets[0].buffer],
+            ...(await Promise.all(
+              ordered.map(async (buffer, n) => [
+                `v.${blind ? ["A", "B"][n] : ["before", "after"][n]}.png`,
+                await sharp(buffer)
+                  .extract({ left: 0, top: 0, width: 8, height: 8 })
+                  .png()
+                  .toBuffer(),
+              ]),
+            )),
+          ];
+          for (const [file, buffer] of files) fs.writeFileSync(path.join(dir, file), buffer);
+          view.images = files.map(([file, buffer]) => record(file, buffer));
+          expect(await verifyImages(dir, view, full, judge)).toBe(true);
+          const inventory = [...view.images];
+          for (const [file, buffer] of files.filter(([file]) =>
+            /\.(clean|before|after|A|B)\.png$/.test(file),
+          )) {
+            view.images = inventory.filter((i) => i.file !== file);
+            expect(await verifyImages(dir, view, full, judge)).toBe(false);
+            view.images = [...inventory];
+            fs.unlinkSync(path.join(dir, file));
+            await expect(verifyImages(dir, view, full, judge)).rejects.toThrow(/ENOENT/);
+            const replacement = PNG.sync.write(
+              png(PNG.sync.read(buffer).width, PNG.sync.read(buffer).height),
+            );
+            fs.writeFileSync(path.join(dir, file), replacement);
+            view.images = inventory.map((i) => (i.file === file ? record(file, replacement) : i));
+            expect(await verifyImages(dir, view, full, judge)).toBe(false);
+            fs.writeFileSync(path.join(dir, file), buffer);
+            view.images = [...inventory];
+          }
+          expect(await verifyImages(dir, view, full, judge)).toBe(true);
+        }
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
@@ -409,6 +555,35 @@ describe("validateLabels", () => {
     expect(() =>
       validateLabels(unverified, second({ label: "Measured appearance change" }), names),
     ).toThrow();
+  });
+
+  it("accepts uncertainty templates despite ordinary-word element names but rejects actual references", () => {
+    const item = { ...items[0], status: "unverified_claim", element: { name: "Control" } };
+    for (const label of [
+      "No visible change",
+      "No visible evidence",
+      "Control no visible change",
+      "Control no visible evidence",
+    ])
+      expect(
+        validateLabels(
+          [item],
+          [{ id: item.id, label, rationale: "No visible evidence" }],
+          ["Visible", "Evidence", "Change", "Control"],
+        ),
+      ).toBe(true);
+    for (const patch of [
+      { label: "Visible no visible change" },
+      { rationale: "Footer no visible evidence" },
+      { label: "Control padding changed" },
+    ])
+      expect(() =>
+        validateLabels(
+          [item],
+          [{ id: item.id, label: "No visible change", rationale: "", ...patch }],
+          ["Visible", "Footer"],
+        ),
+      ).toThrow();
   });
 
   it("rejects names of another element", () => {
@@ -1222,6 +1397,109 @@ describe("attribution audit regressions", () => {
     ...extra,
   });
   const itemFor = (items, region) => items.find((i) => i.regions.some((r) => r.id === region.id));
+
+  it("keeps coincident unsupported paint or media content unexplained while allowing plain opacity", () => {
+    const box = { x: 40, y: 40, w: 40, h: 40 };
+    const region = { id: "paint", bbox_css: box };
+    for (const kind of ["plain", "gradient", "url", "canvas", "img", "video"]) {
+      const before = node(
+        "paint",
+        2,
+        box,
+        { opacity: "0.4" },
+        {
+          tag: ["canvas", "img", "video"].includes(kind) ? kind : "div",
+          paint: { "background-image": kind === "url" ? 'url("/hero.png")' : "none" },
+        },
+      );
+      const after = {
+        ...before,
+        style: { opacity: "1" },
+        paint: {
+          "background-image":
+            kind === "gradient" ? "linear-gradient(red, blue)" : before.paint["background-image"],
+        },
+      };
+      const { items } = attribute(
+        [before],
+        [after],
+        [region],
+        claimOf("op", "#paint", "opacity"),
+        hunks,
+        "h",
+        view,
+      );
+      expect(itemFor(items, region).status).toBe(kind === "plain" ? "explained" : "unexplained");
+      if (kind !== "plain")
+        expect(items.find((i) => i.intent_ref === "op").status).toBe("unverified_claim");
+      if (["canvas", "img", "video"].includes(kind))
+        expect(itemFor(items, region).element).toBeNull();
+      expect(items.find((i) => i.intent_ref === "op").style_delta).toEqual([
+        { prop: "opacity", old: "0.4", new: "1" },
+      ]);
+    }
+  });
+
+  it("retains unsupported paint-only deltas in facts without saying unchanged", () => {
+    const box = { x: 40, y: 40, w: 40, h: 40 };
+    const before = node("paint", 2, box, {}, { paint: { "background-image": "none" } });
+    const after = { ...before, paint: { "background-image": "linear-gradient(red, blue)" } };
+    const { items } = attribute(
+      [before],
+      [after],
+      [{ id: "paint", bbox_css: box }],
+      [],
+      hunks,
+      "h",
+      view,
+    );
+    expect(items[0]).toMatchObject({
+      status: "unexplained",
+      change: "style",
+      style_delta: [],
+      paint_delta: [{ prop: "background-image", old: "none", new: "linear-gradient(red, blue)" }],
+    });
+    const docs = markdownFiles({
+      capture_spec_hash: "s",
+      capture_spec: { runtime: { playwright: "p", os_image: "os" }, seed: "fixture" },
+      views: [{ ...view, items, alt: "Paint" }],
+    });
+    expect(docs["v.judge.md"]).toContain("background-image: none → linear-gradient");
+    expect(docs["v.judge.md"]).not.toContain("unchanged");
+  });
+
+  it("marks only visible halves when existing elements move outside either viewport axis", () => {
+    const visible = { x: 100, y: 100, w: 20, h: 20 };
+    for (const offscreen of [
+      { ...visible, x: 500 },
+      { ...visible, x: -100 },
+      { ...visible, y: 1000 },
+      { ...visible, y: -100 },
+    ]) {
+      for (const reverse of [false, true]) {
+        const a = node("card", 2, reverse ? offscreen : visible);
+        const b = node("card", 2, reverse ? visible : offscreen);
+        const { items } = attribute(
+          [a],
+          [b],
+          [{ id: "move", bbox_css: visible }],
+          [],
+          hunks,
+          "h",
+          view,
+        );
+        const [r] = items[0].regions;
+        expect(r.half).toBe(reverse ? "after" : "before");
+        expect(r[reverse ? "before" : "after"]).toBeNull();
+        expect(r[reverse ? "after" : "before"].w).toBeGreaterThan(0);
+        expect(r[reverse ? "after" : "before"].h).toBeGreaterThan(0);
+        const projected = { ...view, items };
+        projected.geometry = geometry(projected);
+        expect(projected.geometry.marks.map((m) => m.half)).toEqual([r.half]);
+        expect(geometryCheck(projected)).toBe(true);
+      }
+    }
+  });
 
   it("does not explain an independent move with a simultaneous opacity claim", () => {
     const before = node("card", 2, { x: 50, y: 40, w: 20, h: 20 }, { opacity: "0.4" });

@@ -6,6 +6,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
 import { verifyMotion } from "./motion.mjs";
+import { verifyPaint } from "./paint.mjs";
 import {
   capture,
   compare,
@@ -20,10 +21,14 @@ import {
   hash,
   reconcileInputs,
   normalizeMotion,
+  regions,
+  STYLES,
 } from "../run.mjs";
 
 await verifyMotion(normalizeMotion);
 console.log("Native-frame motion regression passed");
+await verifyPaint({ attribute, normalizeIntent, regions, STYLES });
+console.log("Coincident paint/media regression and opacity-only control passed");
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const run = path.join(root, ".climb/diff", `qualification-${Date.now()}`);
@@ -404,6 +409,8 @@ try {
         "Keep authored auto constraints, not resolved opposite insets",
       );
       assert.deepEqual(next.flow.inset, old.flow.inset);
+      assert.equal(old.paint["background-image"], "none");
+      assert.equal(next.paint["background-image"], "none");
       assert.equal(old.rect.y, 1100 - (frozen.fullPage ? 0 : a.scrollY));
       assert.equal(next.rect.y - old.rect.y, mode === "zero" ? 0 : 40);
       assert.equal(a.mask_rects[0].y, 1250 - (frozen.fullPage ? 0 : a.scrollY));
