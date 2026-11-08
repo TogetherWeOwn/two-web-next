@@ -444,7 +444,7 @@ test("candidate build invokes candidate command and awaits its capture boundary"
       },
       {
         command: "npm",
-        args: ["run", "build", "--prefix", "web"],
+        args: ["--ignore-scripts", "run", "build", "--prefix", "web"],
         options: { cwd: root, timeoutMs: 240000, maxBytes: 2097152 },
       },
     ]);
@@ -479,6 +479,48 @@ test("candidate build invokes candidate command and awaits its capture boundary"
   });
   assert.equal(result.dependenciesVerified, false);
   assert.equal(result.executionVerified, false);
+});
+
+test("candidate named build suppresses implicit lifecycle hooks with native npm", async () => {
+  const { root, sha } = candidateBuildRepo();
+  const result = await runCanonicalCandidateBuild(root, sha, async () => "fixture-capture");
+  const cwd = fixtureRoot("npm-lifecycle");
+  write(
+    cwd,
+    "web/package.json",
+    JSON.stringify({
+      private: true,
+      scripts: {
+        prebuild: 'node -e "process.exit(91)"',
+        build: 'node -e "require(\'node:fs\').writeFileSync(\'built.txt\', \'named build\')"',
+        postbuild: 'node -e "process.exit(92)"',
+      },
+    }),
+  );
+  const invoke = (args) =>
+    spawnSync(result.command.executable, args, {
+      cwd,
+      env: {
+        PATH: process.env.PATH,
+        HOME: cwd,
+        npm_config_userconfig: join(cwd, "empty.npmrc"),
+        npm_config_globalconfig: join(cwd, "empty-global.npmrc"),
+      },
+      encoding: "utf8",
+      timeout: 30000,
+      maxBuffer: 2097152,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+  write(cwd, "empty.npmrc", "");
+  write(cwd, "empty-global.npmrc", "");
+  const unguarded = invoke(result.command.args.filter((arg) => arg !== "--ignore-scripts"));
+  assert.equal(unguarded.error, undefined);
+  assert.equal(unguarded.status, 91);
+  assert.equal(existsSync(join(cwd, "web/built.txt")), false);
+  const guarded = invoke(result.command.args);
+  assert.equal(guarded.error, undefined);
+  assert.equal(guarded.status, 0);
+  assert.equal(readFileSync(join(cwd, "web/built.txt"), "utf8"), "named build");
 });
 
 for (const generator of [

@@ -28,6 +28,15 @@ matching output digest, without claiming dependency or runtime integrity. Six ne
 negative-control registrations and the expanded command-order/receipt fixture use
 the existing Actions suite; they have not run. This does not install dependencies,
 verify npm lifecycle execution or provide an admitted collection caller.
+The separated named build now passes native npm `--ignore-scripts`: the explicit
+candidate generator remains the only generator invocation before the build, and
+implicit `prebuild`/`postbuild` hooks cannot run outside that observed boundary.
+The named candidate build script still executes unchanged. A new hermetic Actions
+fixture uses the emitted command against inert npm scripts: without the flag a
+failing prebuild prevents the build; with it the named build writes its marker
+and both failing lifecycle hooks stay disabled. This fixture has not run. No
+candidate manifest, lockfile, package-manager config or install policy is changed;
+installation, dependency contents and actual npm/runtime provenance stay unverified.
 Capture runs at the candidate build-return callback, before source rechecks;
 failed or partial captures remain on disk rather than becoming success receipts.
 A distinct separated-capture schema binds the candidate source SHA, collector

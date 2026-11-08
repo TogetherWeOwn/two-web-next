@@ -391,9 +391,12 @@ export async function runCanonicalCandidateBuild(path, expectedSha, capture) {
     { ...source, installBoundary },
     "candidate generator inputs or output changed",
   );
+  // The pinned generator already ran and its bytes were checked above. Native
+  // npm script refusal still runs the named build, without implicit pre/post
+  // hooks that would execute the generator again outside that observed boundary.
   const command = {
     executable: "npm",
-    args: ["run", "build", "--prefix", "web"],
+    args: ["--ignore-scripts", "run", "build", "--prefix", "web"],
     cwd: "candidate-root",
     timeoutMs: 240000,
     maxBytes: 2097152,
