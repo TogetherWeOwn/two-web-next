@@ -110,6 +110,18 @@ prior-head Actions run below, without executing an actual separated collection.
 
 ## Observed verification
 
+[Actions 42529000610](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42529000610)
+at `4762f9510ccea6fffc959269da072924e70286e3` completed with **success**.
+Main check, Node 22, all auxiliary jobs and `ci-ok` passed. The production build,
+canonical capture/finalization, frozen rehearsal, built fatal fixture and full
+production-config parity steps passed; both parity recordings contain 3,313 vectors.
+The numeric/member/ZIP fixtures published on that head reached the successful
+parity selftest step. This ends the producer-preservation serialization, not the
+recovery or release gate. The retained authenticated separated reader, explicit
+candidate generator and npm lifecycle controls were not on that tested head;
+they still require new exact-head Actions. No local tests, lint, typecheck, build
+or install ran. Production remains Hono; no accepted D, B receipt or P admission.
+
 [Actions 42527595161](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42527595161)
 at `1b5ff4c9e4520c9af3759d3adc0ae056df9bb6f9` completed with **failure**.
 Both test legs stopped at formatting in the separated execution module and fixtures;
