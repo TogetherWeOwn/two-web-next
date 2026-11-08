@@ -259,8 +259,7 @@ test("failed producer with complete trees preserves complete bytes but throws", 
   const root = makeRoot();
   const dest = target();
   assert.throws(
-    () =>
-      captureCanonicalBuild(root, dest, context({ producerOutcome: "failure" }), authority()),
+    () => captureCanonicalBuild(root, dest, context({ producerOutcome: "failure" }), authority()),
     /canonical producer failed before capture/,
   );
   const journal = status(dest);
@@ -278,8 +277,7 @@ test("failed producer with missing trees is a failed capture", () => {
   rmSync(join(root, CLIENT_TREE), { recursive: true });
   const dest = target();
   assert.throws(
-    () =>
-      captureCanonicalBuild(root, dest, context({ producerOutcome: "failure" }), authority()),
+    () => captureCanonicalBuild(root, dest, context({ producerOutcome: "failure" }), authority()),
     /canonical byte capture failed/,
   );
   const journal = status(dest);

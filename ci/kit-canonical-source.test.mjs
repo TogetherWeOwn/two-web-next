@@ -116,7 +116,10 @@ test("canonicalCellIdentity rejects later cells, defaults, floats and equal D=B"
   }
   assert.throws(() => canonicalCellIdentity({}), /explicit full source SHA/);
   assert.throws(() => canonicalCellIdentity({ cell: "B" }), /explicit full source SHA/);
-  assert.throws(() => canonicalCellIdentity({ cell: "B", collectorSha }), /explicit full source SHA/);
+  assert.throws(
+    () => canonicalCellIdentity({ cell: "B", collectorSha }),
+    /explicit full source SHA/,
+  );
   assert.throws(
     () => canonicalCellIdentity({ cell: "B", candidateSha: B_COMMIT }),
     /explicit full source SHA/,

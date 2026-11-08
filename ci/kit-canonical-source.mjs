@@ -121,10 +121,7 @@ export function inspectCanonicalSource(path, expectedSha) {
     const [, mode, blob, path] = match;
     const bytes = sourceBytes(root, path, LIMITS.bytes - totalBytes);
     totalBytes += bytes.length;
-    const actual = createHash("sha1")
-      .update(`blob ${bytes.length}\0`)
-      .update(bytes)
-      .digest("hex");
+    const actual = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
     assert.equal(actual, blob, "tracked source bytes differ from pinned tree");
     assert.equal(
       Boolean(lstatSync(join(root, path)).mode & 0o111),
@@ -147,7 +144,10 @@ export function bindCanonicalSources(collectorPath, candidatePath, context) {
   const identity = canonicalCellIdentity(context);
   const collectorRoot = directory(collectorPath);
   const candidateRoot = directory(candidatePath);
-  for (const [a, b] of [[collectorRoot, candidateRoot], [candidateRoot, collectorRoot]]) {
+  for (const [a, b] of [
+    [collectorRoot, candidateRoot],
+    [candidateRoot, collectorRoot],
+  ]) {
     const relation = relative(a, b);
     assert.ok(
       relation === ".." || relation.startsWith(`..${sep}`),
