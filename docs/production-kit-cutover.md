@@ -50,9 +50,14 @@ Empty directories remain **receipt-declared**, not observed ZIP entries.
 
 The existing data-only ZIP inspector now has a canonical profile, composed with
 that member verifier. It checks the complete ZIP digest/size and explicit
-SHA/run/attempt-keyed artifact name against supplied expectations, then reads only
-`artifacts/kit-canonical-capture/bytes/`. Later raw output never substitutes for
-that frozen subtree. Both profiles share regular-file/compression validation;
+SHA/run/attempt-keyed artifact name against supplied expectations, then reads the
+fixed `artifacts/kit-canonical-capture/bytes/` subtree and its sibling `status.json`.
+Later raw output never substitutes for that frozen subtree. The journal is bounded
+at 16 KiB and checked against a separately supplied digest. Its exact schema must
+bind the same source/workflow SHA, run/attempt and receipt digest/length to a
+successful build and complete build-process-return capture; failed, stale or
+caller-requested captures refuse. The result records this identity check without
+claiming authentication. Both profiles share regular-file/compression validation;
 the Hono profile retains its flat membership contract. The canonical profile
 bounds compressed bytes, entries, expanded sizes, child memory/time and output;
 unsafe paths, duplicate names, aliases, encrypted/unsupported entries, invalid
@@ -62,9 +67,12 @@ no credential environment and a trusted cwd; it never extracts or executes bytes
 This is **digest-bound byte verification**, not authentication: the caller must
 obtain the expected digests and capture identity through trusted channels. The
 result explicitly keeps authentication and qualification false. Other artifact
-subtrees are not content-verified. Authenticated retrieval/journal binding and
-source-separated caller integration remain unfinished. New parser/member fixtures
-use the existing Actions invocation and have not run yet. No local suite, lint,
+subtrees are not content-verified. Authenticated retrieval/metadata binding and
+source-separated caller integration remain unfinished. The journal-binding slice
+adds 17 fixture registrations to the existing Actions invocation; these additions
+have not run yet. Published-head Actions 42511829980 was still executing both test
+legs at inspection, with auxiliary jobs passed; no corrected overall verdict is
+claimed. No local suite, lint,
 build or installation ran.
 
 [Actions 42500235397](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42500235397)

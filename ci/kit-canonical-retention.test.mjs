@@ -213,7 +213,7 @@ function canonicalZip(entries) {
   });
 }
 
-function archiveFixture(mutate = () => {}) {
+function archiveFixture(mutate = () => {}, mutateJournal = () => {}) {
   const root = makeRoot("zip-root");
   mkdirSync(join(root, SERVER, "empty"));
   const receipt = createCanonicalReceipt(root, authority());
@@ -223,6 +223,26 @@ function archiveFixture(mutate = () => {}) {
     base64: readFileSync(join(root, path)).toString("base64"),
   }));
   entries.push({ name: `${ARCHIVE_PREFIX}receipt.json`, base64: receiptBytes.toString("base64") });
+  const receiptSha256 = createHash("sha256").update(receiptBytes).digest("hex");
+  const journal = {
+    schema: "two.kit-canonical-capture.v1",
+    evidence: "unqualified-same-source-ci-diagnostic",
+    sourceSha: "a".repeat(40),
+    workflowSha: "a".repeat(40),
+    runId: "123",
+    runAttempt: "2",
+    producerOutcome: "success",
+    captureBoundary: "build-process-return",
+    capture: "complete",
+    qualified: false,
+    receipt: { path: "bytes/receipt.json", bytes: receiptBytes.length, sha256: receiptSha256 },
+  };
+  mutateJournal(journal);
+  const journalBytes = Buffer.from(`${JSON.stringify(journal)}\n`);
+  entries.push({
+    name: "artifacts/kit-canonical-capture/status.json",
+    base64: journalBytes.toString("base64"),
+  });
   // This artifact contains other diagnostic trees; only the fixed capture
   // subtree is verified. It is never substituted by later raw build output.
   entries.push({ name: "web/.svelte-kit/output/server/later.js", base64: "eA==" });
@@ -231,7 +251,8 @@ function archiveFixture(mutate = () => {}) {
   const expected = {
     archiveBytes: archive.length,
     archiveSha256: createHash("sha256").update(archive).digest("hex"),
-    receiptSha256: createHash("sha256").update(receiptBytes).digest("hex"),
+    receiptSha256,
+    journalSha256: createHash("sha256").update(journalBytes).digest("hex"),
     sourceSha: "a".repeat(40),
     runId: "123",
     runAttempt: "2",
@@ -249,12 +270,61 @@ test("canonical artifact parser verifies bytes without claiming authentication",
   assert.equal(verified.directoryEvidence, "receipt-declared");
   assert.equal(verified.authenticatedArchiveVerified, false);
   assert.equal(verified.qualified, false);
+  assert.equal(verified.journalSha256, expected.journalSha256);
+  assert.equal(verified.journalIdentityVerified, true);
 });
+
+for (const [name, mutate] of Object.entries({
+  source: (journal) => {
+    journal.sourceSha = "b".repeat(40);
+  },
+  workflow: (journal) => {
+    journal.workflowSha = "b".repeat(40);
+  },
+  run: (journal) => {
+    journal.runId = "124";
+  },
+  attempt: (journal) => {
+    journal.runAttempt = "3";
+  },
+  producer: (journal) => {
+    journal.producerOutcome = "failure";
+  },
+  boundary: (journal) => {
+    journal.captureBoundary = "caller-requested";
+  },
+  capture: (journal) => {
+    journal.capture = "failed";
+  },
+  qualification: (journal) => {
+    journal.qualified = true;
+  },
+  "receipt path": (journal) => {
+    journal.receipt.path = "later/receipt.json";
+  },
+  "receipt size": (journal) => {
+    journal.receipt.bytes += 1;
+  },
+  "receipt digest": (journal) => {
+    journal.receipt.sha256 = "0".repeat(64);
+  },
+  "extra field": (journal) => {
+    journal.privateDetail = "not retained";
+  },
+})) {
+  test(`canonical artifact parser rejects capture journal ${name}`, () => {
+    const { archive, expected } = archiveFixture(() => {}, mutate);
+    assert.throws(() => verifyCanonicalArtifactBytes(archive, expected, authority()), {
+      message: ARCHIVE_FAILURE,
+    });
+  });
+}
 
 for (const key of [
   "archiveBytes",
   "archiveSha256",
   "receiptSha256",
+  "journalSha256",
   "artifactName",
   "sourceSha",
   "runId",
@@ -277,6 +347,20 @@ for (const [name, mutate] of Object.entries({
       entries.findIndex((e) => e.name.endsWith("/receipt.json")),
       1,
     ),
+  "missing journal": (entries) => {
+    const index = entries.findIndex((e) => e.name.endsWith("/status.json"));
+    entries.splice(index, 1);
+  },
+  "empty journal": (entries) => {
+    entries.find((e) => e.name.endsWith("/status.json")).base64 = "";
+  },
+  "oversized journal": (entries) => {
+    const journal = entries.find((e) => e.name.endsWith("/status.json"));
+    journal.base64 = Buffer.alloc(16385).toString("base64");
+  },
+  "journal digest drift": (entries) => {
+    entries.find((e) => e.name.endsWith("/status.json")).base64 = "eA==";
+  },
   "extra selected file": (entries) =>
     entries.push({ name: `${ARCHIVE_PREFIX}extra`, base64: "eA==" }),
   traversal: (entries) => {

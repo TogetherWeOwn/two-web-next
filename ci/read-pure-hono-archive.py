@@ -87,6 +87,7 @@ def read_archive(data):
 
 
 CANONICAL_PREFIX = "artifacts/kit-canonical-capture/bytes/"
+CANONICAL_JOURNAL = "artifacts/kit-canonical-capture/status.json"
 CANONICAL_ARCHIVE = 128 * 1024 * 1024
 
 
@@ -125,6 +126,15 @@ def read_canonical_archive(data):
             or selected_total > 264 * 1024 * 1024
         ):
             raise ValueError("canonical members outside bounds")
+        if CANONICAL_JOURNAL not in names:
+            raise ValueError("capture journal missing")
+        journal = archive.getinfo(CANONICAL_JOURNAL)
+        if not 0 < journal.file_size <= 16384:
+            raise ValueError("capture journal outside bounds")
+        with archive.open(journal) as member:
+            journal_bytes = member.read(journal.file_size + 1)
+        if len(journal_bytes) != journal.file_size:
+            raise ValueError("capture journal length mismatch")
         members = []
         for entry in sorted(selected, key=lambda item: item.filename):
             path = entry.filename[len(CANONICAL_PREFIX):]
@@ -135,7 +145,7 @@ def read_canonical_archive(data):
             if len(content) != entry.file_size:
                 raise ValueError("member length mismatch")
             members.append({"path": path, "type": "file", "base64": base64.b64encode(content).decode("ascii")})
-        return members
+        return {"members": members, "journalBase64": base64.b64encode(journal_bytes).decode("ascii")}
 
 
 if __name__ == "__main__":

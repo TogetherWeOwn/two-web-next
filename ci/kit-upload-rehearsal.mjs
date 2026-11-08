@@ -323,6 +323,7 @@ export function verifyCanonicalArtifactBytes(archive, expected, authority) {
     assert.match(expected.sourceSha, /^[0-9a-f]{40}$/);
     assert.match(expected.runId, /^[1-9][0-9]*$/);
     assert.match(expected.runAttempt, /^[1-9][0-9]*$/);
+    assert.match(expected.journalSha256, /^[0-9a-f]{64}$/);
     assert.equal(
       expected.artifactName,
       `kit-production-bundle-build-${expected.sourceSha}-${expected.runId}-${expected.runAttempt}`,
@@ -346,15 +347,42 @@ export function verifyCanonicalArtifactBytes(archive, expected, authority) {
         },
       ),
     );
-    const members = parsed.map(({ path, type, base64 }) => ({
+    const journalBytes = Buffer.from(parsed.journalBase64, "base64");
+    assert.equal(sha256(journalBytes), expected.journalSha256, "capture journal digest mismatch");
+    const journal = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(journalBytes));
+    const members = parsed.members.map(({ path, type, base64 }) => ({
       path,
       type,
       data: Buffer.from(base64, "base64"),
     }));
     const verified = verifyCanonicalArchiveMembers(members, authority, expected.receiptSha256);
+    const receiptBytes = members.find((member) => member.path === "receipt.json").data;
+    assert.deepEqual(
+      journal,
+      {
+        schema: "two.kit-canonical-capture.v1",
+        evidence: "unqualified-same-source-ci-diagnostic",
+        sourceSha: expected.sourceSha,
+        workflowSha: expected.sourceSha,
+        runId: expected.runId,
+        runAttempt: expected.runAttempt,
+        producerOutcome: "success",
+        captureBoundary: "build-process-return",
+        capture: "complete",
+        qualified: false,
+        receipt: {
+          path: "bytes/receipt.json",
+          bytes: receiptBytes.length,
+          sha256: expected.receiptSha256,
+        },
+      },
+      "capture journal identity mismatch",
+    );
     return {
       ...verified,
       evidence: "digest-bound-canonical-artifact-bytes",
+      journalSha256: expected.journalSha256,
+      journalIdentityVerified: true,
       artifactName: expected.artifactName,
       archiveSha256: expected.archiveSha256,
       archiveBytes: archive.length,
