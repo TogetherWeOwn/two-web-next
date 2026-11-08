@@ -78,6 +78,7 @@ test("descriptor is exact and digests bind each input", () => {
       assets: "adapter",
       environment: "default",
       nameOverride: false,
+      sourceMaps: false,
     },
     intentSha256,
   });

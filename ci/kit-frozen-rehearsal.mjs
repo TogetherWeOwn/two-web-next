@@ -81,6 +81,9 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
     "upload",
     "--dry-run",
     "--no-bundle",
+    // The complete build retains its map. This single-module profile must not
+    // auto-attach that adjacent file to the serialized upload envelope.
+    "--upload-source-maps=false",
     join(frozen, "build/worker.js"),
     "--config",
     join(frozen, "source/web/wrangler.production.jsonc"),
@@ -154,6 +157,7 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
     ],
     invocation: {
       command: ["versions", "upload", "--dry-run", "--no-bundle"],
+      sourceMaps: false,
       entry: "build/worker.js",
       config: "source/web/wrangler.production.jsonc",
       assets: "adapter",

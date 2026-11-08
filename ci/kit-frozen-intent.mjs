@@ -80,6 +80,7 @@ export function createKitFrozenIntent(inputs, tool, multipart) {
       assets: "adapter",
       environment: "default",
       nameOverride: false,
+      sourceMaps: false,
     },
   };
   return { ...intent, intentSha256: sha256(JSON.stringify(intent)) };

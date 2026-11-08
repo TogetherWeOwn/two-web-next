@@ -108,7 +108,12 @@ function fixture(run) {
 
 test("snapshot rehearsal pins paths, dry-run flags, environment and bounded execution", () => {
   fixture((f) => {
+    const map = join(f.snapshot, "build/worker.js.map");
+    writeFileSync(map, "{}");
     const receipt = f.invoke();
+    assert.equal(readFileSync(map, "utf8"), "{}");
+    assert.equal(receipt.invocation.sourceMaps, false);
+    assert.equal(receipt.intent.invocation.sourceMaps, false);
     const [{ command, args, options }] = f.calls;
     assert.equal(command, process.execPath);
     assert.deepEqual(args, [
@@ -117,6 +122,7 @@ test("snapshot rehearsal pins paths, dry-run flags, environment and bounded exec
       "upload",
       "--dry-run",
       "--no-bundle",
+      "--upload-source-maps=false",
       join(f.snapshot, "build/worker.js"),
       "--config",
       join(f.snapshot, "source/web/wrangler.production.jsonc"),

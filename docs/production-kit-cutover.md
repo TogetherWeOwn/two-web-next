@@ -6,17 +6,29 @@ build yet.
 
 ## Observed verification
 
-Serialized-config checks and the prepared-input descriptor below are newly
-prepared and **untested**. Published
 [Actions 42472988388](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42472988388)
-at `f3de951a239df18c61c090148cfd104d53881f96` was still running at inspection:
-main and Node 22 suites were executing; scope, docs-links, bundle-budget,
-accessibility and Lighthouse passed. No current-head completed suite, frozen
-rehearsal, parity or overall PASS is claimed. Only replacement of
-that same-branch cancel-in-progress producer is deferred until completion,
-concrete required-leg failure or its existing main-job timeout; independent
-source preparation continues. The pending config checks add no deploy or
-recovery acceptance.
+at `f3de951a239df18c61c090148cfd104d53881f96` completed with **failure**.
+Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
+auxiliary jobs passed. Kit typecheck/build, checked-tool/config/classifier,
+same-byte rehearsal and snapshot creation/verification passed; all 35 snapshot,
+20 multipart and 27 frozen-rehearsal fixtures passed. The real frozen rehearsal
+then refused unexpected multipart membership. Built fatal and production parity
+were not reached; missing artifacts are consequences, not runtime verdicts.
+
+The authenticated build archive contains an adjacent `build/worker.js.map`.
+Lock-SRI-verified Wrangler 4.156.1 source confirms `buildWorker` calls
+`loadSourceMaps` unless `uploadSourceMaps === false`, then
+`createWorkerUploadForm` attaches those maps as extra parts. The frozen rehearsal
+now explicitly passes `--upload-source-maps=false` for its finite single-module
+profile. The complete build map remains in the frozen archive; parser rejection
+of extra modules/maps is unchanged. Both rehearsal and prepared-input invocation
+records bind this choice. The focused invocation regression failed before the
+repair and passed after; the real corrected Wrangler rehearsal is unverified.
+The production uploader remains unchanged. Any future uploader consuming this
+intent must preserve its explicit source-map choice or qualify a revised profile.
+Serialized-config checks and the prepared-input descriptor are newly published
+with this repair and remain **untested in Actions**. No corrected frozen
+rehearsal, full parity or overall CI PASS is claimed; recovery gates are unchanged.
 
 [Actions run 42468936442](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42468936442)
 at `a888daf9358a5a7f20a71325a271bd40f60b8bc2` failed the snapshot fixture step:
