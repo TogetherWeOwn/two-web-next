@@ -28,11 +28,10 @@ function makeVerified({ inputs, packages, absenceEligible = true, unknownExterna
     target: "two-web-next-production",
     environment: "production",
     bundle: { algorithm: "sha256", sha256: "b".repeat(64), entry: "worker.js" },
-    inputs:
-      inputs ?? [
-        input("src/worker.ts"),
-        input("node_modules/hono/dist/hono.js", "node_modules/hono"),
-      ],
+    inputs: inputs ?? [
+      input("src/worker.ts"),
+      input("node_modules/hono/dist/hono.js", "node_modules/hono"),
+    ],
     packages: packages ?? [pkg("hono")],
     externals: [],
     absenceEligible,
@@ -67,7 +66,11 @@ const makeNative = (overrides = {}) => ({
 });
 
 const create = (verified = makeVerified(), deployed, native = makeNative()) =>
-  createPureHonoRollback(verified, deployed === undefined ? makeDeployed(verified) : deployed, native);
+  createPureHonoRollback(
+    verified,
+    deployed === undefined ? makeDeployed(verified) : deployed,
+    native,
+  );
 
 describe("createPureHonoRollback", () => {
   test("returns the exact pointer for a verified pure-Hono deployment", () => {

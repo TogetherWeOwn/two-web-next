@@ -84,9 +84,11 @@ function verifiedFixture() {
 
 test("Actions reverifies the built receipt and runs the receipt fixture tests", () => {
   const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
-  assert.ok(workflow.includes("BUILD_SHA=\"$GITHUB_SHA\" node ci/kit-upload-evidence.mjs verify"));
+  assert.ok(workflow.includes('BUILD_SHA="$GITHUB_SHA" node ci/kit-upload-evidence.mjs verify'));
   assert.ok(
-    workflow.includes("node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs"),
+    workflow.includes(
+      "node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs",
+    ),
   );
 });
 
