@@ -5,6 +5,7 @@ import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { PNG } from "pngjs";
+import { verifyMotion } from "./motion.mjs";
 import {
   capture,
   compare,
@@ -18,7 +19,11 @@ import {
   diffHunks,
   hash,
   reconcileInputs,
+  normalizeMotion,
 } from "../run.mjs";
+
+await verifyMotion(normalizeMotion);
+console.log("Native-frame motion regression passed");
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
 const run = path.join(root, ".climb/diff", `qualification-${Date.now()}`);
