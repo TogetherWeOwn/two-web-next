@@ -809,6 +809,12 @@ jobs:
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run"
           npx wrangler deploy --config web/wrangler.production.jsonc --dry-run --outdir "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run" --metafile "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/bundle-meta.json"
+      - name: Production Kit complete asset classification (build inputs only)
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
+        run: |
+          node --test ci/kit-complete-assets.test.mjs
+          mkdir -p artifacts/kit-upload-rehearsal
+          node ci/kit-complete-assets.mjs web/.svelte-kit/cloudflare artifacts/kit-upload-rehearsal/public-assets.json
       - name: Production Kit same-byte upload rehearsal (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         shell: bash

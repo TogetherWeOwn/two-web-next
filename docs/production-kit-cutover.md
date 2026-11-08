@@ -221,12 +221,46 @@ upload session. Dry-run multipart output therefore supplies no native selected-
 asset manifest either. This source inspection is not an upload or account probe.
 
 The rehearsal's complete adapter tree is useful build evidence but cannot be
-renamed as native asset selection. No supported dry-run selection-output contract
-has been established. Do not add a speculative `.assetsignore` parser, infer
-selection from debug listings or perform a real upload merely to fill this gap.
-Upload evidence integration still needs an exact selection/provenance mechanism
-and its applicable authorization; neither this note nor the recovery-spec
-amendment supplies that capability.
+renamed as native asset selection. The November 8 technical decision retains
+unmodified Wrangler 4.156.1 `versions upload`: a native manifest receipt is not a
+requirement. The replacement proof is a complete frozen archive, independently
+checked finite file/ignore/config semantics, archive-to-intent-to-native-UUID
+association, authenticated successful-main provenance and custody, exhaustive
+asset verification, and both actual on-demand staging recovery drills. This is
+input/process and qualified-recovery evidence, not remote byte readback. No
+custom uploader, private Wrangler imports or hash-algorithm replica is selected.
+
+The first source slice, `ci/kit-complete-assets.mjs`, independently classifies the
+current adapter directory into public URL/member/size/SHA-256/MIME rows, Worker
+inputs, raw control inputs and ignored build-only rows. It accepts only the exact
+adapter 8.0.2 literal ignore bytes, with no source prefix. Unknown patterns,
+negation, unexpected nested special names, symlinked ancestors/tree entries,
+non-regular files, URL aliases, case collisions and unknown MIME extensions fail.
+The basename/subtree rules apply to `_worker.js`, `_routes.json`, `_headers` and
+`_redirects`; a nested special name outside the declared root Worker subtree is
+rejected rather than silently classified. Root `_headers` and optional
+`_redirects` are semantic inputs, never served-file claims. JSON has no charset;
+only text MIME types gain UTF-8, following the pinned upload helper. The published
+Wrangler asset helper uses the bundled mime 4.0.7 table, including
+`image/vnd.microsoft.icon` and `application/manifest+json`.
+
+Actions runs the new hermetic negative controls and records
+`public-assets.json` beside the existing rehearsal evidence after the real
+adapter build. These changes are not yet tested. The classifier does not freeze
+inputs, verify the effective production config or executable, produce an upload
+intent, or qualify recovery. Before/after hashes alone are not a read-only upload
+snapshot. The pure-Hono profile remains separate and unimplemented. No counts
+are hardcoded as file allowlists. Unsupported layout/ignore changes require a
+reviewed profile, not an ignore rewrite or general gitignore implementation.
+
+Still required before upload acceptance: read-only complete snapshot and exact
+membership re-verification, effective module/config/control semantics, invoked
+Wrangler/lock integrity, digest-bound intent and guarded native version/tag
+readback, then attested successful-main custody and actual recovery drills.
+Pinned upload may patch service/environment tags; non-versioned routes, tail,
+jobs, schedules and settings need current identity/preservation evidence rather
+than assumed multipart preservation. No account probe or upload is authorized by
+this source slice. Production still uploads Hono.
 
 ## Unimplemented
 
