@@ -56,12 +56,31 @@ export const STYLES = [
 ];
 // Residual evidence only: these properties never qualify an intent as explained.
 const PAINT_GUARDS = [
+  "border-top-style",
+  "border-right-style",
+  "border-bottom-style",
+  "border-left-style",
+  "outline-style",
+  "outline-color",
+  "outline-width",
+  "outline-offset",
   "background-image",
+  "background-clip",
+  "background-origin",
+  "background-attachment",
   "background-size",
   "background-position",
   "background-repeat",
   "background-blend-mode",
   "border-image-source",
+  "border-image-slice",
+  "border-image-width",
+  "border-image-outset",
+  "border-image-repeat",
+  "text-decoration-line",
+  "text-decoration-color",
+  "text-decoration-style",
+  "text-decoration-thickness",
   "filter",
   "backdrop-filter",
   "clip-path",
@@ -254,6 +273,122 @@ export async function normalizeMotion(page) {
   }
 }
 
+export async function captureDOM(page, { font, masks = [], fullPage = false }) {
+  return page.evaluate(
+    ({ props, paintProps, font, masks, fullPage }) => {
+      const nodes = [...document.querySelectorAll("body *")].filter(
+        (e) =>
+          !["SCRIPT", "STYLE", "LINK", "META"].includes(e.tagName) &&
+          !masks.some((m) => e.closest(m.selector)),
+      );
+      if (nodes.length > 20_000) throw new Error("DOM inventory exceeds limit");
+      const cssPath = (e) => {
+        if (e.id) return `#${CSS.escape(e.id)}`;
+        if (!e.parentElement || e === document.body) return "body";
+        return `${cssPath(e.parentElement)} > ${e.tagName.toLowerCase()}:nth-child(${[...e.parentElement.children].indexOf(e) + 1})`;
+      };
+      const elements = nodes
+        .map((e) => {
+          const r = e.getBoundingClientRect(),
+            s = getComputedStyle(e),
+            testid = e.getAttribute("data-testid");
+          const text = e.childElementCount
+            ? [...e.childNodes]
+                .filter((n) => n.nodeType === 3)
+                .map((n) => n.textContent)
+                .join("")
+                .trim()
+            : e.textContent.trim();
+          const ancestors = [];
+          let suppressed = s.display === "none";
+          for (let p = e.parentElement; p; p = p.parentElement) {
+            ancestors.push(
+              p.hasAttribute("data-testid")
+                ? `[data-testid="${CSS.escape(p.getAttribute("data-testid"))}"]`
+                : cssPath(p),
+            );
+            if (getComputedStyle(p).display === "none") suppressed = true;
+          }
+          const parentStyle = getComputedStyle(e.parentElement);
+          return {
+            ancestors,
+            flow: {
+              parent: cssPath(e.parentElement),
+              position: s.position,
+              inset: ["top", "right", "bottom", "left"].map((p) =>
+                e.computedStyleMap().get(p).toString(),
+              ),
+              float: s.cssFloat,
+              transform: s.transform,
+              translate: s.translate,
+              rotate: s.rotate,
+              scale: s.scale,
+              parent_display: parentStyle.display,
+              writing_mode: parentStyle.writingMode,
+            },
+            key: testid ? `testid:${testid}` : `${cssPath(e)}|${text}`,
+            selector: testid ? `[data-testid="${CSS.escape(testid)}"]` : cssPath(e),
+            testid,
+            tag: e.tagName.toLowerCase(),
+            depth: cssPath(e).split(">").length,
+            role: e.getAttribute("role"),
+            name: e.getAttribute("aria-label") || text || testid || e.tagName.toLowerCase(),
+            text,
+            rect: {
+              x: r.x + (fullPage ? scrollX : 0),
+              y: r.y + (fullPage ? scrollY : 0),
+              w: r.width,
+              h: r.height,
+            },
+            style: Object.fromEntries(props.map((p) => [p, s.getPropertyValue(p)])),
+            paint: Object.fromEntries(
+              paintProps.map((p) => [
+                p,
+                (p === "outline-color" && s.outlineStyle === "none") ||
+                (p === "text-decoration-color" && s.textDecorationLine === "none")
+                  ? "none"
+                  : s.getPropertyValue(p),
+              ]),
+            ),
+            pseudos: ["::before", "::after", "::marker"].filter((pseudo) => {
+              const p = getComputedStyle(e, pseudo);
+              return (
+                !suppressed &&
+                p.display !== "none" &&
+                ((pseudo === "::marker" &&
+                  s.display === "list-item" &&
+                  (s.listStyleType !== "none" || s.listStyleImage !== "none")) ||
+                  !["none", "normal"].includes(p.content))
+              );
+            }),
+          };
+        })
+        .filter((e) => (e.rect.w > 0 && e.rect.h > 0) || e.pseudos.length);
+      return {
+        elements,
+        fonts_loaded:
+          document.fonts.check(`16px "${font}"`) &&
+          elements.some(
+            (e) => e.style["font-family"].split(",")[0].replaceAll('"', "").trim() === font,
+          ),
+        scrollY,
+        scrollX,
+        coordinate_space: fullPage ? "document" : "viewport",
+        title: document.title,
+        text: elements.map((e) => e.text).join(" "),
+        seed: document.documentElement.dataset.captureSeed || null,
+      };
+    },
+    {
+      props: STYLES,
+      paintProps: PAINT_GUARDS,
+      font,
+      masks,
+      fullPage,
+    },
+  );
+}
+
 // Capture only already-provisioned, clean source checkouts. This tool never creates worktrees.
 export async function capture({ spec, sourceRoot, sha, url, out }) {
   validateSpec(spec);
@@ -319,98 +454,12 @@ export async function capture({ spec, sourceRoot, sha, url, out }) {
               }
             }
           }
-          const dom = await page.evaluate(
-            ({ props, paintProps, font, masks, fullPage }) => {
-              const nodes = [...document.querySelectorAll("body *")].filter(
-                (e) =>
-                  !["SCRIPT", "STYLE", "LINK", "META"].includes(e.tagName) &&
-                  !masks.some((m) => e.closest(m.selector)),
-              );
-              if (nodes.length > 20_000) throw new Error("DOM inventory exceeds limit");
-              const cssPath = (e) => {
-                if (e.id) return `#${CSS.escape(e.id)}`;
-                if (!e.parentElement || e === document.body) return "body";
-                return `${cssPath(e.parentElement)} > ${e.tagName.toLowerCase()}:nth-child(${[...e.parentElement.children].indexOf(e) + 1})`;
-              };
-              const elements = nodes
-                .map((e) => {
-                  const r = e.getBoundingClientRect(),
-                    s = getComputedStyle(e),
-                    testid = e.getAttribute("data-testid");
-                  const text = e.childElementCount
-                    ? [...e.childNodes]
-                        .filter((n) => n.nodeType === 3)
-                        .map((n) => n.textContent)
-                        .join("")
-                        .trim()
-                    : e.textContent.trim();
-                  const ancestors = [];
-                  for (let p = e.parentElement; p; p = p.parentElement)
-                    ancestors.push(
-                      p.hasAttribute("data-testid")
-                        ? `[data-testid="${CSS.escape(p.getAttribute("data-testid"))}"]`
-                        : cssPath(p),
-                    );
-                  const parentStyle = getComputedStyle(e.parentElement);
-                  return {
-                    ancestors,
-                    flow: {
-                      parent: cssPath(e.parentElement),
-                      position: s.position,
-                      inset: ["top", "right", "bottom", "left"].map((p) =>
-                        e.computedStyleMap().get(p).toString(),
-                      ),
-                      float: s.cssFloat,
-                      transform: s.transform,
-                      translate: s.translate,
-                      rotate: s.rotate,
-                      scale: s.scale,
-                      parent_display: parentStyle.display,
-                      writing_mode: parentStyle.writingMode,
-                    },
-                    key: testid ? `testid:${testid}` : `${cssPath(e)}|${text}`,
-                    selector: testid ? `[data-testid="${CSS.escape(testid)}"]` : cssPath(e),
-                    testid,
-                    tag: e.tagName.toLowerCase(),
-                    depth: cssPath(e).split(">").length,
-                    role: e.getAttribute("role"),
-                    name: e.getAttribute("aria-label") || text || testid || e.tagName.toLowerCase(),
-                    text,
-                    rect: {
-                      x: r.x + (fullPage ? scrollX : 0),
-                      y: r.y + (fullPage ? scrollY : 0),
-                      w: r.width,
-                      h: r.height,
-                    },
-                    style: Object.fromEntries(props.map((p) => [p, s.getPropertyValue(p)])),
-                    paint: Object.fromEntries(paintProps.map((p) => [p, s.getPropertyValue(p)])),
-                  };
-                })
-                .filter((e) => e.rect.w > 0 && e.rect.h > 0);
-              return {
-                elements,
-                fonts_loaded:
-                  document.fonts.check(`16px "${font}"`) &&
-                  elements.some(
-                    (e) => e.style["font-family"].split(",")[0].replaceAll('"', "").trim() === font,
-                  ),
-                scrollY,
-                scrollX,
-                coordinate_space: fullPage ? "document" : "viewport",
-                title: document.title,
-                text: elements.map((e) => e.text).join(" "),
-                seed: document.documentElement.dataset.captureSeed || null,
-              };
-            },
-            {
-              props: STYLES,
-              paintProps: PAINT_GUARDS,
-              font: view.expectedFont,
-              masks: view.masks,
-              fullPage: spec.fullPage,
-            },
-          );
-          const fontNodes = dom.elements.filter((e) => e.text);
+          const dom = await captureDOM(page, {
+            font: view.expectedFont,
+            masks: view.masks,
+            fullPage: spec.fullPage,
+          });
+          const fontNodes = dom.elements.filter((e) => e.text && e.rect.w > 0 && e.rect.h > 0);
           dom.font_evidence = [];
           const cdp = await context.newCDPSession(page);
           try {
@@ -1030,12 +1079,14 @@ export function attribute(base, head, regions, intent, hunks, sha, view) {
       })
       .filter((x) => x.score > 0)
       .sort((a, b) => b.depth - a.depth || b.score - a.score);
-    // Style deltas cannot exclude independent canvas/video/image content replacement.
+    // Pseudo paint has no measured bounds and can overflow its host. Fail closed view-wide.
+    // Media bounds alone cannot exclude independent content replacement, including SVG paths.
     const domless = [...base, ...head].some(
       (e) =>
-        (["canvas", "video", "img"].includes(e.tag) ||
+        e.pseudos?.length ||
+        ((["canvas", "video", "img", "svg"].includes(e.tag) ||
           Object.values(e.paint || {}).some((value) => /url\(/i.test(value))) &&
-        overlap(e.rect, region.bbox_css) > 0,
+          overlap(e.rect, region.bbox_css) > 0),
     );
     const best = domless ? null : scores[0]?.m;
     const causes = candidates.filter((c) => c.m === best);
@@ -1198,6 +1249,18 @@ function aggregateAncestor(ancestor, descendant) {
         d.ancestors?.includes(a.selector) &&
         a.style["background-color"] === "rgba(0, 0, 0, 0)" &&
         a.style["box-shadow"] === "none" &&
+        !a.pseudos?.length &&
+        [
+          "background-image",
+          "border-image-source",
+          "filter",
+          "backdrop-filter",
+          "mask-image",
+          "clip-path",
+          "text-shadow",
+        ].every((prop) => a.paint?.[prop] === "none") &&
+        a.paint?.["mix-blend-mode"] === "normal" &&
+        (a.paint?.["outline-style"] === "none" || a.paint?.["outline-width"] === "0px") &&
         ["top", "right", "bottom", "left"].every(
           (side) => a.style[`border-${side}-width`] === "0px",
         )

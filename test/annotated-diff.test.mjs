@@ -1459,6 +1459,119 @@ describe("attribution audit regressions", () => {
     }
   });
 
+  it("keeps border styles, generated paint and SVG content outside opacity explanations", () => {
+    const box = { x: 40, y: 40, w: 40, h: 40 };
+    const region = { id: "paint", bbox_css: box };
+    for (const kind of ["border", "pseudo", "svg"]) {
+      const before = node(
+        "paint",
+        2,
+        box,
+        { opacity: "0.4" },
+        {
+          tag: kind === "svg" ? "svg" : "div",
+          paint: { "border-top-style": "solid" },
+          pseudos: kind === "pseudo" ? ["::before"] : [],
+        },
+      );
+      const after = {
+        ...before,
+        style: { opacity: "1" },
+        paint: { "border-top-style": kind === "border" ? "dashed" : "solid" },
+      };
+      const { items } = attribute(
+        [before],
+        [after],
+        [region],
+        claimOf("op", "#paint", "opacity"),
+        hunks,
+        "h",
+        view,
+      );
+      expect(itemFor(items, region).status).toBe("unexplained");
+      expect(items.find((i) => i.intent_ref === "op").verification.valid).toBe(true);
+      if (kind === "border")
+        expect(itemFor(items, region).paint_delta).toEqual([
+          { prop: "border-top-style", old: "solid", new: "dashed" },
+        ]);
+      else expect(itemFor(items, region).element).toBeNull();
+    }
+  });
+
+  it("excludes only proven unpainted aggregate ancestors from a narrower padding claim", () => {
+    const box = { x: 40, y: 40, w: 100, h: 100 };
+    const childBox = { ...box, w: 60, h: 42 };
+    const style = {
+      "background-color": "rgba(0, 0, 0, 0)",
+      "box-shadow": "none",
+      height: "100px",
+      ...Object.fromEntries(
+        ["top", "right", "bottom", "left"].map((s) => [`border-${s}-width`, "0px"]),
+      ),
+    };
+    const noPaint = {
+      ...Object.fromEntries(
+        [
+          "background-image",
+          "border-image-source",
+          "filter",
+          "backdrop-filter",
+          "mask-image",
+          "clip-path",
+          "text-shadow",
+        ].map((p) => [p, "none"]),
+      ),
+      "mix-blend-mode": "normal",
+      "outline-width": "0px",
+    };
+    for (const kind of ["transparent", "gradient", "missing-evidence"]) {
+      const parent = node("parent", 1, box, style, {
+        paint:
+          kind === "missing-evidence"
+            ? {}
+            : {
+                ...noPaint,
+                "background-image": kind === "gradient" ? "linear-gradient(red, blue)" : "none",
+              },
+      });
+      const child = node(
+        "child",
+        2,
+        childBox,
+        { "padding-top": "2px", "padding-bottom": "0px", height: "42px" },
+        { ancestors: ["#parent"] },
+      );
+      const region = { id: "paint", bbox_css: box };
+      const { items } = attribute(
+        [parent, child],
+        [
+          { ...parent, rect: { ...box, h: 120 }, style: { ...style, height: "120px" } },
+          {
+            ...child,
+            rect: { ...childBox, h: 44 },
+            style: { ...child.style, "padding-top": "4px", height: "44px" },
+          },
+        ],
+        [region],
+        claimOf("pad", "#child", "padding-top"),
+        hunks,
+        "h",
+        view,
+      );
+      const owner = itemFor(items, region);
+      expect(owner.status).toBe(kind === "transparent" ? "explained" : "unexplained");
+      if (kind === "gradient") {
+        expect(owner.contributors.map((c) => c.element.selector).sort()).toEqual([
+          "#child",
+          "#parent",
+        ]);
+        expect(
+          owner.contributors.find((c) => c.element.selector === "#parent").style_delta,
+        ).toContainEqual({ prop: "height", old: "100px", new: "120px" });
+      }
+    }
+  });
+
   it("retains unsupported paint-only deltas in facts without saying unchanged", () => {
     const box = { x: 40, y: 40, w: 40, h: 40 };
     const before = node("paint", 2, box, {}, { paint: { "background-image": "none" } });

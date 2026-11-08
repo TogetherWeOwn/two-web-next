@@ -22,12 +22,12 @@ import {
   reconcileInputs,
   normalizeMotion,
   regions,
-  STYLES,
+  captureDOM,
 } from "../run.mjs";
 
 await verifyMotion(normalizeMotion);
 console.log("Native-frame motion regression passed");
-await verifyPaint({ attribute, normalizeIntent, regions, STYLES });
+await verifyPaint({ attribute, normalizeIntent, regions, captureDOM });
 console.log("Coincident paint/media regression and opacity-only control passed");
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../..");
