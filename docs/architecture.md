@@ -331,6 +331,7 @@ exactly once.
 | `src/kit-members.ts` | profiles |
 | `src/kit-past-events.ts` | events |
 | `src/kit-session.ts` | auth |
+| `src/kit-worker-dispatch.ts` | entry |
 | `src/kit-worker-response.ts` | entry |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |

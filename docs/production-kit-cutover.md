@@ -220,6 +220,17 @@ amendment supplies that capability.
 
 ## Status
 
+[Actions 42449149027](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42449149027)
+at `c39afac1ce1e6c921f2cd0e1bf62308d9fba9884` failed one architecture-document
+module-map assertion in both main and Node 22 suites: the new
+`src/kit-worker-dispatch.ts` entry was missing. Each suite reported 26,756 passed,
+one failed and 676 skipped tests. Lint and typecheck passed; scope, docs-links,
+bundle-budget, accessibility and Lighthouse passed. The map now includes that
+entry without changing the assertion. Corrected results are pending. Kit build,
+fatal, rehearsal and full parity were not reached; missing-artifact errors are
+consequences, not runtime verdicts. No complete corrected replay archive is
+available from that run.
+
 [Actions 42443536920](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42443536920)
 at `fcd64cb306de8c1ac177f10865e4ff2091b65932` passed the main lint/type/coverage
 step, Node 22 compatibility, Kit typecheck, production-config build/rehearsal and
