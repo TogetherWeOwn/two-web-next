@@ -713,6 +713,10 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
   }
 });
 
+function workflowJob(workflow, id) {
+  return workflow.split(`\n  ${id}:\n`)[1]?.split(/\n  [a-z][a-z-]*:\n/)[0] ?? "";
+}
+
 test("manual production workflow routes runners by repo visibility and uses production-only secrets", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
@@ -723,10 +727,13 @@ test("manual production workflow routes runners by repo visibility and uses prod
   // preflight, staging-soak, regression, deploy-production,
   // post-deploy-watch and notify.
   assert.equal(workflow.split(runsOn).length - 1, 6);
+  const incidents = workflowJob(workflow, "incidents");
+  assert.match(incidents, /^    runs-on: ubuntu-latest$/m);
+  assert.doesNotMatch(incidents, /secrets\.|^    environment:/m);
   assert.equal(
-    workflow.split("ubuntu-latest").length - 1,
+    workflow.replace(incidents, "").split("ubuntu-latest").length - 1,
     6,
-    "ubuntu-latest only as the public-repo branch",
+    "outside the isolated incident reporter, ubuntu-latest only as the public-repo branch",
   );
   // Staging credentials appear only in the staging-soak job, which binds
   // the staging Environment, runs no wrangler and makes one gate call.
@@ -1118,8 +1125,15 @@ test("production promotion and rollback mutations share one static non-cancellin
     ["deploy-staging"],
     "the staging rollback lock must match deploy.yml's job-level lock",
   );
+  const incidents = workflowJob(deploy, "incidents");
+  assert.deepEqual(jobConcurrencyBlocks(incidents), [
+    { group: "production-incident-observation", cancel: "false" },
+  ]);
+  assert.match(incidents, /^      queue: max$/m);
+  assert.doesNotMatch(incidents, /secrets\.|^    environment:/m);
+  const deployMutations = deploy.replace(incidents, "");
   for (const [label, workflow] of [
-    ["deploy-production.yml", deploy],
+    ["deploy-production.yml", deployMutations],
     ["rollback-production.yml (production)", production],
   ]) {
     const blocks = jobConcurrencyBlocks(workflow);
@@ -1137,7 +1151,7 @@ test("production promotion and rollback mutations share one static non-cancellin
       );
     }
   }
-  const deployGroup = jobConcurrencyBlocks(deploy)[0].group;
+  const deployGroup = jobConcurrencyBlocks(deployMutations)[0].group;
   const rollbackGroup = jobConcurrencyBlocks(production)[0].group;
   assert.equal(deployGroup, rollbackGroup, "promotion and rollback locks must match exactly");
 });
