@@ -22,6 +22,7 @@ import {
   inspectCanonicalPristineSource,
   inspectCanonicalSource,
   loadCanonicalAuthority,
+  loadCanonicalStartup,
 } from "./kit-canonical-source.mjs";
 
 const B_COMMIT = "1fe09ab868a6fea4a7873e4a096523b78747b232";
@@ -183,6 +184,116 @@ test("authority sanitizes import errors and refuses evaluation-time drift", asyn
 writeFileSync(new URL("../README.md", import.meta.url), "changed fixture");
 ${AUTHORITY_MODULE}`);
   await assert.rejects(loadCanonicalAuthority(changed.root, changed.sha), /dirty/);
+});
+
+const STARTUP_MODULE = `import assert from "node:assert/strict";
+export const METRIC = "local_startup_non_idle_sample_ms";
+export function collect() { return import.meta.url; }
+export function runCommand() { throw new Error("fixture must not execute a command"); }
+export function validateBudget(budget) { assert.equal(budget.version, 1); }
+export function validateEvidence() {}
+export function summary() { return "candidate fixture"; }
+`;
+const RUNNER_MODULE = `export const RUNNER_IMAGE = "node:24-bookworm@sha256:${"a".repeat(64)}";
+export function runnerIdentity() { throw new Error("fixture must not inspect runner"); }
+`;
+const STARTUP_BUDGET = '{"version":1,"tools":{"wrangler":"4.156.1"}}\n';
+
+function startupRepo(startup = STARTUP_MODULE, runner = RUNNER_MODULE, budget = STARTUP_BUDGET) {
+  const { root } = makeRepo("startup");
+  write(root, "ci/check-worker-startup.mjs", startup);
+  write(root, "ci/worker-startup-runner.mjs", runner);
+  write(root, "ci/worker-startup-budget.json", budget);
+  return { root, sha: commitAll(root, "startup inputs") };
+}
+
+test("startup loader binds candidate inputs without executing build or runner", async () => {
+  const { root, sha } = startupRepo();
+  const before = inspectCanonicalSource(root, sha);
+  const result = await loadCanonicalStartup(root, sha);
+  assert.equal(result.evidence, "source-bound-candidate-startup-only");
+  assert.equal(result.executionVerified, false);
+  assert.deepEqual(result.source, before);
+  assert.deepEqual(
+    result.inputs,
+    [
+      "ci/check-worker-startup.mjs",
+      "ci/worker-startup-runner.mjs",
+      "ci/worker-startup-budget.json",
+    ].map((path) => before.files.find((file) => file.path === path)),
+  );
+  assert.equal(result.inputs[2].sha256, sha256Hex(STARTUP_BUDGET));
+  assert.deepEqual(result.budget, JSON.parse(STARTUP_BUDGET));
+  assert.ok(Object.isFrozen(result.budget) && Object.isFrozen(result.budget.tools));
+  assert.ok(Object.isFrozen(result.startup) && Object.isFrozen(result.runner));
+  assert.equal(result.startup.summary(), "candidate fixture");
+  const loaded = new URL(result.startup.collect());
+  assert.equal(loaded.pathname, join(root, "ci/check-worker-startup.mjs"));
+  assert.equal(loaded.searchParams.get("source"), sha);
+  assert.deepEqual(inspectCanonicalSource(root, sha), before);
+});
+
+test("startup loader refuses missing and hidden changed inputs before evaluation", async () => {
+  const missing = makeRepo("startup-missing");
+  await assert.rejects(loadCanonicalStartup(missing.root, missing.sha), /startup input missing/);
+  const changed = startupRepo();
+  write(changed.root, "ci/check-worker-startup.mjs", 'throw new Error("must not run");\n');
+  git(changed.root, "update-index", "--assume-unchanged", "ci/check-worker-startup.mjs");
+  await assert.rejects(
+    loadCanonicalStartup(changed.root, changed.sha),
+    /tracked source bytes differ/,
+  );
+  const aliased = startupRepo();
+  unlinkSync(join(aliased.root, "ci/worker-startup-budget.json"));
+  symlinkSync("../README.md", join(aliased.root, "ci/worker-startup-budget.json"));
+  await assert.rejects(loadCanonicalStartup(aliased.root, aliased.sha));
+});
+
+for (const [label, startup, runner, budget, error] of [
+  [
+    "metric",
+    STARTUP_MODULE.replace("local_startup_non_idle_sample_ms", "other"),
+    RUNNER_MODULE,
+    STARTUP_BUDGET,
+    /metric drift/,
+  ],
+  [
+    "function",
+    STARTUP_MODULE.replace("export function collect", "function collect"),
+    RUNNER_MODULE,
+    STARTUP_BUDGET,
+    /interface missing/,
+  ],
+  [
+    "runner",
+    STARTUP_MODULE,
+    RUNNER_MODULE.replace("node:24", "node:22"),
+    STARTUP_BUDGET,
+    /runner image invalid/,
+  ],
+  ["budget", STARTUP_MODULE, RUNNER_MODULE, '{"version":2}', /budget invalid/],
+  ["budget bound", STARTUP_MODULE, RUNNER_MODULE, " ".repeat(4097), /budget exceeds bound/],
+]) {
+  test(`startup loader rejects ${label} drift`, async () => {
+    const { root, sha } = startupRepo(startup, runner, budget);
+    await assert.rejects(loadCanonicalStartup(root, sha), error);
+  });
+}
+
+test("startup loader sanitizes errors and rejects evaluation or validation mutations", async () => {
+  const invalid = startupRepo('throw new Error("private fixture detail");\n');
+  await assert.rejects(loadCanonicalStartup(invalid.root, invalid.sha), (error) => {
+    assert.equal(error.message, "candidate startup inputs could not be loaded");
+    return true;
+  });
+  const changed = startupRepo(`import { writeFileSync } from "node:fs";
+writeFileSync(new URL("../README.md", import.meta.url), "changed fixture");
+${STARTUP_MODULE}`);
+  await assert.rejects(loadCanonicalStartup(changed.root, changed.sha), /dirty/);
+  const mutated = startupRepo(
+    STARTUP_MODULE.replace("assert.equal(budget.version, 1);", "budget.version = 2;"),
+  );
+  await assert.rejects(loadCanonicalStartup(mutated.root, mutated.sha), /budget mutated/);
 });
 
 function installedRepo() {

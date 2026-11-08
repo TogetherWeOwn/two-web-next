@@ -185,6 +185,81 @@ export async function loadCanonicalAuthority(path, expectedSha) {
   };
 }
 
+export async function loadCanonicalStartup(path, expectedSha) {
+  const root = directory(path);
+  const source = inspectCanonicalSource(root, expectedSha);
+  const paths = [
+    "ci/check-worker-startup.mjs",
+    "ci/worker-startup-runner.mjs",
+    "ci/worker-startup-budget.json",
+  ];
+  const inputs = paths.map((path) => {
+    const file = source.files.find((file) => file.path === path);
+    assert.ok(
+      file && file.bytes > 0 && file.bytes <= 256 * 1024,
+      "candidate startup input missing",
+    );
+    return file;
+  });
+  assert.ok(inputs[2].bytes <= 4096, "candidate startup budget exceeds bound");
+  let startup;
+  let runner;
+  let budget;
+  try {
+    // Relative imports and the module-owned root remain in the candidate tree.
+    // Never copy the diagnostic or substitute the collector's budget/runner.
+    const load = (path) => {
+      const url = pathToFileURL(join(root, path));
+      url.searchParams.set("source", expectedSha);
+      return import(url.href);
+    };
+    startup = await load(paths[0]);
+    runner = await load(paths[1]);
+    budget = JSON.parse(sourceBytes(root, paths[2], 4096).toString("utf8"));
+  } catch {
+    throw new Error("candidate startup inputs could not be loaded");
+  }
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  assert.equal(
+    startup.METRIC,
+    "local_startup_non_idle_sample_ms",
+    "candidate startup metric drift",
+  );
+  for (const key of ["collect", "runCommand", "validateBudget", "validateEvidence", "summary"]) {
+    assert.equal(typeof startup[key], "function", "candidate startup interface missing");
+  }
+  assert.equal(typeof runner.runnerIdentity, "function", "candidate runner interface missing");
+  assert.ok(
+    typeof runner.RUNNER_IMAGE === "string" &&
+      /^node:24-bookworm@sha256:[0-9a-f]{64}$/.test(runner.RUNNER_IMAGE),
+    "candidate runner image invalid",
+  );
+  const original = JSON.stringify(budget);
+  try {
+    startup.validateBudget(budget);
+  } catch {
+    throw new Error("candidate startup budget invalid");
+  }
+  assert.equal(JSON.stringify(budget), original, "candidate startup budget mutated");
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  return {
+    evidence: "source-bound-candidate-startup-only",
+    source,
+    inputs,
+    budget: Object.freeze({ ...budget, tools: Object.freeze({ ...budget.tools }) }),
+    startup: Object.freeze({
+      collect: startup.collect,
+      runCommand: startup.runCommand,
+      validateEvidence: startup.validateEvidence,
+      summary: startup.summary,
+    }),
+    runner: Object.freeze({ image: runner.RUNNER_IMAGE, identity: runner.runnerIdentity }),
+    // Loading exports does not execute the build, collect profiles, verify the
+    // installed tools or establish the actual process/container identity.
+    executionVerified: false,
+  };
+}
+
 export function inspectCanonicalPristineSource(path, expectedSha) {
   const root = directory(path);
   const inspectExtras = () => {

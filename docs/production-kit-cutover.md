@@ -191,6 +191,15 @@ describe implementation-time evidence, not a green overall gate.
   loader does not execute the candidate checker, prove installed dependencies or
   runtime integrity, or supply the separated build caller. Its eight new test
   registrations use the existing Actions suite and have **not run**.
+  The candidate startup loader similarly retains exact source digests for the
+  startup module, runner module and bounded budget. It imports the candidate's
+  existing serializer/profiler functions in place, validates its interface and
+  budget, then rechecks source bytes after module evaluation and validation.
+  It does not copy the CLI, invoke its build, collect profiles or inspect the
+  runtime; execution remains explicitly unverified. Import/validation errors
+  are sanitized, and changed or aliased source inputs refuse. Eight new fixture
+  registrations use the existing Actions invocation and remain **unrun**. This
+  is preparation for a single-build caller, not that caller or dependency proof.
   The real B-to-D positive binding is not
   exercised by the hermetic fixture repositories, which cannot recreate B's SHA.
   No checkouts, installs, builds, dispatches or collection are performed by this
