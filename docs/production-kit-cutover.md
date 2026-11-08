@@ -43,6 +43,18 @@ execution also binds the independently recomputed group totals' digest. This is
 numeric agreement only, not independent verification of the candidate's ceilings,
 installed dependencies, actual runtime or a final authenticated archive.
 
+The same module now offers a data-only separated-output member verifier. It
+requires externally supplied binding, execution, budget, journal and frozen
+receipt digests; checks exact manifest membership and bounded regular-file bytes;
+and recomputes the frozen per-file raw/gzip ledger through the existing verifier.
+It cross-checks candidate/collector identities, pristine binding, successful
+build-return journal, execution receipt and candidate report totals. Runtime and
+qualification claims still refuse. This does not parse a ZIP, authenticate a
+transport, reconstruct either Git source tree or certify candidate budget policy.
+The authenticated same-source reader remains deliberately unchanged; wiring a
+separated parser/transport is still unfinished. Twenty-four additional fixture
+registrations reuse the existing Actions command and have not run.
+
 This is source preparation, **not an executed collection or reviewed D**. No
 Actions job invokes these phases yet. Candidate-owned installation, dependency
 content and generator/process/tool/image/run proof, candidate-owned profiling,

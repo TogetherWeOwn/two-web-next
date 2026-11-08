@@ -15,7 +15,13 @@ import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { KIT_CHECK_IDS, KIT_GROUP_IDS } from "./bundle-inventory.mjs";
-import { executeCanonicalBuild, verifyCanonicalBudgetReport } from "./kit-canonical-execute.mjs";
+import {
+  executeCanonicalBuild,
+  verifyCanonicalBudgetReport,
+  verifyCanonicalExecutionMembers,
+} from "./kit-canonical-execute.mjs";
+import { canonicalCellIdentity } from "./kit-canonical-source.mjs";
+import { createCanonicalReceipt } from "./kit-upload-rehearsal.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), "canonical-execute-")));
@@ -143,6 +149,190 @@ function fixture() {
     },
   };
   return { args, binding, save, calls, authority, collaborators, report, frozen };
+}
+
+function memberFixture() {
+  const f = fixture();
+  const authority = {
+    KIT_WORKER_PATH: "web/.svelte-kit/cloudflare/_worker.js",
+    KIT_SERVER_DIR: "web/.svelte-kit/output/server",
+    KIT_CLIENT_DIR: "web/.svelte-kit/output/client/_app",
+    KIT_GROUP_IDS,
+  };
+  const files = [
+    authority.KIT_WORKER_PATH,
+    `${authority.KIT_SERVER_DIR}/index.js`,
+    `${authority.KIT_CLIENT_DIR}/start.js`,
+    `${authority.KIT_CLIENT_DIR}/app.css`,
+    "web/.svelte-kit/output/client/robots.txt",
+    "web/.svelte-kit/cloudflare/.assetsignore",
+  ];
+  const members = files.map((path) => {
+    mkdirSync(dirname(join(f.args.candidate, path)), { recursive: true });
+    const data = Buffer.from(`${path}\r\n`);
+    writeFileSync(join(f.args.candidate, path), data);
+    return { path: `capture/bytes/${path}`, type: "file", data };
+  });
+  const frozen = createCanonicalReceipt(f.args.candidate, authority);
+  const report = reportFixture().report;
+  for (const [index, group] of frozen.groups.entries()) {
+    Object.assign(report.groups[index].checks[0], {
+      rawBytes: group.bytes,
+      gzipBytes: group.gzipBytes,
+      files: group.files,
+    });
+  }
+  const expected = { ...f.args.context };
+  const records = {};
+  function save(path, record, digest) {
+    records[path] = record;
+    const data = Buffer.from(`${JSON.stringify(record, null, 2)}\n`);
+    const index = members.findIndex((member) => member.path === path);
+    const member = { path, type: "file", data };
+    if (index === -1) members.push(member);
+    else members[index] = member;
+    expected[digest] = sha256(data);
+  }
+  save("capture/bytes/receipt.json", frozen, "receiptSha256");
+  save("source-binding.json", f.binding, "bindingSha256");
+  const journal = {
+    schema: "two.kit-canonical-separated-capture.v1",
+    evidence: "unqualified-source-separated-diagnostic",
+    sourceBindingSha256: expected.bindingSha256,
+    sourceSha: B,
+    workflowSha: D,
+    runId: expected.runId,
+    runAttempt: expected.runAttempt,
+    producerOutcome: "success",
+    captureBoundary: "build-process-return",
+    capture: "complete",
+    qualified: false,
+    receipt: {
+      path: "bytes/receipt.json",
+      bytes: members.find((member) => member.path === "capture/bytes/receipt.json").data.length,
+      sha256: expected.receiptSha256,
+    },
+  };
+  save("capture/status.json", journal, "journalSha256");
+  const source = { ...f.binding.candidate };
+  delete source.installBoundary;
+  save("budget.json", { source, code: 0, report, executionVerified: false }, "budgetSha256");
+  save(
+    "execution.json",
+    {
+      schema: "two.kit-canonical-execution.v1",
+      evidence: "unqualified-source-separated-build-return",
+      identity: canonicalCellIdentity(expected),
+      runId: expected.runId,
+      runAttempt: expected.runAttempt,
+      sourceBindingSha256: expected.bindingSha256,
+      build: { source, capture: journal, executionVerified: false },
+      capture: journal,
+      budget: {
+        code: 0,
+        sha256: expected.budgetSha256,
+        frozenTotalsSha256: sha256(JSON.stringify(frozen.groups)),
+      },
+      dependenciesVerified: false,
+      executionVerified: false,
+      qualified: false,
+    },
+    "executionSha256",
+  );
+  return { members, expected, authority, records, save, frozen };
+}
+
+test("separated members bind capture and report without qualification", () => {
+  const f = memberFixture();
+  const result = verifyCanonicalExecutionMembers(f.members, f.expected, f.authority);
+  assert.deepEqual(result.receipt, f.frozen);
+  assert.equal(result.identity.candidateSha, B);
+  assert.equal(result.identity.collectorSha, D);
+  assert.equal(result.directoryEvidence, "receipt-declared");
+  assert.equal(result.reportTotalsVerified, true);
+  assert.equal(result.authenticatedArchiveVerified, false);
+  assert.equal(result.sourceTreesVerified, false);
+  assert.equal(result.executionVerified, false);
+  assert.equal(result.qualified, false);
+});
+
+for (const digest of [
+  "bindingSha256",
+  "executionSha256",
+  "budgetSha256",
+  "journalSha256",
+  "receiptSha256",
+]) {
+  test(`separated members refuse external ${digest} drift`, () => {
+    const f = memberFixture();
+    f.expected[digest] = "0".repeat(64);
+    assert.throws(() => verifyCanonicalExecutionMembers(f.members, f.expected, f.authority), {
+      message: "canonical separated execution member verification failed",
+    });
+  });
+}
+
+for (const kind of [
+  "missing",
+  "duplicate",
+  "extra",
+  "alias",
+  "body",
+  "raw-byte",
+  "candidate",
+  "collector",
+  "attempt",
+  "same-source",
+  "failed-capture",
+  "late-capture",
+  "report-total",
+  "report-source",
+  "execution-total",
+  "execution-capture",
+  "runtime-claim",
+  "qualified-claim",
+]) {
+  test(`separated members refuse ${kind} substitution`, () => {
+    const f = memberFixture();
+    if (kind === "missing") {
+      const index = f.members.findIndex((member) => member.path === "budget.json");
+      f.members.splice(index, 1);
+    }
+    if (kind === "duplicate") f.members.push(f.members[0]);
+    if (kind === "extra") {
+      f.members.push({ path: "late-output.js", type: "file", data: Buffer.from("x") });
+    }
+    if (kind === "alias") f.members[0].type = "symlink";
+    if (kind === "body") f.members[0].data = "not a Buffer";
+    if (kind === "raw-byte") f.members[0].data = Buffer.from("changed");
+    if (kind === "candidate") f.expected.candidateSha = "0".repeat(40);
+    if (kind === "collector") f.expected.collectorSha = "e".repeat(40);
+    if (kind === "attempt") f.expected.runAttempt = "2";
+    if (["same-source", "failed-capture", "late-capture"].includes(kind)) {
+      const journal = f.records["capture/status.json"];
+      if (kind === "same-source") journal.schema = "two.kit-canonical-capture.v1";
+      if (kind === "failed-capture") journal.producerOutcome = "failure";
+      if (kind === "late-capture") journal.captureBoundary = "caller-requested";
+      f.save("capture/status.json", journal, "journalSha256");
+    }
+    if (["report-total", "report-source"].includes(kind)) {
+      const measured = f.records["budget.json"];
+      if (kind === "report-total") measured.report.groups[0].checks[0].rawBytes++;
+      if (kind === "report-source") measured.source.commit = D;
+      f.save("budget.json", measured, "budgetSha256");
+    }
+    if (["execution-total", "execution-capture", "runtime-claim", "qualified-claim"].includes(kind)) {
+      const execution = f.records["execution.json"];
+      if (kind === "execution-total") execution.budget.frozenTotalsSha256 = "0".repeat(64);
+      if (kind === "execution-capture") execution.capture = { capture: "unavailable" };
+      if (kind === "runtime-claim") execution.executionVerified = true;
+      if (kind === "qualified-claim") execution.qualified = true;
+      f.save("execution.json", execution, "executionSha256");
+    }
+    assert.throws(() => verifyCanonicalExecutionMembers(f.members, f.expected, f.authority), {
+      message: "canonical separated execution member verification failed",
+    });
+  });
 }
 
 test("execution awaits capture and retains distinct source identities", async () => {

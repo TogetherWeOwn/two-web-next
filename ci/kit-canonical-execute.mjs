@@ -12,7 +12,10 @@ import {
   runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
 } from "./kit-canonical-source.mjs";
-import { verifyCanonicalBuild } from "./kit-upload-rehearsal.mjs";
+import {
+  verifyCanonicalArchiveMembers,
+  verifyCanonicalBuild,
+} from "./kit-upload-rehearsal.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -80,6 +83,124 @@ export function verifyCanonicalBudgetReport(report, frozen) {
     }
   }
   return { evidence: "unqualified-frozen-budget-totals", groups: frozen.groups };
+}
+
+// Consume bounded, data-only members from the separated execution output.
+// Digest expectations and ZIP/transport authentication remain caller-owned;
+// source identities here do not independently reconstitute either Git tree.
+export function verifyCanonicalExecutionMembers(members, expected, authority) {
+  try {
+    const identity = canonicalCellIdentity(expected);
+    assert.match(expected.runId, /^[1-9][0-9]*$/);
+    assert.match(expected.runAttempt, /^[1-9][0-9]*$/);
+    assert.ok(Array.isArray(members) && members.length > 5 && members.length <= 20010);
+    const documents = new Map([
+      ["source-binding.json", ["bindingSha256", MAX_BINDING_BYTES]],
+      ["execution.json", ["executionSha256", 32 * 1024 * 1024]],
+      ["budget.json", ["budgetSha256", 20 * 1024 * 1024]],
+      ["capture/status.json", ["journalSha256", 16384]],
+    ]);
+    const parsed = new Map();
+    const frozen = [];
+    const paths = new Set();
+    let total = 0;
+    for (const member of members) {
+      assert.ok(typeof member.path === "string" && !paths.has(member.path));
+      paths.add(member.path);
+      assert.ok(member.type === "file" && Buffer.isBuffer(member.data));
+      total += member.data.length;
+      assert.ok(total <= 128 * 1024 * 1024);
+      const document = documents.get(member.path);
+      if (document) {
+        const [digest, bound] = document;
+        assert.match(expected[digest], /^[0-9a-f]{64}$/);
+        assert.ok(member.data.length > 0 && member.data.length <= bound);
+        assert.equal(sha256(member.data), expected[digest]);
+        parsed.set(
+          member.path,
+          JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(member.data)),
+        );
+      } else {
+        assert.ok(member.path.startsWith("capture/bytes/"));
+        frozen.push({ ...member, path: member.path.slice("capture/bytes/".length) });
+      }
+    }
+    assert.equal(parsed.size, documents.size);
+    const verified = verifyCanonicalArchiveMembers(frozen, authority, expected.receiptSha256);
+    const receiptBytes = frozen.find((member) => member.path === "receipt.json").data;
+    const binding = parsed.get("source-binding.json");
+    const execution = parsed.get("execution.json");
+    const measured = parsed.get("budget.json");
+    const journal = parsed.get("capture/status.json");
+    assert.equal(binding.schema, "two.kit-canonical-source.v1");
+    assert.equal(binding.evidence, "unqualified-source-identity-only");
+    assert.equal(binding.trackedFilesOnly, true);
+    assert.equal(binding.cell, identity.cell);
+    assert.equal(binding.collector.commit, identity.collectorSha);
+    const { installBoundary, ...source } = binding.candidate;
+    assert.equal(source.commit, identity.candidateSha);
+    assert.equal(source.tree, identity.candidateTree);
+    assert.deepEqual(binding.sourcePatch, { base: identity.candidateSha, files: [] });
+    assert.deepEqual(installBoundary, {
+      evidence: "observed-pristine-pre-install-source-only",
+      ignoredEntries: 0,
+      untrackedEntries: 0,
+    });
+    assert.deepEqual(journal, {
+      schema: "two.kit-canonical-separated-capture.v1",
+      evidence: "unqualified-source-separated-diagnostic",
+      sourceBindingSha256: expected.bindingSha256,
+      sourceSha: identity.candidateSha,
+      workflowSha: identity.collectorSha,
+      runId: expected.runId,
+      runAttempt: expected.runAttempt,
+      producerOutcome: "success",
+      captureBoundary: "build-process-return",
+      capture: "complete",
+      qualified: false,
+      receipt: {
+        path: "bytes/receipt.json",
+        bytes: receiptBytes.length,
+        sha256: expected.receiptSha256,
+      },
+    });
+    assert.equal(execution.schema, "two.kit-canonical-execution.v1");
+    assert.equal(execution.evidence, "unqualified-source-separated-build-return");
+    assert.deepEqual(execution.identity, identity);
+    assert.equal(execution.runId, expected.runId);
+    assert.equal(execution.runAttempt, expected.runAttempt);
+    assert.equal(execution.sourceBindingSha256, expected.bindingSha256);
+    assert.deepEqual(execution.capture, journal);
+    assert.deepEqual(execution.build.capture, journal);
+    assert.deepEqual(execution.build.source, source);
+    assert.deepEqual(measured.source, source);
+    assert.equal(measured.code, 0);
+    verifyCanonicalBudgetReport(measured.report, verified.receipt);
+    assert.deepEqual(execution.budget, {
+      code: 0,
+      sha256: expected.budgetSha256,
+      frozenTotalsSha256: sha256(JSON.stringify(verified.receipt.groups)),
+    });
+    for (const record of [execution, execution.build, measured]) {
+      assert.equal(record.executionVerified, false);
+    }
+    assert.equal(execution.dependenciesVerified, false);
+    assert.equal(execution.qualified, false);
+    return {
+      ...verified,
+      evidence: "digest-bound-separated-execution-members",
+      identity,
+      sourceBindingSha256: expected.bindingSha256,
+      executionSha256: expected.executionSha256,
+      budgetSha256: expected.budgetSha256,
+      journalSha256: expected.journalSha256,
+      reportTotalsVerified: true,
+      sourceTreesVerified: false,
+      executionVerified: false,
+    };
+  } catch {
+    throw new Error("canonical separated execution member verification failed");
+  }
 }
 
 export async function executeCanonicalBuild(
