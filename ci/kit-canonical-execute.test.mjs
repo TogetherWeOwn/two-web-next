@@ -15,6 +15,7 @@ import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
 import { KIT_CHECK_IDS, KIT_GROUP_IDS } from "./bundle-inventory.mjs";
+import { readCanonicalExecutionArtifact } from "./kit-canonical-artifact.mjs";
 import {
   executeCanonicalBuild,
   verifyCanonicalBudgetReport,
@@ -276,6 +277,206 @@ function artifactFixture(mutate = () => {}) {
     expected: { ...f.expected, archiveBytes: archive.length, archiveSha256: sha256(archive) },
   };
 }
+
+function authenticatedFixture() {
+  const f = artifactFixture();
+  const expected = {
+    ...f.expected,
+    producerBranch: "feat/production-kit-cutover",
+    producerEvent: "workflow_dispatch",
+    artifactName: `kit-canonical-separated-${B}-${D}-123-1`,
+  };
+  const run = {
+    id: 123,
+    run_attempt: 1,
+    repository: { id: 42, full_name: "TogetherWeOwn/two-web-next" },
+    head_repository: { id: 42, full_name: "TogetherWeOwn/two-web-next" },
+    path: ".github/workflows/ci.yml",
+    head_sha: D,
+    head_branch: expected.producerBranch,
+    event: expected.producerEvent,
+    status: "completed",
+    conclusion: "success",
+    html_url: "https://github.com/TogetherWeOwn/two-web-next/actions/runs/123",
+  };
+  const artifact = {
+    id: 456,
+    name: expected.artifactName,
+    expired: false,
+    size_in_bytes: expected.archiveBytes,
+    digest: `sha256:${expected.archiveSha256}`,
+    workflow_run: {
+      id: 123,
+      repository_id: 42,
+      head_repository_id: 42,
+      head_branch: expected.producerBranch,
+      head_sha: D,
+    },
+  };
+  const calls = [];
+  const token = "fixture-token-never-forward";
+  const signed = "https://fixture.blob.core.windows.net/archive?sig=private-fixture";
+  const api = "https://api.github.com/repos/TogetherWeOwn/two-web-next/actions";
+  const options = {
+    artifactId: "456",
+    token,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      if (url === `${api}/runs/123`) return Response.json(run);
+      if (url === `${api}/artifacts/456`) return Response.json(artifact);
+      if (url === `${api}/artifacts/456/zip`)
+        return new Response(null, { status: 302, headers: { location: signed } });
+      assert.equal(url, signed);
+      return new Response(f.archive);
+    },
+  };
+  return { ...f, expected, run, artifact, calls, options, token };
+}
+
+const AUTH_FAILURE = "canonical authenticated separated artifact verification failed";
+
+test("authenticated separated archive pins collector and candidate separately", async () => {
+  const f = authenticatedFixture();
+  const result = await readCanonicalExecutionArtifact(f.expected, f.authority, f.options);
+  assert.deepEqual(result.receipt, f.frozen);
+  assert.equal(result.identity.candidateSha, B);
+  assert.equal(result.identity.collectorSha, D);
+  assert.equal(result.provenance.sourceSha, D);
+  assert.equal(result.provenance.artifactId, "456");
+  assert.equal(result.authenticatedArchiveVerified, true);
+  assert.equal(result.reportTotalsVerified, true);
+  assert.equal(result.sourceTreesVerified, false);
+  assert.equal(result.executionVerified, false);
+  assert.equal(result.sourceSeparated, false);
+  assert.equal(result.qualified, false);
+  assert.equal(f.calls.length, 4);
+  for (const { init } of f.calls.slice(0, 3))
+    assert.equal(new Headers(init.headers).get("authorization"), `Bearer ${f.token}`);
+  assert.equal(f.calls[2].init.redirect, "manual");
+  assert.equal(new Headers(f.calls[3].init.headers).get("authorization"), null);
+  assert.equal(f.calls[3].init.redirect, "error");
+  assert.ok(!JSON.stringify(result).includes(f.token));
+  assert.ok(!JSON.stringify(result).includes("private-fixture"));
+});
+
+for (const [name, mutate] of Object.entries({
+  "candidate as collector": (f) => {
+    f.run.head_sha = B;
+  },
+  "artifact candidate as collector": (f) => {
+    f.artifact.workflow_run.head_sha = B;
+  },
+  fork: (f) => {
+    f.run.head_repository.id = 43;
+  },
+  workflow: (f) => {
+    f.run.path = ".github/workflows/deploy-production.yml";
+  },
+  branch: (f) => {
+    f.run.head_branch = "other";
+  },
+  event: (f) => {
+    f.run.event = "pull_request";
+  },
+  attempt: (f) => {
+    f.run.run_attempt = 2;
+  },
+  unfinished: (f) => {
+    f.run.status = "in_progress";
+  },
+  failure: (f) => {
+    f.run.conclusion = "failure";
+  },
+  expired: (f) => {
+    f.artifact.expired = true;
+  },
+  "artifact name": (f) => {
+    f.artifact.name = "other";
+  },
+  "archive digest": (f) => {
+    f.artifact.digest = `sha256:${"0".repeat(64)}`;
+  },
+})) {
+  test(`authenticated separated archive rejects ${name} before download`, async () => {
+    const f = authenticatedFixture();
+    mutate(f);
+    await assert.rejects(readCanonicalExecutionArtifact(f.expected, f.authority, f.options), {
+      message: AUTH_FAILURE,
+    });
+    assert.equal(f.calls.length, 2);
+  });
+}
+
+for (const key of [
+  "bindingSha256",
+  "executionSha256",
+  "budgetSha256",
+  "journalSha256",
+  "receiptSha256",
+]) {
+  test(`authenticated separated archive refuses independently bound ${key} drift`, async () => {
+    const f = authenticatedFixture();
+    f.expected[key] = "0".repeat(64);
+    await assert.rejects(readCanonicalExecutionArtifact(f.expected, f.authority, f.options), {
+      message: AUTH_FAILURE,
+    });
+    assert.equal(f.calls.length, 4);
+  });
+}
+
+for (const [name, mutate] of Object.entries({
+  "same source": (f) => {
+    f.expected.collectorSha = B;
+  },
+  "invalid digest": (f) => {
+    f.expected.bindingSha256 = "invalid";
+  },
+  "artifact name": (f) => {
+    f.expected.artifactName = "other";
+  },
+  "feature push": (f) => {
+    f.expected.producerEvent = "push";
+  },
+  "empty branch": (f) => {
+    f.expected.producerBranch = "";
+  },
+})) {
+  test(`authenticated separated archive rejects expected ${name} before network`, async () => {
+    const f = authenticatedFixture();
+    mutate(f);
+    await assert.rejects(readCanonicalExecutionArtifact(f.expected, f.authority, f.options), {
+      message: AUTH_FAILURE,
+    });
+    assert.equal(f.calls.length, 0);
+  });
+}
+
+test("authenticated separated archive sanitizes transport failure without retry", async () => {
+  const f = authenticatedFixture();
+  let calls = 0;
+  f.options.fetchImpl = async () => {
+    calls += 1;
+    throw new Error(`${f.token} private-fixture`);
+  };
+  await assert.rejects(readCanonicalExecutionArtifact(f.expected, f.authority, f.options), {
+    message: AUTH_FAILURE,
+  });
+  assert.equal(calls, 1);
+});
+
+test("authenticated separated archive snapshots expectations during transport", async () => {
+  const f = authenticatedFixture();
+  const fetchImpl = f.options.fetchImpl;
+  f.options.fetchImpl = async (...args) => {
+    const response = await fetchImpl(...args);
+    f.expected.journalSha256 = "0".repeat(64);
+    return response;
+  };
+  const result = await readCanonicalExecutionArtifact(f.expected, f.authority, f.options);
+  assert.notEqual(result.journalSha256, f.expected.journalSha256);
+  assert.equal(result.authenticatedArchiveVerified, true);
+  assert.equal(result.qualified, false);
+});
 
 const ARTIFACT_FAILURE = "canonical separated artifact byte verification failed";
 

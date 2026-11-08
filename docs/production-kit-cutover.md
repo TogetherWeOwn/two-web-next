@@ -61,9 +61,22 @@ entries and CRC/length/bounds failures refuse. Parsing has bounded memory, outpu
 and wall time; it never extracts or executes archived files, inherits no credential
 environment and returns only fixed diagnostics on failure. Twenty-nine new ZIP
 fixture registrations reuse the existing Actions invocation and have not run.
-The authenticated same-source reader remains deliberately unchanged. Separated
-transport/provenance integration is still unfinished; matching supplied digests
-alone authenticates neither the producer nor its execution.
+`readCanonicalExecutionArtifact` in `ci/kit-canonical-artifact.mjs` now composes
+that complete-output verifier with the existing bounded authenticated transport.
+It pins successful non-fork CI metadata to the **collector** head, not the
+candidate SHA. The expected artifact name binds both SHAs plus run/attempt;
+externally supplied document/receipt digests remain mandatory. Only fixed GitHub
+API requests carry the token; allowlisted signed storage receives no token and
+cannot redirect. No extraction, archived-code execution or retry occurs.
+Twenty-five new fixture registrations reuse the existing execution suite and
+have not run. The same-source reader's behavior is unchanged.
+
+This is an unexercised reader interface, not an existing producer artifact or
+an accepted collection. It authenticates archive/run association only, not
+source trees, actual source separation, dependencies or execution. Those result
+flags and qualification remain false. A pipeline caller/producer, independently
+verified runtime provenance and actual accepted D remain unfinished; matching
+supplied digests alone never authenticates execution.
 
 This is source preparation, **not an executed collection or reviewed D**. No
 Actions job invokes these phases yet. Candidate-owned installation, dependency

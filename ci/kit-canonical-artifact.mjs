@@ -2,6 +2,8 @@
 // successful-main recovery attestation, custody or environment qualification.
 import assert from "node:assert/strict";
 import { readGitHubArtifactArchive } from "./github-artifact-archive.mjs";
+import { verifyCanonicalExecutionArtifactBytes } from "./kit-canonical-execute.mjs";
+import { canonicalCellIdentity } from "./kit-canonical-source.mjs";
 import { verifyCanonicalArtifactBytes } from "./kit-upload-rehearsal.mjs";
 
 function verifyCanonicalMetadata(expected, run, artifact) {
@@ -42,6 +44,60 @@ function verifyCanonicalMetadata(expected, run, artifact) {
     producerBranch: expected.producerBranch,
     producerEvent: expected.producerEvent,
   };
+}
+
+// Authenticate the collector-run archive, never confuse its workflow head with
+// the candidate whose bytes it describes. This does not verify either source
+// tree, the installed toolchain or actual source separation/execution.
+export async function readCanonicalExecutionArtifact(expected, authority, options) {
+  try {
+    expected = structuredClone(expected);
+    authority = structuredClone(authority);
+    const identity = canonicalCellIdentity(expected);
+    assert.ok(
+      typeof expected.producerBranch === "string" &&
+        /^[A-Za-z0-9][A-Za-z0-9._/-]{0,199}$/.test(expected.producerBranch),
+    );
+    assert.ok(
+      expected.producerEvent === "workflow_dispatch" ||
+        (expected.producerEvent === "push" && expected.producerBranch === "main"),
+    );
+    for (const key of [
+      "bindingSha256",
+      "executionSha256",
+      "budgetSha256",
+      "journalSha256",
+      "receiptSha256",
+      "archiveSha256",
+    ]) {
+      assert.match(expected[key], /^[0-9a-f]{64}$/);
+    }
+    assert.ok(Number.isSafeInteger(expected.archiveBytes) && expected.archiveBytes > 0);
+    assert.equal(
+      expected.artifactName,
+      `kit-canonical-separated-${identity.candidateSha}-${identity.collectorSha}-${expected.runId}-${expected.runAttempt}`,
+    );
+    const { archive, provenance } = await readGitHubArtifactArchive(
+      { ...expected, sourceSha: identity.collectorSha },
+      {
+        artifactId: options.artifactId,
+        token: options.token,
+        fetchImpl: options.fetchImpl,
+        verifyMetadata: verifyCanonicalMetadata,
+      },
+    );
+    const verified = verifyCanonicalExecutionArtifactBytes(archive, expected, authority);
+    return {
+      ...verified,
+      evidence: "authenticated-separated-execution-diagnostic",
+      provenance,
+      authenticatedArchiveVerified: true,
+      sourceSeparated: false,
+      qualified: false,
+    };
+  } catch {
+    throw new Error("canonical authenticated separated artifact verification failed");
+  }
 }
 
 export async function readCanonicalArtifact(expected, authority, options) {
