@@ -79,6 +79,17 @@ and final reporting job in [deploy-production](../.github/workflows/deploy-produ
 Repeated failures comment on the open issue. The next executed green gate
 comments **Recovered** and closes it; skipped jobs and a superseded watch are
 not recovery evidence. A clean promotion needs the watch's explicit `pass` verdict.
+Before staging issue writes, the reporter checks authoritative main-workflow
+history by source run number and source attempt, not the observer's rerun number.
+A newer meaningful observation supersedes the older one separately for each
+stable key, even when the newer green run never opened an issue or already
+closed it. Skipped or incomplete gates do not hide a useful earlier failure;
+aggregate recovery requires every selected job in both required gates to pass.
+History reads are bounded to five run-list pages and twenty newer attempt
+snapshots (each job list retains its own page cap). Missing, malformed,
+unavailable or over-cap history fails reporting before staging issue mutations.
+Use the current source's observer for a fresh report; an old observer rerun is
+not a new qualification and cannot reverse newer source evidence.
 The sink follows the stable-key/deduplication pattern from
 [two-bot-next](https://github.com/TogetherWeOwn/two-bot-next/blob/main/scripts/incident_issue.py).
 

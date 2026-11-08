@@ -72,8 +72,13 @@ function fixture({
       );
       return {};
     }
+    if (method === "GET" && path.startsWith("/actions/workflows/e2e-staging.yml/runs?"))
+      return { workflow_runs: [await api("GET", "/actions/runs/42")] };
     if (method === "GET" && path === "/actions/runs/42")
       return {
+        id: 42,
+        run_number: 42,
+        run_attempt: 1,
         head_branch: "main",
         head_repository: { full_name: "TogetherWeOwn/two-web-next" },
         head_sha: MAIN,
@@ -270,6 +275,170 @@ test("skipped staging jobs never clear incidents; executed green gates recover",
   });
   await report(env("staging"), { api: green.api });
   assert.ok(green.state.issues.every((issue) => issue.state === "closed"));
+});
+
+test("staging replay freshness rejects old observations without suppressing useful failures", async () => {
+  const gates = (quality, journeys = quality) => [
+    { name: "staging-quality / web-quality", conclusion: quality },
+    { name: "staging-journeys", conclusion: journeys },
+  ];
+  const source = (id, runAttempt = 1) => ({
+    id,
+    run_number: id,
+    run_attempt: runAttempt,
+    head_branch: "main",
+    head_repository: { full_name: "TogetherWeOwn/two-web-next" },
+    path: ".github/workflows/e2e-staging.yml",
+    status: "completed",
+  });
+  const replay = (
+    currentJobs,
+    newerJobs,
+    { sameRun = false, issues = [], newer = {}, intercept } = {},
+  ) =>
+    fixture({
+      mode: "staging",
+      issues,
+      jobs: currentJobs,
+      metadata: sameRun ? { run_attempt: 2 } : {},
+      intercept(method, path) {
+        const override = intercept?.(method, path);
+        if (override !== undefined) return override;
+        if (method !== "GET") return;
+        if (path.startsWith("/actions/workflows/e2e-staging.yml/runs?"))
+          return {
+            workflow_runs: sameRun ? [source(42, 2)] : [{ ...source(43), ...newer }, source(42)],
+          };
+        if (path.startsWith(`/actions/runs/${sameRun ? "42/attempts/2" : "43/attempts/1"}/jobs?`))
+          return { jobs: newerJobs };
+      },
+    });
+  const observe = (f) =>
+    report(
+      env("staging", {
+        GITHUB_RUN_ID: "900",
+        GITHUB_RUN_ATTEMPT: "8",
+        SOURCE_RUN_ID: "42",
+        SOURCE_RUN_ATTEMPT: "1",
+      }),
+      { api: f.api, measurements: async () => [] },
+    );
+  const writes = (f) => f.calls.filter((call) => call.method !== "GET");
+  for (const sameRun of [false, true]) {
+    const newerRed = replay(gates("success"), gates("failure"), {
+      sameRun,
+      issues: [keyed(1), keyed(2, "staging-journeys"), keyed(3, "e2e-staging")],
+    });
+    await observe(newerRed);
+    assert.equal(writes(newerRed).length, 0, "old green must not close newer red");
+    assert.ok(newerRed.state.issues.every((issue) => issue.state === "open"));
+    for (const issues of [[], [{ ...keyed(1), state: "closed" }]]) {
+      const newerGreen = replay(gates("failure"), gates("success"), { sameRun, issues });
+      await observe(newerGreen);
+      assert.equal(writes(newerGreen).length, 0, "old red must not resurrect after newer green");
+    }
+  }
+  for (const newerJobs of [gates("skipped"), gates(null), gates("success", "skipped")]) {
+    const useful = replay(gates("failure"), newerJobs);
+    await observe(useful);
+    assert.ok(useful.state.issues.some((issue) => issue.body.includes(marker("staging-journeys"))));
+    assert.ok(useful.state.issues.some((issue) => issue.body.includes(marker("e2e-staging"))));
+    assert.equal(
+      useful.state.issues.some((issue) => issue.body.includes(marker("staging-quality"))),
+      newerJobs[0].conclusion !== "success",
+    );
+  }
+  for (const status of ["queued", "in_progress", "waiting"]) {
+    const pending = replay(gates("failure"), gates("success"), { newer: { status } });
+    await observe(pending);
+    assert.equal(pending.state.issues.length, 3, "unfinished runs cannot hide useful failures");
+  }
+  const previousAttempt = replay(gates("success"), gates("skipped"), {
+    intercept(method, path) {
+      if (method === "GET" && path.startsWith("/actions/workflows/"))
+        return { workflow_runs: [source(43, 2), source(42)] };
+      if (method === "GET" && path.startsWith("/actions/runs/43/attempts/2/jobs?"))
+        return { jobs: gates("skipped") };
+      if (method === "GET" && path.startsWith("/actions/runs/43/attempts/1/jobs?"))
+        return { jobs: gates("failure") };
+    },
+    issues: [keyed(1)],
+  });
+  await observe(previousAttempt);
+  assert.equal(
+    writes(previousAttempt).length,
+    0,
+    "skipped retry does not erase newer failure evidence",
+  );
+  const secondPage = replay(gates("success"), gates("failure"), {
+    intercept(method, path) {
+      if (method === "GET" && path.startsWith("/actions/workflows/"))
+        return {
+          workflow_runs: path.endsWith("page=1")
+            ? Array.from({ length: 100 }, (_, i) => source(i + 43))
+            : [source(42)],
+        };
+      if (
+        method === "GET" &&
+        /\/actions\/runs\/\d+\/attempts\/1\/jobs\?/.test(path) &&
+        !path.includes("/runs/42/")
+      )
+        return { jobs: gates("failure") };
+    },
+    issues: [keyed(1)],
+  });
+  await observe(secondPage);
+  assert.equal(writes(secondPage).length, 0);
+  assert.ok(
+    secondPage.calls.some(
+      (call) => call.path.startsWith("/actions/workflows/") && call.path.endsWith("page=2"),
+    ),
+  );
+  const mixed = fixture({
+    mode: "staging",
+    jobs: [...gates("success"), { name: "staging-quality / extra", conclusion: "skipped" }],
+    issues: [keyed(1, "e2e-staging")],
+  });
+  await observe(mixed);
+  assert.equal(
+    mixed.state.issues[0].state,
+    "open",
+    "partial gate success is not aggregate recovery",
+  );
+  for (const newer of [
+    { head_branch: "feature" },
+    { head_repository: { full_name: "untrusted/fork" } },
+    { path: ".github/workflows/other.yml" },
+  ]) {
+    const untrusted = replay(gates("failure"), gates("success"), { newer });
+    await observe(untrusted);
+    assert.equal(untrusted.state.issues.length, 3, "untrusted runs cannot hide current failures");
+  }
+  for (const result of [
+    null,
+    { workflow_runs: null },
+    { workflow_runs: [source(43, 0)] },
+    { workflow_runs: [] },
+  ]) {
+    const bad = replay(gates("failure"), [], {
+      intercept(method, path) {
+        if (method === "GET" && path.startsWith("/actions/workflows/"))
+          return result === null ? Promise.reject(new Error("history unavailable")) : result;
+      },
+    });
+    await assert.rejects(observe(bad));
+    assert.equal(writes(bad).length, 0);
+  }
+  const capped = replay(gates("failure"), gates("skipped"), {
+    intercept(method, path) {
+      if (method === "GET" && path.startsWith("/actions/workflows/"))
+        return { workflow_runs: [source(43, 21), source(42)] };
+      if (method === "GET" && path.startsWith("/actions/runs/43/attempts/"))
+        return { jobs: gates("skipped") };
+    },
+  });
+  await assert.rejects(observe(capped), /history.*cap/i);
+  assert.equal(writes(capped).length, 0);
 });
 
 test("green no-candidate promotion still raises a hold and >6h incident", async () => {
