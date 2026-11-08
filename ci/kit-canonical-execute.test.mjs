@@ -322,7 +322,10 @@ for (const path of [
 ]) {
   test(`separated ZIP refuses missing ${path}`, () => {
     const f = artifactFixture((entries) => {
-      entries.splice(entries.findIndex((entry) => entry.name === path), 1);
+      entries.splice(
+        entries.findIndex((entry) => entry.name === path),
+        1,
+      );
     });
     assert.throws(() => verifyCanonicalExecutionArtifactBytes(f.archive, f.expected, f.authority), {
       message: ARTIFACT_FAILURE,
@@ -468,7 +471,9 @@ for (const kind of [
       if (kind === "report-source") measured.source.commit = D;
       f.save("budget.json", measured, "budgetSha256");
     }
-    if (["execution-total", "execution-capture", "runtime-claim", "qualified-claim"].includes(kind)) {
+    if (
+      ["execution-total", "execution-capture", "runtime-claim", "qualified-claim"].includes(kind)
+    ) {
       const execution = f.records["execution.json"];
       if (kind === "execution-total") execution.budget.frozenTotalsSha256 = "0".repeat(64);
       if (kind === "execution-capture") execution.capture = { capture: "unavailable" };

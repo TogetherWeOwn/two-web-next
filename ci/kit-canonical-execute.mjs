@@ -13,10 +13,7 @@ import {
   runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
 } from "./kit-canonical-source.mjs";
-import {
-  verifyCanonicalArchiveMembers,
-  verifyCanonicalBuild,
-} from "./kit-upload-rehearsal.mjs";
+import { verifyCanonicalArchiveMembers, verifyCanonicalBuild } from "./kit-upload-rehearsal.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");

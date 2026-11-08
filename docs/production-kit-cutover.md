@@ -77,6 +77,15 @@ prior-head Actions run below, without executing an actual separated collection.
 
 ## Observed verification
 
+[Actions 42527595161](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42527595161)
+at `1b5ff4c9e4520c9af3759d3adc0ae056df9bb6f9` completed with **failure**.
+Both test legs stopped at formatting in the separated execution module and fixtures;
+all auxiliary jobs passed. Applied the three reported layouts without changing
+behavior, assertions, dependencies or gates. Suites and Kit build/rehearsal/fatal/parity
+were not reached; unavailable capture and missing artifacts are consequences, not
+runtime verdicts. The new numeric/member/ZIP fixtures remain untested. Corrected
+exact-head Actions is still required; prior-head success below does not qualify them.
+
 [Actions 42522700142](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42522700142)
 at `8a1cec0a03bb2a53af9f8770d78abbe04e627394` completed with **success**.
 Main lint/type/coverage and Node 22 each passed 26,757 tests (676 skipped);
