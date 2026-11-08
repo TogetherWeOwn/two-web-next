@@ -38,6 +38,22 @@ describe("production Kit Worker config (web/wrangler.production.jsonc)", () => {
     });
   });
 
+  it("types the production boundary before the generated adapter exists", () => {
+    const entry = read("web/worker.js");
+    const declaration = read("web/src/adapter-worker.d.ts");
+    const tsconfig = JSON.parse(read("web/tsconfig.json"));
+    expect(entry).toContain("@param {Request} request");
+    expect(entry).toContain("@param {Cloudflare.Env} env");
+    expect(declaration).toContain('declare module "*/.svelte-kit/cloudflare/_worker.js"');
+    expect(declaration).toContain(
+      "fetch(request: Request, env: Cloudflare.Env): Promise<Response>",
+    );
+    expect(tsconfig.include).toContain("src");
+    expect(tsconfig.include).toContain("*");
+    expect(tsconfig.compilerOptions.strict).toBe(true);
+    expect(tsconfig.exclude).not.toContain("worker.js");
+  });
+
   it("requires the built fatal-response proof after the adapter build in Actions", () => {
     const workflow = read(".github/workflows/ci.yml");
     const build = workflow.indexOf("name: Kit adapter build and local startup diagnostic");
