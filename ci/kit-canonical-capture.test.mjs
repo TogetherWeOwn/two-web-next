@@ -116,6 +116,45 @@ function digest(root, rel = ".") {
   return out.sort();
 }
 
+test("separated capture binds distinct revisions through finalization", async () => {
+  const root = makeRoot();
+  const dest = target();
+  const ctx = context({
+    workflowSha: OTHER_SHA,
+    sourceBindingSha256: "a".repeat(64),
+    captureBoundary: "build-process-return",
+  });
+  const journal = captureCanonicalBuild(root, dest, ctx, authority());
+  assert.equal(journal.schema, "two.kit-canonical-separated-capture.v1");
+  assert.equal(journal.evidence, "unqualified-source-separated-diagnostic");
+  assert.equal(journal.sourceSha, SHA);
+  assert.equal(journal.workflowSha, OTHER_SHA);
+  assert.equal(journal.sourceBindingSha256, ctx.sourceBindingSha256);
+  assert.equal(journal.qualified, false);
+  assert.deepEqual(await finalizeCanonicalCapture(root, dest, ctx, authority()), journal);
+  await assert.rejects(
+    finalizeCanonicalCapture(
+      root,
+      dest,
+      { ...ctx, sourceBindingSha256: "b".repeat(64) },
+      authority(),
+    ),
+    /mismatched immediate build capture/,
+  );
+});
+
+for (const over of [
+  { sourceBindingSha256: "short", workflowSha: OTHER_SHA },
+  { sourceBindingSha256: "a".repeat(64) },
+  { sourceBindingSha256: "a".repeat(64), workflowSha: "main" },
+]) {
+  test(`separated capture rejects invalid binding identity ${JSON.stringify(over)}`, () => {
+    const dest = target();
+    assert.throws(() => captureCanonicalBuild(makeRoot(), dest, context(over), authority()));
+    assert.equal(existsSync(dest), false);
+  });
+}
+
 test("success captures all trees, raw bytes, and a recomputed receipt digest", async () => {
   const root = makeRoot();
   const before = digest(root);

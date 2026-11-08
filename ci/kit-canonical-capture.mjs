@@ -1,4 +1,4 @@
-// Immediate same-source CI diagnostics, not an admitted B collection or pinned D.
+// Immediate diagnostic capture, not an admitted B collection or pinned D.
 import assert from "node:assert/strict";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
@@ -36,7 +36,13 @@ function captureFailureCode(error) {
 
 function validateIdentity(context) {
   assert.match(context.sourceSha, /^[0-9a-f]{40}$/, "explicit source SHA required");
-  assert.equal(context.workflowSha, context.sourceSha, "same-source diagnostic SHA mismatch");
+  if (context.sourceBindingSha256 !== undefined) {
+    assert.match(context.sourceBindingSha256, /^[0-9a-f]{64}$/, "invalid source binding digest");
+    assert.match(context.workflowSha, /^[0-9a-f]{40}$/, "explicit collector SHA required");
+    assert.notEqual(context.workflowSha, context.sourceSha, "separated sources must differ");
+  } else {
+    assert.equal(context.workflowSha, context.sourceSha, "same-source diagnostic SHA mismatch");
+  }
   assert.match(context.runId, /^[1-9][0-9]*$/, "explicit run ID required");
   assert.match(context.runAttempt, /^[1-9][0-9]*$/, "explicit run attempt required");
   const boundary = context.captureBoundary ?? "caller-requested";
@@ -44,6 +50,19 @@ function validateIdentity(context) {
     ["caller-requested", "build-process-return", "not-observed"].includes(boundary),
     "invalid capture boundary",
   );
+}
+
+function journalIdentity(context) {
+  return context.sourceBindingSha256 === undefined
+    ? {
+        schema: "two.kit-canonical-capture.v1",
+        evidence: "unqualified-same-source-ci-diagnostic",
+      }
+    : {
+        schema: "two.kit-canonical-separated-capture.v1",
+        evidence: "unqualified-source-separated-diagnostic",
+        sourceBindingSha256: context.sourceBindingSha256,
+      };
 }
 
 export function captureCanonicalBuild(root, destination, context, inventory = authority) {
@@ -59,8 +78,7 @@ export function captureCanonicalBuild(root, destination, context, inventory = au
   mkdirSync(output, { mode: 0o700 });
   const path = join(output, "status.json");
   const initial = {
-    schema: "two.kit-canonical-capture.v1",
-    evidence: "unqualified-same-source-ci-diagnostic",
+    ...journalIdentity(context),
     sourceSha: context.sourceSha,
     workflowSha: context.workflowSha,
     runId: context.runId,
@@ -175,8 +193,7 @@ export async function finalizeCanonicalCapture(root, destination, context, inven
   assert.deepEqual(
     journal,
     {
-      schema: "two.kit-canonical-capture.v1",
-      evidence: "unqualified-same-source-ci-diagnostic",
+      ...journalIdentity(context),
       sourceSha: context.sourceSha,
       workflowSha: context.workflowSha,
       runId: context.runId,

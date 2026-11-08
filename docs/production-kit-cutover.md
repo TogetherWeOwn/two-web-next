@@ -4,6 +4,33 @@ This page records only what is delivered. The production deploy still builds and
 uploads the Hono Worker; nothing in `deploy-production.yml` uploads the Kit
 build yet.
 
+## Separated execution caller (not yet exercised)
+
+`ci/kit-canonical-execute.mjs` connects the existing source binder and
+candidate-owned build-return interface to immediate byte capture. Its `--bind`
+phase records pristine separate candidate/collector roots before installation.
+Its `--build` phase requires the binding file and its separately supplied SHA-256,
+rechecks both complete tracked source inventories, and invokes the candidate's
+own installed build interface. The candidate-owned inventory reaches both capture
+and finalization. Output must be outside both roots and exclusively created.
+Neither phase creates, clones, checks out or installs a source tree.
+
+The build CLI refuses unexpected environment keys; the pipeline must launch it
+with an explicitly credential-free environment. Child failure is not retried.
+Capture runs at the candidate build-return callback, before source rechecks;
+failed or partial captures remain on disk rather than becoming success receipts.
+A distinct separated-capture schema binds the candidate source SHA, collector
+workflow SHA, run/attempt and source-binding digest. Existing same-source archive
+readers deliberately do not accept this new schema as authenticated evidence.
+
+This is source preparation, **not an executed collection or reviewed D**. No
+Actions job invokes these phases yet. Candidate-owned installation, dependency
+content and generator/process/tool/image/run proof, candidate-owned profiling and
+budget execution, separated archive-reader integration and review remain required
+before collecting B. The execution receipt explicitly keeps qualification,
+dependency verification and execution verification false. No B receipt or P
+admission is implied. New caller/capture fixture registrations are unrun.
+
 ## Observed verification
 
 [Actions 42511829980](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42511829980)
