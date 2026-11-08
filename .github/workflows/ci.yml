@@ -814,6 +814,8 @@ jobs:
           set -euo pipefail
           npx wrangler versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$RUNNER_TEMP/kit-production-worker-dry-run/worker.js" --outdir "$RUNNER_TEMP/kit-production-worker-replay"
           cmp "$RUNNER_TEMP/kit-production-worker-dry-run/worker.js" "$RUNNER_TEMP/kit-production-worker-replay/worker.js"
+          mkdir -p artifacts/kit-upload-rehearsal
+          node ci/kit-upload-rehearsal.mjs "$RUNNER_TEMP/kit-production-worker-dry-run" "$RUNNER_TEMP/kit-production-worker-replay" artifacts/kit-upload-rehearsal/receipt.json
       - name: Production Kit bundle build evidence
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -822,6 +824,10 @@ jobs:
           path: |
             ${{ runner.temp }}/kit-production-worker-dry-run/
             ${{ runner.temp }}/kit-production-worker-replay/
+            artifacts/kit-upload-rehearsal/
+            web/.svelte-kit/cloudflare/
+          # Adapter control files (for example .assetsignore) are build evidence.
+          include-hidden-files: true
           if-no-files-found: error
           retention-days: 14
       - name: Production Kit fatal-response boundary (built Worker, local fixtures)

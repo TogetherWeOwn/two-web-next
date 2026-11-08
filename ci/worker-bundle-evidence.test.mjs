@@ -13,6 +13,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { afterEach, describe, test } from "node:test";
 import { parse } from "yaml";
+import { createKitRehearsal } from "./kit-upload-rehearsal.mjs";
 import {
   SCHEMA,
   createInventory,
@@ -111,6 +112,112 @@ function fixture({ imports = [] } = {}) {
   writeMeta(root, meta);
   return root;
 }
+
+describe("production Kit build-only rehearsal receipt", () => {
+  function kitFixture() {
+    const root = fixture();
+    for (const path of [
+      "web/wrangler.production.jsonc",
+      "web/worker.js",
+      "web/_headers",
+      "web/package-lock.json",
+      "web/.svelte-kit/cloudflare/_worker.js",
+      "web/.svelte-kit/cloudflare/_headers",
+      "web/.svelte-kit/cloudflare/_routes.json",
+      "web/.svelte-kit/cloudflare/_app/version.json",
+      "web/.svelte-kit/cloudflare/_app/immutable/chunks/a.js",
+    ]) put(root, path, `fixture ${path}\n`);
+    put(root, "replay/worker.js", readFileSync(join(root, DIR, "worker.js")));
+    return root;
+  }
+
+  const receipt = (root, ctx = context) =>
+    createKitRehearsal(root, join(root, DIR), join(root, "replay"), ctx);
+
+  test("binds every build file and config to the exact run without claiming upload", () => {
+    const root = kitFixture();
+    put(root, "web/.svelte-kit/cloudflare/.assetsignore", "_worker.js\n");
+    const first = receipt(root);
+    assert.deepEqual(receipt(root), first);
+    assert.equal(first.schema, "two.kit-upload-rehearsal.v1");
+    assert.equal(first.evidence, "build-and-upload-rehearsal-only");
+    assert.equal(first.sourceSha, SHA);
+    assert.equal(first.runId, "123");
+    assert.equal(first.runAttempt, "1");
+    assert.equal(first.sameWorkerBytes, true);
+    assert.equal(first.workerSha256, sha256("console.log('worker');\n"));
+    assert.equal(first.versionId, undefined);
+    assert.equal(first.absenceEligible, undefined);
+    assert.ok(first.trees.assets.some((item) => item.path === ".assetsignore"));
+    assert.ok(first.trees.assets.some((item) => item.path === "_worker.js"));
+    assert.equal(first.inputs.length, 5);
+    assert.equal(first.treeSha256, sha256(JSON.stringify(first.trees)));
+    put(root, "web/.svelte-kit/cloudflare/new-static.txt", "new");
+    assert.notEqual(receipt(root).treeSha256, first.treeSha256);
+    put(root, "web/package-lock.json", "changed");
+    assert.notDeepEqual(receipt(root).inputs, first.inputs);
+  });
+
+  test("does not require Pages-only route metadata on a Workers build", () => {
+    const root = kitFixture();
+    rmSync(join(root, "web/.svelte-kit/cloudflare/_routes.json"));
+    assert.equal(receipt(root).sameWorkerBytes, true);
+  });
+
+  test("rejects changed or missing replay Worker bytes", () => {
+    const root = kitFixture();
+    put(root, "replay/worker.js", "different");
+    assert.throws(() => receipt(root), /changed Worker bytes/);
+    rmSync(join(root, "replay/worker.js"));
+    put(root, "replay/README.md", "not a worker");
+    assert.throws(() => receipt(root), /changed Worker bytes/);
+  });
+
+  test("rejects empty Worker, absent metafile and incomplete assets", () => {
+    const root = kitFixture();
+    put(root, `${DIR}/worker.js`, "");
+    assert.throws(() => receipt(root), /Worker missing or empty/);
+    put(root, `${DIR}/worker.js`, readFileSync(join(root, "replay/worker.js")));
+    rmSync(join(root, DIR, "bundle-meta.json"));
+    assert.throws(() => receipt(root), /metafile missing/);
+    put(root, `${DIR}/bundle-meta.json`, "{}");
+    rmSync(join(root, "web/.svelte-kit/cloudflare/_headers"));
+    assert.throws(() => receipt(root), /missing Kit build file/);
+    put(root, "web/.svelte-kit/cloudflare/_headers", "headers");
+    rmSync(join(root, "web/.svelte-kit/cloudflare/_app/immutable"), { recursive: true });
+    assert.throws(() => receipt(root), /immutable assets missing/);
+  });
+
+  test("rejects symlinked asset files and directories instead of omitting them", () => {
+    const root = kitFixture();
+    const link = join(root, "web/.svelte-kit/cloudflare/link");
+    symlinkSync(join(root, DIR, "worker.js"), link);
+    assert.throws(() => receipt(root), /regular file/);
+    rmSync(link);
+    symlinkSync(join(root, DIR), link, "dir");
+    assert.throws(() => receipt(root), /regular file/);
+  });
+
+  test("Actions generates and retains the receipt and complete adapter tree", () => {
+    const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+    assert.ok(workflow.includes("node ci/kit-upload-rehearsal.mjs"));
+    assert.ok(workflow.includes("artifacts/kit-upload-rehearsal/receipt.json"));
+    const archive = workflow.slice(
+      workflow.indexOf("      - name: Production Kit bundle build evidence"),
+      workflow.indexOf("      - name: Production Kit fatal-response boundary"),
+    );
+    assert.ok(archive.includes("artifacts/kit-upload-rehearsal/"));
+    assert.ok(archive.includes("web/.svelte-kit/cloudflare/"));
+    assert.ok(archive.includes("include-hidden-files: true"));
+  });
+
+  test("rejects malformed build identity", () => {
+    const root = kitFixture();
+    for (const change of [{ sourceSha: "main" }, { runId: "0" }, { runAttempt: "" }]) {
+      assert.throws(() => receipt(root, { ...context, ...change }), /required/);
+    }
+  });
+});
 
 function saved(root, ctx = context) {
   const inventory = createInventory(root, DIR, ctx);

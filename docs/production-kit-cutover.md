@@ -47,8 +47,15 @@ build yet.
   and `--no-bundle`, then requires its output Worker to equal the dry-run build
   byte for byte. The build metafile and both output directories are retained for
   14 days, keyed by source SHA, run and attempt. This is build-only evidence, not
-  an upload/deployment receipt or a non-expiring rollback pointer. The existing
-  Hono inventory, upload and deployed receipts remain unchanged.
+  an upload/deployment receipt or a non-expiring rollback pointer. The new
+  `ci/kit-upload-rehearsal.mjs` receipt binds the compared Worker bytes, metafile,
+  complete adapter asset-build tree (including control files), production config,
+  wrapper and both lockfiles to the source SHA, run and attempt. It rejects missing
+  required build files, empty or changed Worker bytes and symlinked tree entries.
+  This tree is not Wrangler's uploaded-asset selection; no version identity or
+  package-absence eligibility is claimed. The existing Hono inventory, upload and
+  deployed receipts remain unchanged. Receipt generation and its negative-control
+  tests are wired into Actions; a result has not yet been observed.
 
 ## Unimplemented
 
