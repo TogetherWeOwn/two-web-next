@@ -132,7 +132,10 @@ test("watch scheduling stays anchored despite realistic probe and query latency"
   });
   const result = await watchProduction(config, deps);
   assert.deepEqual(calls.rateAt, [309, 609, 909, 1209, 1509, 1809]);
-  assert.deepEqual(calls.probeAt, Array.from({ length: 31 }, (_, n) => n * 60));
+  assert.deepEqual(
+    calls.probeAt,
+    Array.from({ length: 31 }, (_, n) => n * 60),
+  );
   assert.equal(result.verdict, "pass");
   assert.equal(result.judged, 6);
   assert.equal(result.missed, 0);
@@ -192,7 +195,9 @@ test("a later breach or supersession still takes priority over missed opportunit
       rateSeconds: (n) => (n === 1 ? 700 : 0),
       rates: (n) => ({ verdict: state === "breach" && n === 2 ? "fail" : "pass" }),
       probes: (n) =>
-        state === "superseded" && n === 7 ? { state: "superseded", reason: "other" } : { state: "ok" },
+        state === "superseded" && n === 7
+          ? { state: "superseded", reason: "other" }
+          : { state: "ok" },
     });
     assert.equal((await watchProduction(config, deps)).verdict, state);
     assert.ok(calls.probeAt.at(-1) < 1800);
