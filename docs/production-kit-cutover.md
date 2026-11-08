@@ -4,6 +4,27 @@ This page records only what is delivered. The production deploy still builds and
 uploads the Hono Worker; nothing in `deploy-production.yml` uploads the Kit
 build yet.
 
+## Observed verification
+
+[Actions run 42452358177](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42452358177)
+at `bc4826fe5192aab93e89b6c2ffa3e97aa0af4999` completed with an overall failure.
+Main and Node 22 each passed 26,757 tests (676 skipped). Kit typecheck, build,
+same-byte upload rehearsal and the built fatal-response fixture passed. The
+production-config comparison passed all 3,313 vectors with zero differences and
+zero approved exceptions; the pre-hook asset security-header comparison also
+reported zero differences. These are local-fixture Actions results, not deployed
+production qualification or independent Security/QA acceptance.
+
+The retained [build archive](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42452358177/artifacts/13607448082)
+now includes both dry-run and replay output trees and the rehearsal receipt. It
+is still build-only evidence, not Wrangler-selected asset evidence or durable
+recovery custody. The run later failed two deployment-gate source assertions:
+credential-reference counts had not included native pure-Hono capture, the
+read-only dry-run report and archive verification. The count contracts are
+updated to account for those exact steps while retaining environment isolation;
+corrected overall CI remains unobserved. Earlier unobserved-result notes below
+describe implementation-time evidence, not a green overall gate.
+
 ## Delivered
 
 - `deploy-production.yml` has a `kit_route_family` dispatch input (`hono`,

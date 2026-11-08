@@ -742,14 +742,15 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.ok(!/secrets\.PRODUCTION_/.test(soak), "staging-soak never sees production secrets");
   assert.match(soak, /run: node ci\/production-deploy-gate\.mjs --staging-soak\n/);
   // Credentials check, required-secrets preflight, rollback-target check,
-  // production Tail deploy, version upload, promotion and the auto-rollback
-  // explicit secret map: all production-only. The regression check keeps
+  // production Tail deploy, version upload, promotion, native pure-Hono
+  // capture and the auto-rollback explicit secret map: all production-only.
+  // The regression check keeps
   // the production account id for its baseline query but reads analytics
   // with the repo-level read-only token, so only the account id appears
   // there.
   for (const [key, count] of Object.entries({
-    CLOUDFLARE_API_TOKEN: 7,
-    CLOUDFLARE_ACCOUNT_ID: 8,
+    CLOUDFLARE_API_TOKEN: 8,
+    CLOUDFLARE_ACCOUNT_ID: 9,
   })) {
     assert.equal(
       (workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length,
@@ -982,11 +983,19 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   // Credential check before the mutation.
   for (const key of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]) {
     // Credentials check, live-version guard, rollback target-version secrets
-    // preflight and the rollback itself.
+    // preflight, read-only dry-run report and the rollback itself.
     const selector = `\${{ inputs.environment == 'production' && secrets.PRODUCTION_${key} || inputs.environment != 'production' && secrets.${key} || '' }}`;
-    assert.equal(workflow.split(selector).length - 1, 4);
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 4);
-    assert.equal((workflow.match(new RegExp(`secrets\\.${key}\\b`, "g")) ?? []).length, 4);
+    assert.equal(workflow.split(selector).length - 1, 5);
+    // The archive verifier has one additional production-only reference,
+    // never a staging fallback or a job-wide credential grant.
+    const archive = workflow.slice(
+      workflow.indexOf("      - name: Verify requested pure-Hono rollback archive (read-only)"),
+      workflow.indexOf("      - name: Archive verified pure-Hono rollback receipt"),
+    );
+    assert.ok(archive.includes(`${key}: \${{ secrets.PRODUCTION_${key} }}`));
+    assert.ok(archive.includes("assert.equal(process.env.ROLLBACK_ENVIRONMENT, 'production'"));
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 6);
+    assert.equal((workflow.match(new RegExp(`secrets\\.${key}\\b`, "g")) ?? []).length, 5);
   }
   const versionCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --version-id");
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
