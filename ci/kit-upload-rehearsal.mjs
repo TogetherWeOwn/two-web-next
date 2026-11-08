@@ -161,6 +161,7 @@ export function createCanonicalReceipt(root, authority) {
   canonicalAuthority(authority);
   const base = safeDirectory(root);
   const files = [];
+  const directories = [];
   let totalBytes = 0;
   const groupFor = (path) => {
     if (path === authority.KIT_WORKER_PATH) return "kit.worker";
@@ -175,8 +176,10 @@ export function createCanonicalReceipt(root, authority) {
   function walk(path, depth) {
     assert.ok(depth <= 32, "canonical directory depth exceeded");
     safeDirectory(join(base, path));
+    assert.ok(directories.length < CANONICAL_LIMITS.files, "canonical directory count exceeded");
+    directories.push(path);
     const members = readdirSync(join(base, path)).sort();
-    assert.ok(members.length > 0, "empty canonical directory");
+    assert.ok(depth > 0 || members.length > 0, "empty canonical directory");
     for (const name of members) {
       const member = `${path}/${name}`;
       safeMember(member);
@@ -217,6 +220,7 @@ export function createCanonicalReceipt(root, authority) {
     schema: "two.kit-canonical-build.v1",
     evidence: "unqualified-canonical-build-bytes",
     measurementRuntime: { node: process.versions.node, zlib: process.versions.zlib },
+    directories: directories.sort(),
     files,
     totals: sums(files),
     groups,
@@ -229,7 +233,7 @@ export function verifyCanonicalBuild(directory, authority) {
   const actual = createCanonicalReceipt(base, authority);
   assert.deepEqual(receipt, actual, "canonical receipt mismatch");
   const allowedFiles = new Set(["receipt.json", ...actual.files.map((file) => file.path)]);
-  const allowedDirectories = new Set();
+  const allowedDirectories = new Set(actual.directories);
   for (const path of allowedFiles) {
     let parent = dirname(path);
     while (parent !== ".") {
@@ -267,6 +271,9 @@ export function freezeCanonicalBuild(root, destination, authority) {
   }
   const receipt = createCanonicalReceipt(source, authority);
   mkdirSync(output, { mode: 0o700 });
+  for (const path of receipt.directories) {
+    mkdirSync(join(output, path), { recursive: true, mode: 0o700 });
+  }
   for (const file of receipt.files) {
     const bytes = canonicalBytes(join(source, file.path));
     assert.equal(bytes.length, file.bytes, "canonical source size changed");

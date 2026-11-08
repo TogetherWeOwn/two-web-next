@@ -94,10 +94,11 @@ function makeRoot(label = "root") {
   return root;
 }
 
-function walk(root, rel, out = []) {
+function walk(root, rel, out = [], directories = []) {
+  directories.push(rel);
   for (const entry of readdirSync(join(root, rel), { withFileTypes: true })) {
     const child = `${rel}/${entry.name}`;
-    if (entry.isDirectory()) walk(root, child, out);
+    if (entry.isDirectory()) walk(root, child, out, directories);
     else out.push(child);
   }
   return out;
@@ -112,10 +113,11 @@ function groupOf(path) {
 }
 
 function expectedReceipt(root) {
+  const directories = [];
   const paths = [
-    ...walk(root, CLOUDFLARE_TREE),
-    ...walk(root, SERVER),
-    ...walk(root, CLIENT_TREE),
+    ...walk(root, CLOUDFLARE_TREE, [], directories),
+    ...walk(root, SERVER, [], directories),
+    ...walk(root, CLIENT_TREE, [], directories),
   ].sort();
   const files = paths.map((path) => {
     const bytes = readFileSync(join(root, path));
@@ -132,6 +134,7 @@ function expectedReceipt(root) {
     schema: "two.kit-canonical-build.v1",
     evidence: "unqualified-canonical-build-bytes",
     measurementRuntime: { node: process.versions.node, zlib: process.versions.zlib },
+    directories: directories.sort(),
     files,
     totals: { files: files.length, bytes: sum(files, "bytes"), gzipBytes: sum(files, "gzipBytes") },
     groups: GROUP_IDS.map((id) => {
@@ -187,6 +190,7 @@ test("createCanonicalReceipt returns the exact unqualified receipt for full tree
   const receipt = await createCanonicalReceipt(root, authority());
   assert.deepEqual(receipt, expectedReceipt(root));
   assert.deepEqual(Object.keys(receipt).sort(), [
+    "directories",
     "evidence",
     "files",
     "groups",
@@ -201,6 +205,38 @@ test("createCanonicalReceipt returns the exact unqualified receipt for full tree
     GROUP_IDS,
   );
   for (const group of receipt.groups) assert.ok(group.files > 0, group.id);
+});
+
+test("nested empty directories survive capture and topology tampering fails", () => {
+  const root = makeRoot("empty-topology");
+  const empty = [
+    `${SERVER}/entries/endpoints`,
+    `${CLIENT_TREE}/.empty/nested`,
+    `${CLOUDFLARE_TREE}/unused`,
+  ];
+  for (const path of empty) mkdirSync(join(root, path), { recursive: true });
+  const before = createCanonicalReceipt(root, authority());
+  for (const path of empty) assert.ok(before.directories.includes(path));
+  assert.deepEqual(before.directories, [...before.directories].sort());
+  assert.equal(new Set(before.directories).size, before.directories.length);
+  const destination = join(fresh("empty-topology-out"), "build");
+  const receipt = freezeCanonicalBuild(root, destination, authority());
+  assert.deepEqual(receipt, before);
+  for (const path of empty) {
+    assert.ok(lstatSync(join(destination, path)).isDirectory());
+    assert.deepEqual(readdirSync(join(destination, path)), []);
+  }
+  assert.deepEqual(verifyCanonicalBuild(destination, authority()), before);
+  rmSync(join(destination, empty[0]), { recursive: true });
+  assert.throws(() => verifyCanonicalBuild(destination, authority()), /receipt mismatch/);
+  mkdirSync(join(destination, empty[0]));
+  const extra = join(destination, SERVER, "unrecorded");
+  mkdirSync(extra);
+  assert.throws(() => verifyCanonicalBuild(destination, authority()), /receipt mismatch/);
+  rmSync(extra, { recursive: true });
+  rmSync(join(destination, empty[0]), { recursive: true });
+  symlinkSync(join(destination, empty[2]), join(destination, empty[0]));
+  assert.throws(() => verifyCanonicalBuild(destination, authority()), /not a regular file/);
 });
 
 test("receipt rows are sorted by full repo-relative path and keep exact keys", async () => {
@@ -347,7 +383,10 @@ test("absent or empty trees and missing groups are rejected", async () => {
     "absent server dir": (root) => rmSync(join(root, SERVER), { recursive: true }),
     "absent cloudflare dir": (root) => rmSync(join(root, CLOUDFLARE_TREE), { recursive: true }),
     "absent client tree": (root) => rmSync(join(root, CLIENT_TREE), { recursive: true }),
-    "nested empty directory": (root) => mkdirSync(join(root, SERVER, "chunks", "hollow")),
+    "server with only empty directories": (root) => {
+      rmSync(join(root, SERVER), { recursive: true });
+      mkdirSync(join(root, SERVER, "chunks", "hollow"), { recursive: true });
+    },
     "empty cloudflare dir": (root) => {
       rmSync(join(root, CLOUDFLARE_TREE), { recursive: true });
       mkdirSync(join(root, CLOUDFLARE_TREE));
@@ -652,6 +691,18 @@ test("verifyCanonicalBuild refuses unreadable or malformed receipts", async () =
 
 test("verifyCanonicalBuild refuses forged receipt rows, groups, gzip and totals", async () => {
   const forgeries = {
+    "directory omitted": (r) => {
+      r.directories.pop();
+    },
+    "directories reordered": (r) => {
+      r.directories.reverse();
+    },
+    "directory duplicated": (r) => {
+      r.directories.push(r.directories[0]);
+    },
+    "directory invented": (r) => {
+      r.directories.push(`${SERVER}/invented`);
+    },
     schema: (r) => {
       r.schema = "two.kit-canonical-build.v2";
     },

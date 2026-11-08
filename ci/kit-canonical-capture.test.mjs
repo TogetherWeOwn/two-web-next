@@ -226,7 +226,14 @@ test("a missing group retains a failed status and no receipt", () => {
 
 test("capture failure codes are finite and do not expose exception details", () => {
   for (const [name, mutate, expected] of [
-    ["empty", (root) => mkdirSync(join(root, SERVER, "empty")), "empty-directory"],
+    [
+      "empty",
+      (root) => {
+        rmSync(join(root, SERVER), { recursive: true });
+        mkdirSync(join(root, SERVER));
+      },
+      "empty-directory",
+    ],
     ["missing", (root) => rmSync(join(root, SERVER), { recursive: true }), "filesystem-missing"],
     ["group", (root) => unlinkSync(join(root, WORKER)), "group-missing"],
   ]) {

@@ -6,6 +6,25 @@ build yet.
 
 ## Observed verification
 
+[Actions 42500235397](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42500235397)
+at `94d8f758ac8d3191d01f8d94a744df9d3b50b5d7` completed with **failure**.
+Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
+auxiliary jobs passed. The authenticated build archive's size and SHA-256 matched
+metadata. Its immediate journal records build success followed by failed capture
+with the fixed code **empty-directory**. Later frozen rehearsal, fatal and parity
+steps were not reached; missing artifacts are consequences, not runtime verdicts.
+
+Capture now records a sorted, bounded directory inventory and copies nested empty
+directories instead of rejecting valid emitted topology. Readback recomputes the
+inventory: missing, extra, reordered or aliased entries refuse. Empty required
+trees and missing budget groups still fail; file bytes/gzip groups remain
+unchanged. The one focused topology regression failed before the repair and
+passed after a fixture-cleanup correction. The wider fixtures and actual corrected
+build await exact-head Actions. No local suite, lint, build or install ran.
+Actions ZIP upload omits empty directories; the receipt retains their paths, but
+independent archive reconstruction/verification remains unfinished. This is not
+accepted collection, dependency/runtime provenance or recovery qualification.
+
 [Actions 42495258968](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42495258968)
 at `8c19ae5c8c38da45d3f61974fa2424d2f40b6b67` completed with **failure**.
 Main lint/type/coverage and Node 22 each passed 26,757 tests (676 skipped);
@@ -20,12 +39,12 @@ bounded data-only reproduction of the 320 raw server/client/Cloudflare files
 passed canonical file/group validation. No downloaded code was executed. This
 does not reproduce the original directory topology: artifact upload omits empty
 directory entries and does not establish the source filesystem's alias state.
-The precise failing invariant is therefore **unknown**, not repaired or waived.
-The journal now records only a fixed failure classification, never arbitrary
-exception text, paths, generated contents or child output. Empty directories,
-aliases and incomplete groups still fail; unknown exceptions remain unclassified.
-New diagnostic and retained source-observer/authority fixtures await exact-head
-Actions. No local suite, lint, build, install or deployment ran.
+At that older inspection the precise failing invariant was **unknown**, not
+repaired or waived. The subsequent classified run above identifies empty-directory
+rejection. The journal records only fixed failure classifications, never arbitrary
+exception text, paths, generated contents or child output. Aliases, empty required
+trees and incomplete groups still fail; unknown exceptions remain unclassified.
+No local suite, lint, build, install or deployment ran.
 
 [Actions 42478341249](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42478341249)
 at `a8f26bb2d9e93e7cbd831901ce15fb075a19361a` completed with **failure**.
