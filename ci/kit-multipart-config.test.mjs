@@ -273,7 +273,13 @@ test("rejects extra binding properties", () => {
 });
 
 test("rejects missing bindings", () => {
-  for (const name of ["ALPHA_VAR", "JOBS_QUEUE", "DB_HYPERDRIVE", "VERSION_META", "STATIC_ASSETS"]) {
+  for (const name of [
+    "ALPHA_VAR",
+    "JOBS_QUEUE",
+    "DB_HYPERDRIVE",
+    "VERSION_META",
+    "STATIC_ASSETS",
+  ]) {
     assertRejectsWithoutLeak((value) => {
       value.bindings = value.bindings.filter((entry) => entry.name !== name);
     });
@@ -336,7 +342,10 @@ test("package telemetry is still subject to the bindings checks", () => {
 test("rejects malformed package telemetry", () => {
   const entry = () => telemetry()[0];
   const tooMany = Array.from({ length: 201 }, (_, index) => ({ ...entry(), name: `pkg-${index}` }));
-  const boundary = Array.from({ length: 200 }, (_, index) => ({ ...entry(), name: `pkg-${index}` }));
+  const boundary = Array.from({ length: 200 }, (_, index) => ({
+    ...entry(),
+    name: `pkg-${index}`,
+  }));
   const variants = [
     [],
     {},

@@ -29,10 +29,10 @@ export function createKitFrozenIntent(inputs, tool, multipart) {
       tool.version === "4.156.1" &&
       tool.entry === "node_modules/wrangler/bin/wrangler.js" &&
       Array.isArray(tool.locks) &&
-      isDeepStrictEqual(
-        tool.locks.map((lock) => lock?.path).sort(),
-        ["package-lock.json", "web/package-lock.json"],
-      ),
+      isDeepStrictEqual(tool.locks.map((lock) => lock?.path).sort(), [
+        "package-lock.json",
+        "web/package-lock.json",
+      ]),
     "checked Wrangler required for intent",
   );
   for (const lock of tool.locks) {
