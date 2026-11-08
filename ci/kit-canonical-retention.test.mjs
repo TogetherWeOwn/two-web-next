@@ -397,7 +397,9 @@ function archiveMembers() {
 
 function verifyMembers(members) {
   const receipt = members.find((member) => member.path === "receipt.json");
-  const hash = createHash("sha256").update(receipt?.data ?? "absent").digest("hex");
+  const hash = createHash("sha256")
+    .update(receipt?.data ?? "absent")
+    .digest("hex");
   return verifyCanonicalArchiveMembers(members, authority(), hash);
 }
 

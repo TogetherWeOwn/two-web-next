@@ -6,6 +6,16 @@ build yet.
 
 ## Observed verification
 
+[Actions 42510350690](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42510350690)
+at `e0acb7d82b79d7fb79ac756ac8b0b71b8ccf3e4b` failed both test legs at lint
+on one archive-fixture formatting layout. Applied the exact reported layout;
+no behavior, assertion, dependency or gate changed. Neither suite nor the Kit
+build/rehearsal/fatal/parity steps ran. Unavailable capture and missing artifacts
+are consequences, not runtime verdicts. Auxiliary jobs passed; draft-event
+fast-passes do not replace the failed full run. Corrected exact-head results
+remain pending. Node syntax and whitespace checks passed; no local tests, lint,
+typecheck, build, install, staging or production operation ran.
+
 [Actions 42505212059](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42505212059)
 at `401b3fb250d920a0c8cf5f98cf5d2b6f025b69e1` completed with **failure**.
 Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
