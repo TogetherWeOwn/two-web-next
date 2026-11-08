@@ -2308,12 +2308,12 @@ export async function reconcileInputs(dir, manifest, hunks) {
 
 export async function check({ dir, root }) {
   const m = await read(path.join(dir, "annotated-diff.manifest.json"));
-  const previousStatus = m.status;
-  m.status = "checking";
+  const admitted = ["rendered", "checking", "checks_failed", "gallery_ready"].includes(m.status);
+  if (admitted) m.status = "checking";
   m.checks = { passed: false };
   m.judge_eligible = false;
   await write(path.join(dir, "annotated-diff.manifest.json"), m);
-  assert(["rendered", "checking", "checks_failed", "gallery_ready"].includes(previousStatus));
+  assert(admitted);
   const labels = await read(path.join(dir, "labels.todo.json"));
   validateSpec(m.capture_spec);
   assert(same(await runtime(), m.capture_spec.runtime), "Check runtime changed");

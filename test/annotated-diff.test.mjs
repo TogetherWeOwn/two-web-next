@@ -22,6 +22,7 @@ import {
   parityPair,
   regionTargets,
   reconcileInputs,
+  render,
   regions,
   segmentsCross,
   segmentHitsRect,
@@ -92,10 +93,39 @@ describe("readiness lifecycle", () => {
         if (mode !== "missing") fs.writeFileSync(path.join(dir, "labels.todo.json"), "{");
         await expect(check({ dir })).rejects.toThrow();
         expect(JSON.parse(fs.readFileSync(file, "utf8"))).toMatchObject({
-          status: "checking",
+          status: mode === "invalid-status" ? "invalid" : "checking",
           checks: { passed: false },
           judge_eligible: false,
         });
+      }
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+  it("preserves prohibited capture statuses across rejected check and render admission", async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "annotated-admission-"));
+    const file = path.join(dir, "annotated-diff.manifest.json");
+    try {
+      for (const status of ["capture_invalid", "too_many_regions"]) {
+        const manifest = {
+          status,
+          reasons: ["Original capture failure"],
+          checks: { passed: true },
+          judge_eligible: true,
+        };
+        fs.writeFileSync(file, JSON.stringify(manifest));
+        await expect(check({ dir })).rejects.toMatchObject({ code: "ERR_ASSERTION" });
+        const rejected = JSON.parse(fs.readFileSync(file, "utf8"));
+        expect(rejected).toEqual({
+          ...manifest,
+          checks: { passed: false },
+          judge_eligible: false,
+        });
+        await expect(render({ dir, author: "fixture:deterministic" })).rejects.toMatchObject({
+          code: "ERR_ASSERTION",
+        });
+        expect(JSON.parse(fs.readFileSync(file, "utf8"))).toEqual(rejected);
+        expect(fs.readdirSync(dir)).toEqual(["annotated-diff.manifest.json"]);
       }
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
