@@ -6,6 +6,18 @@ build yet.
 
 ## Observed verification
 
+[Actions run 42456798269](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42456798269)
+at `457b6d5e7fa813852a469b3cc7f986d22520546f` also failed overall. Main coverage
+passed 26,757 tests (676 skipped); Node 22 and auxiliary jobs passed. Kit
+build/typecheck, same-byte rehearsal, built fatal fixture and all 3,313 production
+parity vectors passed, with zero route/asset-header differences or exceptions.
+The repaired deployment-gate selftest passed 168/168. The later notification
+selftest passed seven and failed one: its staging-only exclusion assertion did
+not account for the added production dry-run exclusion. The contract now pins
+both exclusions on the actual notify job. Focused local reproduction of that one
+previously failing test passed; no local full suite ran. New mirror, source-config
+and asset-classifier results remain unobserved until replacement exact-head Actions.
+
 [Actions run 42452358177](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42452358177)
 at `bc4826fe5192aab93e89b6c2ffa3e97aa0af4999` completed with an overall failure.
 Main and Node 22 each passed 26,757 tests (676 skipped). Kit typecheck, build,
@@ -26,6 +38,21 @@ corrected overall CI remains unobserved. Earlier unobserved-result notes below
 describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
+
+- The production promotion caller pins the unmodified central action at
+  `d32f6c5a90d5e83f51b7421b357f574e12548224` (`v0.9.0`). The complete five-file
+  hermetic mirror includes its README and pre-promotion runner, with raw hashes
+  and the normalized manifest hash appended to the existing SHA mapping. The
+  delivered analytics helper includes the independently reviewed observation-budget
+  correction. The isolated synthetic proof workflow retains its older pin.
+  The production caller explicitly requires the fresh per-mutation verifier, but
+  does not yet configure one: the shared runner refuses before the first 5%
+  mutation. This is an intentional fail-closed intermediate state, not a working
+  recovery verifier, custody qualification, production acceptance or release-ready
+  pipeline. The existing build-archive verifier is not substituted for fresh
+  custody/attestation/current-environment qualification. The same runner boundary
+  executes immediately before 50% and 100% once the real verifier is integrated;
+  rollback and changed-secret/resource guards remain required.
 
 - `ci/kit-source-config.mjs` checks the all-off Kit source configuration against
   an explicit projection of the root pure-Hono production configuration. Unknown

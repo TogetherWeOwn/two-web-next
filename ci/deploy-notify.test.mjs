@@ -352,10 +352,13 @@ test("deploy and rollback workflows end with a non-blocking notify", () => {
       `${file} notify gets no deploy credentials`,
     );
   }
-  // Staging drills never notify.
+  // Staging drills and production dry-runs never notify.
+  const rollbackNotify = read("../.github/workflows/rollback-production.yml").split(
+    "\n  notify:\n",
+  )[1];
   assert.match(
-    read("../.github/workflows/rollback-production.yml"),
-    /inputs\.environment == 'production' \}\}/,
+    rollbackNotify,
+    /if: \$\{\{ always\(\) && inputs\.environment == 'production' && inputs\.dry_run != true \}\}/,
   );
   // The rollback mutation is recorded separately from the post-rollback
   // smoke so a failed job cannot misreport a completed restoration.

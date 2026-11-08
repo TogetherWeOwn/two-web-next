@@ -512,8 +512,12 @@ jobs:
       # stays above.
       - name: Gradual promotion 5-50-100 with automatic rollback
         id: gradual
-        uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06
+        uses: TogetherWeOwn/.github/actions/gradual-promote@d32f6c5a90d5e83f51b7421b357f574e12548224 # v0.9.0
         with:
+          # No verifier is configured until custody and current-environment
+          # qualification are implemented. Missing evidence blocks promotion;
+          # do not substitute the build-only archive verifier or a no-op.
+          require-pre-promotion-verifier: "true"
           worker-name: two-web-next-production
           version-tag: ${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           domain: togetherweown.com

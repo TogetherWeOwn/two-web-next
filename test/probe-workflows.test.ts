@@ -528,7 +528,7 @@ describe("production deployment preserves configured triggers", () => {
       'npx wrangler versions upload --env production --tag "${DEPLOY_SHA:?}-${GITHUB_RUN_ID:?}-${GITHUB_RUN_ATTEMPT:?}"',
     );
     const gradual = workflow.indexOf(
-      "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@d32f6c5a90d5e83f51b7421b357f574e12548224 # v0.9.0",
     );
 
     expect(upload).toBeGreaterThan(-1);
@@ -538,16 +538,44 @@ describe("production deployment preserves configured triggers", () => {
     // from the action's own path, never caller-relative, so every repo runs
     // the same traffic math with no copy.
     expect(action).not.toContain("node ci/gradual-promote.mjs");
-    for (const percentage of [5, 50]) {
+    // The action path now travels through the ACTION_PATH env mapping
+    // instead of inline github.action_path interpolation in the script.
+    expect(action).not.toContain('"${{ github.action_path }}/');
+    for (const percentage of [5, 50, 100]) {
       expect(action).toContain(
-        '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" ' +
+        'node "$ACTION_PATH/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" ' +
           `${percentage} "$PREV_VERSION"`,
       );
     }
-    expect(action).toContain(
-      '"${{ github.action_path }}/gradual-promote.mjs" --deploy-spec "$VERSION_TAG" 100 "$PREV_VERSION"',
-    );
+    expect(action).toContain("ACTION_PATH: ${{ github.action_path }}");
     expect(action).toContain("npx wrangler versions deploy --env production");
+    // Every 5/50/100 mutation runs the pre-promotion runner immediately
+    // before its wrangler deploy, after the traffic spec is computed.
+    for (const percentage of [5, 50, 100]) {
+      const step = action.match(
+        new RegExp(
+          `    - name: Promote to ${percentage} percent\\n[\\s\\S]*?(?=\\n    - name: |$)`,
+        ),
+      )?.[0];
+      expect(step).toBeDefined();
+      expect(step).toMatch(
+        /--deploy-spec "\$VERSION_TAG" \d+ "\$PREV_VERSION"\)\n {8}node "\$ACTION_PATH\/pre-promotion-check\.mjs"\n {8}npx wrangler versions deploy --env production/,
+      );
+      expect(step).toContain(`PROMOTION_PERCENTAGE: "${percentage}"`);
+      expect(step?.match(/pre-promotion-check\.mjs/g)).toHaveLength(1);
+    }
+    expect(action.match(/npx wrangler versions deploy/g)).toHaveLength(3);
+    expect(action.match(/pre-promotion-check\.mjs/g)).toHaveLength(3);
+    // Caller fails closed: the verifier is required but intentionally not
+    // configured yet (custody qualification boundary), and no placeholder
+    // verifier may stand in for it.
+    const callerStep = workflow.match(
+      /uses: TogetherWeOwn\/\.github\/actions\/gradual-promote@[0-9a-f]{40}[^\n]*\n[\s\S]*?(?=\n {6}- name: |$)/,
+    )?.[0];
+    expect(callerStep).toBeDefined();
+    expect(callerStep).toContain('require-pre-promotion-verifier: "true"');
+    expect(callerStep).not.toMatch(/^\s*pre-promotion-verifier:/m);
+    expect(workflow).not.toMatch(/^\s*pre-promotion-verifier:/m);
     expect(workflow).not.toContain("wrangler triggers deploy");
     expect(workflow).not.toContain("wrangler deploy --env production");
     expect(action).not.toContain("wrangler triggers deploy");

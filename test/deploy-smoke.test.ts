@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
@@ -10,14 +10,36 @@ import { describe, expect, it } from "vitest";
 // needs verified upstream hashes so local tests cannot cover stale code.
 const gradualPromoteHashesByRef: Record<
   string,
-  { helper: string; manifest: string; gate: string }
+  {
+    helper: string;
+    manifest: string;
+    gate: string;
+    // Raw-file digests of the complete five-file mirror. The historical entry
+    // predates them; every currently pinned ref must carry all three.
+    action?: string;
+    readme?: string;
+    precheck?: string;
+  }
 > = {
   "89c290be20c0044efaf6916f28341c76e75fff06": {
     helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
     manifest: "3ec491a337a484c5cdcb25695c6d0d9c48576a76a13c94453bd5ff98aa59b13a",
     gate: "973d48bd7a0ee0c130a4842e4bd2441451791d1483abdef37fcd7a0895766914",
   },
+  // v0.9.0
+  d32f6c5a90d5e83f51b7421b357f574e12548224: {
+    helper: "8f87a83d79cc24dacdb5a7247eb1ad67afa0dde71ce3d210980927fe681a320a",
+    manifest: "e2f34a41d902be69371342c1fbc37f6cabf07ddc697fe60c3ebf4278cd2ae92a",
+    gate: "629091bf134d50211759bca63b7b6fe7c812187c2858c9b369be237514d7b7bf",
+    action: "8c4a5794658bf5330d425ad82edb38ae0b3e35b993a336bcc1260dbd4e294bfc",
+    readme: "0ba2f259c89acea835af0cf221758dca9181f7f67a3addec1631eb95f85eeed3",
+    precheck: "400f6ed0d1ac01735188f520bda52e0aef5741bda773b2a966d42bf99e977526",
+  },
 };
+
+function rawSha256(path: string) {
+  return createHash("sha256").update(readFileSync(path)).digest("hex");
+}
 
 function actionManifestSha256(content: string) {
   const executableContent = content
@@ -599,7 +621,7 @@ describe("production deploy smoke (offline)", () => {
   it("probes the apex origin with the indexable posture, never staging", () => {
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
     expect(workflow).toContain(
-      "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+      "uses: TogetherWeOwn/.github/actions/gradual-promote@d32f6c5a90d5e83f51b7421b357f574e12548224 # v0.9.0",
     );
     const centralActionRef = workflow.match(
       /uses: TogetherWeOwn\/\.github\/actions\/gradual-promote@([0-9a-f]{40})/,
@@ -616,6 +638,23 @@ describe("production deploy smoke (offline)", () => {
     expect(gateSha256).toBe(expectedHashes?.gate);
     const action = readFileSync(".github/actions/gradual-promote/action.yml", "utf8");
     expect(actionManifestSha256(action)).toBe(expectedHashes?.manifest);
+    // Complete five-file mirror: raw action manifest, README and the
+    // pre-promotion helper must match the pinned upstream bytes too.
+    expect(readdirSync(".github/actions/gradual-promote").sort()).toEqual([
+      "README.md",
+      "action.yml",
+      "error-rate-gate.mjs",
+      "gradual-promote.mjs",
+      "pre-promotion-check.mjs",
+    ]);
+    expect(expectedHashes?.action).toBeDefined();
+    expect(expectedHashes?.readme).toBeDefined();
+    expect(expectedHashes?.precheck).toBeDefined();
+    expect(rawSha256(".github/actions/gradual-promote/action.yml")).toBe(expectedHashes?.action);
+    expect(rawSha256(".github/actions/gradual-promote/README.md")).toBe(expectedHashes?.readme);
+    expect(rawSha256(".github/actions/gradual-promote/pre-promotion-check.mjs")).toBe(
+      expectedHashes?.precheck,
+    );
     expect(workflow).toContain("domain: togetherweown.com");
     expect(workflow).not.toContain("next.togetherweown.com");
     expect(action).toContain('default: "true"');

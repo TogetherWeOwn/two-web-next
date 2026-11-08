@@ -767,7 +767,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
   const gradual = workflow.indexOf(
-    "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@d32f6c5a90d5e83f51b7421b357f574e12548224 # v0.9.0",
   );
   assert.ok(
     credentialCheck > 0 &&
@@ -783,7 +783,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   // Promotion lives in the shared composite action: the caller only passes
   // the tag built from the exact same three parts as the upload tag above.
-  const call = workflow.slice(gradual, gradual + 800);
+  const call = workflow.slice(gradual, workflow.indexOf("\n      - name: ", gradual));
   assert.match(call, /worker-name: two-web-next-production/);
   assert.match(
     call,
@@ -1575,7 +1575,7 @@ test("each gradual stage also judges the new version's live error rate before ro
   // End-of-line anchor: a trailing `|| true` on the run line would
   // neutralize the gate while an unanchored count stays green.
   assert.equal(
-    (action.match(/node "\$\{\{ github\.action_path \}\}\/error-rate-gate\.mjs"$/gm) ?? []).length,
+    (action.match(/node "\$ACTION_PATH\/error-rate-gate\.mjs"$/gm) ?? []).length,
     3,
   );
   // The gate reads analytics with the same caller-supplied token/account
@@ -1631,6 +1631,7 @@ test("each gradual stage also judges the new version's live error rate before ro
     const block = stepBlock(`Live error-rate gate at ${pct} percent`);
     assert.ok(block.includes("if: inputs.error-rate-gate == 'true'\n"), `gate ${pct} if guard`);
     for (const envLine of [
+      "ACTION_PATH: ${{ github.action_path }}",
       "WORKER_NAME: ${{ inputs.worker-name }}",
       "NEW_VERSION: ${{ steps.promoted-version.outputs.id }}",
       "CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}",
@@ -1647,6 +1648,29 @@ test("each gradual stage also judges the new version's live error rate before ro
     // A swallowed failure would never reach the rollback step.
     assert.ok(!block.includes("continue-on-error"), `gate ${pct} must not swallow its failure`);
   }
+});
+
+test("production promotion refuses a missing recovery verifier before spawning a caller", async () => {
+  const { runPrePromotionCheck } = await import(
+    "../.github/actions/gradual-promote/pre-promotion-check.mjs"
+  );
+  let calls = 0;
+  const spawn = () => {
+    calls += 1;
+    throw new Error("an absent verifier must not execute a caller");
+  };
+  await assert.rejects(
+    runPrePromotionCheck({ REQUIRE_PRE_PROMOTION_VERIFIER: "true" }, spawn),
+    /verifier must be a repository-relative checked-in/,
+  );
+  assert.equal(calls, 0);
+  await runPrePromotionCheck({}, spawn);
+  assert.equal(calls, 0, "non-opted-in synthetic callers retain the existing behavior");
+  await assert.rejects(
+    runPrePromotionCheck({ REQUIRE_PRE_PROMOTION_VERIFIER: "unknown" }, spawn),
+    /invalid verifier requirement/,
+  );
+  assert.equal(calls, 0);
 });
 
 test("the staging rehearsal requires the elevated-rate verdict, not any non-zero exit", () => {
