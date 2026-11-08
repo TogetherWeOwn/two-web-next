@@ -6,6 +6,21 @@ build yet.
 
 ## Observed verification
 
+[Actions run 42468936442](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42468936442)
+at `a888daf9358a5a7f20a71325a271bd40f60b8bc2` failed the snapshot fixture step:
+34 passed and one failed. Its drift fixture replaced a script name in a comment,
+not the actual config field. The fixture now targets the quoted `name` field,
+requires a changed input and checks the specific config-contract rejection.
+Focused local reproduction of that single test failed before and passed after
+the repair. No production validation was weakened. Main lint/type/coverage
+passed 26,757 tests (676 skipped); Node 22 and all auxiliary jobs passed. Kit
+typecheck/build, checked-tool fixtures (40), asset classifier (17), source-config
+fixtures (11) and same-byte rehearsal passed. Snapshot creation, frozen rehearsal,
+built fatal fixture and full production parity were not reached. Missing fatal
+and parity artifacts are consequences, not runtime verdicts. Retained finite-output
+and multipart checks still await their first Actions execution. Syntax and
+whitespace checks passed; no local suite, lint, build, install or deploy ran.
+
 [Actions run 42464735477](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42464735477)
 at `f6908d1c1f9abc02445f88107ca03522914d43d4` failed the Node 22 lint step
 on formatting in `kit-frozen-inputs.mjs`, `kit-wrangler-tool.mjs` and its fixture

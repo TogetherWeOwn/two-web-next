@@ -491,11 +491,14 @@ test("drifted adapter control bytes are rejected before anything is written", as
 test("a drifted source production config is rejected", async () => {
   await withFixture(async (f) => {
     const path = join(f.root, "web/wrangler.production.jsonc");
-    writeFileSync(
-      path,
-      readFileSync(path, "utf8").replace("two-web-next-production", "two-web-next-other"),
+    const original = readFileSync(path, "utf8");
+    const changed = original.replace(
+      '"name": "two-web-next-production"',
+      '"name": "two-web-next-other"',
     );
-    assert.throws(() => freeze(f));
+    assert.notEqual(changed, original, "fixture must change the script name, not a comment");
+    writeFileSync(path, changed);
+    assert.throws(() => freeze(f), /Kit config differs from reviewed source contract/);
     assert.ok(!existsSync(f.destination));
   });
 });
