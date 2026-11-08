@@ -122,22 +122,25 @@ describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
 
-- `ci/kit-canonical-capture.mjs` wires the existing byte primitive immediately
-  after the combined adapter-build/local-startup step, before contrast, budgets
-  or production dry-run/replay. Its exclusive diagnostic directory journals
-  started, complete, failed or unavailable capture, the producer outcome,
-  explicit source/workflow SHA and run/attempt, and a receipt size/digest only
-  after complete snapshot readback. A failed producer still fails even if bytes
-  can be retained; skipped/cancelled producers never copy stale output. The
-  existing always-run bundle archive now includes the snapshot/status and all
-  three raw emitted trees, including hidden files and partial outputs. No
-  original startup, budget, parity or production gate is suppressed.
-  Fixtures are authored but not executed. This is **same-source CI diagnostic
-  retention**, not admitted B collection, accepted D or build-process provenance.
-  In particular, it runs after the combined startup diagnostic, not at the
-  instant the build process returns. The separated candidate/collector build
-  interface must still capture at that earlier boundary and independently bind
-  process/tool/image/input identities and final archive identity.
+- `ci/kit-canonical-capture.mjs` now wraps the awaited adapter build within the
+  existing startup diagnostic. With the workflow's explicit capture directory,
+  it freezes all three trees immediately after the build operation returns,
+  before upload serialization or profiling. The command, timeout, output cap
+  and single execution remain unchanged. A failed build attempts byte retention
+  but rethrows its original error, even if capture also fails. A successful build
+  with failed capture still fails. An explicit journal boundary distinguishes
+  this capture from a direct caller-requested snapshot.
+  The following `always()` finalizer verifies the original frozen snapshot,
+  identity and receipt, never recopies possibly mutated raw output. If the build
+  never reached the capture boundary, it records unavailable without copying
+  stale trees. A later startup failure preserves the snapshot but still fails
+  the finalizer. Raw/partial output and the journal remain in the existing
+  always-run bundle archive. No startup, budget, parity or production guard is
+  suppressed. New fixtures and real wiring are **not yet run**.
+  This is **same-source CI diagnostic retention**, not admitted B collection,
+  accepted D or complete build-process provenance. The source-separated
+  candidate/collector interface, candidate-owned execution and independently
+  bound process/tool/image/input and final archive identities remain unfinished.
 
 - `ci/kit-canonical-source.mjs` supplies a source-identity boundary for future
   separate Actions checkouts. Both full commit SHAs are explicit; only the fixed

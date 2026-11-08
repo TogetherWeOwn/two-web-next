@@ -763,13 +763,14 @@ jobs:
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         env:
           STARTUP_RUNNER_IMAGE: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
+          CANONICAL_CAPTURE_DIRECTORY: artifacts/kit-canonical-capture/
         run: node ci/check-worker-startup.mjs
       - name: Kit immediate canonical byte capture (unqualified diagnostics)
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         env:
           CANONICAL_PRODUCER_OUTCOME: ${{ steps.kit-build.outcome }}
         timeout-minutes: 3
-        run: node ci/kit-canonical-capture.mjs artifacts/kit-canonical-capture/
+        run: node ci/kit-canonical-capture.mjs --finalize artifacts/kit-canonical-capture/
       - name: Worker local startup evidence
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

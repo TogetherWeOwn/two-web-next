@@ -6,6 +6,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import {
+  chmodSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -22,12 +23,17 @@ import { dirname, join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { captureCanonicalBuild } from "./kit-canonical-capture.mjs";
+import {
+  captureAfterCanonicalBuild,
+  captureCanonicalBuild,
+  finalizeCanonicalCapture,
+} from "./kit-canonical-capture.mjs";
 import { verifyCanonicalBuild } from "./kit-upload-rehearsal.mjs";
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SCRIPT = join(HERE, "kit-canonical-capture.mjs");
 const WORKFLOW = join(HERE, "..", ".github", "workflows", "ci.yml");
+const STARTUP = join(HERE, "check-worker-startup.mjs");
 
 const WORKER = "web/.svelte-kit/cloudflare/_worker.js";
 const SERVER = "web/.svelte-kit/output/server";
@@ -120,6 +126,7 @@ test("success captures all trees, raw bytes, and a recomputed receipt digest", a
   assert.equal(journal.schema, "two.kit-canonical-capture.v1");
   assert.equal(journal.evidence, "unqualified-same-source-ci-diagnostic");
   assert.equal(journal.capture, "complete");
+  assert.equal(journal.captureBoundary, "caller-requested");
   assert.equal(journal.qualified, false);
   assert.equal(journal.sourceSha, SHA);
   assert.equal(journal.workflowSha, SHA);
@@ -180,6 +187,7 @@ test("status journal is created before capture and only ever replaces itself", (
   const journal = status(failedDest);
   assert.deepEqual(Object.keys(journal).sort(), [
     "capture",
+    "captureBoundary",
     "evidence",
     "producerOutcome",
     "qualified",
@@ -433,6 +441,11 @@ test("workflow runs the capture immediately after the Kit build and retains raw 
   assert.match(producer, /\n {8}id: kit-build\n/);
   // Original startup and budget gates remain on the producer and downstream.
   assert.ok(producer.includes("node ci/check-worker-startup.mjs"));
+  assert.match(
+    producer,
+    /\n {10}CANONICAL_CAPTURE_DIRECTORY: artifacts\/kit-canonical-capture\/\n/,
+    "producer names the immediate capture directory",
+  );
   assert.ok(text.includes("node ci/check-kit-perf.mjs"));
   assert.ok(text.includes("node ci/check-kit-route-perf.mjs"));
   assert.equal(
@@ -445,6 +458,10 @@ test("workflow runs the capture immediately after the Kit build and retains raw 
   assert.ok(capture, "step after producer");
   assert.ok(capture.includes("node ci/kit-canonical-capture.mjs"), "capture immediately follows");
   assert.ok(capture.includes("artifacts/kit-canonical-capture/"));
+  assert.ok(
+    capture.includes("node ci/kit-canonical-capture.mjs --finalize artifacts/kit-canonical-capture/"),
+    "always() step finalizes the immediate capture",
+  );
   assert.match(capture, /\n {8}if: always\(\)/);
   assert.match(capture, /CANONICAL_PRODUCER_OUTCOME: \$\{\{ steps\.kit-build\.outcome \}\}/);
   assert.equal(text.split("node ci/kit-canonical-capture.mjs").length - 1, 1);
@@ -469,4 +486,486 @@ test("workflow runs the capture immediately after the Kit build and retains raw 
     );
   }
   assert.ok(resolve(WORKFLOW).endsWith("ci.yml"));
+});
+
+// Immediate capture around the one canonical build, and its always() finalizer.
+const contextWithoutOutcome = (over = {}) => {
+  const { producerOutcome: _ignored, ...rest } = context(over);
+  return rest;
+};
+
+function controlled() {
+  let resolveBuild;
+  let rejectBuild;
+  const promise = new Promise((resolvePromise, rejectPromise) => {
+    resolveBuild = resolvePromise;
+    rejectBuild = rejectPromise;
+  });
+  return { promise, resolveBuild, rejectBuild };
+}
+
+const microtasks = async () => {
+  for (let i = 0; i < 8; i++) await Promise.resolve();
+};
+
+async function captured(label = "frozen") {
+  const root = makeRoot(label);
+  const dest = target(`${label}-out`);
+  await captureAfterCanonicalBuild(
+    root,
+    dest,
+    contextWithoutOutcome(),
+    async () => {},
+    authority(),
+  );
+  return { root, dest };
+}
+
+test("capture waits for the awaited build and freezes the bytes it produced", async () => {
+  const root = makeRoot("after-build");
+  const dest = target();
+  const gate = controlled();
+  const events = [];
+  let calls = 0;
+  const pending = captureAfterCanonicalBuild(
+    root,
+    dest,
+    contextWithoutOutcome(),
+    () => {
+      calls++;
+      events.push("build-start");
+      return gate.promise;
+    },
+    authority(),
+  ).then((result) => {
+    events.push("settled");
+    return result;
+  });
+  await microtasks();
+  assert.equal(calls, 1);
+  assert.deepEqual(events, ["build-start"], "must not settle before the build resolves");
+  assert.equal(existsSync(join(dest, "bytes/receipt.json")), false, "no capture before build ends");
+  // The build finishes by rewriting the worker; the capture must see that output.
+  const built = Buffer.concat([RAW_WORKER, Buffer.from("rebuilt\n")]);
+  put(root, WORKER, built);
+  gate.resolveBuild();
+  const result = await pending;
+  assert.deepEqual(events, ["build-start", "settled"]);
+  assert.equal(calls, 1, "no retry or rebuild");
+  assert.equal(result.capture, "complete");
+  assert.equal(result.captureBoundary, "build-process-return");
+  assert.equal(result.producerOutcome, "success");
+  assert.equal(result.qualified, false);
+  assert.deepEqual(status(dest), result);
+  assert.deepEqual(readFileSync(join(dest, "bytes", WORKER)), built);
+  await verifyCanonicalBuild(join(dest, "bytes"), authority());
+});
+
+test("a context producerOutcome is overridden by the actual build completion", async () => {
+  for (const claimed of ["failure", "skipped", "cancelled", "success"]) {
+    const dest = target(`override-${claimed}`);
+    const result = await captureAfterCanonicalBuild(
+      makeRoot("override"),
+      dest,
+      context({ producerOutcome: claimed }),
+      async () => {},
+      authority(),
+    );
+    assert.equal(result.producerOutcome, "success", claimed);
+    assert.equal(status(dest).producerOutcome, "success", claimed);
+  }
+});
+
+test("invalid identity refuses before the build runs or the destination exists", async () => {
+  const root = makeRoot();
+  const bad = {
+    "short source": { sourceSha: "abc123", workflowSha: "abc123" },
+    "workflow mismatch": { workflowSha: OTHER_SHA },
+    "missing workflow": { workflowSha: undefined },
+    "zero run id": { runId: "0" },
+    "missing run id": { runId: undefined },
+    "non-numeric attempt": { runAttempt: "one" },
+  };
+  for (const [name, over] of Object.entries(bad)) {
+    const dest = target("pre-refuse");
+    let calls = 0;
+    await assert.rejects(
+      captureAfterCanonicalBuild(
+        root,
+        dest,
+        contextWithoutOutcome(over),
+        async () => {
+          calls++;
+        },
+        authority(),
+      ),
+      undefined,
+      name,
+    );
+    assert.equal(calls, 0, `${name}: build executed`);
+    assert.equal(existsSync(dest), false, `${name}: destination created`);
+  }
+});
+
+test("a failed build is captured and its original error is rethrown unchanged", async () => {
+  const root = makeRoot();
+  const dest = target();
+  const original = new Error("build exploded RAW-ORIGINAL");
+  let calls = 0;
+  await assert.rejects(
+    captureAfterCanonicalBuild(
+      root,
+      dest,
+      contextWithoutOutcome(),
+      async () => {
+        calls++;
+        throw original;
+      },
+      authority(),
+    ),
+    (error) => {
+      assert.strictEqual(error, original);
+      return true;
+    },
+  );
+  assert.equal(calls, 1);
+  const journal = status(dest);
+  assert.equal(journal.capture, "complete");
+  assert.equal(journal.captureBoundary, "build-process-return");
+  assert.equal(journal.producerOutcome, "failure");
+  assert.equal(journal.qualified, false);
+  const receiptBytes = readFileSync(join(dest, "bytes/receipt.json"));
+  assert.equal(journal.receipt.sha256, sha(receiptBytes));
+  await verifyCanonicalBuild(join(dest, "bytes"), authority());
+});
+
+test("incomplete output records capture failure without replacing the build error", async () => {
+  const root = makeRoot();
+  const dest = target();
+  const original = new Error("build exploded early");
+  await assert.rejects(
+    captureAfterCanonicalBuild(
+      root,
+      dest,
+      contextWithoutOutcome(),
+      async () => {
+        rmSync(join(root, CLIENT_TREE), { recursive: true });
+        throw original;
+      },
+      authority(),
+    ),
+    (error) => {
+      assert.strictEqual(error, original, "capture failure must not mask the build error");
+      return true;
+    },
+  );
+  const journal = status(dest);
+  assert.equal(journal.capture, "failed");
+  assert.equal(journal.captureBoundary, "build-process-return");
+  assert.equal(journal.producerOutcome, "failure");
+  assert.equal(journal.receipt, null);
+  assert.equal(existsSync(join(dest, "bytes/receipt.json")), false);
+  // Incomplete trees fail before a snapshot is created; raw output remains for
+  // the workflow's always() archive, never a fabricated complete receipt.
+  assert.equal(existsSync(join(dest, "bytes")), false);
+  assert.deepEqual(readFileSync(join(root, WORKER)), RAW_WORKER);
+});
+
+test("a failed build still rethrows the original when the destination is unusable", async () => {
+  const root = makeRoot();
+  const dest = target();
+  mkdirSync(dest);
+  const original = new Error("build exploded with blocked destination");
+  await assert.rejects(
+    captureAfterCanonicalBuild(
+      root,
+      dest,
+      contextWithoutOutcome(),
+      async () => {
+        throw original;
+      },
+      authority(),
+    ),
+    (error) => {
+      assert.strictEqual(error, original);
+      return true;
+    },
+  );
+  assert.deepEqual(readdirSync(dest), [], "existing destination preserved");
+});
+
+test("capture failure after a successful build rejects without retrying the build", async () => {
+  const root = makeRoot();
+  const dest = target();
+  let calls = 0;
+  await assert.rejects(
+    captureAfterCanonicalBuild(
+      root,
+      dest,
+      contextWithoutOutcome(),
+      async () => {
+        calls++;
+        rmSync(join(root, SERVER), { recursive: true });
+      },
+      authority(),
+    ),
+    /canonical byte capture failed/,
+  );
+  assert.equal(calls, 1, "no retry or rebuild");
+  const journal = status(dest);
+  assert.equal(journal.capture, "failed");
+  assert.equal(journal.captureBoundary, "build-process-return");
+  assert.equal(journal.producerOutcome, "success");
+  assert.equal(journal.qualified, false);
+  assert.equal(journal.receipt, null);
+});
+
+test("finalize validates the frozen bytes even after the raw trees change", async () => {
+  const { root, dest } = await captured();
+  const frozen = digest(dest);
+  const journal = status(dest);
+  // Later steps rewrite or delete raw output; the finalizer must not recopy it.
+  put(root, WORKER, blob("late-mutation"));
+  rmSync(join(root, CLIENT_TREE), { recursive: true });
+  const result = await finalizeCanonicalCapture(
+    root,
+    dest,
+    context({ producerOutcome: "success" }),
+    authority(),
+  );
+  assert.equal(result.capture, "complete");
+  assert.equal(result.captureBoundary, "build-process-return");
+  assert.equal(result.qualified, false);
+  assert.deepEqual(result.receipt, journal.receipt);
+  assert.deepEqual(digest(dest), frozen, "frozen bytes and journal untouched");
+  assert.deepEqual(readFileSync(join(dest, "bytes", WORKER)), RAW_WORKER);
+});
+
+test("finalize without immediate capture is unavailable and copies no stale trees", async () => {
+  const root = makeRoot("stale-finalize");
+  const dest = target();
+  const before = digest(root);
+  await assert.rejects(
+    finalizeCanonicalCapture(root, dest, context({ producerOutcome: "failure" }), authority()),
+  );
+  const journal = status(dest);
+  assert.equal(journal.capture, "unavailable");
+  assert.equal(journal.captureBoundary, "not-observed");
+  assert.equal(journal.qualified, false);
+  assert.equal(journal.receipt, null);
+  assert.deepEqual(readdirSync(dest), ["status.json"], "stale bytes must not be copied");
+  assert.deepEqual(digest(root), before);
+  // A skipped producer has no capture either, even with a successful-looking outcome.
+  const skipped = target("stale-finalize-success");
+  await assert.rejects(
+    finalizeCanonicalCapture(root, skipped, context({ producerOutcome: "success" }), authority()),
+  );
+  assert.equal(status(skipped).capture, "unavailable");
+  assert.equal(status(skipped).captureBoundary, "not-observed");
+  assert.deepEqual(readdirSync(skipped), ["status.json"]);
+});
+
+test("finalize rejects a mismatched identity, run or invalid context", async () => {
+  const { root, dest } = await captured();
+  const frozen = digest(dest);
+  const mismatched = {
+    "other source": { sourceSha: OTHER_SHA, workflowSha: OTHER_SHA },
+    "workflow mismatch": { workflowSha: OTHER_SHA },
+    "other run": { runId: "999999" },
+    "other attempt": { runAttempt: "2" },
+    "missing run": { runId: undefined },
+    "unknown outcome": { producerOutcome: "neutral" },
+    "missing outcome": { producerOutcome: undefined },
+  };
+  for (const [name, over] of Object.entries(mismatched)) {
+    await assert.rejects(
+      finalizeCanonicalCapture(root, dest, context(over), authority()),
+      undefined,
+      name,
+    );
+  }
+  assert.deepEqual(digest(dest), frozen, "identity refusal preserves the entire capture");
+});
+
+test("finalize rejects a changed journal, receipt or frozen byte", async () => {
+  const edits = {
+    "journal source": (dest) => {
+      const journal = status(dest);
+      writeFileSync(
+        join(dest, "status.json"),
+        JSON.stringify({ ...journal, sourceSha: OTHER_SHA, workflowSha: OTHER_SHA }),
+      );
+    },
+    "journal run": (dest) => {
+      writeFileSync(
+        join(dest, "status.json"),
+        JSON.stringify({ ...status(dest), runId: "999999" }),
+      );
+    },
+    "journal receipt digest": (dest) => {
+      const journal = status(dest);
+      writeFileSync(
+        join(dest, "status.json"),
+        JSON.stringify({ ...journal, receipt: { ...journal.receipt, sha256: "0".repeat(64) } }),
+      );
+    },
+    "journal capture state": (dest) => {
+      writeFileSync(
+        join(dest, "status.json"),
+        JSON.stringify({ ...status(dest), capture: "started", receipt: null }),
+      );
+    },
+    "journal producer outcome": (dest) => {
+      writeFileSync(
+        join(dest, "status.json"),
+        JSON.stringify({ ...status(dest), producerOutcome: "failure" }),
+      );
+    },
+    "journal boundary downgraded": (dest) => {
+      writeFileSync(
+        join(dest, "status.json"),
+        JSON.stringify({ ...status(dest), captureBoundary: "caller-requested" }),
+      );
+    },
+    "journal boundary unobserved": (dest) => {
+      writeFileSync(
+        join(dest, "status.json"),
+        JSON.stringify({ ...status(dest), captureBoundary: "not-observed" }),
+      );
+    },
+    "journal boundary removed": (dest) => {
+      const { captureBoundary: _removed, ...rest } = status(dest);
+      writeFileSync(join(dest, "status.json"), JSON.stringify(rest));
+    },
+    "journal removed": (dest) => unlinkSync(join(dest, "status.json")),
+    "receipt bytes": (dest) => {
+      const path = join(dest, "bytes/receipt.json");
+      chmodSync(path, 0o600);
+      writeFileSync(path, Buffer.concat([readFileSync(path), Buffer.from(" ")]));
+    },
+    "receipt removed": (dest) => unlinkSync(join(dest, "bytes/receipt.json")),
+    "frozen worker": (dest) => {
+      const path = join(dest, "bytes", WORKER);
+      chmodSync(path, 0o600);
+      writeFileSync(path, Buffer.concat([readFileSync(path), Buffer.from([0])]));
+    },
+    "frozen server file": (dest) => {
+      const path = join(dest, "bytes", SERVER, "index.js");
+      chmodSync(path, 0o600);
+      writeFileSync(path, blob("x"));
+    },
+    "frozen client file removed": (dest) =>
+      unlinkSync(join(dest, "bytes", CLIENT, "immutable/assets/app.css")),
+  };
+  for (const [name, edit] of Object.entries(edits)) {
+    const { root, dest } = await captured("tamper");
+    edit(dest);
+    await assert.rejects(
+      finalizeCanonicalCapture(root, dest, context({ producerOutcome: "success" }), authority()),
+      undefined,
+      name,
+    );
+  }
+});
+
+test("finalize preserves build bytes but fails when the combined step failed", async () => {
+  for (const producerOutcome of ["failure", "skipped", "cancelled"]) {
+    const { root, dest } = await captured("combined");
+    const before = digest(join(dest, "bytes"));
+    await assert.rejects(
+      finalizeCanonicalCapture(root, dest, context({ producerOutcome }), authority()),
+      undefined,
+      producerOutcome,
+    );
+    const journal = status(dest);
+    assert.equal(journal.capture, "complete", producerOutcome);
+    assert.equal(journal.qualified, false, producerOutcome);
+    assert.deepEqual(digest(join(dest, "bytes")), before, producerOutcome);
+    await verifyCanonicalBuild(join(dest, "bytes"), authority());
+  }
+});
+
+test("a legacy direct capture is never accepted as immediate proof", async () => {
+  const root = makeRoot();
+  const dest = target();
+  captureCanonicalBuild(root, dest, context(), authority());
+  assert.equal(status(dest).captureBoundary, "caller-requested");
+  await assert.rejects(
+    finalizeCanonicalCapture(root, dest, context({ producerOutcome: "success" }), authority()),
+  );
+  assert.equal(status(dest).captureBoundary, "caller-requested");
+  await verifyCanonicalBuild(join(dest, "bytes"), authority());
+});
+
+test("unknown capture boundaries refuse before touching the destination or build", async () => {
+  const root = makeRoot();
+  const direct = target();
+  assert.throws(() =>
+    captureCanonicalBuild(root, direct, context({ captureBoundary: "bogus" }), authority()),
+  );
+  assert.equal(existsSync(direct), false);
+  const wrapped = target();
+  let calls = 0;
+  await assert.rejects(
+    captureAfterCanonicalBuild(
+      root,
+      wrapped,
+      contextWithoutOutcome({ captureBoundary: "bogus" }),
+      async () => {
+        calls++;
+      },
+      authority(),
+    ),
+  );
+  assert.equal(calls, 0);
+  assert.equal(existsSync(wrapped), false);
+  await assert.rejects(
+    finalizeCanonicalCapture(root, target(), context({ captureBoundary: "bogus" }), authority()),
+  );
+});
+
+test("a failed-build capture cannot finalize as success", async () => {
+  const root = makeRoot();
+  const dest = target();
+  await assert.rejects(
+    captureAfterCanonicalBuild(
+      root,
+      dest,
+      contextWithoutOutcome(),
+      async () => {
+        throw new Error("build failed");
+      },
+      authority(),
+    ),
+  );
+  await assert.rejects(
+    finalizeCanonicalCapture(root, dest, context({ producerOutcome: "success" }), authority()),
+  );
+  assert.equal(status(dest).capture, "complete");
+});
+
+test("the startup producer captures around the one npm build and before collection", () => {
+  const text = readFileSync(STARTUP, "utf8");
+  assert.match(
+    text,
+    /import\s*\{[^}]*\bcaptureAfterCanonicalBuild\b[^}]*\}\s*from\s*"\.\/kit-canonical-capture\.mjs"/,
+  );
+  assert.ok(text.includes("CANONICAL_CAPTURE_DIRECTORY"), "capture directory comes from env");
+  const build = /runCommand\(\s*"npm",\s*\[\s*"run",\s*"build",\s*"--prefix",\s*"web"\s*\]/g;
+  assert.equal(text.match(build)?.length, 1, "exactly one npm build execution");
+  const start = text.indexOf("captureAfterCanonicalBuild(");
+  const collect = text.indexOf("await collect(");
+  assert.ok(start >= 0 && collect > start, "capture call precedes collect");
+  assert.equal(text.split("captureAfterCanonicalBuild(").length - 1, 1);
+  const buildOperation = text.indexOf("const runBuild = () =>");
+  assert.ok(buildOperation >= 0 && buildOperation < start, "one build callback is defined first");
+  assert.match(text.slice(buildOperation, start), build, "callback owns the one build command");
+  const wrapped = text.slice(start, collect);
+  assert.match(wrapped, /\brunBuild,\s*\);/, "capture wrapper receives the build callback");
+  assert.match(wrapped, /else\s*\{\s*await runBuild\(\);/, "non-capture callers retain the build");
+  assert.ok(
+    text.slice(collect).includes("cli: tools.cli"),
+    "startup collection invocation preserved",
+  );
+  assert.equal(text.split("await collect(").length - 1, 1);
 });

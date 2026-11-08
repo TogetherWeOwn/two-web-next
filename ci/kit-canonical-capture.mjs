@@ -4,14 +4,23 @@ import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import * as authority from "./bundle-inventory.mjs";
-import { freezeCanonicalBuild } from "./kit-upload-rehearsal.mjs";
+import { freezeCanonicalBuild, verifyCanonicalBuild } from "./kit-upload-rehearsal.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
-export function captureCanonicalBuild(root, destination, context, inventory = authority) {
+function validateIdentity(context) {
   assert.match(context.sourceSha, /^[0-9a-f]{40}$/, "explicit source SHA required");
   assert.equal(context.workflowSha, context.sourceSha, "same-source diagnostic SHA mismatch");
   assert.match(context.runId, /^[1-9][0-9]*$/, "explicit run ID required");
   assert.match(context.runAttempt, /^[1-9][0-9]*$/, "explicit run attempt required");
+  const boundary = context.captureBoundary ?? "caller-requested";
+  assert.ok(
+    ["caller-requested", "build-process-return", "not-observed"].includes(boundary),
+    "invalid capture boundary",
+  );
+}
+
+export function captureCanonicalBuild(root, destination, context, inventory = authority) {
+  validateIdentity(context);
   assert.ok(
     ["success", "failure", "skipped", "cancelled"].includes(context.producerOutcome),
     "explicit producer outcome required",
@@ -30,6 +39,7 @@ export function captureCanonicalBuild(root, destination, context, inventory = au
     runId: context.runId,
     runAttempt: context.runAttempt,
     producerOutcome: context.producerOutcome,
+    captureBoundary: context.captureBoundary ?? "caller-requested",
     capture: "started",
     qualified: false,
     receipt: null,
@@ -65,10 +75,114 @@ export function captureCanonicalBuild(root, destination, context, inventory = au
   return status;
 }
 
-function main() {
-  const [destination, ...extra] = process.argv.slice(2);
-  assert.ok(destination && !extra.length, "usage: kit-canonical-capture.mjs <destination>");
-  captureCanonicalBuild(process.cwd(), destination, {
+export async function captureAfterCanonicalBuild(
+  root,
+  destination,
+  context,
+  runBuild,
+  inventory = authority,
+) {
+  validateIdentity(context);
+  assert.equal(typeof runBuild, "function", "build operation required");
+  let failed = false;
+  let buildError;
+  try {
+    await runBuild();
+  } catch (error) {
+    failed = true;
+    buildError = error;
+  }
+  let result;
+  try {
+    result = captureCanonicalBuild(
+      root,
+      destination,
+      {
+        ...context,
+        producerOutcome: failed ? "failure" : "success",
+        captureBoundary: "build-process-return",
+      },
+      inventory,
+    );
+  } catch (error) {
+    // Captured partial bytes never turn a failed build green, and a collector
+    // failure must not replace the original build failure. There is no retry.
+    if (!failed) throw error;
+  }
+  if (failed) throw buildError;
+  return result;
+}
+
+export async function finalizeCanonicalCapture(root, destination, context, inventory = authority) {
+  validateIdentity(context);
+  assert.ok(
+    ["success", "failure", "skipped", "cancelled"].includes(context.producerOutcome),
+    "explicit producer outcome required",
+  );
+  const output = resolve(destination);
+  let stat;
+  try {
+    stat = lstatSync(output);
+  } catch (error) {
+    if (error.code !== "ENOENT") throw error;
+    // The build never reached its return boundary. Do not copy possibly stale
+    // output now, after profiling or another failure has occurred.
+    return captureCanonicalBuild(
+      root,
+      output,
+      { ...context, producerOutcome: "skipped", captureBoundary: "not-observed" },
+      inventory,
+    );
+  }
+  assert.ok(stat.isDirectory(), "capture directory replaced");
+  assert.equal(realpathSync(output), output, "capture directory alias");
+  const path = join(output, "status.json");
+  const journalStat = lstatSync(path);
+  assert.ok(
+    journalStat.isFile() && journalStat.size > 0 && journalStat.size <= 16384,
+    "invalid capture journal",
+  );
+  const bytes = readFileSync(path);
+  assert.equal(bytes.length, journalStat.size, "capture journal changed");
+  const journal = JSON.parse(bytes.toString("utf8"));
+  assert.deepEqual(
+    journal,
+    {
+      schema: "two.kit-canonical-capture.v1",
+      evidence: "unqualified-same-source-ci-diagnostic",
+      sourceSha: context.sourceSha,
+      workflowSha: context.workflowSha,
+      runId: context.runId,
+      runAttempt: context.runAttempt,
+      producerOutcome: "success",
+      captureBoundary: "build-process-return",
+      capture: "complete",
+      qualified: false,
+      receipt: journal.receipt,
+    },
+    "missing or mismatched immediate build capture",
+  );
+  verifyCanonicalBuild(join(output, "bytes"), inventory);
+  const receipt = readFileSync(join(output, "bytes/receipt.json"));
+  assert.deepEqual(
+    journal.receipt,
+    { path: "bytes/receipt.json", bytes: receipt.length, sha256: sha256(receipt) },
+    "capture receipt digest mismatch",
+  );
+  assert.equal(context.producerOutcome, "success", "combined build/startup diagnostic failed");
+  return journal;
+}
+
+async function main() {
+  const args = process.argv.slice(2);
+  const finalize = args[0] === "--finalize";
+  const [destination, ...extra] = finalize ? args.slice(1) : args;
+  assert.ok(
+    destination && !extra.length,
+    "usage: kit-canonical-capture.mjs [--finalize] <destination>",
+  );
+  const operation = finalize ? finalizeCanonicalCapture : captureCanonicalBuild;
+  await operation(process.cwd(), destination, {
     sourceSha: process.env.GITHUB_SHA,
     workflowSha: process.env.GITHUB_WORKFLOW_SHA,
     runId: process.env.GITHUB_RUN_ID,
@@ -78,10 +192,8 @@ function main() {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  try {
-    main();
-  } catch {
+  main().catch(() => {
     console.error("canonical diagnostic capture failed; inspect retained status");
     process.exitCode = 1;
-  }
+  });
 }
