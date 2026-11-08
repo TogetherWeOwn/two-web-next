@@ -1,4 +1,5 @@
 import { readFileSync } from "node:fs";
+import { URL as NodeURL } from "node:url";
 import { describe, expect, it } from "vitest";
 import { PRODUCTION_APEX } from "../src/headers";
 import { STAGING_APP_URL } from "../src/qa";
@@ -105,7 +106,7 @@ describe("honoOwnedProductionDataRequest", () => {
 });
 
 describe("web/worker.js data-request wiring", () => {
-  const source = readFileSync(new URL("../web/worker.js", import.meta.url), "utf8");
+  const source = readFileSync(new NodeURL("../web/worker.js", import.meta.url), "utf8");
 
   it("calls the helper once and honoFetch once", () => {
     expect(source.match(/honoOwnedProductionDataRequest\(/g)).toHaveLength(1);
