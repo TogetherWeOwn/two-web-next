@@ -168,7 +168,10 @@ async function main() {
   // The pipeline must launch this phase with an explicitly credential-free env.
   // Never pass the caller's token-bearing environment into candidate code.
   const allowed = new Set(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "CI"]);
-  assert.ok(Object.keys(process.env).every((key) => allowed.has(key)), "unexpected execution env");
+  assert.ok(
+    Object.keys(process.env).every((key) => allowed.has(key)),
+    "unexpected execution env",
+  );
   const [bindingPath, bindingSha256, runId, runAttempt] = extra;
   await executeCanonicalBuild({
     collector: ROOT,

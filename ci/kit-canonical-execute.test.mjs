@@ -121,10 +121,7 @@ test("execution awaits capture and retains distinct source identities", async ()
     `inspect:${D}`,
   ]);
   assert.equal(result.budget.code, 0);
-  assert.equal(
-    result.budget.sha256,
-    sha256(readFileSync(join(f.args.destination, "budget.json"))),
-  );
+  assert.equal(result.budget.sha256, sha256(readFileSync(join(f.args.destination, "budget.json"))));
   assert.equal(result.identity.candidateSha, B);
   assert.equal(result.identity.collectorSha, D);
   assert.equal(result.executionVerified, false);
