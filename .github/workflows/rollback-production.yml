@@ -249,8 +249,8 @@ jobs:
           ROLLBACK_VERSION_ID: ${{ inputs.version_id }}
           ROLLBACK_ENVIRONMENT: ${{ inputs.environment }}
           GITHUB_TOKEN: ${{ github.token }}
-          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
-          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_API_TOKEN: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_API_TOKEN || '' }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ inputs.environment == 'production' && secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID || '' }}
       - name: Archive verified pure-Hono rollback receipt
         if: ${{ steps.pure-hono.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

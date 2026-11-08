@@ -6,6 +6,24 @@ build yet.
 
 ## Observed verification
 
+[Actions 42511829980](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42511829980)
+at `d4cbb9144972b16613fae43934a8015e54e57c3c` completed with **failure**.
+Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
+auxiliary jobs passed. Canonical capture/finalization, frozen rehearsal, built
+fatal fixture and all 3,313 all-off production-config parity vectors passed,
+with zero route/asset-header differences or exceptions. These are prior-head
+results, not qualification.
+
+The later production-secrets selftest found an unguarded production credential
+mapping in the optional rollback archive step. Both credentials now resolve only
+when the selected environment is production, otherwise to empty strings. Staging
+credentials are never substituted for this production-only verifier. Its existing
+runtime refusal and all rollback guards remain. Focused reproduction of the one
+failing environment-binding test failed before and passed after the repair;
+the checker and assertions are unchanged. Corrected full Actions remains pending.
+No local full suite, lint, typecheck, build, install or staging/production operation
+ran.
+
 [Actions 42510350690](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42510350690)
 at `e0acb7d82b79d7fb79ac756ac8b0b71b8ccf3e4b` failed both test legs at lint
 on one archive-fixture formatting layout. Applied the exact reported layout;
@@ -83,10 +101,11 @@ subtrees are not content-verified; empty directories remain receipt-declared.
 There is no workflow collection or recovery consumer for this library yet.
 Thirty-one new fixture registrations use the existing retention suite invocation,
 alongside the unchanged transport regression suite. These and the preceding 17
-journal-binding registrations have not run yet. Published-head Actions 42511829980
-was still executing its main coverage/check step at inspection; Node 22 and all
-auxiliary jobs passed. No totals, corrected parity or overall verdict is claimed.
-No local suite, lint, typecheck, build or installation ran.
+journal-binding registrations have not run yet. Actions 42511829980 tested the
+preceding published head, not these retained additions; its concrete overall
+failure and parity results are recorded above. The combined publication requires
+new exact-head Actions. No local full suite, lint, typecheck, build or installation
+ran.
 
 [Actions 42500235397](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42500235397)
 at `94d8f758ac8d3191d01f8d94a744df9d3b50b5d7` completed with **failure**.
