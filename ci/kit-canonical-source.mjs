@@ -1,4 +1,4 @@
-// Source identity only. No build, collection admission or qualification is implied.
+// Source-bound candidate interfaces. No collection admission or qualification is implied.
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
@@ -356,6 +356,70 @@ export function inspectCanonicalInstalledSource(path, expectedSha) {
       dependenciesVerified: false,
       generatorExecutionVerified: false,
     },
+  };
+}
+
+export async function runCanonicalCandidateBuild(path, expectedSha, capture) {
+  assert.equal(typeof capture, "function", "candidate build capture required");
+  const root = directory(path);
+  const startup = await loadCanonicalStartup(root, expectedSha);
+  const inventory = await loadCanonicalAuthority(root, expectedSha);
+  const { installBoundary, ...source } = inspectCanonicalInstalledSource(root, expectedSha);
+  assert.deepEqual(startup.source, source, "candidate source changed");
+  assert.deepEqual(inventory.source, source, "candidate source changed");
+  const command = {
+    executable: "npm",
+    args: ["run", "build", "--prefix", "web"],
+    cwd: "candidate-root",
+    timeoutMs: 240000,
+    maxBytes: 2097152,
+  };
+  let failed = false;
+  let buildError;
+  try {
+    await startup.startup.runCommand(command.executable, [...command.args], {
+      cwd: root,
+      timeoutMs: command.timeoutMs,
+      maxBytes: command.maxBytes,
+    });
+  } catch (error) {
+    failed = true;
+    buildError = error;
+  }
+  let captured;
+  try {
+    // The collector observes the return boundary before any source rechecks or
+    // profiler work, including when the candidate command failed. It owns raw
+    // byte retention and its failure journal; no later retry is performed here.
+    captured = await capture({
+      root,
+      authority: inventory.authority,
+      producerOutcome: failed ? "failure" : "success",
+    });
+  } catch (error) {
+    if (!failed) throw error;
+  }
+  if (failed) throw buildError;
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  // Build output is now expected. Recheck only the previously observed inputs,
+  // not the pre-build overlay set, without classifying dependency contents.
+  for (const file of [installBoundary.generated, ...installBoundary.installedLocks]) {
+    const bytes = sourceBytes(root, file.path, LIMITS.fileBytes);
+    assert.equal(bytes.length, file.bytes, "candidate installed input changed");
+    assert.equal(sha256(bytes), file.sha256, "candidate installed input changed");
+  }
+  return {
+    evidence: "unqualified-candidate-build-return",
+    source,
+    installBoundary,
+    startupInputs: startup.inputs,
+    authorityInput: inventory.input,
+    command,
+    capture: captured,
+    // A call through candidate code is not actual runtime/tool/image provenance,
+    // verified dependency contents, a separated workflow or collection admission.
+    dependenciesVerified: false,
+    executionVerified: false,
   };
 }
 

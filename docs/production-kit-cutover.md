@@ -199,11 +199,21 @@ describe implementation-time evidence, not a green overall gate.
   runtime; execution remains explicitly unverified. Import/validation errors
   are sanitized, and changed or aliased source inputs refuse. Eight new fixture
   registrations use the existing Actions invocation and remain **unrun**. This
-  is preparation for a single-build caller, not that caller or dependency proof.
+  is interface preparation, not dependency proof.
+  A candidate-build operation now composes these loaders and the pre-build
+  installed-input observer, invokes the candidate's own bounded command runner
+  once with its candidate-root build command, then awaits a collector callback
+  immediately at command return, including failure. Source/generated-input
+  rechecks follow capture; capture cannot hide an original command failure.
+  Eight additional fixture registrations cover invocation, ordering, drift,
+  failure precedence and preflight refusal. They remain **unrun**. The callback
+  owns byte retention and its journal; this operation does not itself freeze
+  bytes, attest a process/runtime or admit collection. No actual candidate build
+  has been invoked through it, and dependency contents remain unverified.
   The real B-to-D positive binding is not
   exercised by the hermetic fixture repositories, which cannot recreate B's SHA.
-  No checkouts, installs, builds, dispatches or collection are performed by this
-  library. It is not wired to a candidate collection invocation yet. The eventual
+  No checkouts, installs, builds, dispatches or collection ran in this source
+  preparation. It is not wired to a candidate collection invocation yet. The eventual
   workflow still needs reviewed immutable D, the separated checkout/interface,
   actual build-process/tool/image/run provenance, immediate failure-retaining
   capture and independent archive identity verification. Fixtures are authored

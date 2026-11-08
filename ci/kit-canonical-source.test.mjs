@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -23,6 +24,7 @@ import {
   inspectCanonicalSource,
   loadCanonicalAuthority,
   loadCanonicalStartup,
+  runCanonicalCandidateBuild,
 } from "./kit-canonical-source.mjs";
 
 const B_COMMIT = "1fe09ab868a6fea4a7873e4a096523b78747b232";
@@ -398,6 +400,142 @@ test("installed source rejects an absent pinned generator and an untracked overl
   const extra = installedRepo();
   write(extra.root, "collector-overlay.js", "inert collector injection\n");
   assert.throws(() => inspectCanonicalInstalledSource(extra.root, extra.sha), /dirty/);
+});
+
+function candidateBuildRepo({ fail = false, drift = null } = {}) {
+  const { root } = installedRepo();
+  const calls = join(fixtureRoot("build-calls"), "call.json");
+  const run = `export async function runCommand(command, args, options) {
+    writeFileSync(${JSON.stringify(calls)}, JSON.stringify({ command, args, options }));
+    ${drift ? `writeFileSync(${JSON.stringify(join(root, drift))}, "changed by fixture");` : ""}
+    ${fail ? 'throw new Error("candidate build failed");' : ""}
+  }`;
+  write(
+    root,
+    "ci/check-worker-startup.mjs",
+    `import { writeFileSync } from "node:fs";\n${STARTUP_MODULE.replace(
+      'export function runCommand() { throw new Error("fixture must not execute a command"); }',
+      run,
+    )}`,
+  );
+  write(root, "ci/worker-startup-runner.mjs", RUNNER_MODULE);
+  write(root, "ci/worker-startup-budget.json", STARTUP_BUDGET);
+  write(root, "ci/bundle-inventory.mjs", AUTHORITY_MODULE);
+  return { root, calls, sha: commitAll(root, "candidate build fixture") };
+}
+
+test("candidate build invokes candidate command and awaits its capture boundary", async () => {
+  const { root, sha, calls } = candidateBuildRepo();
+  let captured = false;
+  const result = await runCanonicalCandidateBuild(root, sha, async (context) => {
+    assert.deepEqual(JSON.parse(readFileSync(calls, "utf8")), {
+      command: "npm",
+      args: ["run", "build", "--prefix", "web"],
+      options: { cwd: root, timeoutMs: 240000, maxBytes: 2097152 },
+    });
+    assert.equal(context.root, root);
+    assert.equal(context.producerOutcome, "success");
+    assert.equal(context.authority.KIT_WORKER_PATH, "web/.svelte-kit/cloudflare/_worker.js");
+    assert.ok(Object.isFrozen(context.authority));
+    await Promise.resolve();
+    captured = true;
+    return "fixture-capture";
+  });
+  assert.equal(captured, true);
+  assert.equal(result.capture, "fixture-capture");
+  assert.equal(result.evidence, "unqualified-candidate-build-return");
+  assert.equal(result.command.cwd, "candidate-root");
+  assert.equal(result.source.commit, sha);
+  assert.equal(result.startupInputs.length, 3);
+  assert.equal(result.authorityInput.path, "ci/bundle-inventory.mjs");
+  assert.equal(result.dependenciesVerified, false);
+  assert.equal(result.executionVerified, false);
+});
+
+test("candidate build captures before rejecting tracked source drift", async () => {
+  const { root, sha } = candidateBuildRepo({ drift: "README.md" });
+  let captured = false;
+  await assert.rejects(
+    runCanonicalCandidateBuild(root, sha, (context) => {
+      assert.equal(context.producerOutcome, "success");
+      assert.equal(readFileSync(join(root, "README.md"), "utf8"), "changed by fixture");
+      captured = true;
+    }),
+    /dirty/,
+  );
+  assert.equal(captured, true);
+});
+
+for (const drift of ["src/leaf-critical-css.ts", "web/node_modules/.package-lock.json"]) {
+  test(`candidate build captures before rejecting observed input drift ${drift}`, async () => {
+    const { root, sha } = candidateBuildRepo({ drift });
+    let captured = false;
+    await assert.rejects(
+      runCanonicalCandidateBuild(root, sha, () => {
+        captured = true;
+      }),
+      /candidate installed input changed/,
+    );
+    assert.equal(captured, true);
+  });
+}
+
+test("candidate build propagates capture failure without retry", async () => {
+  const { root, sha } = candidateBuildRepo();
+  const failure = new Error("capture fixture failure");
+  let attempts = 0;
+  await assert.rejects(
+    runCanonicalCandidateBuild(root, sha, async () => {
+      attempts++;
+      throw failure;
+    }),
+    (error) => error === failure,
+  );
+  assert.equal(attempts, 1);
+});
+
+test("candidate build preserves its failure when the immediate capture also fails", async () => {
+  const { root, sha, calls } = candidateBuildRepo({ fail: true, drift: "README.md" });
+  let attempts = 0;
+  await assert.rejects(
+    runCanonicalCandidateBuild(root, sha, async (context) => {
+      assert.ok(existsSync(calls));
+      assert.equal(context.producerOutcome, "failure");
+      attempts++;
+      throw new Error("capture must not hide build failure");
+    }),
+    { message: "candidate build failed" },
+  );
+  assert.equal(attempts, 1);
+});
+
+test("candidate build failure remains failed after successful capture", async () => {
+  const { root, sha } = candidateBuildRepo({ fail: true });
+  let captured = false;
+  await assert.rejects(
+    runCanonicalCandidateBuild(root, sha, (context) => {
+      assert.equal(context.producerOutcome, "failure");
+      captured = true;
+      return "retained partial fixture bytes";
+    }),
+    { message: "candidate build failed" },
+  );
+  assert.equal(captured, true);
+});
+
+test("candidate build rejects invalid callbacks and overlays before command invocation", async () => {
+  const { root, sha, calls } = candidateBuildRepo();
+  await assert.rejects(runCanonicalCandidateBuild(root, sha), /capture required/);
+  write(root, "web/.env.local", "inert forbidden overlay\n");
+  let captured = false;
+  await assert.rejects(
+    runCanonicalCandidateBuild(root, sha, () => {
+      captured = true;
+    }),
+    /unexpected post-install/,
+  );
+  assert.equal(existsSync(calls), false);
+  assert.equal(captured, false);
 });
 
 test("canonicalCellIdentity permits only exact B commit and tree", () => {
