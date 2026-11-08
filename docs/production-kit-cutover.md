@@ -101,6 +101,22 @@ describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
 
+- `ci/kit-frozen-upload.mjs` prepares native identity association for the frozen
+  input descriptor. It recomputes the descriptor from the supplied verified inputs,
+  checked tool and serialized envelope, then requires exactly one native upload
+  record for the expected script/default environment, no name override, a lowercase
+  UUID and a matching named-version UUID/SHA-run-attempt tag. The existing required
+  secret-name check also applies. Record-count/native-response bounds and fixed
+  diagnostics prevent native binding values from entering the returned projection
+  or error messages. Fixtures and Actions wiring are added but **not run**.
+  This is a library helper, not an upload or native reader. The future trusted
+  caller must invoke the checked uploader with those exact frozen inputs and
+  obtain authenticated named-script readback; arbitrary JSON or matching tags
+  alone do not establish that execution. No production workflow consumes the
+  helper yet. Custody, successful-main attestation, current-environment
+  qualification, non-versioned setting preservation and recovery gates are not
+  established by this association.
+
 - `ci/kit-frozen-intent.mjs` constructs a digest-bound prepared-input descriptor
   only after the rehearsal rechecks the snapshot, checked Wrangler and serialized
   module/config. The retained rehearsal receipt includes its SHA/run/attempt,
