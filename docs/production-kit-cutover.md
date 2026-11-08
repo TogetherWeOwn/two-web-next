@@ -67,6 +67,20 @@ build yet.
   the Hono inventory's package-absence eligibility. A native version record plus
   local digests is not remote byte readback or proof of Wrangler's asset selection.
 
+- `ci/pure-hono-rollback.mjs` defines a separate rollback-pointer evidence
+  contract. Its CLI first recomputes the original Hono inventory, then requires
+  the matching smoke-verified deployment receipt, the native version UUID and
+  exact SHA/run/attempt tag, and the existing required-secret-name check. It
+  rejects Kit source inputs, Kit/Svelte packages (including tree-shaken inputs),
+  unknown runtime externals and inventories without the Hono entry/package.
+  The sanitized record includes the original bundle/inventory digests and
+  `expiresAt: null`; exact verification rejects added fields or any expiry.
+  This is source preparation only: Actions fixture tests are wired but unobserved.
+  No native version has been read, no target classified, and no permanent storage
+  or production-workflow consumption is implemented. The calling workflow must
+  establish trusted successful-run provenance and use the named production script
+  for its native version read; an arbitrary JSON file cannot establish either.
+
 ## Unimplemented
 
 - Production Kit upload (`web/wrangler.production.jsonc` as a version of the

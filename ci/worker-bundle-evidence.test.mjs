@@ -852,6 +852,12 @@ describe("workflow evidence wiring", () => {
     assert.equal(archive.uses, artifactPin);
     assert.equal(archive.if, pilot.if);
     assert.equal(archive.with["if-no-files-found"], "error");
-    assert.ok(steps.some((step) => step.run === "node --test ci/worker-bundle-evidence.test.mjs"));
+    assert.ok(
+      steps.some(
+        (step) =>
+          step.run ===
+          "node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs ci/pure-hono-rollback.test.mjs",
+      ),
+    );
   });
 });
