@@ -405,6 +405,8 @@ test("a tracked directory replaced by a symlink is refused even when hidden", ()
   rmSync(join(root, "src"), { recursive: true });
   symlinkSync(outside, join(root, "src"));
   git(root, "update-index", "--assume-unchanged", "src/index.txt");
+  write(root, ".git/info/exclude", "/src\n");
+  assert.equal(git(root, "status", "--porcelain=v1", "--untracked-files=all"), "");
   assert.throws(() => inspectCanonicalSource(root, sha), /missing or symlinked/);
 });
 
