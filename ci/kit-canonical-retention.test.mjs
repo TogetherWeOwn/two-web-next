@@ -26,6 +26,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { gzipSync } from "node:zlib";
+import { readCanonicalArtifact } from "./kit-canonical-artifact.mjs";
 import {
   createCanonicalReceipt,
   freezeCanonicalBuild,
@@ -260,6 +261,231 @@ function archiveFixture(mutate = () => {}, mutateJournal = () => {}) {
   };
   return { archive, expected, receipt };
 }
+
+function authenticatedFixture() {
+  const fixture = archiveFixture();
+  const expected = {
+    ...fixture.expected,
+    producerBranch: "feat/production-kit-cutover",
+    producerEvent: "workflow_dispatch",
+  };
+  const run = {
+    id: 123,
+    run_attempt: 2,
+    repository: { id: 42, full_name: "TogetherWeOwn/two-web-next" },
+    head_repository: { id: 42, full_name: "TogetherWeOwn/two-web-next" },
+    path: ".github/workflows/ci.yml",
+    head_sha: expected.sourceSha,
+    head_branch: expected.producerBranch,
+    event: expected.producerEvent,
+    status: "completed",
+    conclusion: "success",
+    html_url: "https://github.com/TogetherWeOwn/two-web-next/actions/runs/123",
+  };
+  const artifact = {
+    id: 456,
+    name: expected.artifactName,
+    expired: false,
+    size_in_bytes: expected.archiveBytes,
+    digest: `sha256:${expected.archiveSha256}`,
+    workflow_run: {
+      id: 123,
+      repository_id: 42,
+      head_repository_id: 42,
+      head_branch: expected.producerBranch,
+      head_sha: expected.sourceSha,
+    },
+  };
+  const calls = [];
+  const token = "fixture-token-never-forward";
+  const signed = "https://fixture.blob.core.windows.net/archive?sig=private-fixture";
+  const api = "https://api.github.com/repos/TogetherWeOwn/two-web-next/actions";
+  const options = {
+    artifactId: "456",
+    token,
+    fetchImpl: async (url, init) => {
+      calls.push({ url, init });
+      if (url === `${api}/runs/123`) return Response.json(run);
+      if (url === `${api}/artifacts/456`) return Response.json(artifact);
+      if (url === `${api}/artifacts/456/zip`)
+        return new Response(null, { status: 302, headers: { location: signed } });
+      assert.equal(url, signed);
+      return new Response(fixture.archive);
+    },
+  };
+  return { ...fixture, expected, run, artifact, calls, options, token };
+}
+
+const AUTH_FAILURE = "canonical authenticated artifact verification failed";
+
+test("authenticated canonical artifact binds metadata, journal and frozen bytes", async () => {
+  const fixture = authenticatedFixture();
+  const result = await readCanonicalArtifact(fixture.expected, authority(), fixture.options);
+  assert.deepEqual(result.receipt, fixture.receipt);
+  assert.equal(result.authenticatedArchiveVerified, true);
+  assert.equal(result.sourceSeparated, false);
+  assert.equal(result.qualified, false);
+  assert.equal(result.directoryEvidence, "receipt-declared");
+  assert.equal(result.provenance.artifactId, "456");
+  assert.equal(result.journalIdentityVerified, true);
+  assert.equal(fixture.calls.length, 4);
+  for (const { init } of fixture.calls.slice(0, 3))
+    assert.equal(new Headers(init.headers).get("authorization"), `Bearer ${fixture.token}`);
+  assert.equal(fixture.calls[2].init.redirect, "manual");
+  assert.equal(new Headers(fixture.calls[3].init.headers).get("authorization"), null);
+  assert.equal(fixture.calls[3].init.redirect, "error");
+  assert.ok(!JSON.stringify(result).includes(fixture.token));
+  assert.ok(!JSON.stringify(result).includes("private-fixture"));
+});
+
+for (const [name, mutate] of Object.entries({
+  repository: (f) => {
+    f.run.repository.full_name = "other/repo";
+  },
+  fork: (f) => {
+    f.run.head_repository.id = 43;
+  },
+  workflow: (f) => {
+    f.run.path = ".github/workflows/deploy-production.yml";
+  },
+  branch: (f) => {
+    f.run.head_branch = "other";
+  },
+  source: (f) => {
+    f.run.head_sha = "b".repeat(40);
+  },
+  run: (f) => {
+    f.run.id = 124;
+  },
+  attempt: (f) => {
+    f.run.run_attempt = 3;
+  },
+  event: (f) => {
+    f.run.event = "pull_request";
+  },
+  unfinished: (f) => {
+    f.run.status = "in_progress";
+  },
+  failure: (f) => {
+    f.run.conclusion = "failure";
+  },
+  url: (f) => {
+    f.run.html_url = "https://example.com/run";
+  },
+  "artifact id": (f) => {
+    f.artifact.id = 457;
+  },
+  "artifact name": (f) => {
+    f.artifact.name = "other";
+  },
+  expired: (f) => {
+    f.artifact.expired = true;
+  },
+  size: (f) => {
+    f.artifact.size_in_bytes += 1;
+  },
+  digest: (f) => {
+    f.artifact.digest = `sha256:${"0".repeat(64)}`;
+  },
+  "artifact run": (f) => {
+    f.artifact.workflow_run.id = 124;
+  },
+  "artifact repository": (f) => {
+    f.artifact.workflow_run.repository_id = 43;
+  },
+  "artifact fork": (f) => {
+    f.artifact.workflow_run.head_repository_id = 43;
+  },
+  "artifact source": (f) => {
+    f.artifact.workflow_run.head_sha = "b".repeat(40);
+  },
+  "artifact branch": (f) => {
+    f.artifact.workflow_run.head_branch = "other";
+  },
+})) {
+  test(`authenticated canonical artifact rejects metadata ${name} before download`, async () => {
+    const fixture = authenticatedFixture();
+    mutate(fixture);
+    await assert.rejects(readCanonicalArtifact(fixture.expected, authority(), fixture.options), {
+      message: AUTH_FAILURE,
+    });
+    assert.equal(fixture.calls.length, 2);
+  });
+}
+
+for (const key of ["receiptSha256", "journalSha256"]) {
+  test(`authenticated canonical artifact rejects mismatched ${key} after download`, async () => {
+    const fixture = authenticatedFixture();
+    fixture.expected[key] = "0".repeat(64);
+    await assert.rejects(readCanonicalArtifact(fixture.expected, authority(), fixture.options), {
+      message: AUTH_FAILURE,
+    });
+    assert.equal(fixture.calls.length, 4);
+  });
+}
+
+test("authenticated canonical artifact sanitizes transport failures without retry", async () => {
+  const fixture = authenticatedFixture();
+  let calls = 0;
+  fixture.options.fetchImpl = async () => {
+    calls += 1;
+    throw new Error(`${fixture.token} private-fixture`);
+  };
+  await assert.rejects(readCanonicalArtifact(fixture.expected, authority(), fixture.options), {
+    message: AUTH_FAILURE,
+  });
+  assert.equal(calls, 1);
+});
+
+test("authenticated canonical main-push evidence stays unqualified", async () => {
+  const fixture = authenticatedFixture();
+  fixture.expected.producerBranch = "main";
+  fixture.expected.producerEvent = "push";
+  fixture.run.head_branch = "main";
+  fixture.run.event = "push";
+  fixture.artifact.workflow_run.head_branch = "main";
+  const result = await readCanonicalArtifact(fixture.expected, authority(), fixture.options);
+  assert.equal(result.provenance.producerBranch, "main");
+  assert.equal(result.qualified, false);
+  assert.equal(result.sourceSeparated, false);
+});
+
+for (const [name, mutate] of Object.entries({
+  event: (expected) => {
+    expected.producerEvent = "pull_request";
+  },
+  "feature push": (expected) => {
+    expected.producerEvent = "push";
+  },
+  branch: (expected) => {
+    expected.producerBranch = "";
+  },
+  "receipt digest": (expected) => {
+    expected.receiptSha256 = "invalid";
+  },
+})) {
+  test(`authenticated canonical artifact refuses expected ${name} before network`, async () => {
+    const fixture = authenticatedFixture();
+    mutate(fixture.expected);
+    await assert.rejects(readCanonicalArtifact(fixture.expected, authority(), fixture.options), {
+      message: AUTH_FAILURE,
+    });
+    assert.equal(fixture.calls.length, 0);
+  });
+}
+
+test("authenticated canonical artifact snapshots expectations across async transport", async () => {
+  const fixture = authenticatedFixture();
+  const fetchImpl = fixture.options.fetchImpl;
+  fixture.options.fetchImpl = async (...args) => {
+    const response = await fetchImpl(...args);
+    fixture.expected.journalSha256 = "0".repeat(64);
+    return response;
+  };
+  const result = await readCanonicalArtifact(fixture.expected, authority(), fixture.options);
+  assert.notEqual(result.journalSha256, fixture.expected.journalSha256);
+  assert.equal(result.journalIdentityVerified, true);
+});
 
 test("canonical artifact parser verifies bytes without claiming authentication", () => {
   const { archive, expected, receipt } = archiveFixture();

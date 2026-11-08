@@ -64,16 +64,29 @@ unsafe paths, duplicate names, aliases, encrypted/unsupported entries, invalid
 CRC/lengths and receipt/member drift refuse. The child uses Python isolated mode,
 no credential environment and a trusted cwd; it never extracts or executes bytes.
 
-This is **digest-bound byte verification**, not authentication: the caller must
-obtain the expected digests and capture identity through trusted channels. The
-result explicitly keeps authentication and qualification false. Other artifact
-subtrees are not content-verified. Authenticated retrieval/metadata binding and
-source-separated caller integration remain unfinished. The journal-binding slice
-adds 17 fixture registrations to the existing Actions invocation; these additions
-have not run yet. Published-head Actions 42511829980 was still executing both test
-legs at inspection, with auxiliary jobs passed; no corrected overall verdict is
-claimed. No local suite, lint,
-build or installation ran.
+The data-only verifier remains **digest-bound byte verification**, not
+authentication: supplied expectations alone do not authenticate bytes. A separate
+`readCanonicalArtifact` composition now reuses the existing Hono transport through
+one shared authenticated reader. It fetches metadata only from the fixed repository
+API, checks exact source/run/attempt, branch/event, non-fork repository identity,
+CI workflow, completed-success state and non-expired artifact identity/size/digest,
+then verifies the journal and frozen bytes. It permits an explicitly expected
+branch dispatch or a main push, never a PR event. Metadata refusal stops before
+archive download. The token is never sent to signed storage; redirects, bounds,
+timeouts, no-retry and sanitized errors are retained. Expectations are snapshotted
+before asynchronous reads. Neither transport extracts nor executes downloaded code.
+The Hono wrapper retains exclusive private-file writes and its existing failures.
+
+This composition reports **authenticated same-source CI diagnostics**, never
+source separation, recovery attestation, custody or qualification. Other artifact
+subtrees are not content-verified; empty directories remain receipt-declared.
+There is no workflow collection or recovery consumer for this library yet.
+Thirty-one new fixture registrations use the existing retention suite invocation,
+alongside the unchanged transport regression suite. These and the preceding 17
+journal-binding registrations have not run yet. Published-head Actions 42511829980
+was still executing its main coverage/check step at inspection; Node 22 and all
+auxiliary jobs passed. No totals, corrected parity or overall verdict is claimed.
+No local suite, lint, typecheck, build or installation ran.
 
 [Actions 42500235397](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42500235397)
 at `94d8f758ac8d3191d01f8d94a744df9d3b50b5d7` completed with **failure**.
