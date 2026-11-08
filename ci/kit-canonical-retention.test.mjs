@@ -196,7 +196,10 @@ test("createCanonicalReceipt returns the exact unqualified receipt for full tree
   ]);
   assert.equal(receipt.schema, "two.kit-canonical-build.v1");
   assert.equal(receipt.evidence, "unqualified-canonical-build-bytes");
-  assert.deepEqual(receipt.groups.map((group) => group.id), GROUP_IDS);
+  assert.deepEqual(
+    receipt.groups.map((group) => group.id),
+    GROUP_IDS,
+  );
   for (const group of receipt.groups) assert.ok(group.files > 0, group.id);
 });
 
@@ -285,8 +288,14 @@ test("group totals only count their own budget members", async () => {
   const clientJs = receipt.files.filter((row) => row.group === "kit.client.js");
   const group = receipt.groups.find((entry) => entry.id === "kit.client.js");
   assert.equal(group.files, clientJs.length);
-  assert.equal(group.bytes, clientJs.reduce((total, row) => total + row.bytes, 0));
-  assert.equal(group.gzipBytes, clientJs.reduce((total, row) => total + row.gzipBytes, 0));
+  assert.equal(
+    group.bytes,
+    clientJs.reduce((total, row) => total + row.bytes, 0),
+  );
+  assert.equal(
+    group.gzipBytes,
+    clientJs.reduce((total, row) => total + row.gzipBytes, 0),
+  );
   assert.equal(receipt.groups.find((entry) => entry.id === "kit.worker").files, 1);
 });
 
@@ -310,7 +319,15 @@ test("receipt reads no identity env and makes no source or provenance claims", a
     const loud = await createCanonicalReceipt(root, authority());
     assert.deepEqual(loud, clean);
     assert.ok(!JSON.stringify(loud).includes("sentinel-"));
-    const forbidden = ["sourceSha", "commit", "provenance", "source", "workflow", "runId", "runAttempt"];
+    const forbidden = [
+      "sourceSha",
+      "commit",
+      "provenance",
+      "source",
+      "workflow",
+      "runId",
+      "runAttempt",
+    ];
     for (const name of forbidden) assert.ok(!Object.hasOwn(loud, name), name);
   } finally {
     for (const name of names) {
@@ -351,7 +368,8 @@ test("absent or empty trees and missing groups are rejected", async () => {
       for (const path of walk(root, CLIENT)) if (path.endsWith(".js")) unlinkSync(join(root, path));
     },
     "client without css": (root) => {
-      for (const path of walk(root, CLIENT)) if (path.endsWith(".css")) unlinkSync(join(root, path));
+      for (const path of walk(root, CLIENT))
+        if (path.endsWith(".css")) unlinkSync(join(root, path));
     },
     "client css only": (root) => {
       for (const path of walk(root, CLIENT)) if (path.endsWith(".js")) unlinkSync(join(root, path));
@@ -490,11 +508,10 @@ test("freezeCanonicalBuild copies original bytes with full paths and an exclusiv
     assert.ok(lstatSync(copy).isFile(), row.path);
     assert.deepEqual(readFileSync(copy), readFileSync(join(root, row.path)), row.path);
   }
-  assert.deepEqual(
-    JSON.parse(readFileSync(join(destination, "receipt.json"), "utf8")),
-    receipt,
-  );
-  const snapshotFiles = walk(destination, ".").map((path) => path.slice(2)).sort();
+  assert.deepEqual(JSON.parse(readFileSync(join(destination, "receipt.json"), "utf8")), receipt);
+  const snapshotFiles = walk(destination, ".")
+    .map((path) => path.slice(2))
+    .sort();
   assert.deepEqual(snapshotFiles, [...receipt.files.map((row) => row.path), "receipt.json"].sort());
   assert.deepEqual(await verifyCanonicalBuild(destination, authority()), receipt);
 });
@@ -594,7 +611,8 @@ test("verifyCanonicalBuild refuses missing, corrupt and extra snapshot bytes", a
     "extra server file": (dir) => put(dir, `${SERVER}/extra.js`, blob("extra")),
     "extra hidden file": (dir) => put(dir, `${CLIENT}/.extra`, blob("extra")),
     "extra file outside trees under web": (dir) => put(dir, "web/package.json", blob("extra")),
-    "extra file in cloudflare tree": (dir) => put(dir, `${CLOUDFLARE_TREE}/extra.txt`, blob("extra")),
+    "extra file in cloudflare tree": (dir) =>
+      put(dir, `${CLOUDFLARE_TREE}/extra.txt`, blob("extra")),
     "extra non-_app client file": (dir) => put(dir, `${CLIENT_TREE}/extra.txt`, blob("extra")),
     "missing cloudflare headers": (dir) => unlinkSync(join(dir, CLOUDFLARE_TREE, "_headers")),
     "missing non-_app client file": (dir) => unlinkSync(join(dir, CLIENT_TREE, "robots.txt")),
@@ -634,10 +652,10 @@ test("verifyCanonicalBuild refuses unreadable or malformed receipts", async () =
 
 test("verifyCanonicalBuild refuses forged receipt rows, groups, gzip and totals", async () => {
   const forgeries = {
-    "schema": (r) => {
+    schema: (r) => {
       r.schema = "two.kit-canonical-build.v2";
     },
-    "evidence": (r) => {
+    evidence: (r) => {
       r.evidence = "qualified-canonical-build-bytes";
     },
     "row bytes": (r) => {

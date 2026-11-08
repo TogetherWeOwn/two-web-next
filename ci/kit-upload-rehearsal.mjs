@@ -209,7 +209,10 @@ export function createCanonicalReceipt(root, authority) {
     id,
     ...sums(files.filter((file) => file.group === id)),
   }));
-  assert.ok(groups.every((group) => group.files > 0 && group.bytes > 0), "missing canonical group");
+  assert.ok(
+    groups.every((group) => group.files > 0 && group.bytes > 0),
+    "missing canonical group",
+  );
   return {
     schema: "two.kit-canonical-build.v1",
     evidence: "unqualified-canonical-build-bytes",
