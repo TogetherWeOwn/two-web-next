@@ -126,7 +126,8 @@ describe("production Kit build-only rehearsal receipt", () => {
       "web/.svelte-kit/cloudflare/_routes.json",
       "web/.svelte-kit/cloudflare/_app/version.json",
       "web/.svelte-kit/cloudflare/_app/immutable/chunks/a.js",
-    ]) put(root, path, `fixture ${path}\n`);
+    ])
+      put(root, path, `fixture ${path}\n`);
     put(root, "replay/worker.js", readFileSync(join(root, DIR, "worker.js")));
     return root;
   }

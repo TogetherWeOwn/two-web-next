@@ -37,10 +37,16 @@ export function createKitRehearsal(root, buildDirectory, replayDirectory, contex
   const replayWorker = replay.find((item) => item.path === "worker.js");
   assert.ok(worker?.bytes > 0, "built Worker missing or empty");
   assert.deepEqual(replayWorker, worker, "rehearsal changed Worker bytes");
-  assert.ok(build.some((item) => item.path === "bundle-meta.json"), "metafile missing");
+  assert.ok(
+    build.some((item) => item.path === "bundle-meta.json"),
+    "metafile missing",
+  );
   const assets = tree(join(root, "web/.svelte-kit/cloudflare"));
   for (const required of ["_worker.js", "_headers", "_app/version.json"]) {
-    assert.ok(assets.some((item) => item.path === required), `missing Kit build file: ${required}`);
+    assert.ok(
+      assets.some((item) => item.path === required),
+      `missing Kit build file: ${required}`,
+    );
   }
   assert.ok(
     assets.some((item) => item.path.startsWith("_app/immutable/")),
