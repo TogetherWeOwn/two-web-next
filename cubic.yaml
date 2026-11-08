@@ -1,0 +1,3 @@
+# yaml-language-server: $schema=https://cubic.dev/schema/cubic-repository-config.schema.json
+pr_descriptions:
+  skip_if_author_description: true
