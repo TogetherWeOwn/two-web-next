@@ -25,7 +25,9 @@ describe("production Kit Worker config (web/wrangler.production.jsonc)", () => {
     expect(adapter.main).toBe(".svelte-kit/cloudflare/_worker.js");
     const entry = read("web/worker.js");
     expect(entry).toContain('import adapter from "./.svelte-kit/cloudflare/_worker.js"');
-    expect(entry).toContain('import { protectKitWorkerResponse } from "../src/kit-worker-response.ts"');
+    expect(entry).toContain(
+      'import { protectKitWorkerResponse } from "../src/kit-worker-response.ts"',
+    );
     expect(entry).toContain(
       "protectKitWorkerResponse(request, await adapter.fetch(request, env), env)",
     );
@@ -48,6 +50,32 @@ describe("production Kit Worker config (web/wrangler.production.jsonc)", () => {
       "node --import tsx --test --test-timeout=150000 ci/kit-worker-fatal.test.mjs",
     );
     expect(workflow).toContain("KIT_WORKER_FATAL_EVIDENCE_DIR: artifacts/kit-worker-fatal");
+  });
+
+  it("rehearses the same-byte Kit upload and retains build-only evidence", () => {
+    const workflow = read(".github/workflows/ci.yml");
+    const build = workflow.indexOf("name: Production Kit Worker config dry run (no deploy)");
+    const replay = workflow.indexOf("name: Production Kit same-byte upload rehearsal (no deploy)");
+    const archive = workflow.indexOf("name: Production Kit bundle build evidence");
+    const fatal = workflow.indexOf("name: Production Kit fatal-response boundary");
+    expect(build).toBeGreaterThan(-1);
+    expect(replay).toBeGreaterThan(build);
+    expect(archive).toBeGreaterThan(replay);
+    expect(fatal).toBeGreaterThan(archive);
+    const steps = workflow.slice(build, fatal);
+    expect(steps).toContain(
+      '--metafile "$RUNNER_TEMP/kit-production-worker-dry-run/bundle-meta.json"',
+    );
+    expect(steps).toContain(
+      'npx wrangler versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$RUNNER_TEMP/kit-production-worker-dry-run/worker.js"',
+    );
+    expect(steps).toContain(
+      'cmp "$RUNNER_TEMP/kit-production-worker-dry-run/worker.js" "$RUNNER_TEMP/kit-production-worker-replay/worker.js"',
+    );
+    expect(steps).toContain("if-no-files-found: error");
+    expect(steps).not.toContain("continue-on-error");
+    expect(steps).toContain("${{ runner.temp }}/kit-production-worker-dry-run/");
+    expect(steps).toContain("${{ runner.temp }}/kit-production-worker-replay/");
   });
 
   it("preserves the production runtime settings", () => {

@@ -366,25 +366,22 @@ describe("protectKitWorkerResponse request id", () => {
     expect(() => new Headers({ "cf-ray": "8a1b2c3d4e5f6071\r\nx-evil: 1" })).toThrow();
   });
 
-  it.each([
-    "<script>",
-    "abc",
-    "8a1b2c3d4e5f6071-sjc",
-    "8a1b2c3d4e5f6071-SJCX",
-    "x".repeat(300),
-  ])("replaces hostile cf-ray %j with a generated id", async (ray) => {
-    expect(safeRequestId(ray)).toBeUndefined();
+  it.each(["<script>", "abc", "8a1b2c3d4e5f6071-sjc", "8a1b2c3d4e5f6071-SJCX", "x".repeat(300)])(
+    "replaces hostile cf-ray %j with a generated id",
+    async (ray) => {
+      expect(safeRequestId(ray)).toBeUndefined();
 
-    const out = await protectKitWorkerResponse(
-      req(`${PROD_URL}/events`, { headers: { "cf-ray": ray } }),
-      plain500(),
-      { APP_URL: PROD_URL },
-    );
+      const out = await protectKitWorkerResponse(
+        req(`${PROD_URL}/events`, { headers: { "cf-ray": ray } }),
+        plain500(),
+        { APP_URL: PROD_URL },
+      );
 
-    const id = out.headers.get("x-request-id")!;
-    expect(id).toMatch(ULID);
-    expect(id).not.toBe(ray);
-  });
+      const id = out.headers.get("x-request-id")!;
+      expect(id).toMatch(ULID);
+      expect(id).not.toBe(ray);
+    },
+  );
 
   it("retains a safe x-request-id on the response and replaces an unsafe one", async () => {
     const ray = "8a1b2c3d4e5f6071";

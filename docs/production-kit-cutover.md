@@ -43,6 +43,13 @@ build yet.
   and an Actions built-Worker fatal fixture are verification sources, not a
   recorded PASS or independent Security approval.
 
+- Actions rehearses the production-config Kit `versions upload` with `--dry-run`
+  and `--no-bundle`, then requires its output Worker to equal the dry-run build
+  byte for byte. The build metafile and both output directories are retained for
+  14 days, keyed by source SHA, run and attempt. This is build-only evidence, not
+  an upload/deployment receipt or a non-expiring rollback pointer. The existing
+  Hono inventory, upload and deployed receipts remain unchanged.
+
 ## Unimplemented
 
 - Production Kit upload (`web/wrangler.production.jsonc` as a version of the
@@ -54,4 +61,6 @@ build yet.
 
 ## Status
 
-No runtime test, workflow dispatch or drill has run for this change.
+Full branch-dispatch Actions verification has been requested; no runtime,
+parity or upload-rehearsal PASS is recorded here. No staging or production
+workflow or rollback drill has run for this change.

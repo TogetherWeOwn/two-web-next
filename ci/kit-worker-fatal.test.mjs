@@ -45,7 +45,7 @@ const EVIDENCE_VERSION = 1;
 
 const HOOKS_FILTER = /[\\/]output[\\/]server[\\/]entries[\\/]hooks\.server\.js$/;
 const REPLACEMENT_HOOKS = [
-  `export const handle = () => { throw new Error(${JSON.stringify(PRIVATE_DETAIL)}); };`,
+  'export const handle = () => { throw new Error("TEST_ONLY_PRIVATE_DETAIL"); };',
   'export const handleError = () => ({ message: "Internal Error" });',
   "",
 ].join("\n");
