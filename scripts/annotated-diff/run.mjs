@@ -198,15 +198,19 @@ export async function normalizeMotion(page) {
   await page.evaluate(async () => {
     const active = () =>
       document.getAnimations().filter((a) => !["finished", "idle"].includes(a.playState));
+    let idleFrames = 0;
     for (let pass = 0; pass < 16; pass++) {
-      for (const animation of active()) {
+      const animations = active();
+      if (animations.length) idleFrames = 0;
+      for (const animation of animations) {
         if (animation.effect?.getComputedTiming().endTime === Infinity) animation.cancel();
         else animation.finish();
       }
-      // Completion callbacks can start another animation; settle them before inventorying again.
+      // Scroll and completion callbacks can enqueue animation work in the next rendering update.
       await new Promise(requestAnimationFrame);
       await new Promise((resolve) => setTimeout(resolve, 0));
-      if (!active().length) {
+      if (active().length) idleFrames = 0;
+      else if (++idleFrames === 2) {
         const style = document.createElement("style");
         style.textContent = "*, *::before, *::after { transition-property: none !important; }";
         document.head.append(style);

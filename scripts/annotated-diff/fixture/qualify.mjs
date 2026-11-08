@@ -412,7 +412,16 @@ try {
         [0, 0, 0, 255],
         "Animation facts must agree with captured pixels",
       );
-      assert.equal(b.elements.find((e) => e.testid === "animation").style.opacity, "1");
+      const headAnimation = b.elements.find((e) => e.testid === "animation");
+      assert.equal(headAnimation.style.opacity, "1");
+      const headPixels = PNG.sync.read(await fs.readFile(path.join(dir, "head", `${v.id}.png`)));
+      const headAnimationPixel =
+        (Math.round((headAnimation.rect.y + 20) * v.dpr) * headPixels.width + 300 * v.dpr) * 4;
+      assert.deepEqual(
+        [...headPixels.data.subarray(headAnimationPixel, headAnimationPixel + 4)],
+        [0, 0, 0, 255],
+        "Scroll-triggered candidate animation facts must agree with captured pixels",
+      );
       const point = (Math.round((a.mask_rects[0].y + 10) * v.dpr) * image.width + 50 * v.dpr) * 4;
       assert.deepEqual([...image.data.subarray(point, point + 4)], [0, 0, 0, 255]);
       assert(a.font_evidence.some((f) => f.family === "Rajdhani" && f.verified));

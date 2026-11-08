@@ -256,6 +256,18 @@ jobs:
       - run: npx playwright install --with-deps chromium
       - name: Annotated screenshot known-answer qualification
         run: timeout 240s npm run test:annotated-diff
+      - name: Annotated screenshot qualification evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: annotated-diff-${{ github.sha }}
+          path: |
+            .climb/diff/qualification-*/**/*.png
+            .climb/diff/qualification-*/**/*.json
+            .climb/diff/qualification-*/**/*.md
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 14
       - name: Chromium cancellation regressions
         env:
           A11Y_BROWSER_TESTS: "true"
