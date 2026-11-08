@@ -57,14 +57,25 @@ build yet.
   deployed receipts remain unchanged. Receipt generation and its negative-control
   tests are wired into Actions; a result has not yet been observed.
 
+- `ci/kit-upload-evidence.mjs` recomputes that receipt before accepting it,
+  rejecting stale SHA/run/attempt, changed bytes and added or removed build files.
+  Its native-upload receipt parser requires one Wrangler upload record for the
+  production script, no named environment or name override, and a version UUID.
+  The deployment parser binds the promoted UUID to that upload and the full local
+  build digests. Fixture tests cover both parsers; neither is consumed by the
+  production workflow yet. These are distinct Kit schemas, not an expansion of
+  the Hono inventory's package-absence eligibility. A native version record plus
+  local digests is not remote byte readback or proof of Wrangler's asset selection.
+
 ## Unimplemented
 
 - Production Kit upload (`web/wrangler.production.jsonc` as a version of the
   existing script, with the web build and dependency install).
 - A fail-closed, verified pure-Hono version pointer retained across Kit deploys.
   A version with no marker must not be classified as pure Hono.
-- Same-byte bundle evidence receipts for the Kit upload. The existing Hono
-  bundle inventory, upload and deployed receipts are unchanged.
+- Production integration of the Kit upload and deployment receipt parsers,
+  after a verified build and upload and only after successful promotion/smoke.
+  The existing Hono bundle inventory, upload and deployed receipts are unchanged.
 
 ## Status
 

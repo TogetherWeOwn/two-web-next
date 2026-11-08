@@ -816,6 +816,7 @@ jobs:
           cmp "$RUNNER_TEMP/kit-production-worker-dry-run/worker.js" "$RUNNER_TEMP/kit-production-worker-replay/worker.js"
           mkdir -p artifacts/kit-upload-rehearsal
           node ci/kit-upload-rehearsal.mjs "$RUNNER_TEMP/kit-production-worker-dry-run" "$RUNNER_TEMP/kit-production-worker-replay" artifacts/kit-upload-rehearsal/receipt.json
+          BUILD_SHA="$GITHUB_SHA" node ci/kit-upload-evidence.mjs verify "$RUNNER_TEMP/kit-production-worker-dry-run" "$RUNNER_TEMP/kit-production-worker-replay" artifacts/kit-upload-rehearsal/receipt.json
       - name: Production Kit bundle build evidence
         if: always() && (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -1061,7 +1062,7 @@ jobs:
         run: npx wrangler deploy --dry-run --env production --outdir dist-production --metafile dist-production/bundle-meta.json
       - name: Worker bundle evidence selftest (offline fixtures, no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
-        run: node --test ci/worker-bundle-evidence.test.mjs
+        run: node --test ci/worker-bundle-evidence.test.mjs ci/kit-upload-evidence.test.mjs
       - name: Verify production build inventory and prebuilt upload equivalence (no deploy)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true') && (needs.scope.outputs.full == 'true' || needs.scope.outputs.app == 'true' || needs.scope.outputs.worker == 'true')
         run: |
