@@ -459,7 +459,9 @@ test("workflow runs the capture immediately after the Kit build and retains raw 
   assert.ok(capture.includes("node ci/kit-canonical-capture.mjs"), "capture immediately follows");
   assert.ok(capture.includes("artifacts/kit-canonical-capture/"));
   assert.ok(
-    capture.includes("node ci/kit-canonical-capture.mjs --finalize artifacts/kit-canonical-capture/"),
+    capture.includes(
+      "node ci/kit-canonical-capture.mjs --finalize artifacts/kit-canonical-capture/",
+    ),
     "always() step finalizes the immediate capture",
   );
   assert.match(capture, /\n {8}if: always\(\)/);
