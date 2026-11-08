@@ -140,45 +140,80 @@ A successful lookup today, an annotation, a saved UUID or `expiresAt: null` cann
 prove indefinite deployability. Re-upload creates a new UUID, so durable bundle
 storage alone cannot satisfy an indefinite original-UUID rollback requirement.
 
-The cutover cannot be accepted against that literal requirement. Any replacement
-with durable, qualified pure-Hono recoverability needs an explicit acceptance-spec
-amendment and technical acceptance of the concrete recovery contract; none is
-approved here. Original-UUID rollback and archive-to-new-UUID recovery must remain
-distinct. A replacement would need trusted bundle and complete asset retention,
-config/runtime and resource/schema/secret compatibility, mandatory fail-closed
-promotion qualification, and isolated on-demand staging drills of both paths.
-Expiring Actions artifacts and mutable release attachments alone do not establish
-a durable retention policy. Secret values must not enter recovery archives.
+The cutover cannot be accepted against that literal requirement. The acceptance
+owner amended it to durable, qualified pure-Hono recoverability, with technical
+acceptance of revision 2 recorded on November 8, 2026. The first revision was
+rejected; the second separates native rollback eligibility from the standing
+archive-recovery requirement. This is an effective specification, not operational
+acceptance, storage implementation authority or production permission.
 
-The Product Lead's proposed amendment is conditional on Engineering Lead technical
-acceptance. Its first revision was rejected, so the condition is not met and the
-literal acceptance requirement is unchanged. The revision must separate recorded
-original-UUID eligibility from qualification of the archive fallback: requiring an
-eligible original UUID for every promotion would defeat recovery after the native
-last-100 window. Explicit original-UUID ineligibility may select a qualified
-fallback; unknown eligibility or an unqualified selected path is not a pass.
-Both initial isolated staging drills remain required while the staging original
-UUID is eligible. The proposal must also name a verified archive custodian,
-supported retention mechanism, access controls and overwrite/deletion protection.
-Retirement of the recovery obligation needs a recorded acceptance-owner decision;
-any replacement must be technically accepted, retained and qualified before the
-previous required archive can be removed. These are outstanding contract
-corrections, not an implemented backend, an effective amendment or permission to
-create storage. Relevant environment changes invalidate qualification before
-promotion; re-uploading bytes under a new UUID does not cure incompatibility.
+Every promotion must fail closed unless the archive is retrievable, its expected
+successful-main workflow attestation and all file digests verify, and archive-to-
+new-UUID recovery is qualified for the target script and current environment.
+Original-UUID eligibility is recorded separately: only `eligible+compatible` makes
+it the first-choice path. Explicit ineligibility or incompatibility selects the
+qualified archive path without failing that gate. Unknown eligibility never
+counts as eligible; missing, unknown or stale archive qualification blocks
+promotion. The historical UUID remains recorded permanently, not promised
+indefinitely deployable. Each production recovery still needs its own Release
+Manager decision.
 
-Independent Actions, parity and source preparation may continue. Production stays
-Hono; no storage machinery, recovery substitution or production action is
-authorized by this status note. Existing QA/Security, exact-head checks, migration
-and rollback guards, gradual rollout/watch and Release Manager gates remain.
-Calendar waiting cannot resolve this platform limit and is not reinstated.
+DevOps owns custody. The specified mechanism is a content-addressed prefix in the
+existing R2 store, protected by a prefix-scoped indefinite bucket-lock rule, with
+main-only writes, read-only recovery/qualification and no routine delete rights.
+[R2 bucket locks](https://developers.cloudflare.com/r2/buckets/bucket-locks/)
+prevent overwrite/deletion while the rule exists; rules are removable, not
+irrevocable WORM. Account support, actual grants/token scope, cost and terms are
+unverified. Existing DB-backup storage does not prove recovery-prefix custody.
+Expiring Actions artifacts and mutable release attachments do not satisfy it.
+No secret values enter recovery archives. Any new spend, new/rescoped credential
+or security weakening requires its existing separate decision before proceeding.
+
+Qualification binds one archive digest, the target script and an environment
+snapshot: complete assets and headers, effective config, schema/data contract,
+binding/resource identities, authorized secret names/presence, routes, triggers,
+jobs, tail consumer and runtime. Relevant changes invalidate qualification before
+the next promotion. Native changed-secret/resource guards remain; re-uploading
+bytes under a new UUID does not cure incompatibility. Both initial isolated,
+on-demand staging drills remain required while the staging original UUID is
+eligible, with parity/security/smoke before, during and after, recorded identity
+and digests, and cleanup. A dry run is not a drill.
+
+Retirement requires the acceptance owner's recorded decision, technical acceptance
+of any replacement, applicable security/release gates and retention/qualification
+of the replacement before removing the old lock/archive, with a release-log
+record. Custody, complete archives/attestation, compatibility and both drills are
+still unverified, so the operational archive gate remains failed. Production
+stays Hono. Independent Actions, parity and source preparation continue; existing
+QA/Security, exact-head checks, migration/rollback guards, gradual rollout/watch
+and Release Manager gates remain. Calendar waiting is not reinstated.
+
+## Wrangler asset-selection evidence boundary
+
+Pinned Wrangler 4.156.1 does not compute or emit its selected asset manifest in a
+`versions upload --dry-run`. Its
+[versions upload helper](https://github.com/cloudflare/workers-sdk/blob/wrangler%404.156.1/packages/deploy-helpers/src/deploy/versions-upload.ts)
+calls `syncAssets` only when assets exist and `dryRun` is false. The
+[asset helper](https://github.com/cloudflare/workers-sdk/blob/wrangler%404.156.1/packages/deploy-helpers/src/deploy/helpers/assets.ts)
+builds the path-to-hash/size manifest inside that call and sends it to the asset
+upload session. Dry-run multipart output therefore supplies no native selected-
+asset manifest either. This source inspection is not an upload or account probe.
+
+The rehearsal's complete adapter tree is useful build evidence but cannot be
+renamed as native asset selection. No supported dry-run selection-output contract
+has been established. Do not add a speculative `.assetsignore` parser, infer
+selection from debug listings or perform a real upload merely to fill this gap.
+Upload evidence integration still needs an exact selection/provenance mechanism
+and its applicable authorization; neither this note nor the recovery-spec
+amendment supplies that capability.
 
 ## Unimplemented
 
 - Production Kit upload (`web/wrangler.production.jsonc` as a version of the
   existing script, with the web build and dependency install).
-- A fail-closed, verified pure-Hono version pointer retained across Kit deploys.
-  A version with no marker must not be classified as pure Hono.
+- Mandatory qualification and custody integration for the accepted pure-Hono
+  recovery contract, with original-UUID eligibility recorded separately. A
+  version with no marker must not be classified as pure Hono.
 - Production integration of the Kit upload and deployment receipt parsers,
   after a verified build and upload and only after successful promotion/smoke.
   The existing Hono bundle inventory, upload and deployed receipts are unchanged.
