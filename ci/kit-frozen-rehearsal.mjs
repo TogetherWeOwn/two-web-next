@@ -53,6 +53,10 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
   realDirectory(dirname(output));
   assert.ok(output !== frozen && !output.startsWith(`${frozen}${sep}`), "output overlaps snapshot");
   const inputs = verifyInputs(frozen, context);
+  assert.ok(
+    inputs.sourceConfig?.schema === "two.kit-source-config.v1" && inputs.sourceConfig.config,
+    "verified source config required for rehearsal",
+  );
   const tool = verifyTool(base);
   for (const lock of tool.locks) {
     assert.deepEqual(
@@ -110,6 +114,7 @@ export function rehearseFrozenKitInputs(root, snapshot, destination, context, co
     multipart = verifyKitMultipartModules(
       outputBytes(multipartPath, 65 * 1024 * 1024),
       expectedWorker,
+      inputs.sourceConfig,
     );
   } finally {
     // Raw metadata may contain binding values. Unlink even on child/parser failure;

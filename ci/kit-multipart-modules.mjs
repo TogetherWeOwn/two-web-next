@@ -1,5 +1,6 @@
-// Finite dry-run envelope evidence, not effective-config or upload verification.
+// Finite dry-run envelope and optional serialized-config checks, not upload verification.
 import assert from "node:assert/strict";
+import { verifyKitMultipartConfig } from "./kit-multipart-config.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const METADATA_HEADER = 'Content-Disposition: form-data; name="metadata"\r\n\r\n';
@@ -21,7 +22,7 @@ function stripHeader(part, header) {
   return part.subarray(bytes.length);
 }
 
-export function verifyKitMultipartModules(multipart, expectedWorker) {
+export function verifyKitMultipartModules(multipart, expectedWorker, sourceConfig) {
   assert.ok(
     Buffer.isBuffer(multipart) && multipart.length > 0 && multipart.length <= 65 * 1024 * 1024,
     "invalid multipart size",
@@ -101,5 +102,8 @@ export function verifyKitMultipartModules(multipart, expectedWorker) {
       sha256: sha256(worker),
     },
     metadata: { bytes: metadataBytes.length, sha256: sha256(metadataBytes), bindings },
+    ...(sourceConfig === undefined
+      ? {}
+      : { config: verifyKitMultipartConfig(metadata, sourceConfig) }),
   };
 }

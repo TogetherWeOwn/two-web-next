@@ -6,6 +6,17 @@ build yet.
 
 ## Observed verification
 
+Serialized-config checks below are newly prepared and **untested**. Published
+[Actions 42472988388](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42472988388)
+at `f3de951a239df18c61c090148cfd104d53881f96` was still running at inspection:
+main and Node 22 suites were executing; scope, docs-links, bundle-budget and
+accessibility passed, with Lighthouse still running. No current-head completed
+suite, frozen rehearsal, parity or overall PASS is claimed. Only replacement of
+that same-branch cancel-in-progress producer is deferred until completion,
+concrete required-leg failure or its existing main-job timeout; independent
+source preparation continues. The pending config checks add no deploy or
+recovery acceptance.
+
 [Actions run 42468936442](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42468936442)
 at `a888daf9358a5a7f20a71325a271bd40f60b8bc2` failed the snapshot fixture step:
 34 passed and one failed. Its drift fixture replaced a script name in a comment,
@@ -99,9 +110,18 @@ describe implementation-time evidence, not a green overall gate.
   type. It rejects extra parts, unexpected headers/framing and malformed or
   oversized metadata; only metadata digests and bounded binding names/types enter
   the receipt. Raw metadata is unlinked on success, child failure or parse failure.
-  This checks the finite module envelope, **not** all effective metadata values,
-  native asset selection, inherited remote bindings or non-versioned settings.
-  Unknown metadata fields are not qualified merely by hashing them. Only the
+  `ci/kit-multipart-config.mjs` additionally compares the serialized compatibility
+  date/flags, exact binding objects and values, keep-bindings categories, tail
+  declarations and empty annotations against the reverified frozen source config.
+  Unknown semantic fields, missing/extra/inherited bindings and changed values
+  fail with fixed diagnostics, never raw binding diffs. The sanitized receipt
+  names the checked fields and hashes their normalized contract. Optional package
+  instrumentation is shape-bounded separately and explicitly unverified, with no
+  values copied to the receipt. This checks only fields serialized by the dry
+  run, **not** synchronized assets/control policy, actual inherited remote values
+  or non-versioned setting preservation. A serialized tail declaration is not
+  proof that the active tail consumer is preserved; observability is omitted by
+  this Wrangler upload path. New fixtures and integration remain unrun. Only the
   digest-bound receipt and dry-run output directory enter the existing Actions
   archive. Fixtures and the real rehearsal are wired but **unrun**. This is not a native
   upload, selected-asset metadata, remote readback, complete normalized config,

@@ -17,9 +17,35 @@ import { sha256 } from "./worker-bundle-evidence.mjs";
 const context = { sourceSha: "a".repeat(40), runId: "123", runAttempt: "1" };
 const worker = "export default { fetch() {} };\n";
 const readme = "Wrangler dry-run output.\n";
+const sourceConfig = {
+  schema: "two.kit-source-config.v1",
+  config: {
+    vars: {},
+    queues: { producers: [] },
+    hyperdrive: [],
+    version_metadata: { binding: "VERSION" },
+    assets: { binding: "ASSETS" },
+    compatibility_date: "2026-09-29",
+    compatibility_flags: ["nodejs_compat"],
+    tail_consumers: [{ service: "fixture-tail" }],
+    keep_vars: true,
+  },
+};
+const metadata = {
+  main_module: "worker.js",
+  bindings: [
+    { name: "ASSETS", type: "assets" },
+    { name: "VERSION", type: "version_metadata" },
+  ],
+  compatibility_date: "2026-09-29",
+  compatibility_flags: ["nodejs_compat"],
+  tail_consumers: [{ service: "fixture-tail" }],
+  keep_bindings: ["plain_text", "json", "secret_text", "secret_key"],
+  annotations: {},
+};
 const form = Buffer.from(
   '--fixture\r\nContent-Disposition: form-data; name="metadata"\r\n\r\n' +
-    '{"main_module":"worker.js","bindings":[]}\r\n--fixture\r\n' +
+    `${JSON.stringify(metadata)}\r\n--fixture\r\n` +
     'Content-Disposition: form-data; name="worker.js"; filename="worker.js"\r\n' +
     `Content-Type: application/javascript+module\r\n\r\n${worker}\r\n--fixture--`,
 );
@@ -43,6 +69,7 @@ function fixture(run) {
   const inputs = {
     ...context,
     target: "two-web-next-production",
+    sourceConfig: structuredClone(sourceConfig),
     files: tool.locks.map((lock) => ({ ...lock, path: `source/${lock.path}` })),
   };
   const calls = [];
@@ -154,6 +181,31 @@ for (const kind of ["snapshot", "tool"]) {
     });
   });
 }
+
+test("missing frozen source config refuses before invoking Wrangler", () => {
+  fixture((f) => {
+    delete f.inputs.sourceConfig;
+    assert.throws(f.invoke, /verified source config required/);
+    assert.equal(f.calls.length, 0);
+  });
+});
+
+test("serialized config drift refuses a receipt and removes raw bytes", () => {
+  fixture((f) => {
+    const run = f.collaborators.run;
+    f.collaborators.run = (...args) => {
+      const result = run(...args);
+      writeFileSync(
+        join(f.destination, "private/form-data"),
+        Buffer.from(form.toString().replace('"nodejs_compat"', '"unexpected_flag"')),
+      );
+      return result;
+    };
+    assert.throws(f.invoke, /multipart config differs/);
+    assert.equal(existsSync(join(f.destination, "receipt.json")), false);
+    assert.equal(existsSync(join(f.destination, "private/form-data")), false);
+  });
+});
 
 test("mismatching frozen lock refuses before invoking Wrangler", () => {
   fixture((f) => {
@@ -289,6 +341,7 @@ test("Actions runs frozen rehearsal after snapshot verification and retains only
   );
   const archive = workflow.indexOf("      - name: Production Kit bundle build evidence");
   assert.ok(verified >= 0 && tests > verified && replay > tests && archive > replay);
+  assert.ok(workflow.includes("node --test ci/kit-multipart-config.test.mjs"));
   assert.ok(workflow.includes("node --test ci/kit-multipart-modules.test.mjs"));
   assert.ok(!workflow.includes("            artifacts/kit-frozen-rehearsal/private/"));
   assert.ok(workflow.includes("            artifacts/kit-frozen-rehearsal/receipt.json"));
