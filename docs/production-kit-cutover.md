@@ -122,6 +122,26 @@ describe implementation-time evidence, not a green overall gate.
 
 ## Delivered
 
+- `ci/kit-canonical-source.mjs` supplies a source-identity boundary for future
+  separate Actions checkouts. Both full commit SHAs are explicit; only the fixed
+  baseline B commit/tree has a mapping. Floating/default identities, unknown cells,
+  equal or nested collector/candidate roots, dirty checkouts, unsupported tree
+  members and altered tracked bytes/modes refuse. Every tracked file is compared
+  with its pinned Git blob and recorded with SHA-256, including candidate-owned
+  locks, configs, checkers, budgets, fonts and generator inputs. This also detects
+  changes hidden from Git status by index flags. Collector and candidate receipts
+  retain separate commit/tree/parent/file inventories; B's source patch is empty.
+  This covers tracked sources only: ignored outputs/dependencies and the actual
+  build environment need separate proof. The real B-to-D positive binding is not
+  exercised by the hermetic fixture repositories, which cannot recreate B's SHA.
+  No checkouts, installs, builds, dispatches or collection are performed by this
+  library. It is not wired to a candidate collection invocation yet. The eventual
+  workflow still needs reviewed immutable D, the separated checkout/interface,
+  actual build-process/tool/image/run provenance, immediate failure-retaining
+  capture and independent archive identity verification. Fixtures are authored
+  and wired for Actions, not locally executed; no working D or admitted B/P is
+  claimed.
+
 - The existing `ci/kit-upload-rehearsal.mjs` now also exposes bounded canonical
   byte-retention primitives. They copy all original files from the complete Kit
   server, client and Cloudflare trees, preserving repository-relative paths and
