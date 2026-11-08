@@ -28,6 +28,7 @@ import { gzipSync } from "node:zlib";
 import {
   createCanonicalReceipt,
   freezeCanonicalBuild,
+  verifyCanonicalArchiveMembers,
   verifyCanonicalBuild,
 } from "./kit-upload-rehearsal.mjs";
 
@@ -205,6 +206,103 @@ test("createCanonicalReceipt returns the exact unqualified receipt for full tree
     GROUP_IDS,
   );
   for (const group of receipt.groups) assert.ok(group.files > 0, group.id);
+});
+
+function archiveMembers() {
+  const root = makeRoot("archive-members");
+  mkdirSync(join(root, SERVER, "empty/nested"), { recursive: true });
+  const receipt = expectedReceipt(root);
+  const members = receipt.files.map(({ path }) => ({
+    path,
+    type: "file",
+    data: readFileSync(join(root, path)),
+  }));
+  members.push({ path: "receipt.json", type: "file", data: Buffer.from(JSON.stringify(receipt)) });
+  return { members, receipt };
+}
+
+function verifyMembers(members) {
+  const receipt = members.find((member) => member.path === "receipt.json");
+  const hash = createHash("sha256").update(receipt?.data ?? "absent").digest("hex");
+  return verifyCanonicalArchiveMembers(members, authority(), hash);
+}
+
+test("data-only archive verification recomputes exact raw and independent gzip rows", () => {
+  const { members, receipt } = archiveMembers();
+  const result = verifyMembers(members.reverse());
+  assert.deepEqual(result.receipt, receipt);
+  assert.equal(result.evidence, "unqualified-canonical-archive-members");
+  assert.equal(result.directoryEvidence, "receipt-declared");
+  assert.equal(result.authenticatedArchiveVerified, false);
+  assert.equal(result.qualified, false);
+  assert.ok(result.receipt.directories.includes(`${SERVER}/empty/nested`));
+  assert.ok(!members.some((member) => member.path.endsWith("empty/nested")));
+  const raw = members
+    .filter((member) => member.path !== "receipt.json")
+    .map((member) => member.data);
+  assert.notEqual(receipt.totals.gzipBytes, gzipSync(Buffer.concat(raw)).length);
+});
+
+for (const [label, mutate] of [
+  ["missing file", (members) => members.splice(0, 1)],
+  ["duplicate file", (members) => members.push(members[0])],
+  ["duplicate receipt", (members) => members.push(members.at(-1))],
+  [
+    "extra file",
+    (members) => members.push({ path: `${SERVER}/extra`, type: "file", data: blob("x") }),
+  ],
+  ["outside file", (members) => Object.assign(members[0], { path: "outside.js" })],
+  ["traversal", (members) => Object.assign(members[0], { path: `${SERVER}/../escape.js` })],
+  ["backslash", (members) => Object.assign(members[0], { path: `${SERVER}/bad\\\\name.js` })],
+  ["symlink", (members) => Object.assign(members[0], { type: "symlink" })],
+  ["directory", (members) => Object.assign(members[0], { type: "directory" })],
+  ["non-buffer", (members) => Object.assign(members[0], { data: "not raw bytes" })],
+  ["changed bytes", (members) => Object.assign(members[0], { data: blob("changed") })],
+  ["missing receipt", (members) => members.pop()],
+]) {
+  test(`data-only archive verification refuses ${label}`, () => {
+    const { members } = archiveMembers();
+    mutate(members);
+    assert.throws(() => verifyMembers(members));
+  });
+}
+
+for (const [label, mutate] of [
+  ["gzip row", (receipt) => Object.assign(receipt.files[0], { gzipBytes: 0 })],
+  ["hash row", (receipt) => Object.assign(receipt.files[0], { sha256: "0".repeat(64) })],
+  ["group membership", (receipt) => Object.assign(receipt.files[0], { group: "kit.worker" })],
+  ["total", (receipt) => Object.assign(receipt.totals, { bytes: 0 })],
+  ["group sum", (receipt) => Object.assign(receipt.groups[0], { gzipBytes: 0 })],
+  ["runtime", (receipt) => Object.assign(receipt.measurementRuntime, { zlib: "unknown" })],
+  ["unsorted rows", (receipt) => receipt.files.reverse()],
+  ["unsorted directories", (receipt) => receipt.directories.reverse()],
+  ["duplicate directory", (receipt) => receipt.directories.push(receipt.directories[0])],
+  ["outside directory", (receipt) => receipt.directories.push("unrelated")],
+  ["traversing directory", (receipt) => receipt.directories.push(`${SERVER}/../escape`)],
+  [
+    "missing parent",
+    (receipt) => receipt.directories.splice(receipt.directories.indexOf(`${SERVER}/empty`), 1),
+  ],
+  ["missing root", (receipt) => receipt.directories.splice(receipt.directories.indexOf(SERVER), 1)],
+  ["file directory collision", (receipt) => receipt.directories.push(WORKER)],
+  ["unknown field", (receipt) => Object.assign(receipt, { qualified: true })],
+]) {
+  test(`data-only archive verification refuses forged ${label}`, () => {
+    const { members, receipt } = archiveMembers();
+    mutate(receipt);
+    members.at(-1).data = Buffer.from(JSON.stringify(receipt));
+    assert.throws(() => verifyMembers(members));
+  });
+}
+
+test("data-only archive verification pins the external receipt digest and finite inputs", () => {
+  const { members } = archiveMembers();
+  assert.throws(() => verifyCanonicalArchiveMembers(members, authority(), "0".repeat(64)));
+  assert.throws(() => verifyCanonicalArchiveMembers(members, authority(), ""));
+  assert.throws(() => verifyCanonicalArchiveMembers(Array(20002), authority(), "a".repeat(64)));
+  assert.throws(() => verifyMembers([]));
+  members.at(-1).data = Buffer.from("{malformed JSON");
+  assert.throws(() => verifyMembers(members));
 });
 
 test("nested empty directories survive capture and topology tampering fails", () => {

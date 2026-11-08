@@ -157,22 +157,30 @@ function canonicalBytes(path, remaining = CANONICAL_LIMITS.fileBytes) {
   }
 }
 
+function canonicalRow(path, bytes, authority) {
+  let group = null;
+  if (path === authority.KIT_WORKER_PATH) group = "kit.worker";
+  else if (path.startsWith(`${authority.KIT_SERVER_DIR}/`) && path.endsWith(".js"))
+    group = "kit.server.js";
+  else if (path.startsWith(`${authority.KIT_CLIENT_DIR}/`) && path.endsWith(".js"))
+    group = "kit.client.js";
+  else if (path.startsWith(`${authority.KIT_CLIENT_DIR}/`) && path.endsWith(".css"))
+    group = "kit.client.css";
+  return {
+    path,
+    group,
+    bytes: bytes.length,
+    gzipBytes: gzipSync(bytes).length,
+    sha256: sha256(bytes),
+  };
+}
+
 export function createCanonicalReceipt(root, authority) {
   canonicalAuthority(authority);
   const base = safeDirectory(root);
   const files = [];
   const directories = [];
   let totalBytes = 0;
-  const groupFor = (path) => {
-    if (path === authority.KIT_WORKER_PATH) return "kit.worker";
-    if (path.startsWith(`${authority.KIT_SERVER_DIR}/`) && path.endsWith(".js"))
-      return "kit.server.js";
-    if (path.startsWith(`${authority.KIT_CLIENT_DIR}/`) && path.endsWith(".js"))
-      return "kit.client.js";
-    if (path.startsWith(`${authority.KIT_CLIENT_DIR}/`) && path.endsWith(".css"))
-      return "kit.client.css";
-    return null;
-  };
   function walk(path, depth) {
     assert.ok(depth <= 32, "canonical directory depth exceeded");
     safeDirectory(join(base, path));
@@ -191,17 +199,15 @@ export function createCanonicalReceipt(root, authority) {
         assert.ok(files.length < CANONICAL_LIMITS.files, "canonical file count exceeded");
         const bytes = canonicalBytes(full, CANONICAL_LIMITS.bytes - totalBytes);
         totalBytes += bytes.length;
-        files.push({
-          path: member,
-          group: groupFor(member),
-          bytes: bytes.length,
-          gzipBytes: gzipSync(bytes).length,
-          sha256: sha256(bytes),
-        });
+        files.push(canonicalRow(member, bytes, authority));
       }
     }
   }
   for (const path of CANONICAL_ROOTS) walk(path, 0);
+  return canonicalReceipt(files, directories, authority);
+}
+
+function canonicalReceipt(files, directories, authority) {
   files.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0));
   const sums = (rows) => ({
     files: rows.length,
@@ -224,6 +230,82 @@ export function createCanonicalReceipt(root, authority) {
     files,
     totals: sums(files),
     groups,
+  };
+}
+
+export function verifyCanonicalArchiveMembers(members, authority, receiptSha256) {
+  canonicalAuthority(authority);
+  assert.match(receiptSha256, /^[0-9a-f]{64}$/, "explicit canonical receipt digest required");
+  assert.ok(
+    Array.isArray(members) && members.length > 1 && members.length <= CANONICAL_LIMITS.files + 1,
+    "canonical archive member count exceeded",
+  );
+  const paths = new Set();
+  const files = [];
+  let receiptBytes;
+  let totalBytes = 0;
+  for (const member of members) {
+    safeMember(member.path);
+    assert.ok(!paths.has(member.path), "duplicate canonical archive member");
+    paths.add(member.path);
+    assert.ok(
+      member.type === "file" && Buffer.isBuffer(member.data),
+      "canonical archive member is not a regular file",
+    );
+    assert.ok(member.data.length <= CANONICAL_LIMITS.fileBytes, "canonical archive file bound");
+    if (member.path === "receipt.json") {
+      assert.ok(member.data.length > 0 && member.data.length <= 8 * 1024 * 1024);
+      receiptBytes = member.data;
+      continue;
+    }
+    assert.ok(
+      CANONICAL_ROOTS.some((root) => member.path.startsWith(`${root}/`)),
+      "unexpected canonical archive file",
+    );
+    totalBytes += member.data.length;
+    assert.ok(totalBytes <= CANONICAL_LIMITS.bytes, "canonical archive byte bound");
+    files.push(canonicalRow(member.path, member.data, authority));
+  }
+  assert.ok(receiptBytes, "canonical archive receipt missing");
+  assert.equal(sha256(receiptBytes), receiptSha256, "canonical archive receipt digest mismatch");
+  const receipt = JSON.parse(receiptBytes.toString("utf8"));
+  assert.ok(
+    Array.isArray(receipt.directories) &&
+      receipt.directories.length >= CANONICAL_ROOTS.length &&
+      receipt.directories.length <= CANONICAL_LIMITS.files,
+    "canonical archive directory count bound",
+  );
+  const directories = new Set();
+  for (const path of receipt.directories) {
+    safeMember(path);
+    const root = CANONICAL_ROOTS.find((root) => path === root || path.startsWith(`${root}/`));
+    assert.ok(root && path.split("/").length - root.split("/").length <= 32);
+    assert.ok(!directories.has(path) && !paths.has(path), "canonical archive path collision");
+    directories.add(path);
+  }
+  for (const root of CANONICAL_ROOTS) {
+    assert.ok(directories.has(root), "canonical archive root missing");
+  }
+  for (const path of [...directories, ...files.map((file) => file.path)]) {
+    if (!CANONICAL_ROOTS.includes(path)) {
+      assert.ok(directories.has(dirname(path)), "canonical archive parent missing");
+    }
+  }
+  assert.deepEqual(
+    receipt,
+    canonicalReceipt(files, [...directories], authority),
+    "canonical archive receipt mismatch",
+  );
+  // The bounded ZIP parser and authenticated archive identity are caller-owned.
+  // ZIP omits empty directories: these are receipt declarations, not observations
+  // of archived directory entries, historical source bytes or build provenance.
+  return {
+    evidence: "unqualified-canonical-archive-members",
+    receiptSha256,
+    receipt,
+    directoryEvidence: "receipt-declared",
+    authenticatedArchiveVerified: false,
+    qualified: false,
   };
 }
 

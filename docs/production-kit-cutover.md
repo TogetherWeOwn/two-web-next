@@ -6,6 +6,18 @@ build yet.
 
 ## Observed verification
 
+The existing retention module also exposes data-only canonical archive-member
+verification. It takes bounded, already-parsed regular-file bytes and an explicit
+expected receipt SHA-256, recomputes independent gzip/SHA-256 rows and exact
+membership/groups/totals using the capture semantics, and rejects malformed or
+colliding declared topology. Reproduction requires the recorded Node/zlib
+identity; a different runtime refuses instead of relabelling the measurement.
+Empty directories remain **receipt-declared**, not observed ZIP entries. This
+library does not parse ZIP, authenticate archive metadata or attest a build; its
+bounded transport/parser and source-separated caller integration remain unfinished.
+New fixtures use the existing Actions invocation and have not run yet. No local
+suite, lint, build or installation ran.
+
 [Actions 42500235397](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42500235397)
 at `94d8f758ac8d3191d01f8d94a744df9d3b50b5d7` completed with **failure**.
 Main lint/type/coverage passed 26,757 tests (676 skipped); Node 22 and all
