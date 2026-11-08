@@ -128,7 +128,10 @@ test("accepts required files and returns sorted inventory with texts", () => {
   assert.equal(result.status, 0, result.stderr);
   assert.equal(result.stderr, "");
   const parsed = JSON.parse(result.stdout);
-  assert.deepEqual(parsed.files.map((f) => f.path), [...REQUIRED].sort());
+  assert.deepEqual(
+    parsed.files.map((f) => f.path),
+    [...REQUIRED].sort(),
+  );
   for (const file of parsed.files) {
     const data = Buffer.from(contentFor(file.path), "utf8");
     assert.equal(file.bytes, data.length);
@@ -144,7 +147,10 @@ test("accepts stored members and an optional README", () => {
   const result = runReader(buildZip(entries));
   assert.equal(result.status, 0, result.stderr);
   const parsed = JSON.parse(result.stdout);
-  assert.deepEqual(parsed.files.map((f) => f.path), [...REQUIRED, "README.md"].sort());
+  assert.deepEqual(
+    parsed.files.map((f) => f.path),
+    [...REQUIRED, "README.md"].sort(),
+  );
   assert.equal("README.md" in parsed.texts, false);
 });
 
@@ -512,7 +518,10 @@ test("content verifier accepts a consistent archive and returns a sanitized rece
   assert.deepEqual(receipt.provenance, fixture.transport.provenance);
   assert.equal(receipt.archiveSha256, fixture.transport.archiveSha256);
   assert.equal(receipt.archiveBytes, fixture.archive.length);
-  assert.deepEqual(receipt.files.map((f) => f.path), [...REQUIRED].sort());
+  assert.deepEqual(
+    receipt.files.map((f) => f.path),
+    [...REQUIRED].sort(),
+  );
   assert.equal(JSON.stringify(receipt).includes("export default"), false);
 });
 

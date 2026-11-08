@@ -53,18 +53,18 @@ export function verifyPureHonoArchiveContents(pointer, archive, transport, nativ
     assert.equal(inventory.bundle.entry, "worker.js");
     assert.equal(inventory.bundle.sha256, pointer.bundleSha256);
     assert.equal(inventory.bundle.sha256, records.get("worker.js").sha256);
-    assert.deepEqual(
-      inventory.outputs.map((file) => file.path).sort(),
-      ["worker.js", "worker.js.map"],
-    );
+    assert.deepEqual(inventory.outputs.map((file) => file.path).sort(), [
+      "worker.js",
+      "worker.js.map",
+    ]);
     for (const output of inventory.outputs) assert.deepEqual(output, records.get(output.path));
     assert.deepEqual(inventory.metafile, records.get("bundle-meta.json"));
     const meta = JSON.parse(texts["bundle-meta.json"]);
     const directory = "dist-production";
-    assert.deepEqual(
-      Object.keys(meta.outputs).sort(),
-      [`${directory}/worker.js`, `${directory}/worker.js.map`],
-    );
+    assert.deepEqual(Object.keys(meta.outputs).sort(), [
+      `${directory}/worker.js`,
+      `${directory}/worker.js.map`,
+    ]);
     for (const output of inventory.outputs)
       assert.equal(meta.outputs[`${directory}/${output.path}`].bytes, output.bytes);
     // A successful trusted producer owns input verification. Preserve its exact
