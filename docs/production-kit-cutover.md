@@ -33,13 +33,24 @@ neither checker nor finalizer is retried. A checker error remains the primary
 failure if finalization also fails. Successful execution binds the retained
 budget receipt's digest. Frozen-byte verification failure always refuses success.
 
+The caller independently recomputes per-file raw/gzip sums from the already
+frozen capture and compares all four canonical groups with the candidate report.
+Group/check identities and statuses, exact byte totals and file counts must agree;
+only server gzip may retain its existing advisory warning. The Worker has one
+implicit file. Numeric disagreement still finalizes the frozen capture, retains
+the candidate report and fails without an execution-success receipt. Successful
+execution also binds the independently recomputed group totals' digest. This is
+numeric agreement only, not independent verification of the candidate's ceilings,
+installed dependencies, actual runtime or a final authenticated archive.
+
 This is source preparation, **not an executed collection or reviewed D**. No
 Actions job invokes these phases yet. Candidate-owned installation, dependency
 content and generator/process/tool/image/run proof, candidate-owned profiling,
-separated archive-reader integration and independent report verification remain
-required before collecting B. The execution receipt explicitly keeps
+separated archive-reader integration and full independent report verification
+remain required before collecting B. The execution receipt explicitly keeps
 qualification, dependency verification and execution verification false. No B
-receipt or P admission is implied. New caller/capture/budget fixtures are unrun.
+receipt or P admission is implied. New caller/capture/budget fixtures, including
+35 additional numeric-comparison and failure-propagation registrations, are unrun.
 
 ## Observed verification
 

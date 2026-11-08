@@ -14,7 +14,8 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { after, test } from "node:test";
 import { fileURLToPath } from "node:url";
-import { executeCanonicalBuild } from "./kit-canonical-execute.mjs";
+import { KIT_CHECK_IDS, KIT_GROUP_IDS } from "./bundle-inventory.mjs";
+import { executeCanonicalBuild, verifyCanonicalBudgetReport } from "./kit-canonical-execute.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const base = realpathSync(mkdtempSync(join(tmpdir(), "canonical-execute-")));
@@ -23,6 +24,37 @@ const B = "1fe09ab868a6fea4a7873e4a096523b78747b232";
 const TREE = "454843aa9ac7b9f911020108ba539a4353ee977d";
 const D = "d".repeat(40);
 let counter = 0;
+function reportFixture() {
+  const frozen = {
+    groups: KIT_GROUP_IDS.map((id, index) => ({
+      id,
+      files: index + 1,
+      bytes: (index + 1) * 100,
+      gzipBytes: (index + 1) * 50,
+    })),
+  };
+  const report = {
+    version: 1,
+    check: "kit-perf",
+    ok: true,
+    exitCode: 0,
+    groups: frozen.groups.map((group, index) => ({
+      id: group.id,
+      status: "pass",
+      checks: [
+        {
+          id: KIT_CHECK_IDS[index],
+          status: "pass",
+          rawBytes: group.bytes,
+          gzipBytes: group.gzipBytes,
+          ...(index === 0 ? {} : { files: group.files }),
+        },
+      ],
+    })),
+  };
+  return { frozen, report };
+}
+
 function fixture() {
   const root = join(base, String(counter++));
   const collector = join(root, "collector");
@@ -63,6 +95,7 @@ function fixture() {
   save();
   const calls = [];
   const authority = Object.freeze({ candidate: true });
+  const { report, frozen } = reportFixture();
   const collaborators = {
     inspect: (path, sha) => {
       calls.push(`inspect:${sha}`);
@@ -81,7 +114,13 @@ function fixture() {
       calls.push("budget");
       assert.equal(path, candidate);
       assert.equal(sha, B);
-      return { source, code: 0, report: { version: 1 }, executionVerified: false };
+      return { source, code: 0, report, executionVerified: false };
+    },
+    verifyBytes: (path, inventory) => {
+      calls.push("verifyBytes");
+      assert.equal(path, join(args.destination, "capture/bytes"));
+      assert.equal(inventory, authority);
+      return frozen;
     },
     capture: (path, output, context, inventory) => {
       calls.push("capture");
@@ -103,7 +142,7 @@ function fixture() {
       return { qualified: false };
     },
   };
-  return { args, binding, save, calls, authority, collaborators };
+  return { args, binding, save, calls, authority, collaborators, report, frozen };
 }
 
 test("execution awaits capture and retains distinct source identities", async () => {
@@ -117,10 +156,12 @@ test("execution awaits capture and retains distinct source identities", async ()
     "returned",
     `inspect:${D}`,
     "budget",
+    "verifyBytes",
     "finalize",
     `inspect:${D}`,
   ]);
   assert.equal(result.budget.code, 0);
+  assert.equal(result.budget.frozenTotalsSha256, sha256(JSON.stringify(f.frozen.groups)));
   assert.equal(result.budget.sha256, sha256(readFileSync(join(f.args.destination, "budget.json"))));
   assert.equal(result.identity.candidateSha, B);
   assert.equal(result.identity.collectorSha, D);
@@ -236,6 +277,122 @@ test("execution refuses budget source substitution before writing a report", asy
   await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /budget source changed/);
   assert.equal(f.calls.includes("finalize"), true);
   assert.equal(existsSync(join(f.args.destination, "budget.json")), false);
+});
+
+test("frozen report comparison preserves server warnings and implicit single Worker count", () => {
+  const { report, frozen } = reportFixture();
+  report.groups[1].status = "warn";
+  report.groups[1].checks[0].status = "warn";
+  assert.deepEqual(verifyCanonicalBudgetReport(report, frozen), {
+    evidence: "unqualified-frozen-budget-totals",
+    groups: frozen.groups,
+  });
+  report.groups[0].checks[0].files = 1;
+  assert.deepEqual(verifyCanonicalBudgetReport(report, frozen).groups, frozen.groups);
+});
+
+for (const index of [0, 1, 2, 3]) {
+  for (const field of ["rawBytes", "gzipBytes", "files"]) {
+    test(`frozen report comparison refuses ${KIT_GROUP_IDS[index]} ${field} drift`, () => {
+      const { report, frozen } = reportFixture();
+      const check = report.groups[index].checks[0];
+      check[field] = (check[field] ?? 1) + 1;
+      assert.throws(() => verifyCanonicalBudgetReport(report, frozen), /mismatch/);
+    });
+  }
+}
+
+for (const [name, mutate] of Object.entries({
+  version: (r) => {
+    r.version = 2;
+  },
+  checker: (r) => {
+    r.check = "worker-budget";
+  },
+  ok: (r) => {
+    r.ok = false;
+  },
+  exit: (r) => {
+    r.exitCode = 1;
+  },
+  error: (r) => {
+    r.error = { code: "CANNOT_ENFORCE" };
+  },
+  missing: (r) => {
+    r.groups.pop();
+  },
+  duplicate: (r) => {
+    r.groups[3] = structuredClone(r.groups[2]);
+  },
+  extra: (r) => {
+    r.groups.push(structuredClone(r.groups[0]));
+  },
+  reordered: (r) => {
+    r.groups.reverse();
+  },
+  checkId: (r) => {
+    r.groups[0].checks[0].id = "kit.server.js";
+  },
+  extraCheck: (r) => {
+    r.groups[0].checks.push(structuredClone(r.groups[0].checks[0]));
+  },
+  missingCount: (r) => {
+    delete r.groups[1].checks[0].files;
+  },
+  failedGroup: (r) => {
+    r.groups[0].status = "fail";
+  },
+  failedCheck: (r) => {
+    r.groups[0].checks[0].status = "fail";
+  },
+  clientWarning: (r) => {
+    r.groups[2].status = "warn";
+    r.groups[2].checks[0].status = "warn";
+  },
+})) {
+  test(`frozen report comparison refuses report ${name}`, () => {
+    const { report, frozen } = reportFixture();
+    mutate(report);
+    assert.throws(() => verifyCanonicalBudgetReport(report, frozen));
+  });
+}
+
+for (const value of [0, -1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
+  test(`frozen report comparison refuses invalid total ${value}`, () => {
+    const { report, frozen } = reportFixture();
+    frozen.groups[0].bytes = value;
+    report.groups[0].checks[0].rawBytes = value;
+    assert.throws(() => verifyCanonicalBudgetReport(report, frozen), /invalid frozen budget total/);
+  });
+}
+
+for (const secondFailure of [false, true]) {
+  test(`numeric mismatch stays primary with finalizer failure ${secondFailure}`, async () => {
+    const f = fixture();
+    f.report.groups[2].checks[0].rawBytes++;
+    if (secondFailure) {
+      f.collaborators.finalize = async () => {
+        f.calls.push("finalize");
+        throw new Error("secondary finalizer failure fixture");
+      };
+    }
+    await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /raw total mismatch/);
+    assert.equal(f.calls.filter((call) => call === "budget").length, 1);
+    assert.equal(f.calls.includes("verifyBytes"), true);
+    assert.equal(f.calls.includes("finalize"), true);
+    assert.equal(existsSync(join(f.args.destination, "budget.json")), true);
+    assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+  });
+}
+
+test("execution finalizes but refuses success when frozen bytes no longer verify", async () => {
+  const f = fixture();
+  f.collaborators.verifyBytes = () => {
+    throw new Error("frozen-byte failure fixture");
+  };
+  await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /frozen-byte failure/);
+  assert.equal(f.calls.includes("finalize"), true);
+  assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
 });
 
 test("execution CLI refuses invalid identity without exposing arguments", () => {

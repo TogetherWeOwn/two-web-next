@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from "node:fs";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
+import { KIT_CHECK_IDS, KIT_GROUP_IDS } from "./bundle-inventory.mjs";
 import { captureCanonicalBuild, finalizeCanonicalCapture } from "./kit-canonical-capture.mjs";
 import {
   bindCanonicalSources,
@@ -11,6 +12,7 @@ import {
   runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
 } from "./kit-canonical-source.mjs";
+import { verifyCanonicalBuild } from "./kit-upload-rehearsal.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -36,12 +38,57 @@ function paths(collector, candidate, output) {
   assert.equal(realpathSync(dirname(output)), dirname(output), "execution output parent alias");
 }
 
+// Compare the candidate's aggregate report with independent per-file raw/gzip
+// sums from the already frozen bytes. The candidate still owns its ceilings;
+// agreement here is neither independent budget-policy nor execution acceptance.
+export function verifyCanonicalBudgetReport(report, frozen) {
+  assert.equal(report?.version, 1, "candidate report version mismatch");
+  assert.equal(report.check, "kit-perf", "candidate report checker mismatch");
+  assert.equal(report.ok, true, "candidate report is not successful");
+  assert.equal(report.exitCode, 0, "candidate report exit mismatch");
+  assert.equal(report.error, undefined, "candidate report contains an error");
+  for (const groups of [report.groups, frozen.groups]) {
+    assert.ok(Array.isArray(groups), "canonical budget groups missing");
+    assert.deepEqual(
+      groups.map((group) => group.id),
+      KIT_GROUP_IDS,
+      "canonical budget group identity mismatch",
+    );
+  }
+  for (const [index, group] of report.groups.entries()) {
+    const actual = frozen.groups[index];
+    for (const value of [actual.files, actual.bytes, actual.gzipBytes]) {
+      assert.ok(Number.isSafeInteger(value) && value > 0, "invalid frozen budget total");
+    }
+    assert.ok(
+      group.status === "pass" || (group.id === "kit.server.js" && group.status === "warn"),
+      "candidate budget group is not successful",
+    );
+    assert.ok(Array.isArray(group.checks) && group.checks.length === 1, "budget check count");
+    const check = group.checks[0];
+    assert.equal(check.id, KIT_CHECK_IDS[index], "candidate budget check identity mismatch");
+    assert.equal(check.status, group.status, "candidate budget check status mismatch");
+    assert.equal(check.rawBytes, actual.bytes, "candidate budget raw total mismatch");
+    assert.equal(check.gzipBytes, actual.gzipBytes, "candidate budget gzip total mismatch");
+    if (group.id === "kit.worker") {
+      assert.equal(actual.files, 1, "canonical Worker count mismatch");
+      if (check.files !== undefined) {
+        assert.equal(check.files, 1, "candidate budget file count mismatch");
+      }
+    } else {
+      assert.equal(check.files, actual.files, "candidate budget file count mismatch");
+    }
+  }
+  return { evidence: "unqualified-frozen-budget-totals", groups: frozen.groups };
+}
+
 export async function executeCanonicalBuild(
   { collector, candidate, destination, bindingPath, bindingSha256, context },
   {
     inspect = inspectCanonicalSource,
     build = runCanonicalCandidateBuild,
     budget = runCanonicalCandidateBudget,
+    verifyBytes = verifyCanonicalBuild,
     capture = captureCanonicalBuild,
     finalize = finalizeCanonicalCapture,
   } = {},
@@ -105,6 +152,7 @@ export async function executeCanonicalBuild(
   assert.ok(authority, "build return not observed");
   assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
   let measured;
+  let comparison;
   let budgetError;
   try {
     measured = await budget(candidate, identity.candidateSha);
@@ -112,6 +160,10 @@ export async function executeCanonicalBuild(
     assert.ok([0, 1, 2].includes(measured.code), "candidate budget exit invalid");
     writeFileSync(join(output, "budget.json"), encode(measured), { flag: "wx", mode: 0o600 });
     assert.equal(measured.code, 0, "candidate budget failed");
+    comparison = verifyCanonicalBudgetReport(
+      measured.report,
+      verifyBytes(join(capturePath, "bytes"), authority),
+    );
   } catch (error) {
     budgetError = error;
   }
@@ -138,7 +190,11 @@ export async function executeCanonicalBuild(
     runAttempt: context.runAttempt,
     sourceBindingSha256: bindingSha256,
     build: result,
-    budget: { code: measured.code, sha256: sha256(encode(measured)) },
+    budget: {
+      code: measured.code,
+      sha256: sha256(encode(measured)),
+      frozenTotalsSha256: sha256(JSON.stringify(comparison.groups)),
+    },
     capture: journal,
     dependenciesVerified: false,
     executionVerified: false,
