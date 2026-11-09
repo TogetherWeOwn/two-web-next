@@ -7,14 +7,16 @@ build yet.
 ## Latest verification
 
 [Actions 42535628416](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42535628416)
-on `249c3d2f2510d3a6bd2a6c21368fcb56811d6778` was still running at the
-inspection: Node 22 and all auxiliary jobs passed; main reached the built fatal
-fixture. No completed main, current-head parity or overall pass is claimed.
-The native-install integration described below is new source, not yet tested or
-exercised. Syntax and whitespace checks passed. No local suite, lint, typecheck,
-build, dependency installation, collection or deployment ran. A bounded native
-npm config query exposed the duplicate `/dev/null` config error; the new path
-uses a separate empty temporary global config rather than an ambient one.
+on `249c3d2f2510d3a6bd2a6c21368fcb56811d6778` completed with **success**:
+main, Node 22, all auxiliary jobs and `ci-ok` passed. This ends preservation of
+that producer, not recovery qualification or acceptance of the new source.
+The native-install integration in `71f21e2a` is new source, not yet tested or
+exercised. Nineteen new fixture registrations reuse the existing Actions suites.
+Syntax and whitespace checks passed. No local suite, lint, typecheck, build,
+dependency installation, collection or deployment ran. A bounded native npm
+config query failed with duplicate `/dev/null` config inputs, then passed with
+a distinct empty temporary global config; cleanup was verified. This focused
+query does not establish the Actions npm version, installation or enforcement.
 
 ## Separated execution caller (not yet exercised)
 
