@@ -35,6 +35,7 @@ const D = "d".repeat(40);
 let counter = 0;
 function reportFixture() {
   const frozen = {
+    measurementRuntime: { node: process.versions.node, zlib: process.versions.zlib },
     groups: KIT_GROUP_IDS.map((id, index) => ({
       id,
       files: index + 1,
@@ -89,7 +90,8 @@ function runnerFixture(source) {
         evidence: "observed-process-executable-only",
         bytes: 100,
         sha256: "c".repeat(64),
-        version: "v24.0.0",
+        version: process.version,
+        zlib: process.versions.zlib,
         authenticated: false,
       },
     },
@@ -893,6 +895,9 @@ for (const kind of [
   "fractional",
   "digest",
   "version",
+  "zlib-missing",
+  "zlib-malformed",
+  "zlib-oversized",
   "claim",
   "extra",
 ]) {
@@ -904,6 +909,9 @@ for (const kind of [
     if (kind === "fractional") node.bytes = 0.5;
     if (kind === "digest") node.sha256 = "not-a-digest";
     if (kind === "version") node.version = "unknown";
+    if (kind === "zlib-missing") delete node.zlib;
+    if (kind === "zlib-malformed") node.zlib = "unknown";
+    if (kind === "zlib-oversized") node.zlib = `1.2.3-${"a".repeat(128)}`;
     if (kind === "claim") node.authenticated = true;
     if (kind === "extra") node.path = "/private/runtime";
   };
@@ -926,6 +934,39 @@ for (const kind of [
     const f = memberFixture();
     const execution = f.records["execution.json"];
     mutate(execution.runner);
+    f.save("execution.json", execution, "executionSha256");
+    assert.throws(() => verifyCanonicalExecutionMembers(f.members, f.expected, f.authority), {
+      message: "canonical separated execution member verification failed",
+    });
+  });
+}
+
+for (const runtime of ["node", "zlib"]) {
+  test(`execution finalizes without success on frozen ${runtime} mismatch`, async () => {
+    const f = fixture();
+    f.frozen.measurementRuntime[runtime] = "999.0.0";
+    await assert.rejects(executeCanonicalBuild(f.args, f.collaborators));
+    assert.equal(f.calls.filter((call) => call === "finalize").length, 1);
+    assert.equal(f.calls.includes("profile"), false);
+    assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+  });
+  test(`separated reader refuses internally consistent profile ${runtime} substitution`, () => {
+    const f = memberFixture();
+    const execution = f.records["execution.json"];
+    const node = execution.runner.runner.nodeExecutable;
+    if (runtime === "node") node.version = "v999.0.0";
+    else node.zlib = "999.0.0";
+    execution.profile.report.identity.runner = execution.runner.runner;
+    for (const path of ["report.json", "checkpoint.json"]) {
+      const member = f.members.find((entry) => entry.path === `startup/${path}`);
+      const record = JSON.parse(member.data.toString("utf8"));
+      record.identity.runner = execution.runner.runner;
+      member.data = Buffer.from(JSON.stringify(record));
+    }
+    execution.profile.files = CANONICAL_PROFILE_FILES.map((path) => {
+      const bytes = f.members.find((member) => member.path === `startup/${path}`).data;
+      return { path, bytes: bytes.length, sha256: sha256(bytes) };
+    });
     f.save("execution.json", execution, "executionSha256");
     assert.throws(() => verifyCanonicalExecutionMembers(f.members, f.expected, f.authority), {
       message: "canonical separated execution member verification failed",

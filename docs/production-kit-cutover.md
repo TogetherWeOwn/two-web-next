@@ -121,6 +121,17 @@ an observed byte fingerprint, not an authenticated release pin, npm/transitive
 verification, proof against intervening mutation or collection qualification.
 No actual separated runtime has been measured through this path.
 
+The same observation now records the running process's zlib version. Before
+profiling, the caller requires the frozen per-file gzip receipt's Node/zlib
+identity to match that observation; mismatch still finalizes captured bytes but
+refuses execution success. The data-only reader repeats the cross-document
+comparison, even when profile runner declarations agree with each other. Missing,
+malformed or oversized zlib declarations also refuse. Ten additional fixture
+registrations reuse the existing Actions invocation and are unrun. This binds
+observed measurement identities, not authenticated tool/image provenance or the
+identity of every child build process. No actual collection or runtime
+qualification is established.
+
 After native installation, the caller now invokes the existing published-package
 Wrangler verifier against the candidate root, then repeats it after frozen
 finalization. It binds the existing thirty-file pin, complete installed Wrangler

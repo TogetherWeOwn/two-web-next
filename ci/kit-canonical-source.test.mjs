@@ -370,6 +370,7 @@ test("runner observation invokes candidate checks without build or install", asy
     bytes: executable.length,
     sha256: sha256Hex(executable),
     version: process.version,
+    zlib: process.versions.zlib,
     authenticated: false,
   });
   assert.equal(JSON.stringify(result.runner).includes(process.execPath), false);

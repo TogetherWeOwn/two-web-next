@@ -314,6 +314,7 @@ export async function observeCanonicalRunner(path, expectedSha) {
         bytes: Number(size),
         sha256: hash.digest("hex"),
         version: process.version,
+        zlib: process.versions.zlib,
         authenticated: false,
       };
     } finally {

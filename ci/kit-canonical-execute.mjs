@@ -46,11 +46,14 @@ function runnerRecord(record) {
     "evidence",
     "sha256",
     "version",
+    "zlib",
   ]);
   assert.equal(node.evidence, "observed-process-executable-only");
   assert.ok(Number.isSafeInteger(node.bytes) && node.bytes > 0 && node.bytes <= 256 * 1024 * 1024);
   assert.match(node.sha256, /^[0-9a-f]{64}$/);
   assert.match(node.version, /^v[0-9]+\.[0-9]+\.[0-9]+$/);
+  assert.ok(typeof node.zlib === "string" && node.zlib.length <= 128);
+  assert.match(node.zlib, /^[0-9]+\.[0-9]+\.[0-9]+(?:[-.][0-9A-Za-z]+)*$/);
   assert.equal(node.authenticated, false);
   return record;
 }
@@ -223,6 +226,10 @@ export function verifyCanonicalExecutionMembers(members, expected, authority) {
     assert.deepEqual(execution.runner.source, source);
     assert.equal(execution.runner.executionVerified, false);
     runnerRecord(execution.runner);
+    assert.deepEqual(verified.receipt.measurementRuntime, {
+      node: execution.runner.runner.nodeExecutable.version.slice(1),
+      zlib: execution.runner.runner.nodeExecutable.zlib,
+    });
     toolRecord(execution.wrangler, "root");
     toolRecord(execution.webWrangler, "web");
     assert.equal(execution.installation.evidence, "unqualified-native-candidate-install-return");
@@ -483,10 +490,12 @@ export async function executeCanonicalBuild(
     assert.ok([0, 1, 2].includes(measured.code), "candidate budget exit invalid");
     writeFileSync(join(output, "budget.json"), encode(measured), { flag: "wx", mode: 0o600 });
     assert.equal(measured.code, 0, "candidate budget failed");
-    comparison = verifyCanonicalBudgetReport(
-      measured.report,
-      verifyBytes(join(capturePath, "bytes"), authority),
-    );
+    const frozen = verifyBytes(join(capturePath, "bytes"), authority);
+    assert.deepEqual(frozen.measurementRuntime, {
+      node: observedRunner.runner.nodeExecutable.version.slice(1),
+      zlib: observedRunner.runner.nodeExecutable.zlib,
+    });
+    comparison = verifyCanonicalBudgetReport(measured.report, frozen);
     profiled = await profile(candidate, identity.candidateSha, join(output, "startup"), {
       sha: identity.candidateSha,
       runner: observedRunner.runner,
