@@ -16,6 +16,7 @@ import {
   runCanonicalCandidateBuild,
 } from "./kit-canonical-source.mjs";
 import { verifyCanonicalArchiveMembers, verifyCanonicalBuild } from "./kit-upload-rehearsal.mjs";
+import { verifyWranglerTool } from "./kit-wrangler-tool.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
 const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -176,6 +177,10 @@ export function verifyCanonicalExecutionMembers(members, expected, authority) {
     assert.equal(execution.runner.evidence, "unqualified-candidate-runner-observation");
     assert.deepEqual(execution.runner.source, source);
     assert.equal(execution.runner.executionVerified, false);
+    assert.equal(execution.wrangler.schema, "two.kit-wrangler-tool.v1");
+    assert.equal(execution.wrangler.evidence, "installed-wrangler-package-only");
+    assert.equal(execution.wrangler.name, "wrangler");
+    assert.equal(execution.wrangler.version, "4.156.1");
     assert.equal(execution.installation.evidence, "unqualified-native-candidate-install-return");
     assert.deepEqual(execution.installation.source, source);
     assert.equal(execution.installation.scriptPolicy, "ignore-scripts");
@@ -264,6 +269,7 @@ export async function executeCanonicalBuild(
   {
     inspect = inspectCanonicalSource,
     runner = observeCanonicalRunner,
+    tool = verifyWranglerTool,
     install = installCanonicalCandidate,
     build = runCanonicalCandidateBuild,
     budget = runCanonicalCandidateBudget,
@@ -334,6 +340,25 @@ export async function executeCanonicalBuild(
     );
     throw new Error("canonical install failed; retain output without retry");
   }
+  let wrangler;
+  try {
+    // Reuse the published-package verifier, without copying collector source or
+    // dependencies into the candidate. Transitive packages remain unverified.
+    wrangler = await tool(candidate);
+    assert.equal(wrangler.schema, "two.kit-wrangler-tool.v1");
+    assert.equal(wrangler.evidence, "installed-wrangler-package-only");
+    assert.equal(wrangler.name, "wrangler");
+    assert.equal(wrangler.version, "4.156.1");
+    assert.deepEqual(inspect(candidate, identity.candidateSha), source);
+    assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
+  } catch {
+    writeFileSync(
+      join(output, "tool-failure.json"),
+      encode({ sourceBindingSha256: bindingSha256, outcome: "failure", qualified: false }),
+      { flag: "wx", mode: 0o600 },
+    );
+    throw new Error("canonical tool unavailable; retain output without retry");
+  }
   const capturePath = join(output, "capture");
   const captureContext = {
     sourceSha: identity.candidateSha,
@@ -399,6 +424,8 @@ export async function executeCanonicalBuild(
     observedRunner,
     "candidate runner changed during execution",
   );
+  assert.deepEqual(await tool(candidate), wrangler, "candidate Wrangler changed during execution");
+  assert.deepEqual(inspect(candidate, identity.candidateSha), source);
   assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
   const receipt = {
     schema: "two.kit-canonical-execution.v1",
@@ -408,6 +435,7 @@ export async function executeCanonicalBuild(
     runAttempt: context.runAttempt,
     sourceBindingSha256: bindingSha256,
     runner: observedRunner,
+    wrangler,
     installation,
     build: result,
     budget: {

@@ -24,10 +24,10 @@ a distinct empty temporary global config; cleanup was verified. This focused
 query does not establish actual candidate installation or enforcement.
 
 [Actions 42541200702](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42541200702)
-on `ba1b19de352d0c3fb4342eff8a16c81a975976b4` was still executing the main and
-Node 22 suites at the latest inspection; auxiliary jobs passed. No completed
-current-head suite, install fixture, parity or overall pass is claimed. The
-runner-observation source below is local, unpushed and untested; the existing
+on `ba1b19de352d0c3fb4342eff8a16c81a975976b4` has passed Node 22 and the
+auxiliary jobs; the main job was at Kit typecheck at the latest inspection.
+No current-head install fixture, parity or overall pass is claimed. The
+runner-observation and Wrangler integration below are local, unpushed and untested; the existing
 cancel-in-progress producer is preserved until completion, a concrete required-leg
 failure or its existing timeout.
 
@@ -75,6 +75,19 @@ sanitized sidecar. Successful receipts embed the source-bound bounded observatio
 the member reader rejects missing, source-substituted or qualified runner claims.
 Fourteen additional fixture registrations use the existing Actions invocation and
 have not run. No actual candidate runner has been observed through this path.
+
+After native installation, the caller now invokes the existing published-package
+Wrangler verifier against the candidate root, then repeats it after frozen
+finalization. It binds the existing thirty-file pin, complete installed Wrangler
+membership, both candidate lock entries and the fixed launch entry/runtime without
+copying packages or source. Initial failure retains a sanitized sidecar and
+prevents build; post-build drift refuses execution success while preserving
+capture and budget output. The successful receipt embeds the package-only record;
+the member reader refuses missing or differently labelled tool observations.
+Eleven new fixture registrations use the existing Actions suite and are unrun.
+This does not verify the separate web-installed Wrangler used by the build,
+transitive packages, npm/Node bytes, profiling execution or dependency provenance.
+No actual candidate install or tool verification has run through this caller.
 
 The image string remains pipeline-declared, not independent container attestation.
 Matching endpoint observations do not establish absence of changes between them,
