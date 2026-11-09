@@ -129,9 +129,17 @@ def read_canonical_archive(data, separated=False):
                 "capture/status.json": 16384,
                 "capture/bytes/receipt.json": 8 * 1024 * 1024,
             }
+            profiles = {
+                "startup/worker.bundle": 32 * 1024 * 1024,
+                "startup/empty.env": 0,
+                "startup/checkpoint.json": 1024 * 1024,
+                "startup/report.json": 1024 * 1024,
+                **{f"startup/cold-{i}.cpuprofile": 8 * 1024 * 1024 for i in (1, 2, 3)},
+                **{f"startup/cold-{i}.json": 1024 * 1024 for i in (1, 2, 3)},
+            }
             if not 5 < len(selected) <= 20010 or selected_total > MAX_TOTAL:
                 raise ValueError("separated members outside bounds")
-            if not documents.keys() <= set(names):
+            if not documents.keys() | profiles.keys() <= set(names):
                 raise ValueError("separated documents missing")
             members = []
             for entry in sorted(selected, key=lambda item: item.filename):
@@ -139,6 +147,9 @@ def read_canonical_archive(data, separated=False):
                 if name in documents:
                     if not 0 < entry.file_size <= documents[name]:
                         raise ValueError("separated document outside bounds")
+                elif name in profiles:
+                    if entry.file_size > profiles[name] or (name != "startup/empty.env" and entry.file_size == 0):
+                        raise ValueError("separated profile outside bounds")
                 elif not name.startswith("capture/bytes/"):
                     raise ValueError("unexpected separated member")
                 with archive.open(entry) as member:

@@ -101,9 +101,29 @@ byte drift, absence or a symlink. Twenty-four additional fixture registrations
 reuse the existing Actions invocations and are unrun. The default root verifier
 and existing dry-run CLI remain unchanged.
 
-This still does not verify transitive packages, npm/Node bytes, profiling execution
-or dependency provenance. No actual candidate install or tool verification has
-run through this caller.
+The separated caller now invokes the pinned candidate's existing `collect`
+interface after immediate byte capture and candidate budget validation, without
+rebuilding or running the collector's startup entrypoint. It binds the candidate
+SHA, runner observation and root Wrangler package-record digest, forces the
+candidate working directory, and retains the serialized upload, exactly three
+raw cold profiles, numeric sidecars, empty dotenv control, checkpoint and report
+in an exclusive external directory. The candidate's own validator must accept
+all three profiles at its unchanged thresholds; failure retains partial output,
+still finalizes the frozen bytes and refuses an execution-success receipt.
+The data-only separated reader requires the exact ten startup files, checks their
+manifest against the execution digest and independently recomputes numeric profile
+evidence with the existing pure validator. Existing archive and expansion caps
+remain unchanged. Thirty-two additional fixture registrations reuse existing
+Actions. This integration and the retained web-tool extension are local, unpushed
+and untested; no actual profile or independent review pass is claimed.
+
+The candidate's serialized command metadata still includes its original build
+command declaration. The separately retained build receipt, not that declaration,
+records the actual script-disabled build invocation. Profiling is a local sampling
+diagnostic, never provider startup CPU or proof of production margin. Transitive
+packages, npm/Node bytes, dependency provenance and actual separated producer/run
+execution remain unverified. No actual candidate install, tool verification or
+profile has run through this caller.
 
 The image string remains pipeline-declared, not independent container attestation.
 Matching endpoint observations do not establish absence of changes between them,

@@ -5,8 +5,10 @@ import { lstatSync, mkdirSync, readFileSync, realpathSync, writeFileSync } from 
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { fileURLToPath } from "node:url";
 import { KIT_CHECK_IDS, KIT_GROUP_IDS } from "./bundle-inventory.mjs";
+import { validateEvidence as validateProfileEvidence } from "./check-worker-startup.mjs";
 import { captureCanonicalBuild, finalizeCanonicalCapture } from "./kit-canonical-capture.mjs";
 import {
+  CANONICAL_PROFILE_FILES,
   bindCanonicalSources,
   canonicalCellIdentity,
   inspectCanonicalSource,
@@ -14,6 +16,7 @@ import {
   observeCanonicalRunner,
   runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
+  runCanonicalCandidateProfile,
 } from "./kit-canonical-source.mjs";
 import { verifyCanonicalArchiveMembers, verifyCanonicalBuild } from "./kit-upload-rehearsal.mjs";
 import { verifyWranglerTool } from "./kit-wrangler-tool.mjs";
@@ -114,6 +117,7 @@ export function verifyCanonicalExecutionMembers(members, expected, authority) {
     ]);
     const parsed = new Map();
     const frozen = [];
+    const profiles = new Map();
     const paths = new Set();
     let total = 0;
     for (const member of members) {
@@ -132,6 +136,18 @@ export function verifyCanonicalExecutionMembers(members, expected, authority) {
           member.path,
           JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(member.data)),
         );
+      } else if (member.path.startsWith("startup/")) {
+        const path = member.path.slice("startup/".length);
+        assert.ok(CANONICAL_PROFILE_FILES.includes(path));
+        const bound =
+          path === "worker.bundle"
+            ? 32 * 1024 * 1024
+            : path.endsWith(".cpuprofile")
+              ? 8 * 1024 * 1024
+              : 1024 * 1024;
+        assert.ok(member.data.length <= bound);
+        assert.ok(member.data.length > 0 || path === "empty.env");
+        profiles.set(path, member.data);
       } else {
         assert.ok(member.path.startsWith("capture/bytes/"));
         frozen.push({ ...member, path: member.path.slice("capture/bytes/".length) });
@@ -207,6 +223,46 @@ export function verifyCanonicalExecutionMembers(members, expected, authority) {
     for (const record of [execution, execution.build, measured]) {
       assert.equal(record.executionVerified, false);
     }
+    assert.deepEqual([...profiles.keys()].sort(), CANONICAL_PROFILE_FILES);
+    const profile = execution.profile;
+    assert.equal(profile.evidence, "unqualified-candidate-profile-return");
+    assert.deepEqual(profile.source, source);
+    assert.equal(profile.executionVerified, false);
+    assert.deepEqual(
+      profile.files,
+      CANONICAL_PROFILE_FILES.map((path) => ({
+        path,
+        bytes: profiles.get(path).length,
+        sha256: sha256(profiles.get(path)),
+      })),
+    );
+    const json = (path) => JSON.parse(profiles.get(path).toString("utf8"));
+    assert.deepEqual(json("report.json"), profile.report);
+    assert.equal(profile.report.identity.sha, identity.candidateSha);
+    assert.deepEqual(profile.report.identity.runner, execution.runner.runner);
+    assert.equal(
+      profile.report.identity.wranglerSha256,
+      sha256(JSON.stringify(execution.wrangler)),
+    );
+    assert.equal(profile.report.identity.uploadSha256, sha256(profiles.get("worker.bundle")));
+    assert.equal(profiles.get("empty.env").length, 0);
+    for (let i = 1; i <= 3; i++) {
+      assert.deepEqual(json(`cold-${i}.json`), profile.report.runs[i - 1]);
+    }
+    assert.deepEqual(json("checkpoint.json"), {
+      version: 1,
+      metric: "local_startup_non_idle_sample_ms",
+      status: "unavailable",
+      identity: profile.report.identity,
+      runs: profile.report.runs,
+    });
+    const profileStatus = validateProfileEvidence(
+      profile.report,
+      profile.report.identity,
+      [1, 2, 3].map((i) => profiles.get(`cold-${i}.cpuprofile`)),
+      profile.budget,
+    );
+    assert.ok(profileStatus === "pass" || profileStatus === "warn");
     assert.equal(execution.dependenciesVerified, false);
     assert.equal(execution.qualified, false);
     return {
@@ -282,6 +338,7 @@ export async function executeCanonicalBuild(
     install = installCanonicalCandidate,
     build = runCanonicalCandidateBuild,
     budget = runCanonicalCandidateBudget,
+    profile = runCanonicalCandidateProfile,
     verifyBytes = verifyCanonicalBuild,
     capture = captureCanonicalBuild,
     finalize = finalizeCanonicalCapture,
@@ -398,6 +455,7 @@ export async function executeCanonicalBuild(
   assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
   let measured;
   let comparison;
+  let profiled;
   let budgetError;
   try {
     measured = await budget(candidate, identity.candidateSha);
@@ -409,6 +467,14 @@ export async function executeCanonicalBuild(
       measured.report,
       verifyBytes(join(capturePath, "bytes"), authority),
     );
+    profiled = await profile(candidate, identity.candidateSha, join(output, "startup"), {
+      sha: identity.candidateSha,
+      runner: observedRunner.runner,
+      wranglerSha256: sha256(JSON.stringify(wrangler)),
+    });
+    assert.equal(profiled.evidence, "unqualified-candidate-profile-return");
+    assert.deepEqual(profiled.source, source, "candidate profile source changed");
+    assert.equal(profiled.executionVerified, false, "unsupported profile qualification");
   } catch (error) {
     budgetError = error;
   }
@@ -451,6 +517,7 @@ export async function executeCanonicalBuild(
     webWrangler,
     installation,
     build: result,
+    profile: profiled,
     budget: {
       code: measured.code,
       sha256: sha256(encode(measured)),

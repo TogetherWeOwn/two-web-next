@@ -28,6 +28,7 @@ import {
   observeCanonicalRunner,
   runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
+  runCanonicalCandidateProfile,
 } from "./kit-canonical-source.mjs";
 
 const B_COMMIT = "1fe09ab868a6fea4a7873e4a096523b78747b232";
@@ -210,6 +211,119 @@ function startupRepo(startup = STARTUP_MODULE, runner = RUNNER_MODULE, budget = 
   write(root, "ci/worker-startup-runner.mjs", runner);
   write(root, "ci/worker-startup-budget.json", budget);
   return { root, sha: commitAll(root, "startup inputs") };
+}
+
+function profileRepo(variant = "pass") {
+  const module = `import assert from "node:assert/strict";
+import { writeFileSync, symlinkSync } from "node:fs";
+import { join } from "node:path";
+import { createHash } from "node:crypto";
+const variant = ${JSON.stringify(variant)};
+const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+export const METRIC = "local_startup_non_idle_sample_ms";
+export function validateBudget(budget) { assert.equal(budget.version, 1); }
+export function summary() { return "fixture"; }
+export function runCommand(command, args, options) {
+  assert.equal(command, "inert-profile-fixture");
+  assert.deepEqual(args, []);
+  assert.equal(options.cwd, new URL("../", import.meta.url).pathname.replace(/\\/$/, ""));
+}
+export function validateEvidence(report, expected, profiles) {
+  assert.equal(profiles.length, 3);
+  assert.deepEqual(expected, report.identity);
+  if (variant === "validator") throw new Error("private fixture detail");
+  return variant === "invalid-status" ? undefined : report.status;
+}
+export async function collect({ outdir, budget, identity, cli, run }) {
+  if (variant === "collect") throw new Error("private fixture detail");
+  assert.equal(cli, new URL("../node_modules/wrangler/bin/wrangler.js", import.meta.url).pathname);
+  await run("inert-profile-fixture", [], { cwd: "must-not-be-used" });
+  const bytes = Buffer.from("inert serialized fixture");
+  const bound = { ...identity, uploadSha256: hash(bytes) };
+  if (variant === "identity") bound.sha = "0".repeat(40);
+  if (variant === "upload") bound.uploadSha256 = "0".repeat(64);
+  const runs = [1, 2, 3].map((invocation) => ({ invocation }));
+  for (const i of [1, 2, 3]) {
+    writeFileSync(join(outdir, "cold-" + i + ".cpuprofile"), "inert profile");
+    writeFileSync(join(outdir, "cold-" + i + ".json"), JSON.stringify(runs[i - 1]));
+  }
+  const checkpoint = { version: 1, metric: METRIC, status: "unavailable", identity: bound, runs };
+  writeFileSync(join(outdir, "checkpoint.json"), JSON.stringify(checkpoint));
+  writeFileSync(join(outdir, "worker.bundle"), bytes);
+  writeFileSync(join(outdir, "empty.env"), variant === "env" ? "overlay" : "");
+  if (variant === "extra") writeFileSync(join(outdir, ".extra"), "extra");
+  if (variant === "alias") symlinkSync("cold-1.json", join(outdir, "extra.json"));
+  if (variant === "drift") writeFileSync(new URL("../README.md", import.meta.url), "changed");
+  const status = variant === "fail" ? "fail" : variant === "warn" ? "warn" : "pass";
+  return { identity: bound, runs, status };
+}
+`;
+  const f = startupRepo(module);
+  return { ...f, output: join(scratch, `profile-output-${counter++}`) };
+}
+
+for (const status of ["pass", "warn"]) {
+  test(`candidate profiles once without rebuilding and retains raw ${status}`, async () => {
+    const f = profileRepo(status);
+    const result = await runCanonicalCandidateProfile(f.root, f.sha, f.output, { sha: f.sha });
+    assert.equal(result.evidence, "unqualified-candidate-profile-return");
+    assert.equal(result.executionVerified, false);
+    assert.deepEqual(result.source, inspectCanonicalSource(f.root, f.sha));
+    assert.equal(result.report.status, status);
+    assert.equal(result.files.length, 10);
+    for (const file of result.files) {
+      const bytes = readFileSync(join(f.output, file.path));
+      assert.equal(file.bytes, bytes.length);
+      assert.equal(file.sha256, sha256Hex(bytes));
+    }
+    assert.equal(result.files.find((file) => file.path === "empty.env").bytes, 0);
+    assert.equal(result.inputs.length, 3);
+    assert.deepEqual(result.budget, JSON.parse(STARTUP_BUDGET));
+  });
+}
+
+for (const variant of [
+  "collect",
+  "validator",
+  "identity",
+  "upload",
+  "env",
+  "extra",
+  "alias",
+  "drift",
+  "fail",
+  "invalid-status",
+]) {
+  test(`candidate profiling refuses ${variant} without a retry or private detail`, async () => {
+    const f = profileRepo(variant);
+    await assert.rejects(
+      runCanonicalCandidateProfile(f.root, f.sha, f.output, { sha: f.sha }),
+      { message: "candidate profiling failed; retain output without retry" },
+    );
+    assert.ok(existsSync(f.output));
+    if (variant === "validator") assert.ok(existsSync(join(f.output, "checkpoint.json")));
+  });
+}
+
+for (const variant of ["nested", "reused", "identity", "alias"]) {
+  test(`candidate profile refuses ${variant} before collection`, async () => {
+    const f = profileRepo();
+    let output = f.output;
+    if (variant === "nested") output = join(f.root, "profile");
+    if (variant === "reused") mkdirSync(output);
+    if (variant === "alias") {
+      const parent = join(scratch, `profile-alias-${counter++}`);
+      symlinkSync(scratch, parent);
+      output = join(parent, "output");
+    }
+    await assert.rejects(
+      runCanonicalCandidateProfile(f.root, f.sha, output, {
+        sha: variant === "identity" ? ZERO : f.sha,
+      }),
+      { message: "candidate profiling failed; retain output without retry" },
+    );
+    assert.equal(existsSync(join(output, "checkpoint.json")), false);
+  });
 }
 
 test("startup loader binds candidate inputs without executing build or runner", async () => {

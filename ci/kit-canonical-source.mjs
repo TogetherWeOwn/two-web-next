@@ -7,7 +7,9 @@ import {
   constants,
   fstatSync,
   lstatSync,
+  mkdirSync,
   mkdtempSync,
+  readdirSync,
   openSync,
   readSync,
   realpathSync,
@@ -288,6 +290,112 @@ export async function observeCanonicalRunner(path, expectedSha) {
     runner,
     executionVerified: false,
   };
+}
+
+export const CANONICAL_PROFILE_FILES = Object.freeze([
+  "checkpoint.json",
+  "cold-1.cpuprofile",
+  "cold-1.json",
+  "cold-2.cpuprofile",
+  "cold-2.json",
+  "cold-3.cpuprofile",
+  "cold-3.json",
+  "empty.env",
+  "report.json",
+  "worker.bundle",
+]);
+
+// The candidate owns serialization/profiling and its numeric policy. Capture has
+// already completed; collect does not rebuild or replace any candidate source.
+export async function runCanonicalCandidateProfile(path, expectedSha, destination, identity) {
+  try {
+    const root = directory(path);
+    const startup = await loadCanonicalStartup(root, expectedSha);
+    const output = resolve(destination);
+    directory(dirname(output));
+    for (const [a, b] of [
+      [root, output],
+      [output, root],
+    ]) {
+      const distance = relative(a, b);
+      assert.ok(distance === ".." || distance.startsWith(`..${sep}`));
+    }
+    const encoded = JSON.stringify(identity);
+    assert.ok(encoded.length > 0 && Buffer.byteLength(encoded) <= 1024 * 1024);
+    const expected = JSON.parse(encoded);
+    assert.equal(expected.sha, expectedSha);
+    assert.equal(expected.commands, undefined);
+    assert.equal(expected.uploadSha256, undefined);
+    mkdirSync(output, { mode: 0o700 });
+    const report = await startup.startup.collect({
+      outdir: output,
+      budget: startup.budget,
+      identity: JSON.parse(encoded),
+      cli: join(root, "node_modules/wrangler/bin/wrangler.js"),
+      run: (command, args, options = {}) =>
+        startup.startup.runCommand(command, args, { ...options, cwd: root }),
+    });
+    for (const [key, value] of Object.entries(expected)) {
+      assert.deepEqual(report.identity[key], value, "candidate profile identity changed");
+    }
+    const profiles = [1, 2, 3].map((i) =>
+      sourceBytes(output, `cold-${i}.cpuprofile`, 8 * 1024 * 1024),
+    );
+    const status = startup.startup.validateEvidence(
+      report,
+      report.identity,
+      profiles,
+      startup.budget,
+    );
+    assert.ok(status === "pass" || status === "warn", "candidate profile failed");
+    assert.equal(report.status, status);
+    assert.equal(
+      sha256(sourceBytes(output, "worker.bundle", 32 * 1024 * 1024)),
+      report.identity.uploadSha256,
+    );
+    assert.equal(sourceBytes(output, "empty.env", 1).length, 0);
+    for (let i = 1; i <= 3; i++) {
+      assert.deepEqual(
+        JSON.parse(sourceBytes(output, `cold-${i}.json`, 1024 * 1024)),
+        report.runs[i - 1],
+      );
+    }
+    assert.deepEqual(JSON.parse(sourceBytes(output, "checkpoint.json", 1024 * 1024)), {
+      version: 1,
+      metric: "local_startup_non_idle_sample_ms",
+      status: "unavailable",
+      identity: report.identity,
+      runs: report.runs,
+    });
+    writeFileSync(join(output, "report.json"), `${JSON.stringify(report, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    assert.deepEqual(readdirSync(output).sort(), CANONICAL_PROFILE_FILES);
+    const files = CANONICAL_PROFILE_FILES.map((path) => {
+      const bound =
+        path === "worker.bundle"
+          ? 32 * 1024 * 1024
+          : path.endsWith(".cpuprofile")
+            ? 8 * 1024 * 1024
+            : 1024 * 1024;
+      const bytes = sourceBytes(output, path, bound);
+      assert.ok(bytes.length > 0 || path === "empty.env");
+      return { path, bytes: bytes.length, sha256: sha256(bytes) };
+    });
+    assert.deepEqual(inspectCanonicalSource(root, expectedSha), startup.source);
+    return {
+      evidence: "unqualified-candidate-profile-return",
+      source: startup.source,
+      inputs: startup.inputs,
+      budget: startup.budget,
+      report,
+      files,
+      executionVerified: false,
+    };
+  } catch {
+    throw new Error("candidate profiling failed; retain output without retry");
+  }
 }
 
 export function inspectCanonicalPristineSource(path, expectedSha) {

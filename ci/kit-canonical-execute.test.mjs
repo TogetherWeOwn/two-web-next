@@ -22,7 +22,8 @@ import {
   verifyCanonicalExecutionArtifactBytes,
   verifyCanonicalExecutionMembers,
 } from "./kit-canonical-execute.mjs";
-import { canonicalCellIdentity } from "./kit-canonical-source.mjs";
+import { summarizeProfile } from "./check-worker-startup.mjs";
+import { CANONICAL_PROFILE_FILES, canonicalCellIdentity } from "./kit-canonical-source.mjs";
 import { createCanonicalReceipt } from "./kit-upload-rehearsal.mjs";
 import { sha256 } from "./worker-bundle-evidence.mjs";
 
@@ -83,6 +84,84 @@ function runnerFixture(source) {
     inputs: [],
     runner: { image: "fixture-image", limits: { effectiveCpuCount: 2 } },
     executionVerified: false,
+  };
+}
+
+function profileFixture(source, identity) {
+  const profile = {
+    nodes: [{ id: 1, callFrame: { functionName: "fixture" } }],
+    samples: [1, 1],
+    timeDeltas: [500, 500],
+    startTime: 0,
+    endTime: 1000,
+  };
+  const raw = Buffer.from(JSON.stringify(profile));
+  const upload = Buffer.from("inert upload fixture");
+  const bound = { ...identity, uploadSha256: sha256(upload) };
+  const runs = [1, 2, 3].map((invocation) => ({
+    invocation,
+    completed: true,
+    uploadSha256: bound.uploadSha256,
+    profile: `cold-${invocation}.cpuprofile`,
+    profileSha256: sha256(raw),
+    measurement: summarizeProfile(profile),
+  }));
+  const report = {
+    version: 1,
+    metric: "local_startup_non_idle_sample_ms",
+    authoritativeStartup: "unavailable",
+    productionMargin: "unmet",
+    identity: bound,
+    runs,
+    maximumMs: 1,
+    status: "pass",
+  };
+  const json = (value) => Buffer.from(`${JSON.stringify(value)}\n`);
+  const contents = new Map([
+    ["worker.bundle", upload],
+    ["empty.env", Buffer.alloc(0)],
+    ["report.json", json(report)],
+    [
+      "checkpoint.json",
+      json({
+        version: 1,
+        metric: report.metric,
+        status: "unavailable",
+        identity: bound,
+        runs,
+      }),
+    ],
+    ...[1, 2, 3].flatMap((i) => [
+      [`cold-${i}.cpuprofile`, raw],
+      [`cold-${i}.json`, json(runs[i - 1])],
+    ]),
+  ]);
+  return {
+    members: CANONICAL_PROFILE_FILES.map((path) => ({
+      path: `startup/${path}`,
+      type: "file",
+      data: contents.get(path),
+    })),
+    result: {
+      evidence: "unqualified-candidate-profile-return",
+      source,
+      inputs: [],
+      budget: {
+        version: 1,
+        metric: report.metric,
+        runs: 3,
+        warnMs: 400,
+        failMs: 700,
+        tools: { wrangler: "4.156.1", miniflare: "fixture", workerd: "fixture" },
+      },
+      report,
+      files: CANONICAL_PROFILE_FILES.map((path) => ({
+        path,
+        bytes: contents.get(path).length,
+        sha256: sha256(contents.get(path)),
+      })),
+      executionVerified: false,
+    },
   };
 }
 
@@ -180,6 +259,18 @@ function fixture() {
       assert.equal(sha, B);
       return { source, code: 0, report, executionVerified: false };
     },
+    profile: async (path, sha, output, identity) => {
+      calls.push("profile");
+      assert.equal(path, candidate);
+      assert.equal(sha, B);
+      assert.equal(output, join(args.destination, "startup"));
+      assert.deepEqual(identity, {
+        sha: B,
+        runner: runnerFixture(source).runner,
+        wranglerSha256: sha256(JSON.stringify(toolFixture())),
+      });
+      return profileFixture(source, identity).result;
+    },
     verifyBytes: (path, inventory) => {
       calls.push("verifyBytes");
       assert.equal(path, join(args.destination, "capture/bytes"));
@@ -274,6 +365,12 @@ function memberFixture() {
   save("capture/status.json", journal, "journalSha256");
   const source = { ...f.binding.candidate };
   delete source.installBoundary;
+  const profiled = profileFixture(source, {
+    sha: B,
+    runner: runnerFixture(source).runner,
+    wranglerSha256: sha256(JSON.stringify(toolFixture())),
+  });
+  members.push(...profiled.members);
   save("budget.json", { source, code: 0, report, executionVerified: false }, "budgetSha256");
   save(
     "execution.json",
@@ -288,6 +385,7 @@ function memberFixture() {
       wrangler: toolFixture(),
       webWrangler: toolFixture("web"),
       installation: installationFixture(source),
+      profile: profiled.result,
       build: {
         source,
         capture: journal,
@@ -773,6 +871,88 @@ for (const kind of [
   });
 }
 
+for (const kind of ["failure", "source", "evidence", "qualification"]) {
+  test(`execution finalizes frozen bytes after candidate profile ${kind}`, async () => {
+    const f = fixture();
+    const profile = f.collaborators.profile;
+    f.collaborators.profile = async (...args) => {
+      const record = await profile(...args);
+      if (kind === "failure") throw new Error("profile unavailable");
+      if (kind === "source") record.source = f.binding.collector;
+      if (kind === "evidence") record.evidence = "qualified";
+      if (kind === "qualification") record.executionVerified = true;
+      return record;
+    };
+    await assert.rejects(executeCanonicalBuild(f.args, f.collaborators));
+    assert.equal(f.calls.filter((call) => call === "profile").length, 1);
+    assert.equal(f.calls.filter((call) => call === "finalize").length, 1);
+    assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+  });
+}
+
+test("profile failure remains primary when frozen finalization also fails", async () => {
+  const f = fixture();
+  f.collaborators.profile = async () => {
+    throw new Error("profile unavailable");
+  };
+  f.collaborators.finalize = async () => {
+    throw new Error("secondary finalizer");
+  };
+  await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /profile unavailable/);
+});
+
+for (const kind of ["missing", "extra", "bytes", "number", "env", "source", "qualification"]) {
+  test(`separated members reject profile ${kind}`, () => {
+    const f = memberFixture();
+    const index = f.members.findIndex((member) => member.path === "startup/cold-1.cpuprofile");
+    if (kind === "missing") f.members.splice(index, 1);
+    if (kind === "extra") {
+      f.members.push({ path: "startup/.extra", type: "file", data: Buffer.from("x") });
+    }
+    if (kind === "bytes") f.members[index].data = Buffer.from("changed");
+    if (kind === "env") {
+      f.members.find((m) => m.path === "startup/empty.env").data = Buffer.from("x");
+    }
+    const execution = f.records["execution.json"];
+    if (kind === "number") execution.profile.report.maximumMs = 0;
+    if (kind === "source") execution.profile.source = {};
+    if (kind === "qualification") execution.profile.executionVerified = true;
+    f.save("execution.json", execution, "executionSha256");
+    assert.throws(() => verifyCanonicalExecutionMembers(f.members, f.expected, f.authority), {
+      message: "canonical separated execution member verification failed",
+    });
+  });
+}
+
+test("separated reader recomputes profile numbers after matching digest substitutions", () => {
+  const f = memberFixture();
+  const execution = f.records["execution.json"];
+  execution.profile.report.maximumMs = 0;
+  const raw = f.members.find((member) => member.path === "startup/report.json");
+  raw.data = Buffer.from(JSON.stringify(execution.profile.report));
+  execution.profile.files = CANONICAL_PROFILE_FILES.map((path) => {
+    const bytes = f.members.find((member) => member.path === `startup/${path}`).data;
+    return { path, bytes: bytes.length, sha256: sha256(bytes) };
+  });
+  f.save("execution.json", execution, "executionSha256");
+  assert.throws(() => verifyCanonicalExecutionMembers(f.members, f.expected, f.authority), {
+    message: "canonical separated execution member verification failed",
+  });
+});
+
+for (const kind of ["missing", "extra", "env"]) {
+  test(`separated ZIP parser rejects startup ${kind}`, () => {
+    const f = artifactFixture((entries) => {
+      if (kind === "missing") {
+        entries.splice(entries.findIndex((e) => e.name === "startup/report.json"), 1);
+      }
+      if (kind === "extra") entries.push({ name: "startup/.extra", base64: "eA==" });
+      if (kind === "env") entries.find((e) => e.name === "startup/empty.env").base64 = "eA==";
+    });
+    assert.throws(() => verifyCanonicalExecutionArtifactBytes(f.archive, f.expected, f.authority));
+  });
+}
+
 test("execution awaits capture and retains distinct source identities", async () => {
   const f = fixture();
   const result = await executeCanonicalBuild(f.args, f.collaborators);
@@ -793,6 +973,7 @@ test("execution awaits capture and retains distinct source identities", async ()
     `inspect:${D}`,
     "budget",
     "verifyBytes",
+    "profile",
     "finalize",
     "runner",
     "tool",
