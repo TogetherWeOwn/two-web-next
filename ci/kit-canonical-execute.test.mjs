@@ -33,6 +33,81 @@ const B = "1fe09ab868a6fea4a7873e4a096523b78747b232";
 const TREE = "454843aa9ac7b9f911020108ba539a4353ee977d";
 const D = "d".repeat(40);
 let counter = 0;
+
+function producerWorkflow() {
+  const workflow = readFileSync(new URL("../.github/workflows/ci.yml", import.meta.url), "utf8");
+  const start = workflow.indexOf("  canonical-baseline:\n");
+  const end = workflow.indexOf("  ci-ok:\n", start);
+  assert.ok(start > 0 && end > start);
+  return { workflow, job: workflow.slice(start, end), aggregate: workflow.slice(end) };
+}
+
+test("separated producer requires explicit default-off collector selection", () => {
+  const { workflow, job } = producerWorkflow();
+  assert.match(workflow, /canonical_baseline:[\s\S]*?type: boolean\s+default: false/);
+  assert.match(workflow, /canonical_collector_sha:[\s\S]*?type: string\s+default: ""/);
+  assert.match(job, /if: github.event_name == 'workflow_dispatch' && inputs.canonical_baseline/);
+  assert.match(job, /timeout-minutes: 30/);
+  assert.match(job, /permissions:\s+contents: read\s+container:/);
+  assert.doesNotMatch(job, /secrets\.|continue-on-error|retry|id-token:|contents: write/);
+});
+
+test("separated producer checks out distinct pinned sources without credentials", () => {
+  const { job } = producerWorkflow();
+  assert.equal(job.match(/persist-credentials: false/g).length, 2);
+  assert.match(job, /ref: \$\{\{ github.sha \}\}\s+path: canonical-collector/);
+  assert.ok(job.includes(`ref: ${B}\n          path: canonical-candidate`));
+  assert.match(job, /collector="\$GITHUB_WORKSPACE\/canonical-collector"/);
+  assert.match(job, /candidate="\$GITHUB_WORKSPACE\/canonical-candidate"/);
+  assert.match(job, /output="\$GITHUB_WORKSPACE\/canonical-output"/);
+  assert.match(job, /binding="\$RUNNER_TEMP\/canonical-source-binding.json"/);
+  assert.equal(job.match(/env -i PATH="\$PATH" HOME="\$home" TMPDIR="\$temporary"/g).length, 2);
+  assert.equal(job.match(/ci\/kit-canonical-execute.mjs --bind/g).length, 1);
+  assert.equal(job.match(/ci\/kit-canonical-execute.mjs --build/g).length, 1);
+  assert.match(job, /"\$binding" "\$binding_sha" "\$PRODUCER_RUN_ID" "\$PRODUCER_RUN_ATTEMPT"/);
+  assert.doesNotMatch(job, /npm ci|git clone|cp -|rsync|setup-node@/);
+});
+
+test("separated producer retains complete failure output and gates selected CI", () => {
+  const { job, aggregate } = producerWorkflow();
+  assert.match(job, /Retain complete separated output including failed execution\s+if: always\(\)/);
+  assert.ok(job.includes(`name: kit-canonical-separated-${B}-`));
+  assert.match(job, /include-hidden-files: true/);
+  assert.match(job, /if-no-files-found: error/);
+  assert.match(job, /path: canonical-output\//);
+  assert.match(aggregate, /needs: \[[^\n]*canonical-baseline\]/);
+  assert.match(aggregate, /CANONICAL_RESULT: \$\{\{ needs.canonical-baseline.result \}\}/);
+  assert.match(aggregate, /test "\$CANONICAL_RESULT" = success/);
+});
+
+for (const [label, sha, dispatch, attempt, success] of [
+  ["exact", D, D, "1", true],
+  ["empty", "", D, "1", false],
+  ["short", D.slice(1), D, "1", false],
+  ["different", "e".repeat(40), D, "1", false],
+  ["baseline", B, B, "1", false],
+  ["expression", "$(false)", D, "1", false],
+  ["rerun", D, D, "2", false],
+]) {
+  test(`separated producer selection refuses invalid identity without checkout: ${label}`, () => {
+    const { job } = producerWorkflow();
+    const script = job.match(/run: \|\n([\s\S]*?)      - name: Check out pinned collector/)[1];
+    const result = spawnSync("bash", ["-c", script], {
+      env: {
+        PATH: process.env.PATH,
+        COLLECTOR_SHA: sha,
+        DISPATCH_SHA: dispatch,
+        BASELINE_SHA: B,
+        PRODUCER_RUN_ATTEMPT: attempt,
+      },
+      encoding: "utf8",
+      timeout: 10000,
+    });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status === 0, success, result.stderr);
+  });
+}
+
 function reportFixture() {
   const frozen = {
     measurementRuntime: { node: process.versions.node, zlib: process.versions.zlib },

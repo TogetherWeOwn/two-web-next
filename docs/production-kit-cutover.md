@@ -65,6 +65,34 @@ with twenty-nine new fixture registrations; their exact-head Actions is pending.
 
 ## Separated execution caller (not yet exercised)
 
+The existing CI workflow now has an opt-in `canonical-baseline` job. Ordinary
+pushes, PRs, schedules and dispatches with the default inputs do not collect B.
+Only a deliberate dispatch with `canonical_baseline=true` and a full
+`canonical_collector_sha` equal to that dispatch's immutable SHA selects it.
+The input binds a declared revision; it does not authenticate review acceptance.
+Native exact-revision collector acceptance and the failed-revision/no-retry stops
+must be checked before dispatch. No dispatch or B collection has occurred.
+
+The job checks out unchanged B and the workflow's collector in distinct sibling
+roots with checkout credential persistence disabled. It invokes the existing
+binder before installation, then the existing build caller exactly once, using
+`env -i` with a finite non-credential environment and private external HOME/temp
+paths. The pinned Node 24 Bookworm container is retained; setup-node and dependency
+caches do not replace it. GitHub rerun attempts are refused before checkout.
+The existing caller owns native script-disabled installs, generation, immediate
+capture, budgets and profiling. No candidate source/config overlay is introduced.
+
+An always-run upload retains the entire separated output, including hidden files
+and available failure records, under the reader's existing candidate/collector/
+run/attempt artifact name. Missing output fails retention rather than inventing a
+receipt. A selected job must succeed for `ci-ok`; the ordinary CI gates remain.
+The job is bounded at 30 minutes on an on-demand hosted runner and creates no
+staging runtime. Ten new fixture registrations cover dispatch identity refusal,
+source separation, credential isolation, failure retention and selected-job gating.
+They have not run. Actual separated execution, tool/dependency provenance, final
+artifact acceptance and full-D readiness remain unverified. This is pending source
+wiring, not collection admission, custody or production clearance.
+
 `ci/kit-canonical-execute.mjs` connects the existing source binder and
 candidate-owned build-return interface to immediate byte capture. Its `--bind`
 phase records pristine separate candidate/collector roots before installation.
