@@ -44,7 +44,9 @@ function fileRecord(path, bytes) {
   return { path, bytes: bytes.length, sha256: sha256(bytes) };
 }
 
-export function verifyWranglerTool(root, expected = pin) {
+export function verifyWranglerTool(root, expected = pin, installation = "root") {
+  assert.ok(installation === "root" || installation === "web", "unknown tool installation");
+  const prefix = installation === "web" ? "web/" : "";
   assert.equal(expected.schema, "two.wrangler-package-pin.v1", "unknown package pin schema");
   assert.equal(expected.name, "wrangler", "wrong package name");
   assert.equal(expected.version, "4.156.1", "unreviewed Wrangler version");
@@ -95,7 +97,7 @@ export function verifyWranglerTool(root, expected = pin) {
     assert.equal(locked.bin?.wrangler, "bin/wrangler.js", "wrong locked Wrangler entry");
     return fileRecord(path, bytes);
   });
-  const directory = realDirectory(join(base, "node_modules/wrangler"));
+  const directory = realDirectory(join(base, `${prefix}node_modules/wrangler`));
   const files = [];
   let total = 0;
   const directories = [];
@@ -144,8 +146,8 @@ export function verifyWranglerTool(root, expected = pin) {
     integrity: expected.integrity,
     files,
     locks,
-    entry: "node_modules/wrangler/bin/wrangler.js",
-    runtime: "node_modules/wrangler/wrangler-dist/cli.js",
+    entry: `${prefix}node_modules/wrangler/bin/wrangler.js`,
+    runtime: `${prefix}node_modules/wrangler/wrangler-dist/cli.js`,
   };
 }
 

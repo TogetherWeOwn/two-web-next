@@ -23,6 +23,17 @@ const ROOT = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const MAX_BINDING_BYTES = 16 * 1024 * 1024;
 const encode = (value) => `${JSON.stringify(value, null, 2)}\n`;
 
+function toolRecord(record, installation) {
+  const prefix = installation === "web" ? "web/" : "";
+  assert.equal(record.schema, "two.kit-wrangler-tool.v1");
+  assert.equal(record.evidence, "installed-wrangler-package-only");
+  assert.equal(record.name, "wrangler");
+  assert.equal(record.version, "4.156.1");
+  assert.equal(record.entry, `${prefix}node_modules/wrangler/bin/wrangler.js`);
+  assert.equal(record.runtime, `${prefix}node_modules/wrangler/wrangler-dist/cli.js`);
+  return record;
+}
+
 function separate(a, b) {
   const path = relative(a, b);
   assert.ok(path === ".." || path.startsWith(`..${sep}`), "execution paths overlap");
@@ -177,10 +188,8 @@ export function verifyCanonicalExecutionMembers(members, expected, authority) {
     assert.equal(execution.runner.evidence, "unqualified-candidate-runner-observation");
     assert.deepEqual(execution.runner.source, source);
     assert.equal(execution.runner.executionVerified, false);
-    assert.equal(execution.wrangler.schema, "two.kit-wrangler-tool.v1");
-    assert.equal(execution.wrangler.evidence, "installed-wrangler-package-only");
-    assert.equal(execution.wrangler.name, "wrangler");
-    assert.equal(execution.wrangler.version, "4.156.1");
+    toolRecord(execution.wrangler, "root");
+    toolRecord(execution.webWrangler, "web");
     assert.equal(execution.installation.evidence, "unqualified-native-candidate-install-return");
     assert.deepEqual(execution.installation.source, source);
     assert.equal(execution.installation.scriptPolicy, "ignore-scripts");
@@ -341,14 +350,12 @@ export async function executeCanonicalBuild(
     throw new Error("canonical install failed; retain output without retry");
   }
   let wrangler;
+  let webWrangler;
   try {
-    // Reuse the published-package verifier, without copying collector source or
-    // dependencies into the candidate. Transitive packages remain unverified.
-    wrangler = await tool(candidate);
-    assert.equal(wrangler.schema, "two.kit-wrangler-tool.v1");
-    assert.equal(wrangler.evidence, "installed-wrangler-package-only");
-    assert.equal(wrangler.name, "wrangler");
-    assert.equal(wrangler.version, "4.156.1");
+    // Check both installations: the candidate build resolves its own web CLI,
+    // while the profiler uses the root CLI. Transitives remain unverified.
+    wrangler = toolRecord(await tool(candidate), "root");
+    webWrangler = toolRecord(await tool(candidate, undefined, "web"), "web");
     assert.deepEqual(inspect(candidate, identity.candidateSha), source);
     assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
   } catch {
@@ -425,6 +432,11 @@ export async function executeCanonicalBuild(
     "candidate runner changed during execution",
   );
   assert.deepEqual(await tool(candidate), wrangler, "candidate Wrangler changed during execution");
+  assert.deepEqual(
+    await tool(candidate, undefined, "web"),
+    webWrangler,
+    "candidate web Wrangler changed during execution",
+  );
   assert.deepEqual(inspect(candidate, identity.candidateSha), source);
   assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
   const receipt = {
@@ -436,6 +448,7 @@ export async function executeCanonicalBuild(
     sourceBindingSha256: bindingSha256,
     runner: observedRunner,
     wrangler,
+    webWrangler,
     installation,
     build: result,
     budget: {

@@ -97,6 +97,49 @@ test("Actions checks published tool bytes around direct Kit dry-run invocations"
   assert.doesNotMatch(steps, /npx wrangler|continue-on-error/);
 });
 
+async function webFixture() {
+  const root = await fixture();
+  for (const [rel, text] of Object.entries(FILES)) await put(pkg(join(root, "web")), rel, text);
+  return root;
+}
+
+test("verifies the explicit web installation with both candidate locks", async () => {
+  const root = await webFixture();
+  const original = verifyWranglerTool(root, pin());
+  const web = verifyWranglerTool(root, pin(), "web");
+  assert.deepEqual(web.files, original.files);
+  assert.deepEqual(web.locks, original.locks);
+  assert.equal(web.entry, "web/node_modules/wrangler/bin/wrangler.js");
+  assert.equal(web.runtime, "web/node_modules/wrangler/wrangler-dist/cli.js");
+});
+
+test("a clean root cannot mask changed web Wrangler bytes", async () => {
+  const root = await webFixture();
+  await writeFile(pkg(join(root, "web"), "wrangler-dist/cli.js"), "changed\n");
+  verifyWranglerTool(root, pin());
+  assert.throws(() => verifyWranglerTool(root, pin(), "web"), /differs from published/);
+});
+
+test("web verification never falls back to the root installation", async () => {
+  const root = await fixture();
+  verifyWranglerTool(root, pin());
+  assert.throws(() => verifyWranglerTool(root, pin(), "web"));
+});
+
+test("web verification refuses a symlink to the clean root package", async () => {
+  const root = await fixture();
+  await mkdir(join(root, "web/node_modules"));
+  await symlink(pkg(root), pkg(join(root, "web")));
+  assert.throws(() => verifyWranglerTool(root, pin(), "web"), /symlink ancestor/);
+});
+
+for (const installation of ["", "../", "web/", "other", null]) {
+  test(`refuses unknown Wrangler installation ${JSON.stringify(installation)}`, async () => {
+    const root = await webFixture();
+    assert.throws(() => verifyWranglerTool(root, pin(), installation), /unknown tool installation/);
+  });
+}
+
 describe("verifyWranglerTool", () => {
   test("accepts the unchanged installed package and returns the evidence", async () => {
     const root = await fixture();

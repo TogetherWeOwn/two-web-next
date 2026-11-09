@@ -63,12 +63,15 @@ function reportFixture() {
   return { frozen, report };
 }
 
-function toolFixture() {
+function toolFixture(installation = "root") {
+  const prefix = installation === "web" ? "web/" : "";
   return {
     schema: "two.kit-wrangler-tool.v1",
     evidence: "installed-wrangler-package-only",
     name: "wrangler",
     version: "4.156.1",
+    entry: `${prefix}node_modules/wrangler/bin/wrangler.js`,
+    runtime: `${prefix}node_modules/wrangler/wrangler-dist/cli.js`,
     files: [{ path: "fixture", bytes: 1, sha256: "a".repeat(64) }],
   };
 }
@@ -147,10 +150,11 @@ function fixture() {
       assert.equal(sha, B);
       return runnerFixture(source);
     },
-    tool: async (path) => {
-      calls.push("tool");
+    tool: async (path, expected, installation = "root") => {
+      calls.push(installation === "web" ? "web-tool" : "tool");
       assert.equal(path, candidate);
-      return toolFixture();
+      assert.equal(expected, undefined);
+      return toolFixture(installation);
     },
     install: async (path, sha) => {
       calls.push("install");
@@ -282,6 +286,7 @@ function memberFixture() {
       sourceBindingSha256: expected.bindingSha256,
       runner: runnerFixture(source),
       wrangler: toolFixture(),
+      webWrangler: toolFixture("web"),
       installation: installationFixture(source),
       build: {
         source,
@@ -779,6 +784,7 @@ test("execution awaits capture and retains distinct source identities", async ()
     "install",
     `inspect:${D}`,
     "tool",
+    "web-tool",
     `inspect:${B}`,
     `inspect:${D}`,
     "build",
@@ -790,10 +796,12 @@ test("execution awaits capture and retains distinct source identities", async ()
     "finalize",
     "runner",
     "tool",
+    "web-tool",
     `inspect:${B}`,
     `inspect:${D}`,
   ]);
   assert.deepEqual(result.wrangler, toolFixture());
+  assert.deepEqual(result.webWrangler, toolFixture("web"));
   assert.deepEqual(result.runner, runnerFixture(result.installation.source));
   assert.deepEqual(result.installation, installationFixture(result.installation.source));
   assert.equal(result.budget.code, 0);
@@ -887,7 +895,7 @@ test("execution refuses post-build Wrangler drift after frozen finalization", as
   let calls = 0;
   f.collaborators.tool = async (...args) => {
     const result = await tool(...args);
-    if (calls++ > 0) result.files[0].sha256 = "b".repeat(64);
+    if (args[2] !== "web" && calls++ > 0) result.files[0].sha256 = "b".repeat(64);
     return result;
   };
   await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /Wrangler changed/);
@@ -903,6 +911,65 @@ for (const kind of ["missing", "schema", "evidence", "name", "version"]) {
     const execution = f.records["execution.json"];
     if (kind === "missing") delete execution.wrangler;
     else execution.wrangler[kind] = "invalid";
+    f.save("execution.json", execution, "executionSha256");
+    assert.throws(() => verifyCanonicalExecutionMembers(f.members, f.expected, f.authority), {
+      message: "canonical separated execution member verification failed",
+    });
+  });
+}
+
+for (const kind of ["failure", "schema", "evidence", "name", "version", "entry", "runtime"]) {
+  test(`execution refuses web Wrangler ${kind} before build without retry`, async () => {
+    const f = fixture();
+    const tool = f.collaborators.tool;
+    f.collaborators.tool = async (...args) => {
+      const result = await tool(...args);
+      if (args[2] === "web") {
+        if (kind === "failure") throw new Error("private web tool fixture detail");
+        result[kind] = "invalid";
+      }
+      return result;
+    };
+    await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), {
+      message: "canonical tool unavailable; retain output without retry",
+    });
+    assert.equal(f.calls.filter((call) => call === "web-tool").length, 1);
+    assert.equal(f.calls.includes("tool"), true);
+    assert.equal(f.calls.includes("build"), false);
+    assert.equal(f.calls.includes("capture"), false);
+    assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+    const failure = readFileSync(join(f.args.destination, "tool-failure.json"), "utf8");
+    assert.doesNotMatch(failure, /private|fixture detail/);
+    assert.deepEqual(JSON.parse(failure), {
+      sourceBindingSha256: f.args.bindingSha256,
+      outcome: "failure",
+      qualified: false,
+    });
+  });
+}
+
+test("execution refuses web-only Wrangler drift after frozen finalization", async () => {
+  const f = fixture();
+  const tool = f.collaborators.tool;
+  let calls = 0;
+  f.collaborators.tool = async (...args) => {
+    const result = await tool(...args);
+    if (args[2] === "web" && calls++ > 0) result.files[0].sha256 = "b".repeat(64);
+    return result;
+  };
+  await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /web Wrangler changed/);
+  assert.equal(calls, 2);
+  assert.equal(f.calls.includes("finalize"), true);
+  assert.equal(existsSync(join(f.args.destination, "budget.json")), true);
+  assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+});
+
+for (const kind of ["missing", "schema", "evidence", "name", "version", "entry", "runtime"]) {
+  test(`separated members refuse web Wrangler ${kind} observation`, () => {
+    const f = memberFixture();
+    const execution = f.records["execution.json"];
+    if (kind === "missing") delete execution.webWrangler;
+    else execution.webWrangler[kind] = "invalid";
     f.save("execution.json", execution, "executionSha256");
     assert.throws(() => verifyCanonicalExecutionMembers(f.members, f.expected, f.authority), {
       message: "canonical separated execution member verification failed",

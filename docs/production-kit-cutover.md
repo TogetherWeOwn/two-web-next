@@ -24,12 +24,19 @@ a distinct empty temporary global config; cleanup was verified. This focused
 query does not establish actual candidate installation or enforcement.
 
 [Actions 42541200702](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42541200702)
-on `ba1b19de352d0c3fb4342eff8a16c81a975976b4` has passed Node 22 and the
-auxiliary jobs; the main job was at Kit typecheck at the latest inspection.
-No current-head install fixture, parity or overall pass is claimed. The
-runner-observation and Wrangler integration below are local, unpushed and untested; the existing
-cancel-in-progress producer is preserved until completion, a concrete required-leg
-failure or its existing timeout.
+on `ba1b19de352d0c3fb4342eff8a16c81a975976b4` completed with **success**:
+main and Node 22 each passed 26,757 tests with 676 skipped; Kit parity fixtures
+passed 647/647. Build, capture, finalization, frozen rehearsal, fatal fixture and
+production parity passed, with 3,313 vectors in each recording. This is not
+independent artifact verification or separated-runtime qualification.
+
+[Actions 42546731794](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42546731794)
+on published `6b5a6e954210d9431d095df89c447238e0b16bb6` was still executing both
+test jobs at the latest inspection; auxiliary jobs passed. The twenty-five new
+runner/root-tool fixture registrations have no observed result yet. The web-tool
+extension below is local, unpushed and untested. Preserve the current
+cancel-in-progress producer until completion, a concrete required-leg failure or
+its existing timeout; no new suite, parity or overall pass is claimed.
 
 ## Separated execution caller (not yet exercised)
 
@@ -85,9 +92,18 @@ prevents build; post-build drift refuses execution success while preserving
 capture and budget output. The successful receipt embeds the package-only record;
 the member reader refuses missing or differently labelled tool observations.
 Eleven new fixture registrations use the existing Actions suite and are unrun.
-This does not verify the separate web-installed Wrangler used by the build,
-transitive packages, npm/Node bytes, profiling execution or dependency provenance.
-No actual candidate install or tool verification has run through this caller.
+A local extension checks the separate web-installed Wrangler used by the build
+against that same published pin and both locks, before build and after frozen
+finalization. Only explicit root/web installations are supported; web never
+falls back to root. Receipts bind both entry/runtime paths, and the separated
+member reader requires both package records. A clean root cannot mask web-only
+byte drift, absence or a symlink. Twenty-four additional fixture registrations
+reuse the existing Actions invocations and are unrun. The default root verifier
+and existing dry-run CLI remain unchanged.
+
+This still does not verify transitive packages, npm/Node bytes, profiling execution
+or dependency provenance. No actual candidate install or tool verification has
+run through this caller.
 
 The image string remains pipeline-declared, not independent container attestation.
 Matching endpoint observations do not establish absence of changes between them,
