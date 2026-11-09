@@ -63,6 +63,18 @@ is claimed. This completion ends preservation of that producer. The Node-byte
 fingerprint and final installed-input drift extensions below are being published
 with twenty-nine new fixture registrations; their exact-head Actions is pending.
 
+[Actions 42558667516](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42558667516)
+on `3e179db44901ff676f89ac21dd0c4402a1d7c3d0` completed with **success**:
+main, Node 22, all auxiliary jobs and `ci-ok` passed. Production build,
+capture/finalization, frozen rehearsal, fatal fixture and all-off parity steps
+passed. The published fingerprint and final installed-input fixtures are covered
+by this run; their earlier untested status is superseded. No new test totals or
+independent artifact verification is claimed. This ends preservation of that
+producer, not qualification of separated execution. The retained gzip-runtime
+cross-link and opt-in separated workflow are being published with twenty new
+fixture registrations; they still need exact-new-head Actions. Baseline collection
+remains off and has not been dispatched.
+
 ## Separated execution caller (not yet exercised)
 
 The existing CI workflow now has an opt-in `canonical-baseline` job. Ordinary
