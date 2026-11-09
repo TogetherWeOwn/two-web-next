@@ -1152,10 +1152,15 @@ test("shared production mutation lock never nests at workflow level nor leaks in
     "utf8",
   );
   // Workflow-level groups stay distinct and non-cancelling, so the run never
-  // nests the shared job-level group.
+  // nests the shared job-level group. Only the trusted main staging drill gets
+  // a run-unique caller group; rollback-target.test.mjs covers each selector leg.
   for (const [label, workflow, expected] of [
     ["deploy-production.yml", deploy, "deploy-production"],
-    ["rollback-production.yml", rollback, "rollback-${{ inputs.environment }}"],
+    [
+      "rollback-production.yml",
+      rollback,
+      "${{ inputs.environment == 'staging' && github.workflow == 'staging-rollback-drill' && github.ref == 'refs/heads/main' && format('staging-drill-call-{0}', github.run_id) || format('rollback-{0}', inputs.environment) }}",
+    ],
   ]) {
     const header = workflow.slice(0, workflow.indexOf("\njobs:"));
     assert.ok(
