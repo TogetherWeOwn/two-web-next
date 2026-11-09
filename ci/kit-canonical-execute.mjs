@@ -37,6 +37,23 @@ function toolRecord(record, installation) {
   return record;
 }
 
+function runnerRecord(record) {
+  const node = record.runner.nodeExecutable;
+  assert.deepEqual(Object.keys(node).sort(), [
+    "authenticated",
+    "bytes",
+    "evidence",
+    "sha256",
+    "version",
+  ]);
+  assert.equal(node.evidence, "observed-process-executable-only");
+  assert.ok(Number.isSafeInteger(node.bytes) && node.bytes > 0 && node.bytes <= 256 * 1024 * 1024);
+  assert.match(node.sha256, /^[0-9a-f]{64}$/);
+  assert.match(node.version, /^v[0-9]+\.[0-9]+\.[0-9]+$/);
+  assert.equal(node.authenticated, false);
+  return record;
+}
+
 function separate(a, b) {
   const path = relative(a, b);
   assert.ok(path === ".." || path.startsWith(`..${sep}`), "execution paths overlap");
@@ -204,6 +221,7 @@ export function verifyCanonicalExecutionMembers(members, expected, authority) {
     assert.equal(execution.runner.evidence, "unqualified-candidate-runner-observation");
     assert.deepEqual(execution.runner.source, source);
     assert.equal(execution.runner.executionVerified, false);
+    runnerRecord(execution.runner);
     toolRecord(execution.wrangler, "root");
     toolRecord(execution.webWrangler, "web");
     assert.equal(execution.installation.evidence, "unqualified-native-candidate-install-return");
@@ -379,7 +397,7 @@ export async function executeCanonicalBuild(
   writeFileSync(join(output, "source-binding.json"), bytes, { flag: "wx", mode: 0o600 });
   let observedRunner;
   try {
-    observedRunner = await runner(candidate, identity.candidateSha);
+    observedRunner = runnerRecord(await runner(candidate, identity.candidateSha));
     assert.deepEqual(observedRunner.source, source, "candidate runner source changed");
     assert.equal(observedRunner.executionVerified, false, "unsupported runner qualification");
     assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);

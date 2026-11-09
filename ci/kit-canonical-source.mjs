@@ -14,6 +14,7 @@ import {
   readSync,
   realpathSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
@@ -279,6 +280,45 @@ export async function observeCanonicalRunner(path, expectedSha) {
     const bytes = JSON.stringify(observed);
     assert.ok(bytes.length > 0 && Buffer.byteLength(bytes) <= 65536);
     runner = JSON.parse(bytes);
+    // Bind the executable mapped into this Linux process, not a PATH lookup or
+    // version string. This fingerprint is observed locally, not a trusted pin.
+    const executable = realpathSync(process.execPath);
+    assert.equal(realpathSync("/proc/self/exe"), executable);
+    const fd = openSync(
+      executable,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      const before = fstatSync(fd, { bigint: true });
+      assert.ok(before.isFile() && before.size > 0n && before.size <= 256n * 1024n * 1024n);
+      const identity = (stat) =>
+        ["dev", "ino", "mode", "nlink", "size", "mtimeNs", "ctimeNs"].map((key) => stat[key]);
+      assert.deepEqual(identity(statSync("/proc/self/exe", { bigint: true })), identity(before));
+      const hash = createHash("sha256");
+      const buffer = Buffer.alloc(1024 * 1024);
+      let size = 0n;
+      while (size <= before.size) {
+        const count = readSync(fd, buffer, 0, buffer.length, null);
+        if (!count) break;
+        size += BigInt(count);
+        assert.ok(size <= before.size);
+        hash.update(buffer.subarray(0, count));
+      }
+      assert.equal(size, before.size);
+      assert.deepEqual(identity(fstatSync(fd, { bigint: true })), identity(before));
+      assert.deepEqual(identity(lstatSync(executable, { bigint: true })), identity(before));
+      assert.deepEqual(identity(statSync("/proc/self/exe", { bigint: true })), identity(before));
+      assert.equal(realpathSync("/proc/self/exe"), executable);
+      runner.nodeExecutable = {
+        evidence: "observed-process-executable-only",
+        bytes: Number(size),
+        sha256: hash.digest("hex"),
+        version: process.version,
+        authenticated: false,
+      };
+    } finally {
+      closeSync(fd);
+    }
   } catch {
     throw new Error("candidate runner provenance unavailable");
   }

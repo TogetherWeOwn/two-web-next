@@ -363,6 +363,15 @@ test("runner observation invokes candidate checks without build or install", asy
   assert.deepEqual(result.inputs, (await loadCanonicalStartup(root, sha)).inputs);
   assert.equal(result.runner.image, `node:24-bookworm@sha256:${"b".repeat(64)}`);
   assert.equal(result.runner.limits.effectiveCpuCount, 2);
+  const executable = readFileSync(realpathSync(process.execPath));
+  assert.deepEqual(result.runner.nodeExecutable, {
+    evidence: "observed-process-executable-only",
+    bytes: executable.length,
+    sha256: sha256Hex(executable),
+    version: process.version,
+    authenticated: false,
+  });
+  assert.equal(JSON.stringify(result.runner).includes(process.execPath), false);
   assert.equal(result.executionVerified, false);
 });
 

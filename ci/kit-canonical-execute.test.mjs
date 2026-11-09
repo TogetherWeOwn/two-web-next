@@ -82,7 +82,17 @@ function runnerFixture(source) {
     evidence: "unqualified-candidate-runner-observation",
     source,
     inputs: [],
-    runner: { image: "fixture-image", limits: { effectiveCpuCount: 2 } },
+    runner: {
+      image: "fixture-image",
+      limits: { effectiveCpuCount: 2 },
+      nodeExecutable: {
+        evidence: "observed-process-executable-only",
+        bytes: 100,
+        sha256: "c".repeat(64),
+        version: "v24.0.0",
+        authenticated: false,
+      },
+    },
     executionVerified: false,
   };
 }
@@ -871,6 +881,53 @@ for (const kind of [
   });
 }
 
+for (const kind of [
+  "missing",
+  "empty",
+  "oversized",
+  "fractional",
+  "digest",
+  "version",
+  "claim",
+  "extra",
+]) {
+  const mutate = (record) => {
+    const node = record.runner.nodeExecutable;
+    if (kind === "missing") delete record.runner.nodeExecutable;
+    if (kind === "empty") node.bytes = 0;
+    if (kind === "oversized") node.bytes = 256 * 1024 * 1024 + 1;
+    if (kind === "fractional") node.bytes = 0.5;
+    if (kind === "digest") node.sha256 = "not-a-digest";
+    if (kind === "version") node.version = "unknown";
+    if (kind === "claim") node.authenticated = true;
+    if (kind === "extra") node.path = "/private/runtime";
+  };
+  test(`execution refuses Node executable ${kind} before installation`, async () => {
+    const f = fixture();
+    const runner = f.collaborators.runner;
+    f.collaborators.runner = async (...args) => {
+      const record = await runner(...args);
+      mutate(record);
+      return record;
+    };
+    await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), {
+      message: "canonical runner unavailable; retain output without retry",
+    });
+    assert.deepEqual(f.calls, [`inspect:${D}`, `inspect:${B}`, "runner"]);
+    assert.equal(existsSync(join(f.args.destination, "runner-failure.json")), true);
+    assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+  });
+  test(`separated reader refuses Node executable ${kind}`, () => {
+    const f = memberFixture();
+    const execution = f.records["execution.json"];
+    mutate(execution.runner);
+    f.save("execution.json", execution, "executionSha256");
+    assert.throws(() => verifyCanonicalExecutionMembers(f.members, f.expected, f.authority), {
+      message: "canonical separated execution member verification failed",
+    });
+  });
+}
+
 for (const kind of ["failure", "source", "evidence", "qualification"]) {
   test(`execution finalizes frozen bytes after candidate profile ${kind}`, async () => {
     const f = fixture();
@@ -1168,6 +1225,22 @@ test("execution refuses post-build runner drift after frozen finalization", asyn
   f.collaborators.runner = async (...args) => {
     const result = await runner(...args);
     if (calls++ > 0) result.runner.limits.effectiveCpuCount = 1;
+    return result;
+  };
+  await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /runner changed/);
+  assert.equal(calls, 2);
+  assert.equal(f.calls.includes("finalize"), true);
+  assert.equal(existsSync(join(f.args.destination, "budget.json")), true);
+  assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+});
+
+test("execution refuses changed Node bytes after frozen finalization", async () => {
+  const f = fixture();
+  const runner = f.collaborators.runner;
+  let calls = 0;
+  f.collaborators.runner = async (...args) => {
+    const result = await runner(...args);
+    if (calls++ > 0) result.runner.nodeExecutable.sha256 = "d".repeat(64);
     return result;
   };
   await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /runner changed/);

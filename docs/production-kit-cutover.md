@@ -96,6 +96,19 @@ the member reader rejects missing, source-substituted or qualified runner claims
 Fourteen additional fixture registrations use the existing Actions invocation and
 have not run. No actual candidate runner has been observed through this path.
 
+The retained local runner extension fingerprints the Node executable mapped by
+Linux `/proc/self/exe`, cross-checking its identity with the resolved executable
+and bounded streaming SHA-256. File identity, size, mode and change timestamps
+must remain stable across the read; access timestamps are deliberately excluded.
+The existing pre-install and post-finalization observations must carry the same
+fingerprint. The separated reader refuses missing, malformed or authenticated
+fingerprint claims. No executable path is retained. Seventeen new fixture
+registrations reuse the existing Actions suite, alongside an independent hash
+assertion in the runner fixture; they have not run or been published. This is
+an observed byte fingerprint, not an authenticated release pin, npm/transitive
+verification, proof against intervening mutation or collection qualification.
+No actual separated runtime has been measured through this path.
+
 After native installation, the caller now invokes the existing published-package
 Wrangler verifier against the candidate root, then repeats it after frozen
 finalization. It binds the existing thirty-file pin, complete installed Wrangler
