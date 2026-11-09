@@ -16,8 +16,9 @@ permissions:
   contents: read
   actions: read
 
+# Own staging from plan through restore, not just during each mutation leg.
 concurrency:
-  group: staging-rollback-drill
+  group: ${{ github.ref == 'refs/heads/main' && 'deploy-staging' || format('staging-drill-rejected-{0}', github.run_id) }}
   cancel-in-progress: false
 
 jobs:
@@ -43,18 +44,6 @@ jobs:
           node-version: 24
           cache: npm
       - run: npm ci --include=dev
-      - name: Wait until no staging deploy or journey run is active
-        # Bounded: 30 checks a minute apart, then the drill fails instead of
-        # moving staging under a deploy or an e2e-staging journey run.
-        run: |
-          for i in $(seq 1 30); do
-            if node ci/rollback-target.mjs --staging-busy | tee /dev/stderr | grep -qx 'Staging lane idle'; then exit 0; fi
-            sleep 60
-          done
-          echo "::error::staging lane stayed busy for 30 minutes; rerun the drill when staging is idle"
-          exit 1
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
       - name: Record the live and previous staging versions
         id: versions
         # The previous version is the newest earlier single-version 100%

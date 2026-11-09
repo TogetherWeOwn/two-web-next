@@ -32,6 +32,15 @@ export function resolveStagingCandidate({ eventName, event, sha, ref, repository
   return candidate;
 }
 
+export function validateStagingIdentityPair(expected, before, after, now = Date.now()) {
+  if (!isSha(expected) || versionMismatch(before, expected, now) || versionMismatch(after, expected, now)) {
+    throw new Error("Staging identities do not prove the candidate");
+  }
+  if (before.deployedAt !== after.deployedAt) {
+    throw new Error("Staging deployment changed during qualification");
+  }
+}
+
 export async function observeStaging({ expected, previous, fetchImpl = fetch, now = Date.now() }) {
   if (!isSha(expected)) throw new Error("Invalid staging candidate");
   const response = await fetchImpl("https://next.togetherweown.com/version", {
@@ -51,12 +60,7 @@ export async function observeStaging({ expected, previous, fetchImpl = fetch, no
   if (versionMismatch(data, expected, now)) {
     throw new Error("Staging identity does not prove the candidate");
   }
-  if (
-    previous !== undefined &&
-    (previous?.sha !== data.sha || previous?.deployedAt !== data.deployedAt)
-  ) {
-    throw new Error("Staging deployment changed during qualification");
-  }
+  if (previous !== undefined) validateStagingIdentityPair(expected, previous, data, now);
   return { sha: data.sha, deployedAt: data.deployedAt };
 }
 

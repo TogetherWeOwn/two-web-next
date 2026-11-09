@@ -378,9 +378,14 @@ test("the staging drill rolls back and forward through rollback-production.yml",
   assert.match(verdict, /if: \$\{\{ always\(\) \}\}/);
   assert.match(verdict, /"\$ROLLBACK_ACTION" != rollback/);
   assert.match(verdict, /"\$RESTORE_ACTION" != rollback/);
-  // The plan waits for an idle staging lane, bounded.
-  assert.match(workflow, /node ci\/rollback-target\.mjs --staging-busy/);
-  assert.match(workflow, /for i in \$\(seq 1 30\)/);
+  // The whole drill owns staging, including the gap between both legs.
+  assert.match(workflow, /concurrency:\n  group: .*&& 'deploy-staging'/);
+  assert.match(workflow, /cancel-in-progress: false/);
+  assert.doesNotMatch(workflow, /--staging-busy/);
+  const callee = read("../.github/workflows/rollback-production.yml");
+  assert.match(callee, /github\.workflow == 'staging-rollback-drill' && github\.ref == 'refs\/heads\/main'/);
+  assert.match(callee, /format\('staging-drill-leg-\{0\}', github\.run_id\)/);
+  assert.match(callee, /\|\| 'deploy-staging'\) \|\| 'production-worker-mutation'/);
   // Only staging (repo-level) credentials, never production ones.
   assert.ok(!/secrets\.PRODUCTION_/.test(workflow));
 });

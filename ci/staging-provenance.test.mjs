@@ -48,13 +48,25 @@ test("untrusted, failed, non-main and missing deploy events fail closed", () => 
 
 test("manual qualification uses the exact main dispatch revision, not a deploy title", () => {
   assert.equal(
-    resolveStagingCandidate({ eventName: "workflow_dispatch", event: { workflow_run: run }, sha: C, ref: "refs/heads/main", repository }),
+    resolveStagingCandidate({
+      eventName: "workflow_dispatch",
+      event: { workflow_run: run },
+      sha: C,
+      ref: "refs/heads/main",
+      repository,
+    }),
     C,
   );
   for (const ref of [undefined, "main", "refs/heads/feature", "refs/tags/v1"]) {
     assert.throws(() => resolveStagingCandidate({ eventName: "workflow_dispatch", sha: A, ref }));
   }
-  assert.throws(() => resolveStagingCandidate({ eventName: "workflow_dispatch", sha: "main", ref: "refs/heads/main" }));
+  assert.throws(() =>
+    resolveStagingCandidate({
+      eventName: "workflow_dispatch",
+      sha: "main",
+      ref: "refs/heads/main",
+    }),
+  );
 });
 
 test("qualification observes the fixed staging endpoint once without redirects or caching", async () => {
@@ -100,10 +112,19 @@ test("a replacement during journeys refuses the after observation", async () => 
 
 test("an HTTP error or network failure is never retried into green", async () => {
   for (const status of [302, 404, 500]) {
-    await assert.rejects(observe({ sha: A, deployedAt }, { fetchImpl: identity({ sha: A, deployedAt }, status) }));
+    await assert.rejects(
+      observe({ sha: A, deployedAt }, { fetchImpl: identity({ sha: A, deployedAt }, status) }),
+    );
   }
   let calls = 0;
-  await assert.rejects(observe({}, { fetchImpl: async () => { calls++; throw new Error("offline"); } }));
+  await assert.rejects(
+    observe({}, {
+      fetchImpl: async () => {
+        calls++;
+        throw new Error("offline");
+      },
+    }),
+  );
   assert.equal(calls, 1);
   await assert.rejects(observe({}, { fetchImpl: async () => new Response("not JSON") }));
   await assert.rejects(observe({}, { fetchImpl: async () => new Response("x".repeat(2049)) }));
@@ -123,6 +144,8 @@ test("qualification pins every checker, validates ancestry and shares the stagin
   assert.doesNotMatch(workflow, /workflow_run\.head_sha/);
   assert.match(workflow, /&& 'deploy-staging'/);
   assert.match(workflow, /cancel-in-progress: false/);
+  assert.doesNotMatch(workflow, /cache: npm|uses: actions\/cache@/);
+  assert.equal((workflow.match(/package-manager-cache: false/g) ?? []).length, 2);
   assert.match(workflow, /after passive\/identity passive\/commit/);
   assert.doesNotMatch(workflow, /printf.*passive\/commit/);
   for (const name of ["web-quality-origin", "zap-staging"]) {
@@ -130,5 +153,7 @@ test("qualification pins every checker, validates ancestry and shares the stagin
     assert.match(child, /ref: \$\{\{ inputs\.candidate_sha \|\| github\.sha \}\}/);
     assert.match(child, /staging-provenance\.mjs observe.* before /);
     assert.match(child, /staging-provenance\.mjs observe.* after /);
+    assert.doesNotMatch(child, /cache: npm|uses: actions\/cache@/);
+    assert.match(child, /package-manager-cache: false/);
   }
 });

@@ -1051,10 +1051,10 @@ test("production promotion and rollback mutations share one static non-cancellin
     new URL("../.github/workflows/rollback-production.yml", import.meta.url),
     "utf8",
   );
-  // The rollback lock is chosen per environment from two static names:
-  // production shares the promotion lock, staging shares deploy.yml's.
+  // Production always shares the promotion lock. Ordinary staging rollback
+  // shares deploy.yml's; the main drill caller already holds it across both legs.
   const rollbackSelector =
-    "${{ inputs.environment == 'staging' && 'deploy-staging' || 'production-worker-mutation' }}";
+    "${{ inputs.environment == 'staging' && ((github.workflow == 'staging-rollback-drill' && github.ref == 'refs/heads/main') && format('staging-drill-leg-{0}', github.run_id) || 'deploy-staging') || 'production-worker-mutation' }}";
   assert.deepEqual(
     jobConcurrencyBlocks(rollback).map((block) => block.group),
     [rollbackSelector],

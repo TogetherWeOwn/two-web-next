@@ -11,6 +11,7 @@ import {
   stagingRunsSinceCommit,
 } from "./resolve-promotion-sha.mjs";
 import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
+import { validateStagingIdentityPair } from "./staging-provenance.mjs";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 
 export const AUTOMATIC_PROMOTION_EVENTS = new Set([
@@ -873,6 +874,18 @@ export async function fetchPassiveLedgers(
     throw new Error(
       `Staging passive ledger names ${commit || "no commit"}, not the candidate ${sha}`,
     );
+  }
+  // Historical title/commit-only artifacts cannot prove what staging served.
+  // Require the producer's two observations; never relabel an old artifact.
+  try {
+    const readIdentity = (phase) => {
+      const text = readFileSync(join(dir, `identity.${phase}.json`), "utf8");
+      if (text.length > 2048) throw new Error("Oversized staging identity");
+      return JSON.parse(text);
+    };
+    validateStagingIdentityPair(sha, readIdentity("before"), readIdentity("after"));
+  } catch {
+    throw new Error("Staging passive ledger lacks matching before/after served identities");
   }
   return { runId: latest.id, artifactId: artifact.id };
 }

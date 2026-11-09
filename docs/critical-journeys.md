@@ -146,15 +146,20 @@ or mismatched identity fails the job, as does a changed upload timestamp
 validated served identity only after the passive set. Sanitized identity
 artifacts contain only SHA and upload time, never response bodies or secrets.
 A failed identity check is not retried into a pass or reduced to a passive
-ledger verdict. Historical artifacts are never rewritten or relabelled.
+ledger verdict. Promotion requires both passive identity files to name the
+candidate with the same valid upload timestamp; a matching `commit` file alone
+is insufficient. Historical artifacts are never rewritten or relabelled, and
+artifacts without the observations remain ineligible.
 
 The whole qualification workflow shares `deploy-staging` concurrency with
-the staging deploy job, so repository staging deploys cannot replace the
-Worker during its qualification window. A deploy that wins the mutex before
-an older qualification makes the older candidate fail closed at `/version`.
+the staging deploy job, ordinary staging rollbacks and the entire staging
+rollback drill (plan through restore). The drill's nested mutation jobs use a
+run-specific group because their caller already owns the shared mutex.
+Repository mutations therefore cannot replace the Worker during qualification,
+even by rolling away and back between samples. A deploy that wins the mutex
+before an older qualification makes the older candidate fail closed at `/version`.
 Two observations alone do not prove full-window stability against out-of-band
-Cloudflare changes or a rollback away and back between samples; those mutations
-must remain excluded from the protected window. This change adds no staging
+Cloudflare changes; those mutations must remain excluded from the protected window. This change adds no staging
 startup, keep-alive, alarm or scheduler, and lifts no existing staging or
 production hold. All on-demand lifecycle, security, soak and release gates
 remain applicable.
