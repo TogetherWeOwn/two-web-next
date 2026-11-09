@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { DiscordTransient } from "../src/islands/contracts";
 import {
@@ -70,7 +72,7 @@ for (const twin of ["Hono", "Kit"] as const) {
           await renderCalendar(twin, [scanEvent({ description })], { view: "list" }),
         );
         expect(card).not.toMatch(/<details\b/);
-        if (description) expect(card).toContain(`<p>${description}</p>`);
+        if (description) expect(card).toContain(`<p class="schedule-text">${description}</p>`);
       },
     );
 
@@ -130,6 +132,23 @@ for (const twin of ["Hono", "Kit"] as const) {
       expect(card).toMatch(/<details\b/);
     });
 
+    it("keeps authored line breaks as escaped text, never as markup", async () => {
+      const lines = "Bring a game.\n<b>Doors</b> at 7.\n\nEveryone welcome.";
+      const escaped = "Bring a game.\n&lt;b&gt;Doors&lt;/b&gt; at 7.\n\nEveryone welcome.";
+      const short = cardIn(
+        await renderCalendar(twin, [scanEvent({ description: lines })], { view: "list" }),
+      );
+      expect(short).toContain(`<p class="schedule-text">${escaped}</p>`);
+      const long = cardIn(
+        await renderCalendar(twin, [scanEvent({ description: `${lines}\n${FULL_DESCRIPTION}` })], {
+          view: "list",
+        }),
+      );
+      expect(long).toContain(`<p class="schedule-text">${escaped}\n${FULL_DESCRIPTION}</p>`);
+      expect(long).toContain(`<span class="schedule-excerpt schedule-text">${escaped}\n`);
+      expect(long).not.toMatch(/<b>|<br\s*\/?>\s*Doors/);
+    });
+
     it("retains unknown-end Discord rows without inventing an end or local attendance", async () => {
       const row: DiscordTransient = {
         discordId: "123456789012345678",
@@ -169,6 +188,12 @@ for (const twin of ["Hono", "Kit"] as const) {
     });
   });
 }
+
+it("turns authored newlines into breaks only through schedule-theme.css", () => {
+  // Hono and Kit both serve this sheet on the list and archive pages.
+  const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
+  expect(css).toContain(".events-page .schedule-text{white-space:pre-line}");
+});
 
 it.each([false, true])(
   "disclosure leaves existing attendance and sign-in policy intact (member=%s)",
