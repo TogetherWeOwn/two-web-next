@@ -136,7 +136,11 @@ The scope job resolves the exact `deploy <sha>` title from a successful,
 same-repository main deploy. The deploy workflow's API `head_sha` can be a
 later main tip; it is not candidate provenance. The candidate must be a main
 ancestor. Scope runs trusted workflow-revision code and diffs that candidate
-as data without checking it out. Passive and critical journey code, ZAP and
+as data without checking it out. When the candidate differs from the workflow
+revision, scope runs qualification in full: the later tree's helper import
+inventory cannot justify skipping the candidate's journeys or passive set.
+Same-revision deploys retain the existing docs/test-only scope optimization.
+Passive and critical journey code, ZAP and
 quality checkers check out the candidate with cache writes disabled. A manual
 dispatch must target `main` and uses its exact dispatch SHA; it does not become
 automatic-promotion evidence.

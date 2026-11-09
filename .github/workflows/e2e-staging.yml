@@ -75,12 +75,15 @@ jobs:
       - id: scope
         env:
           HEAD_SHA: ${{ steps.candidate.outputs.sha }}
+          WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
-          # A manual dispatch always runs the journeys; a deploy with no
-          # parent (practically impossible on main) fails closed.
-          if [ "${{ github.event_name }}" = workflow_dispatch ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
+          # The trusted tree supplies the helper import inventory. If main
+          # moved past the candidate, that inventory cannot justify a skip.
+          # Manual dispatch and a candidate without a parent also run fully.
+          if [ "${{ github.event_name }}" = workflow_dispatch ] || [ "$HEAD_SHA" != "$WORKFLOW_SHA" ] || ! git rev-parse --verify --quiet "$HEAD_SHA~1" >/dev/null; then
             echo "docs_only=false" >> "$GITHUB_OUTPUT"
+            echo "skip_e2e=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
           # Same shape as the pull-request files API that ci/change-scope.sh
