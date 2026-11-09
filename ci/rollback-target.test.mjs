@@ -383,7 +383,10 @@ test("the staging drill rolls back and forward through rollback-production.yml",
   assert.match(workflow, /cancel-in-progress: false/);
   assert.doesNotMatch(workflow, /--staging-busy/);
   const callee = read("../.github/workflows/rollback-production.yml");
-  assert.match(callee, /github\.workflow == 'staging-rollback-drill' && github\.ref == 'refs\/heads\/main'/);
+  assert.match(
+    callee,
+    /github\.workflow == 'staging-rollback-drill' && github\.ref == 'refs\/heads\/main'/,
+  );
   assert.match(callee, /format\('staging-drill-leg-\{0\}', github\.run_id\)/);
   assert.match(callee, /\|\| 'deploy-staging'\) \|\| 'production-worker-mutation'/);
   // Only staging (repo-level) credentials, never production ones.

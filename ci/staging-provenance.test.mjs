@@ -17,8 +17,16 @@ const run = {
   head_sha: B,
 };
 const candidate = (workflow_run = run) =>
-  resolveStagingCandidate({ eventName: "workflow_run", event: { workflow_run }, sha: C, repository });
-const identity = (body, status = 200) => async () => new Response(JSON.stringify(body), { status });
+  resolveStagingCandidate({
+    eventName: "workflow_run",
+    event: { workflow_run },
+    sha: C,
+    repository,
+  });
+const identity =
+  (body, status = 200) =>
+  async () =>
+    new Response(JSON.stringify(body), { status });
 const observe = (body, options = {}) =>
   observeStaging({ expected: A, now, fetchImpl: identity(body), ...options });
 
@@ -27,7 +35,13 @@ test("candidate A survives deploy metadata B and workflow main tip C", () => {
 });
 
 test("a deploy title is mandatory, exact, and lowercase", () => {
-  for (const title of [undefined, `deploy ${A} extra`, A, `deploy ${"A".repeat(40)}`, "deploy main"]) {
+  for (const title of [
+    undefined,
+    `deploy ${A} extra`,
+    A,
+    `deploy ${"A".repeat(40)}`,
+    "deploy main",
+  ]) {
     assert.throws(() => candidate({ ...run, display_title: title }));
   }
 });
@@ -118,12 +132,15 @@ test("an HTTP error or network failure is never retried into green", async () =>
   }
   let calls = 0;
   await assert.rejects(
-    observe({}, {
-      fetchImpl: async () => {
-        calls++;
-        throw new Error("offline");
+    observe(
+      {},
+      {
+        fetchImpl: async () => {
+          calls++;
+          throw new Error("offline");
+        },
       },
-    }),
+    ),
   );
   assert.equal(calls, 1);
   await assert.rejects(observe({}, { fetchImpl: async () => new Response("not JSON") }));
@@ -135,12 +152,18 @@ test("the candidate cannot be inferred from a malformed expected SHA", async () 
 });
 
 test("qualification pins every checker, validates ancestry and shares the staging deploy mutex", () => {
-  const workflow = readFileSync(new URL("../.github/workflows/e2e-staging.yml", import.meta.url), "utf8");
+  const workflow = readFileSync(
+    new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
   assert.match(workflow, /run: node ci\/staging-provenance\.mjs candidate/);
   assert.match(workflow, /git merge-base --is-ancestor "\$CANDIDATE_SHA" origin\/main/);
   assert.match(workflow, /ref: \$\{\{ steps\.candidate\.outputs\.sha \}\}/);
   assert.equal((workflow.match(/ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/g) ?? []).length, 2);
-  assert.equal((workflow.match(/candidate_sha: \$\{\{ needs\.scope\.outputs\.sha \}\}/g) ?? []).length, 2);
+  assert.equal(
+    (workflow.match(/candidate_sha: \$\{\{ needs\.scope\.outputs\.sha \}\}/g) ?? []).length,
+    2,
+  );
   assert.doesNotMatch(workflow, /workflow_run\.head_sha/);
   assert.match(workflow, /&& 'deploy-staging'/);
   assert.match(workflow, /cancel-in-progress: false/);
@@ -149,7 +172,10 @@ test("qualification pins every checker, validates ancestry and shares the stagin
   assert.match(workflow, /after passive\/identity passive\/commit/);
   assert.doesNotMatch(workflow, /printf.*passive\/commit/);
   for (const name of ["web-quality-origin", "zap-staging"]) {
-    const child = readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), "utf8");
+    const child = readFileSync(
+      new URL(`../.github/workflows/${name}.yml`, import.meta.url),
+      "utf8",
+    );
     assert.match(child, /ref: \$\{\{ inputs\.candidate_sha \|\| github\.sha \}\}/);
     assert.match(child, /staging-provenance\.mjs observe.* before /);
     assert.match(child, /staging-provenance\.mjs observe.* after /);

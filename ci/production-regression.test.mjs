@@ -518,11 +518,14 @@ test("historical or changed staging identities cannot be promoted by a matching 
     { before: valid, after: { ...valid, deployedAt: "2026-01-02T00:00:00.000Z" } },
     { before: valid, after: { ...valid, deployedAt: "not a timestamp" } },
   ]) {
-    await assert.rejects(fetchLedgers({
-      runs: [e2eRun(9)],
-      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
-      identities,
-    }), /lacks matching before\/after served identities/);
+    await assert.rejects(
+      fetchLedgers({
+        runs: [e2eRun(9)],
+        artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+        identities,
+      }),
+      /lacks matching before\/after served identities/,
+    );
   }
 });
 
@@ -535,10 +538,7 @@ test("e2e-staging records the passive set for every promotable deploy", () => {
     workflow.indexOf("\n  staging-journeys:\n"),
   );
   assert.match(job, /needs\.scope\.outputs\.skip_e2e != 'true'/);
-  assert.match(
-    job,
-    /ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/,
-  );
+  assert.match(job, /ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/);
   assert.match(
     job,
     /node bin\/smoke\.mjs https:\/\/next\.togetherweown\.com --ledger passive\/smoke\.json/,

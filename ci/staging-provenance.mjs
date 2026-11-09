@@ -27,13 +27,19 @@ export function resolveStagingCandidate({ eventName, event, sha, ref, repository
     !candidate ||
     run.display_title !== `deploy ${candidate}`
   ) {
-    throw new Error("Staging qualification requires a successful same-repository main deploy title");
+    throw new Error(
+      "Staging qualification requires a successful same-repository main deploy title",
+    );
   }
   return candidate;
 }
 
 export function validateStagingIdentityPair(expected, before, after, now = Date.now()) {
-  if (!isSha(expected) || versionMismatch(before, expected, now) || versionMismatch(after, expected, now)) {
+  if (
+    !isSha(expected) ||
+    versionMismatch(before, expected, now) ||
+    versionMismatch(after, expected, now)
+  ) {
     throw new Error("Staging identities do not prove the candidate");
   }
   if (before.deployedAt !== after.deployedAt) {
@@ -83,9 +89,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
       !extra.length
     ) {
       const previous =
-        phase === "after"
-          ? JSON.parse(readFileSync(`${evidence}.before.json`, "utf8"))
-          : undefined;
+        phase === "after" ? JSON.parse(readFileSync(`${evidence}.before.json`, "utf8")) : undefined;
       const identity = await observeStaging({ expected, previous });
       mkdirSync(dirname(evidence), { recursive: true });
       writeFileSync(`${evidence}.${phase}.json`, `${JSON.stringify(identity)}\n`);
