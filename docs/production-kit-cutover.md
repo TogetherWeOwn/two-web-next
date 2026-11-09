@@ -31,12 +31,15 @@ production parity passed, with 3,313 vectors in each recording. This is not
 independent artifact verification or separated-runtime qualification.
 
 [Actions 42546731794](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42546731794)
-on published `6b5a6e954210d9431d095df89c447238e0b16bb6` was still executing both
-test jobs at the latest inspection; auxiliary jobs passed. The twenty-five new
-runner/root-tool fixture registrations have no observed result yet. The web-tool
-extension below is local, unpushed and untested. Preserve the current
-cancel-in-progress producer until completion, a concrete required-leg failure or
-its existing timeout; no new suite, parity or overall pass is claimed.
+on `6b5a6e954210d9431d095df89c447238e0b16bb6` completed with **success**:
+main, Node 22, all auxiliary jobs and `ci-ok` passed. Main coverage passed
+26,757 tests with 676 skipped; Kit parity fixtures passed 672/672, including
+the runner/root-tool additions. Production build, capture/finalization, frozen
+rehearsal, built fatal fixture and production parity steps passed, with 3,313
+vectors in each production recording. No independent artifact verification or
+separated-runtime qualification is claimed. This completion ends preservation
+of that producer. The retained web-tool and profiling integrations below still
+need exact-new-head Actions; these fifty-six fixture registrations are untested.
 
 ## Separated execution caller (not yet exercised)
 
@@ -114,8 +117,8 @@ The data-only separated reader requires the exact ten startup files, checks thei
 manifest against the execution digest and independently recomputes numeric profile
 evidence with the existing pure validator. Existing archive and expansion caps
 remain unchanged. Thirty-two additional fixture registrations reuse existing
-Actions. This integration and the retained web-tool extension are local, unpushed
-and untested; no actual profile or independent review pass is claimed.
+Actions. This integration and the retained web-tool extension are source changes
+only and remain untested; no actual profile or independent review pass is claimed.
 
 The candidate's serialized command metadata still includes its original build
 command declaration. The separately retained build receipt, not that declaration,
