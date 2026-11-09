@@ -130,6 +130,35 @@ secret `QA_AUTH_TOKEN` (secret name only here — never a value), masked in logs
 sent only as the `X-TWO-QA-Auth` header next to an explicit staging `Origin`,
 and never printed or placed in a URL.
 
+### Candidate identity and the qualification window
+
+The scope job resolves the exact `deploy <sha>` title from a successful,
+same-repository main deploy. The deploy workflow's API `head_sha` can be a
+later main tip; it is not candidate provenance. The candidate must be a main
+ancestor. Scope, passive and critical journey code, ZAP and quality checkers
+all check out that candidate. A manual dispatch must target `main` and uses
+its exact dispatch SHA; it does not become automatic-promotion evidence.
+
+Before and after each qualification set, `ci/staging-provenance.mjs` reads
+staging `/version` once, without redirects or cache reuse. Missing, invalid
+or mismatched identity fails the job, as does a changed upload timestamp
+(including a same-SHA redeploy). The passive `commit` file is written from the
+validated served identity only after the passive set. Sanitized identity
+artifacts contain only SHA and upload time, never response bodies or secrets.
+A failed identity check is not retried into a pass or reduced to a passive
+ledger verdict. Historical artifacts are never rewritten or relabelled.
+
+The whole qualification workflow shares `deploy-staging` concurrency with
+the staging deploy job, so repository staging deploys cannot replace the
+Worker during its qualification window. A deploy that wins the mutex before
+an older qualification makes the older candidate fail closed at `/version`.
+Two observations alone do not prove full-window stability against out-of-band
+Cloudflare changes or a rollback away and back between samples; those mutations
+must remain excluded from the protected window. This change adds no staging
+startup, keep-alive, alarm or scheduler, and lifts no existing staging or
+production hold. All on-demand lifecycle, security, soak and release gates
+remain applicable.
+
 Coverage reuses the CI journey logic with staging-safe setup:
 
 | Journey | Spec | Evidence required |

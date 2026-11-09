@@ -958,6 +958,8 @@ jobs:
       - name: Gradual promotion proof harness selftest (real smoke checker, loopback only)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/gradual-promote-proof/proof.test.mjs
+      - name: Staging provenance selftest (offline identities, no deployment)
+        run: node --test ci/staging-provenance.test.mjs
       - name: Promotion resolver selftest (stubbed GitHub API, no network)
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
         run: node --test ci/resolve-promotion-sha.test.mjs

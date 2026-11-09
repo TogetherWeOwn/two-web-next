@@ -10,6 +10,9 @@ on:
       origin:
         type: string
         required: true
+      candidate_sha:
+        type: string
+        default: ""
   schedule:
     - cron: "37 4 * * *"
   workflow_dispatch:
@@ -40,6 +43,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          ref: ${{ inputs.candidate_sha || github.sha }}
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
@@ -50,6 +54,12 @@ jobs:
         run: |
           npx playwright install --with-deps chromium
           node -e 'require("fs").appendFileSync(process.env.GITHUB_ENV, "CHROME_PATH=" + require("playwright").chromium.executablePath() + "\n")'
+      - name: Staging identity before quality checks
+        id: identity-before
+        if: ${{ inputs.candidate_sha != '' }}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: node ci/staging-provenance.mjs observe "$CANDIDATE_SHA" before staging-identity/quality
       - name: Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)
         run: npm run lighthouse:origin -- "$ORIGIN"
       - name: Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)
@@ -60,6 +70,11 @@ jobs:
       - name: Web standards (security headers, HTML basics, internal links)
         if: ${{ !cancelled() }}
         run: npm run standards -- --origin "$ORIGIN"
+      - name: Staging identity after quality checks
+        if: ${{ !cancelled() && steps.identity-before.outcome == 'success' }}
+        env:
+          CANDIDATE_SHA: ${{ inputs.candidate_sha }}
+        run: node ci/staging-provenance.mjs observe "$CANDIDATE_SHA" after staging-identity/quality
       - name: Quality summary (what to fix)
         if: ${{ !cancelled() }}
         env:
@@ -74,7 +89,9 @@ jobs:
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: web-quality-origin-${{ github.run_id }}-${{ github.run_attempt }}
-          path: .lighthouseci/
+          path: |
+            .lighthouseci/
+            staging-identity/*.json
           include-hidden-files: true
           if-no-files-found: warn
           retention-days: 14
