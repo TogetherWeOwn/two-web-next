@@ -9,8 +9,8 @@
   "scripts": {
     "postinstall": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs",
     "prebuild": "node ../ci/build-ember-tokens.mjs --check && node ../ci/build-leaf-css.mjs",
-    "build": "vite build && node scripts/copy-public.mjs && node ../ci/kit-route-evidence.mjs",
-    "check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
+    "build": "node ../ci/build-leaf-css.mjs && vite build && node scripts/copy-public.mjs && node ../ci/kit-route-evidence.mjs",
+    "check": "node ../ci/build-leaf-css.mjs && svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --fail-on-warnings",
     "preview:deploy": "wrangler deploy"
   },
   "devDependencies": {

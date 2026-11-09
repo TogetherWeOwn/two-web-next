@@ -119,10 +119,14 @@ npm ci --include=dev
 cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
 
-Root and `web/` installs generate the ignored critical-CSS module through
-`postinstall`. If install scripts are disabled (`npm ci --ignore-scripts`),
-run the generator explicitly **from the repository root before typecheck,
-tests or bundling**:
+Root installs generate the ignored critical-CSS module through `postinstall`
+when install scripts are enabled. The `web/.npmrc` disables lifecycle hooks,
+including the project's own `postinstall` and `prebuild`, to avoid running
+dependency install scripts. Kit's explicit `build` and `check` commands regenerate
+the module directly, so missing or stale CSS does not depend on those hooks.
+After a web-only install, or a root install with scripts disabled
+(`npm ci --ignore-scripts`), run the generator explicitly **from the repository
+root before root typecheck, tests or bundling**:
 
 ```sh
 node ci/build-leaf-css.mjs
