@@ -73,15 +73,20 @@ test("rejects duplicate keys, malformed YAML, flow queues and alias/merge ambigu
   );
   assert.throws(() => projectWorkflow(workflow(`${block()}  <<: {group: fixture}\n`)), /merge/);
   assert.throws(
-    () =>
-      projectWorkflow(
-        workflow(
-          block(),
-          "    env:\n      NAME: &name fixture\n      COPY: *name\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo fixture\n",
-        ),
-      ),
-    /aliases|anchors/,
+    () => projectWorkflow(workflow(block().replace("concurrency:", "concurrency: &shared"))),
+    /anchors/,
   );
+});
+
+test("preserves unrelated environment aliases used by the deploy workflow", () => {
+  const source = workflow(
+    block(),
+    "    runs-on: ubuntu-latest\n    steps:\n      - run: echo first\n        env: &shared-env\n          NAME: fixture\n      - run: echo second\n        env: *shared-env\n",
+  );
+  const projected = projectWorkflow(source);
+  assert.equal(projected, source.replace("queue: max", "          "));
+  assert.match(projected, /env: &shared-env/);
+  assert.match(projected, /env: \*shared-env/);
 });
 
 test("preserves misplaced queue keys and every unrelated invalid field for actionlint", () => {

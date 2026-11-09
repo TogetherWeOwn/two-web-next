@@ -35,18 +35,30 @@ export function projectWorkflow(source) {
     ranges.push([queue.key.range[0], queue.value.range[2]]);
   }
   if (!ranges.length) return source;
-  // Aliases/merges can conceal or share an extension outside its validated
-  // owner. Fail closed rather than expanding YAML and changing lint coverage.
-  visit(document, {
-    Node(_key, node) {
-      if (isAlias(node) || node.anchor)
-        throw new Error("queue workflows cannot use YAML aliases or anchors");
-    },
-    Pair(_key, pair) {
-      if (isScalar(pair.key) && pair.key.value === "<<")
-        throw new Error("queue workflows cannot use YAML merges");
-    },
-  });
+  // Reject ambiguity in queue ownership and concurrency only. Unrelated
+  // aliases (such as shared step environments) remain byte-identical for lint.
+  const structures = [...owners, jobs].filter(isMap);
+  for (const structure of structures) {
+    if (structure.anchor) throw new Error("queue owners cannot use YAML anchors");
+    if (structure.items.some((pair) => pair.key?.value === "<<"))
+      throw new Error("queue owners cannot use YAML merges");
+  }
+  if (isAlias(jobs) || (isMap(jobs) && jobs.items.some((pair) => isAlias(pair.value))))
+    throw new Error("queue owners cannot use YAML aliases");
+  for (const owner of owners) {
+    const concurrency = owner.get("concurrency", true);
+    if (!concurrency) continue;
+    visit(concurrency, {
+      Node(_key, node) {
+        if (isAlias(node) || node.anchor)
+          throw new Error("concurrency cannot use YAML aliases or anchors");
+      },
+      Pair(_key, pair) {
+        if (isScalar(pair.key) && pair.key.value === "<<")
+          throw new Error("concurrency cannot use YAML merges");
+      },
+    });
+  }
   let projected = source;
   for (const [start, end] of ranges.sort((a, b) => b[0] - a[0])) {
     projected =
