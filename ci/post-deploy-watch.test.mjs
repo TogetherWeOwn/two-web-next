@@ -190,6 +190,31 @@ test("analytics-only wakes do not count as extra readiness opportunities", async
   assert.deepEqual(calls.rateAt, [45, 90, 135]);
 });
 
+test("analytics latency cannot consume an unprobed readiness deadline", async () => {
+  for (const failing of [true, false]) {
+    const { deps, calls, elapsed } = harness({
+      probes: (n) => (failing && n >= 2 ? { state: "miss", reason: "x" } : { state: "ok" }),
+      rateSeconds: () => 20,
+    });
+    const result = await watchProduction(
+      { ...config, durationSeconds: 180, errorRateEverySeconds: 45 },
+      deps,
+    );
+    assert.equal(result.verdict, failing ? "breach" : "pass");
+    assert.deepEqual(calls.probeAt, [0, 65, 120, 180]);
+    assert.deepEqual(calls.rateAt, failing ? [45, 90, 135] : [45, 90, 135, 180]);
+    if (failing) {
+      assert.equal(result.reason, "readiness");
+      assert.equal(result.judged, 3);
+      assert.equal(elapsed(), 180);
+    } else {
+      assert.equal(result.judged, 4);
+      assert.equal(result.missed, 0);
+      assert.equal(elapsed(), 200, "only the final query latency extends completion");
+    }
+  }
+});
+
 test("wall-clock corrections cannot shorten or restart the actual watch", async () => {
   for (const correction of [3600, -3600]) {
     const { deps, calls, elapsed } = harness({

@@ -102,7 +102,8 @@ export async function watchProduction(config, deps = {}) {
       await sleep(Math.max(1, Math.ceil(nextAt - before)) / 1000);
       continue;
     }
-    if (before >= nextProbeAt || before >= durationMs) {
+    const probeDue = before >= nextProbeAt || before >= durationMs;
+    if (probeDue) {
       const result = await probe({ origin: settings.origin, versionId: settings.versionId });
       if (result.state === "superseded") {
         log(`::notice::watch stands down: ${result.reason}`);
@@ -154,8 +155,10 @@ export async function watchProduction(config, deps = {}) {
       }
     }
     if (final) break;
-    const after = elapsed();
-    nextProbeAt = Math.max(nextProbeAt, (Math.floor(after / intervalMs) + 1) * intervalMs);
+    if (probeDue) {
+      const after = elapsed();
+      nextProbeAt = Math.max(nextProbeAt, (Math.floor(after / intervalMs) + 1) * intervalMs);
+    }
   }
   if (missed > 0) {
     log(
