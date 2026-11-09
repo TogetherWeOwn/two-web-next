@@ -135,9 +135,11 @@ and never printed or placed in a URL.
 The scope job resolves the exact `deploy <sha>` title from a successful,
 same-repository main deploy. The deploy workflow's API `head_sha` can be a
 later main tip; it is not candidate provenance. The candidate must be a main
-ancestor. Scope, passive and critical journey code, ZAP and quality checkers
-all check out that candidate. A manual dispatch must target `main` and uses
-its exact dispatch SHA; it does not become automatic-promotion evidence.
+ancestor. Scope runs trusted workflow-revision code and diffs that candidate
+as data without checking it out. Passive and critical journey code, ZAP and
+quality checkers check out the candidate with cache writes disabled. A manual
+dispatch must target `main` and uses its exact dispatch SHA; it does not become
+automatic-promotion evidence.
 
 Before and after each qualification set, `ci/staging-provenance.mjs` reads
 staging `/version` once, without redirects or cache reuse. Missing, invalid
@@ -163,7 +165,15 @@ so a qualification does not replace a pending deployment. GitHub retains at most
 the lock queue, not dispatch time. Overflow/cancellation is not qualification
 evidence. The shared rollback mutation job also preserves pending production
 entries; its static production group, non-cancellation and authorization gates
-remain unchanged. Repository mutations therefore cannot replace the Worker during qualification,
+remain unchanged. The required scope gate uses integrity-pinned actionlint
+1.7.12 plus `ci/workflow-lint.mjs`: the latter validates plain `single`/`max`
+queue values at workflow/job concurrency locations and refuses cancellation,
+expressions, flow mappings and alias/merge ambiguity. It then blanks only the
+validated extension, preserving source locations, and actionlint checks every
+other field with no ignored diagnostics. Invalid queue syntax fails closed;
+fixtures also prove unrelated actionlint errors still fail. Remove this
+compatibility projection when upstream actionlint supports the extension.
+Repository mutations therefore cannot replace the Worker during qualification,
 even by rolling away and back between samples. A deploy that wins the mutex
 before an older qualification makes the older candidate fail closed at `/version`.
 Two observations alone do not prove full-window stability against out-of-band

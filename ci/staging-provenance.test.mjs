@@ -176,7 +176,12 @@ test("qualification pins every checker, validates ancestry and shares the stagin
   );
   assert.match(workflow, /run: node ci\/staging-provenance\.mjs candidate/);
   assert.match(workflow, /git merge-base --is-ancestor "\$CANDIDATE_SHA" origin\/main/);
-  assert.match(workflow, /ref: \$\{\{ steps\.candidate\.outputs\.sha \}\}/);
+  const scope = workflow.split("  zap-baseline:")[0];
+  assert.equal((scope.match(/uses: actions\/checkout@/g) ?? []).length, 1);
+  assert.match(scope, /ref: \$\{\{ github\.sha \}\}/);
+  assert.doesNotMatch(scope, /ref: \$\{\{ steps\.candidate\.outputs\.sha \}\}/);
+  assert.match(scope, /git diff --name-status -M "\$HEAD_SHA~1" "\$HEAD_SHA"/);
+  assert.match(scope, /bash ci\/change-scope\.sh/);
   assert.equal((workflow.match(/ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/g) ?? []).length, 2);
   assert.equal(
     (workflow.match(/candidate_sha: \$\{\{ needs\.scope\.outputs\.sha \}\}/g) ?? []).length,

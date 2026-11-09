@@ -70,11 +70,8 @@ jobs:
         env:
           CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
         run: git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          ref: ${{ steps.candidate.outputs.sha }}
-          fetch-depth: 0
-          persist-credentials: false
+      # Diff the validated candidate as data; keep scope code on the trusted
+      # workflow revision. Never execute candidate code in this privileged job.
       - id: scope
         env:
           HEAD_SHA: ${{ steps.candidate.outputs.sha }}
