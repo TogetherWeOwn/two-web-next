@@ -70,6 +70,7 @@ function harness({
   probeSeconds = () => 0,
   rateSeconds = () => 0,
   wallOffset = () => 0,
+  sleepSeconds = (seconds) => seconds,
 } = {}) {
   const started = Date.parse("2026-11-01T12:00:00Z");
   let elapsed = 0;
@@ -79,7 +80,7 @@ function harness({
     monotonicNow: () => 42_000 + elapsed * 1000,
     sleep: async (seconds) => {
       calls.sleeps += 1;
-      elapsed += seconds;
+      elapsed += sleepSeconds(seconds);
     },
     log: (line) => calls.log.push(line),
     probe: async () => {
@@ -140,6 +141,53 @@ test("watch scheduling stays anchored despite realistic probe and query latency"
   assert.equal(result.judged, 6);
   assert.equal(result.missed, 0);
   assert.equal(elapsed(), 1829, "only the final probe/query latency extends completion");
+});
+
+test("early timer wakes cannot duplicate readiness slots or accelerate a three-miss breach", async () => {
+  for (const sleepSeconds of [
+    // Node truncates fractional milliseconds and clamps delays below 1ms.
+    (seconds) => Math.max(1, Math.trunc(seconds * 1000)) / 1000,
+    (seconds) => Math.max(0.001, seconds - 0.01),
+  ]) {
+    for (const failing of [false, true]) {
+      const { deps, calls, elapsed } = harness({
+        sleepSeconds,
+        probeSeconds: () => 0.0001,
+        probes: (n) => (failing && n >= 5 ? { state: "miss", reason: "x" } : { state: "ok" }),
+      });
+      const result = await watchProduction(config, deps);
+      assert.deepEqual(
+        calls.probeAt.map((seconds) => Math.floor(seconds / 60)),
+        Array.from({ length: failing ? 7 : 31 }, (_, n) => n),
+        "every probe uses a distinct eligible minute slot, even after an early wake",
+      );
+      if (failing) {
+        assert.equal(result.verdict, "breach");
+        assert.equal(result.reason, "readiness");
+        assert.ok(calls.probeAt.at(-1) >= 360, "three misses cannot breach before slot six");
+      } else {
+        assert.equal(result.verdict, "pass");
+        assert.equal(result.judged, 6);
+        assert.equal(result.missed, 0);
+        assert.ok(elapsed() >= 1800, "an early final wake cannot shorten the watch");
+        assert.ok(elapsed() < 1800.01, "early wakes do not restart or drift the watch");
+      }
+    }
+  }
+});
+
+test("analytics-only wakes do not count as extra readiness opportunities", async () => {
+  const { deps, calls } = harness({
+    probes: (n) => (n >= 2 ? { state: "miss", reason: "x" } : { state: "ok" }),
+  });
+  const result = await watchProduction(
+    { ...config, durationSeconds: 180, errorRateEverySeconds: 45 },
+    deps,
+  );
+  assert.equal(result.verdict, "breach");
+  assert.equal(result.reason, "readiness");
+  assert.deepEqual(calls.probeAt, [0, 60, 120, 180]);
+  assert.deepEqual(calls.rateAt, [45, 90, 135]);
 });
 
 test("wall-clock corrections cannot shorten or restart the actual watch", async () => {

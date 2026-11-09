@@ -92,20 +92,31 @@ export async function watchProduction(config, deps = {}) {
   let judged = 0;
   let handled = 0;
   let missed = 0;
+  let nextProbeAt = 0;
   for (;;) {
-    const result = await probe({ origin: settings.origin, versionId: settings.versionId });
-    if (result.state === "superseded") {
-      log(`::notice::watch stands down: ${result.reason}`);
-      return { verdict: "superseded", judged };
+    const before = elapsed();
+    const nextRateAt = (handled + 1) * rateEveryMs;
+    const nextAt = Math.min(nextProbeAt, nextRateAt, durationMs);
+    if (before < nextAt) {
+      // Timers can wake early; retain the deadline and recheck eligibility.
+      await sleep(Math.max(1, Math.ceil(nextAt - before)) / 1000);
+      continue;
     }
-    if (result.state === "ok") {
-      misses = 0;
-    } else {
-      misses += 1;
-      log(`readiness miss ${misses}/${settings.readinessMisses}: ${result.reason}`);
-      if (misses >= settings.readinessMisses) {
-        log(`::error::readiness breach: ${settings.readinessMisses} consecutive misses`);
-        return { verdict: "breach", reason: "readiness", judged };
+    if (before >= nextProbeAt || before >= durationMs) {
+      const result = await probe({ origin: settings.origin, versionId: settings.versionId });
+      if (result.state === "superseded") {
+        log(`::notice::watch stands down: ${result.reason}`);
+        return { verdict: "superseded", judged };
+      }
+      if (result.state === "ok") {
+        misses = 0;
+      } else {
+        misses += 1;
+        log(`readiness miss ${misses}/${settings.readinessMisses}: ${result.reason}`);
+        if (misses >= settings.readinessMisses) {
+          log(`::error::readiness breach: ${settings.readinessMisses} consecutive misses`);
+          return { verdict: "breach", reason: "readiness", judged };
+        }
       }
     }
     const at = elapsed();
@@ -144,9 +155,7 @@ export async function watchProduction(config, deps = {}) {
     }
     if (final) break;
     const after = elapsed();
-    const nextProbeAt = (Math.floor(after / intervalMs) + 1) * intervalMs;
-    const nextRateAt = (handled + 1) * rateEveryMs;
-    await sleep(Math.max(0, Math.min(nextProbeAt, nextRateAt, durationMs) - after) / 1000);
+    nextProbeAt = Math.max(nextProbeAt, (Math.floor(after / intervalMs) + 1) * intervalMs);
   }
   if (missed > 0) {
     log(
