@@ -75,7 +75,10 @@ describe("critical CSS is a build output, not a source", () => {
         for (const source of ["styles.css", "theme-tokens.css", "theme.css"]) {
           writeFileSync(join(fixture, "public", source), ":root { color: red; }");
         }
-        writeFileSync(join(fixture, "web/package.json"), readFileSync(join(root, "web/package.json")));
+        writeFileSync(
+          join(fixture, "web/package.json"),
+          readFileSync(join(root, "web/package.json")),
+        );
         writeFileSync(join(fixture, "web/.npmrc"), readFileSync(join(root, "web/.npmrc")));
         // Stop at the bundler/typechecker boundary; no dependencies or build are needed.
         for (const binary of ["vite", "svelte-kit"]) {
