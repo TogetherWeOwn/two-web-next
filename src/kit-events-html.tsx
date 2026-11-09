@@ -1,6 +1,7 @@
 import { HtmlEscapedCallbackPhase, resolveCallback } from "hono/utils/html";
 import { EventsCalendarPage, EventsSearchTooLongPage } from "./events/pages";
 import type { KitEventsLoadData } from "./kit-events";
+import { EVENTS_INLINE_CSS_MARKER } from "./events/inline-css";
 
 export interface KitEventsHtml {
   status: 200;
@@ -25,7 +26,7 @@ export async function renderEventsHtml(
   headers: Record<string, string>,
 ): Promise<KitEventsHtml> {
   const element = data.queryTooLong ? (
-    <EventsSearchTooLongPage appUrl={data.appUrl} />
+    <EventsSearchTooLongPage appUrl={data.appUrl} inlineScheduleCss />
   ) : (
     <EventsCalendarPage
       state={data.state}
@@ -52,7 +53,11 @@ export async function renderEventsHtml(
   const body = await resolveCallback(element, HtmlEscapedCallbackPhase.Stringify, false, {});
   return {
     status: 200,
-    headers: { ...headers, "content-type": "text/html; charset=UTF-8" },
+    headers: {
+      ...headers,
+      "content-type": "text/html; charset=UTF-8",
+      [EVENTS_INLINE_CSS_MARKER]: "true",
+    },
     body: String(body),
   };
 }

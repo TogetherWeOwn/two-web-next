@@ -2,6 +2,9 @@
 // A 200 homepage fallback is not an admissible performance measurement.
 const assert = require("node:assert/strict");
 const { spawn } = require("node:child_process");
+const { createHash } = require("node:crypto");
+const { readFileSync } = require("node:fs");
+const { join } = require("node:path");
 
 const origin = "http://127.0.0.1:8787";
 const key = "01ARZ3NDEKTSV4RRFFQ69G5FAV";
@@ -30,6 +33,34 @@ function assertFixtureContent(path, response, html, before, after) {
         ? /<style>[\s\S]*\.hero h1[\s\S]*<\/style>/
         : /<style>[\s\S]*\.content-page[\s\S]*<\/style>/,
       `${path}: real app stylesheet`,
+    );
+  } else if (path === "/events") {
+    // Candidate-owned representation assertion only: keep every populated
+    // content, status, redirect and time check below unchanged.
+    const source = (name) => readFileSync(join(__dirname, "../public", name), "utf8");
+    const expected = [
+      ["styles.css", "theme-tokens.css", "theme.css"].map(source).join("\n"),
+      source("schedule-theme.css"),
+    ];
+    const styles = [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((match) => match[1]);
+    assert.deepEqual(styles, expected, "/events: exact L then S stylesheet bytes");
+    assert.ok(
+      html.includes(expected.map((css) => `<style>${css}</style>`).join("")),
+      "/events: adjacent L then S",
+    );
+    const csp = response.headers.get("content-security-policy") || "";
+    const hashes = expected.map(
+      (css) => `'sha256-${createHash("sha256").update(css, "utf8").digest("base64")}'`,
+    );
+    assert.equal(
+      /(?:^|;\s*)style-src ([^;]+)/.exec(csp)?.[1],
+      `'self' ${hashes.join(" ")}`,
+      "/events: stylesheet hashes",
+    );
+    assert.doesNotMatch(
+      html,
+      /<link\b[^>]*href="\/(?:styles|theme-tokens|theme|schedule-theme)\.css"/,
+      "/events: no blocking stylesheet links",
     );
   } else {
     assert.match(

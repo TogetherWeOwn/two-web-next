@@ -1,7 +1,8 @@
 import type { Context, Next } from "hono";
 import type { Env } from "./env";
 import { imageHosts } from "./image-policy";
-import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
+import { LEAF_CRITICAL_CSS_SHA256, SCHEDULE_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
+import { takeEventsInlineCssResponse } from "./events/inline-css";
 
 // Response-header parity (TOG-10118 ports two-web TOG-7328 + TOG-8729).
 // Two layers, same split as legacy:
@@ -97,8 +98,9 @@ export async function robotsTag(c: Context<{ Bindings: Env }>, next: Next): Prom
 // exact leaf bundle byte for byte (same LEAF_CRITICAL_CSS hash, no generator
 // change); recovery/error shells keep theme="home" without the flag and stay
 // on external stylesheets. Any other response carrying the hash would be
-// inert, but the allowlist stays scoped to these paths so the documented
-// policy for every other route never changes shape.
+// inert, but the leaf allowlist stays scoped to these paths. Upcoming schedule
+// documents use a separate response classification and exact GET/HEAD predicate;
+// a path, theme or request header alone must never grant their L/S hashes.
 const INLINE_CRITICAL_CSS_PATHS: ReadonlySet<string> = new Set([
   "/",
   "/about",
@@ -122,13 +124,26 @@ export function isInlineCriticalCssPath(path: string): boolean {
 // secureHeaders (same pattern as robotsTag), so no extra middleware is
 // registered. String replacement keeps the directive order byte-identical to
 // securityHeadersFor for the same path.
+function scheduleStyleHashes(
+  request: { path: string; method: string },
+  classified: boolean,
+): string[] {
+  return classified && request.path === "/events" && ["GET", "HEAD"].includes(request.method)
+    ? [`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`, `'sha256-${SCHEDULE_CRITICAL_CSS_SHA256}'`]
+    : [];
+}
+
 export function leafInlineStyleCsp(c: Context): void {
-  if (!isInlineCriticalCssPath(c.req.path)) return;
+  const classified = takeEventsInlineCssResponse(c.res);
+  const hashes = isInlineCriticalCssPath(c.req.path)
+    ? [`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`]
+    : scheduleStyleHashes({ path: c.req.path, method: c.req.method }, classified && !c.error);
+  if (hashes.length === 0) return;
   const csp = c.res.headers.get("Content-Security-Policy");
   if (!csp || !csp.includes("style-src 'self'")) return;
   c.res.headers.set(
     "Content-Security-Policy",
-    csp.replace("style-src 'self'", `style-src 'self' 'sha256-${LEAF_CRITICAL_CSS_SHA256}'`),
+    csp.replace("style-src 'self'", `style-src 'self' ${hashes.join(" ")}`),
   );
 }
 
@@ -174,18 +189,18 @@ const CSP_REPORT_GROUP = "csp-endpoint";
 export function securityHeadersFor(
   request: { path: string; method: string },
   featuredImageHosts?: string,
+  response: { inlineScheduleCss?: boolean } = {},
 ): Array<[string, string]> {
   const framed = request.path === "/join" && ["GET", "HEAD"].includes(request.method);
   const images = imageHosts(featuredImageHosts)
     .map((host) => `https://${host}`)
     .join(" ");
-  // Only the inline-critical pages (/ plus about/faq/rules/privacy) emit an
-  // inlined <style> block, so only they carry its hash allowlist. Every other
-  // path keeps the exact documented policy byte-identical, which the adapter
-  // _headers parity and Kit parity tests pin.
+  // Existing leaf/home policy is unchanged. Upcoming L/S additionally needs
+  // the server-owned response classification supplied by the decorator; the
+  // default tuple, errors and unrelated paths keep their original policy.
   const leafStyle = isInlineCriticalCssPath(request.path)
     ? [`'sha256-${LEAF_CRITICAL_CSS_SHA256}'`]
-    : [];
+    : scheduleStyleHashes(request, response.inlineScheduleCss === true);
   const csp = [
     ["default-src", "'self'"],
     ["base-uri", "'self'"],

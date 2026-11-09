@@ -19,6 +19,7 @@ import {
 } from "./events/page-models.server";
 import { guardRequestId, publicReadGuard, seedGuardRequestId } from "./events/routes-shared";
 import type { DiscordEventsSource } from "./events/discord-transients-types";
+import { EVENTS_INLINE_CSS_MARKER, isEventsInlineCssResponse } from "./events/inline-css";
 import { inviteDestination } from "./invite";
 import type { JoinResult } from "./return-journey";
 import { canonicalUrl } from "./seo";
@@ -166,6 +167,7 @@ export async function dispatchEventsRequest(
       // repeat guests render the page instead of its source.
       headers.set("content-type", "text/html; charset=UTF-8");
       if (hit.vary) headers.set("vary", hit.vary);
+      if (hit.inlineScheduleCss) headers.set(EVENTS_INLINE_CSS_MARKER, "true");
       return new Response(hit.body, { status: hit.status, headers });
     }
   }
@@ -197,6 +199,7 @@ export async function dispatchEventsRequest(
           cacheControl: cleanResponse.headers.get("cache-control") ?? "public, max-age=60",
           vary: cleanResponse.headers.get("vary"),
           body,
+          inlineScheduleCss: isEventsInlineCssResponse(cleanResponse),
         },
         ANON_EVENTS_TTL_MS,
         now,

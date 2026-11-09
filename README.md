@@ -102,7 +102,13 @@ cp .dev.vars.example .dev.vars   # local settings only; never commit this file
 ```
 
 Root and `web/` installs generate the ignored critical-CSS module through
-`postinstall`. If install scripts are disabled (`npm ci --ignore-scripts`),
+`postinstall`. It contains the unchanged home/content three-sheet literal L and
+one separate schedule-sheet literal S. Only upcoming `/events` documents opt in
+to L then S; the archive and other shells keep external stylesheets. Both hashes
+cover the exact text of their own style elements. The generator refuses invalid
+UTF-8, NUL, CR, BOM and closing-style tags, and atomically writes both literals
+and hashes together. `node ci/build-leaf-css.mjs --check` rejects stale output
+without rewriting it. If install scripts are disabled (`npm ci --ignore-scripts`),
 run the generator explicitly **from the repository root before typecheck,
 tests or bundling**:
 

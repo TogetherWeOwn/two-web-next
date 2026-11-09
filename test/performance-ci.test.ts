@@ -15,6 +15,7 @@ import { getPublicEvent, listHomeUpcoming } from "../src/events/reads";
 import { listPublishedFeatured, listVisibleFeatured } from "../src/featured";
 import { cachedFeatured } from "../src/home-cache";
 import { auditPaths, fixtureKey } from "../ci/lighthouse-paths";
+import { LEAF_CRITICAL_CSS, SCHEDULE_CRITICAL_CSS } from "../src/leaf-critical-css";
 
 const require = createRequire(import.meta.url);
 const config = require("../ci/lighthouserc.cjs").ci;
@@ -61,6 +62,11 @@ describe("performance CI", () => {
           // rules), the leaves carry the content rules.
           expect(html, path).toContain("<style>");
           expect(html, path).toContain(path === "/" ? ".hero h1" : ".content-page");
+          expect(html, path).not.toContain('rel="stylesheet"');
+        } else if (path === "/events") {
+          expect(html, path).toContain(
+            `<style>${LEAF_CRITICAL_CSS}</style><style>${SCHEDULE_CRITICAL_CSS}</style>`,
+          );
           expect(html, path).not.toContain('rel="stylesheet"');
         } else {
           expect(html, path).toContain("/styles.css");
@@ -335,6 +341,36 @@ describe("performance CI", () => {
       (html: string) => html.replace("3 of 20 going", "0 of 20 going"),
     ],
     [
+      "calendar L byte changed",
+      "/events",
+      (html: string) =>
+        html.replace(`<style>${LEAF_CRITICAL_CSS}</style>`, `<style>${LEAF_CRITICAL_CSS} </style>`),
+    ],
+    [
+      "calendar S byte changed",
+      "/events",
+      (html: string) =>
+        html.replace(
+          `<style>${SCHEDULE_CRITICAL_CSS}</style>`,
+          `<style>${SCHEDULE_CRITICAL_CSS} </style>`,
+        ),
+    ],
+    [
+      "calendar reversed stylesheet order",
+      "/events",
+      (html: string) =>
+        html.replace(
+          `<style>${LEAF_CRITICAL_CSS}</style><style>${SCHEDULE_CRITICAL_CSS}</style>`,
+          `<style>${SCHEDULE_CRITICAL_CSS}</style><style>${LEAF_CRITICAL_CSS}</style>`,
+        ),
+    ],
+    [
+      "calendar blocking stylesheet retained",
+      "/events",
+      (html: string) =>
+        html.replace("</head>", '<link rel="stylesheet" href="/schedule-theme.css"/></head>'),
+    ],
+    [
       "detail missing heading despite populated metadata",
       `/e/${fixtureKey}`,
       (html: string) => html.replace(/<h1\b[^>]*>[\s\S]*?<\/h1>/, ""),
@@ -502,6 +538,22 @@ describe("performance CI", () => {
         assertFixtureContent(path, response, withTimes(instants), before, after),
       ).toThrow();
     });
+  });
+
+  it("rejects missing or stale schedule CSP hashes before announcing readiness", async () => {
+    const before = Date.now();
+    const response = await request("/events");
+    const html = await response.text();
+    const after = Date.now();
+    expect(() => assertFixtureContent("/events", response, html, before, after)).not.toThrow();
+    for (const csp of [
+      "style-src 'self'",
+      response.headers.get("content-security-policy")!.replace("sha256-", "sha256-stale-"),
+    ]) {
+      const stale = new Response(html, { headers: response.headers });
+      stale.headers.set("content-security-policy", csp);
+      expect(() => assertFixtureContent("/events", stale, html, before, after)).toThrow();
+    }
   });
 
   it("never normalizes a homepage timestamp into the two-hour end window", async () => {

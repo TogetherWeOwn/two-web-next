@@ -22,7 +22,7 @@ const inputs = [
 ];
 // Read by later generators (a revision's generator may or may not need them);
 // copied only when that revision has them, so every revision finds its inputs.
-const optionalInputs = ["assets/leaf-only.css"];
+const optionalInputs = ["assets/leaf-only.css", "public/schedule-theme.css"];
 const options = {
   encoding: "utf8",
   timeout: 10000,
@@ -35,7 +35,10 @@ function snapshot(sha) {
   const dir = mkdtempSync(join(tmpdir(), "leaf-css-review-"));
   try {
     for (const input of inputs) {
-      const contents = execFileSync("git", ["show", `${sha}:${input}`], options);
+      const contents = execFileSync("git", ["show", `${sha}:${input}`], {
+        ...options,
+        encoding: null,
+      });
       mkdirSync(dirname(join(dir, input)), { recursive: true });
       writeFileSync(join(dir, input), contents);
     }
@@ -43,7 +46,10 @@ function snapshot(sha) {
       const present = spawnSync("git", ["cat-file", "-e", `${sha}:${input}`], options).status === 0;
       if (!present) continue;
       mkdirSync(dirname(join(dir, input)), { recursive: true });
-      writeFileSync(join(dir, input), execFileSync("git", ["show", `${sha}:${input}`], options));
+      writeFileSync(
+        join(dir, input),
+        execFileSync("git", ["show", `${sha}:${input}`], { ...options, encoding: null }),
+      );
     }
     mkdirSync(join(dir, "src"));
     // Use that revision's actual generator, not a duplicate concatenation rule.
@@ -59,7 +65,28 @@ function snapshot(sha) {
     const bytes = JSON.parse(css[1]);
     const sha256 = createHash("sha256").update(bytes, "utf8").digest("base64");
     if (sha256 !== hash[1] || /<\/style/i.test(bytes)) throw new Error("invalid generated bundle");
-    return { sha, sha256, bytes: Buffer.byteLength(bytes, "utf8") };
+    const scheduleCss = /export const SCHEDULE_CRITICAL_CSS: string =\s*("(?:[^"\\]|\\.)*");/.exec(
+      module,
+    );
+    const scheduleHash = /export const SCHEDULE_CRITICAL_CSS_SHA256: string = "([^"]+)";/.exec(
+      module,
+    );
+    let schedule = null;
+    if (scheduleCss || scheduleHash) {
+      if (!scheduleCss || !scheduleHash) throw new Error("incomplete generated schedule bundle");
+      const css = JSON.parse(scheduleCss[1]);
+      const source = readFileSync(join(dir, "public/schedule-theme.css"));
+      const digest = createHash("sha256").update(source).digest("base64");
+      if (
+        !Buffer.from(css, "utf8").equals(source) ||
+        digest !== scheduleHash[1] ||
+        /<\/style/i.test(css)
+      ) {
+        throw new Error("invalid generated schedule bundle");
+      }
+      schedule = { sha256: digest, bytes: source.length };
+    }
+    return { sha, sha256, bytes: Buffer.byteLength(bytes, "utf8"), schedule };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -69,7 +96,7 @@ try {
   if (process.argv.length !== 4) throw new Error("expected base and head commit SHAs");
   const base = snapshot(process.argv[2]);
   const head = snapshot(process.argv[3]);
-  const changed = base.sha256 !== head.sha256;
+  const changed = base.sha256 !== head.sha256 || base.schedule?.sha256 !== head.schedule?.sha256;
   const report = { version: 1, ok: true, changed, base, head };
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(
@@ -83,6 +110,8 @@ try {
         "| --- | --- | --- | --- |",
         `| Base | \`${base.sha}\` | \`sha256-${base.sha256}\` | ${base.bytes} |`,
         `| Head | \`${head.sha}\` | \`sha256-${head.sha256}\` | ${head.bytes} |`,
+        `| Base S | \`${base.sha}\` | ${base.schedule ? `\`sha256-${base.schedule.sha256}\`` : "not generated"} | ${base.schedule?.bytes ?? "not generated"} |`,
+        `| Head S | \`${head.sha}\` | ${head.schedule ? `\`sha256-${head.schedule.sha256}\`` : "not generated"} | ${head.schedule?.bytes ?? "not generated"} |`,
         "",
         "The drift suite checks generated-output coherence, not an independently committed hash pin.",
         "",

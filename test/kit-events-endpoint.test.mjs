@@ -195,6 +195,18 @@ describe("Kit events endpoint late-failure contract", () => {
     expect(deleteCookie).not.toHaveBeenCalled();
   });
 
+  it("does not leak classification when cookie handling fails after rendering", async () => {
+    const { event, headers, deleteCookie } = requestEvent({ flash: true });
+    deleteCookie.mockImplementationOnce(() => {
+      throw new Error("cookie handling failed after rendering");
+    });
+    await expectUnavailable(event);
+    const rendered = await seams.render.mock.results[0].value;
+    expect(rendered.headers["x-two-events-inline-css"]).toBe("true");
+    expectPrivate(headers);
+    expect(headers.has("x-two-events-inline-css")).toBe(false);
+  });
+
   it("does not queue a join-flash deletion when Response construction fails", async () => {
     const { event, headers, deleteCookie } = requestEvent({ flash: true });
     const construct = vi.fn(() => {
