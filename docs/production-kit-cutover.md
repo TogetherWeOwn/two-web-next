@@ -51,6 +51,18 @@ fifty-six web-tool/profile fixture registrations remain untested. Syntax and
 whitespace checks passed; no local tests, lint, typecheck, build, installation,
 collection or deployment ran. Corrected exact-head Actions remains required.
 
+[Actions 42553762384](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42553762384)
+on `a66d2e8a71a6e9eb5cbb58a08d64155c052f85c5` completed with **success**:
+main, Node 22, auxiliary jobs and `ci-ok` passed. Main coverage passed 26,757
+tests with 676 skipped. Production build/capture/finalization, frozen rehearsal,
+built fatal fixture and all-off production parity passed; both production
+recordings contain 3,313 vectors. The web-tool/profile fixture additions are now
+covered by successful Actions, superseding their earlier untested status above.
+No independent artifact verification or actual separated execution/qualification
+is claimed. This completion ends preservation of that producer. The Node-byte
+fingerprint and final installed-input drift extensions below are being published
+with twenty-nine new fixture registrations; their exact-head Actions is pending.
+
 ## Separated execution caller (not yet exercised)
 
 `ci/kit-canonical-execute.mjs` connects the existing source binder and
@@ -96,7 +108,7 @@ the member reader rejects missing, source-substituted or qualified runner claims
 Fourteen additional fixture registrations use the existing Actions invocation and
 have not run. No actual candidate runner has been observed through this path.
 
-The retained local runner extension fingerprints the Node executable mapped by
+The runner extension fingerprints the Node executable mapped by
 Linux `/proc/self/exe`, cross-checking its identity with the resolved executable
 and bounded streaming SHA-256. File identity, size, mode and change timestamps
 must remain stable across the read; access timestamps are deliberately excluded.
@@ -104,7 +116,7 @@ The existing pre-install and post-finalization observations must carry the same
 fingerprint. The separated reader refuses missing, malformed or authenticated
 fingerprint claims. No executable path is retained. Seventeen new fixture
 registrations reuse the existing Actions suite, alongside an independent hash
-assertion in the runner fixture; they have not run or been published. This is
+assertion in the runner fixture; their exact-new-head Actions is pending. This is
 an observed byte fingerprint, not an authenticated release pin, npm/transitive
 verification, proof against intervening mutation or collection qualification.
 No actual separated runtime has been measured through this path.
@@ -140,15 +152,15 @@ The data-only separated reader requires the exact ten startup files, checks thei
 manifest against the execution digest and independently recomputes numeric profile
 evidence with the existing pure validator. Existing archive and expansion caps
 remain unchanged. Thirty-two additional fixture registrations reuse existing
-Actions. This integration and the retained web-tool extension are source changes
-only and remain untested; no actual profile or independent review pass is claimed.
+Actions. These fixtures passed in the successful run recorded above; no actual
+separated profile or independent review pass is claimed.
 
-The retained local input-drift extension reuses the build-return check after
+The input-drift extension reuses the build-return check after
 budget/profiling and frozen finalization, before writing execution success. It
 requires unchanged generated CSS and both hidden installed-lock snapshots, with
 fixed paths and bounded regular-file reads. A later mutation refuses success
 without recopying or discarding the frozen capture. Twelve new fixture
-registrations reuse existing Actions; they are unrun and unpublished. This
+registrations reuse existing Actions; their exact-new-head result is pending. This
 endpoint check is not dependency-content verification, absence of intervening
 mutation, actual producer execution or qualification.
 
