@@ -48,7 +48,7 @@ jobs:
       contents: read
       issues: write
       pull-requests: write
-    uses: TogetherWeOwn/.github/.github/workflows/pr-size.yml@82c5b367c6e3e8032666029dc22d206fff39c3f2
+    uses: TogetherWeOwn/.github/.github/workflows/pr-size.yml@d427f7212f478ea3823a605edb394b0722e152b5
     with:
       # Runner separation: pull_request runs stay on GitHub-hosted runners in
       # both visibilities (docs/private-flip-checklist.md).
@@ -68,6 +68,6 @@ jobs:
       contents: read
       issues: read
       pull-requests: read
-    uses: TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@82c5b367c6e3e8032666029dc22d206fff39c3f2
+    uses: TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@d427f7212f478ea3823a605edb394b0722e152b5
     with:
       runs-on: '["ubuntu-latest"]'
