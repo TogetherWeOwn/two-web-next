@@ -143,6 +143,15 @@ remain unchanged. Thirty-two additional fixture registrations reuse existing
 Actions. This integration and the retained web-tool extension are source changes
 only and remain untested; no actual profile or independent review pass is claimed.
 
+The retained local input-drift extension reuses the build-return check after
+budget/profiling and frozen finalization, before writing execution success. It
+requires unchanged generated CSS and both hidden installed-lock snapshots, with
+fixed paths and bounded regular-file reads. A later mutation refuses success
+without recopying or discarding the frozen capture. Twelve new fixture
+registrations reuse existing Actions; they are unrun and unpublished. This
+endpoint check is not dependency-content verification, absence of intervening
+mutation, actual producer execution or qualification.
+
 The candidate's serialized command metadata still includes its original build
 command declaration. The separately retained build receipt, not that declaration,
 records the actual script-disabled build invocation. Profiling is a local sampling

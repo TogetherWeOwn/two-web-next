@@ -17,6 +17,7 @@ import {
   runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
   runCanonicalCandidateProfile,
+  verifyCanonicalInstalledInputs,
 } from "./kit-canonical-source.mjs";
 import { verifyCanonicalArchiveMembers, verifyCanonicalBuild } from "./kit-upload-rehearsal.mjs";
 import { verifyWranglerTool } from "./kit-wrangler-tool.mjs";
@@ -351,6 +352,7 @@ export async function executeCanonicalBuild(
   { collector, candidate, destination, bindingPath, bindingSha256, context },
   {
     inspect = inspectCanonicalSource,
+    installedInputs = verifyCanonicalInstalledInputs,
     runner = observeCanonicalRunner,
     tool = verifyWranglerTool,
     install = installCanonicalCandidate,
@@ -510,6 +512,9 @@ export async function executeCanonicalBuild(
     if (!budgetError) throw error;
   }
   if (budgetError) throw budgetError;
+  // Budget/profiling runs after the build's input check. Refuse later drift
+  // without recopying or discarding the already finalized frozen capture.
+  await installedInputs(candidate, installation.installBoundary);
   assert.deepEqual(
     await runner(candidate, identity.candidateSha),
     observedRunner,

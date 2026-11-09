@@ -228,6 +228,11 @@ function fixture() {
   const authority = Object.freeze({ candidate: true });
   const { report, frozen } = reportFixture();
   const collaborators = {
+    installedInputs: async (path, boundary) => {
+      calls.push("installed-inputs");
+      assert.equal(path, candidate);
+      assert.deepEqual(boundary, installationFixture(source).installBoundary);
+    },
     inspect: (path, sha) => {
       calls.push(`inspect:${sha}`);
       assert.equal(path, sha === B ? candidate : collector);
@@ -1013,6 +1018,30 @@ for (const kind of ["missing", "extra", "env"]) {
   });
 }
 
+for (const phase of ["budget", "profile", "finalize"]) {
+  test(`execution refuses installed input drift during ${phase} after retaining capture`, async () => {
+    const f = fixture();
+    const original = f.collaborators[phase];
+    let changed = false;
+    f.collaborators[phase] = async (...args) => {
+      const result = await original(...args);
+      changed = true;
+      return result;
+    };
+    f.collaborators.installedInputs = async () => {
+      assert.equal(changed, true);
+      throw new Error("installed input drift fixture");
+    };
+    await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), {
+      message: "installed input drift fixture",
+    });
+    assert.equal(f.calls.filter((call) => call === "capture").length, 1);
+    assert.equal(f.calls.filter((call) => call === "finalize").length, 1);
+    assert.equal(existsSync(join(f.args.destination, "budget.json")), true);
+    assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+  });
+}
+
 test("execution awaits capture and retains distinct source identities", async () => {
   const f = fixture();
   const result = await executeCanonicalBuild(f.args, f.collaborators);
@@ -1035,6 +1064,7 @@ test("execution awaits capture and retains distinct source identities", async ()
     "verifyBytes",
     "profile",
     "finalize",
+    "installed-inputs",
     "runner",
     "tool",
     "web-tool",

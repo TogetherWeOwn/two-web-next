@@ -666,6 +666,27 @@ function npmQuery(args, cwd) {
   return result.stdout;
 }
 
+export function verifyCanonicalInstalledInputs(path, boundary) {
+  const root = directory(path);
+  const files = [boundary.generated, ...boundary.installedLocks];
+  assert.deepEqual(
+    files.map((file) => file.path),
+    [
+      "src/leaf-critical-css.ts",
+      "node_modules/.package-lock.json",
+      "web/node_modules/.package-lock.json",
+    ],
+    "candidate installed input paths changed",
+  );
+  for (const file of files) {
+    assert.ok(Number.isSafeInteger(file.bytes) && file.bytes > 0 && file.bytes <= LIMITS.fileBytes);
+    assert.match(file.sha256, /^[0-9a-f]{64}$/);
+    const bytes = sourceBytes(root, file.path, LIMITS.fileBytes);
+    assert.equal(bytes.length, file.bytes, "candidate installed input changed");
+    assert.equal(sha256(bytes), file.sha256, "candidate installed input changed");
+  }
+}
+
 export async function runCanonicalCandidateBuild(path, expectedSha, capture) {
   assert.equal(typeof capture, "function", "candidate build capture required");
   const root = directory(path);
@@ -737,11 +758,7 @@ export async function runCanonicalCandidateBuild(path, expectedSha, capture) {
   assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
   // Build output is now expected. Recheck only the previously observed inputs,
   // not the pre-build overlay set, without classifying dependency contents.
-  for (const file of [installBoundary.generated, ...installBoundary.installedLocks]) {
-    const bytes = sourceBytes(root, file.path, LIMITS.fileBytes);
-    assert.equal(bytes.length, file.bytes, "candidate installed input changed");
-    assert.equal(sha256(bytes), file.sha256, "candidate installed input changed");
-  }
+  verifyCanonicalInstalledInputs(root, installBoundary);
   return {
     evidence: "unqualified-candidate-build-return",
     source,
