@@ -25,6 +25,7 @@ import {
   installCanonicalCandidate,
   loadCanonicalAuthority,
   loadCanonicalStartup,
+  observeCanonicalRunner,
   runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
 } from "./kit-canonical-source.mjs";
@@ -235,6 +236,49 @@ test("startup loader binds candidate inputs without executing build or runner", 
   assert.equal(loaded.pathname, join(root, "ci/check-worker-startup.mjs"));
   assert.equal(loaded.searchParams.get("source"), sha);
   assert.deepEqual(inspectCanonicalSource(root, sha), before);
+});
+
+test("runner observation invokes candidate checks without build or install", async () => {
+  const runner = `export const RUNNER_IMAGE = "node:24-bookworm@sha256:${"b".repeat(64)}";
+  export function runnerIdentity() {
+    return { image: RUNNER_IMAGE, node: "v24.0.0", limits: { effectiveCpuCount: 2 } };
+  }`;
+  const { root, sha } = startupRepo(STARTUP_MODULE, runner);
+  const result = await observeCanonicalRunner(root, sha);
+  assert.equal(result.evidence, "unqualified-candidate-runner-observation");
+  assert.deepEqual(result.source, inspectCanonicalSource(root, sha));
+  assert.deepEqual(result.inputs, (await loadCanonicalStartup(root, sha)).inputs);
+  assert.equal(result.runner.image, `node:24-bookworm@sha256:${"b".repeat(64)}`);
+  assert.equal(result.runner.limits.effectiveCpuCount, 2);
+  assert.equal(result.executionVerified, false);
+});
+
+for (const body of [
+  'throw new Error("private runner fixture detail");',
+  "return null;",
+  "return [];",
+  'return { image: "wrong" };',
+  'return { image: RUNNER_IMAGE, oversized: "x".repeat(65536) };',
+]) {
+  test(`runner observation sanitizes refusal ${sha256Hex(body).slice(0, 8)}`, async () => {
+    const runner = `export const RUNNER_IMAGE = "node:24-bookworm@sha256:${"b".repeat(64)}";
+    export function runnerIdentity() { ${body} }`;
+    const { root, sha } = startupRepo(STARTUP_MODULE, runner);
+    await assert.rejects(observeCanonicalRunner(root, sha), {
+      message: "candidate runner provenance unavailable",
+    });
+  });
+}
+
+test("runner observation refuses source drift during the candidate check", async () => {
+  const runner = `import { writeFileSync } from "node:fs";
+  export const RUNNER_IMAGE = "node:24-bookworm@sha256:${"b".repeat(64)}";
+  export function runnerIdentity() {
+    writeFileSync(new URL("../README.md", import.meta.url), "runner fixture drift");
+    return { image: RUNNER_IMAGE };
+  }`;
+  const { root, sha } = startupRepo(STARTUP_MODULE, runner);
+  await assert.rejects(observeCanonicalRunner(root, sha), /dirty/);
 });
 
 test("startup loader refuses missing and hidden changed inputs before evaluation", async () => {

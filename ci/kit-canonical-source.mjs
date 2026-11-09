@@ -264,6 +264,32 @@ export async function loadCanonicalStartup(path, expectedSha) {
   };
 }
 
+export async function observeCanonicalRunner(path, expectedSha) {
+  const root = directory(path);
+  const startup = await loadCanonicalStartup(root, expectedSha);
+  let runner;
+  try {
+    // Reuse the candidate's image/OS/Node/cgroup checks, not a collector replica.
+    // The image field is pipeline-declared, not independent image attestation.
+    const observed = startup.runner.identity();
+    assert.ok(observed && typeof observed === "object" && !Array.isArray(observed));
+    assert.equal(observed.image, startup.runner.image);
+    const bytes = JSON.stringify(observed);
+    assert.ok(bytes.length > 0 && Buffer.byteLength(bytes) <= 65536);
+    runner = JSON.parse(bytes);
+  } catch {
+    throw new Error("candidate runner provenance unavailable");
+  }
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), startup.source);
+  return {
+    evidence: "unqualified-candidate-runner-observation",
+    source: startup.source,
+    inputs: startup.inputs,
+    runner,
+    executionVerified: false,
+  };
+}
+
 export function inspectCanonicalPristineSource(path, expectedSha) {
   const root = directory(path);
   const inspectExtras = () => {

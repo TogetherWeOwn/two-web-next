@@ -23,6 +23,14 @@ config query failed with duplicate `/dev/null` config inputs, then passed with
 a distinct empty temporary global config; cleanup was verified. This focused
 query does not establish actual candidate installation or enforcement.
 
+[Actions 42541200702](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42541200702)
+on `ba1b19de352d0c3fb4342eff8a16c81a975976b4` was still executing the main and
+Node 22 suites at the latest inspection; auxiliary jobs passed. No completed
+current-head suite, install fixture, parity or overall pass is claimed. The
+runner-observation source below is local, unpushed and untested; the existing
+cancel-in-progress producer is preserved until completion, a concrete required-leg
+failure or its existing timeout.
+
 ## Separated execution caller (not yet exercised)
 
 `ci/kit-canonical-execute.mjs` connects the existing source binder and
@@ -57,8 +65,28 @@ versions. These fixtures have not run. Successful execution embeds the install
 witness; the separated reader refuses missing or mismatched source/qualification
 claims. No actual separated workflow or B collection is admitted.
 
+The existing build caller now invokes the pinned candidate's `runnerIdentity`
+before installation and again after frozen finalization. This reuses the existing
+Node 24/Linux x64, declared-image, Debian Bookworm and visible cgroup/CPU-limit
+checks rather than copying them into the collector. The observations must match;
+unknown provenance prevents installation, and drift prevents an execution-success
+receipt without discarding captured bytes. Initial failure retains only a fixed
+sanitized sidecar. Successful receipts embed the source-bound bounded observation;
+the member reader rejects missing, source-substituted or qualified runner claims.
+Fourteen additional fixture registrations use the existing Actions invocation and
+have not run. No actual candidate runner has been observed through this path.
+
+The image string remains pipeline-declared, not independent container attestation.
+Matching endpoint observations do not establish absence of changes between them,
+verified executable/dependency bytes, an exclusive resource lease, workflow/run
+attestation or profiling acceptance. Execution and qualification flags remain
+false. The pipeline still must supply and prove the authorized actual runtime.
+
 The build CLI refuses unexpected environment keys; the pipeline must launch it
-with an explicitly credential-free environment. Child failure is not retried.
+with an explicitly credential-free environment. It now admits only the two
+additional non-secret keys consumed by that existing runner: `STARTUP_RUNNER_IMAGE`
+and `GITHUB_ACTIONS`. No token or general environment forwarding is added.
+Child failure is not retried.
 Before the adapter build, the candidate interface now invokes its pinned
 `ci/build-leaf-css.mjs` through its own bounded command runner and the current Node
 executable. It then rechecks the complete tracked source, allowed ignored-input

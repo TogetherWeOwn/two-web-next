@@ -11,6 +11,7 @@ import {
   canonicalCellIdentity,
   inspectCanonicalSource,
   installCanonicalCandidate,
+  observeCanonicalRunner,
   runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
 } from "./kit-canonical-source.mjs";
@@ -172,6 +173,9 @@ export function verifyCanonicalExecutionMembers(members, expected, authority) {
     assert.deepEqual(execution.capture, journal);
     assert.deepEqual(execution.build.capture, journal);
     assert.deepEqual(execution.build.source, source);
+    assert.equal(execution.runner.evidence, "unqualified-candidate-runner-observation");
+    assert.deepEqual(execution.runner.source, source);
+    assert.equal(execution.runner.executionVerified, false);
     assert.equal(execution.installation.evidence, "unqualified-native-candidate-install-return");
     assert.deepEqual(execution.installation.source, source);
     assert.equal(execution.installation.scriptPolicy, "ignore-scripts");
@@ -259,6 +263,7 @@ export async function executeCanonicalBuild(
   { collector, candidate, destination, bindingPath, bindingSha256, context },
   {
     inspect = inspectCanonicalSource,
+    runner = observeCanonicalRunner,
     install = installCanonicalCandidate,
     build = runCanonicalCandidateBuild,
     budget = runCanonicalCandidateBudget,
@@ -300,6 +305,20 @@ export async function executeCanonicalBuild(
   assert.deepEqual(inspect(candidate, identity.candidateSha), source);
   mkdirSync(output, { mode: 0o700 });
   writeFileSync(join(output, "source-binding.json"), bytes, { flag: "wx", mode: 0o600 });
+  let observedRunner;
+  try {
+    observedRunner = await runner(candidate, identity.candidateSha);
+    assert.deepEqual(observedRunner.source, source, "candidate runner source changed");
+    assert.equal(observedRunner.executionVerified, false, "unsupported runner qualification");
+    assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
+  } catch {
+    writeFileSync(
+      join(output, "runner-failure.json"),
+      encode({ sourceBindingSha256: bindingSha256, outcome: "failure", qualified: false }),
+      { flag: "wx", mode: 0o600 },
+    );
+    throw new Error("canonical runner unavailable; retain output without retry");
+  }
   let installation;
   try {
     installation = await install(candidate, identity.candidateSha);
@@ -375,6 +394,11 @@ export async function executeCanonicalBuild(
     if (!budgetError) throw error;
   }
   if (budgetError) throw budgetError;
+  assert.deepEqual(
+    await runner(candidate, identity.candidateSha),
+    observedRunner,
+    "candidate runner changed during execution",
+  );
   assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
   const receipt = {
     schema: "two.kit-canonical-execution.v1",
@@ -383,6 +407,7 @@ export async function executeCanonicalBuild(
     runId: context.runId,
     runAttempt: context.runAttempt,
     sourceBindingSha256: bindingSha256,
+    runner: observedRunner,
     installation,
     build: result,
     budget: {
@@ -418,7 +443,17 @@ async function main() {
   assert.equal(extra.length, 4, "expected binding path/digest and run ID/attempt");
   // The pipeline must launch this phase with an explicitly credential-free env.
   // Never pass the caller's token-bearing environment into candidate code.
-  const allowed = new Set(["PATH", "HOME", "TMPDIR", "LANG", "LC_ALL", "TZ", "CI"]);
+  const allowed = new Set([
+    "PATH",
+    "HOME",
+    "TMPDIR",
+    "LANG",
+    "LC_ALL",
+    "TZ",
+    "CI",
+    "STARTUP_RUNNER_IMAGE",
+    "GITHUB_ACTIONS",
+  ]);
   assert.ok(
     Object.keys(process.env).every((key) => allowed.has(key)),
     "unexpected execution env",

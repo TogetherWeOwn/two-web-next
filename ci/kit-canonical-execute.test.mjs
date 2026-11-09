@@ -63,6 +63,16 @@ function reportFixture() {
   return { frozen, report };
 }
 
+function runnerFixture(source) {
+  return {
+    evidence: "unqualified-candidate-runner-observation",
+    source,
+    inputs: [],
+    runner: { image: "fixture-image", limits: { effectiveCpuCount: 2 } },
+    executionVerified: false,
+  };
+}
+
 function installationFixture(source) {
   return {
     evidence: "unqualified-native-candidate-install-return",
@@ -120,6 +130,12 @@ function fixture() {
       calls.push(`inspect:${sha}`);
       assert.equal(path, sha === B ? candidate : collector);
       return sha === B ? source : collected;
+    },
+    runner: async (path, sha) => {
+      calls.push("runner");
+      assert.equal(path, candidate);
+      assert.equal(sha, B);
+      return runnerFixture(source);
     },
     install: async (path, sha) => {
       calls.push("install");
@@ -249,6 +265,7 @@ function memberFixture() {
       runId: expected.runId,
       runAttempt: expected.runAttempt,
       sourceBindingSha256: expected.bindingSha256,
+      runner: runnerFixture(source),
       installation: installationFixture(source),
       build: {
         source,
@@ -670,6 +687,9 @@ for (const kind of [
   "install-missing",
   "install-source",
   "install-claim",
+  "runner-missing",
+  "runner-source",
+  "runner-claim",
   "runtime-claim",
   "qualified-claim",
 ]) {
@@ -702,6 +722,13 @@ for (const kind of [
       if (kind === "report-source") measured.source.commit = D;
       f.save("budget.json", measured, "budgetSha256");
     }
+    if (kind.startsWith("runner-")) {
+      const execution = f.records["execution.json"];
+      if (kind === "runner-missing") delete execution.runner;
+      if (kind === "runner-source") execution.runner.source = {};
+      if (kind === "runner-claim") execution.runner.executionVerified = true;
+      f.save("execution.json", execution, "executionSha256");
+    }
     if (kind.startsWith("install-")) {
       const execution = f.records["execution.json"];
       if (kind === "install-missing") delete execution.installation;
@@ -731,6 +758,8 @@ test("execution awaits capture and retains distinct source identities", async ()
   assert.deepEqual(f.calls, [
     `inspect:${D}`,
     `inspect:${B}`,
+    "runner",
+    `inspect:${D}`,
     "install",
     `inspect:${D}`,
     "build",
@@ -740,8 +769,10 @@ test("execution awaits capture and retains distinct source identities", async ()
     "budget",
     "verifyBytes",
     "finalize",
+    "runner",
     `inspect:${D}`,
   ]);
+  assert.deepEqual(result.runner, runnerFixture(result.installation.source));
   assert.deepEqual(result.installation, installationFixture(result.installation.source));
   assert.equal(result.budget.code, 0);
   assert.equal(result.budget.frozenTotalsSha256, sha256(JSON.stringify(f.frozen.groups)));
@@ -773,6 +804,49 @@ for (const kind of ["digest", "tree", "source", "overlay", "patch", "cell"]) {
     assert.equal(existsSync(f.args.destination), false);
   });
 }
+
+for (const kind of ["failure", "source", "executionVerified"]) {
+  test(`execution refuses runner ${kind} before installation`, async () => {
+    const f = fixture();
+    const runner = f.collaborators.runner;
+    f.collaborators.runner = async (...args) => {
+      const result = await runner(...args);
+      if (kind === "failure") throw new Error("private runner fixture detail");
+      if (kind === "source") result.source = {};
+      if (kind === "executionVerified") result.executionVerified = true;
+      return result;
+    };
+    await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), {
+      message: "canonical runner unavailable; retain output without retry",
+    });
+    assert.equal(f.calls.filter((call) => call === "runner").length, 1);
+    for (const call of ["install", "build", "capture", "budget", "finalize"]) {
+      assert.equal(f.calls.includes(call), false);
+    }
+    assert.deepEqual(JSON.parse(readFileSync(join(f.args.destination, "runner-failure.json"))), {
+      sourceBindingSha256: f.args.bindingSha256,
+      outcome: "failure",
+      qualified: false,
+    });
+    assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+  });
+}
+
+test("execution refuses post-build runner drift after frozen finalization", async () => {
+  const f = fixture();
+  const runner = f.collaborators.runner;
+  let calls = 0;
+  f.collaborators.runner = async (...args) => {
+    const result = await runner(...args);
+    if (calls++ > 0) result.runner.limits.effectiveCpuCount = 1;
+    return result;
+  };
+  await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /runner changed/);
+  assert.equal(calls, 2);
+  assert.equal(f.calls.includes("finalize"), true);
+  assert.equal(existsSync(join(f.args.destination, "budget.json")), true);
+  assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+});
 
 for (const kind of ["failure", "source", "dependenciesVerified", "executionVerified"]) {
   test(`execution refuses install ${kind} before build without retry`, async () => {
