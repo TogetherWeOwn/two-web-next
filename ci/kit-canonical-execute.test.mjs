@@ -792,10 +792,11 @@ for (const kind of ["failure", "source", "dependenciesVerified", "executionVerif
     for (const call of ["build", "capture", "budget", "finalize"]) {
       assert.equal(f.calls.includes(call), false);
     }
-    assert.deepEqual(
-      JSON.parse(readFileSync(join(f.args.destination, "install-failure.json"))),
-      { sourceBindingSha256: f.args.bindingSha256, outcome: "failure", qualified: false },
-    );
+    assert.deepEqual(JSON.parse(readFileSync(join(f.args.destination, "install-failure.json"))), {
+      sourceBindingSha256: f.args.bindingSha256,
+      outcome: "failure",
+      qualified: false,
+    });
     assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
   });
 }

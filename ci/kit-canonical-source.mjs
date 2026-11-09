@@ -369,7 +369,10 @@ export async function installCanonicalCandidate(path, expectedSha, { query = npm
   const root = directory(path);
   const temporaryRoot = directory(tmpdir());
   const outside = relative(root, temporaryRoot);
-  assert.ok(outside === ".." || outside.startsWith(`..${sep}`), "npm config would overlay candidate");
+  assert.ok(
+    outside === ".." || outside.startsWith(`..${sep}`),
+    "npm config would overlay candidate",
+  );
   const configDirectory = mkdtempSync(join(temporaryRoot, "canonical-npm-config-"));
   const globalConfig = join(configDirectory, "global.npmrc");
   try {
@@ -384,10 +387,17 @@ export async function installCanonicalCandidate(path, expectedSha, { query = npm
 
 async function nativeCandidateInstall(path, expectedSha, query, globalConfig) {
   const root = directory(path);
-  const { installBoundary: pristine, ...source } = inspectCanonicalPristineSource(root, expectedSha);
+  const { installBoundary: pristine, ...source } = inspectCanonicalPristineSource(
+    root,
+    expectedSha,
+  );
   const startup = await loadCanonicalStartup(root, expectedSha);
   assert.deepEqual(startup.source, source, "candidate source changed");
-  const policyArgs = ["--userconfig=/dev/null", `--globalconfig=${globalConfig}`, "--ignore-scripts"];
+  const policyArgs = [
+    "--userconfig=/dev/null",
+    `--globalconfig=${globalConfig}`,
+    "--ignore-scripts",
+  ];
   const version = query([...policyArgs, "--version"], root).trim();
   assert.match(version, /^(10|11)\.[0-9]+\.[0-9]+$/, "unsupported candidate npm version");
   assert.equal(

@@ -10,13 +10,18 @@ build yet.
 on `249c3d2f2510d3a6bd2a6c21368fcb56811d6778` completed with **success**:
 main, Node 22, all auxiliary jobs and `ci-ok` passed. This ends preservation of
 that producer, not recovery qualification or acceptance of the new source.
-The native-install integration in `71f21e2a` is new source, not yet tested or
-exercised. Nineteen new fixture registrations reuse the existing Actions suites.
+[Actions 42540740217, Node 22 job](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42540740217/job/128914866739)
+on `00cf54a8643327b4a5d92b506a367471b9ef1016` failed at lint: two evidence
+files differed from the formatter output. Applied the reported layouts without
+changing behavior, assertions or gates. The native-install integration and its
+nineteen new fixture registrations remain untested; later Kit gates were not
+reached in that job. The log confirms Node 22.23.0 and npm 10.9.8 for that CI
+leg, not the separated caller's install policy or dependency provenance.
 Syntax and whitespace checks passed. No local suite, lint, typecheck, build,
-dependency installation, collection or deployment ran. A bounded native npm
+dependency installation, collection or deployment ran. A prior bounded native npm
 config query failed with duplicate `/dev/null` config inputs, then passed with
 a distinct empty temporary global config; cleanup was verified. This focused
-query does not establish the Actions npm version, installation or enforcement.
+query does not establish actual candidate installation or enforcement.
 
 ## Separated execution caller (not yet exercised)
 
