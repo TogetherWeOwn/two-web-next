@@ -41,6 +41,16 @@ separated-runtime qualification is claimed. This completion ends preservation
 of that producer. The retained web-tool and profiling integrations below still
 need exact-new-head Actions; these fifty-six fixture registrations are untested.
 
+[Actions 42552324318](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42552324318)
+on `681cd60503f41f180cceb4c817464f4a778e7335` completed with **failure**:
+main and Node 22 stopped at lint on two fixture formatting hunks. Applied the
+reported layouts without changing behavior, assertions, dependencies or gates.
+Tests and Kit build/capture/frozen/fatal/parity were not reached; unavailable
+capture and missing artifacts are consequences, not runtime verdicts. The
+fifty-six web-tool/profile fixture registrations remain untested. Syntax and
+whitespace checks passed; no local tests, lint, typecheck, build, installation,
+collection or deployment ran. Corrected exact-head Actions remains required.
+
 ## Separated execution caller (not yet exercised)
 
 `ci/kit-canonical-execute.mjs` connects the existing source binder and

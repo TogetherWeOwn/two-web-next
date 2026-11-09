@@ -296,10 +296,9 @@ for (const variant of [
 ]) {
   test(`candidate profiling refuses ${variant} without a retry or private detail`, async () => {
     const f = profileRepo(variant);
-    await assert.rejects(
-      runCanonicalCandidateProfile(f.root, f.sha, f.output, { sha: f.sha }),
-      { message: "candidate profiling failed; retain output without retry" },
-    );
+    await assert.rejects(runCanonicalCandidateProfile(f.root, f.sha, f.output, { sha: f.sha }), {
+      message: "candidate profiling failed; retain output without retry",
+    });
     assert.ok(existsSync(f.output));
     if (variant === "validator") assert.ok(existsSync(join(f.output, "checkpoint.json")));
   });

@@ -944,7 +944,10 @@ for (const kind of ["missing", "extra", "env"]) {
   test(`separated ZIP parser rejects startup ${kind}`, () => {
     const f = artifactFixture((entries) => {
       if (kind === "missing") {
-        entries.splice(entries.findIndex((e) => e.name === "startup/report.json"), 1);
+        entries.splice(
+          entries.findIndex((e) => e.name === "startup/report.json"),
+          1,
+        );
       }
       if (kind === "extra") entries.push({ name: "startup/.extra", base64: "eA==" });
       if (kind === "env") entries.find((e) => e.name === "startup/empty.env").base64 = "eA==";
