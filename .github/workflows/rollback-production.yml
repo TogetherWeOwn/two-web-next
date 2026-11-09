@@ -90,8 +90,11 @@ permissions:
   contents: read
   actions: read
 
+# A main drill already owns deploy-staging before invoking this workflow.
+# Do not acquire rollback-staging inside it: an ordinary rollback may own that
+# group while waiting for deploy-staging, creating an inverted lock order.
 concurrency:
-  group: rollback-${{ inputs.environment }}
+  group: ${{ inputs.environment == 'staging' && github.workflow == 'staging-rollback-drill' && github.ref == 'refs/heads/main' && format('staging-drill-call-{0}', github.run_id) || format('rollback-{0}', inputs.environment) }}
   cancel-in-progress: false
 
 jobs:
@@ -151,6 +154,7 @@ jobs:
     concurrency:
       group: ${{ inputs.environment == 'staging' && ((github.workflow == 'staging-rollback-drill' && github.ref == 'refs/heads/main') && format('staging-drill-leg-{0}', github.run_id) || 'deploy-staging') || 'production-worker-mutation' }}
       cancel-in-progress: false
+      queue: max
     # Preflight verifies the environment name and the configured
     # automated-evidence or reviewer mode before GitHub can auto-create a
     # missing/unprotected Environment.

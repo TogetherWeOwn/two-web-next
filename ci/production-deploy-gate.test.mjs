@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
-import { existsSync, mkdtempSync, readFileSync } from "node:fs";
+import { cpSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { readWranglerConfig } from "./wrangler-config.mjs";
 import {
@@ -1030,6 +1031,57 @@ test("rollback workflow reuses the production gate with no wider permissions", (
     }
   }
   assert.match(workflow, /ROLLBACK_VERSION_ID: \$\{\{ inputs\.version_id \}\}/);
+});
+
+test("production gates import from every actual sparse checkout shape", () => {
+  const root = fileURLToPath(new URL("../", import.meta.url));
+  const workflow = readFileSync(join(root, ".github/workflows/deploy-production.yml"), "utf8");
+  const shapes = [...workflow.matchAll(/sparse-checkout: \|\n((?: +\/.*\n)+)/g)].map((match) =>
+    match[1]
+      .trim()
+      .split("\n")
+      .map((line) => line.trim()),
+  );
+  assert.ok(shapes.length > 0, "the production sparse shapes must be exercised");
+  for (const paths of shapes) {
+    assert.ok(paths.includes("/ci/"));
+    assert.ok(paths.includes("/bin/version-check.mjs"), "CI imports need the version helper");
+  }
+  const dir = mkdtempSync(join(tmpdir(), "production-sparse-import-"));
+  try {
+    for (const [index, shape] of [
+      ...new Set(shapes.map((shape) => JSON.stringify(shape))),
+    ].entries()) {
+      const cwd = join(dir, String(index));
+      mkdirSync(cwd);
+      for (const path of JSON.parse(shape)) {
+        const relative = path.slice(1).replace(/\/$/, "");
+        const destination = join(cwd, relative);
+        mkdirSync(dirname(destination), { recursive: true });
+        cpSync(join(root, relative), destination, { recursive: true });
+      }
+      const result = spawnSync(
+        process.execPath,
+        [
+          "--input-type=module",
+          "-e",
+          "await import(process.argv[1]); await import(process.argv[2]);",
+          pathToFileURL(join(cwd, "ci/resolve-promotion-sha.mjs")).href,
+          pathToFileURL(join(cwd, "ci/production-deploy-gate.mjs")).href,
+        ],
+        {
+          cwd,
+          encoding: "utf8",
+          timeout: 15_000,
+          maxBuffer: 8192,
+          env: { PATH: process.env.PATH },
+        },
+      );
+      assert.equal(result.status, 0, `sparse imports failed: ${result.stderr || result.error}`);
+    }
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 const sharedMutationGroup = "production-worker-mutation";

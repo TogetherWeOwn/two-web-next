@@ -153,9 +153,17 @@ artifacts without the observations remain ineligible.
 
 The whole qualification workflow shares `deploy-staging` concurrency with
 the staging deploy job, ordinary staging rollbacks and the entire staging
-rollback drill (plan through restore). The drill's nested mutation jobs use a
-run-specific group because their caller already owns the shared mutex.
-Repository mutations therefore cannot replace the Worker during qualification,
+rollback drill (plan through restore). The drill's nested workflow and mutation
+jobs use run-specific groups because their caller already owns the shared mutex;
+they must not take `rollback-staging` inside `deploy-staging` and invert the lock
+order of an ordinary rollback. Every entry to the shared staging group sets
+[`queue: max`](https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/control-workflow-concurrency)
+so a qualification does not replace a pending deployment. GitHub retains at most
+100 pending entries and cancels new arrivals when full; ordering follows entry to
+the lock queue, not dispatch time. Overflow/cancellation is not qualification
+evidence. The shared rollback mutation job also preserves pending production
+entries; its static production group, non-cancellation and authorization gates
+remain unchanged. Repository mutations therefore cannot replace the Worker during qualification,
 even by rolling away and back between samples. A deploy that wins the mutex
 before an older qualification makes the older candidate fail closed at `/version`.
 Two observations alone do not prove full-window stability against out-of-band

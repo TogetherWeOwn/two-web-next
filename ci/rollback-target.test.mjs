@@ -389,6 +389,20 @@ test("the staging drill rolls back and forward through rollback-production.yml",
   );
   assert.match(callee, /format\('staging-drill-leg-\{0\}', github\.run_id\)/);
   assert.match(callee, /\|\| 'deploy-staging'\) \|\| 'production-worker-mutation'/);
+  const selector = callee.match(/^concurrency:\n  group: \$\{\{ (.+) \}\}/m)[1];
+  const select = new Function("inputs", "github", "format", `return ${selector}`);
+  const format = (template, value) => template.replace("{0}", value);
+  const mainDrill = { workflow: "staging-rollback-drill", ref: "refs/heads/main", run_id: 7 };
+  assert.equal(select({ environment: "staging" }, mainDrill, format), "staging-drill-call-7");
+  assert.equal(
+    select({ environment: "staging" }, { ...mainDrill, workflow: "rollback-production" }, format),
+    "rollback-staging",
+  );
+  assert.equal(
+    select({ environment: "staging" }, { ...mainDrill, ref: "refs/heads/feature" }, format),
+    "rollback-staging",
+  );
+  assert.equal(select({ environment: "production" }, mainDrill, format), "rollback-production");
   // Only staging (repo-level) credentials, never production ones.
   assert.ok(!/secrets\.PRODUCTION_/.test(workflow));
 });

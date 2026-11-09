@@ -34,6 +34,7 @@ permissions:
 concurrency:
   group: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)) && 'deploy-staging' || format('e2e-staging-rejected-{0}', github.run_id) }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   # Cheap change-scope gate (mirrors e2e.yml): a deploy whose head commit only

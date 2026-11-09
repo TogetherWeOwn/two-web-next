@@ -20,6 +20,7 @@ permissions:
 concurrency:
   group: ${{ github.ref == 'refs/heads/main' && 'deploy-staging' || format('staging-drill-rejected-{0}', github.run_id) }}
   cancel-in-progress: false
+  queue: max
 
 jobs:
   plan:

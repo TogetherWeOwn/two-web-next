@@ -151,6 +151,24 @@ test("the candidate cannot be inferred from a malformed expected SHA", async () 
   await assert.rejects(observe({ sha: A, deployedAt }, { expected: "main" }));
 });
 
+test("every shared staging lock preserves pending runs instead of replacing them", () => {
+  for (const name of ["deploy", "e2e-staging", "staging-rollback-drill", "rollback-production"]) {
+    const source = readFileSync(
+      new URL(`../.github/workflows/${name}.yml`, import.meta.url),
+      "utf8",
+    );
+    const blocks = [
+      ...source.matchAll(
+        /^( *)concurrency:\n\1  group: (.+)\n\1  cancel-in-progress: (.+)\n\1  queue: (.+)$/gm,
+      ),
+    ];
+    const staging = blocks.filter((block) => block[2].includes("deploy-staging"));
+    assert.equal(staging.length, 1, `${name} must queue its shared staging entry`);
+    assert.equal(staging[0][3], "false", `${name} must not cancel an active mutation`);
+    assert.equal(staging[0][4], "max", `${name} must not evict a pending deployment`);
+  }
+});
+
 test("qualification pins every checker, validates ancestry and shares the staging deploy mutex", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
