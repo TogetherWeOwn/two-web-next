@@ -847,7 +847,7 @@ test("gate removes whole URLs and host cookie values on every diagnostic path an
   }
 });
 
-test("both artifact uploads have exactly the two derived ledger paths", () => {
+test("both artifact uploads have exactly the derived ledger and identity paths", () => {
   const workflow = readFileSync(
     new URL("../../.github/workflows/e2e-staging.yml", import.meta.url),
     "utf8",
@@ -867,7 +867,12 @@ test("both artifact uploads have exactly the two derived ledger paths", () => {
         .split("\n")
         .map((path) => path.trim())
         .filter(Boolean),
-      ["test-results/staging-journey-ledger.json", "test-results/staging-journey-ledger.md"],
+      [
+        "test-results/staging-journey-ledger.json",
+        "test-results/staging-journey-ledger.md",
+        "staging-identity/critical.before.json",
+        "staging-identity/critical.after.json",
+      ],
       "no raw directories, extra files or globs may be uploaded",
     );
   }

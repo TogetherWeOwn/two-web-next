@@ -223,8 +223,9 @@ database error fails the teardown loudly instead of claiming cleanup
 succeeded. The staging sweep allows four passes and
 at most four cancellation throttle waits within its five-minute sweep bound. An exhausted bound fails the run rather than claiming cleanup
 succeeded.
-On failure the job sweeps `test-results/` and `playwright-report/`, but uploads
-only the derived journey ledger after the sweep completes; that artifact is
+On failure the job sweeps `test-results/`, `playwright-report/` and
+`staging-identity/`, but uploads only the derived journey ledger and the two
+SHA/timestamp identity files after the sweep completes; that artifact is
 retained for seven days. The repo is public, so uploaded artifacts are
 world-readable and log masking does not cover them. Playwright puts request headers (including `X-TWO-QA-Auth`) into a
 transport-level request error, so token-bearing requests go through
@@ -307,11 +308,16 @@ closed. Check for a `--retries` override or a report produced by another config;
 verify that provenance rather than trusting the row as a pass. Its first-attempt reason is a bounded, single-line
 summary in the derived ledger; it is not the raw Playwright report. The
 failure-only upload is gated on the existing QA-token scrub completing across
-`test-results/` and `playwright-report/`; a failed or incomplete scrub uploads
-nothing. The separate ledger artifact contains only the derived JSON and
-Markdown ledger, never the raw report. The `e2e-staging-failure-*` artifact, retained for seven days, contains only
-the derived ledger; the raw report, HTML report and traces are not published
-as artifacts. For a failed run on `main`, follow the [documented host-flake loop](rum-web-vitals.md):
+`test-results/`, `playwright-report/` and `staging-identity/`; a failed or
+incomplete scrub uploads nothing. Both the separate ledger artifact and the
+`e2e-staging-failure-*` artifact, retained for seven days, use exactly four paths:
+`test-results/staging-journey-ledger.json`, `test-results/staging-journey-ledger.md`,
+`staging-identity/critical.before.json` and `staging-identity/critical.after.json`.
+The identity writer retains only the validated candidate SHA and canonical
+upload timestamp, never extra response fields. Identity files stay outside
+Playwright's output directory so startup cleanup cannot erase the before sample.
+No directory or glob is uploaded; the raw report, HTML report and traces are
+not published as artifacts. For a failed run on `main`, follow the [documented host-flake loop](rum-web-vitals.md):
 it reruns once, then opens a private main-red card for the Web Engineer if it
 fails again. Never rerun-until-green to clear a failure: the production gate
 refuses any commit whose `e2e-staging` run failed or was re-run

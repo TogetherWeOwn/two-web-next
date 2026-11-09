@@ -104,6 +104,50 @@ test("qualification observes the fixed staging endpoint once without redirects o
   assert.ok(calls[0][1].signal instanceof AbortSignal);
 });
 
+test("identity evidence files retain only validated SHA and timestamp, never response data", () => {
+  const directory = mkdtempSync(join(tmpdir(), "staging-identity-"));
+  try {
+    const canary = "synthetic-qa-token-cookie-member-data";
+    const body = {
+      sha: A,
+      deployedAt,
+      token: canary,
+      cookie: `session=${canary}`,
+      member: { name: canary },
+      raw: [canary],
+    };
+    const mock = join(directory, "fetch.mjs");
+    writeFileSync(
+      mock,
+      `globalThis.fetch = async () => new Response(${JSON.stringify(JSON.stringify(body))});\n`,
+    );
+    for (const phase of ["before", "after"]) {
+      const output = execFileSync(
+        process.execPath,
+        [
+          "--import",
+          mock,
+          new URL("./staging-provenance.mjs", import.meta.url).pathname,
+          "observe",
+          A,
+          phase,
+          "staging-identity/critical",
+        ],
+        { cwd: directory, encoding: "utf8", timeout: 10_000 },
+      );
+      assert.ok(!output.includes(canary), "response data must not reach diagnostics");
+      const evidence = readFileSync(
+        join(directory, "staging-identity", `critical.${phase}.json`),
+        "utf8",
+      );
+      assert.equal(evidence, `${JSON.stringify({ sha: A, deployedAt })}\n`);
+      assert.ok(!evidence.includes(canary), "response data must not reach an artifact");
+    }
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
 test("missing, malformed, wrong and future identities never qualify", async () => {
   for (const body of [
     null,

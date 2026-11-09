@@ -235,14 +235,14 @@ jobs:
         # upload below runs only when this sweep finished the whole tree.
         id: scrub
         if: failure()
-        run: python3 ci/scrub-qa-token.py test-results playwright-report
+        run: python3 ci/scrub-qa-token.py test-results playwright-report staging-identity
         env:
           QA_AUTH_TOKEN: ${{ secrets.QA_AUTH_TOKEN }}
       - name: Failure traces and report (sanitized ledger only)
-        # Upload only the derived, bounded ledger, never the raw report, HTML
-        # report or traces (which may contain request data, cookies or member
-        # content). The QA-token sweep still covers their full source tree and
-        # the ledger; a crashed or incomplete sweep uploads nothing.
+        # Upload only the derived, bounded ledger and SHA/timestamp identities,
+        # never the raw report, HTML report or traces (which may contain request
+        # data, cookies or member content). The QA-token sweep covers all source
+        # trees and these four files; an incomplete sweep uploads nothing.
         if: failure() && steps.scrub.outputs.swept == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -250,12 +250,13 @@ jobs:
           path: |
             test-results/staging-journey-ledger.json
             test-results/staging-journey-ledger.md
-            staging-identity/*.json
+            staging-identity/critical.before.json
+            staging-identity/critical.after.json
           if-no-files-found: ignore
           retention-days: 7
       - name: Journey ledger artifact
-        # Ships only the derived ledger files (journey titles, outcomes and
-        # reasons), never the raw Playwright JSON report, HTML report or traces.
+        # Ships only derived ledger files (journey titles, outcomes and reasons)
+        # and SHA/timestamp identities, never raw Playwright JSON, HTML or traces.
         # The ledger carries only bounded single-line first-failure context. On
         # failed runs it waits for the scrub sweep to finish the whole tree;
         # on green runs no failure evidence is uploaded. A crashed or incomplete
@@ -267,7 +268,8 @@ jobs:
           path: |
             test-results/staging-journey-ledger.json
             test-results/staging-journey-ledger.md
-            staging-identity/*.json
+            staging-identity/critical.before.json
+            staging-identity/critical.after.json
           if-no-files-found: warn
           retention-days: 7
 

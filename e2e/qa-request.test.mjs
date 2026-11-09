@@ -625,6 +625,42 @@ for top in sys.argv[1:]:
   }
 });
 
+test("the workflow sweep covers both identity files and withholds token contamination", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  const roots = workflow.match(/run: python3 ci\/scrub-qa-token\.py ([^\n]+)/)?.[1].split(" ");
+  assert.deepEqual(roots, ["test-results", "playwright-report", "staging-identity"]);
+  for (const phase of ["before", "after"]) {
+    const root = mkdtempSync(join(tmpdir(), "scrub-staging-identity-"));
+    try {
+      for (const name of roots) mkdirSync(join(root, name));
+      const paths = ["before", "after"].map((name) =>
+        join(root, "staging-identity", `critical.${name}.json`),
+      );
+      const clean = `${JSON.stringify({ sha: "a".repeat(40), deployedAt: "2026-11-01T10:00:00.000Z" })}\n`;
+      for (const path of paths) writeFileSync(path, clean);
+      const contaminated = join(root, "staging-identity", `critical.${phase}.json`);
+      writeFileSync(contaminated, JSON.stringify({ token: CANARY }));
+      const { run, output } = sweepWithOutput(CANARY, ...roots.map((name) => join(root, name)));
+      assert.equal(run.status, 1, run.stderr);
+      assert.equal(output, "swept=true\n");
+      assert.ok(!existsSync(contaminated), "contaminated identity must not reach an upload");
+      assert.equal(
+        readFileSync(
+          paths.find((path) => path !== contaminated),
+          "utf8",
+        ),
+        clean,
+      );
+      assert.ok(!run.stdout.includes(CANARY) && !run.stderr.includes(CANARY), "token printed");
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  }
+});
+
 test("the sweep runs on failure, before the upload, with the token in its own env", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
@@ -643,7 +679,10 @@ test("the sweep runs on failure, before the upload, with the token in its own en
   }
   assert.match(steps[scrub], /\n\s+id: scrub\n/);
   assert.match(steps[scrub], /\n\s+if: failure\(\)\n/);
-  assert.match(steps[scrub], /python3 ci\/scrub-qa-token\.py test-results playwright-report\n/);
+  assert.match(
+    steps[scrub],
+    /python3 ci\/scrub-qa-token\.py test-results playwright-report staging-identity\n/,
+  );
   assert.match(steps[scrub], /env:\n\s+QA_AUTH_TOKEN: \$\{\{ secrets\.QA_AUTH_TOKEN \}\}/);
   // A sweep that crashed or could not delete a file leaves no `swept` output,
   // and then nothing is uploaded. The failure upload waits for a swept tree;
@@ -657,9 +696,9 @@ test("the sweep runs on failure, before the upload, with the token in its own en
     ledger,
     /\n\s+if: \$\{\{ !cancelled\(\) && \(steps\.scrub\.outcome == 'skipped' \|\| steps\.scrub\.outputs\.swept == 'true'\) \}\}\n/,
   );
-  // Sweep both source trees, but publish only the derived ledger: raw reports,
-  // HTML reports and traces may contain cookies or member data.
-  assert.match(steps[scrub], /test-results playwright-report/);
+  // Sweep all three source trees, but publish only the derived ledger and
+  // identities: raw reports and traces may contain cookies or member data.
+  assert.match(steps[scrub], /test-results playwright-report staging-identity/);
   for (const uploadStep of gated) {
     assert.match(uploadStep, /staging-journey-ledger\.json/);
     assert.match(uploadStep, /staging-journey-ledger\.md/);
@@ -671,7 +710,12 @@ test("the sweep runs on failure, before the upload, with the token in its own en
         .split("\n")
         .map((path) => path.trim())
         .filter(Boolean),
-      ["test-results/staging-journey-ledger.json", "test-results/staging-journey-ledger.md"],
+      [
+        "test-results/staging-journey-ledger.json",
+        "test-results/staging-journey-ledger.md",
+        "staging-identity/critical.before.json",
+        "staging-identity/critical.after.json",
+      ],
       "both uploads must exclude every raw directory, extra file and glob",
     );
   }
