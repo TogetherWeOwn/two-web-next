@@ -6,14 +6,15 @@ build yet.
 
 ## Latest verification
 
-[Actions 42534384202](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42534384202)
-on `3e56d02c6053f3a674bfc3c4871dc71c4efb62ed` failed both test legs at
-formatting: one quoted command string in the npm lifecycle fixture. The reported
-layout is corrected without changing its command bytes, behavior or assertions.
-Tests and Kit build/capture/rehearsal/fatal/parity steps were not reached; missing
-outputs are consequences, not runtime verdicts. Auxiliary jobs passed. The newly
-published authenticated-reader, generator and lifecycle controls remain untested.
-No local tests, lint, typecheck, build, install or deployment ran for this repair.
+[Actions 42535628416](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42535628416)
+on `249c3d2f2510d3a6bd2a6c21368fcb56811d6778` was still running at the
+inspection: Node 22 and all auxiliary jobs passed; main reached the built fatal
+fixture. No completed main, current-head parity or overall pass is claimed.
+The native-install integration described below is new source, not yet tested or
+exercised. Syntax and whitespace checks passed. No local suite, lint, typecheck,
+build, dependency installation, collection or deployment ran. A bounded native
+npm config query exposed the duplicate `/dev/null` config error; the new path
+uses a separate empty temporary global config rather than an ambient one.
 
 ## Separated execution caller (not yet exercised)
 
@@ -21,10 +22,33 @@ No local tests, lint, typecheck, build, install or deployment ran for this repai
 candidate-owned build-return interface to immediate byte capture. Its `--bind`
 phase records pristine separate candidate/collector roots before installation.
 Its `--build` phase requires the binding file and its separately supplied SHA-256,
-rechecks both complete tracked source inventories, and invokes the candidate's
-own installed build interface. The candidate-owned inventory reaches both capture
-and finalization. Output must be outside both roots and exclusively created.
-Neither phase creates, clones, checks out or installs a source tree.
+rechecks both complete tracked source inventories, installs through native npm,
+and invokes the candidate's own build interface. The candidate-owned inventory
+reaches both capture and finalization. Output must be outside both roots and
+exclusively created. Neither phase creates, clones or checks out a source tree.
+
+The build phase now requires pristine candidate inputs before native root/web
+`npm ci`, including development and optional packages with `--ignore-scripts`.
+It observes npm version and native script-policy configuration, disables ambient
+user/global config with distinct empty inputs, and rechecks tracked source after
+each install. The temporary global config is removed on success or failure.
+Only the pinned candidate CSS generator then runs explicitly; the build's existing
+second invocation must reproduce the observed bytes. No hook exception, manifest,
+lockfile or candidate config overlay is introduced. Any install/policy/source
+failure retains a fixed sanitized failure record and never starts build/capture,
+retries installation or enables fallback hooks.
+
+On observed npm 11.19+ within major 11, native three-day release-age configuration
+is required and recorded. Earlier npm 10/11 records that version's unestablished
+age-filter support, without passing an unknown option or upgrading the tool. Existing
+lockfiles are not a retrospective publication-age audit. This is an unqualified
+install-return witness: dependency contents, effective policy enforcement, npm
+bytes, runtime/image and actual clean install/build remain unverified. New fixture
+coverage includes an offline dependency-free native lifecycle refusal control,
+install order, failure/no-retry, source drift, policy mismatch and unsupported
+versions. These fixtures have not run. Successful execution embeds the install
+witness; the separated reader refuses missing or mismatched source/qualification
+claims. No actual separated workflow or B collection is admitted.
 
 The build CLI refuses unexpected environment keys; the pipeline must launch it
 with an explicitly credential-free environment. Child failure is not retried.
@@ -40,7 +64,7 @@ negative-control registrations and the expanded command-order/receipt fixture us
 the existing Actions suite; they have not run. This does not install dependencies,
 verify npm lifecycle execution or provide an admitted collection caller.
 The separated named build now passes native npm `--ignore-scripts`: the explicit
-candidate generator remains the only generator invocation before the build, and
+candidate generator invocations remain explicitly observed, and
 implicit `prebuild`/`postbuild` hooks cannot run outside that observed boundary.
 The named candidate build script still executes unchanged. A new hermetic Actions
 fixture uses the emitted command against inert npm scripts: without the flag a

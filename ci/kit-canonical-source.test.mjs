@@ -22,6 +22,7 @@ import {
   inspectCanonicalInstalledSource,
   inspectCanonicalPristineSource,
   inspectCanonicalSource,
+  installCanonicalCandidate,
   loadCanonicalAuthority,
   loadCanonicalStartup,
   runCanonicalCandidateBudget,
@@ -401,6 +402,216 @@ test("installed source rejects an absent pinned generator and an untracked overl
   const extra = installedRepo();
   write(extra.root, "collector-overlay.js", "inert collector injection\n");
   assert.throws(() => inspectCanonicalInstalledSource(extra.root, extra.sha), /dirty/);
+});
+
+test("native npm install refusal blocks root lifecycle without fetching dependencies", () => {
+  const root = fixtureRoot("npm-refusal");
+  const globalConfig = join(root, "global.npmrc");
+  writeFileSync(globalConfig, "");
+  const script = "node hook.cjs";
+  writeFileSync(
+    join(root, "hook.cjs"),
+    "require('node:fs').writeFileSync('hook-marker', 'ran'); process.exit(73);\n",
+  );
+  writeFileSync(
+    join(root, "package.json"),
+    JSON.stringify({
+      name: "native-refusal-fixture",
+      version: "1.0.0",
+      scripts: Object.fromEntries(
+        ["preinstall", "install", "postinstall", "prepare"].map((key) => [key, script]),
+      ),
+    }),
+  );
+  writeFileSync(
+    join(root, "package-lock.json"),
+    JSON.stringify({
+      name: "native-refusal-fixture",
+      version: "1.0.0",
+      lockfileVersion: 3,
+      packages: { "": { name: "native-refusal-fixture", version: "1.0.0" } },
+    }),
+  );
+  const args = [
+    "--userconfig=/dev/null",
+    `--globalconfig=${globalConfig}`,
+    "ci",
+    "--offline",
+    "--no-audit",
+    "--no-fund",
+  ];
+  const options = {
+    cwd: root,
+    timeout: 30000,
+    maxBuffer: 32768,
+    env: { PATH: process.env.PATH, HOME: root, CI: "true" },
+    stdio: ["ignore", "pipe", "pipe"],
+  };
+  const control = spawnSync("npm", [...args, "--ignore-scripts=false"], options);
+  assert.equal(control.status, 73);
+  assert.equal(readFileSync(join(root, "hook-marker"), "utf8"), "ran");
+  unlinkSync(join(root, "hook-marker"));
+  const guarded = spawnSync(
+    "npm",
+    [...args, "--ignore-scripts", "--include=dev", "--include=optional"],
+    options,
+  );
+  assert.equal(guarded.status, 0);
+  assert.equal(guarded.error, undefined);
+  assert.equal(existsSync(join(root, "hook-marker")), false);
+});
+
+function candidateInstallRepo({ fail = null, drift = false } = {}) {
+  const { root } = makeRepo("native-install");
+  const calls = join(scratch, `install-calls-${counter++}.jsonl`);
+  const startup = STARTUP_MODULE.replace(
+    'export function runCommand() { throw new Error("fixture must not execute a command"); }',
+    `export async function runCommand(command, args, options) {
+      const fs = await import("node:fs");
+      fs.appendFileSync(${JSON.stringify(calls)}, JSON.stringify({ command, args, options }) + "\\n");
+      const phase = command === "npm" ? (args.includes("web") ? "web" : "root") : "generator";
+      if (phase === ${JSON.stringify(fail)}) throw new Error("private install fixture detail");
+      if (phase === "generator") {
+        fs.writeFileSync(${JSON.stringify(join(root, "src/leaf-critical-css.ts"))}, "fixture CSS");
+      } else {
+        const prefix = phase === "web" ? "web/" : "";
+        fs.mkdirSync(${JSON.stringify(root)} + "/" + prefix + "node_modules", { recursive: true });
+        fs.writeFileSync(${JSON.stringify(root)} + "/" + prefix + "node_modules/.package-lock.json", "{}");
+      }
+      ${drift ? `fs.writeFileSync(${JSON.stringify(join(root, "README.md"))}, "fixture drift");` : ""}
+    }`,
+  );
+  write(root, ".gitignore", "node_modules/\nsrc/leaf-critical-css.ts\n");
+  for (const path of [
+    "package.json",
+    "web/package.json",
+    "web/package-lock.json",
+    "ci/build-leaf-css.mjs",
+    "public/styles.css",
+    "public/theme-tokens.css",
+    "public/theme.css",
+  ]) {
+    write(root, path, `inert input ${path}\n`);
+  }
+  write(root, "ci/check-worker-startup.mjs", startup);
+  write(root, "ci/worker-startup-runner.mjs", RUNNER_MODULE);
+  write(root, "ci/worker-startup-budget.json", STARTUP_BUDGET);
+  const sha = commitAll(root, "native install fixture");
+  const observed = () =>
+    existsSync(calls)
+      ? readFileSync(calls, "utf8")
+          .trim()
+          .split("\n")
+          .map((line) => JSON.parse(line))
+      : [];
+  return { root, sha, observed };
+}
+
+for (const version of ["10.9.8", "11.19.0"]) {
+  test(`candidate install uses native refusal and records npm ${version} age gap`, async () => {
+    const f = candidateInstallRepo();
+    const queries = [];
+    const result = await installCanonicalCandidate(f.root, f.sha, {
+      query: (args, root) => {
+        assert.equal(root, f.root);
+        queries.push(args);
+        const config = args.find((arg) => arg.startsWith("--globalconfig=")).split("=")[1];
+        assert.equal(readFileSync(config, "utf8"), "");
+        assert.notEqual(config, "/dev/null");
+        if (args.includes("--version")) return `${version}\n`;
+        return args.includes("min-release-age") ? "3\n" : "true\n";
+      },
+    });
+    assert.equal(result.npmVersion, version);
+    assert.equal(result.scriptPolicy, "ignore-scripts");
+    assert.equal(result.dependenciesVerified, false);
+    assert.equal(result.executionVerified, false);
+    assert.equal(result.releaseAge.configured, version === "11.19.0");
+    if (version === "10.9.8") {
+      assert.equal(result.releaseAge.reason, "support-not-established-for-observed-version");
+    } else {
+      assert.equal(result.releaseAge.days, 3);
+      assert.equal(result.releaseAge.lockedReleaseAgesVerified, false);
+    }
+    const calls = f.observed();
+    assert.equal(calls.length, 3);
+    for (const [index, command] of result.commands.entries()) {
+      assert.equal(command.executable, "npm");
+      assert.deepEqual(calls[index].args, command.args);
+      for (const arg of [
+        "--ignore-scripts",
+        "--include=dev",
+        "--include=optional",
+        "ci",
+        "--userconfig=/dev/null",
+        "--no-audit",
+        "--no-fund",
+      ]) {
+        assert.ok(command.args.includes(arg));
+      }
+      const config = command.args.find((arg) => arg.startsWith("--globalconfig=")).split("=")[1];
+      assert.equal(existsSync(config), false);
+      assert.equal(command.args.includes("--min-release-age=3"), version === "11.19.0");
+      assert.equal(command.args.includes("web"), index === 1);
+      assert.equal(calls[index].options.cwd, f.root);
+      assert.equal(calls[index].options.timeoutMs, 240000);
+      assert.equal(calls[index].options.maxBytes, 2097152);
+    }
+    assert.equal(calls[2].command, process.execPath);
+    assert.deepEqual(calls[2].args, ["ci/build-leaf-css.mjs"]);
+    assert.equal(queries.length, version === "11.19.0" ? 3 : 2);
+    assert.deepEqual(
+      result.installBoundary,
+      inspectCanonicalInstalledSource(f.root, f.sha).installBoundary,
+    );
+    assert.deepEqual(result.source, inspectCanonicalSource(f.root, f.sha));
+  });
+}
+
+for (const phase of ["root", "web", "generator"]) {
+  test(`candidate install stops on ${phase} failure without retry or private detail`, async () => {
+    const f = candidateInstallRepo({ fail: phase });
+    await assert.rejects(
+      installCanonicalCandidate(f.root, f.sha, {
+        query: (args) => (args.includes("--version") ? "10.9.8" : "true"),
+      }),
+      {
+        message:
+          phase === "generator"
+            ? "candidate install generator failed"
+            : "candidate native install failed; retain output without retry",
+      },
+    );
+    assert.equal(f.observed().length, ["root", "web", "generator"].indexOf(phase) + 1);
+  });
+}
+
+for (const version of ["9.0.0", "12.0.0", "11.19.0-private", "private detail"]) {
+  test(`candidate install refuses unsupported version ${sha256Hex(version).slice(0, 8)}`, async () => {
+    const f = candidateInstallRepo();
+    await assert.rejects(
+      installCanonicalCandidate(f.root, f.sha, { query: () => version }),
+      /unsupported candidate npm version/,
+    );
+    assert.deepEqual(f.observed(), []);
+  });
+}
+
+test("candidate install refuses policy mismatch, pristine overlays and source drift", async () => {
+  for (const kind of ["scripts", "age", "overlay", "drift"]) {
+    const f = candidateInstallRepo({ drift: kind === "drift" });
+    if (kind === "overlay") write(f.root, "node_modules/untrusted", "must not install");
+    await assert.rejects(
+      installCanonicalCandidate(f.root, f.sha, {
+        query: (args) => {
+          if (args.includes("--version")) return "11.19.0";
+          if (args.includes("min-release-age")) return kind === "age" ? "0" : "3";
+          return kind === "scripts" ? "false" : "true";
+        },
+      }),
+    );
+    assert.equal(f.observed().length, kind === "drift" ? 1 : 0);
+  }
 });
 
 function candidateBuildRepo({ fail = false, drift = null, generator = {} } = {}) {

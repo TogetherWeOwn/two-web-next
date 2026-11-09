@@ -7,10 +7,14 @@ import {
   constants,
   fstatSync,
   lstatSync,
+  mkdtempSync,
   openSync,
   readSync,
   realpathSync,
+  rmSync,
+  writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import { dirname, join, relative, resolve, sep } from "node:path";
 import { pathToFileURL } from "node:url";
 import { sha256 } from "./worker-bundle-evidence.mjs";
@@ -357,6 +361,125 @@ export function inspectCanonicalInstalledSource(path, expectedSha) {
       generatorExecutionVerified: false,
     },
   };
+}
+
+// Use native npm policy, never a second resolver or an overlay in the candidate.
+// The observed version/config is not a package-byte or actual image/tool pin.
+export async function installCanonicalCandidate(path, expectedSha, { query = npmQuery } = {}) {
+  const root = directory(path);
+  const temporaryRoot = directory(tmpdir());
+  const outside = relative(root, temporaryRoot);
+  assert.ok(outside === ".." || outside.startsWith(`..${sep}`), "npm config would overlay candidate");
+  const configDirectory = mkdtempSync(join(temporaryRoot, "canonical-npm-config-"));
+  const globalConfig = join(configDirectory, "global.npmrc");
+  try {
+    // npm refuses loading the same /dev/null as both user and global config.
+    // Keep a distinct empty global file outside both source trees; never overlay B.
+    writeFileSync(globalConfig, "", { flag: "wx", mode: 0o600 });
+    return await nativeCandidateInstall(path, expectedSha, query, globalConfig);
+  } finally {
+    rmSync(configDirectory, { recursive: true, force: true });
+  }
+}
+
+async function nativeCandidateInstall(path, expectedSha, query, globalConfig) {
+  const root = directory(path);
+  const { installBoundary: pristine, ...source } = inspectCanonicalPristineSource(root, expectedSha);
+  const startup = await loadCanonicalStartup(root, expectedSha);
+  assert.deepEqual(startup.source, source, "candidate source changed");
+  const policyArgs = ["--userconfig=/dev/null", `--globalconfig=${globalConfig}`, "--ignore-scripts"];
+  const version = query([...policyArgs, "--version"], root).trim();
+  assert.match(version, /^(10|11)\.[0-9]+\.[0-9]+$/, "unsupported candidate npm version");
+  assert.equal(
+    query([...policyArgs, "config", "get", "ignore-scripts"], root).trim(),
+    "true",
+    "native npm script refusal unavailable",
+  );
+  // Source review established this option on 11.19.0, not on npm 10. Do not
+  // silently upgrade the tool, pass unknown options or claim a lock age audit.
+  const ageSupported = Number(version.split(".")[0]) === 11 && Number(version.split(".")[1]) >= 19;
+  if (ageSupported) {
+    policyArgs.push("--min-release-age=3");
+    assert.equal(
+      query([...policyArgs, "config", "get", "min-release-age"], root).trim(),
+      "3",
+      "native npm release age unavailable",
+    );
+  }
+  assert.deepEqual(inspectCanonicalPristineSource(root, expectedSha), {
+    ...source,
+    installBoundary: pristine,
+  });
+  const commands = [];
+  for (const prefix of [[], ["--prefix", "web"]]) {
+    const command = {
+      executable: "npm",
+      args: [
+        ...policyArgs,
+        "ci",
+        ...prefix,
+        "--include=dev",
+        "--include=optional",
+        "--no-audit",
+        "--no-fund",
+      ],
+      cwd: "candidate-root",
+      timeoutMs: 240000,
+      maxBytes: 2097152,
+    };
+    try {
+      await startup.startup.runCommand(command.executable, [...command.args], {
+        cwd: root,
+        timeoutMs: command.timeoutMs,
+        maxBytes: command.maxBytes,
+      });
+    } catch {
+      throw new Error("candidate native install failed; retain output without retry");
+    }
+    commands.push(command);
+    assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  }
+  // Root/web lifecycle hooks were refused. Generate only with the pinned
+  // first-party input; build will independently rerun and compare these bytes.
+  try {
+    await startup.startup.runCommand(process.execPath, ["ci/build-leaf-css.mjs"], {
+      cwd: root,
+      timeoutMs: 30000,
+      maxBytes: 2097152,
+    });
+  } catch {
+    throw new Error("candidate install generator failed");
+  }
+  const installed = inspectCanonicalInstalledSource(root, expectedSha);
+  assert.deepEqual(installed, { ...source, installBoundary: installed.installBoundary });
+  return {
+    evidence: "unqualified-native-candidate-install-return",
+    source,
+    npmVersion: version,
+    scriptPolicy: "ignore-scripts",
+    releaseAge: ageSupported
+      ? { days: 3, configured: true, lockedReleaseAgesVerified: false }
+      : { configured: false, reason: "support-not-established-for-observed-version" },
+    commands,
+    generator: { executable: process.execPath, args: ["ci/build-leaf-css.mjs"] },
+    installBoundary: installed.installBoundary,
+    dependenciesVerified: false,
+    executionVerified: false,
+  };
+}
+
+function npmQuery(args, cwd) {
+  // CLI entrypoint already refuses credential-bearing environment variables.
+  // Ignore inherited npm config files even when HOME points at a shared cache.
+  const result = spawnSync("npm", args, {
+    cwd,
+    encoding: "utf8",
+    timeout: 10000,
+    maxBuffer: 16384,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  assert.ok(!result.error && result.status === 0 && !result.signal, "native npm query failed");
+  return result.stdout;
 }
 
 export async function runCanonicalCandidateBuild(path, expectedSha, capture) {

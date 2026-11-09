@@ -63,6 +63,17 @@ function reportFixture() {
   return { frozen, report };
 }
 
+function installationFixture(source) {
+  return {
+    evidence: "unqualified-native-candidate-install-return",
+    source,
+    scriptPolicy: "ignore-scripts",
+    installBoundary: { evidence: "fixture" },
+    dependenciesVerified: false,
+    executionVerified: false,
+  };
+}
+
 function fixture() {
   const root = join(base, String(counter++));
   const collector = join(root, "collector");
@@ -110,13 +121,23 @@ function fixture() {
       assert.equal(path, sha === B ? candidate : collector);
       return sha === B ? source : collected;
     },
+    install: async (path, sha) => {
+      calls.push("install");
+      assert.equal(path, candidate);
+      assert.equal(sha, B);
+      return installationFixture(source);
+    },
     build: async (path, sha, capture) => {
       assert.equal(path, candidate);
       assert.equal(sha, B);
       calls.push("build");
       const result = await capture({ root: candidate, authority, producerOutcome: "success" });
       calls.push("returned");
-      return { capture: result, executionVerified: false };
+      return {
+        capture: result,
+        installBoundary: installationFixture(source).installBoundary,
+        executionVerified: false,
+      };
     },
     budget: async (path, sha) => {
       calls.push("budget");
@@ -228,7 +249,13 @@ function memberFixture() {
       runId: expected.runId,
       runAttempt: expected.runAttempt,
       sourceBindingSha256: expected.bindingSha256,
-      build: { source, capture: journal, executionVerified: false },
+      installation: installationFixture(source),
+      build: {
+        source,
+        capture: journal,
+        installBoundary: installationFixture(source).installBoundary,
+        executionVerified: false,
+      },
       capture: journal,
       budget: {
         code: 0,
@@ -640,6 +667,9 @@ for (const kind of [
   "report-source",
   "execution-total",
   "execution-capture",
+  "install-missing",
+  "install-source",
+  "install-claim",
   "runtime-claim",
   "qualified-claim",
 ]) {
@@ -672,6 +702,13 @@ for (const kind of [
       if (kind === "report-source") measured.source.commit = D;
       f.save("budget.json", measured, "budgetSha256");
     }
+    if (kind.startsWith("install-")) {
+      const execution = f.records["execution.json"];
+      if (kind === "install-missing") delete execution.installation;
+      if (kind === "install-source") execution.installation.source = {};
+      if (kind === "install-claim") execution.installation.dependenciesVerified = true;
+      f.save("execution.json", execution, "executionSha256");
+    }
     if (
       ["execution-total", "execution-capture", "runtime-claim", "qualified-claim"].includes(kind)
     ) {
@@ -694,6 +731,8 @@ test("execution awaits capture and retains distinct source identities", async ()
   assert.deepEqual(f.calls, [
     `inspect:${D}`,
     `inspect:${B}`,
+    "install",
+    `inspect:${D}`,
     "build",
     "capture",
     "returned",
@@ -703,6 +742,7 @@ test("execution awaits capture and retains distinct source identities", async ()
     "finalize",
     `inspect:${D}`,
   ]);
+  assert.deepEqual(result.installation, installationFixture(result.installation.source));
   assert.equal(result.budget.code, 0);
   assert.equal(result.budget.frozenTotalsSha256, sha256(JSON.stringify(f.frozen.groups)));
   assert.equal(result.budget.sha256, sha256(readFileSync(join(f.args.destination, "budget.json"))));
@@ -733,6 +773,46 @@ for (const kind of ["digest", "tree", "source", "overlay", "patch", "cell"]) {
     assert.equal(existsSync(f.args.destination), false);
   });
 }
+
+for (const kind of ["failure", "source", "dependenciesVerified", "executionVerified"]) {
+  test(`execution refuses install ${kind} before build without retry`, async () => {
+    const f = fixture();
+    const install = f.collaborators.install;
+    f.collaborators.install = async (...args) => {
+      const result = await install(...args);
+      if (kind === "failure") throw new Error("private install fixture detail");
+      if (kind === "source") result.source = {};
+      else result[kind] = true;
+      return result;
+    };
+    await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), {
+      message: "canonical install failed; retain output without retry",
+    });
+    assert.equal(f.calls.filter((call) => call === "install").length, 1);
+    for (const call of ["build", "capture", "budget", "finalize"]) {
+      assert.equal(f.calls.includes(call), false);
+    }
+    assert.deepEqual(
+      JSON.parse(readFileSync(join(f.args.destination, "install-failure.json"))),
+      { sourceBindingSha256: f.args.bindingSha256, outcome: "failure", qualified: false },
+    );
+    assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+  });
+}
+
+test("execution refuses changed install inputs at build return", async () => {
+  const f = fixture();
+  const build = f.collaborators.build;
+  f.collaborators.build = async (...args) => ({
+    ...(await build(...args)),
+    installBoundary: { evidence: "changed fixture" },
+  });
+  await assert.rejects(executeCanonicalBuild(f.args, f.collaborators), /install inputs changed/);
+  assert.equal(f.calls.includes("capture"), true);
+  assert.equal(f.calls.includes("budget"), false);
+  assert.equal(f.calls.includes("finalize"), false);
+  assert.equal(existsSync(join(f.args.destination, "execution.json")), false);
+});
 
 test("execution propagates build failure without finalization or retry", async () => {
   const f = fixture();

@@ -10,6 +10,7 @@ import {
   bindCanonicalSources,
   canonicalCellIdentity,
   inspectCanonicalSource,
+  installCanonicalCandidate,
   runCanonicalCandidateBudget,
   runCanonicalCandidateBuild,
 } from "./kit-canonical-source.mjs";
@@ -171,6 +172,12 @@ export function verifyCanonicalExecutionMembers(members, expected, authority) {
     assert.deepEqual(execution.capture, journal);
     assert.deepEqual(execution.build.capture, journal);
     assert.deepEqual(execution.build.source, source);
+    assert.equal(execution.installation.evidence, "unqualified-native-candidate-install-return");
+    assert.deepEqual(execution.installation.source, source);
+    assert.equal(execution.installation.scriptPolicy, "ignore-scripts");
+    assert.equal(execution.installation.dependenciesVerified, false);
+    assert.equal(execution.installation.executionVerified, false);
+    assert.deepEqual(execution.build.installBoundary, execution.installation.installBoundary);
     assert.deepEqual(measured.source, source);
     assert.equal(measured.code, 0);
     verifyCanonicalBudgetReport(measured.report, verified.receipt);
@@ -252,6 +259,7 @@ export async function executeCanonicalBuild(
   { collector, candidate, destination, bindingPath, bindingSha256, context },
   {
     inspect = inspectCanonicalSource,
+    install = installCanonicalCandidate,
     build = runCanonicalCandidateBuild,
     budget = runCanonicalCandidateBudget,
     verifyBytes = verifyCanonicalBuild,
@@ -292,6 +300,21 @@ export async function executeCanonicalBuild(
   assert.deepEqual(inspect(candidate, identity.candidateSha), source);
   mkdirSync(output, { mode: 0o700 });
   writeFileSync(join(output, "source-binding.json"), bytes, { flag: "wx", mode: 0o600 });
+  let installation;
+  try {
+    installation = await install(candidate, identity.candidateSha);
+    assert.deepEqual(installation.source, source, "candidate install source changed");
+    assert.equal(installation.dependenciesVerified, false, "unsupported install qualification");
+    assert.equal(installation.executionVerified, false, "unsupported install qualification");
+    assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
+  } catch {
+    writeFileSync(
+      join(output, "install-failure.json"),
+      encode({ sourceBindingSha256: bindingSha256, outcome: "failure", qualified: false }),
+      { flag: "wx", mode: 0o600 },
+    );
+    throw new Error("canonical install failed; retain output without retry");
+  }
   const capturePath = join(output, "capture");
   const captureContext = {
     sourceSha: identity.candidateSha,
@@ -316,6 +339,11 @@ export async function executeCanonicalBuild(
     );
   });
   assert.ok(authority, "build return not observed");
+  assert.deepEqual(
+    result.installBoundary,
+    installation.installBoundary,
+    "candidate install inputs changed before build",
+  );
   assert.deepEqual(inspect(collector, identity.collectorSha), binding.collector);
   let measured;
   let comparison;
@@ -355,6 +383,7 @@ export async function executeCanonicalBuild(
     runId: context.runId,
     runAttempt: context.runAttempt,
     sourceBindingSha256: bindingSha256,
+    installation,
     build: result,
     budget: {
       code: measured.code,
