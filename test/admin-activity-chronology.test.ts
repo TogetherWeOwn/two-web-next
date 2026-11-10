@@ -55,6 +55,26 @@ describe("ActivityLogPage chronology", () => {
     expect(out).toContain("Chronology action 2");
   });
 
+  it("keeps the activity list in a labelled keyboard-focusable scroll region", () => {
+    const out = html([row(1, new Date("2026-10-01T12:00:00.000Z"))]);
+    const region = out.match(/<div\b[^>]*data-testid="activity-log-table-scroll"[^>]*>/)?.[0];
+    expect(region).toBeDefined();
+    expect(region).toContain('role="region"');
+    expect(region).toContain('aria-label="Activity log list"');
+    expect(region).toContain('aria-describedby="activity-log-scroll-hint"');
+    expect(region).toContain('tabindex="0"');
+    expect(out).toContain(
+      '<p id="activity-log-scroll-hint">Scroll horizontally to see all columns on smaller screens.</p>',
+    );
+  });
+
+  it("explains UTC chronology, member-access logging and legacy causers", () => {
+    const out = html([row(1, new Date("2026-10-01T12:00:00.000Z"))]);
+    expect(out).toContain(
+      "Read-only. Who changed what, when (UTC). Views that name a member are access-logged; imported causer IDs are labeled legacy.",
+    );
+  });
+
   it("marks the When column as UTC", () => {
     expect(html([row(1, new Date("2026-10-01T12:00:00.000Z"))])).toContain("when (UTC)");
   });

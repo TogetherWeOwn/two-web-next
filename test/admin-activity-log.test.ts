@@ -12,20 +12,35 @@ import {
 } from "../src/admin/table-list";
 import { activityLog, memberDataAccessLogs } from "../src/db/admin-schema";
 import { createMemorySessionStore } from "../src/sessions";
+import type { Db } from "../src/db/index";
 import { registerEventReeditBaselineQuery } from "./helpers/event-reedit-baseline-query";
 import { cookieFor, env, MEMBER, MODERATOR, SUBJECT } from "./helpers/member-data";
 import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
 describe("activity-log guard pins (local fixtures)", () => {
-  it("redirects guests and forbids members before any activity read", async () => {
+  it("redirects guests and forbids members before any activity read or audit write", async () => {
     const sessions = createMemorySessionStore();
-    const app = adminApp(sessions);
-    const guest = await app.request("/activity-log", {}, env);
-    expect(guest.status).toBe(302);
-    expect(guest.headers.get("location")).toBe("/auth/discord");
+    const select = vi.fn(() => {
+      throw new Error("refused viewer reached an activity read");
+    });
+    const execute = vi.fn(() => {
+      throw new Error("refused viewer reached a raw query");
+    });
+    const insert = vi.fn(() => {
+      throw new Error("refused viewer reached an access-log write");
+    });
+    const db = { select, execute, insert } as unknown as Db;
+    const app = adminApp({ sessionStore: sessions, db });
+    const bindings = { ...env, ADMIN_DB: db };
     const cookie = await cookieFor(sessions, MEMBER);
     for (const path of ["/activity-log", "/activity-log?subject=Event", "/activity-log?page=2"]) {
-      expect((await app.request(path, { headers: { cookie } }, env)).status, path).toBe(403);
+      const guest = await app.request(path, {}, bindings);
+      expect(guest.status, path).toBe(302);
+      expect(guest.headers.get("location"), path).toBe("/auth/discord");
+      expect((await app.request(path, { headers: { cookie } }, bindings)).status, path).toBe(403);
+      expect(select).not.toHaveBeenCalled();
+      expect(execute).not.toHaveBeenCalled();
+      expect(insert).not.toHaveBeenCalled();
     }
   });
 
