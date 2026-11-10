@@ -1,9 +1,18 @@
 # M0 page-renderer migration
 
 Status: **approved direction** (owner direction 2026-11-04, recorded
-2026-11-06; [Decision 0001](../decisions/0001-sveltekit-page-renderer.md)).
+2026-11-06; [ADR 0001](../adr/0001-sveltekit-page-renderer.md)).
 This plan records the approach, what is implemented versus what remains, and
 the exact verification route for the [M0 milestone spec](../specs/m0-page-renderer.md).
+
+**Scope note.** This plan uses the *page-renderer* meaning of M0 from ADR 0001
+(every page family Kit-served in production, plus the Kit Worker cut's 48-hour
+acceptance). The canonical product roadmap also labels the Ember Hours
+milestone "M0" in the internal planning system; no source in this repository
+defines how the two relate, so they are not equated here. See the
+reconciliation in [specs/README.md](../specs/README.md). Ember Hours core
+scope is **approved** direction in [ROADMAP.md](../../ROADMAP.md); only later
+expansion beyond the accepted scope stays proposed.
 
 ## Approach
 

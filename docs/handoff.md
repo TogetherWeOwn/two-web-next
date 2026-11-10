@@ -9,8 +9,12 @@ date so a fresh reader can resume from the repository alone.
 
 - Repository: `TogetherWeOwn/two-web-next`, default branch `main`.
   HEAD on `main` at review: `1fe09ab8` ("fix(ci): accept bounded startup
-  profile timestamp reversals"). Production serves the Worker built from
-  `main`; see [releases.md](releases.md) for release history.
+  profile timestamp reversals").
+- **Production is frozen at release `v2026.1107.2`, built from commit
+  `943f0b40` (2026-11-07 19:06Z).** No production deploy has shipped since.
+  The current `main` HEAD is ahead of the deployed release. See
+  [GitHub releases](https://github.com/TogetherWeOwn/two-web-next/releases)
+  for the shipped history.
 - Stack: Hono on Cloudflare Workers, TypeScript, Drizzle + Postgres,
   server-rendered HTML with plain JavaScript islands. SvelteKit with Svelte 5
   under [`web/`](../web/) is the accepted single page renderer; Hono keeps the
@@ -19,8 +23,20 @@ date so a fresh reader can resume from the repository alone.
   [website roadmap](../ROADMAP.md).
 - Direction entry point: the public [website roadmap](../ROADMAP.md) (landing
   via its pull request, see "Open pull requests" below) summarises approved
-  community/event direction, Ember Hours boundaries and non-goals. It is an
-  entry point, not a delivery schedule and not a task tracker.
+  community/event direction and the **approved** Ember Hours core scope (the
+  shared visual system across the site's home, events, join and sign-in,
+  member discovery, profiles and moderator screens, with the seat and
+  reserve-offer journeys, Event Echoes, profile history and privacy controls,
+  honestly labelled season rankings, live voice context, event action
+  timelines and a privacy-filtered bot activity feed). Only later expansion
+  beyond that accepted scope is proposed and unapproved. The roadmap's
+  non-goals apply.
+- "M0" appears in two distinct senses: ADR 0001's page-renderer milestone
+  (every page family Kit-served in production, plus the Kit Worker cut's
+  48-hour acceptance) and the canonical product roadmap's Ember Hours
+  milestone in production. No source in this repository defines how the two
+  relate; whether they are the same, overlapping, or separate milestones is
+  unresolved. See the reconciliation in [specs/README.md](specs/README.md).
 - Accepted milestone contracts live in [specs/](specs/README.md); approved
   approaches and their implemented-vs-remaining status in
   [plans/](plans/README.md); material decisions with provenance in
@@ -38,15 +54,23 @@ date so a fresh reader can resume from the repository alone.
   (PR standards, CI, docs-links, e2e, PR lint, gitleaks, CodeQL) passed. A
   merged PR is not proof of production activation: verify on the deployed
   artefact per the runbook before treating it as live.
-- No other open pull request in this repository at review time conflicted with
-  the documents in this handoff.
+- **Release-hold remedy and promotion fixes bearing on the next step:**
+  [#2092](https://github.com/TogetherWeOwn/two-web-next/pull/2092) (production
+  Kit Worker cutover), [#2088](https://github.com/TogetherWeOwn/two-web-next/pull/2088),
+  [#2093](https://github.com/TogetherWeOwn/two-web-next/pull/2093),
+  [#2097](https://github.com/TogetherWeOwn/two-web-next/pull/2097),
+  [#2098](https://github.com/TogetherWeOwn/two-web-next/pull/2098),
+  [#2099](https://github.com/TogetherWeOwn/two-web-next/pull/2099),
+  [#2100](https://github.com/TogetherWeOwn/two-web-next/pull/2100),
+  [#2101](https://github.com/TogetherWeOwn/two-web-next/pull/2101)
+  (promotion, CI, watch-scheduling and staging-qualification fixes).
 
 ## Concrete blockers
 
-- None recorded for the local runbook, spec, plan and decision documents in
-  this handoff: their sources are already in the repository (operations
-  runbook, architecture and config references, renderer ADR, parity matrix,
-  moderator and planning guides).
+- **Production release hold.** Every production deploy is refused while
+  exact-`main` staging fails the mobile `/events` largest-contentful-paint
+  budget, so production stays at `v2026.1107.2` (`943f0b40`). Merges still
+  land on `main`, but nothing new reaches production until the hold clears.
 - The roadmap composition depends on the roadmap entry PR landing first (see
   above). If it does not land, this handoff's link to the roadmap remains to be
   reconciled; the remaining documents stand alone.
@@ -58,13 +82,28 @@ relative links resolve to existing files, no internal tracker references or
 credentials appear in the new prose, and no application, instruction or
 workflow behaviour changes. No local test suite, CI mirror, build or
 deployment ran. GitHub Actions is the CI of record; exact-head Actions results
-are recorded in the pull request body at draft time. A merged pull request was
-not treated as live evidence.
+are recorded in the pull request body. A merged pull request was not treated
+as live evidence.
+
+- Candidate head SHA: see the pull request head at review time.
+- CI run for the candidate head: recorded in the pull request body with its
+  Actions run URL.
 
 ## Next unfinished step
 
-The next step is integration review of the roadmap entry PR and this handoff
-against the accepted milestone sources in [specs/](specs/README.md) and the
-provenance record in [decisions/](decisions/README.md), then final
-clean-source acceptance. Any remaining Ember Hours scope stays a proposal
-until accepted through normal product planning; the roadmap's non-goals apply.
+In the order the canonical product roadmap tracks them (weekly-review header
+2026-11-09):
+
+1. **Clear the release hold** — land the critical-CSS LCP remedy (see
+   [Decision 0004](decisions/0004-critical-css-lcp-remedy.md)), the promotion
+   resolver fix, and the production Kit Worker cutover
+   ([#2092](https://github.com/TogetherWeOwn/two-web-next/pull/2092)).
+2. The Release Manager **re-qualifies exact-`main` staging**.
+3. The **queued finished PRs merge** once the hold clears.
+4. The **M0 slices continue** (both senses: the Ember Hours milestone slices
+   and the page-renderer family migrations; their relationship is unresolved
+   in this repository — see above).
+
+Ember Hours **core** scope is approved; only later expansion beyond the
+accepted scope stays a proposal until accepted through normal product
+planning. The roadmap's non-goals apply.

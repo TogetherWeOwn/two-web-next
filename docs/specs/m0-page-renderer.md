@@ -1,9 +1,16 @@
 # M0: page-renderer milestone
 
-Status: **approved**. Basis: [Decision 0001](../decisions/0001-sveltekit-page-renderer.md)
+Status: **approved**. Basis: [ADR 0001](../adr/0001-sveltekit-page-renderer.md)
 (owner direction 2026-11-04, recorded 2026-11-06; canonical record ADR 0001).
 This spec states M0's requirements and acceptance criteria only; the approach
 and its slice-by-slice status live in [plans/m0-page-renderer.md](../plans/m0-page-renderer.md).
+
+**Scope note.** This spec uses the *page-renderer* meaning of M0 from ADR 0001
+(every page family Kit-served in production, plus the Kit Worker cut's 48-hour
+acceptance). The canonical product roadmap also labels the Ember Hours
+milestone "M0" in the internal planning system; no source in this repository
+defines how the two relate, so they are not equated here. See the
+reconciliation in [specs/README.md](README.md).
 
 ## Requirement
 
