@@ -24,16 +24,15 @@ jobs:
       postgres:
         image: postgres:17
         env:
-          POSTGRES_USER: agent_test
-          POSTGRES_DB: two_web_next
-          POSTGRES_HOST_AUTH_METHOD: trust
+          POSTGRES_PASSWORD: ci
         ports:
           - 5432:5432
         options: >-
-          --health-cmd "pg_isready -U agent_test -d two_web_next"
+          --health-cmd "pg_isready -U postgres"
           --health-interval 5s --health-timeout 5s --health-retries 10
     env:
-      DATABASE_URL: postgres://agent_test@127.0.0.1:5432/two_web_next
+      # Use the existing global test-DB guard's disposable GitHub CI identity.
+      DATABASE_URL: postgres://postgres:ci@localhost:5432/postgres
       BASELINE_SHA: 1fe09ab868a6fea4a7873e4a096523b78747b232
       npm_config_ignore_scripts: "true"
       npm_config_min_release_age: "3"
