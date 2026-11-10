@@ -112,11 +112,14 @@ async function kitResponse() {
 }
 async function decorate(response: Response, path = "/events", method = "GET", headers = {}) {
   const req = new Request(`${env.APP_URL}${path}`, { method, headers });
+  // Production manifest entries are canonical with no trailing slash
+  // (src/route-ownership.ts); routing normalizes trailing slashes the same way.
+  const manifestPath = path.length > 1 ? path.replace(/\/+$/, "") : path;
   return dispatchHookRequest(
     { request: req, url: new URL(req.url), route: { id: path } },
     {
       appUrl: env.APP_URL,
-      manifest: [{ method: "GET", path, enabled: true, reads: "public" }],
+      manifest: [{ method: "GET", path: manifestPath, enabled: true, reads: "public" }],
       honoFetch: async () => {
         throw new Error("unexpected Hono fallback");
       },
