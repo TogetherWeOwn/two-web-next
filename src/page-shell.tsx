@@ -2,7 +2,7 @@ import { raw } from "hono/html";
 import type { FC, PropsWithChildren } from "hono/jsx";
 import type { HeaderSession, Session } from "./env";
 import { HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "./home-copy";
-import { LEAF_CRITICAL_CSS } from "./leaf-critical-css";
+import { LEAF_CRITICAL_CSS, SCHEDULE_CRITICAL_CSS } from "./leaf-critical-css";
 import type { JoinResult } from "./return-journey";
 import { shareImageUrl } from "./seo";
 
@@ -33,6 +33,8 @@ export const Layout: FC<
      * scoped to "/" plus the content leaves.
      */
     inlineCriticalCss?: boolean;
+    /** Upcoming schedule only; theme="schedule" alone keeps external CSS. */
+    inlineScheduleCss?: boolean;
   }>
 > = ({
   title,
@@ -43,6 +45,7 @@ export const Layout: FC<
   theme,
   markdownAlternate,
   inlineCriticalCss,
+  inlineScheduleCss = false,
   children,
 }) => (
   <>
@@ -112,7 +115,12 @@ export const Layout: FC<
             href={markdownAlternate}
           />
         ) : null}
-        {theme === "content" || inlineCriticalCss ? (
+        {inlineScheduleCss && theme === "schedule" ? (
+          <>
+            <style dangerouslySetInnerHTML={{ __html: LEAF_CRITICAL_CSS }} />
+            <style dangerouslySetInnerHTML={{ __html: SCHEDULE_CRITICAL_CSS }} />
+          </>
+        ) : theme === "content" || inlineCriticalCss ? (
           // Content leaves inline the three stylesheets: the mobile audit
           // measured ~150 ms of render-blocking savings on /rules, while
           // preload hints for the same files measured zero. The homepage
@@ -130,7 +138,9 @@ export const Layout: FC<
         )}
         {theme ? (
           <>
-            {!inlineCriticalCss && theme !== "content" ? (
+            {!inlineCriticalCss &&
+            theme !== "content" &&
+            !(inlineScheduleCss && theme === "schedule") ? (
               <>
                 <link rel="stylesheet" href="/theme-tokens.css" />
                 <link rel="stylesheet" href="/theme.css" />
@@ -138,7 +148,9 @@ export const Layout: FC<
             ) : null}
             {theme === "event" ? <link rel="stylesheet" href="/event-theme.css" /> : null}
             {theme === "profile" ? <link rel="stylesheet" href="/profile-theme.css" /> : null}
-            {theme === "schedule" ? <link rel="stylesheet" href="/schedule-theme.css" /> : null}
+            {theme === "schedule" && !inlineScheduleCss ? (
+              <link rel="stylesheet" href="/schedule-theme.css" />
+            ) : null}
           </>
         ) : null}
       </head>

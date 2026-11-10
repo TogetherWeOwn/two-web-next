@@ -19,6 +19,7 @@ import {
   writeAnonCache,
 } from "./anon-cache";
 import { discordEventsSource } from "./discord-transients";
+import { markEventsInlineCssResponse } from "./inline-css";
 import { listPast, normalizePastPage } from "./reads";
 import { matchQuery } from "./search-log";
 import { EventsCalendarPage, EventsSearchTooLongPage, PastEventsPage } from "./pages";
@@ -41,7 +42,9 @@ export function registerCalendarRoutes(
     });
     if (input.queryTooLong) {
       c.header("cache-control", "no-store, private");
-      return c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} />, 422);
+      return markEventsInlineCssResponse(
+        await c.html(<EventsSearchTooLongPage appUrl={c.env.APP_URL} inlineScheduleCss />, 422),
+      );
     }
     let phases = c.get("calendarPhaseRecorder");
     const limited = await (phases
@@ -112,9 +115,11 @@ export function registerCalendarRoutes(
           hit.cacheControl.replace(/max-age=\d+/, `max-age=${hit.maxAgeSeconds}`),
         );
         if (hit.vary) c.header("vary", hit.vary);
-        return phases
-          ? phases.measure("render_cache", () => c.html(hit.body, hit.status as 200))
-          : c.html(hit.body, hit.status as 200);
+        const renderHit = async () => {
+          const response = await c.html(hit.body, hit.status as 200);
+          return hit.inlineScheduleCss ? markEventsInlineCssResponse(response) : response;
+        };
+        return phases ? phases.measure("render_cache", renderHit) : renderHit();
       }
     }
     // Retire generation before the first render read: a publish, edit or RSVP
@@ -218,13 +223,14 @@ export function registerCalendarRoutes(
                 cacheControl,
                 vary: response.headers.get("vary"),
                 body,
+                inlineScheduleCss: true,
               },
               ANON_EVENTS_TTL_MS,
             );
           }
         }
       }
-      return response;
+      return markEventsInlineCssResponse(response);
     };
     return phases ? phases.measure("render_cache", render) : render();
   });

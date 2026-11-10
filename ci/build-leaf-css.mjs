@@ -24,28 +24,69 @@
 // in the logo, icon and favicon artwork. A component that needs the gradient
 // re-adds the token with its own budget.
 import { createHash } from "node:crypto";
-import { readFileSync, writeFileSync } from "node:fs";
+import { readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const SOURCES = ["public/styles.css", "public/theme-tokens.css", "public/theme.css"];
+const SCHEDULE_SOURCE = "public/schedule-theme.css";
 const OUT = "src/leaf-critical-css.ts";
 
-export function build() {
-  const css = SOURCES.map((entry) => readFileSync(join(repoRoot, entry), "utf8")).join("\n");
+function inlineSource(root, entry) {
+  const bytes = readFileSync(join(root, entry));
+  // HTML replaces NUL and normalizes CR. Refuse those inputs and BOMs
+  // rather than silently normalizing any source bytes for the inline hash.
+  const css = new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(bytes);
+  if (/[\u0000\r]/u.test(css) || css.includes(String.fromCharCode(0xfeff))) {
+    throw new Error(`invalid inline CSS bytes: ${entry}`);
+  }
   if (/<\/style/i.test(css)) {
     throw new Error("refusing to inline CSS containing a closing style tag");
   }
-  const sha256 = createHash("sha256").update(css, "utf8").digest("base64");
-  const text =
-    `// GENERATED from ${SOURCES.join(", ")} — do not hand-edit.\n` +
-    `// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-drift.test.ts).\n` +
-    `export const LEAF_CRITICAL_CSS: string =\n  ${JSON.stringify(css)};\n` +
-    `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
-  return { text, sha256 };
+  return css;
 }
 
-const { text, sha256 } = build();
-writeFileSync(join(repoRoot, OUT), text);
-console.log(`${OUT}: ${text.length} chars, sha256 ${sha256}`);
+export function build(root = repoRoot) {
+  const css = SOURCES.map((entry) => inlineSource(root, entry)).join("\n");
+  const scheduleCss = inlineSource(root, SCHEDULE_SOURCE);
+  if (/<\/style/i.test(css)) throw new Error("refusing a closing style tag across CSS sources");
+  const sha256 = createHash("sha256").update(css, "utf8").digest("base64");
+  const scheduleSha256 = createHash("sha256").update(scheduleCss, "utf8").digest("base64");
+  // One atomic artifact, two separate literals. L is never duplicated in a
+  // four-sheet bundle; each hash covers only its own rendered style element.
+  const text =
+    `// GENERATED from ${[...SOURCES, SCHEDULE_SOURCE].join(", ")} — do not hand-edit.\n` +
+    `// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-drift.test.ts).\n` +
+    `export const LEAF_CRITICAL_CSS: string =\n  ${JSON.stringify(css)};\n` +
+    `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n` +
+    `export const SCHEDULE_CRITICAL_CSS: string =\n  ${JSON.stringify(scheduleCss)};\n` +
+    `export const SCHEDULE_CRITICAL_CSS_SHA256: string = ${JSON.stringify(scheduleSha256)};\n`;
+  return { text, sha256, scheduleSha256 };
+}
+
+export function generate(root = repoRoot, check = false) {
+  const result = build(root);
+  const out = join(root, OUT);
+  if (check) {
+    if (readFileSync(out, "utf8") !== result.text) throw new Error("stale critical CSS artifact");
+    return result;
+  }
+  const temporary = `${out}.${process.pid}.tmp`;
+  try {
+    writeFileSync(temporary, result.text, { flag: "wx" });
+    renameSync(temporary, out);
+  } finally {
+    rmSync(temporary, { force: true });
+  }
+  return result;
+}
+
+if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  const args = process.argv.slice(2);
+  if (args.length > 1 || (args.length === 1 && args[0] !== "--check")) {
+    throw new Error("usage: build-leaf-css.mjs [--check]");
+  }
+  const { text, sha256, scheduleSha256 } = generate(repoRoot, args[0] === "--check");
+  console.log(`${OUT}: ${text.length} chars, L sha256 ${sha256}, S sha256 ${scheduleSha256}`);
+}

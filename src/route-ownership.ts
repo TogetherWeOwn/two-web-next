@@ -22,6 +22,7 @@ import {
   securityHeadersFor,
   withKitFallbackStyleCsp,
 } from "./headers";
+import { takeEventsInlineCssResponse } from "./events/inline-css";
 import { STAGING_APP_URL } from "./qa";
 import { newRequestId, safeRequestId } from "./request-log";
 import { transformContentLeafChunk } from "./kit-content-chunk";
@@ -605,6 +606,7 @@ function decorateKitResponse(
   for (const [name, value] of securityHeadersFor(
     { path: event.url.pathname, method: event.request.method },
     featuredImageHosts,
+    { inlineScheduleCss: takeEventsInlineCssResponse(response) },
   )) {
     response.headers.set(name, value);
   }

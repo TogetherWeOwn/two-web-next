@@ -24,6 +24,7 @@ function fixture() {
   writeFileSync(join(dir, "public/styles.css"), "body { color: black; }");
   writeFileSync(join(dir, "public/theme-tokens.css"), ":root { --accent: lime; }");
   writeFileSync(join(dir, "public/theme.css"), ".hero { display: grid; }");
+  writeFileSync(join(dir, "public/schedule-theme.css"), ".schedule-theme { display: grid; }");
   const git = (...args: string[]) =>
     execFileSync("git", args, { cwd: dir, encoding: "utf8" }).trim();
   git("init", "-q");
@@ -204,6 +205,31 @@ describe("generated leaf CSS review evidence", () => {
       sha: head,
       sha256: hash([...rules, "@media print { .leaf { margin: 0; } }"]),
     });
+  });
+
+  it("records a schedule-only hash delta from immutable inputs without changing L", () => {
+    const { dir, base, commit, run } = fixture();
+    writeFileSync(join(dir, "public/schedule-theme.css"), ".schedule-theme { display: flex; }");
+    const head = commit();
+    writeFileSync(join(dir, "public/schedule-theme.css"), "uncommitted");
+    const result = run(head);
+    expect(result.status, result.stderr).toBe(0);
+    const report = JSON.parse(result.stdout);
+    expect(report.changed).toBe(true);
+    expect(report.base.sha).toBe(base);
+    expect(report.base.sha256).toBe(report.head.sha256);
+    expect(report.head.schedule.sha256).toBe(
+      createHash("sha256").update(".schedule-theme { display: flex; }").digest("base64"),
+    );
+    expect(readFileSync(join(dir, "summary.md"), "utf8")).toContain(report.head.schedule.sha256);
+  });
+
+  it("fails when the revision's required schedule input is missing", () => {
+    const { dir, commit, run } = fixture();
+    rmSync(join(dir, "public/schedule-theme.css"));
+    const result = run(commit());
+    expect(result.status).toBe(1);
+    expect(JSON.parse(result.stdout).error_code).toBe("leaf_css_review_failed");
   });
 
   it("compares the merge queue's base and head revisions on merge_group runs", () => {

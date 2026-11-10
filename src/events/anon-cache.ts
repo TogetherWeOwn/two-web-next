@@ -46,6 +46,7 @@ interface AnonEntry {
   cacheControl: string;
   vary: string | null;
   body: string;
+  inlineScheduleCss?: boolean;
   expiresAt: number;
 }
 
@@ -141,6 +142,7 @@ export function readAnonCache(
     cacheControl: hit.cacheControl,
     vary: hit.vary,
     body: hit.body,
+    ...(hit.inlineScheduleCss === true ? { inlineScheduleCss: true } : {}),
     maxAgeSeconds: Math.max(1, Math.ceil((hit.expiresAt - now) / 1000)),
   };
 }
@@ -148,7 +150,13 @@ export function readAnonCache(
 export function writeAnonCache(
   key: string,
   source: AnonCacheSource,
-  res: { status: number; cacheControl: string; vary: string | null; body: string },
+  res: {
+    status: number;
+    cacheControl: string;
+    vary: string | null;
+    body: string;
+    inlineScheduleCss?: boolean;
+  },
   ttlMs: number,
   now: number = Date.now(),
 ): void {

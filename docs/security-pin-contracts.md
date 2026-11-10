@@ -71,6 +71,26 @@ with `leaf_css_review_failed` and a concrete `next_action`; there is no
 silent fallback to the current tree. Derived bytes and hash pins stay out
 of git, avoiding another per-stylesheet merge-conflict source.
 
+The same ignored module also carries a separate literal/hash for the exact
+`schedule-theme.css` bytes (S); the home/content three-sheet literal (L) is
+unchanged. New-generator snapshots add `schedule: { sha256, bytes }` to the
+report; historical generators without S report `schedule: null`. The summary
+shows L and S separately, and a change to either marks the report changed.
+Inputs are copied as raw bytes, never decoded/re-encoded before generation.
+`node ci/build-leaf-css.mjs --check` validates the entire atomic artifact
+without rewriting stale evidence. Generation rejects closing-style tags,
+invalid UTF-8, NUL, CR and BOM rather than normalizing inline bytes.
+
+The existing five-path leaf allowlist and stable check IDs stay unchanged.
+Upcoming `/events` GET/HEAD documents explicitly render L then S and separately
+classify their successful response; the CSP consumers require that server-owned
+classification as well as the exact path/method. Cache entries retain it as
+metadata. The internal response marker is not read from requests and is removed
+before release; non-HTML, redirects and replacement errors do not grant schedule
+hashes. Archive, recovery and other shells default to external CSS. Schedule
+byte/state/cache tests and the local browser CSP mutation spec supplement, not
+replace, the existing security-pin gates.
+
 ## Properties
 
 Idempotent and read-only: the gate writes only its own scratch report, which
