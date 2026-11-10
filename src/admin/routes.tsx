@@ -210,7 +210,14 @@ function refusedEventSave(
     parseEventForm(values);
   } catch (err) {
     if (!(err instanceof ValidationError)) throw err;
-    errors = err.fields;
+    errors = { ...err.fields };
+    // The refused token cannot reconstruct the original UTC carriers. In a
+    // fold, two identical wall times can be a valid hour apart; reparsing them
+    // would falsely report an invalid end. Defer nonempty schedule diagnostics
+    // to the fresh editor, where the saved carriers are trustworthy again.
+    for (const field of ["starts_at", "ends_at"]) {
+      if (typeof values[field] === "string" && values[field].trim()) delete errors[field];
+    }
   }
   c.status(status);
   return c.html(

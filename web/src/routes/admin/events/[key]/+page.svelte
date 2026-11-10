@@ -33,7 +33,8 @@ const timezoneVal = $derived(val("timezone") || "Europe/London");
 // A component-level <script> is Svelte's own; the island tags ride {@html}.
 const textLimitsIsland =
   '<script type="module" src="/islands/admin-event-text-limits.js"></' + "script>";
-const editorIsland = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
+const editorIsland = '<script src="/islands/admin-save-baseline.js" defer></' + "script>" +
+  '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
 <AdminShell title={`Edit ${view.title}`}>

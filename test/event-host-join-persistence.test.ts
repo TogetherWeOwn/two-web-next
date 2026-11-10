@@ -9,6 +9,7 @@ import { eq } from "drizzle-orm";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { adminApp } from "../src/admin/routes";
+import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { mergePatchInput } from "../src/admin/store";
 import { parseEventForm, ValidationError } from "../src/admin/validation";
 import { activityLog, events } from "../src/db/admin-schema";
@@ -198,7 +199,10 @@ describe.skipIf(!process.env.DATABASE_URL)("event host and join persistence (age
   }
 
   async function editEvent(key: string, fields: Record<string, string>) {
-    return app().request(`/events/${key}`, form(fields), liveEnv());
+    // Edit saves carry the token of the stored row the form displayed.
+    const [current] = await db.select().from(events).where(eq(events.eventKey, key));
+    const saved_baseline = await eventSaveBaseline(current!);
+    return app().request(`/events/${key}`, form({ saved_baseline, ...fields }), liveEnv());
   }
 
   async function editForm(key: string) {

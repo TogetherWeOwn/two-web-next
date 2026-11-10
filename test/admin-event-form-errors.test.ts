@@ -160,6 +160,18 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       env,
     );
 
+  // The saved_baseline the guarded edit GET renders right now.
+  const editToken = async (): Promise<string> => {
+    const res = await app.request(APP_URL + `/admin/events/${KEY}`, { headers: { cookie } }, env);
+    expect(res.status).toBe(200);
+    const tag = (await res.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+    const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+    if (!token) throw new Error("edit page carries no saved_baseline token");
+    return token;
+  };
+  const withBaseline = async (mode: "new" | "edit", values: Record<string, string>) =>
+    mode === "edit" ? { ...values, saved_baseline: await editToken() } : values;
+
   for (const mode of ["new", "edit"] as const) {
     const path = mode === "new" ? "/admin/events" : `/admin/events/${KEY}`;
     const cases: {
@@ -225,7 +237,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
     ];
     for (const { label, values: overrides, errors } of cases) {
       it(`${mode}: ${label} has retained values and accessible field errors, without writes`, async () => {
-        const values = { ...FORM, ...overrides };
+        const values = await withBaseline(mode, { ...FORM, ...overrides });
         const before = await fixture.db.select().from(events);
         const res = await post(path, values);
         expect(res.status).toBe(422);
@@ -241,7 +253,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
     }
 
     it(`${mode}: valid wall times still save the same UTC instants`, async () => {
-      const res = await post(path, FORM);
+      const res = await post(path, await withBaseline(mode, FORM));
       expect(res.status).toBe(303);
       const key = new URL(res.headers.get("location")!, APP_URL).pathname.split("/").pop()!;
       const [saved] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
@@ -320,6 +332,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       .where(eq(events.eventKey, KEY));
     const res = await post(`/admin/events/${KEY}`, {
       ...FORM,
+      saved_baseline: await editToken(),
       starts_at: "2026-10-25T01:30",
       ends_at: "2026-10-25 02:30",
     });

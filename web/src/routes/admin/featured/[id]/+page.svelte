@@ -25,7 +25,8 @@ import type { PageProps } from "./$types";
 // destructive actions are never links — so crawlers and prefetchers cannot
 // trigger them.
 let { data }: PageProps = $props();
-const island = '<script src="/islands/admin-event-editor.js" defer></' + "script>";
+const island = '<script src="/islands/admin-save-baseline.js" defer></' + "script>" +
+  '<script src="/islands/admin-event-editor.js" defer></' + "script>";
 </script>
 
 <AdminShell title={`Edit ${data.view.title}`}>

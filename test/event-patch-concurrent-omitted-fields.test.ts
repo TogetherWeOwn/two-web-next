@@ -28,6 +28,7 @@ import { asc, eq, sql } from "drizzle-orm";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
+import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { activityLog, events, rsvps } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
@@ -92,12 +93,20 @@ describe.skipIf(!url)("concurrent disjoint PATCHes preserve omitted fields (live
       { method: "POST", headers: { cookie, origin: baseEnv.APP_URL } },
       jsonEnv,
     );
-  const postForm = (key: string, values: Record<string, string>) =>
-    native().request(
+  const postForm = async (key: string, values: Record<string, string>) => {
+    // The full form posts the token of the stored row it displayed.
+    const [current] = await db.select().from(events).where(eq(events.eventKey, key));
+    const saved_baseline = await eventSaveBaseline(current!);
+    return native().request(
       `/events/${key}`,
-      { method: "POST", headers: { cookie }, body: new URLSearchParams(values) },
+      {
+        method: "POST",
+        headers: { cookie },
+        body: new URLSearchParams({ saved_baseline, ...values }),
+      },
       liveEnv(),
     );
+  };
 
   async function seed(over: Partial<typeof ORIGINAL & { status: string }> = {}) {
     const [row] = await db

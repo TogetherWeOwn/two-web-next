@@ -97,6 +97,20 @@ describe.skipIf(!process.env.DATABASE_URL)(
         env,
       );
 
+    // The saved_baseline the guarded edit GET renders right now.
+    const editToken = async (): Promise<string> => {
+      const res = await app.request(
+        APP_URL + `/admin/events/${FORM_KEY}`,
+        { headers: { cookie } },
+        env,
+      );
+      expect(res.status).toBe(200);
+      const tag = (await res.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+      const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+      if (!token) throw new Error("edit page carries no saved_baseline token");
+      return token;
+    };
+
     for (const field of FIELDS) {
       it(`create: NUL in ${field} is a field-named 422 with no row and no audit`, async () => {
         const before = await fixture.db.select().from(events);
@@ -109,7 +123,11 @@ describe.skipIf(!process.env.DATABASE_URL)(
 
       it(`edit: NUL in ${field} is a field-named 422 and the stored row is unchanged`, async () => {
         const before = await fixture.db.select().from(events);
-        const res = await post(`/admin/events/${FORM_KEY}`, { ...FORM, [field]: "a\u0000b" });
+        const res = await post(`/admin/events/${FORM_KEY}`, {
+          ...FORM,
+          saved_baseline: await editToken(),
+          [field]: "a\u0000b",
+        });
         expect(res.status).toBe(422);
         expect(await res.text()).toContain(`data-testid="error-${field}"`);
         expect(await fixture.db.select().from(events)).toEqual(before);

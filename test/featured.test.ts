@@ -332,8 +332,21 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
       })
     ).split(";")[0]!;
     const admin = adminApp({ sessionStore: store, db: fixture.db });
-    const publish = (path: string, title: string, imageUrl: string) =>
-      admin.request(
+    const publish = async (path: string, title: string, imageUrl: string) => {
+      // Edit saves carry the token the guarded edit GET renders right now.
+      let baseline: Record<string, string> = {};
+      if (path !== "/featured") {
+        const page = await admin.request(path, { headers: { cookie } }, {
+          ...env,
+          ADMIN_DB: fixture.db,
+        } as EnvWithAdminDb);
+        expect(page.status).toBe(200);
+        const tag = (await page.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+        const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+        if (!token) throw new Error("edit page carries no saved_baseline token");
+        baseline = { saved_baseline: token };
+      }
+      return admin.request(
         path,
         {
           method: "POST",
@@ -343,6 +356,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
             "content-type": "application/x-www-form-urlencoded",
           },
           body: new URLSearchParams({
+            ...baseline,
             title,
             image_url: imageUrl,
             image_alt: "Squad photo",
@@ -351,6 +365,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
         },
         { ...env, ADMIN_DB: fixture.db } as EnvWithAdminDb,
       );
+    };
     for (const imageUrl of [
       "https://images.example.test/photo.jpg",
       "http://cdn.discordapp.com/photo.jpg",

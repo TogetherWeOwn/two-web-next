@@ -135,6 +135,14 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     form = false,
     moderator = true,
   ) {
+    // An admin edit form POST carries the token its guarded GET renders now.
+    if (form && method === "POST" && body && /^\/admin\/events\/[^/]+$/.test(path)) {
+      const page = await app.request(path, { headers: { cookie: await cookie(moderator) } }, env);
+      const tag = (await page.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+      const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+      if (!token) throw new Error(`edit page ${path} carries no saved_baseline token`);
+      body = { ...body, saved_baseline: token };
+    }
     return app.request(
       path,
       {

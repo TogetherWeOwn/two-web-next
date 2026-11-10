@@ -14,6 +14,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
 import { getFeatured, recordAccess, updateFeatured } from "../src/admin/store";
 import type { FeaturedEditRow } from "../src/admin/store";
+import { featuredSaveBaseline } from "../src/admin/save-baseline";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
 import type { Db } from "../src/db/index";
 import { createMemorySessionStore, type Sql } from "../src/sessions";
@@ -244,7 +245,12 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
   it("moderator valid under-cap post still spends exactly one admin-write hit and saves", async () => {
     const throttle = throttleFixture(0);
     const { app, cookie, bindings } = await mounted(MODERATOR, throttle);
-    const response = await app.request(PATH, postForm(cookie, FORM), bindings);
+    const saved_baseline = await featuredSaveBaseline(row);
+    const response = await app.request(
+      PATH,
+      postForm(cookie, { ...FORM, saved_baseline }),
+      bindings,
+    );
     expect(response.status).toBe(303);
     expect(response.headers.get("location")).toBe(`/admin/featured/${ID}`);
     expect(throttle.count()).toBe(1);
@@ -259,7 +265,12 @@ describe("controls: today's behavior outside the oversized-moderator case", () =
   it("moderator invalid under-cap post is still a 422 after exactly one throttle hit, with no save", async () => {
     const throttle = throttleFixture(0);
     const { app, cookie, bindings } = await mounted(MODERATOR, throttle);
-    const response = await app.request(PATH, postForm(cookie, { ...FORM, title: "" }), bindings);
+    const saved_baseline = await featuredSaveBaseline(row);
+    const response = await app.request(
+      PATH,
+      postForm(cookie, { ...FORM, saved_baseline, title: "" }),
+      bindings,
+    );
     expect(response.status).toBe(422);
     expect(await response.text()).toContain('data-testid="form-errors"');
     expect(throttle.count()).toBe(1);

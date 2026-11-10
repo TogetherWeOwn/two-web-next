@@ -234,12 +234,18 @@ describe.skipIf(!url)("featured write serialization (owned Postgres schema)", ()
     expect(await audits()).toHaveLength(1);
   });
 
-  it("keeps same-clock no-op saves audit-free and retains timestamp-only save audits", async () => {
+  it("advances same-clock saves without changing content and retains timestamp-only save audits", async () => {
     const before = await getFeatured(fixture.db, id);
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(initialUpdatedAt);
-    expect(await updateFeatured(fixture.db, firstActor, id, form)).toEqual(before);
-    expect(await audits()).toHaveLength(0);
+    // Every accepted full-form save consumes its displayed version, even when
+    // its content is unchanged. A frozen clock must not revalidate an old tab.
+    const first = new Date(initialUpdatedAt.getTime() + 1);
+    expect(await updateFeatured(fixture.db, firstActor, id, form)).toEqual({
+      ...before,
+      updatedAt: first,
+    });
+    expect(await audits()).toHaveLength(1);
     const next = new Date(initialUpdatedAt.getTime() + 1000);
     vi.setSystemTime(next);
     expect(await updateFeatured(fixture.db, firstActor, id, form)).toEqual({
@@ -247,7 +253,8 @@ describe.skipIf(!url)("featured write serialization (owned Postgres schema)", ()
       updatedAt: next,
     });
     expect((await audits()).map((log) => log.properties)).toEqual([
-      { updatedAt: { before: initialUpdatedAt.toISOString(), after: next.toISOString() } },
+      { updatedAt: { before: initialUpdatedAt.toISOString(), after: first.toISOString() } },
+      { updatedAt: { before: first.toISOString(), after: next.toISOString() } },
     ]);
   });
 

@@ -1,0 +1,61 @@
+name: admin-stale-save-proof
+
+# Non-deploy diagnostic path for real renderer fixtures and shipped islands.
+# The full suites, SQL races and required gates remain in ci.yml and e2e.yml.
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - ".github/workflows/admin-stale-save-proof.yml"
+      - "assets/islands/admin-event-editor.js"
+      - "assets/islands/admin-save-baseline.js"
+      - "public/islands/admin-event-editor.js"
+      - "src/admin/**"
+      - "test/admin-stale-save*"
+      - "e2e/admin-stale-save.spec.ts"
+      - "playwright.admin-stale-save.config.ts"
+
+permissions:
+  contents: read
+
+jobs:
+  recovery-proof:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      - name: Generate assets on Actions for review and commit-back
+        run: |
+          npm run build:assets
+          ./node_modules/.bin/esbuild --minify assets/islands/admin-save-baseline.js --outfile=public/islands/admin-save-baseline.js
+          node ci/build-leaf-css.mjs
+      - name: Retain generated editor for the author without pushing from CI
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: generated-admin-editor-${{ github.sha }}
+          path: public/islands/admin-save-baseline.js
+          if-no-files-found: error
+          retention-days: 7
+      - run: npx playwright install --with-deps chromium
+      - name: Focused route and recovery checks
+        run: npx vitest run test/admin-stale-save-route.test.ts test/admin-stale-save-history.test.ts
+      - name: Browser recovery and desktop/mobile captures
+        run: npx playwright test --config playwright.admin-stale-save.config.ts
+      - name: Retain visual evidence and failures
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: admin-stale-save-evidence-${{ github.sha }}
+          path: |
+            test-results/
+            playwright-report-stale-save/
+          if-no-files-found: error
+          retention-days: 14

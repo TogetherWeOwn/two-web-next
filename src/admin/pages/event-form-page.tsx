@@ -87,7 +87,11 @@ export const EventFormPage: FC<{
         ) : null}
       </section>
       <script type="module" src="/islands/admin-event-text-limits.js" />
+      {mode === "edit" ? <script src="/islands/admin-save-baseline.js" defer /> : null}
       <script src="/islands/admin-event-editor.js" defer />
+      {saveRefused ? (
+        <script src="/islands/auth-status.js" defer data-testid="auth-tab-sync" />
+      ) : null}
     </Shell>
   );
 };

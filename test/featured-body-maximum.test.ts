@@ -274,6 +274,15 @@ describe.skipIf(!process.env.DATABASE_URL)(
       headers: { cookie, origin: APP_URL, "content-type": "application/x-www-form-urlencoded" },
       body: new URLSearchParams(fields),
     });
+    // The saved_baseline the guarded edit GET renders right now.
+    const tokenFor = async (path: string): Promise<string> => {
+      const res = await routeApp().request(path, { headers: { cookie } }, liveEnv());
+      expect(res.status).toBe(200);
+      const tag = (await res.text()).match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+      const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+      if (!token) throw new Error("edit page carries no saved_baseline token");
+      return token;
+    };
     const seed = () =>
       db
         .insert(featuredContents)
@@ -344,6 +353,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const res = await routeApp().request(
         `/featured/${id}`,
         form({
+          saved_baseline: await tokenFor(`/featured/${id}`),
           title: "Original slot",
           body: overMaxBody,
           image_url: "https://cdn.discordapp.com/photo.png",
@@ -375,6 +385,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const res = await routeApp().request(
         `/featured/${id}`,
         form({
+          saved_baseline: await tokenFor(`/featured/${id}`),
           title: "Original slot",
           body: atMaxBody,
           image_url: "https://cdn.discordapp.com/photo.png",
