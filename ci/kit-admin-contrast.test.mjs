@@ -78,7 +78,15 @@ before(async () => {
     {
       name: "event-edit-errors",
       path: `/admin/events/${eventRow.eventKey}`,
-      data: { view: { ...event.view, hasErrors: true, errors: eventErrors() } },
+      // A rejected POST re-renders the submitted input beside its errors.
+      data: {
+        view: {
+          ...event.view,
+          values: { ...event.view.values, ...invalidEvent },
+          hasErrors: true,
+          errors: eventErrors(),
+        },
+      },
     },
     { name: "featured-new", path: "/admin/featured/new", data: {} },
     { name: "featured-edit", path: "/admin/featured/7", data: { view: featured.view } },
