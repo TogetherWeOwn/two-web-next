@@ -90,6 +90,7 @@ import {
   parseFeaturedForm,
   utcToWall,
   ValidationError,
+  wallToUtc,
 } from "./validation";
 import { dispatchWriteBack } from "./writeback";
 import {
@@ -199,6 +200,23 @@ function formError(
   return render(err.fields, values);
 }
 
+// A wall time inside an autumn fold names two instants an hour apart, so a
+// carrier-less reparse can shift one of them onto the other and invent an
+// ordering error. Syntax and gap errors do not depend on the carrier and
+// always survive; only a fold-ambiguous ordering error is deferred to the
+// fresh editor, where the saved carriers are trustworthy again.
+function foldAmbiguous(wall: unknown, timezone: string): boolean {
+  if (typeof wall !== "string" || !wall.trim()) return false;
+  try {
+    return (
+      wallToUtc(wall, timezone, "earlier").getTime() !==
+      wallToUtc(wall, timezone, "later").getTime()
+    );
+  } catch {
+    return false;
+  }
+}
+
 function refusedEventSave(
   c: Context<Vars>,
   row: EventRow,
@@ -211,12 +229,15 @@ function refusedEventSave(
   } catch (err) {
     if (!(err instanceof ValidationError)) throw err;
     errors = { ...err.fields };
-    // The refused token cannot reconstruct the original UTC carriers. In a
-    // fold, two identical wall times can be a valid hour apart; reparsing them
-    // would falsely report an invalid end. Defer nonempty schedule diagnostics
-    // to the fresh editor, where the saved carriers are trustworthy again.
-    for (const field of ["starts_at", "ends_at"]) {
-      if (typeof values[field] === "string" && values[field].trim()) delete errors[field];
+    const timezone =
+      typeof values.timezone === "string" && values.timezone.trim()
+        ? values.timezone.trim()
+        : "Europe/London";
+    if (
+      errors.ends_at === "The end is after the start." &&
+      (foldAmbiguous(values.starts_at, timezone) || foldAmbiguous(values.ends_at, timezone))
+    ) {
+      delete errors.ends_at;
     }
   }
   c.status(status);

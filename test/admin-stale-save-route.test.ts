@@ -118,6 +118,57 @@ describe("refused moderator save documents", () => {
     },
   );
 
+  it.each(["early", "locked"])(
+    "keeps intrinsic %s schedule errors on a refused draft",
+    async (path) => {
+      const baseline = await eventSaveBaseline(
+        path === "early" ? { ...fold, title: "Older saved title" } : fold,
+      );
+      vi.mocked(updateEvent).mockRejectedValue(new StaleSaveError({ ...fold, title: "Winner" }));
+      const res = await post(`/events/${key}`, {
+        ...values,
+        starts_at: "not-a-time",
+        saved_baseline: baseline,
+      });
+      // Early refusal renders the stale document; a matching baseline reaches
+      // normal validation first, which reports the same intrinsic error.
+      expect(res.status).toBe(path === "early" ? 409 : 422);
+      const html = await res.text();
+      if (path === "early") {
+        expect(html).toContain('data-testid="stale-save"');
+        expect(html).toContain("Also fix before saving:");
+      }
+      expect(html).toContain('data-testid="error-starts_at"');
+      expect(html).toContain("Not a date and time");
+      expect(updateEvent).not.toHaveBeenCalled();
+      expect(dbTouched).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a gap-time error and a genuine ordering error on a refused draft", async () => {
+    const gap = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-03-29 01:30",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(gap.status).toBe(409);
+    const gapHtml = await gap.text();
+    expect(gapHtml).toContain('data-testid="error-starts_at"');
+    expect(gapHtml).toContain("That time never occurred");
+
+    const ordering = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-10-26 02:00",
+      ends_at: "2026-10-26 01:00",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(ordering.status).toBe(409);
+    const orderingHtml = await ordering.text();
+    expect(orderingHtml).toContain('data-testid="error-ends_at"');
+    expect(orderingHtml).toContain("The end is after the start.");
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
   it("retains non-schedule and missing-date diagnostics within the single stale notice", async () => {
     const res = await post(`/events/${key}`, {
       ...values,

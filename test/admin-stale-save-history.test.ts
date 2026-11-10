@@ -14,7 +14,14 @@ function islandSource(directory: string) {
 const A = "a".repeat(64);
 const B = "b".repeat(64);
 
-function loadIslands(directory: string, token: string, state: unknown, unavailable: boolean) {
+function loadIslands(
+  directory: string,
+  token: string,
+  state: unknown,
+  unavailable: boolean,
+  navType = "",
+  pathname = "/admin/featured/7",
+) {
   const baseline = { value: token };
   const values = new Map([["title", "Saved title"]]);
   const formListeners = new Map<string, (event: Event) => void>();
@@ -50,7 +57,10 @@ function loadIslands(directory: string, token: string, state: unknown, unavailab
     },
     window: {
       history,
-      location: { pathname: "/admin/featured/7" },
+      location: { pathname },
+      performance: {
+        getEntriesByType: () => (navType ? [{ type: navType }] : []),
+      },
       addEventListener: (type: string, listener: (event: Event) => void) =>
         windowListeners.set(type, listener),
     },
@@ -90,6 +100,33 @@ describe.each(["assets", "public"])("%s moderator draft history token binding", 
     back.formListeners.get("submit")!(new Event("submit", { cancelable: true }));
     expect(back.baseline.value).toBe(A);
     expect(back.values.get("title")).toBe("Recovered losing draft");
+  });
+
+  it.each(["/admin/events/01K00000000000000000000001", "/admin/featured/7"])(
+    "reload of %s adopts the fresh GET token and stays clean",
+    (pathname) => {
+      const original = loadIslands(directory, A, null, false, "", pathname);
+      const reloaded = loadIslands(directory, B, original.history.state, false, "reload", pathname);
+      expect(reloaded.baseline.value).toBe(B);
+      expect(reloaded.history.state).toEqual({
+        twoAdminSaveBaseline: { path: pathname, token: B },
+      });
+      const departure = new Event("beforeunload", { cancelable: true });
+      reloaded.windowListeners.get("beforeunload")!(departure);
+      expect(departure.defaultPrevented).toBe(false);
+      reloaded.baseline.value = A;
+      reloaded.formListeners.get("submit")!(new Event("submit", { cancelable: true }));
+      expect(reloaded.baseline.value).toBe(B);
+    },
+  );
+
+  it("back/forward traversal keeps the original token for a restored draft", () => {
+    const original = load(A);
+    const back = loadIslands(directory, B, original.history.state, false, "back_forward");
+    expect(back.baseline.value).toBe(A);
+    const departure = new Event("beforeunload", { cancelable: true });
+    back.windowListeners.get("beforeunload")!(departure);
+    expect(departure.defaultPrevented).toBe(true);
   });
 
   it("marks a freshly re-rendered old history entry dirty even before another keystroke", () => {
