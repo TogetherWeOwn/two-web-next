@@ -98,6 +98,16 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     await expect(reviewLink).toHaveAttribute("href", `${localOrigin}/e/${pausedKey}?review=1`);
     await page.getByLabel("Title", { exact: true }).fill("Not saved");
     await expect(reviewLink).toHaveAttribute("href", /\?review=1&unsaved=1$/);
+    const restoreEditor = async () => {
+      page.once("dialog", (dialog) => dialog.accept());
+      await page.goto("/admin/events");
+      // Playwright Chromium disables BFCache. Back loads a new document, then
+      // restores the edited title without input/change after the island loads.
+      await page.goBack();
+      await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Not saved");
+      await expect(reviewLink).toHaveAttribute("href", /\?review=1&unsaved=1$/);
+    };
+    await restoreEditor();
     const [reviewTab] = await Promise.all([
       context.waitForEvent("page"),
       reviewLink.click({ button: "middle" }),
@@ -110,6 +120,7 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     await page.getByLabel("Title", { exact: true }).fill(pausedTitle);
     await expect(reviewLink).toHaveAttribute("href", /\?review=1$/);
     await page.getByLabel("Title", { exact: true }).fill("Not saved");
+    await restoreEditor();
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByTestId("review-event").click();
     await expect(page.getByTestId("event-review-unsaved")).toBeVisible();

@@ -17,7 +17,9 @@ function reviewBrowser(draft = false) {
     (event: { preventDefault: () => void; returnValue?: string }) => void
   >();
   const editorListeners = new Map<string, Array<() => void>>();
+  const timers: Array<() => void> = [];
   const editor = {
+    removeAttribute: vi.fn(),
     hasAttribute: () => draft,
     addEventListener: (name: string, fn: () => void) => {
       editorListeners.set(name, [...(editorListeners.get(name) ?? []), fn]);
@@ -46,11 +48,17 @@ function reviewBrowser(draft = false) {
         }
       },
       URLSearchParams,
+      setTimeout: (fn: () => void) => timers.push(fn),
+      clearTimeout: vi.fn(),
     },
   );
   return {
     values,
     link,
+    pageshow: () => listeners.get("pageshow")!({ preventDefault: vi.fn() }),
+    fireTimers: () => {
+      for (const fn of timers.splice(0)) fn();
+    },
     edit: (name: "input" | "change") => {
       for (const fn of editorListeners.get(name) ?? []) fn();
     },
@@ -91,6 +99,37 @@ describe("Admin event editor navigation guard", () => {
       expect(b.navigate().preventDefault).not.toHaveBeenCalled();
     },
   );
+
+  it("syncs restored history values without input/change before normal or new-tab review", () => {
+    const b = reviewBrowser();
+    // A new document snapshots saved values before native history restoration.
+    b.pageshow();
+    b.values.set("title", "Restored unsaved title");
+    b.fireTimers();
+    // Middle-click and context-menu opens read this href without onclick.
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+    b.link.onclick?.();
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+    expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
+    // A later restore to the saved baseline must remove the advisory too.
+    b.pageshow();
+    b.values.set("title", "Game night");
+    b.fireTimers();
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1");
+    expect(b.navigate().preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("refreshes review on activation if values changed without an edit event", () => {
+    const b = reviewBrowser();
+    b.values.set("title", "Restored unsaved title");
+    expect(b.link.onclick).toBeTypeOf("function");
+    b.link.onclick!();
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+    expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
+    b.values.set("title", "Game night");
+    b.link.onclick!();
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1");
+  });
 
   it("marks a rejected Save as unsaved without a click or another keystroke", () => {
     const b = reviewBrowser(true);

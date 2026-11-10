@@ -1,7 +1,10 @@
 // Roster search/sort and other navigation must not silently discard event edits.
 (function () {
   "use strict";
-  var editor = document.querySelector("[data-event-editor]");
+  function query(selector) {
+    return document.querySelector(selector);
+  }
+  var editor = query("[data-event-editor]");
   if (!editor) return;
 
   function snapshot() {
@@ -13,7 +16,7 @@
   var draft = editor.hasAttribute("data-event-draft");
   // One synchronous starting point for a rejected document, not a pageshow
   // reset or an async validation result that could overwrite a newer draft.
-  var summary = draft && document.querySelector("[data-admin-validation-summary]");
+  var summary = draft && query("[data-admin-validation-summary]");
   if (summary) summary.focus();
   var saving = false;
   // An expired session vetoes the probe reload (the unsaved draft only exists
@@ -25,7 +28,7 @@
   var locked = false;
   var lockTimer = null;
   // Both renderers provide an empty live region outside the busy form.
-  var status = document.querySelector("[data-admin-save-status]");
+  var status = query("[data-admin-save-status]");
   function announce(message) {
     if (status) status.textContent = message;
   }
@@ -56,6 +59,8 @@
     leavingForRecovery = false;
     unlock();
     announce("");
+    // Persisted form values can be restored after pageshow, without edit events.
+    if (reviewLink) setTimeout(syncReview, 0);
   });
   // Same bar as safeNext (src/join/service.ts): a same-origin path or nothing.
   function samePath(raw) {
@@ -76,7 +81,7 @@
     var recoveryUrl =
       samePath(detail.recoveryUrl) ||
       "/auth/recover?next=" + encodeURIComponent(window.location.pathname + window.location.search);
-    document.querySelector('[data-testid="admin-session-expired"]')?.remove();
+    query('[data-testid="admin-session-expired"]')?.remove();
     var notice = document.createElement("div");
     notice.setAttribute("data-testid", "admin-session-expired");
     notice.setAttribute("role", "alert");
@@ -103,16 +108,20 @@
     editor.parentNode.insertBefore(notice, editor);
     notice.focus();
   });
-  var reviewLink = document.querySelector('[data-testid="review-event"]');
+  var reviewLink = query('[data-testid="review-event"]');
   // Both renderers emit the canonical saved-review URL ending in ?review=1.
   var reviewHref = reviewLink && reviewLink.href;
-  function onEdit() {
-    saving = false;
+  function syncReview() {
     if (reviewLink)
       reviewLink.href = reviewHref + (draft || snapshot() !== initial ? "&unsaved=1" : "");
   }
-  // New-tab and context-menu navigation use href without a click handler.
-  onEdit();
+  function onEdit() {
+    saving = false;
+    syncReview();
+  }
+  // New-tab/context-menu opens need href ready; activation covers silent edits too.
+  if (reviewLink) reviewLink.onclick = syncReview;
+  syncReview();
   editor.addEventListener("input", onEdit);
   editor.addEventListener("change", onEdit);
   window.addEventListener("beforeunload", function (event) {
