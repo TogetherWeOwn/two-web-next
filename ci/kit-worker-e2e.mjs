@@ -284,8 +284,12 @@ try {
       redirect: "manual",
     });
     assert.equal(refused.status, 403, "pre-Kit dispatch retains the Hono origin guard");
-    assert.deepEqual(await refused.json(), { error: "cross_origin" });
-    assert.ok(refused.headers.get("x-request-id"));
+    const refusedRequestId = refused.headers.get("x-request-id");
+    assert.ok(refusedRequestId, "cross-origin API refusal has Hono request correlation");
+    assert.deepEqual(await refused.json(), {
+      error: "cross_origin",
+      request_id: refusedRequestId,
+    });
     const badHost = await fetch(`${origin}${path}`, {
       headers: { host: "foreign.invalid" },
       redirect: "manual",
