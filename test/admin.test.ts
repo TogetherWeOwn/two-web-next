@@ -1002,8 +1002,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         expect(saved).toEqual({
           ...seeded,
           title: "Kit first save",
+          icsSequence: expect.any(BigInt),
+          syncRevision: seeded.syncRevision + 1,
           updatedAt: expect.any(Date),
         });
+        expect(saved.icsSequence).toBeGreaterThan(seeded.icsSequence);
         expect(saved.updatedAt.getTime()).toBeGreaterThan(seeded.updatedAt.getTime());
         const audits = await auditCount();
         const writebacks = vi.mocked(dispatchWriteBack).mock.calls.length;
@@ -1038,15 +1041,20 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
           (await second.post(EVENT_PATH, { ...losing, saved_baseline: fresh.saved_baseline }))
             .status,
         ).toBe(303);
-        expect(await eventRow()).toEqual({
+        const reconciled = await eventRow();
+        expect(reconciled).toEqual({
           ...saved,
           title: losing.title,
           accessibilityNotes: losing.accessibility_notes,
           organizer_name: losing.organizer_name,
           join_url: losing.join_url,
           join_instructions: losing.join_instructions,
+          icsSequence: expect.any(BigInt),
+          syncRevision: saved.syncRevision + 1,
           updatedAt: expect.any(Date),
         });
+        expect(reconciled.icsSequence).toBeGreaterThan(saved.icsSequence);
+        expect(reconciled.updatedAt.getTime()).toBeGreaterThan(saved.updatedAt.getTime());
         expect(await auditCount()).toBe(audits + 1);
       });
 
