@@ -78,11 +78,12 @@ before(async () => {
     {
       name: "event-edit-errors",
       path: `/admin/events/${eventRow.eventKey}`,
-      // A rejected POST re-renders the submitted input beside its errors.
+      // A rejected POST re-renders the submitted input beside its errors. The
+      // submission left Ends blank, so the saved end time must not show.
       data: {
         view: {
           ...event.view,
-          values: { ...event.view.values, ...invalidEvent },
+          values: { ...event.view.values, ...invalidEvent, ends_at: "" },
           hasErrors: true,
           errors: eventErrors(),
         },
