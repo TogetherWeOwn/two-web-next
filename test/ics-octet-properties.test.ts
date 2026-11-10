@@ -1,9 +1,10 @@
 // Pure public feed builders only: no app, database, network or clock reads.
 import fc from "fast-check";
 import { describe, expect, it } from "vitest";
+import type { events } from "../src/db/admin-schema";
 import { eventIcs, eventsIcsCollection } from "../src/events/feeds";
 
-type EventRow = Parameters<typeof eventIcs>[0];
+type EventRow = typeof events.$inferSelect;
 const OPTIONS = { seed: 11432, numRuns: 50 };
 const APP_URL = "https://next.example.test";
 const enc = new TextEncoder();

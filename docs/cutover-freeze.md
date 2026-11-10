@@ -8,9 +8,8 @@
 > `two-web-next`. The 48h post-flip watch ran `2026-10-10 00:52 UTC` to
 > `2026-10-12 00:52 UTC`, and the cutover closed on 2026-10-12. The flip and
 > the watch are recorded on the cutover card in the team tracker, including
-> whether and how a freeze was applied. Their receipts are not in this
-> repository, so a gate snapshot built from public repo state alone, such as
-> [cutover-gates.md](cutover-gates.md), can still read NO-GO.
+> whether and how a freeze was applied. The closed gate record is
+> [cutover-gates.md](cutover-gates.md).
 >
 > **The proposal is withdrawn.** The freeze window below was written before
 > the flip date was set. Take no freeze from this file: any future freeze

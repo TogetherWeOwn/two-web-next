@@ -302,6 +302,7 @@ describe("resolveRequestSession warns once on store failure; UNKNOWN is unchange
     const decision = await resolveRequestSession(requestWith([live.cookie]), {
       sessionSecret: SESSION_SECRET,
       store,
+      roleRecheck: null,
     });
     expect(decision).toEqual({ status: "unknown", session: null });
     expect(get).toHaveBeenCalledOnce();
@@ -321,6 +322,7 @@ describe("resolveRequestSession warns once on store failure; UNKNOWN is unchange
     const decision = await resolveRequestSession(requestWith([live.cookie]), {
       sessionSecret: SESSION_SECRET,
       store,
+      roleRecheck: null,
     });
     expect(decision.status).toBe("authenticated");
     expect(decision.session?.userId).toBe("100000000000000102");
@@ -333,7 +335,7 @@ describe("resolveRequestSession warns once on store failure; UNKNOWN is unchange
     const logs = captureDiagnosticStream();
     const decision = await resolveRequestSession(
       requestWith([await signedCookie(SESSION_COOKIE, newSessionToken())]),
-      { sessionSecret: SESSION_SECRET, store },
+      { sessionSecret: SESSION_SECRET, store, roleRecheck: null },
     );
     expect(decision).toEqual({ status: "guest", session: null });
     expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });
@@ -347,6 +349,7 @@ describe("resolveRequestSession warns once on store failure; UNKNOWN is unchange
     const decision = await resolveRequestSession(requestWith([live.cookie]), {
       sessionSecret: "",
       store,
+      roleRecheck: null,
     });
     expect(decision).toEqual({ status: "unknown", session: null });
     expect(channelCounts(logs)).toMatchObject({ warn: 0, error: 0 });

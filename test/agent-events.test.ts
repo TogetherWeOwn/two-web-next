@@ -1,17 +1,25 @@
 /// <reference types="vite/client" />
 // route-inventory: POST /api/agent-events
+import { randomUUID } from "node:crypto";
 import postgres from "postgres";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import {
   DEFAULT_CONFIG,
+  type Answer,
   type IngressConfig,
   digest,
   handleAgentEvent,
   validateFields,
 } from "../src/agent-events/service";
 import { sha256Hex } from "../src/bot/signer";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
+import { clearAuditRows } from "./helpers/audit-rows";
+import {
+  createMemberDataFixture,
+  testDatabaseUrl,
+  type MemberDataFixture,
+} from "./helpers/member-data-db";
 
 const CALLER = "agent-under-test";
 const STAGING = DEFAULT_CONFIG.stagingGuildId;
@@ -25,19 +33,82 @@ const FIELDS = {
   title: "Agent proof event",
   game: "Helldivers 2",
   description: "One uniquely labelled staging proof.",
-  starts_at: "2026-10-01 20:00",
-  ends_at: "2026-10-01 22:00",
+  starts_at: "2099-10-01 20:00",
+  ends_at: "2099-10-01 22:00",
   timezone: "Europe/London",
   location: "Voice: General",
   capacity: 4,
 };
 
+function busy(answer: Answer) {
+  expect(answer.status).toBe(503);
+  expect(answer.body).toMatchObject({
+    code: "operation_busy",
+    reason: "operation_busy",
+    next: "Retry with the same idempotency key.",
+  });
+  const { request_id, ...body } = answer.body;
+  expect(request_id).toMatch(/^[0-9A-HJKMNP-TV-Z]{26}$/);
+  expect(answer.headers ?? {}).not.toHaveProperty("Retry-After");
+  // A valid random ULID can contain a SQLSTATE; exempt only this validated field.
+  expect(JSON.stringify({ ...answer, body })).not.toMatch(
+    /pg_sleep|57014|55P03|Drizzle|PostgresError/,
+  );
+}
+
+describe("busy response redaction assertion (pure)", () => {
+  const requestId = "01M6TET01R57014CXCETF1F6RD";
+  const answer = (): Answer => ({
+    status: 503,
+    body: {
+      code: "operation_busy",
+      reason: "operation_busy",
+      next: "Retry with the same idempotency key.",
+      request_id: requestId,
+    },
+  });
+
+  it.each([requestId, "01M6TET01R55P03CXCETF1F6RD"])(
+    "accepts a valid request ID containing a SQLSTATE: %s",
+    (request_id) => {
+      const response = answer();
+      response.body.request_id = request_id;
+      expect(() => busy(response)).not.toThrow();
+      expect(response.body.request_id).toBe(request_id);
+    },
+  );
+
+  it.each(["pg_sleep", "57014", "55P03", "Drizzle", "PostgresError"])(
+    "still rejects leaked diagnostics outside the request ID: %s",
+    (diagnostic) => {
+      const response = answer();
+      expect(() =>
+        busy({ ...response, body: { ...response.body, message: diagnostic } }),
+      ).toThrow();
+      expect(() =>
+        busy({ ...response, body: { ...response.body, details: { request_id: diagnostic } } }),
+      ).toThrow();
+      expect(() => busy({ ...response, headers: { "X-Diagnostic": diagnostic } })).toThrow();
+      expect(() => busy({ ...response, headers: { [diagnostic]: "present" } })).toThrow();
+    },
+  );
+
+  it.each(["", requestId.slice(1), `${requestId}0`, "01M6TET01R57014CXCETF1F6RI"])(
+    "still rejects an invalid request ID: %s",
+    (request_id) => {
+      const response = answer();
+      response.body.request_id = request_id;
+      expect(() => busy(response)).toThrow();
+    },
+  );
+});
+
 describe("validateFields / digest (pure)", () => {
   it("accepts the documented example and rejects bad wall times and offsets", () => {
     expect(validateFields(FIELDS).ok).toBe(true);
-    expect(validateFields({ ...FIELDS, starts_at: "2026-10-01T20:00:00+01:00" }).ok).toBe(false);
+    expect(validateFields({ ...FIELDS, starts_at: "2099-10-01T20:00:00+01:00" }).ok).toBe(false);
     expect(validateFields({ ...FIELDS, starts_at: "2026-02-30 20:00" }).ok).toBe(false);
-    expect(validateFields({ ...FIELDS, ends_at: "2026-10-01 19:00" }).ok).toBe(false);
+    expect(validateFields({ ...FIELDS, ends_at: "2099-10-01 19:00" }).ok).toBe(false);
     expect(validateFields({ ...FIELDS, timezone: "Not/AZone" }).ok).toBe(false);
     expect(validateFields({ ...FIELDS, capacity: 0 }).ok).toBe(false);
   });
@@ -350,5 +421,432 @@ describe.skipIf(!process.env.DATABASE_URL)("agent-events ingress (agent-testdb)"
     );
     expect(r.status).toBe(403);
     expect(r.body.reason).toBe("foreign_event");
+  });
+  // Real PostgreSQL witnesses for receipt lock compatibility, post-write
+  // rollback and the actual Drizzle pg-proxy cancellation wrapper. No
+  // synthetic SQLSTATEs. These live under this file's existing DATABASE_URL
+  // gate: the fixture-only offline lane never opens a connection, and an
+  // absent DATABASE_URL never selects a built-in database.
+  describe("statement deadlines through real ingress (Postgres)", () => {
+    const sdCfg = {
+      ...DEFAULT_CONFIG,
+      enabled: true,
+      callerAgentId: "statement-deadline-regression",
+      lockWaitMs: 100,
+    };
+    const fields = {
+      title: "Statement deadline fixture",
+      game: "Chess",
+      description: "Synthetic fixture only",
+      starts_at: "2099-07-01 20:00",
+      ends_at: "2099-07-01 22:00",
+      timezone: "UTC",
+      location: "Fixture",
+      capacity: 2,
+    };
+
+    // Preserve native lazy queries, especially unsafe(...).values(). Only the
+    // post-UPDATE Drizzle SELECT is replaced, by real server-side execution work.
+    function observe(raw: postgres.Sql, slowUpdateRead = false) {
+      const errors: unknown[] = [];
+      let wroteEvent = false;
+      let injected = false;
+      function wrap(client: postgres.Sql): postgres.Sql {
+        return new Proxy(client, {
+          apply(target, _self, args) {
+            const [strings] = args as [TemplateStringsArray];
+            if (strings.join(" ").trim().toLowerCase().startsWith("update events set"))
+              wroteEvent = true;
+            return Reflect.apply(target, target, args);
+          },
+          get(target, key) {
+            if (key === "begin")
+              return async (fn: (tx: postgres.Sql) => Promise<unknown>) => {
+                try {
+                  return await target.begin((tx) => fn(wrap(tx as unknown as postgres.Sql)));
+                } catch (error) {
+                  errors.push(error);
+                  throw error;
+                }
+              };
+            if (key === "unsafe")
+              return (query: string, params?: never[]) => {
+                if (
+                  slowUpdateRead &&
+                  wroteEvent &&
+                  !injected &&
+                  query.toLowerCase().includes('from "events"')
+                ) {
+                  injected = true;
+                  return target.unsafe("select pg_sleep(0.6)");
+                }
+                return target.unsafe(query, params);
+              };
+            const value = Reflect.get(target, key);
+            return typeof value === "function" ? value.bind(target) : value;
+          },
+        });
+      }
+      return { sdSql: wrap(raw), errors, injected: () => injected };
+    }
+
+    let sdFixture: JobsFixture;
+    let sdSql: postgres.Sql;
+    let holder: postgres.Sql;
+    let grantId: string;
+    let credential: string;
+    let pid: number;
+    const writeBack = vi.fn(async () => {});
+
+    beforeEach(async () => {
+      // Gated by the parent describe: DATABASE_URL is set here, and
+      // testDatabaseUrl refuses anything but an approved disposable test DB.
+      const url = testDatabaseUrl(process.env.DATABASE_URL!);
+      sdFixture = await createJobsFixture(url.href);
+      sdSql = sdFixture.client;
+      pid = (await sdSql`SELECT pg_backend_pid() AS pid`)[0]!.pid;
+      holder = postgres(url.href, {
+        max: 1,
+        password: () => url.password,
+        connect_timeout: 5,
+        connection: { search_path: sdFixture.schemaName },
+        onnotice: () => {},
+      });
+      credential = `synthetic-deadline-${randomUUID()}`;
+      const verifier = await sha256Hex(credential);
+      const [grant] = await sdSql`INSERT INTO agent_event_grants
+        (agent_id, company_id, guild_id, verifier_hash)
+        VALUES (${sdCfg.callerAgentId}, 'fixture-company', ${sdCfg.stagingGuildId}, ${verifier}) RETURNING id`;
+      grantId = grant!.id;
+      writeBack.mockClear();
+    });
+    afterEach(async () => {
+      await holder?.end({ timeout: 1 });
+      await sdFixture?.dispose();
+    });
+
+    const sdCall = (client: postgres.Sql, body: unknown) =>
+      handleAgentEvent(client, sdCfg, body, credential, null, { writeBack });
+    const create = (key: string) => ({ op: "create", idempotency_key: key, fields });
+    const receipt = (key: string) =>
+      sdSql`SELECT * FROM agent_event_idempotency_keys WHERE grant_id = ${grantId} AND key = ${key}`;
+    const sdAudits = (key: string) =>
+      sdSql`SELECT * FROM agent_event_audits WHERE grant_id = ${grantId} AND idempotency_key = ${key} ORDER BY id`;
+
+    async function expectReceipt(answer: Answer, key: string, operation: string) {
+      const rows = await sdAudits(key);
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({
+        request_id: answer.body.request_id,
+        operation,
+        result: "error",
+        reason_code: "operation_busy",
+      });
+      expect(await receipt(key)).toHaveLength(0);
+      expect(writeBack).not.toHaveBeenCalled();
+      const [settings] = await sdSql`SELECT pg_backend_pid() AS pid,
+        current_setting('statement_timeout') AS statement, current_setting('lock_timeout') AS lock`;
+      expect(settings).toMatchObject({ pid, statement: "0", lock: "0" });
+    }
+
+    it("a held non-key grant disable does not block the busy receipt a second time", async () => {
+      const key = "held-disable";
+      const observed = observe(sdSql);
+      await holder.unsafe("BEGIN");
+      try {
+        await holder`UPDATE agent_event_grants SET disabled_at = clock_timestamp() WHERE id = ${grantId}`;
+        // Holder remains uncommitted across the operation timeout AND receipt.
+        const answer = await sdCall(observed.sdSql, create(key));
+        busy(answer);
+        expect(observed.errors).toHaveLength(1);
+        expect(["55P03", "57014"]).toContain((observed.errors[0] as { code: string }).code);
+        await expectReceipt(answer, key, "create");
+        expect(await sdSql`SELECT id FROM events WHERE agent_grant_id = ${grantId}`).toHaveLength(
+          0,
+        );
+        const [held] =
+          await holder`SELECT disabled_at IS NOT NULL AS disabled FROM agent_event_grants WHERE id = ${grantId}`;
+        expect(held!.disabled).toBe(true);
+      } finally {
+        await holder.unsafe("ROLLBACK");
+      }
+      expect((await sdCall(sdSql, create(key))).status).toBe(201);
+    });
+
+    it("an executing receipt INSERT cancels after event and audit writes, rolls back, then retries", async () => {
+      const key = "post-write-stall";
+      await sdSql.unsafe(`CREATE FUNCTION stall_deadline_receipt() RETURNS trigger LANGUAGE plpgsql AS $$
+        BEGIN PERFORM pg_sleep(0.6); RETURN NEW; END $$`);
+      await sdSql.unsafe(`CREATE TRIGGER stall_deadline_receipt BEFORE INSERT ON agent_event_idempotency_keys
+        FOR EACH ROW EXECUTE FUNCTION stall_deadline_receipt()`);
+      const observed = observe(sdSql);
+      const answer = await sdCall(observed.sdSql, create(key));
+      busy(answer);
+      expect(observed.errors).toHaveLength(1);
+      expect(observed.errors[0]).toMatchObject({ code: "57014" });
+      await expectReceipt(answer, key, "create");
+      expect(await sdSql`SELECT id FROM events WHERE agent_grant_id = ${grantId}`).toHaveLength(0);
+      await sdSql.unsafe("DROP TRIGGER stall_deadline_receipt ON agent_event_idempotency_keys");
+      const retry = await sdCall(sdSql, create(key));
+      expect(retry.status).toBe(201);
+      expect(await receipt(key)).toHaveLength(1);
+      expect(await sdSql`SELECT id FROM events WHERE agent_grant_id = ${grantId}`).toHaveLength(1);
+      const replay = await sdCall(sdSql, create(key));
+      expect(replay.status).toBe(201);
+      expect(replay.body).toMatchObject({ event_key: retry.body.event_key, replayed: true });
+      expect((await sdAudits(key)).filter((a) => a.result === "ok")).toHaveLength(1);
+    });
+
+    it("actual Drizzle update cancellation after UPDATE rolls back and recovers with the same key", async () => {
+      const seeded = await sdCall(sdSql, create("update-seed"));
+      expect(seeded.status).toBe(201);
+      const published = await sdCall(sdSql, {
+        op: "publish",
+        idempotency_key: "update-publish-seed",
+        event_key: seeded.body.event_key,
+      });
+      expect(published.status).toBe(200);
+      expect(writeBack).toHaveBeenCalledTimes(1);
+      writeBack.mockClear();
+      const key = "wrapped-update-stall";
+      const body = {
+        op: "update",
+        idempotency_key: key,
+        event_key: seeded.body.event_key,
+        version: 1,
+        fields: { ...fields, title: "Retried update" },
+      };
+      const observed = observe(sdSql, true);
+      const answer = await sdCall(observed.sdSql, body);
+      busy(answer);
+      expect(observed.injected()).toBe(true);
+      expect(observed.errors).toHaveLength(1);
+      const error = observed.errors[0] as Error & { code?: string; cause: { code: string } };
+      expect(error.constructor.name).toBe("DrizzleQueryError");
+      expect(error.name).toBe("Error");
+      expect(error.code).toBeUndefined();
+      expect(error.cause.code).toBe("57014");
+      await expectReceipt(answer, key, "update");
+      const [unchanged] =
+        await sdSql`SELECT title, agent_version FROM events WHERE agent_grant_id = ${grantId}`;
+      expect(unchanged).toMatchObject({ title: fields.title, agent_version: 1 });
+      const retry = await sdCall(sdSql, body);
+      expect(retry.status).toBe(200);
+      expect(retry.body.agent_version).toBe(2);
+      expect(await receipt(key)).toHaveLength(1);
+      expect(writeBack).toHaveBeenCalledTimes(1);
+      const [updated] =
+        await sdSql`SELECT title, agent_version FROM events WHERE agent_grant_id = ${grantId}`;
+      expect(updated).toMatchObject({ title: "Retried update", agent_version: 2 });
+      const replay = await sdCall(sdSql, body);
+      expect(replay.status).toBe(200);
+      expect(replay.body).toMatchObject({ event_key: seeded.body.event_key, replayed: true });
+      expect(writeBack).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  // Adopted from #1155 inside the existing disposable-DB gate. Only Date is
+  // faked: the lock wait uses real timers and real PostgreSQL transactions.
+  describe("publish of ended drafts", () => {
+    const ends = Date.UTC(2099, 6, 1, 22);
+    const ended = "An event that has already ended cannot be published. Update its dates first.";
+    const fields = {
+      ...FIELDS,
+      starts_at: "2099-07-01 20:00",
+      ends_at: "2099-07-01 22:00",
+      timezone: "UTC",
+    };
+    let proof: MemberDataFixture;
+    let credential: string;
+    const writeBack = vi.fn(async () => {});
+    const call = (op: string, rest: Record<string, unknown> = {}, config = cfg) =>
+      handleAgentEvent(
+        proof.client,
+        config,
+        { op, idempotency_key: randomUUID(), ...rest },
+        credential,
+        null,
+        { writeBack },
+      );
+    const create = async () => {
+      const result = await call("create", { fields });
+      expect(result.status).toBe(201);
+      return result.body.event_key as string;
+    };
+    const rowOf = async (eventKey: string) =>
+      (
+        await proof.client`SELECT status, location, agent_version, ends_at, updated_at
+          FROM events WHERE event_key = ${eventKey}`
+      )[0]!;
+    const publishAudits = (eventKey: string) =>
+      proof.client`SELECT result, reason_code FROM agent_event_audits
+        WHERE operation = 'publish' AND event_key = ${eventKey} ORDER BY id`;
+
+    beforeAll(async () => {
+      proof = await createMemberDataFixture(process.env.DATABASE_URL!, { max: 8 });
+    });
+    afterAll(async () => {
+      await proof?.dispose();
+    });
+    beforeEach(async () => {
+      await proof.reset();
+      await proof.client`DELETE FROM agent_event_idempotency_keys`;
+      await clearAuditRows(proof.client, ["agent_event_audits"]);
+      await proof.client`DELETE FROM agent_event_hits`;
+      await proof.client`DELETE FROM agent_event_grants`;
+      writeBack.mockClear();
+      credential = `fixture-${randomUUID()}`;
+      await proof.client`INSERT INTO agent_event_grants (agent_id, company_id, guild_id, verifier_hash)
+        VALUES (${CALLER}, 'fixture-company', ${cfg.stagingGuildId}, ${await sha256Hex(credential)})`;
+      vi.useFakeTimers({ toFake: ["Date"] });
+      vi.setSystemTime(new Date(ends - 3600_000));
+    });
+    afterEach(() => vi.useRealTimers());
+
+    it.each([1, 3600_000])(
+      "refuses publish %i ms after the draft ended without mutation, write-back or stored receipt",
+      async (pastEnd) => {
+        const event_key = await create();
+        const before = await rowOf(event_key);
+        expect(before.status).toBe("draft");
+        vi.setSystemTime(new Date(ends + pastEnd));
+        const publishKey = randomUUID();
+        const publish = await call("publish", { event_key, idempotency_key: publishKey });
+        expect(publish.status).toBe(422);
+        expect(publish.body).toMatchObject({
+          reason: "validation_failed",
+          errors: { ends_at: [ended] },
+        });
+        expect(await rowOf(event_key)).toEqual(before);
+        expect(writeBack).not.toHaveBeenCalled();
+        expect(await publishAudits(event_key)).toEqual([
+          { result: "denied", reason_code: "validation_failed" },
+        ]);
+        expect(
+          (
+            await proof.client`SELECT count(*)::int AS n FROM agent_event_idempotency_keys WHERE key = ${publishKey}`
+          )[0]!.n,
+        ).toBe(0);
+        const retry = await call("publish", { event_key, idempotency_key: publishKey });
+        expect(retry.status).toBe(422);
+        expect(retry.body.replayed).toBeUndefined();
+        expect(await publishAudits(event_key)).toHaveLength(2);
+        expect(await rowOf(event_key)).toEqual(before);
+        expect(writeBack).not.toHaveBeenCalled();
+      },
+    );
+
+    it.each([0, 1, 3600_000])(
+      "still publishes when the end is %i ms away (strict boundary)",
+      async (untilEnd) => {
+        const event_key = await create();
+        vi.setSystemTime(new Date(ends - untilEnd));
+        const publish = await call("publish", { event_key });
+        expect(publish.status).toBe(200);
+        expect(publish.body).toMatchObject({ event_key, status: "published" });
+        expect((await rowOf(event_key)).status).toBe("published");
+        expect(writeBack).toHaveBeenCalledExactlyOnceWith({
+          eventKey: event_key,
+          status: "published",
+        });
+        expect(await publishAudits(event_key)).toEqual([{ result: "ok", reason_code: null }]);
+      },
+    );
+
+    it("judges the clock after waiting for the owned-row lock, not at request entry", async () => {
+      const event_key = await create();
+      const before = await rowOf(event_key);
+      let release!: () => void;
+      let ready!: (pid: number) => void;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const acquired = new Promise<number>((resolve) => {
+        ready = resolve;
+      });
+      const holder = proof.client.begin(async (tx) => {
+        await tx`SELECT id FROM events WHERE event_key = ${event_key} FOR UPDATE`;
+        const [backend] = await tx`SELECT pg_backend_pid() AS pid`;
+        ready(Number(backend!.pid));
+        await gate;
+      });
+      const waitForBlock = async (holderPid: number): Promise<void> => {
+        const deadline = performance.now() + 3000;
+        do {
+          const waiting =
+            await proof.client`SELECT pid FROM pg_stat_activity WHERE datname = current_database()
+              AND wait_event_type = 'Lock' AND ${holderPid} = ANY(pg_blocking_pids(pid))`;
+          if (waiting.length) return;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+        } while (performance.now() < deadline);
+        throw new Error("Publish never reached the owned-row lock");
+      };
+      let publish: ReturnType<typeof call> | undefined;
+      try {
+        const holderPid = await acquired;
+        vi.setSystemTime(new Date(ends - 1));
+        publish = call("publish", { event_key }, { ...cfg, lockWaitMs: 5000 });
+        await waitForBlock(holderPid);
+        vi.setSystemTime(new Date(ends + 1));
+      } finally {
+        release();
+        await holder;
+      }
+      const result = await publish!;
+      expect(result.status).toBe(422);
+      expect(result.body).toMatchObject({
+        reason: "validation_failed",
+        errors: { ends_at: [ended] },
+      });
+      expect(await rowOf(event_key)).toEqual(before);
+      expect(writeBack).not.toHaveBeenCalled();
+      expect(await publishAudits(event_key)).toEqual([
+        { result: "denied", reason_code: "validation_failed" },
+      ]);
+    });
+
+    it("still cancels an ended draft, and terminal-state refusals keep precedence", async () => {
+      const event_key = await create();
+      vi.setSystemTime(new Date(ends + 3600_000));
+      const cancel = await call("cancel", { event_key });
+      expect(cancel.status).toBe(200);
+      expect(cancel.body).toMatchObject({ event_key, status: "cancelled" });
+      expect((await rowOf(event_key)).status).toBe("cancelled");
+      expect(writeBack).toHaveBeenCalledExactlyOnceWith({
+        eventKey: event_key,
+        status: "cancelled",
+      });
+      for (const op of ["publish", "cancel"]) {
+        const again = await call(op, { event_key });
+        expect(again.status).toBe(409);
+        expect(again.body.reason).toBe("event_not_open");
+      }
+      expect(writeBack).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps the blank-location refusal for a draft that has not ended", async () => {
+      const event_key = await create();
+      await proof.client`UPDATE events SET location = '   ' WHERE event_key = ${event_key}`;
+      const publish = await call("publish", { event_key });
+      expect(publish.status).toBe(422);
+      expect(publish.body).toMatchObject({
+        reason: "validation_failed",
+        errors: { location: ["Add a location before publishing."] },
+      });
+      expect((await rowOf(event_key)).status).toBe("draft");
+      expect(writeBack).not.toHaveBeenCalled();
+    });
+
+    it("keeps ownership refusal ahead of the ended check for a foreign ended draft", async () => {
+      await create();
+      await proof.client`INSERT INTO events (event_key, title, starts_at, ends_at, location)
+        VALUES ('foreign-ended', 'Foreign', '2099-07-01T20:00:00Z', '2099-07-01T22:00:00Z', 'Voice')`;
+      vi.setSystemTime(new Date(ends + 3600_000));
+      const publish = await call("publish", { event_key: "foreign-ended" });
+      expect(publish.status).toBe(403);
+      expect(publish.body.reason).toBe("foreign_event");
+      expect((await rowOf("foreign-ended")).status).toBe("draft");
+      expect(writeBack).not.toHaveBeenCalled();
+    });
   });
 });

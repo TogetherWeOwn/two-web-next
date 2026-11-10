@@ -19,7 +19,8 @@ Guidance for human and AI contributors.
 - The workspace may hand you a local branch named after a tracker card; keep committing to it, never publish that name, push `git push origin HEAD:refs/heads/<type>/<short-slug>` and open the PR from that ref.
 - Squash-merge only. One PR is one logical change.
 - Title the PR with a Conventional Commits header: `type(scope): summary`, at most 100 characters, no trailing period. Release automation reads it.
-- Use the PR template, in short, active sentences. Linked Issues and Verification are required; the rest is optional.
+- Use the PR template, in short, active sentences. Fill in Linked Issues, Verification and Attestation; the rest is optional.
+- PRs follow the org contract in `TogetherWeOwn/.github` CONTRIBUTING + this repo's overrides; use this repo's PR template, which replaces the org template; its Attestation section is mandatory.
 - Keep references public-safe. No internal card IDs (`TOG-`, `PAP-`), private URLs, tokens, or secrets in any title, body, commit, comment, or branch name. Link public GitHub issues with `Closes #123`.
 - Report the tests you ran. Never claim a green run you did not see.
 - Address every review finding, or reply with why it does not apply.
@@ -47,6 +48,8 @@ npx wrangler deploy --dry-run --outdir dist   # bundle check, no deploy
 
 Run tests only against the disposable test database or local fixtures described in the README, with `DATABASE_URL` set to that URL. Apply migrations with `npm run db:migrate` and validate history with `npm run db:check`. Never point tests, probes, or migrations at a production or staging database. If a credential fails, stop and report it. Do not try another one.
 
+To reproduce CI's Vitest gates with disposable Postgres 17 containers, run `bin/local-ci.sh -- <test files>` for the affected files, then `bin/local-ci.sh -j 8` for the full gate. See "Verify a change before opening a PR" in [CONTRIBUTING.md](CONTRIBUTING.md).
+
 ## UI changes
 
 A user-visible change to a page, component, CSS, typography, navigation, form, or responsive layout follows this loop. AI contributors apply `frontend-ui-engineering`, then `product-ui-design-loop`, and add `frontend-design` for a new visual direction, whenever those skills are available to them.
@@ -62,6 +65,7 @@ A user-visible change to a page, component, CSS, typography, navigation, form, o
 - Behavior matches the request.
 - Tests pass locally, and `npm run check` is green.
 - A UI change carries the evidence listed under UI changes.
-- CI is green on the exact head SHA that merges: `ci-ok`, `gitleaks`, `e2e-ok` and `pr-lint` are required, plus Paperclip Review 5/5 on the exact head.
-- A reviewer who did not write the code approved that head SHA.
+- Every required check is green on the exact head SHA that merges: `ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review`. No approving review is required.
+- Every review finding is fixed, or answered with evidence.
+- When native review stages apply, the final-stage reviewer squash-merges the exact reviewed head before closing the task; otherwise the author merges. Pin the merge to that SHA. A merge to `main` here deploys production, so it requires a fresh per-PR exact-head Release Manager `request_confirmation` on a child card assigned and addressed to the Release Manager; every other production deploy also needs Release Manager confirmation. Any push requires a new exact-head confirmation. Follow [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence) for the automatic post-merge, pre-production staging/e2e/soak gate, retained safeguards and release-log recording; neither pre-merge staging nor artifact equality is a merge prerequisite.
 - The PR is squash-merged, and the docs it made stale are updated.

@@ -523,6 +523,25 @@
       }
     } catch (error) {
       if (active !== controller || error.name === "AbortError") return;
+      // The bounded reader did its job: the destination page itself is past
+      // the HTML cap (a dense month), so no fragment swap or retry of this
+      // read can ever succeed. A member-started navigation (a real anchor or
+      // the month-jump GET form) falls back to the full document it would
+      // have loaded without this island; `url` here was already admitted as
+      // same-origin /events. A settled search or newer draft keeps the
+      // last-good view; failRead still reconciles a changed history address.
+      if (
+        opts.skeleton &&
+        inputRevision === inputRevisionAtStart &&
+        gameRevision === gameRevisionAtStart &&
+        error &&
+        error.message === "HTML too large"
+      ) {
+        feedback.textContent = root.dataset.loadError;
+        setLoading(false);
+        window.location.assign(url.pathname + url.search + url.hash);
+        return;
+      }
       failRead(retryAfterMs);
     } finally {
       if (trackFocus) document.removeEventListener("focusin", trackFocus);

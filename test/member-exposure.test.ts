@@ -58,7 +58,11 @@ const ADMIN_READS = [
   "/join-attempts/:id",
   ...ADMIN_REDIRECTS,
 ];
-const OPERATIONAL_READS = ["/queue/failed/:id/preview", "/queue/source-evidence/:id"];
+const OPERATIONAL_READS = [
+  "/ops-overrides", // Session-free control bearer, dark when unconfigured; never member data.
+  "/queue/failed/:id/preview",
+  "/queue/source-evidence/:id",
+];
 const OTHER_READS = [
   "/",
   "/discord",
@@ -73,6 +77,7 @@ const OTHER_READS = [
   "/robots.txt",
   "/.well-known/security.txt",
   "/up",
+  "/version", // Deploy commit and upload time from version metadata; no DB, no member data.
   "/auth/discord",
   "/auth/discord/callback",
   "/auth/discord/redirect",

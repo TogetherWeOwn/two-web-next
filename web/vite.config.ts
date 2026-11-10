@@ -33,6 +33,12 @@ export default defineConfig({
       build: {
         minify: true,
         rolldownOptions: {
+          // Normal artifacts omit capture-only code. Local builds retain the
+          // identifier for the generated loopback Wrangler config to define.
+          transform:
+            process.env.SSR_CAPTURE_FIXTURE === "true"
+              ? {}
+              : { define: { __TWO_LOCAL_CAPTURE__: "false" } },
           output: {
             // Compact server output without rewrites or name mangling; error
             // diagnostics depend on constructor names. Keep licenses and maps.
@@ -61,16 +67,19 @@ export default defineConfig({
                   name: "content",
                   test: /\/(?:src\/(?:screens\/(?:about|faq|rules|privacy|join)\.tsx|(?:about|faq|rules|privacy)-content\.ts)|web\/src\/(?:lib\/ContentLeaf\.svelte|routes\/(?:about|faq|rules|privacy|join)\/\+page\.svelte))$/,
                 },
-                // Compress Kit's home and admin markup with the Hono renderers
-                // rather than using separate gzip streams for mirrored pages.
+                // Keep the Hono application entry with its admin routes and
+                // Kit's mirrored markup, avoiding cross-chunk export scaffolding
+                // for the same application. Client chunking stays unchanged.
                 {
                   name: "admin",
-                  test: /\/(?:src\/admin\/|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.svelte$))/,
+                  test: /\/(?:src\/(?:admin\/|index\.tsx$)|web\/src\/routes\/(?:\+page\.svelte$|admin\/.*\.svelte$))/,
                 },
-                // Co-compress the Kit profile view with its Hono markup twin.
+                // Co-compress the profile and board renderers across Hono/Kit,
+                // including hot zones and their shared period/read helpers.
+                // Grouping is SSR-only; client chunks keep their boundary.
                 {
                   name: "profiles",
-                  test: /\/src\/(?:profiles\/|lib\/ProfileView\.svelte$)/,
+                  test: /\/src\/(?:profiles\/|hotzones\/|kit-hotzones\.ts$|lib\/ProfileView\.svelte$|routes\/(?:leaderboards\/members|hotzones(?:\/\[signal\])?)\/\+(?:page|error)\.svelte$)/,
                 },
                 {
                   name: "events",

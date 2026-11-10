@@ -5,6 +5,7 @@ import { audit, auditOperationBusy } from "./audit";
 import { ingressDenial } from "./envelope";
 import { pruneAgentEventHits } from "./prune-hits";
 import { throttleEnvelope } from "./rate-limit";
+import { isIngressBusy, setIngressDeadlines } from "./deadline";
 
 // The outer shield's counter (two-web TOG-8402): one bucket per credential
 // hash (or anonymous IP), counted before auth. Returns the 429 envelope when
@@ -78,7 +79,7 @@ export async function shield(
   let retryAfter: number | null = null;
   try {
     const wait = await sql.begin(async (tx) => {
-      await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
+      await setIngressDeadlines(tx, cfg.lockWaitMs);
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-hits:${bucket}`}, 0))`;
       const [r] =
         await tx`SELECT count(*)::int AS n, coalesce(ceil(extract(epoch FROM (min(at) + interval '60 seconds' - now()))), 1)::int AS wait
@@ -91,7 +92,7 @@ export async function shield(
     if (wait === null) return null;
     retryAfter = wait;
   } catch (err) {
-    if ((err as { code?: string }).code === "55P03") {
+    if (isIngressBusy(err)) {
       // Contention, not a decision. Audited as an error so a run of these reads as load.
       // The audit runs in its own short deadline-bound transaction after the
       // admission settled; an expected audit timeout keeps this same 503.
@@ -128,8 +129,7 @@ export async function shield(
         await audit(tx, null, operation, null, null, dig, requestId, "denied", "rate_limited");
       });
     } catch (err) {
-      const code = (err as { code?: string }).code;
-      if (code === "55P03" || code === "57014") {
+      if (isIngressBusy(err)) {
         return {
           status: 503,
           body: ingressDenial(

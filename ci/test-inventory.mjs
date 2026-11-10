@@ -1901,6 +1901,7 @@ function selftest() {
       "test/smoke-ordinary-traffic-identity-acceptance.test.mjs",
       "test/smoke-public-api-acceptance.test.mjs",
       "test/smoke.test.mjs",
+      "test/version-check.test.mjs",
     ]);
   });
 

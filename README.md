@@ -8,8 +8,10 @@ repository: fixes only, no new features.
 
 Stack: [Hono](https://hono.dev) on Cloudflare Workers, TypeScript, Vitest,
 [Drizzle](https://orm.drizzle.team) + Postgres, server-rendered HTML with plain
-JavaScript islands. The [parity matrix](docs/parity.md) tracks the migration;
-migration plan: TOG-9671.
+JavaScript islands. The [parity matrix](docs/parity.md) tracks the migration.
+SvelteKit with Svelte 5 under [web/](web/) is the
+accepted single page renderer; Hono keeps the non-page APIs for now. See
+[ADR 0001](docs/adr/0001-sveltekit-page-renderer.md) and its retirement register.
 How it fits together: [docs/architecture.md](docs/architecture.md).
 Shared-DB foundation (topology, numbering, backups): [docs/db-migrations.md](docs/db-migrations.md).
 Operations (deploy/rollback, `/up`, queues, outages and restore drills):
@@ -46,6 +48,14 @@ the separate past-event archive is not game-filtered. The calendar collection
 Subscribe link, the `.ics` download and the copyable feed URL all carry the
 committed game, and the calendar label names it. Blank means every game; a valid
 unknown game yields an empty scoped calendar, never all games.
+
+Published nights show **Happening now** from their start instant until, but not
+including, their end instant. The schedule cards, current-month grid cells and
+event detail use a server snapshot, not a live clock; existing page caching
+still applies. The label sits beside RSVP availability, so a night can still
+be full or paused. Drafts, cancelled and
+ended nights never carry it; Discord-managed rows use Discord's active status
+and any announced end. The label is not proof of attendance.
 
 Calendar past searches preview up to 20 matches. Use **Continue search in past events**
 to page through older matches without losing the query; **Clear search** returns to
@@ -155,6 +165,15 @@ replace disposable-DB verification or browser evidence.
 Tests must use agent-testdb or disposable CI service containers, never
 production or staging databases. Legacy suites clear shared tables: do not
 run concurrent suites against the same test database.
+
+### Deterministic capture data
+
+The separate [Ember capture fixture](docs/ember-capture-fixture.md) materializes
+invented data and private local sessions in a disposable owned schema. Its
+manifest declares all 33 frozen route-states. `npm run capture:manifest` is offline;
+`npm run capture:verify` requires the documented explicit loopback/test-DB opt-in,
+proves two clean seeds and cleans up. This is not the legacy e2e seed or Pilot
+capture authorization.
 
 ### Public-payload privacy contract
 
@@ -275,7 +294,7 @@ npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands
 ### Browser regressions
 
 Except for the unconditional suites (Kit member-auth, Kit admin contrast,
-native event share and the three `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
+native event share and the four `ci/*-browser` Vitest configs), these suites skip their browser cases unless the opt-in variable is `"true"`, so
 a run without it can pass without executing them. For the Vitest suites wired
 into CI, the `a11y` job sets each variable, writes a Vitest JSON report and runs
 `ci/a11y-require-executed.mjs`, which fails the step unless every case in the
@@ -321,7 +340,7 @@ to execute the same Chromium proof.
 | `ci/rsvp-focus-browser.test.mjs` | `RSVP_FOCUS_BROWSER_TESTS` | `RSVP_FOCUS_BROWSER_TESTS=true node --test ci/rsvp-focus-browser.test.mjs` (real Chromium focus proof with recovery paths; verified by `ci/rsvp-focus-require-executed.mjs`; runs in the `a11y` job) |
 | `ci/kit-admin-contrast.test.mjs` | None—always runs | `npm run build --prefix web && node --import tsx --test --test-timeout=60000 ci/kit-admin-contrast.test.mjs` (built Kit root/layout/styles and five admin leaf fixtures at both widths; intercepted reads, no DB; runs after the adapter build in `check`, not the Hono `a11y` gate) |
 | `ci/kit-member-auth-browser.test.mjs` | None—always runs | `npm run test:kit-member-auth-browser` (15 real Chromium cases; memory sessions, local HTTPS, real Svelte SSR and minified controllers; requires Kit dependencies and OpenSSL; TAP-verified in `a11y`) |
-| `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (34 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
+| `ci/event-native-share-browser.test.mjs` | None—always runs | `node --import tsx --test ci/event-native-share-browser.test.mjs` (44 real Chromium cases; Hono and Kit fixtures, real Svelte SSR and minified islands; requires Kit dependencies and Chromium; TAP-verified in `a11y` via `ci/rsvp-focus-require-executed.mjs`) |
 | `ci/schedule-search-context-browser.test.ts` | None—always runs | `npx vitest run --config ci/schedule-search-context-browser.vitest.ts ci/schedule-search-context-browser.test.ts` (5 Hono and 5 Kit real Chromium cases; requires Kit dependencies and Chromium; JSON-verified in `a11y` via `ci/a11y-require-executed.mjs`) |
 | `ci/calendar-subscription-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-subscription-browser.vitest.ts ci/calendar-subscription-browser.test.ts` (10 cases on each of the four calendar surfaces; intercepted clipboard fixtures; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
 | `ci/calendar-game-recovery-browser.test.ts` | None—always runs | `npx vitest run --config ci/calendar-game-recovery-browser.vitest.ts ci/calendar-game-recovery-browser.test.ts` (16 cases for each Hono/Kit and source/shipped bundle pairing, enforced minimum 14; requires Kit dependencies and Chromium; JSON-verified in `a11y`) |
@@ -347,7 +366,9 @@ Do not use `npm run deploy` as a test or build command.
 ## Deploy
 
 Push to `main` runs `check`, then `deploy-staging` (GitHub Environment `staging`
-gate): `wrangler deploy` with the repo secrets `CLOUDFLARE_API_TOKEN` /
+gate): `wrangler deploy` of the tail Worker (`tail/wrangler.jsonc`), the Kit
+staging Worker (`web/wrangler.staging.jsonc`) and the jobs Worker
+(`wrangler.jobs.jsonc`) with the `staging` Environment secrets `CLOUDFLARE_API_TOKEN` /
 `CLOUDFLARE_ACCOUNT_ID`, followed by `node bin/smoke.mjs https://next.togetherweown.com --fail-on-ready-wait-critical`.
 The staging smoke checks `/up`, the public pages and feeds, sitemap, robots,
 Discord and guest auth redirects, and a branded 404. It checks CSP and nosniff
@@ -401,6 +422,13 @@ database probe or production test.
 
 ### Production (gated automatic promotion)
 
+The production app Worker builds once with a native esbuild metafile, verifies
+its digest-bound inventory, then uploads those same bytes with `--no-bundle`.
+Only a successful version-aware promotion smoke creates deployed evidence.
+See the [Worker bundle inventory contract](docs/worker-bundle-inventory.md) for
+artifact names, schemas, conservative package findings and consumer validation.
+CI dry-run inventories alone are not deployment evidence.
+
 Cutover decision state is recorded in `docs/cutover-gates.md` and the release
 contract in `docs/releases.md`; this section describes the deployment contract,
 not the currently serving version. Worker code reaches production only through
@@ -410,18 +438,31 @@ not the currently serving version. Worker code reaches production only through
 exactly `true`. The production workflow promotes automatically when
 `e2e-staging` completes plus a daily 14:17 UTC schedule backstop, and keeps a
 manually authorized dispatch for explicit redeploys; it never deploys on push,
-PR or release. Automatic runs promote only a staging green that soaked 30
-minutes with no newer red staging run, skip cleanly when production already
-serves the target (`/up` revision marker) or there is nothing soaked and green,
-and read the live production ledger via `/up` when the target journal has
+PR or release. Default selection (both automatic triggers and an empty-SHA
+manual dispatch) requires a known live `/up` commit and verified forward
+ancestry from that commit to the candidate. A behind or divergent selection,
+or unreadable/malformed ancestry evidence, fails closed before candidate
+checkout or promotion side effects. Equality keeps the clean no-op. The
+workflow-head guard cannot be omitted by an older candidate. Only an explicit,
+matching dispatch SHA selects the existing separately authorized recovery
+route; `migrations_applied` never bypasses default ancestry admission. See the
+[ancestry contract](docs/runbook.md#default-promotion-ancestry-admission).
+
+Automatic runs promote only a first-attempt staging green that soaked 30
+minutes, with no red or re-run staging run on that commit or a newer one
+(a red staging gate is fixed forward on a new commit, never re-run until
+green), skip cleanly when production already serves the target
+(`/up` revision marker) or there is nothing soaked and green, and read the live
+production ledger via `/up` when the target journal has
 entries production lacks: when the ledger holds every target web entry (set
 inclusion), the run clears automatically; otherwise it stops with a clear
 error (ledger lacks entries, ledger read failed, unusable target timestamp,
 non-ok database, or a live Worker that predates the ledger signal —
 automatic migration otherwise waits on the least-privilege migrator). An
-unknown live commit after three `/up` reads also stops promotion. A manual
-re-dispatch with `migrations_applied: true` records an audited continuation
-past any stop once `db-migrate.yml` (target production) has applied the
+unknown live commit stops default selection at the ancestry guard; explicit
+recovery also stops at the migration gate after three `/up` reads. An explicit
+manual re-dispatch with `migrations_applied: true` records an audited continuation
+past these migration stops once `db-migrate.yml` (target production) has applied the
 target's migrations; automatic runs ignore that input and halt on those stops
 unless the ledger already proves the target applied. The first promotion
 after the ledger signal ships needs one manual dispatch because the live
@@ -464,7 +505,7 @@ the same GET-only public-route set as staging
 (`node bin/smoke.mjs https://togetherweown.com --allow-indexable`): `/up`
 requires HTTP 200 with `db:ok` and `pending_migrations:0`, accepting
 degraded queue states; unlike staging it omits `--fail-on-ready-wait-critical`,
-so `critical` queue readiness only warns and `unknown` passes, and the remaining 15 routes assert
+so `critical` queue readiness only warns and `unknown` passes, and the remaining 23 routes assert
 status/body/CSP/nosniff/content-type/redirect plus the apex indexing posture
 (indexable HTML omits the staging noindex). No auth, no writes, no PII.
 After the promotion reaches 100%, the workflow probes the apex again with the
@@ -472,12 +513,14 @@ same checker and retry contract (six attempts): verification gates release
 publication, so six failed attempts fail the deploy job before the `release`
 job can tag. A failed verification leaves the promoted candidate live at 100%
 with the tag withheld; the gradual action's automatic rollback covers only
-failures inside the promotion itself, so there is no automatic restore here.
-The failed step prints `PREV_VERSION` as the recorded restoration target, and
-the operator restores it manually through
-`.github/workflows/rollback-production.yml` with that version id. An inline
-rollback stays out of the deploy workflow: the rollback path checks the target
-version's secrets first.
+failures inside the promotion itself. The failed step prints `PREV_VERSION` as
+the recorded restoration target, and the `auto-rollback` job restores it
+through `.github/workflows/rollback-production.yml`. After a passed
+verification, the `post-deploy-watch` job probes readiness every minute and
+the promoted version's error rate every five minutes for 30 minutes; a breach
+triggers the same `auto-rollback`, and the `release` job tags only after the
+watch passes. An inline rollback stays out of the deploy workflow: the
+rollback path checks the target version's secrets first.
 The smoke runs only inside an authorized production deployment run. Routine
 tests and probes stay staging-only; production live checks run only inside the
 authorized cutover (`docs/cutover-check.md`) or incident (`docs/runbook.md`)
@@ -498,8 +541,9 @@ Worker. Never deploy it outside the gated workflow:
 - Queues: `two-web-next-production-sync-event` and
   `two-web-next-production-internal-action` are the production queue names,
   kept separate from staging; complete provisioning before a deployment is
-  authorized. Producers and consumers
-  use these names; crons match staging (every ten minutes, midnight UTC).
+  authorized. This block only produces to them; the production consumers and
+  crons live on `two-web-jobs-production` (`wrangler.jobs.jsonc`
+  `env.production`).
 - Vars are explicit because environment bindings/vars do not inherit. Register
   the production Discord callback; provision secrets for the production Worker
   separately. Never set `QA_AUTH_TOKEN` or a staging `DATABASE_URL` in production.
@@ -663,8 +707,13 @@ These probe-only process settings are not Worker `Env`/`JobsEnv` bindings:
 
 Squash-merge only; PR titles follow Conventional Commits and the body follows the
 [PR template](.github/pull_request_template.md). No internal card IDs in PR text.
-`ci-ok`, `gitleaks`, `e2e-ok` and `pr-lint` are required, plus Paperclip Review 5/5
-on the exact green head. See [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md).
+`ci-ok`, `gitleaks`, `e2e-ok`, `pr-lint`, `CodeRabbit` and `Devin Review` are required
+on the exact head, with no approving review. The final-stage reviewer merges when
+native review stages apply; otherwise the author merges. A merge to `main` reaches
+production, so it needs fresh per-PR exact-head Release Manager confirmation on a
+child card assigned and addressed to the Release Manager. Pin the squash merge to
+that confirmed head. See [CONTRIBUTING.md](CONTRIBUTING.md#merge-and-production-staging-evidence)
+for post-merge staging qualification and retained safeguards, and [AGENTS.md](AGENTS.md).
 
 ## License
 

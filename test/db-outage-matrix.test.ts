@@ -63,11 +63,14 @@ const MATRIX: Case[] = [
     status: 200,
   })),
   { method: "GET", route: "/discord", status: 302, location: env.DISCORD_INVITE_URL },
-  ...["/sitemap_index.xml", "/robots.txt", "/.well-known/security.txt"].map((route) => ({
-    method: "GET",
-    route,
-    status: 200,
-  })),
+  // /version reads only the version_metadata binding, so it stays 200 with the DB down.
+  ...["/sitemap_index.xml", "/robots.txt", "/.well-known/security.txt", "/version"].map(
+    (route) => ({
+      method: "GET",
+      route,
+      status: 200,
+    }),
+  ),
   // Main #111: a failed DB ping is a readiness failure, so /up answers 503
   // with the sanitized readiness body instead of a false healthy 200.
   { method: "GET", route: "/up", status: 503, format: "json" },
@@ -242,6 +245,13 @@ const MATRIX: Case[] = [
   },
   { method: "GET", route: "/admin", status: 503, actor: "moderator", format: "html" },
   // Operational admission is disabled before any session/source/audit lookup.
+  { method: "GET", route: "/admin/ops-overrides", status: 404 },
+  ...["POST", "PUT", "PATCH", "DELETE", "OPTIONS"].map((method) => ({
+    method,
+    route: "/admin/ops-overrides",
+    status: 405,
+    format: "json" as const,
+  })),
   { method: "GET", route: "/admin/queue/failed/:id/preview", status: 404, format: "json" },
   { method: "POST", route: "/admin/queue/failed/:id/redispatch", status: 404, format: "json" },
   // Evidence-only verifier is inert without runtime-only settings, so the

@@ -252,7 +252,7 @@ describe("deploy public-route smoke (offline)", () => {
     }
     const rollback = readFileSync(".github/workflows/rollback-production.yml", "utf8");
     const rollbackBlock = rollback.match(
-      /      - name: Smoke test production public routes\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
+      /      - name: Smoke test public routes on the rolled-back version\n[\s\S]*?        run: \|\n((?:          .*\n)+)/,
     )?.[1];
     expect(rollbackBlock).toBeDefined();
     expect(rollbackBlock).not.toContain("--fail-on-ready-wait-critical");
@@ -316,10 +316,8 @@ describe("deploy public-route smoke (offline)", () => {
     // the pre-rollback baseline fails, an unreadable capture skips the gate.
     const workflow = readFileSync(".github/workflows/rollback-production.yml", "utf8");
     const captureAt = workflow.indexOf("- name: Capture pre-rollback dead-letter baseline");
-    const smokeAt = workflow.indexOf("- name: Smoke test production public routes");
-    const rollbackAt = workflow.indexOf(
-      "- name: Roll back to the recorded production Worker Version",
-    );
+    const smokeAt = workflow.indexOf("- name: Smoke test public routes on the rolled-back version");
+    const rollbackAt = workflow.indexOf("- name: Roll back to the recorded Worker Version");
     expect(captureAt).toBeGreaterThan(-1);
     expect(rollbackAt).toBeGreaterThan(captureAt);
     expect(smokeAt).toBeGreaterThan(rollbackAt);
@@ -328,9 +326,12 @@ describe("deploy public-route smoke (offline)", () => {
     )?.[1];
     expect(captureBlock).toBeDefined();
     expect(captureBlock).toContain("for i in 1 2 3 4 5");
-    expect(captureBlock).toContain('fetch("https://togetherweown.com/up"');
+    expect(captureBlock).toContain('fetch(new URL("/up", process.env.ROLLBACK_ORIGIN)');
     expect(captureBlock).toContain("::warning::dead-letter baseline unreadable");
     expect(captureBlock).toContain('echo "failed=$baseline" >> "$GITHUB_OUTPUT"');
+    expect(workflow.slice(captureAt, rollbackAt)).toContain(
+      "ROLLBACK_ORIGIN: ${{ steps.target.outputs.origin }}",
+    );
     const smokeSection = workflow.slice(smokeAt, smokeAt + 2000);
     expect(smokeSection).toContain(
       "SMOKE_FAILED_BASELINE: ${{ steps.dead-letter-baseline.outputs.failed }}",
@@ -347,7 +348,7 @@ describe("deploy public-route smoke (offline)", () => {
     const pkg = JSON.parse(readFileSync("package.json", "utf8"));
     expect(pkg.scripts.check).toContain("npm run test:smoke");
     expect(pkg.scripts["test:smoke"]).toBe(
-      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs test/smoke-public-api-acceptance.test.mjs test/promotion-smoke-identity-acceptance.test.mjs test/operator-constants-parity.mjs",
+      "node --test test/smoke.test.mjs test/json-smoke.test.mjs test/revision-check.test.mjs test/version-check.test.mjs test/smoke-ordinary-traffic-identity-acceptance.test.mjs test/smoke-public-api-acceptance.test.mjs test/promotion-smoke-identity-acceptance.test.mjs test/operator-constants-parity.mjs",
     );
   });
 });
@@ -667,10 +668,10 @@ describe("production deploy smoke (offline)", () => {
 // promotion reaches 100%, so a promotion serving broken public content fails
 // the deploy-production job before the release job can tag. A failed run
 // leaves the promoted candidate live at 100% with the tag withheld and prints
-// PREV_VERSION as the recorded restoration target for the rollback-production
-// workflow; there is no automatic restore (the gradual action's rollback only
-// covers in-action failures, and an inline wrangler rollback would bypass the
-// rollback target-version secrets preflight).
+// PREV_VERSION as the recorded restoration target; the auto-rollback job
+// restores it through the rollback-production workflow (the gradual action's
+// rollback only covers in-action failures, and an inline wrangler rollback
+// would bypass the rollback target-version secrets preflight).
 function postPromotionSmoke(
   succeedOnAttempt: number,
   prevVersion = "pre-promote-version-for-test",
@@ -808,7 +809,7 @@ describe("production post-promotion verification (offline)", () => {
     expect(result.output).not.toContain("still live at 100%");
   });
 
-  it("wires the gradual rollback target into the step and documents the manual restore", () => {
+  it("wires the gradual rollback target into the step and documents the automatic restore", () => {
     const workflow = readFileSync(".github/workflows/deploy-production.yml", "utf8");
     const stepAt = workflow.indexOf("- name: Verify public routes on the promoted version");
     expect(stepAt).toBeGreaterThan(-1);
@@ -846,7 +847,7 @@ describe("production post-promotion verification (offline)", () => {
       workflow.indexOf("- name: Gradual promotion 5-50-100 with automatic rollback"),
     );
     // Still inside the deploy-production job: the release job keeps its
-    // `needs: [preflight, deploy-production]`, so a failed verification fails
+    // `needs: [preflight, deploy-production, post-deploy-watch]`, so a failed verification fails
     // this job and the tag never publishes (pinned in release-workflow.test.ts).
     expect(stepAt).toBeLessThan(workflow.indexOf("\n  release:\n"));
     const block = workflow.match(

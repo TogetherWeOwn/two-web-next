@@ -590,7 +590,10 @@ test("workflow wires the tested gate before both mutations and preserves staging
     ),
     "Private repo deploys on the self-hosted fleet; public repo on GitHub-hosted",
   );
-  assert.match(workflow, /container:\n      image: node:24-bookworm/);
+  // Digest-pinned, never the bare mutable tag: the named tag stays readable
+  // and any refreshed sha256 passes, but dropping the pin fails here.
+  assert.match(workflow, /container:\n(?:.*\n)*?      image: node:24-bookworm@sha256:[0-9a-f]{64}/);
+  assert.doesNotMatch(workflow, /image: node:24-bookworm\n/);
   assert.match(
     workflow,
     /environment:\n      name: staging\n      url: https:\/\/next.togetherweown.com/,

@@ -28,10 +28,26 @@ function srcFiles(): string[] {
   return out;
 }
 
-function stripComments(text: string): string {
+function stripComments(text: string, filename = ""): string {
   // Parse comment ranges so wildcard strings, templates, regexes and JSX cannot
   // swallow registrations. Blank only comments; preserve tokens and line breaks.
-  const { comments } = parse(text, { sourceType: "module", plugins: ["typescript", "jsx"] });
+  // Pick TSX mode only for .tsx files: Babel 8 reads a bare generic arrow
+  // (`<T>(...) => ...`) in a plain .ts file as a JSX tag when JSX is enabled.
+  // Filename-less fixtures may carry JSX, so retry those in TSX mode.
+  const tsx = filename.endsWith("x");
+  const parseIn = (tsxMode: boolean) =>
+    parse(text, {
+      sourceType: "module",
+      plugins: tsxMode ? ["typescript", "jsx"] : ["typescript"],
+    });
+  let parsed;
+  try {
+    parsed = parseIn(tsx);
+  } catch (error) {
+    if (filename !== "" || tsx) throw error;
+    parsed = parseIn(true);
+  }
+  const { comments } = parsed;
   let out = "";
   let cursor = 0;
   for (const { start, end } of comments ?? []) {
@@ -105,7 +121,7 @@ function middlewareBuckets(): Map<string, { file: string; count: number }[]> {
   for (const full of srcFiles()) {
     const rel = full.slice(root.length + 1);
     if (rel === "src/throttle.ts") continue;
-    const text = stripComments(readFileSync(full, "utf8"));
+    const text = stripComments(readFileSync(full, "utf8"), full);
     for (const match of text.matchAll(/\bthrottle\(\s*"([^"]+)"\s*,/g)) {
       const bucket = match[1]!;
       if (!byBucket.has(bucket)) byBucket.set(bucket, new Map());
@@ -131,7 +147,7 @@ function guardBuckets(): Map<string, string[]> {
   const byBucket = new Map<string, Set<string>>();
   for (const full of srcFiles()) {
     const rel = full.slice(root.length + 1);
-    const text = stripComments(readFileSync(full, "utf8"));
+    const text = stripComments(readFileSync(full, "utf8"), full);
     for (const match of text.matchAll(/\bthrottleGuard\(\s*c\s*,\s*"([^"]+)"\s*,/g)) {
       const bucket = match[1]!;
       if (!byBucket.has(bucket)) byBucket.set(bucket, new Set());
@@ -155,7 +171,7 @@ function nonLiteralThrottleSites(): Map<string, number> {
   for (const full of srcFiles()) {
     const rel = full.slice(root.length + 1);
     if (rel === "src/throttle.ts") continue;
-    const text = stripComments(readFileSync(full, "utf8"));
+    const text = stripComments(readFileSync(full, "utf8"), full);
     for (const call of text.matchAll(/\bthrottle\(/g)) {
       if (!/^throttle\(\s*"[^"]+"\s*,/.test(text.slice(call.index))) {
         counts.set(rel, (counts.get(rel) ?? 0) + 1);
@@ -170,7 +186,7 @@ function nonLiteralGuardSites(): Map<string, number> {
   for (const full of srcFiles()) {
     const rel = full.slice(root.length + 1);
     if (rel === "src/throttle.ts") continue;
-    const text = stripComments(readFileSync(full, "utf8"));
+    const text = stripComments(readFileSync(full, "utf8"), full);
     for (const call of text.matchAll(/\bthrottleGuard\(/g)) {
       if (!/^throttleGuard\(\s*c\s*,\s*"[^"]+"\s*,/.test(text.slice(call.index))) {
         counts.set(rel, (counts.get(rel) ?? 0) + 1);

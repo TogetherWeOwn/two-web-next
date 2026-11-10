@@ -1,0 +1,106 @@
+{
+  "environment": "wrangler dev / local fixtures only",
+  "sourceRevision": "local working tree",
+  "pages": [
+    {
+      "state": "populated",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "status": 200,
+      "image": "populated-desktop.png",
+      "verdict": "PASS",
+      "violations": [],
+      "passedRules": 18
+    },
+    {
+      "state": "empty",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "status": 200,
+      "image": "empty-desktop.png",
+      "verdict": "PASS",
+      "violations": [],
+      "passedRules": 16
+    },
+    {
+      "state": "unavailable",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "status": 503,
+      "image": "unavailable-desktop.png",
+      "verdict": "PASS",
+      "violations": [],
+      "passedRules": 17
+    },
+    {
+      "state": "refused",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "status": 401,
+      "image": "refused-desktop.png",
+      "verdict": "PASS",
+      "violations": [],
+      "passedRules": 14
+    },
+    {
+      "state": "populated",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "status": 200,
+      "image": "populated-mobile.png",
+      "verdict": "PASS",
+      "violations": [],
+      "passedRules": 18
+    },
+    {
+      "state": "empty",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "status": 200,
+      "image": "empty-mobile.png",
+      "verdict": "PASS",
+      "violations": [],
+      "passedRules": 16
+    },
+    {
+      "state": "unavailable",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "status": 503,
+      "image": "unavailable-mobile.png",
+      "verdict": "PASS",
+      "violations": [],
+      "passedRules": 17
+    },
+    {
+      "state": "refused",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "status": 401,
+      "image": "refused-mobile.png",
+      "verdict": "PASS",
+      "violations": [],
+      "passedRules": 14
+    }
+  ],
+  "failures": [],
+  "cleanup": "PASS: Wrangler stopped and owned fixture schema removed",
+  "sentinel": "PASS: injected image-alt violation rejected",
+  "note": "Supplemental panel-only real Worker screenshots using existing accessibility fixtures; not the full accessibility gate or pinned visual baseline."
+}

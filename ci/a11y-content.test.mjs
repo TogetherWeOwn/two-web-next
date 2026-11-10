@@ -51,6 +51,151 @@ for (const identity of ["guest", "member", "moderator"]) {
   });
 }
 
+test("published review retains the seeded member attendees before axe", async () => {
+  const scenario = {
+    route: "/e/:key",
+    status: 200,
+    identity: "moderator",
+    state: "review-published",
+  };
+  const selector = '[data-testid="event-attendees"]';
+  assert.equal(contentExpectations(scenario).find((item) => item.selector === selector).count, 1);
+  await assertAuditContent(fixturePage(scenario), scenario);
+  for (const count of [0, 2])
+    await assert.rejects(
+      assertAuditContent(fixturePage(scenario, { [selector]: { count } }), scenario),
+      /Fixture content count/,
+    );
+});
+
+test("saved-draft audit requires the saved notice and its review link before axe", async () => {
+  const route = "/admin/events/:key";
+  const scenario = coverage[route].cases.find((item) => item.state === "saved-draft");
+  assert.equal(scenario.path, "/admin/events/01J00000000000000000000017?saved=1");
+  const page = { ...scenario, route, status: 200 };
+  const notice = '[data-testid="event-saved-review"]';
+  const link = `${notice} a[href="/e/01J00000000000000000000017?review=1"]`;
+  const expectations = await assertAuditContent(fixturePage(page), page);
+  assert(expectations.some((item) => item.selector === link));
+  await assert.rejects(
+    assertAuditContent(fixturePage(page, { [notice]: { count: 0 } }), page),
+    /Fixture content count/,
+  );
+  await assert.rejects(
+    assertAuditContent(fixturePage(page, { [link]: { count: 0 } }), page),
+    /Fixture content count/,
+  );
+  await assert.rejects(
+    assertAuditContent(fixturePage(page, { [notice]: { attributes: { role: "alert" } } }), page),
+    /Fixture content attribute/,
+  );
+  // The plain edit page is audited too and must not carry the saved notice.
+  const plain = coverage[route].cases.find((item) => !item.state && !item.status);
+  const plainPage = { ...plain, route, status: 200 };
+  assert.deepEqual(contentExpectations(plainPage), [{ selector: notice, count: 0 }]);
+  await assert.rejects(
+    assertAuditContent(fixturePage(plainPage, { [notice]: { count: 1 } }), plainPage),
+    /Fixture content count/,
+  );
+  assert.deepEqual(contentExpectations({ ...page, status: 404 }), []);
+});
+
+for (const [state, key, guidance] of [
+  [
+    "review-corrections",
+    "01J00000000000000000000017",
+    "This is a draft. Only moderators can see this page.",
+  ],
+  [
+    "review-published",
+    "01J00000000000000000000015",
+    "This event is already published. This is what members see now.",
+  ],
+  ["review-cancelled", "01J00000000000000000000016", "This event is cancelled."],
+]) {
+  test(`${state} audit requires the review banner and an inert RSVP before axe`, async () => {
+    const scenario = coverage["/e/:key"].cases.find((item) => item.state === state);
+    assert.equal(scenario.path, `/e/${key}?review=1`);
+    assert.equal(scenario.identity, "moderator");
+    const page = { ...scenario, route: "/e/:key", status: 200 };
+    const review = '[data-testid="event-review"]';
+    const corrections = state === "review-corrections";
+    const expectations = await assertAuditContent(fixturePage(page), page);
+    const find = (selector) => expectations.find((item) => item.selector === selector);
+    assert.equal(find(`${review} > p:nth-of-type(2)`).text, guidance);
+    assert.equal(find(`${review} li`).count, corrections ? 1 : 0);
+    assert.equal(find(review).attributes.role, corrections ? "alert" : "status");
+    // Live RSVP controls must really be absent, and the placeholder disabled.
+    for (const selector of [
+      '[data-island="rsvp-button"]',
+      "[data-rsvp-form]",
+      'form[action*="/rsvp"]',
+      'button[name="status"]',
+    ]) {
+      assert.equal(find(selector).count, 0);
+      await assert.rejects(
+        assertAuditContent(fixturePage(page, { [selector]: { count: 1 } }), page),
+        /Fixture content count/,
+      );
+    }
+    const placeholder = 'button[aria-describedby="preview-rsvp-hint"]';
+    await assert.rejects(
+      assertAuditContent(fixturePage(page, { [placeholder]: { attributes: {} } }), page),
+      /Fixture content attribute/,
+    );
+    await assert.rejects(
+      assertAuditContent(fixturePage(page, { "#preview-rsvp-hint": { count: 0 } }), page),
+      /Fixture content count/,
+    );
+    await assert.rejects(
+      assertAuditContent(fixturePage(page, { [review]: { count: 0 } }), page),
+      /Fixture content count/,
+    );
+    await assert.rejects(
+      assertAuditContent(
+        fixturePage(page, { [`${review} li`]: { count: corrections ? 0 : 1 } }),
+        page,
+      ),
+      /Fixture content count/,
+    );
+    if (corrections) {
+      await assert.rejects(
+        assertAuditContent(
+          fixturePage(page, {
+            [`${review} li a[href="/admin/events/${key}#f-location"]`]: { count: 0 },
+          }),
+          page,
+        ),
+        /Fixture content count/,
+      );
+    }
+    if (state === "review-cancelled") {
+      // The removed listing claim is false; it must fail the exact guidance.
+      await assert.rejects(
+        assertAuditContent(
+          fixturePage(page, {
+            [`${review} > p:nth-of-type(2)`]: {
+              text: "This event is cancelled. Members don't see it in listings.",
+            },
+          }),
+          page,
+        ),
+        /Fixture content text/,
+      );
+    }
+  });
+}
+
+test("non-review event states carry no review expectations", () => {
+  for (const item of coverage["/e/:key"].cases.filter((c) => !c.state?.startsWith("review-"))) {
+    const page = { status: 200, identity: "guest", ...item, route: "/e/:key" };
+    assert(
+      contentExpectations(page).every((entry) => !entry.selector.includes("event-review")),
+      `unexpected review expectation for ${item.path}`,
+    );
+  }
+});
+
 test("the waitlisted event fixture cannot silently render as going", async () => {
   const scenario = { route: "/e/:key", status: 200, identity: "member", state: "waitlisted" };
   await assertAuditContent(fixturePage(scenario), scenario);

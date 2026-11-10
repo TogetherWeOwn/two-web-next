@@ -3,6 +3,7 @@
 //
 // Routes behind adminGuard (non-moderator 403, guest OAuth redirect).
 // Queue preview additionally requires default-off staging/operator admission:
+// - GET  /admin/ops-overrides        control-bearer record/epoch, session-free, read-only
 // - GET  /admin                      dashboard (index of resources)
 // - GET  /admin/events               list (search, status/series/fill, sort, page)
 // - GET  /admin/events/new           create form
@@ -38,6 +39,7 @@ import type { Context } from "hono";
 import { queuePreviewAdmission, queuePreviewHandler, type QueuePreviewVars } from "./queue-preview";
 import { queueRedispatchHandler, queueRedispatchPreThrottleRefusal } from "./queue-redispatch";
 import { sourceEvidenceHandler, sourceEvidenceMethodRefused } from "./source-evidence";
+import { opsOverridesHandler, opsOverridesMethodRefused } from "./ops-overrides";
 import { dbFor, type EnvWithAdminDb } from "./db";
 import { bufferedMemberHtml, bufferedMemberText } from "../member-reads";
 import { badRequest, prefersHtmlError, varyAccept } from "../errors";
@@ -100,6 +102,7 @@ import {
   FeaturedPage,
   JoinAttemptPage,
   JoinAttemptsPage,
+  type RecoveryLink,
 } from "./pages";
 
 type Vars = QueuePreviewVars;
@@ -146,9 +149,26 @@ function errorPage(
   status: 404 | 422 | 503,
   heading: string,
   detail?: string,
+  recovery?: RecoveryLink[],
 ) {
   c.status(status);
-  return bufferedMemberHtml(c, <ErrorPage heading={heading} detail={detail} />, status);
+  return bufferedMemberHtml(
+    c,
+    <ErrorPage heading={heading} detail={detail} recovery={recovery} />,
+    status,
+  );
+}
+
+function adminUnavailable(c: Context<Vars>) {
+  return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+}
+
+function eventNotFound(c: Context<Vars>) {
+  return errorPage(c, 404, "Event not found");
+}
+
+function featuredNotFound(c: Context<Vars>) {
+  return errorPage(c, 404, "Featured content not found");
 }
 
 function writeUnavailable(c: Context<Vars>) {
@@ -180,6 +200,14 @@ function formError(
  */
 export function adminApp(overrides?: AdminOverrides | SessionStore) {
   const admin = new Hono<Vars>();
+  // Control-token holders only: no session lookup, role admission or writes.
+  admin.get("/ops-overrides", opsOverridesHandler);
+  admin.on(
+    ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+    "/ops-overrides",
+    requestBodyLimit("action"),
+    opsOverridesMethodRefused,
+  );
   // Evidence-only source/cache verifier: session-free by construction.
   // Registered before every admin middleware (Hono composes in registration
   // order and these handlers answer without next()), so no session lookup,
@@ -244,12 +272,12 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       route: "admin.featured.legacy-edit",
     });
     const legacyId = c.req.param("id");
-    if (!/^[1-9]\d*$/.test(legacyId)) return errorPage(c, 404, "Featured content not found");
+    if (!/^[1-9]\d*$/.test(legacyId)) return featuredNotFound(c);
     try {
       const db = await dbOr503(c);
-      if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+      if (!db) return adminUnavailable(c);
       const id = await getFeaturedIdByLegacyId(db, legacyId);
-      if (id === null) return errorPage(c, 404, "Featured content not found");
+      if (id === null) return featuredNotFound(c);
       return legacyRedirect(
         c,
         `/admin/featured/${id}`,
@@ -259,7 +287,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     } catch (err) {
       // The guard's read boundary renders the shared outage envelope.
       if (isDatabaseUnavailable(err)) throw err;
-      return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+      return adminUnavailable(c);
     }
   });
 
@@ -322,7 +350,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       route: "admin.join-attempts.index",
     });
     const db = await dbOr503(c);
-    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+    if (!db) return adminUnavailable(c);
     const query = parseJoinAttemptsQuery(c.req.query());
     const fetched = await listJoinAttempts(db, query);
     const rows = fetched.slice(0, JOIN_ATTEMPT_PAGE_SIZE);
@@ -349,7 +377,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       return errorPage(c, 404, "Join attempt not found");
     }
     const db = await dbOr503(c);
-    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+    if (!db) return adminUnavailable(c);
     const result = await getJoinAttempt(db, id);
     if (!result) return errorPage(c, 404, "Join attempt not found");
     return bufferedMemberHtml(c, <JoinAttemptPage row={result.attempt} />);
@@ -362,7 +390,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       route: "admin.activity-log.index",
     });
     const db = await dbOr503(c);
-    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+    if (!db) return adminUnavailable(c);
     const query = parseActivityLogQuery(c.req.query());
     const fetched = await listActivityLog(db, query);
     const rows = fetched.slice(0, ACTIVITY_LOG_PAGE_SIZE);
@@ -379,7 +407,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
   admin.get("/events", async (c) => {
     declareAccess(c, { resource: "events", action: "list", route: "admin.events.index" });
     const db = await dbOr503(c);
-    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+    if (!db) return adminUnavailable(c);
     const params = c.req.query();
     const query = parseEventListQuery(params);
     const fetched = await listEvents(db, params);
@@ -437,18 +465,21 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         throw err;
       }
       const { row } = await createEvent(db, c.get("adminActor"), input!, recurrence ?? null);
-      return c.redirect(`/admin/events/${row.eventKey}`, 303);
+      return c.redirect(
+        `/admin/events/${row.eventKey}${row.status === "draft" ? "?saved=1" : ""}`,
+        303,
+      );
     },
   );
 
   admin.get("/events/:key", async (c) => {
     declareAccess(c, { resource: "events", action: "view", route: "admin.events.edit" });
     const db = await dbOr503(c);
-    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+    if (!db) return adminUnavailable(c);
     const key = c.req.param("key");
-    if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
+    if (!eventKeyAllowed(key, c.env.APP_URL)) return eventNotFound(c);
     const row = await getEvent(db, key);
-    if (!row) return errorPage(c, 404, "Event not found");
+    if (!row) return eventNotFound(c);
     const rosterQuery = parseRosterQuery(c.req.query());
     const { rows: roster, total: rosterTotal } = await listRoster(db, row.eventKey, rosterQuery);
     return bufferedMemberHtml(
@@ -461,6 +492,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         roster={roster}
         rosterTotal={rosterTotal}
         rosterQuery={rosterQuery}
+        saved={c.req.query("saved") === "1"}
       />,
     );
   });
@@ -475,9 +507,9 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const db = await dbOr503(c);
       if (!db) return writeUnavailable(c);
       const key = c.req.param("key");
-      if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
+      if (!eventKeyAllowed(key, c.env.APP_URL)) return eventNotFound(c);
       const existing = await getEvent(db, key);
-      if (!existing) return errorPage(c, 404, "Event not found");
+      if (!existing) return eventNotFound(c);
       const values = await parsedForm(c);
       if (!values) return badRequest(c);
       // Hidden carriers: an untouched fold/gap wall time keeps the stored
@@ -499,7 +531,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
             c,
             err,
             (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
+              c.html(
+                <EventFormPage
+                  mode="edit"
+                  row={existing}
+                  values={v}
+                  errors={errors}
+                  rosterHiddenNotice
+                />,
+              ),
             values,
           );
         }
@@ -514,15 +554,26 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         );
         if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
         for (const wb of childWriteBacks) await dispatchWriteBack(c.env, wb, c.get("requestId"));
-        return c.redirect(`/admin/events/${row.eventKey}`, 303);
+        return c.redirect(
+          `/admin/events/${row.eventKey}${row.status === "draft" ? "?saved=1" : ""}`,
+          303,
+        );
       } catch (err) {
-        if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
+        if (err instanceof NotFoundError) return eventNotFound(c);
         if (err instanceof ValidationError) {
           return formError(
             c,
             err,
             (errors, v) =>
-              c.html(<EventFormPage mode="edit" row={existing} values={v} errors={errors} />),
+              c.html(
+                <EventFormPage
+                  mode="edit"
+                  row={existing}
+                  values={v}
+                  errors={errors}
+                  rosterHiddenNotice
+                />,
+              ),
             values,
           );
         }
@@ -542,7 +593,15 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         const db = await dbOr503(c);
         if (!db) return writeUnavailable(c);
         const key = c.req.param("key");
-        if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
+        if (!eventKeyAllowed(key, c.env.APP_URL)) return eventNotFound(c);
+        const body = action === "publish" ? await parsedForm(c) : {};
+        if (!body) return badRequest(c);
+        const fromReview = body.review === "1";
+        const reviewedUpdatedAt = fromReview
+          ? typeof body.reviewed_updated_at === "string"
+            ? body.reviewed_updated_at
+            : ""
+          : undefined;
         try {
           const actor = c.get("adminActor");
           const { row, writeBack } =
@@ -553,19 +612,40 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
                   actor,
                   key,
                   action === "publish" ? "published" : "cancelled",
+                  reviewedUpdatedAt,
                 );
           if (writeBack) await dispatchWriteBack(c.env, writeBack, c.get("requestId"));
-          return c.redirect(`/admin/events/${row.eventKey}`, 303);
+          return c.redirect(
+            fromReview ? `/e/${row.eventKey}?published=1` : `/admin/events/${row.eventKey}`,
+            303,
+          );
         } catch (err) {
-          if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
+          if (err instanceof NotFoundError) return eventNotFound(c);
           if (err instanceof ValidationError) {
+            if (fromReview) {
+              const reason = err.fields.reviewed_updated_at
+                ? "stale"
+                : err.fields.location
+                  ? "location"
+                  : err.fields.ends_at
+                    ? "ended"
+                    : err.fields.dates
+                      ? "dates"
+                      : "status";
+              // PRG reads the latest saved detail through the moderator-only
+              // review route. Query codes select fixed copy, never raw input.
+              return c.redirect(
+                `/e/${encodeURIComponent(key)}?review=1&publish_error=${reason}`,
+                303,
+              );
+            }
             // A blank location blocks publishing: re-render the edit form so the
             // no-JS moderator sees the error next to the location control and can
             // fix it, rather than an error page with nowhere to correct it.
             if (err.fields.location) {
               const key = c.req.param("key");
               const row = await getEvent(db, key);
-              if (!row) return errorPage(c, 404, "Event not found");
+              if (!row) return eventNotFound(c);
               return formError(
                 c,
                 err,
@@ -578,7 +658,13 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
               c,
               422,
               "That transition is not allowed",
-              err.fields.status ?? err.fields.ends_at ?? err.fields.rsvp_open,
+              err.fields.status ?? err.fields.ends_at ?? err.fields.dates ?? err.fields.rsvp_open,
+              // Nothing changed. Offer plain GET links back to the event and
+              // the list; never a form that would retry the refused POST.
+              [
+                { href: `/admin/events/${key}`, label: "Back to the event" },
+                { href: "/admin/events", label: "Back to events" },
+              ],
             );
           }
           throw err;
@@ -599,19 +685,19 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       const db = await dbOr503(c);
       if (!db) return writeUnavailable(c);
       const key = c.req.param("key");
-      if (!eventKeyAllowed(key, c.env.APP_URL)) return errorPage(c, 404, "Event not found");
+      if (!eventKeyAllowed(key, c.env.APP_URL)) return eventNotFound(c);
       try {
         const { row } = await duplicateEvent(db, c.get("adminActor"), key);
         return c.redirect(`/admin/events/${row.eventKey}`, 303);
       } catch (err) {
-        if (err instanceof NotFoundError) return errorPage(c, 404, "Event not found");
+        if (err instanceof NotFoundError) return eventNotFound(c);
         if (err instanceof ValidationError) {
           // The source's stored fields fail the current form rules: re-render
           // the source editor so the no-JS moderator sees the error next to
           // the flagged control and can fix it, like the publish-location
           // refusal in the action loop above.
           const row = await getEvent(db, key);
-          if (!row) return errorPage(c, 404, "Event not found");
+          if (!row) return eventNotFound(c);
           return formError(
             c,
             err,
@@ -632,7 +718,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       route: "admin.featured.index",
     });
     const db = await dbOr503(c);
-    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+    if (!db) return adminUnavailable(c);
     const query = parseFeaturedListQuery(c.req.query());
     const fetched = await listFeatured(db, {
       ...query,
@@ -708,11 +794,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       route: "admin.featured.edit",
     });
     const id = parseRecordId(c.req.param("id"));
-    if (id === null) return errorPage(c, 404, "Featured content not found");
+    if (id === null) return featuredNotFound(c);
     const db = await dbOr503(c);
-    if (!db) return bufferedMemberText(c, "Admin temporarily unavailable", 503);
+    if (!db) return adminUnavailable(c);
     const row = await getFeatured(db, id);
-    if (!row) return errorPage(c, 404, "Featured content not found");
+    if (!row) return featuredNotFound(c);
     return bufferedMemberHtml(
       c,
       <FeaturedFormPage
@@ -733,11 +819,11 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const id = parseRecordId(c.req.param("id"));
-      if (id === null) return errorPage(c, 404, "Featured content not found");
+      if (id === null) return featuredNotFound(c);
       const db = await dbOr503(c);
       if (!db) return writeUnavailable(c);
       const existing = await getFeatured(db, id);
-      if (!existing) return errorPage(c, 404, "Featured content not found");
+      if (!existing) return featuredNotFound(c);
       const values = await parsedForm(c);
       if (!values) return badRequest(c);
       let input;
@@ -768,7 +854,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         const row = await updateFeatured(db, c.get("adminActor"), id, input);
         return c.redirect(`/admin/featured/${row.id}`, 303);
       } catch (err) {
-        if (err instanceof NotFoundError) return errorPage(c, 404, "Featured content not found");
+        if (err instanceof NotFoundError) return featuredNotFound(c);
         throw err;
       }
     },
@@ -781,14 +867,14 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const id = parseRecordId(c.req.param("id"));
-      if (id === null) return errorPage(c, 404, "Featured content not found");
+      if (id === null) return featuredNotFound(c);
       const db = await dbOr503(c);
       if (!db) return writeUnavailable(c);
       try {
         await unpublishFeatured(db, c.get("adminActor"), id);
         return c.redirect("/admin/featured", 303);
       } catch (err) {
-        if (err instanceof NotFoundError) return errorPage(c, 404, "Featured content not found");
+        if (err instanceof NotFoundError) return featuredNotFound(c);
         throw err;
       }
     },
@@ -801,14 +887,14 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
     throttle("admin-write", WRITE_THROTTLE_PER_MINUTE),
     async (c) => {
       const id = parseRecordId(c.req.param("id"));
-      if (id === null) return errorPage(c, 404, "Featured content not found");
+      if (id === null) return featuredNotFound(c);
       const db = await dbOr503(c);
       if (!db) return writeUnavailable(c);
       try {
         await deleteFeatured(db, c.get("adminActor"), id);
         return c.redirect("/admin/featured", 303);
       } catch (err) {
-        if (err instanceof NotFoundError) return errorPage(c, 404, "Featured content not found");
+        if (err instanceof NotFoundError) return featuredNotFound(c);
         throw err;
       }
     },

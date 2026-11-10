@@ -9,6 +9,14 @@
 // so the clamp yields the empty range exactly where the true window holds no
 // app-reachable rows. The windows themselves stay literal (see
 // test/hotzone-season-window.test.ts); only the SQL binds move.
+//
+// Finished events keep counting (same live suite). The 10-minute close job
+// (closeFinished, src/jobs/events.ts) flips ended events from `published` to
+// `past`. Both consumers filtered `published` only, so every finished night
+// dropped out of the member board and the hotzones event count. A `past`
+// event with a `going` RSVP in the season window must count on the overall
+// board, the relative board and in the event count; `draft` and `cancelled`
+// events still never count.
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { events, rsvps } from "../src/db/admin-schema";
 import { joinAttempts, users } from "../src/db/schema";
@@ -129,5 +137,62 @@ describe.skipIf(!process.env.DATABASE_URL)("year-0000 seasons resolve against Po
     expect(total).toBe(0);
     expect(eventCount).toBe(0);
     await expect(loadMemberRanking(db, windowOf("0099"), null)).resolves.toEqual([]);
+  });
+
+  describe("past events keep counting", () => {
+    const MEMBER = "100000000000000731";
+    const season = () => windowOf("2026-09");
+
+    async function seed(statuses: string[]): Promise<void> {
+      await fixture.reset();
+      await db
+        .insert(users)
+        .values({ id: MEMBER, username: "zxq-past-member", member: true, avatar: null });
+      for (const [i, status] of statuses.entries()) {
+        const startsAt = new Date(Date.UTC(2026, 8, 10 + i, 19));
+        const [event] = await db
+          .insert(events)
+          .values({
+            eventKey: `0000000000000000000000973${i}`,
+            title: `zxq ${status} night`,
+            game: "Chess",
+            status,
+            startsAt,
+            endsAt: new Date(startsAt.getTime() + 2 * 3600_000),
+          })
+          .returning({ id: events.id });
+        await db.insert(rsvps).values({ eventId: event!.id, userId: MEMBER, status: "going" });
+      }
+    }
+
+    it("counts a past event on the overall board", async () => {
+      await seed(["past"]);
+      await expect(loadMemberRanking(db, season(), null)).resolves.toEqual([
+        { userId: MEMBER, username: "zxq-past-member", count: 1 },
+      ]);
+    });
+
+    it("counts a past event on the relative board", async () => {
+      await seed(["past"]);
+      await expect(loadMemberRanking(db, season(), null, "relative", MEMBER)).resolves.toEqual([
+        { userId: MEMBER, username: "zxq-past-member", count: 1, rank: 1 },
+      ]);
+    });
+
+    it("counts a past event in the hotzones event count", async () => {
+      await seed(["past"]);
+      expect((await loadJoinsGrid(db, season())).eventCount).toBe(1);
+    });
+
+    it("counts published and past together, never draft or cancelled", async () => {
+      await seed(["published", "past", "draft", "cancelled"]);
+      await expect(loadMemberRanking(db, season(), null)).resolves.toEqual([
+        { userId: MEMBER, username: "zxq-past-member", count: 2 },
+      ]);
+      await expect(loadMemberRanking(db, season(), null, "relative", MEMBER)).resolves.toEqual([
+        { userId: MEMBER, username: "zxq-past-member", count: 2, rank: 1 },
+      ]);
+      expect((await loadJoinsGrid(db, season())).eventCount).toBe(2);
+    });
   });
 });

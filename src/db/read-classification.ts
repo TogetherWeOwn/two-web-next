@@ -2,6 +2,7 @@
 // arbitrary raw queries. A classification still permits exactly one statement.
 import { Column, getTableName, is } from "drizzle-orm";
 import { refuseMemberRead, type NonSensitiveRead } from "../member-reads";
+import { rankedRosterPrefix } from "./roster-statement";
 
 export type SelectedField = { path: string[]; field: unknown };
 export const normalizedStatement = (statement: string) => statement.trim().replace(/\s+/g, " ");
@@ -120,6 +121,16 @@ export function rawMemberOwner(statement: string): string | undefined {
     )
   )
     return "user_id";
+  // Moderator roster: only this bounded, event-scoped window projection may
+  // return computed queue ranks. Its user_id owns the joined username too.
+  // Filters run outside the window; sorts are fixed tokens, never arbitrary SQL.
+  if (
+    query.startsWith(rankedRosterPrefix) &&
+    /^ \$1 \) line left join users on users\.id = line\.user_id(?: where (?:line\.status = \$2(?: and users\.username ilike \$3)?|users\.username ilike \$2))? order by (?:line\.position (?:asc|desc) nulls last,|line\.(?:status|updated_at) (?:asc|desc) ,) line\.user_id asc limit 100 offset \$\d+$/.test(
+      query.slice(rankedRosterPrefix.length),
+    )
+  )
+    return "user_id";
   // Member leaderboard aggregate (src/leaderboards/members.ts): one grouped
   // row per ranked member with the owner's id alongside, never per-RSVP
   // rows. Only this exact GROUP BY + COUNT shape earns the exemption, with
@@ -127,7 +138,7 @@ export function rawMemberOwner(statement: string): string | undefined {
   // an optional literal top-100 cap. Bound params are dates/game only; the
   // cap is the literal OVERALL_CAP, never a bound limit.
   if (
-    /^select rsvps\.user_id as user_id, users\.username as username, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status = 'published' and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id, users\.username order by count\(\*\) desc, rsvps\.user_id asc( limit 100)?$/.test(
+    /^select rsvps\.user_id as user_id, users\.username as username, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status in \('published', 'past'\) and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id, users\.username order by count\(\*\) desc, rsvps\.user_id asc( limit 100)?$/.test(
       query,
     )
   )
@@ -141,13 +152,13 @@ export function rawMemberOwner(statement: string): string | undefined {
   // params are dates/game/viewer-id/viewer-rank only; the neighbor bounds
   // are the literal RELATIVE_NEIGHBORS, never a bound limit.
   if (
-    /^select ranked\.user_id as user_id, ranked\.rank as rank from \( select grouped\.user_id as user_id, row_number\(\) over \(order by grouped\.count desc, grouped\.user_id asc\)::int as rank from \( select rsvps\.user_id as user_id, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status = 'published' and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id \) grouped \) ranked where ranked\.user_id = \$\d+$/.test(
+    /^select ranked\.user_id as user_id, ranked\.rank as rank from \( select grouped\.user_id as user_id, row_number\(\) over \(order by grouped\.count desc, grouped\.user_id asc\)::int as rank from \( select rsvps\.user_id as user_id, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status in \('published', 'past'\) and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id \) grouped \) ranked where ranked\.user_id = \$\d+$/.test(
       query,
     )
   )
     return "user_id";
   if (
-    /^select ranked\.user_id as user_id, ranked\.username as username, ranked\.count as count, ranked\.rank as rank from \( select grouped\.user_id as user_id, grouped\.username as username, grouped\.count as count, row_number\(\) over \(order by grouped\.count desc, grouped\.user_id asc\)::int as rank from \( select rsvps\.user_id as user_id, users\.username as username, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status = 'published' and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id, users\.username \) grouped \) ranked where ranked\.rank between \$\d+ - 5 and \$\d+ \+ 5 order by ranked\.rank asc$/.test(
+    /^select ranked\.user_id as user_id, ranked\.username as username, ranked\.count as count, ranked\.rank as rank from \( select grouped\.user_id as user_id, grouped\.username as username, grouped\.count as count, row_number\(\) over \(order by grouped\.count desc, grouped\.user_id asc\)::int as rank from \( select rsvps\.user_id as user_id, users\.username as username, count\(\*\)::int as count from rsvps inner join events on events\.id = rsvps\.event_id inner join users on users\.id = rsvps\.user_id left join profiles on profiles\.user_id = rsvps\.user_id where rsvps\.status = 'going' and events\.status in \('published', 'past'\) and users\.member = true and \(profiles\.leaderboard_opt_out is null or profiles\.leaderboard_opt_out = false\)( and events\.starts_at >= \$\d+ and events\.starts_at < \$\d+)?( and lower\(trim\(events\.game\)\) = \$\d+)? group by rsvps\.user_id, users\.username \) grouped \) ranked where ranked\.rank between \$\d+ - 5 and \$\d+ \+ 5 order by ranked\.rank asc$/.test(
       query,
     )
   )

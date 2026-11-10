@@ -1,0 +1,518 @@
+{
+  "sourceRevision": "dcf95d35c3951196b77697e17ab7130045e1169a",
+  "tags": ["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22a", "wcag22aa"],
+  "environment": "wrangler dev / local fixtures only",
+  "pages": [
+    {
+      "identity": "guest",
+      "status": 200,
+      "path": "/admin/ops-overrides",
+      "state": "operator-record",
+      "opsBearer": true,
+      "route": "/admin/ops-overrides",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "label": "guest /admin/ops-overrides operator-record 390px",
+      "contentAssertions": [
+        {
+          "selector": "main h1",
+          "text": "Operator overrides"
+        },
+        {
+          "selector": "main",
+          "includes": "300 seconds"
+        },
+        {
+          "selector": "main form, main input, main button",
+          "count": 0
+        },
+        {
+          "selector": "main dl",
+          "includes": "98741"
+        },
+        {
+          "selector": "main table",
+          "includes": "TWO_AUTOMOD_MENTION_LIMIT"
+        }
+      ],
+      "interactionAssertions": [],
+      "violations": [],
+      "incomplete": [],
+      "passedRules": 18,
+      "verdict": "PASS"
+    },
+    {
+      "identity": "guest",
+      "status": 200,
+      "path": "/admin/ops-overrides",
+      "state": "operator-empty",
+      "opsBearer": true,
+      "opsState": "empty",
+      "route": "/admin/ops-overrides",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "label": "guest /admin/ops-overrides operator-empty 390px",
+      "contentAssertions": [
+        {
+          "selector": "main h1",
+          "text": "Operator overrides"
+        },
+        {
+          "selector": "main",
+          "includes": "300 seconds"
+        },
+        {
+          "selector": "main form, main input, main button",
+          "count": 0
+        },
+        {
+          "selector": "main dl",
+          "includes": "98741"
+        },
+        {
+          "selector": "main",
+          "includes": "No overrides are set."
+        }
+      ],
+      "interactionAssertions": [],
+      "violations": [],
+      "incomplete": [],
+      "passedRules": 16,
+      "verdict": "PASS"
+    },
+    {
+      "identity": "guest",
+      "status": 503,
+      "path": "/admin/ops-overrides",
+      "state": "operator-unavailable",
+      "opsBearer": true,
+      "opsState": "unavailable",
+      "route": "/admin/ops-overrides",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "label": "guest /admin/ops-overrides operator-unavailable 390px",
+      "contentAssertions": [
+        {
+          "selector": "main h1",
+          "text": "Operator overrides"
+        },
+        {
+          "selector": "main",
+          "includes": "300 seconds"
+        },
+        {
+          "selector": "main form, main input, main button",
+          "count": 0
+        },
+        {
+          "selector": "[role=\"status\"]",
+          "includes": "Operator record unavailable"
+        }
+      ],
+      "interactionAssertions": [],
+      "violations": [],
+      "incomplete": [],
+      "passedRules": 17,
+      "verdict": "PASS"
+    },
+    {
+      "identity": "guest",
+      "status": 401,
+      "path": "/admin/ops-overrides",
+      "state": "operator-refused",
+      "route": "/admin/ops-overrides",
+      "viewport": {
+        "width": 390,
+        "height": 844
+      },
+      "label": "guest /admin/ops-overrides operator-refused 390px",
+      "contentAssertions": [
+        {
+          "selector": "main h1",
+          "text": "Operator access required"
+        }
+      ],
+      "interactionAssertions": [],
+      "violations": [],
+      "incomplete": [],
+      "passedRules": 14,
+      "verdict": "PASS"
+    },
+    {
+      "identity": "guest",
+      "status": 200,
+      "path": "/admin/ops-overrides",
+      "state": "operator-record",
+      "opsBearer": true,
+      "route": "/admin/ops-overrides",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "label": "guest /admin/ops-overrides operator-record 1280px",
+      "contentAssertions": [
+        {
+          "selector": "main h1",
+          "text": "Operator overrides"
+        },
+        {
+          "selector": "main",
+          "includes": "300 seconds"
+        },
+        {
+          "selector": "main form, main input, main button",
+          "count": 0
+        },
+        {
+          "selector": "main dl",
+          "includes": "98741"
+        },
+        {
+          "selector": "main table",
+          "includes": "TWO_AUTOMOD_MENTION_LIMIT"
+        }
+      ],
+      "interactionAssertions": [],
+      "violations": [],
+      "incomplete": [],
+      "passedRules": 18,
+      "verdict": "PASS"
+    },
+    {
+      "identity": "guest",
+      "status": 200,
+      "path": "/admin/ops-overrides",
+      "state": "operator-empty",
+      "opsBearer": true,
+      "opsState": "empty",
+      "route": "/admin/ops-overrides",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "label": "guest /admin/ops-overrides operator-empty 1280px",
+      "contentAssertions": [
+        {
+          "selector": "main h1",
+          "text": "Operator overrides"
+        },
+        {
+          "selector": "main",
+          "includes": "300 seconds"
+        },
+        {
+          "selector": "main form, main input, main button",
+          "count": 0
+        },
+        {
+          "selector": "main dl",
+          "includes": "98741"
+        },
+        {
+          "selector": "main",
+          "includes": "No overrides are set."
+        }
+      ],
+      "interactionAssertions": [],
+      "violations": [],
+      "incomplete": [],
+      "passedRules": 16,
+      "verdict": "PASS"
+    },
+    {
+      "identity": "guest",
+      "status": 503,
+      "path": "/admin/ops-overrides",
+      "state": "operator-unavailable",
+      "opsBearer": true,
+      "opsState": "unavailable",
+      "route": "/admin/ops-overrides",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "label": "guest /admin/ops-overrides operator-unavailable 1280px",
+      "contentAssertions": [
+        {
+          "selector": "main h1",
+          "text": "Operator overrides"
+        },
+        {
+          "selector": "main",
+          "includes": "300 seconds"
+        },
+        {
+          "selector": "main form, main input, main button",
+          "count": 0
+        },
+        {
+          "selector": "[role=\"status\"]",
+          "includes": "Operator record unavailable"
+        }
+      ],
+      "interactionAssertions": [],
+      "violations": [],
+      "incomplete": [],
+      "passedRules": 17,
+      "verdict": "PASS"
+    },
+    {
+      "identity": "guest",
+      "status": 401,
+      "path": "/admin/ops-overrides",
+      "state": "operator-refused",
+      "route": "/admin/ops-overrides",
+      "viewport": {
+        "width": 1280,
+        "height": 800
+      },
+      "label": "guest /admin/ops-overrides operator-refused 1280px",
+      "contentAssertions": [
+        {
+          "selector": "main h1",
+          "text": "Operator access required"
+        }
+      ],
+      "interactionAssertions": [],
+      "violations": [],
+      "incomplete": [],
+      "passedRules": 14,
+      "verdict": "PASS"
+    }
+  ],
+  "failures": [],
+  "coverage": {
+    "registered": [
+      "/auth/status",
+      "/auth/recover",
+      "/auth/discord/redirect",
+      "/auth/discord",
+      "/auth/discord/callback",
+      "/",
+      "/discord",
+      "/login",
+      "/community",
+      "/about",
+      "/faq",
+      "/rules",
+      "/privacy",
+      "/sitemap_index.xml",
+      "/robots.txt",
+      "/llms.txt",
+      "/about.md",
+      "/faq.md",
+      "/rules.md",
+      "/privacy.md",
+      "/join.md",
+      "/events.md",
+      "/e/:file{.+\\.md}",
+      "/join",
+      "/join/discord",
+      "/join/callback",
+      "/.well-known/security.txt",
+      "/up",
+      "/admin/ops-overrides",
+      "/admin/queue/source-evidence/:id",
+      "/admin/queue/failed/:id/preview",
+      "/admin/events/create",
+      "/admin/events/:key/edit",
+      "/admin/featured-contents",
+      "/admin/featured-contents/create",
+      "/admin/featured-contents/:id/edit",
+      "/admin",
+      "/admin/join-attempts",
+      "/admin/join-attempts/:id",
+      "/admin/activity-log",
+      "/admin/events",
+      "/admin/events/new",
+      "/admin/events/:key",
+      "/admin/featured",
+      "/admin/featured/new",
+      "/admin/featured/:id",
+      "/members",
+      "/members/",
+      "/profile",
+      "/members/:user",
+      "/leaderboards/members",
+      "/events",
+      "/events/past",
+      "/events.json",
+      "/events.rss",
+      "/events.ics",
+      "/events/:file{.+\\.ics}",
+      "/events/:key",
+      "/e/:key",
+      "/hotzones",
+      "/hotzones/:signal",
+      "/api/public/events",
+      "/api/public/events/:key",
+      "/api/public/community",
+      "/api/public/join",
+      "/openapi.json",
+      "/__a11y/404",
+      "/__a11y/404-empty",
+      "/__a11y/429",
+      "/__a11y/500",
+      "/__a11y/503"
+    ],
+    "exclusions": [
+      {
+        "route": "/discord",
+        "reason": "External invite redirect, not an HTML page"
+      },
+      {
+        "route": "/join/discord",
+        "reason": "OAuth redirect, never contact Discord in CI"
+      },
+      {
+        "route": "/auth/discord",
+        "reason": "OAuth redirect, never contact Discord in CI"
+      },
+      {
+        "route": "/auth/status",
+        "reason": "Bool-only JSON liveness probe, not an HTML document"
+      },
+      {
+        "route": "/auth/discord/callback",
+        "reason": "OAuth callback redirects to the audited homepage notices"
+      },
+      {
+        "route": "/auth/discord/redirect",
+        "reason": "Legacy login alias redirects to the non-document OAuth start route"
+      },
+      {
+        "route": "/login",
+        "reason": "Vanity sign-in alias redirects to the non-document OAuth start route"
+      },
+      {
+        "route": "/community",
+        "reason": "Vanity lobby alias redirects to the audited homepage"
+      },
+      {
+        "route": "/admin/events/create",
+        "reason": "Legacy admin alias redirects to the audited /admin/events/new form"
+      },
+      {
+        "route": "/admin/events/:key/edit",
+        "reason": "Legacy admin alias redirects to the audited /admin/events/:key form"
+      },
+      {
+        "route": "/admin/featured-contents",
+        "reason": "Legacy admin alias redirects to the audited /admin/featured list"
+      },
+      {
+        "route": "/admin/featured-contents/create",
+        "reason": "Legacy admin alias redirects to the audited /admin/featured/new form"
+      },
+      {
+        "route": "/admin/featured-contents/:id/edit",
+        "reason": "Legacy admin alias redirects to the audited /admin/featured/:id form"
+      },
+      {
+        "route": "/sitemap_index.xml",
+        "reason": "XML sitemap"
+      },
+      {
+        "route": "/robots.txt",
+        "reason": "Plain-text robots policy"
+      },
+      {
+        "route": "/.well-known/security.txt",
+        "reason": "Plain-text RFC 9116 security policy"
+      },
+      {
+        "route": "/up",
+        "reason": "JSON queue health response"
+      },
+      {
+        "route": "/admin/queue/failed/:id/preview",
+        "reason": "Default-off operator-only JSON advice, not an HTML document"
+      },
+      {
+        "route": "/admin/queue/source-evidence/:id",
+        "reason": "Default-off evidence-only bearer-authenticated JSON, not an HTML document"
+      },
+      {
+        "route": "/events.json",
+        "reason": "Session-gated JSON feed"
+      },
+      {
+        "route": "/events/:key",
+        "reason": "Session-gated JSON event detail; browser guests redirect to sign-in"
+      },
+      {
+        "route": "/events.ics",
+        "reason": "Calendar feed, not HTML"
+      },
+      {
+        "route": "/events.rss",
+        "reason": "RSS feed, not HTML"
+      },
+      {
+        "route": "/events/:file{.+\\.ics}",
+        "reason": "Per-event calendar download, not HTML"
+      },
+      {
+        "route": "/llms.txt",
+        "reason": "Assistant index of the Markdown alternates, not HTML"
+      },
+      {
+        "route": "/about.md",
+        "reason": "Markdown alternate, not HTML"
+      },
+      {
+        "route": "/faq.md",
+        "reason": "Markdown alternate, not HTML"
+      },
+      {
+        "route": "/rules.md",
+        "reason": "Markdown alternate, not HTML"
+      },
+      {
+        "route": "/privacy.md",
+        "reason": "Markdown alternate, not HTML"
+      },
+      {
+        "route": "/join.md",
+        "reason": "Markdown alternate, not HTML"
+      },
+      {
+        "route": "/events.md",
+        "reason": "Markdown event collection, not HTML"
+      },
+      {
+        "route": "/e/:file{.+\\.md}",
+        "reason": "Per-event Markdown alternate, not HTML"
+      },
+      {
+        "route": "/api/public/events",
+        "reason": "Bounded session-free JSON collection, not HTML"
+      },
+      {
+        "route": "/api/public/events/:key",
+        "reason": "Bounded session-free JSON event detail, not HTML"
+      },
+      {
+        "route": "/api/public/community",
+        "reason": "Bounded session-free JSON snapshot, not HTML"
+      },
+      {
+        "route": "/api/public/join",
+        "reason": "Bounded session-free JSON handoff, not HTML"
+      },
+      {
+        "route": "/openapi.json",
+        "reason": "Static OpenAPI document, not HTML"
+      }
+    ]
+  },
+  "axeVersion": "4.14.0",
+  "sentinel": "PASS: injected image-alt violation rejected",
+  "cleanup": "PASS: Wrangler stopped and owned fixture schema removed"
+}

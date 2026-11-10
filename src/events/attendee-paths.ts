@@ -23,14 +23,39 @@ export function archiveEventHref(
   eventKey: string,
   archive: ArchiveContext | null | undefined,
   attendeePage = 1,
+  review = false,
 ): string {
-  const path = attendeePageHref(eventKey, attendeePage);
-  if (!archive) return path;
+  const path = attendeePageHref(encodeURIComponent(eventKey), attendeePage);
+  if (!archive && !review) return path;
   const [base, search] = path.split("?");
   const params = new URLSearchParams(search);
-  params.set("archivePage", String(archive.page));
-  if (archive.q) params.set("archiveQuery", archive.q);
+  if (archive) {
+    params.set("archivePage", String(archive.page));
+    if (archive.q) params.set("archiveQuery", archive.q);
+  }
+  if (review) params.set("review", "1");
   return `${base}?${params}`;
+}
+
+/**
+ * Sign-in/join return destination (`?next=`): normalized archive + attendee
+ * context only, never the raw request query. Auth refuses a decoded next
+ * over its byte cap, so a destination that would cross `maxBytes` (a long
+ * Unicode archive search percent-encodes to several bytes per character)
+ * drops the archive context whole — never truncated mid-search — and keeps
+ * the attendee page; the bare event path is the final fallback.
+ */
+export function authReturnHref(
+  eventKey: string,
+  archive: ArchiveContext | null | undefined,
+  attendeePage: number,
+  maxBytes: number,
+): string {
+  const fits = (href: string) => new TextEncoder().encode(href).byteLength <= maxBytes;
+  const withArchive = archiveEventHref(eventKey, archive, attendeePage);
+  if (fits(withArchive)) return withArchive;
+  const pageOnly = archiveEventHref(eventKey, null, attendeePage);
+  return fits(pageOnly) ? pageOnly : attendeePageHref(eventKey, 1);
 }
 
 export function rsvpPageReturnPath(eventKey: string, page: number): string {

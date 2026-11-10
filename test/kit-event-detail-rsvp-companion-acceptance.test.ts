@@ -473,12 +473,18 @@ describe("acceptance: JSON/ICS have no Kit entries and RSVP mutations stay Hono-
     expect(rsvp).toContain('app.put("/events/:key/rsvp"');
     expect(rsvp).toContain('app.delete("/events/:key/rsvp"');
     expect(rsvp).toContain('app.post("/e/:key/rsvp"');
-    // The Kit view renders the same state machine as a native form posting to
+    // The Kit view injects the server RsvpControl: a native form posting to
     // the Hono controller: no client-side mutation, no fetch, same endpoint.
     const detail = read("web/src/lib/EventDetail.svelte");
-    expect(detail).toContain('<form method="post" action={rsvpAction}');
-    expect(detail).toContain("`/e/${encodeURIComponent(model.eventKey)}/rsvp`");
-    expect(detail).not.toMatch(/fetch\s*\(/);
+    const control = read("src/events/rsvp-button.tsx");
+    expect(detail).toContain("{@html model.detailHtml.rsvp}");
+    expect(control).toContain(
+      '<form method="post" action={rsvpActionHref(e.eventKey, attendeePage)}',
+    );
+    expect(read("src/events/attendee-paths.ts")).toContain(
+      "`/e/${encodeURIComponent(eventKey)}/rsvp`",
+    );
+    expect(`${detail}${control}`).not.toMatch(/fetch\s*\(/);
   });
 
   it("the Kit load binds the shared seams and ships no hydration bundle", () => {

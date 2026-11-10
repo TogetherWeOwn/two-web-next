@@ -1,13 +1,11 @@
 #!/usr/bin/env bash
 #
-# Nightly Postgres backup to R2 `two-web-next-backups` (EU jurisdiction),
-# with the proof that the backup restores.
+# Nightly Postgres backup to R2 `two-web-next-backups` (EU jurisdiction).
 #
 # The Cloudflare build (bot + web) shares one PlanetScale Postgres (see
-# docs/db-migrations.md). A backup with no restore test is a rumour, so this
-# script takes the dump the same way every time (`pg_dump -Fc`) and can prove
-# the dump restores into a scratch database by comparing every table's row
-# count before and after.
+# docs/db-migrations.md). This script takes the dump the same way every time
+# (`pg_dump -Fc`). `check` re-downloads each archive and verifies it against
+# its digest receipt; it does not restore the dump (see docs/runbook.md).
 #
 # Backup target naming: neon/<branch>-<branch>-<UTC>.dump inside R2 (the
 # `neon` R2 key prefix is retained deliberately so pre-rename manifests and
@@ -72,7 +70,7 @@
 # DATABASE_URL is a hard error, so a half-configured box can never silently
 # dump the wrong database. Tests run against agent-testdb only, never prod.
 #
-# Needs: pg_dump + psql (CI: postgres:18 image service / apt), wrangler with
+# Needs: pg_dump (CI: postgres:18 image service / apt), wrangler with
 # CLOUDFLARE_API_TOKEN + CLOUDFLARE_ACCOUNT_ID.
 #
 # Env overrides (mirroring two-web pg-backup.sh):

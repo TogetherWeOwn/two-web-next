@@ -1,9 +1,8 @@
-// Test-author owned, intentionally RED until the paired behavior exists.
 // node --import tsx --test ci/event-native-share-browser.test.mjs
-// No opt-in skips: Builder must register this command in browser-enabled CI
-// with an executed-case verifier. The Hono a11y/Lighthouse gates do not cover Kit.
+// No opt-in skips; runs in browser-enabled CI with an executed-case verifier.
+// The Hono a11y/Lighthouse gates do not cover Kit.
 import assert from "node:assert/strict";
-import { readFile, mkdir } from "node:fs/promises";
+import { readFile, readdir, mkdir } from "node:fs/promises";
 import { resolve, sep } from "node:path";
 import { after, before, describe, test } from "node:test";
 import { chromium, expect } from "@playwright/test";
@@ -21,13 +20,23 @@ import {
 } from "../test/fixtures/event-native-share.ts";
 
 let browser;
+let kitCss;
 const evidence = process.env.EVENT_NATIVE_SHARE_EVIDENCE_DIR;
 const ROOT = resolve("public");
 const SHARE_NAME = /^share(?: this)?(?: event)?$/i;
 const expectedPayload = { title: SHARE_TITLE, url: SHARE_CANONICAL };
 before(async () => {
   browser = await chromium.launch({ headless: true });
-  if (evidence) await mkdir(evidence, { recursive: true });
+  if (evidence) {
+    await mkdir(evidence, { recursive: true });
+    // Match kit-preview-e2e: component SSR omits +layout's compiled app.css.
+    // Capture the real Vite output, never raw Tailwind source or Hono tokens.
+    const assets = resolve("web/.svelte-kit/output/client/_app/immutable/assets");
+    const names = (await readdir(assets)).filter((name) => name.endsWith(".css")).sort();
+    assert.ok(names.length > 0, "Kit evidence requires built layout CSS");
+    const sheets = await Promise.all(names.map((name) => readFile(resolve(assets, name), "utf8")));
+    kitCss = sheets.join("\n");
+  }
 });
 after(async () => {
   await browser?.close();
@@ -138,7 +147,10 @@ async function open(t, view, options = {}) {
       await route.fulfill({
         status: fixture.status,
         contentType: "text/html; charset=utf-8",
-        body: fixture.html,
+        body:
+          view === "Kit" && evidence
+            ? fixture.html.replace("</head>", `<style>${kitCss}</style></head>`)
+            : fixture.html,
       });
       return;
     }
@@ -412,14 +424,46 @@ describe("Native event sharing", () => {
       await noEscapedEffects(f);
     });
 
-    test(`${view}: CONTROL real no-JS client keeps calendar and canonical Copy link navigation, no focusable Share`, async (t) => {
+    test(`${view}: CONTROL JS client reveals the SSR-hidden Copy link and keeps the readonly manual URL`, async (t) => {
+      const f = await open(t, view);
+      await expect(f.page.getByTestId("event-copy-link")).toBeVisible();
+      await expect(f.page.getByTestId("event-link-url")).toHaveAttribute("readonly", "");
+      assert.equal(await f.page.getByTestId("event-link-url").inputValue(), SHARE_CANONICAL);
+      await expect(f.page.getByTestId("event-manual-copy")).toBeVisible();
+      assert.deepEqual(f.errors, []);
+    });
+
+    test(`${view}: CONTROL real no-JS client keeps calendar destinations, copy control hidden and unfocusable, no focusable Share`, async (t) => {
       const f = await open(t, view, { javaScriptEnabled: false });
       assert.equal(await nativeButton(f.page).count(), 0);
-      await calendarAndCopy(f.page);
+      assert.equal(await f.page.getByRole("link", { name: SHARE_NAME }).count(), 0);
+      // Calendar destinations remain usable without JavaScript.
+      assert.equal(
+        await f.page.getByTestId("event-ics").getAttribute("href"),
+        `/events/${SHARE_KEY}.ics`,
+      );
+      assert.match(
+        await f.page.getByTestId("event-google-calendar").getAttribute("href"),
+        /^https:\/\/calendar\.google\.com\/calendar\/render\?/,
+      );
+      // The SSR copy control stays in the document for the binder to reveal,
+      // but without JavaScript it must not promise copying: not visible, not
+      // in the accessibility tree as a Copy link, and not focusable. Against
+      // the pre-implementation visible navigating anchor each check fails.
       const copy = f.page.getByTestId("event-copy-link");
-      await tabTo(f.page, copy);
-      await f.page.keyboard.press("Enter");
-      await expect(f.page).toHaveURL(SHARE_CANONICAL);
+      assert.equal(await copy.count(), 1);
+      assert.equal(await copy.getAttribute("href"), SHARE_CANONICAL);
+      assert.equal(await copy.getAttribute("data-copy-link"), SHARE_CANONICAL);
+      await expect(copy).toBeHidden();
+      assert.equal(await f.page.getByRole("link", { name: /copy link/i }).count(), 0);
+      assert.equal(
+        await copy.evaluate((node) => {
+          node.focus();
+          return document.activeElement === node;
+        }),
+        false,
+        "hidden copy control must not be focusable without JavaScript",
+      );
       assert.deepEqual(f.errors, []);
       assert.deepEqual(f.dialogs, []);
       assert.deepEqual(f.blocked, []);
@@ -452,20 +496,65 @@ describe("Native event sharing", () => {
       await noEscapedEffects(f);
     });
 
+    for (const javaScriptEnabled of [false, true]) {
+      test(`${view}: draft has only its publication note with JS ${javaScriptEnabled}`, async (t) => {
+        const f = await open(t, view, { status: "draft", viewer: "moderator", javaScriptEnabled });
+        const section = f.page.locator("section.event-share");
+        await expect(section.getByTestId("event-share-draft-note")).toBeVisible();
+        await expect(section.locator("a, button, input, textarea, [role=status]")).toHaveCount(0);
+        assert.deepEqual(f.errors, []);
+        assert.deepEqual(f.blocked, []);
+        if (javaScriptEnabled) await noEscapedEffects(f);
+      });
+    }
+
+    for (const width of [1280, 390]) {
+      test(`${view}: no-JS URL is keyboard selectable at ${width}px`, async (t) => {
+        const f = await open(t, view, { javaScriptEnabled: false });
+        await f.page.setViewportSize({ width, height: width === 390 ? 844 : 800 });
+        const field = f.page.getByRole("textbox", { name: "Event link", exact: true });
+        await expect(field).toBeVisible();
+        await expect(field).toHaveAttribute("readonly");
+        await expect(field).toBeEnabled();
+        await field.focus();
+        await f.page.keyboard.press("ControlOrMeta+A");
+        assert.equal(
+          await field.evaluate((node) => node.value.slice(node.selectionStart, node.selectionEnd)),
+          SHARE_CANONICAL,
+        );
+        await expect(f.page.getByRole("link", { name: /copy link/i })).toHaveCount(0);
+        assert.deepEqual(f.errors, []);
+        assert.deepEqual(f.blocked, []);
+      });
+    }
+
     if (evidence)
       test(`${view}: capture current fixture at both required widths`, async (t) => {
-        const f = await open(t, view);
-        for (const [width, height] of [
-          [1280, 800],
-          [390, 844],
-        ]) {
-          await f.page.setViewportSize({ width, height });
-          await f.page.screenshot({
-            path: resolve(evidence, `${view.toLowerCase()}-${width}x${height}.png`),
-            fullPage: true,
-          });
+        for (const status of ["published", "draft"]) {
+          for (const javaScriptEnabled of [true, false]) {
+            const f = await open(t, view, {
+              status,
+              javaScriptEnabled,
+              viewer: status === "draft" ? "moderator" : "guest",
+            });
+            for (const [width, height] of [
+              [1280, 800],
+              [390, 844],
+            ]) {
+              await f.page.setViewportSize({ width, height });
+              await f.page.evaluate(() => document.fonts.ready);
+              assert.notEqual(
+                await f.page
+                  .locator(".base-theme")
+                  .evaluate((node) => getComputedStyle(node).getPropertyValue("--line").trim()),
+                "",
+                "capture must include the renderer's semantic border token",
+              );
+              const name = `${view.toLowerCase()}-${status}-js-${javaScriptEnabled}-${width}x${height}`;
+              await f.page.screenshot({ path: resolve(evidence, `${name}.png`), fullPage: true });
+            }
+          }
         }
-        assert.equal(await f.page.getByTestId("event-copy-link").count(), 1);
       });
   }
 });

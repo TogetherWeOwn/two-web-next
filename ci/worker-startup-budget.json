@@ -1,0 +1,12 @@
+{
+  "version": 1,
+  "metric": "local_startup_non_idle_sample_ms",
+  "runs": 3,
+  "warnMs": 400,
+  "failMs": 700,
+  "tools": {
+    "wrangler": "4.156.1",
+    "miniflare": "5.20261101.0-beta",
+    "workerd": "1.20261101.1"
+  }
+}
