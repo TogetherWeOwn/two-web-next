@@ -27,7 +27,16 @@
 // falls through to the safe retained-token path. The saved entry check uses
 // a truthy token: the token is only ever a 64-char hex digest or an empty
 // failed-write marker, never another truthy value, and an empty marker is
-// re-written to the fresh token rather than retained.
+// re-written to the fresh token rather than retained. The uninitialized
+// superseded/dirty markers are always assigned by the initial save before
+// any listener can fire, so undefined behaves identically to false/null. The
+// clean check is likewise truthy-only: it is only ever true/false/undefined.
+// The second replaceState
+// argument is required by the Web IDL: omitting it throws in a browser, which
+// would fail closed to an empty token on every normal edit. The dirty marker
+// is written once per transition: a retained entry re-marks dirty so a later
+// reload cannot adopt fresh, and repeat input/change skips an identical
+// history write that browsers rate-limit.
 (function () {
   var editor = document.querySelector("[data-event-editor]");
   if (!editor) return;
@@ -35,7 +44,8 @@
   if (!baseline) return;
   var path = window.location.pathname;
   var token = baseline.value;
-  var superseded = null;
+  var superseded;
+  var dirty;
   function snapshot() {
     var params = new URLSearchParams(new FormData(editor));
     params.delete("saved_baseline");
@@ -43,12 +53,16 @@
   }
   var initialSnapshot = snapshot();
   function save(clean) {
+    dirty = !clean;
     try {
       var state = window.history.state || {};
-      window.history.replaceState({
-        ...state,
-        twoAdminSaveBaseline: { path: path, token: token, clean: clean },
-      });
+      window.history.replaceState(
+        {
+          ...state,
+          twoAdminSaveBaseline: { path: path, token: token, clean: clean },
+        },
+        "",
+      );
     } catch {
       token = "";
       editor.setAttribute("data-event-draft", "");
@@ -58,13 +72,14 @@
   if (saved && saved.path === path && saved.token) {
     if (
       window.performance?.getEntriesByType?.("navigation")?.[0]?.type === "reload" &&
-      saved.clean === true
+      saved.clean
     ) {
       superseded = saved.token;
       save(true);
     } else {
       if (saved.token !== token) editor.setAttribute("data-event-draft", "");
       token = saved.token;
+      save(false);
     }
   } else {
     save(true);
@@ -72,7 +87,7 @@
   var on = editor.addEventListener.bind(editor);
   function edited() {
     superseded = null;
-    save(false);
+    if (!dirty) save(false);
   }
   on("input", edited);
   on("change", edited);

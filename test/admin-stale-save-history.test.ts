@@ -43,7 +43,15 @@ function loadIslands(
   };
   const history = {
     state,
-    replaceState: vi.fn((next: unknown) => {
+    replaceState: vi.fn((next: unknown, url: unknown) => {
+      // The Web IDL requires the second string argument: a one-argument
+      // replaceState throws in a browser and the island fails closed.
+      // Emulate it so the VM suite cannot stay green while the shipped
+      // island is broken in a browser.
+      if (url !== "")
+        throw new TypeError(
+          "Failed to execute 'replaceState': parameters 1 is not of type 'string'.",
+        );
       if (unavailable) throw new Error("History unavailable");
       history.state = next;
     }),
@@ -95,6 +103,13 @@ describe.each(["assets", "public"])("%s moderator draft history token binding", 
     });
     expect(JSON.stringify(b.history.state)).not.toContain("Saved title");
     expect(b.history.replaceState).toHaveBeenCalledOnce();
+    expect(b.history.replaceState).toHaveBeenCalledWith(
+      {
+        kit: { index: 7 },
+        twoAdminSaveBaseline: { path: "/admin/featured/7", token: A, clean: true },
+      },
+      "",
+    );
   });
 
   it("Back with restored draft text cannot pair it with a fresh GET token", () => {
@@ -231,6 +246,50 @@ describe.each(["assets", "public"])("%s moderator draft history token binding", 
     reloaded.formListeners.get("submit")!(new Event("submit", { cancelable: true }));
     expect(reloaded.baseline.value).toBe(A);
     expect(reloaded.values.get("title")).toBe("Restored old draft");
+  });
+
+  it("back retains the original token and re-marks the entry dirty so a following reload cannot adopt fresh", () => {
+    const original = load(A);
+    const back = loadIslands(directory, B, original.history.state, false, "back_forward");
+    expect(back.baseline.value).toBe(A);
+    expect(back.history.state).toEqual({
+      twoAdminSaveBaseline: { path: "/admin/featured/7", token: A, clean: false },
+    });
+    const reloaded = loadIslands(directory, B, back.history.state, false, "reload");
+    expect(reloaded.baseline.value).toBe(A);
+    expect(reloaded.history.state).toEqual({
+      twoAdminSaveBaseline: { path: "/admin/featured/7", token: A, clean: false },
+    });
+  });
+
+  it("pins the conditional late-restoration plus later edit of another control case", () => {
+    // Conditional gap, not a demonstrated native overwrite: native
+    // restoration is unproven. If one control is silently restored before
+    // the user edits a different control, the genuine edit clears the
+    // adopted-token guard and the combined fields submit under the adopted
+    // fresh token. This documents the current behavior for Security; it is
+    // not a safety proof.
+    const original = load(A);
+    const reloaded = loadIslands(directory, B, original.history.state, false, "reload");
+    expect(reloaded.baseline.value).toBe(B);
+    reloaded.values.set("title", "Restored old draft");
+    userEdit(reloaded, "capacity", "4");
+    reloaded.formListeners.get("submit")!(new Event("submit", { cancelable: true }));
+    expect(reloaded.baseline.value).toBe(B);
+    expect(reloaded.values.get("title")).toBe("Restored old draft");
+    expect(reloaded.values.get("capacity")).toBe("4");
+  });
+
+  it("writes history once per dirty transition instead of on every input/change", () => {
+    const reloaded = loadIslands(directory, B, load(A).history.state, false, "reload");
+    expect(reloaded.history.replaceState).toHaveBeenCalledTimes(1);
+    userEdit(reloaded, "title", "Edit 1");
+    userEdit(reloaded, "title", "Edit 2");
+    userEdit(reloaded, "title", "Edit 3");
+    expect(reloaded.history.replaceState).toHaveBeenCalledTimes(2);
+    expect(reloaded.history.state).toEqual({
+      twoAdminSaveBaseline: { path: "/admin/featured/7", token: B, clean: false },
+    });
   });
 
   it("reload over an entry without provenance keeps the old token instead of adopting the fresh one", () => {
