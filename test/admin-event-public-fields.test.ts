@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import type { Db } from "../src/db/index";
 import { resolveKitEventEdit, type KitEventEditRow } from "../src/admin/kit-event-edit";
 import { EventFormFields } from "../src/admin/pages/event-form-fields";
+import { EventEditableFields } from "../src/admin/pages/event-editable-fields";
 import {
   EventAccessibilityField,
   EventHostFields,
@@ -51,25 +52,24 @@ describe("shared event public fields", () => {
     );
     if (result.kind !== "ok") throw new Error("expected edit view");
     const rendered = renderEventPublicFieldsHtml(values);
-    expect(result.view.accessibilityFieldHtml).toBe(rendered.accessibilityFieldHtml);
-    expect(result.view.hostFieldsHtml).toBe(rendered.hostFieldsHtml);
+    const kit = result.view.fieldsHtml;
+    expect(kit).toContain(rendered.accessibilityFieldHtml);
+    expect(kit).toContain(rendered.hostFieldsHtml);
+    expect(kit).toBe(String(EventEditableFields({ values: result.view.values, errors: {} })));
+    expect(page).toContain("{@html view.fieldsHtml}");
     const hono = String(
       EventFormFields({ mode: "edit", values, errors: {}, action: "/admin/events/PUBLIC01" }),
     );
     expect(hono).toContain(rendered.accessibilityFieldHtml);
     expect(hono).toContain(rendered.hostFieldsHtml);
-    expect(page.indexOf('name="description"')).toBeLessThan(
-      page.indexOf("{@html view.accessibilityFieldHtml}"),
+    expect(kit.indexOf('name="description"')).toBeLessThan(
+      kit.indexOf(rendered.accessibilityFieldHtml),
     );
-    expect(page.indexOf("{@html view.accessibilityFieldHtml}")).toBeLessThan(
-      page.indexOf('name="starts_at"'),
+    expect(kit.indexOf(rendered.accessibilityFieldHtml)).toBeLessThan(
+      kit.indexOf('name="starts_at"'),
     );
-    expect(page.indexOf('name="location"')).toBeLessThan(
-      page.indexOf("{@html view.hostFieldsHtml}"),
-    );
-    expect(page.indexOf("{@html view.hostFieldsHtml}")).toBeLessThan(
-      page.indexOf('name="capacity"'),
-    );
+    expect(kit.indexOf('name="location"')).toBeLessThan(kit.indexOf(rendered.hostFieldsHtml));
+    expect(kit.indexOf(rendered.hostFieldsHtml)).toBeLessThan(kit.indexOf('name="capacity"'));
     for (const name of Object.keys(values)) {
       expect(hono).toContain(`name="${name}"`);
       expect(page).not.toContain(`name="${name}"`);
@@ -79,6 +79,37 @@ describe("shared event public fields", () => {
     expect(rendered.hostFieldsHtml).toContain("&quot;");
     expect(rendered.hostFieldsHtml).not.toContain("<img");
     expect(rendered.accessibilityFieldHtml).not.toContain("<script>");
+  });
+
+  it.each([
+    "title",
+    "game",
+    "description",
+    "starts_at",
+    "ends_at",
+    "timezone",
+    "location",
+    "capacity",
+  ])("shares retained %s values and error associations without active markup", (name) => {
+    const retained = { [name]: '</textarea><script>alert("draft")</script>' };
+    const errors = { [name]: "Correct <this>" };
+    const html = String(EventEditableFields({ values: retained, errors }));
+    const hono = String(
+      EventFormFields({ mode: "edit", values: retained, errors, action: "/admin/events/PUBLIC01" }),
+    );
+    const id = `f-${name.replaceAll("_", "-")}`;
+    expect(hono).toContain(html);
+    expect(html).toContain(`id="${id}"`);
+    expect(html).toContain(`name="${name}"`);
+    expect(html).toContain('aria-invalid="true"');
+    expect(html).toContain(
+      `aria-describedby="${id}${name === "timezone" ? "-hint " + id : ""}-error"`,
+    );
+    expect(html).toContain(`data-testid="error-${name}"`);
+    expect(html).toContain("Correct &lt;this&gt;");
+    expect(html).toContain("&lt;/textarea&gt;&lt;script&gt;");
+    expect(html).not.toContain("<script>");
+    expect(page).not.toContain(`name="${name}"`);
   });
 
   it.each([

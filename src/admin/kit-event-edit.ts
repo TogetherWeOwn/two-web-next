@@ -52,7 +52,7 @@ import { rosterWaitlistHint } from "./roster-copy";
 import { formatAdminTime } from "./chronology";
 import { renderSavedEventNoticeHtml } from "./pages/event-form-review";
 import { EventRosterSection } from "./pages/event-form-roster";
-import { renderEventPublicFieldsHtml } from "./pages/event-public-fields";
+import { EventEditableFields } from "./pages/event-editable-fields";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -147,9 +147,8 @@ export type KitEventEditView = {
    * strings or disclosure markup (client gzip ceiling). */
   pauseReviewHtml: string | null;
   savedNoticeHtml: string | null;
-  /** Shared escaped optional fields, in their original positions in the form. */
-  accessibilityFieldHtml: string;
-  hostFieldsHtml: string;
+  /** Shared escaped editable fields, in their original positions in the form. */
+  fieldsHtml: string;
 };
 
 export type KitEventEditOutcome =
@@ -290,7 +289,7 @@ export async function resolveKitEventEdit(
           ? renderSavedEventNoticeHtml(row.eventKey)
           : null,
       values,
-      ...renderEventPublicFieldsHtml(values),
+      fieldsHtml: String(EventEditableFields({ values, errors: {} })),
       errors: {},
       hasErrors: false,
       isDraft: false,
