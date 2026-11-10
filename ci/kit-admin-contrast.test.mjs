@@ -10,7 +10,12 @@ import { pathToFileURL } from "node:url";
 import AxeBuilder from "@axe-core/playwright";
 import { build } from "esbuild";
 import { chromium } from "playwright";
-import { eventRow, featuredRow } from "../test/helpers/admin-validation-correction.ts";
+import {
+  eventRow,
+  featuredRow,
+  rejectedHtml,
+  validationErrors,
+} from "../test/helpers/admin-validation-correction.ts";
 import { buildEventCreateView } from "../src/admin/kit-event-create.ts";
 import { resolveKitEventEdit } from "../src/admin/kit-event-edit.ts";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit.ts";
@@ -23,6 +28,8 @@ let scratch;
 let browser;
 let server;
 let fixtures;
+// Native newline fixtures, keyed renderer then state; filled in before().
+const nativeStates = { hono: {}, kit: {} };
 
 before(async () => {
   scratch = await mkdtemp(
@@ -64,6 +71,62 @@ before(async () => {
       },
     },
   ];
+  // Native event newline states. Views come from the real Kit resolver; Hono
+  // renders the real EventFormPage from the same values. The error state is a
+  // server-fixture: errors come from the real parser but no POST is made.
+  const editView = async (row) => {
+    const outcome = await resolveKitEventEdit(
+      row.eventKey,
+      {},
+      {
+        db: {},
+        get: async () => row,
+        list: async () => ({ rows: [], total: 0 }),
+        now: new Date("2026-10-23T12:00:00Z"),
+      },
+    );
+    assert.equal(outcome.kind, "ok");
+    return outcome.view;
+  };
+  const editPath = `/admin/events/${eventRow.eventKey}`;
+  const multilineRow = {
+    ...eventRow,
+    title: "Game night\nsecond line",
+    game: "Chess\nvariants",
+    location: "Room 1\nBack door",
+  };
+  const singleView = await editView(eventRow);
+  const multilineView = await editView(multilineRow);
+  const errorValues = {
+    ...singleView.values,
+    title: "",
+    game: "Chess\nvariants",
+    location: "x".repeat(256),
+  };
+  const errorMap = validationErrors("event", "edit", errorValues);
+  assert.deepEqual(Object.keys(errorMap).sort(), ["location", "title"]);
+  const errorView = {
+    ...singleView,
+    values: errorValues,
+    errors: errorMap,
+    hasErrors: true,
+    isDraft: true,
+  };
+  const kitNative = { single: singleView, multiline: multilineView, error: errorView };
+  for (const [state, view] of Object.entries(kitNative)) {
+    fixtures.push({ name: `native-kit-${state}`, path: editPath, data: { view } });
+  }
+  nativeStates.kit.errors = errorMap;
+  nativeStates.hono.errors = errorMap;
+  const honoPage = async (row, values, errors) =>
+    String(await EventFormPage({ mode: "edit", row, values, errors }));
+  for (const [state, html] of [
+    ["single", await honoPage(eventRow, singleView.values, {})],
+    ["multiline", await honoPage(multilineRow, multilineView.values, {})],
+    ["error", await rejectedHtml("event", "edit", errorValues)],
+  ]) {
+    nativeStates.hono[state] = { path: editPath, html };
+  }
   const entry = join(scratch, "server.mjs");
   await build({
     stdin: {
@@ -114,6 +177,8 @@ before(async () => {
     f.html = await response.text();
     assert.match(f.html, /_app\/immutable\/assets\/0\.[^\"]+\.css/, "real root stylesheet linked");
     assert.doesNotMatch(f.html, /type="module"[^>]*>\s*import/, "admin stays server rendered");
+    if (f.name.startsWith("native-kit-"))
+      nativeStates.kit[f.name.slice("native-kit-".length)] = { path: f.path, html: f.html };
   }
   browser = await chromium.launch({ headless: true });
   if (evidence) await mkdir(evidence, { recursive: true });
@@ -238,6 +303,257 @@ describe("Kit admin contrast", () => {
         } finally {
           await context.close();
         }
+      });
+    }
+  }
+
+  // Native event newline preservation, real Hono EventFormPage and compiled Kit
+  // edit route. Only the document and same-origin assets are intercepted; form
+  // submissions are captured at the window and cancelled, so no POST is sent.
+  // Server-error states are fixtures built from the real parser's field errors,
+  // not a real rejected POST (covered by the route tests).
+  const multilineExpected = {
+    title: "Game night\nsecond line",
+    game: "Chess\nvariants",
+    location: "Room 1\nBack door",
+  };
+
+  async function openState(renderer, state, width, javaScriptEnabled, run) {
+    const fixture = nativeStates[renderer][state];
+    const context = await browser.newContext({
+      javaScriptEnabled,
+      viewport: { width, height: width === 390 ? 844 : 800 },
+    });
+    const unexpected = [];
+    const errors = [];
+    try {
+      await context.route("**/*", async (route) => {
+        const url = new URL(route.request().url());
+        if (url.origin !== origin || route.request().method() !== "GET") {
+          unexpected.push(`${route.request().method()} ${url.origin}${url.pathname}`);
+          return route.abort();
+        }
+        if (url.pathname === fixture.path)
+          return route.fulfill({ contentType: "text/html", body: fixture.html });
+        const directory = url.pathname.startsWith("/_app/")
+          ? join(output, "client")
+          : resolve("public");
+        const asset = resolve(directory, url.pathname.slice(1));
+        if (asset.startsWith(directory + "/") && /\.(css|js|woff2)$/.test(asset)) {
+          return route.fulfill({
+            contentType: asset.endsWith(".css")
+              ? "text/css"
+              : asset.endsWith(".js")
+                ? "text/javascript"
+                : "font/woff2",
+            body: await readFile(asset),
+          });
+        }
+        unexpected.push(`GET ${url.pathname}`);
+        return route.abort();
+      });
+      const page = await context.newPage();
+      page.on("pageerror", (error) => errors.push(error.message));
+      await page.goto(origin + fixture.path);
+      await page.locator("[data-event-editor]").first().waitFor();
+      await run(page);
+      assert.deepEqual(unexpected, [], `${renderer} ${state}: no live or mutating requests`);
+      assert.deepEqual(errors, [], `${renderer} ${state}: no page errors`);
+    } finally {
+      await context.close();
+    }
+  }
+
+  async function shoot(page, renderer, state, width, js) {
+    if (!evidence) return;
+    await page.screenshot({
+      path: join(evidence, `native-newline-${renderer}-${state}-js-${js}-${width}.png`),
+      fullPage: true,
+    });
+  }
+
+  async function record(renderer, state, width, js, details) {
+    if (!evidence) return;
+    await writeFile(
+      join(evidence, `native-newline-${renderer}-${state}-js-${js}-${width}.json`),
+      JSON.stringify({ renderer, state, width, javaScript: js, ...details }, null, 2),
+    );
+  }
+
+  const tags = (page) =>
+    page.evaluate(() =>
+      Object.fromEntries(
+        ["title", "game", "location"].map((name) => {
+          const control = document.querySelector(`[name="${name}"]`);
+          return [name, { tag: control.tagName, value: control.value }];
+        }),
+      ),
+    );
+
+  // Cancels the next native submit after reading the entry list; no request.
+  const armCapture = (page) =>
+    page.evaluate(() => {
+      window.__submitted = undefined;
+      window.addEventListener(
+        "submit",
+        (event) => {
+          event.preventDefault();
+          event.stopImmediatePropagation();
+          window.__submitted = [...new FormData(event.target)].filter(
+            ([, value]) => typeof value === "string",
+          );
+        },
+        { capture: true, once: true },
+      );
+    });
+  const submitted = async (page) => {
+    const entries = await page.evaluate(() => window.__submitted);
+    return entries && Object.fromEntries(entries.map(([name, value]) => [name, value]));
+  };
+
+  for (const width of [1280, 390]) {
+    for (const renderer of ["hono", "kit"]) {
+      test(`Kit admin contrast: native newline edit states, ${renderer} at ${width}`, async () => {
+        // Normal single-line saved value: single-line inputs, untouched submit.
+        await openState(renderer, "single", width, true, async (page) => {
+          const controls = await tags(page);
+          for (const name of ["title", "game", "location"])
+            assert.equal(controls[name].tag, "INPUT", `${name} stays a single-line input`);
+          assert.equal(controls.title.value, "Saved game night");
+          assert.equal(await page.getByTestId("form-errors").count(), 0);
+          await armCapture(page);
+          await page.getByTestId("save-event").click();
+          const entries = await submitted(page);
+          assert.equal(entries?.title, "Saved game night");
+          assert.equal(entries?.game, "Saved game");
+          assert.equal(entries?.location, "Saved room");
+          await shoot(page, renderer, "single-before", width, "on");
+          await record(renderer, "single-before", width, "on", { controls, entries });
+        });
+
+        // Existing multiline title/game/location: textareas, untouched submit
+        // keeps the line breaks, then explicit optional clear, then required clear.
+        await openState(renderer, "multiline", width, true, async (page) => {
+          const controls = await tags(page);
+          for (const name of ["title", "game", "location"]) {
+            assert.equal(controls[name].tag, "TEXTAREA", `${name} becomes a textarea`);
+            assert.equal(controls[name].value, multilineExpected[name]);
+          }
+          await shoot(page, renderer, "multiline-before", width, "on");
+          await armCapture(page);
+          await page.getByTestId("save-event").click();
+          const untouched = await submitted(page);
+          for (const name of ["title", "game", "location"])
+            assert.equal(untouched?.[name], multilineExpected[name], `untouched ${name}`);
+          await shoot(page, renderer, "multiline-untouched-after", width, "on");
+
+          // Explicit clear of the optional game control through the real field.
+          await page.locator("#f-game").fill("");
+          await armCapture(page);
+          await page.getByTestId("save-event").click();
+          const cleared = await submitted(page);
+          assert.equal(cleared?.game, "", "optional game clears explicitly");
+          assert.equal(cleared?.title, multilineExpected.title);
+          assert.equal(cleared?.location, multilineExpected.location);
+          await shoot(page, renderer, "multiline-game-cleared", width, "on");
+
+          // Required title: native validation blocks the submit and focuses it.
+          await page.locator("#f-title").fill("");
+          await armCapture(page);
+          await page.getByTestId("save-event").click();
+          assert.equal(await submitted(page), undefined, "empty required title never submits");
+          const invalid = await page.locator("#f-title").evaluate((el) => ({
+            valueMissing: el.validity.valueMissing,
+            focused: document.activeElement === el,
+          }));
+          assert.deepEqual(invalid, { valueMissing: true, focused: true });
+          await shoot(page, renderer, "multiline-title-cleared-invalid", width, "on");
+          await record(renderer, "multiline", width, "on", {
+            controls,
+            untouchedRaw: untouched,
+            clearedRaw: cleared,
+            invalid,
+          });
+        });
+
+        // Server-error draft (fixture errors from the real parser): the summary
+        // takes focus, each correction link moves focus to its control.
+        await openState(renderer, "error", width, true, async (page) => {
+          const errors = nativeStates[renderer].errors;
+          const summary = page.getByTestId("form-errors");
+          await summary.waitFor();
+          assert.equal(
+            await summary.evaluate((el) => el === document.activeElement),
+            true,
+            "rejected document focuses the summary",
+          );
+          assert.equal((await tags(page)).game.tag, "TEXTAREA", "retained multiline game");
+          await shoot(page, renderer, "server-error-fixture-summary", width, "on");
+          for (const [field, id] of [
+            ["title", "f-title"],
+            ["location", "f-location"],
+          ]) {
+            const link = summary.locator(`a[href="#${id}"]`);
+            assert.equal(await link.count(), 1, field);
+            await link.focus();
+            await page.keyboard.press("Enter");
+            assert.equal(await page.evaluate("document.activeElement?.id"), id, field);
+            assert.equal(await page.locator(`#${id}`).getAttribute("aria-invalid"), "true");
+            assert.equal(await page.locator(`#${id}-error`).innerText(), errors[field]);
+            await shoot(page, renderer, `server-error-fixture-${field}-focused`, width, "on");
+          }
+          await record(renderer, "server-error-fixture", width, "on", { errors });
+        });
+      });
+
+      test(`Kit admin contrast: native newline states with JavaScript off, ${renderer} at ${width}`, async () => {
+        await openState(renderer, "multiline", width, false, async (page) => {
+          const controls = await tags(page);
+          for (const name of ["title", "game", "location"]) {
+            assert.equal(controls[name].tag, "TEXTAREA", `${name} textarea without scripts`);
+            assert.equal(controls[name].value, multilineExpected[name]);
+          }
+          await shoot(page, renderer, "multiline-before", width, "off");
+          // Native clear with no script: the real required control blocks Save.
+          await page.locator("#f-game").fill("");
+          assert.equal(
+            await page.locator("[data-event-editor]").evaluate((f) => f.checkValidity()),
+            true,
+          );
+          await shoot(page, renderer, "multiline-game-cleared", width, "off");
+          await page.locator("#f-title").fill("");
+          await page.getByTestId("save-event").click();
+          const invalid = await page.locator("#f-title").evaluate((el) => ({
+            valueMissing: el.validity.valueMissing,
+            focused: document.activeElement === el,
+          }));
+          assert.deepEqual(invalid, { valueMissing: true, focused: true });
+          await shoot(page, renderer, "multiline-title-cleared-invalid", width, "off");
+          await record(renderer, "multiline", width, "off", { controls, invalid });
+        });
+        await openState(renderer, "error", width, false, async (page) => {
+          const errors = nativeStates[renderer].errors;
+          const summary = page.getByTestId("form-errors");
+          await summary.waitFor();
+          assert.equal(
+            await summary.evaluate((el) => el === document.activeElement),
+            false,
+            "no script, no automatic focus",
+          );
+          for (const [field, id] of [
+            ["title", "f-title"],
+            ["location", "f-location"],
+          ]) {
+            const link = summary.locator(`a[href="#${id}"]`);
+            assert.equal(await link.count(), 1, field);
+            await link.focus();
+            await page.keyboard.press("Enter");
+            assert.equal(await page.evaluate("document.activeElement?.id"), id, field);
+            assert.equal(await page.locator(`#${id}-error`).innerText(), errors[field]);
+          }
+          await shoot(page, renderer, "server-error-fixture", width, "off");
+          await record(renderer, "server-error-fixture", width, "off", { errors });
+        });
       });
     }
   }
