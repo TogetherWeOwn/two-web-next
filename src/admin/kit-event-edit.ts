@@ -52,6 +52,7 @@ import { rosterWaitlistHint } from "./roster-copy";
 import { formatAdminTime } from "./chronology";
 import { renderSavedEventNoticeHtml } from "./pages/event-form-review";
 import { EventRosterSection } from "./pages/event-form-roster";
+import { renderEventPublicFieldsHtml } from "./pages/event-public-fields";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
@@ -146,6 +147,9 @@ export type KitEventEditView = {
    * strings or disclosure markup (client gzip ceiling). */
   pauseReviewHtml: string | null;
   savedNoticeHtml: string | null;
+  /** Shared escaped optional fields, in their original positions in the form. */
+  accessibilityFieldHtml: string;
+  hostFieldsHtml: string;
 };
 
 export type KitEventEditOutcome =
@@ -258,6 +262,23 @@ export async function resolveKitEventEdit(
   // stays visible for correction but is never formatted.
   const knownTimezone = isKnownTimezone(row.timezone);
   const startFinite = Number.isFinite(row.startsAt.getTime());
+  const values: KitEventEditValues = {
+    [SAVE_BASELINE_FIELD]: await eventSaveBaseline(row),
+    title: row.title,
+    game: row.game ?? "",
+    description: row.description ?? "",
+    accessibility_notes: row.accessibilityNotes ?? "",
+    // Wall text in the row's zone — what the moderator typed is what they
+    // see; the stored instant is preserved by the Hono UTC carriers.
+    starts_at: knownTimezone && startFinite ? utcToWall(row.startsAt, row.timezone) : "",
+    ends_at: knownTimezone && endFinite ? utcToWall(row.endsAt, row.timezone) : "",
+    timezone: row.timezone,
+    location: row.location ?? "",
+    organizer_name: row.organizer_name ?? "",
+    join_url: row.join_url ?? "",
+    join_instructions: row.join_instructions ?? "",
+    capacity: row.capacity === null ? "" : String(row.capacity),
+  };
   return {
     kind: "ok",
     view: {
@@ -268,23 +289,8 @@ export async function resolveKitEventEdit(
         rawQuery.saved === "1" && row.status === "draft"
           ? renderSavedEventNoticeHtml(row.eventKey)
           : null,
-      values: {
-        [SAVE_BASELINE_FIELD]: await eventSaveBaseline(row),
-        title: row.title,
-        game: row.game ?? "",
-        description: row.description ?? "",
-        accessibility_notes: row.accessibilityNotes ?? "",
-        // Wall text in the row's zone — what the moderator typed is what they
-        // see; the stored instant is preserved by the Hono UTC carriers.
-        starts_at: knownTimezone && startFinite ? utcToWall(row.startsAt, row.timezone) : "",
-        ends_at: knownTimezone && endFinite ? utcToWall(row.endsAt, row.timezone) : "",
-        timezone: row.timezone,
-        location: row.location ?? "",
-        organizer_name: row.organizer_name ?? "",
-        join_url: row.join_url ?? "",
-        join_instructions: row.join_instructions ?? "",
-        capacity: row.capacity === null ? "" : String(row.capacity),
-      },
+      values,
+      ...renderEventPublicFieldsHtml(values),
       errors: {},
       hasErrors: false,
       isDraft: false,
