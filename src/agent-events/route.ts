@@ -2,6 +2,7 @@ import type { Context, MiddlewareHandler } from "hono";
 import postgres from "postgres";
 import { alertRequestError, exceptionClass } from "../alerts";
 import type { Env } from "../env";
+import { warnInvalidConfigOnce } from "../config-warn";
 import { databaseOptions, databaseUrl } from "../db/connection";
 import { dispatchWriteBack } from "../admin/writeback";
 import { signedEventReader } from "../bot/event-read";
@@ -24,22 +25,23 @@ type IngressEnv = {
 export type EnvWithAgentStore = Env & { AGENT_EVENT_SQL?: postgres.Sql };
 
 export function ingressConfig(env: Env): IngressConfig {
+  const raw = env.AGENT_EVENTS_ROUTE_PER_MINUTE;
   let routePerMinute: number;
   try {
-    routePerMinute = Number(env.AGENT_EVENTS_ROUTE_PER_MINUTE);
+    routePerMinute = Number(raw);
   } catch {
     routePerMinute = Number.NaN;
   }
+  const validRate = Number.isInteger(routePerMinute) && routePerMinute > 0;
+  if (!validRate && raw !== undefined && (typeof raw !== "string" || raw.trim() !== ""))
+    warnInvalidConfigOnce("AGENT_EVENTS_ROUTE_PER_MINUTE");
   return {
     ...DEFAULT_CONFIG,
     enabled: env.AGENT_EVENTS_ENABLED === "true" || env.AGENT_EVENTS_ENABLED === "1",
     callerAgentId: env.AGENT_EVENTS_CALLER_AGENT_ID ?? "",
     stagingGuildId: env.AGENT_EVENTS_GUILD_ID || DEFAULT_CONFIG.stagingGuildId,
     productionGuildId: env.AGENT_EVENTS_PRODUCTION_GUILD_ID || DEFAULT_CONFIG.productionGuildId,
-    routePerMinute:
-      Number.isInteger(routePerMinute) && routePerMinute > 0
-        ? routePerMinute
-        : DEFAULT_CONFIG.routePerMinute,
+    routePerMinute: validRate ? routePerMinute : DEFAULT_CONFIG.routePerMinute,
   };
 }
 

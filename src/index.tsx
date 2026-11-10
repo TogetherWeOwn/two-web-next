@@ -25,7 +25,7 @@ import { isDatabaseUnavailable } from "./db/errors";
 import { upsertRosterUser } from "./db/roster";
 import { pgQueueDepth } from "./jobs/postgres";
 import type { Env, Session } from "./env";
-import { imageHosts } from "./image-policy";
+import { operatorImageHosts } from "./config-warn";
 import { Join, Home, type Notice } from "./pages";
 import { renderHtmlOutcome } from "./html-outcome";
 import { honoRecoveryRenderer } from "./recovery-hono";
@@ -116,7 +116,7 @@ const staticSecurityHeaders = secureHeaders({
     imgSrc: [
       "'self'",
       (c) =>
-        imageHosts((c.env as Env).FEATURED_IMAGE_HOSTS)
+        operatorImageHosts((c.env as Env).FEATURED_IMAGE_HOSTS)
           .map((host) => `https://${host}`)
           .join(" "),
     ],

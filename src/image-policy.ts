@@ -29,12 +29,13 @@ function isPublicHostname(host: string): boolean {
 }
 
 /** Additional approved DNS hosts, comma-separated. Invalid entries fail closed. */
-export function imageHosts(configured?: string): string[] {
+export function imageHosts(configured?: string, onInvalid?: () => void): string[] {
   const hosts = new Set([DISCORD_IMAGE_HOST]);
   if (configured != null && typeof configured !== "string") return [...hosts];
   for (const entry of (configured ?? "").split(",")) {
     const host = entry.trim().toLowerCase();
     if (isPublicHostname(host)) hosts.add(host);
+    else if (host) onInvalid?.();
   }
   return [...hosts];
 }

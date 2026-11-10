@@ -1,6 +1,6 @@
 import type { Context, Next } from "hono";
 import type { Env } from "./env";
-import { imageHosts } from "./image-policy";
+import { operatorImageHosts } from "./config-warn";
 import { LEAF_CRITICAL_CSS_SHA256 } from "./leaf-critical-css";
 
 // Response-header parity (TOG-10118 ports two-web TOG-7328 + TOG-8729).
@@ -176,7 +176,7 @@ export function securityHeadersFor(
   featuredImageHosts?: string,
 ): Array<[string, string]> {
   const framed = request.path === "/join" && ["GET", "HEAD"].includes(request.method);
-  const images = imageHosts(featuredImageHosts)
+  const images = operatorImageHosts(featuredImageHosts)
     .map((host) => `https://${host}`)
     .join(" ");
   // Only the inline-critical pages (/ plus about/faq/rules/privacy) emit an
