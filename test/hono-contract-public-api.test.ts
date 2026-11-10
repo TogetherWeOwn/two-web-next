@@ -95,6 +95,27 @@ function noCorsOrCookie(res: Response) {
   expect(res.headers.has("set-cookie")).toBe(false);
 }
 
+async function expectFallbackBody(res: Response, path: string, method: string) {
+  const html = path === "/openapi.json";
+  expect(res.headers.get("content-type")).toContain(html ? "text/html" : "application/json");
+  expect(res.headers.get("x-request-id")).toBeTruthy();
+  expect(res.headers.has("etag")).toBe(false);
+  if (method === "HEAD") expect(await res.text()).toBe("");
+  else if (html) expect(await res.text()).toContain("We cannot find that page");
+  else {
+    const body = await res.json();
+    expect(body).toEqual({
+      error: {
+        code: "not_found",
+        message: "No such API path.",
+        request_id: res.headers.get("x-request-id"),
+        next: "Check the API path and retry.",
+      },
+    });
+    expect(validatePublicSchema(body, "PublicDataError")).toEqual([]);
+  }
+}
+
 function denyAdmission() {
   vi.mocked(publicReadGuard).mockImplementation(
     async () => new Response("limited", { status: 429, headers: { "retry-after": "42" } }),
@@ -200,15 +221,15 @@ describe("mounted public API: methods and conditional HEAD", () => {
   );
 
   it.each(PATHS)(
-    "unsupported verbs reach the branded fallback, not a public read: %s",
+    "unsupported verbs reach the namespace fallback, not a public read: %s",
     async (path) => {
       for (const method of ["POST", "PUT", "PATCH", "DELETE", "OPTIONS"]) {
         const res = await request(path, method, { origin: ORIGIN });
         expect(res.status, method).toBe(404);
-        expect(res.headers.get("content-type")).toContain("text/html");
         expect(res.headers.get("cache-control")).toBe("no-store, private");
         expect(res.headers.has("allow")).toBe(false);
-        expect(await res.text()).toContain("We cannot find that page");
+        expect(res.headers.has("location")).toBe(false);
+        await expectFallbackBody(res, path, method);
         noCorsOrCookie(res);
       }
       expect(publicReadGuard).not.toHaveBeenCalled();
@@ -273,9 +294,8 @@ describe("mounted public API: literal paths and decoded event keys", () => {
       expect(res.status).toBe(404);
       expect(res.headers.has("location")).toBe(false);
       expect(res.headers.get("cache-control")).toBe("no-store, private");
-      expect(await res.text()).toEqual(
-        method === "HEAD" ? "" : expect.stringContaining("We cannot find that page"),
-      );
+      await expectFallbackBody(res, path, method);
+      noCorsOrCookie(res);
     }
     expect(publicReadGuard).not.toHaveBeenCalled();
     noReads();
