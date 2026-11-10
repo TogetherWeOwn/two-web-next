@@ -170,7 +170,7 @@ describe("refused moderator save documents", () => {
       });
       expect(corrected.status).toBe(303);
       expect(updateEvent).toHaveBeenCalledExactlyOnceWith(
-        db,
+        expect.objectContaining({ select: expect.any(Function), update: expect.any(Function) }),
         expect.objectContaining({ id: MODERATOR.userId }),
         key,
         expect.objectContaining({ title: values.title, location: "Community voice room" }),
