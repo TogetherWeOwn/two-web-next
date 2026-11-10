@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
+import { URL } from "node:url";
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import * as adminDb from "../src/admin/db";
@@ -42,7 +43,7 @@ const cspFor = (classified = false, path = "/events", method = "GET") =>
     "Content-Security-Policy",
   )!;
 const baseModel = (): models.CalendarPageModel => ({
-  state: { view: "list", month: "2026-10", q: "", game: null, past: false, page: 1 },
+  state: { view: "list", month: "2026-10", q: "", game: "", past: false, page: 1 },
   upcoming: [],
   past: [],
   zone: "UTC",
@@ -138,17 +139,22 @@ describe("fixed upcoming L then S representation", () => {
     expect(Buffer.from(SCHEDULE_CRITICAL_CSS).equals(source("schedule-theme.css"))).toBe(true);
     expect(LEAF_CRITICAL_CSS_SHA256).toBe(hash(LEAF_CRITICAL_CSS));
     expect(SCHEDULE_CRITICAL_CSS_SHA256).toBe(hash(SCHEDULE_CRITICAL_CSS));
-    const external = Layout({
+    const externalRaw = Layout({
       title: "Fixture",
       theme: "schedule",
       children: "unchanged",
     })!.toString();
-    const inline = Layout({
+    const inlineRaw = Layout({
       title: "Fixture",
       theme: "schedule",
       inlineScheduleCss: true,
       children: "unchanged",
     })!.toString();
+    if (typeof externalRaw !== "string" || typeof inlineRaw !== "string") {
+      throw new Error("Layout render must be synchronous for exact byte comparison");
+    }
+    const external = externalRaw;
+    const inline = inlineRaw;
     const links = ["styles", "theme-tokens", "theme", "schedule-theme"]
       .map((name) => `<link rel="stylesheet" href="/${name}.css"/>`)
       .join("");
