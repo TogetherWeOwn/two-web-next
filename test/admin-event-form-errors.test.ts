@@ -147,7 +147,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
     const token = newSessionToken();
     await store.create({
       tokenHash: await hashToken(token),
-      userId: "wall-error-mod",
+      userId: "100000000000000121",
       username: "mod",
       avatar: null,
       member: true,
@@ -419,9 +419,14 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
         },
         env,
       );
-      expect(res.status).not.toBe(303);
+      expect(res.status).toBe(303);
       expect(res.status).not.toBe(200);
+      expect(res.headers.get("location")).toBe(
+        `/auth/recover?next=${encodeURIComponent(`/admin/events/${KEY}`)}`,
+      );
+      expect(res.headers.get("cache-control")).toBe("no-store, private");
       expect(await fixture.db.select().from(events)).toEqual(before);
+      expect(await fixture.db.select().from(activityLog)).toEqual([]);
     });
   });
 
