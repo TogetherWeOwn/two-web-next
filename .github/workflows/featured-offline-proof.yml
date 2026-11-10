@@ -102,6 +102,7 @@ jobs:
             "src/seo.ts" \
             "public/styles.css" \
             "public/theme.css" \
+            "public/schedule-theme.css" \
             "public/theme-tokens.css" > "$RUNNER_TEMP/scope-verdict.txt"
           verdict=$(cat "$RUNNER_TEMP/scope-verdict.txt")
           case "$verdict" in

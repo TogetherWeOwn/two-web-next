@@ -207,8 +207,8 @@ function isCoveredByScopes(relPosix, globs) {
 const GENERATED_LEAF_CSS = {
   output: 'src/leaf-critical-css.ts',
   generator: 'ci/build-leaf-css.mjs',
-  generatorSha256: '452197b4e4bb0be78edea09dcf63881d7015c8769e48e06c6fa9b9f97bc80af9',
-  inputs: ['public/styles.css', 'public/theme-tokens.css', 'public/theme.css'],
+  generatorSha256: '7a7147a1b466f41758695765a4880dd718f4d1439e0f03afe92503971c5131a3',
+  inputs: ['public/styles.css', 'public/theme-tokens.css', 'public/theme.css', 'public/schedule-theme.css'],
 };
 const { createHash } = require('node:crypto');
 
@@ -217,13 +217,31 @@ function generatedLeafScopeInputs(repoRoot) {
   const recipe = fsSync.readFileSync(path.join(repoRoot, generator));
   assert.equal(createHash('sha256').update(recipe).digest('hex'), generatorSha256,
     'Generated CSS generator drift: review the output/input scope contract');
-  const css = inputs.map(input => fsSync.readFileSync(path.join(repoRoot, input), 'utf8')).join('\n');
-  assert.doesNotMatch(css, /<\/style/i, 'Generated CSS source cannot contain a closing style tag');
-  const sha256 = createHash('sha256').update(css, 'utf8').digest('base64');
+  const sources = inputs.map(input => {
+    const bytes = fsSync.readFileSync(path.join(repoRoot, input));
+    let text;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true, ignoreBOM: true }).decode(bytes);
+    } catch {
+      throw new Error(`Generated CSS source invalid UTF-8: ${input}`);
+    }
+    assert.doesNotMatch(text, /[\u0000\r]/u, `Generated CSS source invalid inline bytes: ${input}`);
+    assert.equal(text.includes(String.fromCharCode(0xfeff)), false, `Generated CSS source invalid inline bytes: ${input}`);
+    assert.doesNotMatch(text, /<\/style/i, `Generated CSS source cannot contain a closing style tag: ${input}`);
+    return { bytes, text };
+  });
+  const leafBytes = Buffer.concat([sources[0].bytes, Buffer.from([0x0A]), sources[1].bytes, Buffer.from([0x0A]), sources[2].bytes]);
+  const css = leafBytes.toString('utf8');
+  const schedule = sources[3];
+  assert.doesNotMatch(css, /<\/style/i, 'Generated CSS source cannot contain a closing style tag across CSS sources');
+  const sha256 = createHash('sha256').update(leafBytes).digest('base64');
+  const scheduleSha256 = createHash('sha256').update(schedule.bytes).digest('base64');
   const expected = `// GENERATED from ${inputs.join(', ')} — do not hand-edit.\n` +
     `// Regen: node ${generator} (drift is pinned by test/leaf-css-drift.test.ts).\n` +
     `export const LEAF_CRITICAL_CSS: string =\n  ${JSON.stringify(css)};\n` +
-    `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
+    `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n` +
+    `export const SCHEDULE_CRITICAL_CSS: string =\n  ${JSON.stringify(schedule.text)};\n` +
+    `export const SCHEDULE_CRITICAL_CSS_SHA256: string = ${JSON.stringify(scheduleSha256)};\n`;
   let actual;
   try {
     actual = fsSync.readFileSync(path.join(repoRoot, output));
@@ -400,18 +418,21 @@ const LEAF_SCOPE_INPUTS = [
   'public/styles.css',
   'public/theme-tokens.css',
   'public/theme.css',
+  'public/schedule-theme.css',
 ];
 // Independent tiny generated fixture, not output assembled by the guard.
-const LEAF_OUTPUT_FIXTURE = '// GENERATED from public/styles.css, public/theme-tokens.css, public/theme.css — do not hand-edit.\n' +
+const LEAF_OUTPUT_FIXTURE = '// GENERATED from public/styles.css, public/theme-tokens.css, public/theme.css, public/schedule-theme.css — do not hand-edit.\n' +
   '// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-drift.test.ts).\n' +
   'export const LEAF_CRITICAL_CSS: string =\n  "body {}\\n:root {}\\nhtml {}";\n' +
-  'export const LEAF_CRITICAL_CSS_SHA256: string = "t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=";\n';
+  'export const LEAF_CRITICAL_CSS_SHA256: string = "t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=";\n' +
+  'export const SCHEDULE_CRITICAL_CSS: string =\n  ".schedule {}";\n' +
+  'export const SCHEDULE_CRITICAL_CSS_SHA256: string = "hzioC4E7ilj1vujvfYT57lwHPI14wo8BL2sJph/chrM=";\n';
 
 async function leafScopeFixture(t, generated = false) {
   const dir = await scratch(t);
   for (const subdir of ['src', 'ci', 'public']) await fs.mkdir(path.join(dir, subdir));
   await fs.copyFile(path.join(REPO_ROOT, LEAF_SCOPE_INPUTS[0]), path.join(dir, LEAF_SCOPE_INPUTS[0]));
-  for (const [index, css] of ['body {}', ':root {}', 'html {}'].entries()) {
+  for (const [index, css] of ['body {}', ':root {}', 'html {}', '.schedule {}'].entries()) {
     await fs.writeFile(path.join(dir, LEAF_SCOPE_INPUTS[index + 1]), css);
   }
   await fs.writeFile(path.join(dir, 'entry.ts'), 'import { LEAF_CRITICAL_CSS } from "./src/leaf-critical-css";\n');
@@ -453,16 +474,39 @@ test('generated CSS provenance does not exempt unrelated generated-looking runti
 });
 
 for (const [name, mutate] of [
-  ['stale source list', text => text.replace('public/theme.css —', 'public/old-theme.css —')],
+  ['stale source list', text => text.replace('public/theme.css,', 'public/old-theme.css,')],
+  ['missing schedule source header', text => text.replace(', public/schedule-theme.css', '')],
+  ['wrong schedule source path', text => text.replace('public/schedule-theme.css', 'public/other-schedule.css')],
+  ['wrong source header order', text => text.replace('public/theme.css, public/schedule-theme.css', 'public/schedule-theme.css, public/theme.css')],
+  ['header-only fourth-input change', text => text.replace('public/schedule-theme.css —', 'public/schedule-theme.css, public/extra.css —')],
   ['malformed header', text => text.replace('// GENERATED', '// malformed')],
   ['wrong generator provenance', text => text.replace('node ci/build-leaf-css.mjs', 'node ci/other.mjs')],
   ['stale CSS bytes', text => text.replace('body {}', 'body {color:red}')],
   ['malformed hash', text => text.replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', 'stale')],
   ['extra runtime import', text => `${text}import "./uncovered";\n`],
+  ['valid-looking wrong leaf hash', text => text.replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', 'hzioC4E7ilj1vujvfYT57lwHPI14wo8BL2sJph/chrM=')],
+  ['changed leaf separator', text => text.replace('body {}\\n:root', 'body {}:root')],
+  ['changed leaf source order', text => text.replace('body {}\\n:root {}\\nhtml {}', 'html {}\\n:root {}\\nbody {}')],
+  ['stale schedule literal', text => text.replace('.schedule {}', '.schedule {color:red}')],
+  ['stale schedule hash', text => text.replace('hzioC4E7ilj1vujvfYT57lwHPI14wo8BL2sJph/chrM=', 't6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=')],
+  ['coherent forged schedule pair', text => text.replace('.schedule {}', '.changed {}').replace('hzioC4E7ilj1vujvfYT57lwHPI14wo8BL2sJph/chrM=', createHash('sha256').update('.changed {}').digest('base64'))],
+  ['coherent forged leaf pair', text => text.replace('body {}', 'body {color:red}').replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', createHash('sha256').update('body {color:red}\n:root {}\nhtml {}').digest('base64'))],
+  ['extra arbitrary code', text => `${text}throw new Error("unexpected code");\n`],
+  ['extra export', text => `${text}export const EXTRA = 1;\n`],
+  ['renamed schedule export', text => text.replace('const SCHEDULE_CRITICAL_CSS:', 'const OTHER_CSS:')],
+  ['missing schedule literal declaration', text => text.replace('export const SCHEDULE_CRITICAL_CSS: string =\n  ".schedule {}";\n', '')],
+  ['missing schedule hash declaration', text => text.replace('export const SCHEDULE_CRITICAL_CSS_SHA256: string = "hzioC4E7ilj1vujvfYT57lwHPI14wo8BL2sJph/chrM=";\n', '')],
+  ['omitted schedule pair', text => text.slice(0, text.indexOf('export const SCHEDULE_CRITICAL_CSS:'))],
+  ['altered export annotation', text => text.replace('SCHEDULE_CRITICAL_CSS: string', 'SCHEDULE_CRITICAL_CSS: unknown')],
+  ['altered export order', text => text.replace(/(export const SCHEDULE_CRITICAL_CSS: string =\n  .*;\n)(export const SCHEDULE_CRITICAL_CSS_SHA256: string = .*;\n)/, '$2$1')],
+  ['extra rendered whitespace', text => text.replace('.schedule {}', ' .schedule {}')],
+  ['missing final LF', text => text.slice(0, -1)],
 ]) {
   test(`generated CSS rejects ${name} rather than granting an exemption`, async t => {
     const dir = await leafScopeFixture(t, true);
-    await fs.writeFile(path.join(dir, LEAF_OUTPUT), mutate(LEAF_OUTPUT_FIXTURE));
+    const changed = mutate(LEAF_OUTPUT_FIXTURE);
+    assert.notEqual(changed, LEAF_OUTPUT_FIXTURE, 'mutation actually changes the output');
+    await fs.writeFile(path.join(dir, LEAF_OUTPUT), changed);
     assert.throws(() => findUncoveredModules([LEAF_OUTPUT], [LEAF_OUTPUT, ...LEAF_SCOPE_INPUTS], dir), /Generated CSS output drift/);
   });
 }
@@ -471,7 +515,9 @@ for (const generated of [false, true]) {
   for (const [name, mutate] of [
     ['input list', text => text.replace('"public/theme.css"', '"public/other.css"')],
     ['output path', text => text.replace('"src/leaf-critical-css.ts"', '"src/other.ts"')],
-    ['build recipe', text => text.replace('.join("\\n")', '.join("")')],
+    ['build recipe', text => text.replace('SOURCES.map((entry) => inlineSource(root, entry))', 'SOURCES.slice(1).map((entry) => inlineSource(root, entry))')],
+    ['schedule input', text => text.replace('"public/schedule-theme.css"', '"public/other-schedule.css"')],
+    ['schedule recipe', text => text.replace('inlineSource(root, SCHEDULE_SOURCE)', 'inlineSource(root, SOURCES[0])')],
   ]) {
     test(`generated CSS rejects generator ${name} drift with output ${generated ? 'present' : 'absent'}`, async t => {
       const dir = await leafScopeFixture(t, generated);
@@ -485,12 +531,18 @@ for (const generated of [false, true]) {
   }
 }
 
-for (const missing of LEAF_SCOPE_INPUTS) {
-  test(`generated CSS rejects missing provenance file ${missing}`, async t => {
-    const dir = await leafScopeFixture(t);
-    await fs.unlink(path.join(dir, missing));
-    assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /ENOENT/);
-  });
+for (const generated of [false, true]) {
+  for (const missing of LEAF_SCOPE_INPUTS) {
+    test(`generated CSS rejects missing provenance file ${missing} with output ${generated ? 'present' : 'absent'}`, async t => {
+      const dir = await leafScopeFixture(t, generated);
+      await fs.unlink(path.join(dir, missing));
+      assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), error => {
+        assert.equal(error.code, 'ENOENT');
+        assert.equal(error.path, path.join(dir, missing));
+        return true;
+      });
+    });
+  }
 }
 
 test('generated CSS rejects stale output after a covered input changes', async t => {
@@ -517,4 +569,126 @@ test('generated CSS accepts valid replacement-character bytes but rejects identi
   t.diagnostic(`valid=${valid.length} bytes; malformed=${malformed.length} bytes; decoded strings equal`);
   await fs.writeFile(path.join(dir, LEAF_OUTPUT), malformed);
   assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+});
+
+test('tiny fixture independently pins both CSS byte strings and hash pairs', () => {
+  const leaf = 'body {}\n:root {}\nhtml {}';
+  const schedule = '.schedule {}';
+  assert.equal(createHash('sha256').update(leaf).digest('base64'), 't6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=');
+  assert.equal(createHash('sha256').update(schedule).digest('base64'), 'hzioC4E7ilj1vujvfYT57lwHPI14wo8BL2sJph/chrM=');
+  assert.ok(LEAF_OUTPUT_FIXTURE.includes(`export const LEAF_CRITICAL_CSS: string =\n  ${JSON.stringify(leaf)};\n`));
+  assert.ok(LEAF_OUTPUT_FIXTURE.includes('export const LEAF_CRITICAL_CSS_SHA256: string = "t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=";\n'));
+  assert.ok(LEAF_OUTPUT_FIXTURE.includes(`export const SCHEDULE_CRITICAL_CSS: string =\n  ${JSON.stringify(schedule)};\n`));
+  assert.ok(LEAF_OUTPUT_FIXTURE.includes('export const SCHEDULE_CRITICAL_CSS_SHA256: string = "hzioC4E7ilj1vujvfYT57lwHPI14wo8BL2sJph/chrM=";\n'));
+});
+
+test('generated CSS rejects non-ENOENT output read failure', async t => {
+  const dir = await leafScopeFixture(t);
+  await fs.mkdir(path.join(dir, LEAF_OUTPUT));
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), error => {
+    assert.equal(error.code, 'EISDIR');
+    return true;
+  });
+});
+
+test('repinning the recipe alone cannot accept a coherent forged output', async t => {
+  const dir = await leafScopeFixture(t, true);
+  const recipe = await fs.readFile(path.join(dir, LEAF_SCOPE_INPUTS[0]));
+  assert.equal(createHash('sha256').update(recipe).digest('hex'), GENERATED_LEAF_CSS.generatorSha256);
+  const forged = LEAF_OUTPUT_FIXTURE.replace('.schedule {}', '.changed {}')
+    .replace('hzioC4E7ilj1vujvfYT57lwHPI14wo8BL2sJph/chrM=', createHash('sha256').update('.changed {}').digest('base64'));
+  assert.notEqual(forged, LEAF_OUTPUT_FIXTURE);
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), forged);
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+});
+
+test('generated CSS rejects stale output after only the schedule input changes', async t => {
+  const dir = await leafScopeFixture(t, true);
+  const input = path.join(dir, 'public/schedule-theme.css');
+  const before = await fs.readFile(input);
+  await fs.appendFile(input, '\n.changed {}');
+  assert.notDeepEqual(await fs.readFile(input), before);
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+});
+
+for (const generated of [false, true]) {
+  for (const input of LEAF_SCOPE_INPUTS.slice(1)) {
+    for (const [name, bytes, errorPattern] of [
+      ['malformed UTF-8', Buffer.from([0xFF]), /Generated CSS source invalid UTF-8/],
+      ['NUL', Buffer.from([0]), /Generated CSS source invalid inline bytes/],
+      ['CR', Buffer.from([13]), /Generated CSS source invalid inline bytes/],
+      ['leading BOM', Buffer.from([0xEF, 0xBB, 0xBF, 0x61]), /Generated CSS source invalid inline bytes/],
+      ['embedded U+FEFF', Buffer.from([0x61, 0xEF, 0xBB, 0xBF]), /Generated CSS source invalid inline bytes/],
+      ['closing style', Buffer.from('a {} </StYlE>'), /Generated CSS source cannot contain a closing style tag/],
+    ]) {
+      test(`generated CSS rejects ${name} in ${input} with output ${generated ? 'present' : 'absent'}`, async t => {
+        const dir = await leafScopeFixture(t, generated);
+        const inputPath = path.join(dir, input);
+        assert.notDeepEqual(bytes, await fs.readFile(inputPath), 'mutation changes the source bytes');
+        await fs.writeFile(inputPath, bytes);
+        assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), error => {
+          assert.match(error.message, errorPattern);
+          assert.ok(error.message.includes(input), 'source failure identifies the input');
+          return true;
+        });
+      });
+    }
+  }
+}
+
+for (const input of LEAF_SCOPE_INPUTS.slice(1)) {
+  test(`generated CSS allows valid replacement-character input in ${input} before generation`, async t => {
+    const dir = await leafScopeFixture(t);
+    await fs.writeFile(path.join(dir, input), '/* � */');
+    assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), []);
+  });
+}
+
+test('generated CSS accepts a valid schedule replacement character but rejects identically decoded output corruption', async t => {
+  const dir = await leafScopeFixture(t, true);
+  const schedule = '.schedule � {}';
+  await fs.writeFile(path.join(dir, 'public/schedule-theme.css'), schedule);
+  const valid = Buffer.from(LEAF_OUTPUT_FIXTURE.replace('.schedule {}', schedule)
+    .replace('hzioC4E7ilj1vujvfYT57lwHPI14wo8BL2sJph/chrM=', createHash('sha256').update(schedule).digest('base64')));
+  assert.notDeepEqual(valid, Buffer.from(LEAF_OUTPUT_FIXTURE));
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), valid);
+  assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), []);
+  const replacement = Buffer.from('�');
+  const offset = valid.indexOf(replacement);
+  assert.ok(offset >= 0);
+  const malformed = Buffer.concat([valid.subarray(0, offset), Buffer.from([0xFF]), valid.subarray(offset + replacement.length)]);
+  assert.notDeepEqual(malformed, valid);
+  assert.equal(malformed.toString('utf8'), valid.toString('utf8'));
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), malformed);
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+});
+
+test('literal LF separators prevent a closing-style sequence from joining across L inputs', async t => {
+  const dir = await leafScopeFixture(t);
+  await fs.writeFile(path.join(dir, 'public/styles.css'), '</sty');
+  await fs.writeFile(path.join(dir, 'public/theme-tokens.css'), 'le>');
+  assert.match('</sty' + 'le>', /<\/style/i, 'without the required LF these inputs would form a breakout');
+  assert.doesNotMatch('</sty\nle>\nhtml {}', /<\/style/i, 'a closing-style token cannot span the literal LF');
+  assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), []);
+});
+
+test('real workflow scope selects S-only changes without changing unrelated classifications', async t => {
+  const globs = extractScopeGlobs(await fs.readFile(FEATURED_WORKFLOW_PATH, 'utf8'));
+  assert.ok(globs.includes('public/schedule-theme.css'));
+  const dir = await scratch(t);
+  const changedFiles = path.join(dir, 'changed.tsv');
+  const { spawnSync } = require('node:child_process');
+  for (const [changed, patterns, expected] of [
+    ['public/schedule-theme.css', globs, 'relevant=true'],
+    ['public/schedule-theme.css', globs.filter(glob => glob !== 'public/schedule-theme.css'), 'relevant=false'],
+    ['public/theme.css', globs, 'relevant=true'],
+    ['ci/featured-proof/run-capture.test.cjs', globs, 'relevant=true'],
+    ['docs/unrelated.md', globs, 'relevant=false'],
+  ]) {
+    await fs.writeFile(changedFiles, `${changed}\t\n`);
+    const result = spawnSync('bash', [path.join(REPO_ROOT, 'ci/path-scope.sh'), changedFiles, '1', '--', ...patterns], { encoding: 'utf8', timeout: 5000 });
+    assert.equal(result.error, undefined);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout.trim(), expected, changed);
+  }
 });

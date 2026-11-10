@@ -55,17 +55,37 @@ Only supplied saved static SSR states are covered. Not auth, save interactions, 
 
 The current-source guard follows runtime imports, including the exact ignored
 `src/leaf-critical-css.ts` output before it exists. That module requires scope
-coverage for its tracked generator, `ci/build-leaf-css.mjs`, and all three inputs:
-`public/styles.css`, `public/theme-tokens.css` and `public/theme.css`. Listing the
-output itself does not replace those requirements. Other runtime source modules
-still require ordinary direct or glob coverage.
+coverage for its tracked generator, `ci/build-leaf-css.mjs`, and all four inputs:
+`public/styles.css`, `public/theme-tokens.css`, `public/theme.css` and
+`public/schedule-theme.css`. Listing the output itself does not replace those
+requirements. Other runtime source modules still require ordinary direct or glob
+coverage. The existing workflow scope includes the schedule sheet explicitly;
+a schedule-only change selects the same proof through the trusted base scope script.
 
-The guard pins the generator's SHA-256 without executing it and reads every input.
-Only the exact generated output may be absent before generation; when present,
-its complete bytes, provenance header and CSS hash must match the inputs and
-reviewed recipe. Generator changes require deliberate review of the provenance
-contract in `run-capture.test.cjs`; stale output requires regeneration. No browser
-container, fixture, capture driver or network-containment setting changes.
+The guard pins the generator's SHA-256 without importing or executing it and reads
+all four inputs as raw buffers. Independent fatal UTF-8 validation rejects malformed
+bytes, NUL, CR, BOM/U+FEFF anywhere and case-insensitive closing-style sequences;
+valid UTF-8 U+FFFD remains allowed. It reconstructs L from styles, theme-tokens and
+theme with exactly two literal LF separators, and S from the schedule sheet alone,
+without an added newline. It independently hashes each CSS byte string and assembles
+the complete four-export module, including exact header, declaration order, string
+annotations, JSON escaping and final LF. L never includes S; S never duplicates L.
+
+Only the exact generated output may be absent with ENOENT before generation, after
+the generator and every source validate. Other read failures are fatal. When output
+exists, its entire raw buffer must match the independent reconstruction, including
+both literal/hash pairs; extra code/comments/imports/exports are rejected. No
+permissive decoding, generated-looking module or directly covered output grants an
+exemption. Generator changes require deliberate review of the provenance contract
+in `run-capture.test.cjs`; a recipe hash repin alone cannot bless output drift.
+
+Tiny hand-authored fixtures independently pin both literal/hash pairs. Regressions
+cover each missing provenance file and scope entry with output present and absent,
+source-byte refusal, stale/coherently forged pairs, headers/declarations/serialization,
+raw-output corruption hidden by decoding and non-ENOENT output reads. Each mutation
+must change its fixture before its intended rejection is checked. The real parsed
+workflow scope is also exercised with schedule-only and unrelated changed paths.
+No browser container, fixture, capture driver or network-containment setting changes.
 
 Credential-free local guard regression command (no browser/module/server/DB):
 
