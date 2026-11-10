@@ -101,6 +101,7 @@ export function registerCreateContentPersistenceAcceptance() {
                 join_instructions: null,
               };
         expect(redirect.pathname).toBe(`/admin/events/${row.eventKey}`);
+        expect(response.headers.get("location")).toBe(`/admin/events/${row.eventKey}?saved=1`);
         expect(row).toMatchObject({
           ...expected,
           status: "draft",
