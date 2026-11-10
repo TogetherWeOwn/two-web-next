@@ -330,6 +330,7 @@ exactly once.
 | `src/kit-hotzones.ts` | events |
 | `src/kit-members.ts` | profiles |
 | `src/kit-past-events.ts` | events |
+| `src/kit-restored-write.ts` | entry |
 | `src/kit-session.ts` | auth |
 | `src/leaderboards/` | profiles |
 | `src/leaf-critical-css.ts` | content |

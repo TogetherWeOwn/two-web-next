@@ -1095,7 +1095,7 @@ export async function dispatchHookRequest(
     if (!vary?.split(",").some((name) => ["cookie", "*"].includes(name.trim().toLowerCase())))
       response.headers.set("vary", vary ? `${vary}, Cookie` : "Cookie");
     if (event.request.headers.has("cookie"))
-      response.headers.set("cache-control", "no-store, private");
+      response.headers.set("cache-control", "private, no-store");
   }
   if (
     restoredWrite &&
@@ -1118,7 +1118,7 @@ export async function dispatchHookRequest(
       c.res = response;
       deleteCookie(c, EXPIRED_WRITE_COOKIE, deleteOpts);
       response = c.res;
-      response.headers.set("cache-control", "no-store, private");
+      response.headers.set("cache-control", "private, no-store");
       // Never let a conditional cache replay a one-shot notice as a bodyless
       // response. Errors/304s above keep the cookie pending instead.
       response.headers.delete("etag");

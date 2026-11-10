@@ -227,7 +227,7 @@ describe("dispatch: locals and root load composition", () => {
       expect(await response.text()).not.toContain("private-destination");
       expect(response.headers.get("vary")).toBe("Cookie");
       expect(response.headers.get("cache-control")).toBe(
-        cookie ? "no-store, private" : "public, max-age=3600",
+        cookie ? "private, no-store" : "public, max-age=3600",
       );
       expect(response.headers.getSetCookie()).toEqual([]);
     }
@@ -284,7 +284,7 @@ describe("dispatch: release boundary and caching", () => {
     expect(deletion).toMatch(/SameSite=Lax/i);
     expect(deletion).not.toContain("/events/42");
     expect(cookies).toContain("other=1; Path=/; HttpOnly");
-    expect(res.headers.get("cache-control")).toBe("no-store, private");
+    expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(res.headers.has("etag")).toBe(false);
     expect(res.headers.get("x-request-id")).toBe(RAY);
     expect(await res.text()).toBe(FULL_HTML);
@@ -310,7 +310,7 @@ describe("dispatch: release boundary and caching", () => {
       expect(res.status, name).toBe(make().status);
       pending(res);
       if (res.status === 200 && (res.headers.get("content-type")?.includes("text/html") || data))
-        expect(res.headers.get("cache-control"), name).toBe("no-store, private");
+        expect(res.headers.get("cache-control"), name).toBe("private, no-store");
     }
   });
 
