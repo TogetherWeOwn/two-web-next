@@ -10,12 +10,13 @@
 // unchanged Hono controllers during mixed mode. There is deliberately no
 // event delete anywhere on this resource, and the Svelte port adds none.
 //
-// Source-text by design: the root Vitest suite cannot compile .svelte, and
-// these pins are the exact selectors the admin edit E2E suite drives.
+// Source wiring and shared rendered HTML pin the exact selectors the admin edit
+// E2E suite drives; the compiled-page correction suite covers their composition.
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import type { Db } from "../src/db/index";
+import { EventEditableFields } from "../src/admin/pages/event-editable-fields";
 import {
   resolveKitEventEdit,
   type KitEventEditRosterRow,
@@ -58,6 +59,21 @@ async function rosterHtmlFor(
   return outcome.view.rosterHtml;
 }
 
+async function editView() {
+  const outcome = await resolveKitEventEdit(
+    eventRow.eventKey,
+    {},
+    {
+      db: {} as Db,
+      get: async () => ({ ...eventRow }),
+      list: async () => ({ rows: [], total: 0 }),
+      now: new Date("2026-06-15T12:00:00.000Z"),
+    },
+  );
+  if (outcome.kind !== "ok") throw new Error(`expected ok view, got ${outcome.kind}`);
+  return outcome.view;
+}
+
 const source = readFileSync(
   fileURLToPath(new URL("../web/src/routes/admin/events/[key]/+page.svelte", import.meta.url).href),
   "utf8",
@@ -81,7 +97,9 @@ describe("Kit event-edit page contract", () => {
     expect(source).toContain('href="/admin/events">Cancel');
   });
 
-  it("keeps every Hono field name, id and label the E2E suite drives", () => {
+  it("keeps every Hono field name, id and label the E2E suite drives", async () => {
+    expect(source).toContain("{@html view.fieldsHtml}");
+    const { fieldsHtml } = await editView();
     for (const name of [
       "title",
       "game",
@@ -92,7 +110,7 @@ describe("Kit event-edit page contract", () => {
       "location",
       "capacity",
     ]) {
-      expect(source).toContain(`name="${name}"`);
+      expect(fieldsHtml).toContain(`name="${name}"`);
     }
     for (const id of [
       "f-title",
@@ -104,12 +122,12 @@ describe("Kit event-edit page contract", () => {
       "f-location",
       "f-capacity",
     ]) {
-      expect(source).toContain(id);
+      expect(fieldsHtml).toContain(`id="${id}"`);
     }
-    expect(source).toContain("Starts (local wall time, YYYY-MM-DD HH:mm)");
-    expect(source).toContain("Ends (local wall time, YYYY-MM-DD HH:mm)");
-    expect(source).toContain("The IANA zone the wall time above is typed in. Storage is UTC.");
-    expect(source).toContain("Capacity (empty = unlimited)");
+    expect(fieldsHtml).toContain("Starts (local wall time, YYYY-MM-DD HH:mm)");
+    expect(fieldsHtml).toContain("Ends (local wall time, YYYY-MM-DD HH:mm)");
+    expect(fieldsHtml).toContain("The IANA zone the wall time above is typed in. Storage is UTC.");
+    expect(fieldsHtml).toContain("Capacity (empty = unlimited)");
   });
 
   it("shows the series-move note instead of the create-only recurrence fieldset", () => {
@@ -122,17 +140,32 @@ describe("Kit event-edit page contract", () => {
     expect(source).not.toContain('name="recurrence_ends_on"');
   });
 
-  it("renders the Hono 422 error shape with retained values and the draft marker", () => {
+  it("renders the Hono 422 error shape with retained values and the draft marker", async () => {
     expect(source).toContain('data-testid="form-errors"');
     expect(source).toContain("Check the highlighted fields and try again.");
-    expect(source).toContain("error-title");
-    expect(source).toContain("error-starts_at");
-    expect(source).toContain("error-timezone");
-    expect(source).toContain("error-location");
-    expect(source).toContain("error-capacity");
+    expect(source).toContain('data-event-draft={hasErrors ? "" : undefined}');
+    const { values } = await editView();
+    const fieldsHtml = String(
+      EventEditableFields({
+        values: { ...values, title: "Retained <draft>" },
+        errors: {
+          title: "Check title",
+          starts_at: "Check start",
+          timezone: "Check timezone",
+          location: "Check location",
+          capacity: "Check capacity",
+        },
+      }),
+    );
+    expect(fieldsHtml).toContain("Retained &lt;draft&gt;");
+    expect(fieldsHtml).toContain("error-title");
+    expect(fieldsHtml).toContain("error-starts_at");
+    expect(fieldsHtml).toContain("error-timezone");
+    expect(fieldsHtml).toContain("error-location");
+    expect(fieldsHtml).toContain("error-capacity");
     expect(source).toContain('role="alert"');
-    expect(source).toContain("aria-invalid=");
-    expect(source).toContain("aria-describedby=");
+    expect(fieldsHtml).toContain('aria-invalid="true"');
+    expect(fieldsHtml).toContain("aria-describedby=");
   });
 
   it("keeps the Hono status actions posting to the unchanged transition endpoints", () => {
@@ -217,7 +250,7 @@ describe("Kit event-edit page contract", () => {
     expect(html.match(/<time\b/g) ?? []).toHaveLength(1);
   });
 
-  it("keeps the progressive text-limit and editor islands with no framework handlers", () => {
+  it("keeps the progressive text-limit and editor islands with no framework handlers", async () => {
     expect(source).toContain("/islands/admin-event-text-limits.js");
     expect(source).toContain("/islands/admin-event-editor.js");
     expect(source).toContain("/islands/admin-save-baseline.js");
@@ -225,7 +258,8 @@ describe("Kit event-edit page contract", () => {
       source.indexOf("/islands/admin-event-editor.js"),
     );
     expect(source).toContain('name="saved_baseline" value={val("saved_baseline")}');
-    expect(source).toContain("data-event-text-limit");
+    const { fieldsHtml } = await editView();
+    expect(fieldsHtml).toContain("data-event-text-limit");
     expect(source).not.toContain("on:click");
     expect(source).not.toContain("onclick");
     expect(source).not.toMatch(/on:[a-z]+=/);
