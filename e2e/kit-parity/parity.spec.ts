@@ -1887,9 +1887,9 @@ test.describe("archive page turns prove successful paging and history", () => {
       await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "2");
       await expect(page.getByTestId("past-events")).not.toHaveAttribute("aria-busy");
       expect(await page.evaluate("window.__noticeSameDoc")).toBe(1);
-      expect((await context.cookies(KIT_ORIGIN)).filter((cookie) => cookie.name === name)).toHaveLength(
-        1,
-      );
+      expect(
+        (await context.cookies(KIT_ORIGIN)).filter((cookie) => cookie.name === name),
+      ).toHaveLength(1);
       expect(
         (await pagination.headerValues("set-cookie")).some((cookie) =>
           cookie.startsWith(`${name}=`),
@@ -1900,9 +1900,9 @@ test.describe("archive page turns prove successful paging and history", () => {
       expect(navigation?.status()).toBe(200);
       expect(navigation?.headers()["x-two-renderer"]).toBe("kit");
       await expect(page.getByTestId("auth-error")).toHaveCount(1);
-      expect((await context.cookies(KIT_ORIGIN)).filter((cookie) => cookie.name === name)).toHaveLength(
-        0,
-      );
+      expect(
+        (await context.cookies(KIT_ORIGIN)).filter((cookie) => cookie.name === name),
+      ).toHaveLength(0);
       await page.goto("/events/past");
       await expect(page.getByTestId("auth-error")).toHaveCount(0);
     } finally {
