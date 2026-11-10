@@ -3,6 +3,10 @@
 import { expect, test, type BrowserContext, type Page } from "@playwright/test";
 import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
+import { Hono } from "hono";
+import { authStatus } from "../src/auth-status";
+import { createMemorySessionStore } from "../src/sessions";
+import { cookieFor, env, MODERATOR } from "../test/helpers/member-data";
 import { EventFormPage, FeaturedFormPage } from "../src/admin/pages";
 import { eventSaveBaseline, featuredSaveBaseline } from "../src/admin/save-baseline";
 import { parseEventForm, parseFeaturedForm, ValidationError } from "../src/admin/validation";
@@ -85,11 +89,22 @@ function fixture(kind: Kind) {
         })!.toString();
   }
   async function mount(context: BrowserContext) {
+    const sessions = createMemorySessionStore();
+    const cookie = await cookieFor(sessions, MODERATOR);
+    const auth = new Hono().get("/auth/status", (c) => authStatus(c, async () => sessions));
     await context.route("**/*", async (route) => {
       const request = route.request();
       const url = new URL(request.url());
       if (url.origin !== origin) return route.abort("blockedbyclient");
-      if (url.pathname === "/auth/status") return route.fulfill({ json: { authenticated: true } });
+      if (url.pathname === "/auth/status") {
+        // Intercepted transport, real signed-cookie handler and revocable memory store.
+        const response = await auth.request(url.href, { headers: { cookie } }, env);
+        return route.fulfill({
+          status: response.status,
+          headers: Object.fromEntries(response.headers),
+          body: await response.text(),
+        });
+      }
       if (url.pathname === "/away")
         return route.fulfill({ contentType: "text/html", body: "<p>Another page</p>" });
       const asset = resolve(root, "public", url.pathname.slice(1));
@@ -129,6 +144,7 @@ function fixture(kind: Kind) {
       version++;
       return route.fulfill({ status: 303, headers: { location: path }, body: "" });
     });
+    return () => sessions.revokeUserSessions(MODERATOR.userId, "0".repeat(64));
   }
   return { path, mount };
 }
@@ -155,7 +171,7 @@ for (const kind of ["event", "featured"] as const) {
         const second = await browser.newContext({ viewport });
         try {
           await f.mount(first);
-          await f.mount(second);
+          const revokeSecond = await f.mount(second);
           const a = await first.newPage();
           const b = await second.newPage();
           await a.goto(origin + f.path);
@@ -185,11 +201,14 @@ for (const kind of ["event", "featured"] as const) {
           await expect(latest.getByTestId("stale-save")).toHaveCount(0);
           expect(await latest.locator('[name="saved_baseline"]').inputValue()).not.toBe(original);
           await capture(latest, `${kind}-fresh-${viewport.width}`);
-          await b.evaluate(() =>
-            window.dispatchEvent(new CustomEvent("two:session-expired", { cancelable: true })),
-          );
+          await revokeSecond();
+          const status = b.waitForResponse((r) => new URL(r.url()).pathname === "/auth/status");
+          await b.evaluate(() => window.dispatchEvent(new Event("focus")));
+          expect(await (await status).json()).toEqual({ authenticated: false });
           await expect(b.getByTestId("admin-session-expired")).toBeFocused();
           await expect(b.locator('[name="title"]')).toHaveValue("My retained draft");
+          await expect(b.locator('[name="saved_baseline"]')).toHaveValue(original);
+          expect(b.url()).toBe(origin + f.path);
           await capture(b, `${kind}-expired-${invalid ? "errors" : "valid"}-${viewport.width}`);
           expect(
             await b.evaluate(() => {

@@ -634,6 +634,10 @@ describe("resolveKitEventEdit: saved baseline and public fields", () => {
     const nonfinite = await load({ ...rich, startsAt: new Date(Number.NaN) });
     expect(nonfinite.starts_at).toBe("");
     expect(nonfinite.saved_baseline).toMatch(/^[0-9a-f]{64}$/);
+    const nonfiniteEnd = await load({ ...rich, endsAt: new Date(Number.NaN) });
+    expect(nonfiniteEnd.ends_at).toBe("");
+    expect(nonfiniteEnd.starts_at).not.toBe("");
+    expect(nonfiniteEnd.saved_baseline).toMatch(/^[0-9a-f]{64}$/);
     const nonfiniteStamp = await load({ ...rich, updatedAt: new Date(Number.NaN) });
     expect(nonfiniteStamp.saved_baseline).toMatch(/^[0-9a-f]{64}$/);
     const unknown = await load({ ...rich, timezone: "Not/AZone" });

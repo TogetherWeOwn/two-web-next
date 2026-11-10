@@ -6,7 +6,15 @@ import {
   featuredSaveBaseline,
   StaleSaveError,
 } from "../src/admin/save-baseline";
-import { getEvent, getFeatured, updateEvent, updateFeatured } from "../src/admin/store";
+import {
+  duplicateEvent,
+  getEvent,
+  getFeatured,
+  transitionEvent,
+  updateEvent,
+  updateFeatured,
+} from "../src/admin/store";
+import { ValidationError } from "../src/admin/validation";
 import type { Db } from "../src/db/index";
 import { sameOrigin } from "../src/same-origin";
 import { createMemorySessionStore } from "../src/sessions";
@@ -15,7 +23,9 @@ import { eventRow, featuredRow, key } from "./helpers/admin-validation-correctio
 
 vi.mock("../src/admin/store", async (original) => ({
   ...(await original<typeof import("../src/admin/store")>()),
+  duplicateEvent: vi.fn(),
   getEvent: vi.fn(),
+  transitionEvent: vi.fn(),
   getFeatured: vi.fn(),
   updateEvent: vi.fn(),
   updateFeatured: vi.fn(),
@@ -95,6 +105,8 @@ describe("refused moderator save documents", () => {
       const html = await res.text();
       expect(html).toContain('data-testid="stale-save"');
       expect(html).toContain('value="Retained title"');
+      expect(html).toContain('data-event-draft=""');
+      expect(html).toContain('src="/islands/admin-event-editor.js"');
       expect(html).toContain(`name="saved_baseline" value="${baseline}"`);
       expect(html).not.toContain("The end is after the start.");
       expect(html).not.toContain('data-testid="error-ends_at"');
@@ -132,6 +144,41 @@ describe("refused moderator save documents", () => {
     expect(await res.text()).toContain("The end is after the start.");
     expect(updateEvent).not.toHaveBeenCalled();
   });
+
+  it.each([
+    ["duplicate", "/duplicate", "title"],
+    ["publish", "/publish", "location"],
+  ])(
+    "re-renders the %s refusal editor with the current saved_baseline and a mounted draft marker",
+    async (action, suffix, field) => {
+      const refusal = new ValidationError({ [field]: "Fix this field." });
+      if (action === "duplicate") vi.mocked(duplicateEvent).mockRejectedValue(refusal);
+      else vi.mocked(transitionEvent).mockRejectedValue(refusal);
+      const res = await post(`/events/${key}${suffix}`, {});
+      expect(res.status).toBe(422);
+      const html = await res.text();
+      const baseline = html.match(/name="saved_baseline" value="([0-9a-f]{64})"/)?.[1];
+      expect(baseline).toBe(await eventSaveBaseline(fold));
+      expect(html).toContain('data-event-draft=""');
+      expect(html).toContain(`data-testid="error-${field}"`);
+      expect(updateEvent).not.toHaveBeenCalled();
+      vi.mocked(updateEvent).mockResolvedValue({ row: fold, writeBack: null, childWriteBacks: [] });
+      const corrected = await post(`/events/${key}`, {
+        ...values,
+        location: "Community voice room",
+        saved_baseline: baseline!,
+      });
+      expect(corrected.status).toBe(303);
+      expect(updateEvent).toHaveBeenCalledExactlyOnceWith(
+        db,
+        expect.objectContaining({ id: MODERATOR.userId }),
+        key,
+        expect.objectContaining({ title: values.title, location: "Community voice room" }),
+        baseline,
+      );
+      expect(dbTouched).not.toHaveBeenCalled();
+    },
+  );
 
   it.each([400, 409])(
     "mounts expiry recovery exactly once on a featured %s draft",
