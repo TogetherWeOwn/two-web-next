@@ -255,6 +255,46 @@ for (const kind of ["event", "featured"] as const) {
     }
   });
 
+  test(`${kind}: unsaved edit then reload never submits under a fresh token`, async ({
+    browser,
+  }) => {
+    const f = fixture(kind);
+    const context = await browser.newContext({ viewport: widths[0] });
+    try {
+      await f.mount(context);
+      const page = await context.newPage();
+      const winner = await context.newPage();
+      await page.goto(origin + f.path);
+      const original = await page.locator('[name="saved_baseline"]').inputValue();
+      await page.locator('[name="title"]').fill("Unsaved reload draft");
+      await winner.goto(origin + f.path);
+      await winner.locator('[name="title"]').fill("Reload winner");
+      expect(await submit(winner, kind)).toBe(303);
+      page.on("dialog", (dialog) => dialog.accept());
+      await page.reload();
+      // Record the actual post-reload state without filling or evaluating
+      // old values into the controls after reload.
+      const observed = {
+        title: await page.locator('[name="title"]').inputValue(),
+        token: await page.locator('[name="saved_baseline"]').inputValue(),
+      };
+      expect(observed.token).toBe(original);
+      expect(await submit(page, kind)).toBe(409);
+      await winner.reload();
+      const persisted = await winner.locator('[name="title"]').inputValue();
+      await test.info().attach("reload-observation", {
+        body: JSON.stringify({ ...observed, postStatus: 409, persisted }, null, 2),
+        contentType: "application/json",
+      });
+      await expect(winner.locator('[name="title"]')).toHaveValue("Reload winner");
+      await capture(page, `${kind}-reload-1280`);
+      await page.setViewportSize(widths[1]!);
+      await capture(page, `${kind}-reload-390`);
+    } finally {
+      await context.close();
+    }
+  });
+
   test(`${kind}: stale recovery works with JavaScript disabled`, async ({ browser }) => {
     const f = fixture(kind);
     const context = await browser.newContext({ javaScriptEnabled: false, viewport: widths[0] });

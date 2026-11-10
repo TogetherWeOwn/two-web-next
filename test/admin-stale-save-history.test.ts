@@ -21,9 +21,10 @@ function loadIslands(
   unavailable: boolean,
   navType = "",
   pathname = "/admin/featured/7",
+  initialValues: Record<string, string> = {},
 ) {
   const baseline = { value: token };
-  const values = new Map([["title", "Saved title"]]);
+  const values = new Map([["title", "Saved title"], ...Object.entries(initialValues)]);
   const formListeners = new Map<string, (event: Event) => void>();
   const windowListeners = new Map<string, (event: Event) => void>();
   const attrs = new Set<string>();
@@ -73,17 +74,23 @@ function loadIslands(
     setTimeout: vi.fn(),
     clearTimeout: vi.fn(),
   });
-  return { baseline, history, values, formListeners, windowListeners };
+  return { attrs, baseline, history, values, formListeners, windowListeners };
 }
 
 describe.each(["assets", "public"])("%s moderator draft history token binding", (directory) => {
   const load = (token: string, state: unknown = null, unavailable = false) =>
     loadIslands(directory, token, state, unavailable);
+  // A genuine user edit: the browser sets the value, then fires input/change.
+  function userEdit(islands: ReturnType<typeof loadIslands>, field: string, value: string) {
+    islands.values.set(field, value);
+    islands.formListeners.get("input")!(new Event("input"));
+    islands.formListeners.get("change")!(new Event("change"));
+  }
   it("pins the displayed token in this entry without storing any form contents or replacing Kit state", () => {
     const b = load(A, { kit: { index: 7 } });
     expect(b.history.state).toEqual({
       kit: { index: 7 },
-      twoAdminSaveBaseline: { path: "/admin/featured/7", token: A },
+      twoAdminSaveBaseline: { path: "/admin/featured/7", token: A, clean: true },
     });
     expect(JSON.stringify(b.history.state)).not.toContain("Saved title");
     expect(b.history.replaceState).toHaveBeenCalledOnce();
@@ -109,7 +116,7 @@ describe.each(["assets", "public"])("%s moderator draft history token binding", 
       const reloaded = loadIslands(directory, B, original.history.state, false, "reload", pathname);
       expect(reloaded.baseline.value).toBe(B);
       expect(reloaded.history.state).toEqual({
-        twoAdminSaveBaseline: { path: pathname, token: B },
+        twoAdminSaveBaseline: { path: pathname, token: B, clean: true },
       });
       const departure = new Event("beforeunload", { cancelable: true });
       reloaded.windowListeners.get("beforeunload")!(departure);
@@ -148,5 +155,92 @@ describe.each(["assets", "public"])("%s moderator draft history token binding", 
     b.baseline.value = B;
     b.formListeners.get("submit")!(new Event("submit", { cancelable: true }));
     expect(b.baseline.value).toBe("");
+  });
+
+  it.each([
+    ["/admin/events/01K00000000000000000000001", "title", "My unsaved draft"],
+    ["/admin/featured/7", "title", "My unsaved draft"],
+    ["/admin/events/01K00000000000000000000001", "capacity", "4"],
+    ["/admin/featured/7", "position", "9"],
+  ])(
+    "dirty reload of %s restores old %s values without upgrading the draft to the fresh token (%s)",
+    (pathname, field, draft) => {
+      const original = loadIslands(directory, A, null, false, "", pathname);
+      userEdit(original, field, draft);
+      const freshValue = field === "title" ? "Saved title" : field === "capacity" ? "8" : "0";
+      // Restoration at initialization: the browser hands the old draft to the
+      // reload before the island runs. Injected restoration is adversarial
+      // simulation, not native reproduction.
+      const restoredAtInit = loadIslands(
+        directory,
+        B,
+        original.history.state,
+        false,
+        "reload",
+        pathname,
+        { [field]: draft },
+      );
+      expect(restoredAtInit.baseline.value).toBe(A);
+      expect(restoredAtInit.attrs.has("data-event-draft")).toBe(true);
+      restoredAtInit.formListeners.get("submit")!(new Event("submit", { cancelable: true }));
+      expect(restoredAtInit.baseline.value).toBe(A);
+      expect(restoredAtInit.values.get(field)).toBe(draft);
+      // Restoration after pageshow, and immediately before submit: same entry,
+      // fresh values at init, old values reappear with no user input events.
+      for (const timing of ["pageshow", "submit"] as const) {
+        const late = loadIslands(directory, B, original.history.state, false, "reload", pathname, {
+          [field]: freshValue,
+        });
+        expect(late.baseline.value).toBe(A);
+        if (timing === "pageshow") late.windowListeners.get("pageshow")!(new Event("pageshow"));
+        late.values.set(field, draft);
+        late.formListeners.get("submit")!(new Event("submit", { cancelable: true }));
+        expect(late.baseline.value).toBe(A);
+        expect(late.values.get(field)).toBe(draft);
+        expect(late.history.state).toEqual({
+          twoAdminSaveBaseline: { path: pathname, token: A, clean: false },
+        });
+      }
+    },
+  );
+
+  it.each(["/admin/events/01K00000000000000000000001", "/admin/featured/7"])(
+    "clean reload of %s adopts the fresh token and saves a legitimate post-reload edit",
+    (pathname) => {
+      const original = loadIslands(directory, A, null, false, "", pathname);
+      const reloaded = loadIslands(directory, B, original.history.state, false, "reload", pathname);
+      expect(reloaded.baseline.value).toBe(B);
+      userEdit(reloaded, "title", "Edited after a clean reload");
+      reloaded.formListeners.get("submit")!(new Event("submit", { cancelable: true }));
+      expect(reloaded.baseline.value).toBe(B);
+      expect(reloaded.values.get("title")).toBe("Edited after a clean reload");
+    },
+  );
+
+  it("clean reload with values restored only after initialization still refuses under the old token", () => {
+    const original = loadIslands(directory, A, null, false, "", "/admin/featured/7");
+    expect(original.history.state).toEqual({
+      twoAdminSaveBaseline: { path: "/admin/featured/7", token: A, clean: true },
+    });
+    const reloaded = loadIslands(directory, B, original.history.state, false, "reload");
+    expect(reloaded.baseline.value).toBe(B);
+    // No input/change fires for native restoration: the submit must bind the
+    // returned fields to the entry's original token, not the adopted fresh B.
+    reloaded.values.set("title", "Restored old draft");
+    reloaded.formListeners.get("submit")!(new Event("submit", { cancelable: true }));
+    expect(reloaded.baseline.value).toBe(A);
+    expect(reloaded.values.get("title")).toBe("Restored old draft");
+  });
+
+  it("reload over an entry without provenance keeps the old token instead of adopting the fresh one", () => {
+    const legacy = loadIslands(
+      directory,
+      B,
+      { twoAdminSaveBaseline: { path: "/admin/featured/7", token: A } },
+      false,
+      "reload",
+    );
+    expect(legacy.baseline.value).toBe(A);
+    expect(legacy.attrs.has("data-event-draft")).toBe(true);
   });
 });
