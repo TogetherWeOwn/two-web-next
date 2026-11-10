@@ -83,6 +83,12 @@ function installFakePlaywright() {
     close: async () => {},
     newContext: async ({ viewport }) => {
       const calls = new Map();
+      // Fake stylesheet state follows the production navigation order for
+      // upcoming: primary, L-byte, S-byte, arbitrary-inline, restore. The
+      // fake is synthetic stand-in only; real rule counts come from the
+      // actual browser in CI.
+      const rulesSequence = [[10, 10], [0, 10], [10, 0], [10, 10, 0], [10, 10]];
+      const state = { navigation: 0 };
       const locator = selector => ({
         locator,
         nth: () => locator(selector),
@@ -91,16 +97,27 @@ function installFakePlaywright() {
         count: async () => {
           if (selector === '[data-status]') return 4;
           if (selector === 'thead th') return 5;
+          if (selector === '[data-testid="events-list"] .schedule-row') return 2;
           assert.fail(`unexpected count selector: ${selector}`);
         },
-        innerText: async () => selector === '[data-testid="featured-preview"]'
-          ? 'Save changes to refresh this preview' : selector.match(/^\[data-status="(\w+)"\]$/)[1],
+        innerText: async () => {
+          if (selector === 'h1') return 'Events';
+          if (selector === '[data-testid="featured-preview"]') return 'Save changes to refresh this preview';
+          const status = selector.match(/^\[data-status="(\w+)"\]$/);
+          assert.ok(status, `unexpected innerText selector: ${selector}`);
+          return status[1];
+        },
         textContent: async () => {
           assert.ok(selector === 'h3' || selector === 'p');
           return selector === 'h3' ? 'a'.repeat(255) : `https://example.test/${'a'.repeat(400)}`;
         },
-        evaluateAll: async () => true,
+        evaluateAll: async () => {
+          if (selector === 'head style') return rulesSequence[Math.min(Math.max(state.navigation - 1, 0), rulesSequence.length - 1)];
+          if (selector === '.schedule-heading, [data-testid="events-list"], .schedule-row') return [{ left: 0, right: viewport.width }];
+          return true;
+        },
         evaluate: async () => selector === 'main' ? '24px'
+          : selector === '.schedule-heading' ? '4px'
           : selector === '[data-testid="featured-table-scroll"]' ? 1 : true,
       });
       return {
@@ -109,6 +126,7 @@ function installFakePlaywright() {
         newPage: async () => ({
           locator,
           keyboard: { press: async () => {} },
+          goto: async () => { state.navigation += 1; },
           setContent: async html => { assert.match(html, /<title>[^<]+<\/title>/); },
           evaluate: async () => ({ viewportWidth: viewport.width, documentWidth: viewport.width, elements: [] }),
           screenshot: async options => {
@@ -140,14 +158,24 @@ test('production CLI serializes every primary and scrolled retry with its origin
   const output = path.join(dir, 'output');
   await fs.mkdir(input);
   const sourceHead = 'a'.repeat(40);
-  const names = ['edit', 'long-content', 'list', 'scheduled'];
+  const names = ['edit', 'long-content', 'list', 'scheduled', 'upcoming'];
+  const fakeLeafCss = '/* synthetic L */';
+  const fakeScheduleCss = '/* synthetic S */';
   const fixtures = [];
   for (const name of names) {
-    const html = `<title>${name}.html</title><main>synthetic driver fixture, not visual evidence</main>`;
+    const html = name === 'upcoming'
+      ? `<title>upcoming.html</title><style>${fakeLeafCss}</style><style>${fakeScheduleCss}</style><main>synthetic upcoming fixture, not visual evidence</main>`
+      : `<title>${name}.html</title><main>synthetic driver fixture, not visual evidence</main>`;
     await fs.writeFile(path.join(input, `${name}.html`), html);
     fixtures.push({ name: `${name}.html`, sha256: createHash('sha256').update(html).digest('hex') });
   }
-  const manifest = { sourceHead, fixtures };
+  const manifest = {
+    sourceHead, fixtures,
+    eventsCspHashes: {
+      leaf: createHash('sha256').update(fakeLeafCss).digest('base64'),
+      schedule: createHash('sha256').update(fakeScheduleCss).digest('base64'),
+    },
+  };
   await fs.writeFile(path.join(input, 'manifest.json'), JSON.stringify(manifest));
   const preload = path.join(dir, 'fake-playwright.cjs');
   await fs.writeFile(preload, `(${installFakePlaywright.toString()})();\n`);
@@ -157,7 +185,7 @@ test('production CLI serializes every primary and scrolled retry with its origin
   });
   assert.equal(child.error, undefined);
   assert.equal(child.status, 0, child.stderr || child.stdout);
-  assert.deepEqual(JSON.parse(child.stdout), { automatedChecksPassed: true, screenshots: 12, sourceHead });
+  assert.deepEqual(JSON.parse(child.stdout), { automatedChecksPassed: true, screenshots: 14, sourceHead });
   const report = JSON.parse(await fs.readFile(path.join(output, 'report.json'), 'utf8'));
   const expected = [];
   for (const size of ['1280x900', '390x844']) {
@@ -175,7 +203,9 @@ test('production CLI serializes every primary and scrolled retry with its origin
   }
   assert.deepEqual(report.captureAttempts, expected);
   assert.deepEqual(report.errors, []);
-  assert.equal(report.results.length, 8);
+  assert.equal(report.results.length, 10);
+  assert.equal(report.eventsRoute, '/events');
+  assert.match(report.eventsCsp, /style-src 'self' 'sha256-/);
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(output, 'manifest.json'), 'utf8')), manifest);
 });
 

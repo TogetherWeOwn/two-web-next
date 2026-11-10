@@ -26,19 +26,35 @@ async function main() {
   if (!/^[a-f0-9]{40}$/.test(manifest.sourceHead) || manifest.sourceHead !== process.env.PROOF_CHECKOUT_HEAD) {
     throw new Error('Fixture source head mismatch');
   }
-  if (manifest.fixtures.map(f => f.name).join(',') !== 'edit.html,long-content.html,list.html,scheduled.html') throw new Error('Unexpected fixtures');
+  if (manifest.fixtures.map(f => f.name).join(',') !== 'edit.html,long-content.html,list.html,scheduled.html,upcoming.html') throw new Error('Unexpected fixtures');
+  if (!manifest.eventsCspHashes || !/^[A-Za-z0-9+/]{43}=$/.test(manifest.eventsCspHashes.leaf || '') || !/^[A-Za-z0-9+/]{43}=$/.test(manifest.eventsCspHashes.schedule || '')) throw new Error('Upcoming CSP hashes required');
+  const eventsDocumentUrl = 'https://events-proof.test/events';
+  // Style-relevant subset of the production upcoming policy
+  // (src/headers.ts scheduleStyleHashes): L+S hashes in style-src, no
+  // unsafe-inline. Recorded in the report; not a byte-identical full policy.
+  const eventsCsp = `default-src 'self'; base-uri 'self'; connect-src 'self'; object-src 'none'; img-src 'self'; style-src 'self' 'sha256-${manifest.eventsCspHashes.leaf}' 'sha256-${manifest.eventsCspHashes.schedule}'; script-src 'none'; font-src 'self'; frame-ancestors 'none'; form-action 'self'`;
   const html = {};
   for (const fixture of manifest.fixtures) {
     const bytes = await fs.readFile(path.join(input, fixture.name));
     if (crypto.createHash('sha256').update(bytes).digest('hex') !== fixture.sha256) throw new Error('Fixture hash mismatch');
     html[fixture.name] = bytes.toString('utf8');
-    if (/<script\b|<style\b|\sstyle=|\son\w+=/i.test(html[fixture.name])) throw new Error('Active content refused');
+    if (fixture.name === 'upcoming.html') {
+      const styles = [...html[fixture.name].matchAll(/<style>([\s\S]*?)<\/style>/g)].map(m => m[1]);
+      if (styles.length !== 2) throw new Error('Upcoming fixture must carry exactly two style blocks');
+      if (crypto.createHash('sha256').update(styles[0]).digest('base64') !== manifest.eventsCspHashes.leaf) throw new Error('Upcoming L hash mismatch');
+      if (crypto.createHash('sha256').update(styles[1]).digest('base64') !== manifest.eventsCspHashes.schedule) throw new Error('Upcoming S hash mismatch');
+      const rest = html[fixture.name].replace(/<style>[\s\S]*?<\/style>/g, '');
+      if (/<script\b|\sstyle=|\son\w+=/i.test(rest)) throw new Error('Active content refused');
+    } else if (/<script\b|<style\b|\sstyle=|\son\w+=/i.test(html[fixture.name])) {
+      throw new Error('Active content refused');
+    }
   }
   await fs.mkdir(output);
   const report = {
     ...manifest, capturedAt: new Date().toISOString(), runUrl: process.env.PROOF_RUN_URL,
     containerImage: process.env.PROOF_CONTAINER_IMAGE, javascriptEnabled: false, offline: true,
-    visualInspection: 'REQUIRED: independent QA must inspect all primary and scrolled-column captures', results: [], errors: [], captureAttempts: [],
+    eventsRoute: '/events', eventsCsp, eventsCspScope: 'style-relevant subset mirroring src/headers.ts scheduleStyleHashes (L+S sha256, no unsafe-inline); not the full production policy',
+    visualInspection: 'REQUIRED: independent QA must inspect all primary and scrolled-column captures; this report is CSP/rendering evidence, not a visual PASS', results: [], errors: [], captureAttempts: [],
   };
   let browser;
   try {
@@ -50,12 +66,22 @@ async function main() {
       for (const fixture of manifest.fixtures) {
         const context = await browser.newContext({ viewport, offline: true, javaScriptEnabled: false, serviceWorkers: 'block' });
         const attemptedRequests = [];
-        await context.route('**/*', route => { attemptedRequests.push(route.request().url()); return route.abort('blockedbyclient'); });
+        const isUpcoming = fixture.name === 'upcoming.html';
+        let eventsBody = isUpcoming ? html[fixture.name] : null;
+        await context.route('**/*', route => {
+          const url = route.request().url();
+          if (isUpcoming && url === eventsDocumentUrl) {
+            return route.fulfill({ status: 200, contentType: 'text/html; charset=UTF-8', headers: { 'content-security-policy': eventsCsp }, body: eventsBody });
+          }
+          attemptedRequests.push(url);
+          return route.abort('blockedbyclient');
+        });
         const checks = [];
         const check = (name, pass) => checks.push({ name, pass });
         try {
           const page = await context.newPage();
-          await page.setContent(html[fixture.name], { waitUntil: 'load' });
+          if (isUpcoming) await page.goto(eventsDocumentUrl, { waitUntil: 'load' });
+          else await page.setContent(html[fixture.name], { waitUntil: 'load' });
           if (fixture.name === 'edit.html' || fixture.name === 'long-content.html') {
             check('saved live card', await page.locator('[data-testid="featured-item"]').isVisible());
             check('live label', await page.locator('[data-status="live"]').isVisible());
@@ -114,6 +140,39 @@ async function main() {
             }
             check('keyboard can scroll the list', keyboardScrollPx > 0);
             await scroll.evaluate(el => { el.scrollLeft = 0; });
+          } else if (fixture.name === 'upcoming.html') {
+            check('upcoming heading', (await page.locator('h1').innerText()).trim() === 'Events');
+            check('upcoming heading visible', await page.locator('h1').isVisible());
+            check('upcoming fictional entries', await page.locator('[data-testid="events-list"] .schedule-row').count() === 2);
+            const rules = await page.locator('head style').evaluateAll(nodes => nodes.map(node => node.sheet?.cssRules.length ?? 0));
+            check('two inline style blocks applied', rules.length === 2 && rules.every(count => count > 0));
+            check('leaf styles applied', await page.locator('main').evaluate(el => getComputedStyle(el).paddingLeft) === '24px');
+            check('schedule styles applied', await page.locator('.schedule-heading').evaluate(el => getComputedStyle(el).borderLeftWidth) === '4px');
+            check('no replaced stylesheet links', ![...html[fixture.name].matchAll(/<link\b[^>]*>/gi)].some(m => /\brel\s*=\s*["']?[^"'>]*\bstylesheet\b/i.test(m[0])));
+            const upcomingBoxes = await page.locator('.schedule-heading, [data-testid="events-list"], .schedule-row').evaluateAll(els => els.map(el => {
+              const rect = el.getBoundingClientRect();
+              return { left: rect.left, right: rect.right };
+            }));
+            check('upcoming content fits', upcomingBoxes.length > 0 && upcomingBoxes.every(box => box.left >= 0 && box.right <= viewport.width));
+            // Isolated mutation copies under the same response policy
+            // (mirrors e2e/schedule-inline-csp.spec.ts): byte drift in L or
+            // S, or any other inline style, must be blocked by CSP.
+            const styleElements = html[fixture.name].match(/<style>[\s\S]*?<\/style>/g);
+            const mutations = [
+              ['L byte blocked', html[fixture.name].replace(styleElements[0], `<style>${html[fixture.name].match(/<style>([\s\S]*?)<\/style>/)[1]} </style>`), 'L'],
+              ['S byte blocked', html[fixture.name].replace(styleElements[1], `<style>${[...html[fixture.name].matchAll(/<style>([\s\S]*?)<\/style>/g)][1][1]} </style>`), 'S'],
+              ['arbitrary inline blocked', html[fixture.name].replace('</head>', '<style>body{display:none}</style></head>'), 'arbitrary'],
+            ];
+            for (const [name, body, kind] of mutations) {
+              eventsBody = body;
+              await page.goto(eventsDocumentUrl, { waitUntil: 'load' });
+              const mutatedRules = await page.locator('head style').evaluateAll(nodes => nodes.map(node => node.sheet?.cssRules.length ?? 0));
+              if (kind === 'L') check(name, mutatedRules.length === 2 && mutatedRules[0] === 0 && mutatedRules[1] > 0);
+              else if (kind === 'S') check(name, mutatedRules.length === 2 && mutatedRules[1] === 0 && mutatedRules[0] > 0);
+              else check(name, mutatedRules.length === 3 && mutatedRules[2] === 0 && mutatedRules[0] > 0 && mutatedRules[1] > 0);
+            }
+            eventsBody = html[fixture.name];
+            await page.goto(eventsDocumentUrl, { waitUntil: 'load' });
           } else {
             check('scheduled label', await page.locator('[data-status="scheduled"]').isVisible());
             check('saved scheduled card', await page.locator('[data-testid="featured-item"]').isVisible());
@@ -144,8 +203,16 @@ async function main() {
           layout.horizontalOverflowPx = Math.max(0, layout.documentWidth - viewport.width);
           check('no horizontal document overflow', layout.horizontalOverflowPx === 0);
           check('primary elements fit viewport', layout.elements.filter(el => !el.scrollContent).every(el => el.left >= 0 && el.right <= viewport.width));
-          check('external stylesheet applied', await page.locator('main').evaluate(el => getComputedStyle(el).paddingLeft) === '24px');
-          check('no network requests', attemptedRequests.length === 0);
+          if (isUpcoming) {
+            // The document itself is fulfilled offline; other subresources
+            // (Display font preload) are attempted and blocked, as in
+            // production. Only the four replaced stylesheet requests must
+            // be absent.
+            check('no replaced stylesheet requests', !attemptedRequests.some(url => /\/(?:styles|theme-tokens|theme|schedule-theme)\.css(?:\?|$)/.test(url)));
+          } else {
+            check('external stylesheet applied', await page.locator('main').evaluate(el => getComputedStyle(el).paddingLeft) === '24px');
+            check('no network requests', attemptedRequests.length === 0);
+          }
           const screenshot = `${path.basename(fixture.name, '.html')}-${viewport.width}x${viewport.height}.png`;
           await captureScreenshot(page, { path: path.join(output, screenshot), fullPage: true }, report.captureAttempts);
           const scrolledCaptures = [];
@@ -181,7 +248,7 @@ async function main() {
     await fs.writeFile(path.join(output, 'report.json'), JSON.stringify(report, null, 2) + '\n');
     await fs.copyFile(path.join(input, 'manifest.json'), path.join(output, 'manifest.json'));
   }
-  const passed = report.errors.length === 0 && report.results.length === 8 && report.results.every(r => r.checks.every(c => c.pass));
+  const passed = report.errors.length === 0 && report.results.length === 10 && report.results.every(r => r.checks.every(c => c.pass));
   console.log(JSON.stringify({ automatedChecksPassed: passed, screenshots: report.results.reduce((count, result) => count + 1 + result.scrolledCaptures.length, 0), sourceHead: report.sourceHead }));
   if (!passed) process.exitCode = 1;
 }

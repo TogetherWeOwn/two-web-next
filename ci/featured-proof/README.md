@@ -19,6 +19,10 @@ The fixtures embed the current external stylesheet as a data URL, only for offli
 
 PR source changes run this new job automatically. Manual `workflow_dispatch` retains the frozen-input `capture` job below; its files, hashes and original source attribution are unchanged and must never be relabelled as new-head evidence. The current-source artifacts are named `featured-current-source-<run-id>-<attempt>` and include twelve PNGs, manifest and report.
 
+The same lane also captures a fifth fictional document, `upcoming.html`: the real `Layout` inline-schedule-CSS path for `/events` (same Layout, header, events-page main and footer structure the schedule shell renders) from fictional entries only, with the production L-then-S `<style>` blocks (hash-pinned in the manifest) and no stylesheet links. The capture serves it offline via route fulfillment under a style-relevant CSP subset mirroring the production upcoming hash allowlist (L+S `sha256`, no `unsafe-inline`; recorded in `report.json` as a subset, not the full policy) and proves in the compiled browser that both sheets apply, the L then S order holds, the four replaced external sheets are never requested, and L-byte, S-byte and arbitrary-inline mutations are blocked. That is rendering/CSP evidence, not a visual PASS; independent QA still inspects every PNG.
+
+Current-source artifacts now include fourteen PNGs, manifest and report (`upcoming-1280x900.png` and `upcoming-390x844.png` are the two new captures).
+
 ## Frozen-input invocation and containment
 
 - Service/repository: GitHub Actions, `TogetherWeOwn/two-web-next`.
