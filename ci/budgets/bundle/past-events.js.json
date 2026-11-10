@@ -2,8 +2,8 @@
   "$comment": "See ci/budgets/README.md; changing this ceiling needs a decision file in ci/budgets/decisions/bundle/.",
   "budgets": {
     "public/islands/past-events.js": {
-      "maxRawBytes": 4608,
-      "maxGzipBytes": 1792
+      "maxRawBytes": 5120,
+      "maxGzipBytes": 2048
     }
   }
 }

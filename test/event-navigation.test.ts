@@ -294,7 +294,13 @@ describe("event navigation SQL and SSR (local fixtures)", () => {
       expect(html.match(/<h1\b/g)).toHaveLength(1);
       expect(html).toContain('data-testid="event-venue">Voice');
       expect(html).toContain(`rel="canonical" href="https://next.example.test/e/${key(2)}"`);
-      expect(html).toContain(`data-copy-link="https://next.example.test/e/${key(2)}"`);
+      // Drafts open only for moderators, so their preview offers no share action.
+      if (status === "draft") {
+        expect(html).toContain('data-testid="event-share-draft-note"');
+        expect(html).not.toContain("data-copy-link=");
+      } else {
+        expect(html).toContain(`data-copy-link="https://next.example.test/e/${key(2)}"`);
+      }
       expect(html).toContain('property="og:title" content="Game night 2 — Together We Own"');
       expect(html).toContain('src="/islands/copy-link.js" defer');
       expect(html).not.toContain('data-testid="event-join-pitch"');

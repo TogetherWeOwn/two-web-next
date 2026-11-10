@@ -20,7 +20,7 @@ name: mutation-sessions-join
 on:
   # After the ci nightly full run, on an off-minute so fleet wake-ups spread.
   schedule:
-    - cron: '41 3 * * *'
+    - cron: "41 3 * * *"
   workflow_dispatch:
 
 permissions:

@@ -6,7 +6,10 @@ Source: legacy [two-web](https://github.com/TogetherWeOwn/two-web) @ `e1e939a`
 policies, middleware, services, config, views, content, public).
 Next side: this repo @ `7a91cbbb9` (2026-10-19).
 
-Flip gate (owner): re-run before W16; the DNS flip needs **0 unmapped rows**.
+**Cutover complete.** The DNS flip ran on 2026-10-10 with **0 unmapped
+rows**, and the apex has served `two-web-next` since then
+([closed cutover gates](cutover-gates.md)). This matrix is now the parity
+record; keep it current when a legacy-facing behavior changes.
 A row is mapped when it names a card or is **dropped, with a reason**.
 `✅ done` = merged to `main`. Everything else names the owning card.
 
@@ -16,7 +19,9 @@ W1 ✅, W2 ✅, W3 ✅, W4 ✅, W5 ✅, W6 ✅, W7 ✅, W8 ✅, W9 ✅, W10 ✅
 [TOG-9839](/TOG/issues/TOG-9839) done), W11 ✅, W12 ✅,
 W13 ✅, W14 ✅, S1 ✅ · W15 ✅ ([TOG-9697](/TOG/issues/TOG-9697) done,
 QA PASS on main `ea51a83e`) ·
-W16 ⛔ ([TOG-10112](/TOG/issues/TOG-10112) done, parent [TOG-9698](/TOG/issues/TOG-9698) still blocked).
+W16 ✅ (cutover: production flipped 2026-10-10, `/up` healthy with 0 pending
+migrations, 48h watch closed 2026-10-12; see
+[cutover-migration-ledger.md](cutover-migration-ledger.md#production-apply-outcome)).
 
 Database-outage acceptance is maintained separately in
 [`db-outage-matrix.md`](db-outage-matrix.md) and
@@ -45,7 +50,7 @@ is not evidence that a configured-but-unreachable DB already meets them.
 | `GET /auth/recover` (expired member writes) | ✅ merged (PR #239): durable explicit recovery, safe GET return, signed ten-minute pending/restored notice, one-shot post-login banner, no retained body or automatic retry. MemberProfile drafts preserved until reset; admin event-editor expired-save recovery merged (`test/admin-session-recovery.test.ts`); other write owners integrate under existing cards | [TOG-10357](/TOG/issues/TOG-10357) ✅ |
 | `POST /logout` (throttle 30,1, session invalidate) | ✅ + origin check; bounded cross-tab server recheck and fail-closed revocation response merged (PR #239); throttle ✅ (`test/throttle.test.ts`) | W5 ✅ + [TOG-10357](/TOG/issues/TOG-10357) ✅ + **N5** ✅ ([TOG-9897](/TOG/issues/TOG-9897)) |
 | `GET /profile`, `GET /members/{user}` (+ `member-access-log`, canonical to `profiles.show`) | ✅ member-gated (guest 302 → OAuth recording `url.intended`, non-member 403), one access-log row per read of another member, fail-closed 503; MemberStats block reads bot-owned `web_v1` views through the bot database (`BOT_DATABASE_URL` then `BOT_DB`, never the web `DB`), hides on no row and renders an explicit unavailable state (keeping membership facts on milestones-only failure) on missing views/DB failure, covered by the same profile access-log subject | W7 ✅ |
-| `GET /leaderboards/members` (new, no legacy page; member-gated like `/members/{user}`) | ✅ going-RSVP ranking over published events, `?season=` shared window grammar, `?scope=overall\|relative` (viewer ±5, clamped, ≤ 11 rows; `friends` deferred → 400), `?activity=` normalized game; opted-out (`profiles.leaderboard_opt_out`) and erased members excluded, joins never counted; one access-log row per view, anonymous `board_view_logs` row (`members`), fail-open | new ✅ |
+| `GET /leaderboards/members` (new, no legacy page; member-gated like `/members/{user}`) | ✅ going-RSVP ranking over published and past events, `?season=` shared window grammar, `?scope=overall\|relative` (viewer ±5, clamped, ≤ 11 rows; `friends` deferred → 400), `?activity=` normalized game; opted-out (`profiles.leaderboard_opt_out`) and erased members excluded, joins never counted; one access-log row per view, anonymous `board_view_logs` row (`members`), fail-open | new ✅ |
 | `PATCH /members/{user}` (owner-only, throttle 30,1, bio/games/timezone validation) | ✅ + `POST _method=PATCH` for the plain form | W7 ✅ |
 | `GET /events.json` (auth, 20/def-100/max paging, ETag, `going_count` per row) | `per_page` takes precedence over retained `limit` alias; default 20, complete signed integer sizes clamped 1–100, malformed/decimal/exponent sizes default 20; stable `starts_at ASC, id ASC`; existing `data/page/limit` plus `meta.current_page/per_page/total/last_page` (published-only total identical for every signed-in session, at least one last page); pages past the end clamp to the last page before any OFFSET is issued, so the response carries last-page rows with consistent `page`/`current_page`; retained exact `event_key` filter applies before paging to both rows and totals (malformed key 422, hidden/missing key empty); JSON/default/mixed-JSON guest 401, explicit `text/html` with valid positive quality redirects 302 with guarded `next` (no HTML substring or q=0 redirect); private ETag/304 identical across signed-in sessions; collection holds published events only and emits the same 15 legacy-ordered keys with wall-time readings, `going_count` and Discord derivation, and no `waitlist_position` or other viewer state (`test/event-json-access-matrix.test.ts`) | ✅ W8 ✅ + [TOG-11155](/TOG/issues/TOG-11155) ✅ |
 | `GET /events/:key` (legacy `/events/{event}` JSON show) | Session gate as collection; existing `eventJson()` fields and viewer waitlist position, no identities; draft member 403, moderator 200 + noindex; cancelled 410 with legacy reason/message/event_key/status; private ETag/304; non-canonical letter-case keys 301 to the canonical form (`test/events-key-canonical-siblings.test.ts`); registered after archive and per-event ICS | ✅ [TOG-11155](/TOG/issues/TOG-11155) ✅ |
@@ -229,7 +234,7 @@ go hunting for them.
 |---|---|---|
 | `secureHeaders`-equivalent (CSP on web+admin+leaves, static anti-framing/sniffing globally) | ✅ global secureHeaders (stricter: no inline/eval in the base policy — no Livewire to need it; the homepage and four content leaves `/about`, `/faq`, `/rules`, `/privacy` additionally allowlist one generated inline `<style>` block by hash, see the CSP row below) | W3 ✅/W4 ✅ |
 | `AddSecurityHeaders::HEADERS` (nosniff, strict-origin-when-cross-origin, X-Frame-Options DENY, Permissions-Policy camera/microphone/geolocation) | ✅ byte-identical `SECURITY_HEADERS` (`src/headers.ts`), pinned against the legacy table in `test/w16b-env-parity.test.ts` | W16b ✅ [TOG-11942](/TOG/issues/TOG-11942) |
-| `AddContentSecurityPolicy` directive set | Deltas, each pinned in `test/w16b-env-parity.test.ts`: **stricter** — `script-src`/`style-src` `'self'` (no `unsafe-inline`/`unsafe-eval`; inline code is limited to JSON-LD data blocks, plus one generated inline `<style>` block on `/` and the four content leaves `/about`, `/faq`, `/rules` and `/privacy`, whose `style-src` also allows that block's sha256 — `src/leaf-critical-css.ts`, regenerated with `node ci/build-leaf-css.mjs`, pinned by `test/csp-policy.test.ts` and `test/leaf-css-drift.test.ts`), `img-src` self + Discord CDN + exact allowlist (no `https:`/`data:`), `frame-src` Discord widget on `/join` only; **added** — `form-action 'self'` (TOG-7095's admin-logout breakage cannot recur: logout posts same-origin `/logout`), report sink `/csp-reports`; **kept/restored** — `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `connect-src 'self'` (every island fetch is a same-origin path); **omitted** — `upgrade-insecure-requests` (every source list is `'self'` or an explicit `https://` host, so an `http:` subresource is blocked, not upgraded) and HSTS (edge-owned, TOG-8729) | W16b ✅ [TOG-11942](/TOG/issues/TOG-11942) |
+| `AddContentSecurityPolicy` directive set | Deltas, each pinned in `test/w16b-env-parity.test.ts`: **stricter** — `script-src`/`style-src` `'self'` (no `unsafe-inline`/`unsafe-eval`; inline code is limited to JSON-LD data blocks, plus one generated inline `<style>` block on `/` and the four content leaves `/about`, `/faq`, `/rules` and `/privacy`, whose `style-src` also allows that block's sha256 — `src/leaf-critical-css.ts` (git-ignored build output, regenerated on every install via `npm run build:leaf-css`), pinned by `test/csp-policy.test.ts` and `test/leaf-css-drift.test.ts`), `img-src` self + Discord CDN + exact allowlist (no `https:`/`data:`), `frame-src` Discord widget on `/join` only; **added** — `form-action 'self'` (TOG-7095's admin-logout breakage cannot recur: logout posts same-origin `/logout`), report sink `/csp-reports`; **kept/restored** — `frame-ancestors 'none'`, `object-src 'none'`, `base-uri 'self'`, `connect-src 'self'` (every island fetch is a same-origin path); **omitted** — `upgrade-insecure-requests` (every source list is `'self'` or an explicit `https://` host, so an `http:` subresource is blocked, not upgraded) and HSTS (edge-owned, TOG-8729) | W16b ✅ [TOG-11942](/TOG/issues/TOG-11942) |
 | Per-env robots/sitemap + staging noindex | Robots `Sitemap:` and every sitemap `<loc>` name the serving env's own origin; robots body is allow-shaped in every env (as legacy), staging's crawl bar is `X-Robots-Tag: noindex, nofollow` on HTML. Staging deploy smoke (`bin/smoke.mjs`) asserts same-origin robots + sitemap and HTML noindex | W16b ✅ [TOG-11942](/TOG/issues/TOG-11942) |
 | One-429-shape (ThrottleEnvelope, all throttles) | ✅ agent ingress; RSVP writes ✅ (rateLimitExceeded); other human routes as they land | W14 ✅ + W9 ✅ |
 | Route throttles 10,1 (join/login/QA) and 30,1 (logout/event writes), every bucket keyed per client | ✅ `src/throttle.ts` + every-POST-throttled audit (`test/throttle.test.ts`) | **N5** ✅ |
@@ -317,8 +322,8 @@ and the legacy JSON show (owning event-JSON card done 2026-10-02;
 17/17 green at HEAD on agent-testdb). The §3 agent-events row stays unmarked:
 `docs/agent-events.md:50` still records the optional W8 carrier as unbound in
 checked-in Wrangler. The admission and smoke-probe cards closed since the last
-pin (texts updated); W16 stays ⛔ on the still-blocked cutover-rehearsal parent.
+pin (texts updated). W16 is ✅: the cutover closed on 2026-10-12.
 Kit-side moves (#886/#914/#879 event/member-board ownership, #960 admin lists)
 are out of scope and touch no Hono parity claim; the §12 Kit session-bridge
 divergence still pins `src/kit-session.ts`. No row invalidated, so no
-follow-up card. Re-run this matrix before the DNS flip.
+follow-up card.

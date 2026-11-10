@@ -1,12 +1,19 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.5.15/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.6.2/schema.json",
   "vcs": {
     "enabled": true,
     "clientKind": "git",
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!!**/node_modules", "!!**/dist", "!!drizzle/meta", "!package-lock.json"]
+    "includes": [
+      "**",
+      "!!**/node_modules",
+      "!!**/dist",
+      "!!drizzle/meta",
+      "!package-lock.json",
+      "!test/fixtures/parity/hono-*"
+    ]
   },
   "formatter": {
     "indentStyle": "space",
@@ -55,7 +62,8 @@
         "public/event-theme.css",
         "ci/a11y.mjs",
         "ci/featured-proof/**",
-        "public/islands/**"
+        "public/islands/**",
+        "**/*.md"
       ],
       "formatter": { "enabled": false }
     },

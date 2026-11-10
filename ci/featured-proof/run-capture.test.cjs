@@ -34,15 +34,16 @@ async function writeOutput(dir, report = reportFixture()) {
   for (const r of report.results) await fs.writeFile(path.join(dir, r.screenshot), png);
 }
 
-test('both capture jobs route runners by repo visibility and retain the pinned browser container', async () => {
+test('both capture jobs route runners by repo visibility and event, and retain the pinned browser container', async () => {
   const workflow = await fs.readFile(path.join(__dirname, '../../.github/workflows/featured-offline-proof.yml'), 'utf8');
   for (const job of ['capture', 'current-source']) {
     const block = workflow.split(`  ${job}:\n`)[1]?.split(/\n  [a-z-]+:\n/)[0];
     assert.ok(block, `${job} exists`);
-    // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-    assert.ok(block.includes(`runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`));
+    // Self-hosted only for non-PR events while private; pull_request and
+    // merge_group runs always stay GitHub-hosted (runner separation).
+    assert.ok(block.includes(`runs-on: \${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`));
     assert.match(block, /image: mcr\.microsoft\.com\/playwright:v1\.58\.2-noble@sha256:6446946a1d9fd62d9ae501312a2d76a43ee688542b21622056a372959b65d63d/);
-    assert.equal(block.split('ubuntu-latest').length - 1, 1, 'ubuntu-latest only as the public-repo branch');
+    assert.equal(block.split('ubuntu-latest').length - 1, 1, 'ubuntu-latest only as the hosted fallback');
   }
 });
 
@@ -160,12 +161,12 @@ const FEATURED_WORKFLOW_PATH = path.join(
 );
 
 function extractScopeGlobs(workflowText) {
-  const marker = 'bash ci/path-scope.sh "$RUNNER_TEMP';
+  const marker = 'bash "$RUNNER_TEMP/trusted-scope/path-scope.sh" "$RUNNER_TEMP';
   const begin = workflowText.indexOf(marker);
   assert.ok(begin >= 0, 'featured scope invocation exists');
   const separator = workflowText.indexOf('--', begin);
   assert.ok(separator >= 0, 'featured scope glob separator exists');
-  const redirect = workflowText.indexOf('>>', separator);
+  const redirect = workflowText.indexOf('>', separator);
   const section = workflowText.slice(separator, redirect >= 0 ? redirect : undefined);
   const globs = [];
   for (const match of section.matchAll(/"([^"]+)"|'([^']+)'/g)) {
@@ -199,7 +200,44 @@ function isCoveredByScopes(relPosix, globs) {
   return globs.some((glob) => scopePatternCovers(glob, relPosix));
 }
 
-function resolveRelativeImport(fromAbs, spec) {
+// One reviewed generated module has tracked scope inputs instead of a tracked
+// output. Pin the generator recipe without importing/evaluating it; any recipe
+// change requires reviewing this provenance contract again. Never infer an
+// exemption from a GENERATED comment, an ignored path, or a failed read.
+const GENERATED_LEAF_CSS = {
+  output: 'src/leaf-critical-css.ts',
+  generator: 'ci/build-leaf-css.mjs',
+  generatorSha256: '452197b4e4bb0be78edea09dcf63881d7015c8769e48e06c6fa9b9f97bc80af9',
+  inputs: ['public/styles.css', 'public/theme-tokens.css', 'public/theme.css'],
+};
+const { createHash } = require('node:crypto');
+
+function generatedLeafScopeInputs(repoRoot) {
+  const { output, generator, generatorSha256, inputs } = GENERATED_LEAF_CSS;
+  const recipe = fsSync.readFileSync(path.join(repoRoot, generator));
+  assert.equal(createHash('sha256').update(recipe).digest('hex'), generatorSha256,
+    'Generated CSS generator drift: review the output/input scope contract');
+  const css = inputs.map(input => fsSync.readFileSync(path.join(repoRoot, input), 'utf8')).join('\n');
+  assert.doesNotMatch(css, /<\/style/i, 'Generated CSS source cannot contain a closing style tag');
+  const sha256 = createHash('sha256').update(css, 'utf8').digest('base64');
+  const expected = `// GENERATED from ${inputs.join(', ')} — do not hand-edit.\n` +
+    `// Regen: node ${generator} (drift is pinned by test/leaf-css-drift.test.ts).\n` +
+    `export const LEAF_CRITICAL_CSS: string =\n  ${JSON.stringify(css)};\n` +
+    `export const LEAF_CRITICAL_CSS_SHA256: string = ${JSON.stringify(sha256)};\n`;
+  let actual;
+  try {
+    actual = fsSync.readFileSync(path.join(repoRoot, output));
+  } catch (error) {
+    // The workflow runs this guard before generation. Only this exact output
+    // may be absent; generator and input reads above must all succeed.
+    if (error.code !== 'ENOENT') throw error;
+  }
+  if (actual !== undefined) assert.deepEqual(actual, Buffer.from(expected, 'utf8'),
+    'Generated CSS output drift: regenerate with node ci/build-leaf-css.mjs');
+  return [generator, ...inputs];
+}
+
+function resolveRelativeImport(fromAbs, spec, repoRoot) {
   if (!spec.startsWith('.')) return null;
   const base = path.resolve(path.dirname(fromAbs), spec);
   const candidates = [
@@ -212,6 +250,7 @@ function resolveRelativeImport(fromAbs, spec) {
     path.join(base, 'index.tsx'),
   ];
   for (const candidate of candidates) {
+    if (candidate === path.join(repoRoot, GENERATED_LEAF_CSS.output)) return candidate;
     try {
       if (fsSync.statSync(candidate).isFile()) return candidate;
     } catch {
@@ -265,7 +304,7 @@ function parseModuleReferences(content) {
   return { imports, exportsFrom };
 }
 
-function collectReachableModules(entryAbs) {
+function collectReachableModules(entryAbs, repoRoot = REPO_ROOT) {
   const neededByFile = new Map();
   const queue = [{ file: entryAbs, needed: null }];
   while (queue.length > 0) {
@@ -290,7 +329,7 @@ function collectReachableModules(entryAbs) {
     const { imports, exportsFrom } = parseModuleReferences(content);
     for (const imp of imports) {
       if (imp.isType || !imp.spec.startsWith('.')) continue;
-      const target = resolveRelativeImport(file, imp.spec);
+      const target = resolveRelativeImport(file, imp.spec, repoRoot);
       if (!target) continue;
       if (imp.srcNames === null) queue.push({ file: target, needed: null });
       else if (imp.srcNames.length > 0)
@@ -298,7 +337,7 @@ function collectReachableModules(entryAbs) {
     }
     for (const exp of exportsFrom) {
       if (exp.isType || !exp.spec.startsWith('.')) continue;
-      const target = resolveRelativeImport(file, exp.spec);
+      const target = resolveRelativeImport(file, exp.spec, repoRoot);
       if (!target) continue;
       if (exp.star) {
         queue.push({
@@ -317,8 +356,10 @@ function collectReachableModules(entryAbs) {
   return [...neededByFile.keys()];
 }
 
-function findUncoveredModules(reachableRels, globs) {
-  return reachableRels.filter((rel) => !isCoveredByScopes(rel, globs));
+function findUncoveredModules(reachableRels, globs, repoRoot = REPO_ROOT) {
+  const required = reachableRels.flatMap(rel => rel === GENERATED_LEAF_CSS.output
+    ? generatedLeafScopeInputs(repoRoot) : [rel]);
+  return [...new Set(required)].filter((rel) => !isCoveredByScopes(rel, globs));
 }
 
 test('featured scope covers every runtime src module the current-source proof renders', async () => {
@@ -351,4 +392,129 @@ test('scope check names an uncovered module and passes once it is added (synthet
   assert.deepEqual(missing, ['src/uncovered.ts']);
   assert.throws(() => assert.deepEqual(missing, []), /src\/uncovered\.ts/);
   assert.deepEqual(findUncoveredModules(reachable, ['src/used.ts', 'src/uncovered.ts']), []);
+});
+
+const LEAF_OUTPUT = 'src/leaf-critical-css.ts';
+const LEAF_SCOPE_INPUTS = [
+  'ci/build-leaf-css.mjs',
+  'public/styles.css',
+  'public/theme-tokens.css',
+  'public/theme.css',
+];
+// Independent tiny generated fixture, not output assembled by the guard.
+const LEAF_OUTPUT_FIXTURE = '// GENERATED from public/styles.css, public/theme-tokens.css, public/theme.css — do not hand-edit.\n' +
+  '// Regen: node ci/build-leaf-css.mjs (drift is pinned by test/leaf-css-drift.test.ts).\n' +
+  'export const LEAF_CRITICAL_CSS: string =\n  "body {}\\n:root {}\\nhtml {}";\n' +
+  'export const LEAF_CRITICAL_CSS_SHA256: string = "t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=";\n';
+
+async function leafScopeFixture(t, generated = false) {
+  const dir = await scratch(t);
+  for (const subdir of ['src', 'ci', 'public']) await fs.mkdir(path.join(dir, subdir));
+  await fs.copyFile(path.join(REPO_ROOT, LEAF_SCOPE_INPUTS[0]), path.join(dir, LEAF_SCOPE_INPUTS[0]));
+  for (const [index, css] of ['body {}', ':root {}', 'html {}'].entries()) {
+    await fs.writeFile(path.join(dir, LEAF_SCOPE_INPUTS[index + 1]), css);
+  }
+  await fs.writeFile(path.join(dir, 'entry.ts'), 'import { LEAF_CRITICAL_CSS } from "./src/leaf-critical-css";\n');
+  if (generated) await fs.writeFile(path.join(dir, LEAF_OUTPUT), LEAF_OUTPUT_FIXTURE);
+  return dir;
+}
+
+for (const generated of [false, true]) {
+  const state = generated ? 'generated' : 'clean';
+  test(`generated CSS provenance covers the runtime module in a ${state} checkout`, async t => {
+    const dir = await leafScopeFixture(t, generated);
+    const reachable = collectReachableModules(path.join(dir, 'entry.ts'), dir)
+      .map(file => path.relative(dir, file).replace(/\\/g, '/'))
+      .filter(rel => rel.startsWith('src/'));
+    assert.deepEqual(reachable, [LEAF_OUTPUT], 'the output stays in the graph even before generation');
+    assert.deepEqual(findUncoveredModules(reachable, LEAF_SCOPE_INPUTS, dir), []);
+  });
+
+  for (const missing of LEAF_SCOPE_INPUTS) {
+    test(`${state} generated CSS scope rejects omission of ${missing}`, async t => {
+      const dir = await leafScopeFixture(t, generated);
+      // Literal output coverage must not bypass its generator/input requirements.
+      const globs = [LEAF_OUTPUT, ...LEAF_SCOPE_INPUTS.filter(input => input !== missing)];
+      assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], globs, dir), [missing]);
+    });
+  }
+}
+
+test('generated CSS provenance does not exempt unrelated generated-looking runtime modules', async t => {
+  const dir = await leafScopeFixture(t, true);
+  await fs.writeFile(path.join(dir, 'src', 'uncovered.ts'), '// GENERATED; still an ordinary module\nexport const b = 2;\n');
+  await fs.appendFile(path.join(dir, 'entry.ts'), 'import { b } from "./src/uncovered";\n');
+  const reachable = collectReachableModules(path.join(dir, 'entry.ts'), dir)
+    .map(file => path.relative(dir, file).replace(/\\/g, '/'))
+    .filter(rel => rel.startsWith('src/')).sort();
+  assert.deepEqual(reachable, [LEAF_OUTPUT, 'src/uncovered.ts']);
+  assert.deepEqual(findUncoveredModules(reachable, LEAF_SCOPE_INPUTS, dir), ['src/uncovered.ts']);
+  assert.deepEqual(findUncoveredModules(reachable, [...LEAF_SCOPE_INPUTS, 'src/uncovered.ts'], dir), []);
+});
+
+for (const [name, mutate] of [
+  ['stale source list', text => text.replace('public/theme.css —', 'public/old-theme.css —')],
+  ['malformed header', text => text.replace('// GENERATED', '// malformed')],
+  ['wrong generator provenance', text => text.replace('node ci/build-leaf-css.mjs', 'node ci/other.mjs')],
+  ['stale CSS bytes', text => text.replace('body {}', 'body {color:red}')],
+  ['malformed hash', text => text.replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', 'stale')],
+  ['extra runtime import', text => `${text}import "./uncovered";\n`],
+]) {
+  test(`generated CSS rejects ${name} rather than granting an exemption`, async t => {
+    const dir = await leafScopeFixture(t, true);
+    await fs.writeFile(path.join(dir, LEAF_OUTPUT), mutate(LEAF_OUTPUT_FIXTURE));
+    assert.throws(() => findUncoveredModules([LEAF_OUTPUT], [LEAF_OUTPUT, ...LEAF_SCOPE_INPUTS], dir), /Generated CSS output drift/);
+  });
+}
+
+for (const generated of [false, true]) {
+  for (const [name, mutate] of [
+    ['input list', text => text.replace('"public/theme.css"', '"public/other.css"')],
+    ['output path', text => text.replace('"src/leaf-critical-css.ts"', '"src/other.ts"')],
+    ['build recipe', text => text.replace('.join("\\n")', '.join("")')],
+  ]) {
+    test(`generated CSS rejects generator ${name} drift with output ${generated ? 'present' : 'absent'}`, async t => {
+      const dir = await leafScopeFixture(t, generated);
+      const generatorPath = path.join(dir, LEAF_SCOPE_INPUTS[0]);
+      const original = await fs.readFile(generatorPath, 'utf8');
+      const changed = mutate(original);
+      assert.notEqual(changed, original, 'mutation actually changes the generator');
+      await fs.writeFile(generatorPath, changed);
+      assert.throws(() => findUncoveredModules([LEAF_OUTPUT], [LEAF_OUTPUT, ...LEAF_SCOPE_INPUTS], dir), /Generated CSS generator drift/);
+    });
+  }
+}
+
+for (const missing of LEAF_SCOPE_INPUTS) {
+  test(`generated CSS rejects missing provenance file ${missing}`, async t => {
+    const dir = await leafScopeFixture(t);
+    await fs.unlink(path.join(dir, missing));
+    assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /ENOENT/);
+  });
+}
+
+test('generated CSS rejects stale output after a covered input changes', async t => {
+  const dir = await leafScopeFixture(t, true);
+  await fs.appendFile(path.join(dir, 'public', 'theme.css'), '\n.changed {}');
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
+});
+
+test('generated CSS accepts valid replacement-character bytes but rejects identically decoded malformed UTF-8', async t => {
+  const dir = await leafScopeFixture(t, true);
+  await fs.writeFile(path.join(dir, 'public', 'styles.css'), 'body � {}');
+  const valid = Buffer.from(LEAF_OUTPUT_FIXTURE
+    .replace('body {}', 'body � {}')
+    .replace('t6OwiNRx7V1Q9F12F/CyMuAHBidohiQoUavOpLejPwU=', 'eDPS7mHegXY3W7fmCCWLYeSQzHINIE/jG1bBbpqMTZM='), 'utf8');
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), valid);
+  assert.deepEqual(findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), []);
+
+  const replacement = Buffer.from('�', 'utf8');
+  const offset = valid.indexOf(replacement);
+  assert.ok(offset >= 0, 'the valid output contains a UTF-8 replacement character');
+  const malformed = Buffer.concat([valid.subarray(0, offset), Buffer.from([0xFF]), valid.subarray(offset + replacement.length)]);
+  assert.notDeepEqual(malformed, valid, 'the output bytes differ');
+  assert.equal(malformed.toString('utf8'), valid.toString('utf8'), 'UTF-8 decoding hides the corruption');
+  t.diagnostic(`valid=${valid.length} bytes; malformed=${malformed.length} bytes; decoded strings equal`);
+  await fs.writeFile(path.join(dir, LEAF_OUTPUT), malformed);
+  assert.throws(() => findUncoveredModules([LEAF_OUTPUT], LEAF_SCOPE_INPUTS, dir), /Generated CSS output drift/);
 });

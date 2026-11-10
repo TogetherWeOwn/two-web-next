@@ -86,21 +86,19 @@ is set. The only authenticated Kit-parity journey in CI is `e2e:kit-parity` in
 `browser-smoke` (member board, one shared QA login); the critical `npm run e2e`
 journeys in the same job log in separately. The parity suite's raw
 no-JavaScript API checks fetch all four hot-zone paths on both targets
-(`e2e/kit-parity/parity.spec.ts:351-431`). Its rendered browser journey currently
-loads `/hotzones`, follows `/hotzones/joins`, and directly loads `/hotzones/voice`
-and `/hotzones/games` at desktop (1280×800) and mobile (390×844) widths
-(`parity.spec.ts:858-936`). That proves each page responds and contains a
-heading/grid region, but voice and games still need the content-specific
-assertions in the acceptance contract below. CI also covers shared helper
+(`e2e/kit-parity/parity.spec.ts`, "index and signals serve aggregate grids").
+Its rendered browser journey loads `/hotzones`, follows `/hotzones/joins`, and
+loads `/hotzones/voice` and `/hotzones/games` at desktop (1280×800) and
+mobile (390×844) widths ("hotzones … shows the grids and follows signal nav"),
+asserting the acceptance contract below. CI also covers shared helper
 branches through the canonical `/hotzones` fixture in the step-3 unit contract
 and the hot-zone Vitest suites. Preview fetches are operator-run evidence, not
 CI evidence.
 
 ### Voice and games rendered acceptance contract
 
-The next implementation slice is limited to strengthening the existing public,
-read-only browser journey in `e2e/kit-parity/parity.spec.ts`; it does not add a
-new fixture, credential, staging/production data dependency, login, screenshot
+The public, read-only browser journey in `e2e/kit-parity/parity.spec.ts` pins
+this contract; it adds no new fixture, credential, staging/production data dependency, login, screenshot
 baseline, or route. Run it on both the local Hono worker and built Kit Worker,
 for each viewport above. Assertions are observable rendered-page behavior:
 
@@ -109,7 +107,7 @@ for each viewport above. Assertions are observable rendered-page behavior:
   season-independent seeded estimate pending bot event-store calibration and
   shows a numeric total estimate. The one rendered grid is a labelled, focusable
   scroll region containing a table with weekday rows and hour columns; its
-  caption is `Season-independent seeded estimate of voice activity` for the fixture URL.
+  caption is `Season-independent seeded estimate of voice activity (hours in UTC)`.
 - **Games page:** same contract for `/hotzones/games`, with `games` substituted
   for `voice` in the heading, estimate copy and caption.
 - **Navigation:** from `/hotzones`, each Voice heatmap and Games heatmap link
@@ -139,8 +137,7 @@ GET pages; the browser context blocks external requests. The current journey
 needs no QA login (the single shared login belongs to the member-board tests).
 Keep data assertions fixture-stable: pin semantic labels, grid dimensions and
 nonnegative numeric totals rather than the seeded WhatPulse cells or a live
-join-count value. Do not claim the new content contract is executed until the
-assertions are merged and the parity browser job is green on that head.
+join-count value.
 
 In `browser-smoke`, after the seed and before any browser journey mutates
 shared state, the dedicated `events-index.visual.spec.ts` captures the Kit
@@ -155,6 +152,101 @@ One baseline integrator owns `e2e/visual/__screenshots__/` and
 `e2e/visual/__screenshots-kit__/`: parallel migration cards never commit
 baselines directly; they attach `*-actual.png` evidence and the integrator
 reviews and commits. This keeps the 18 Hono baselines attributable.
+
+## Pure-Hono route parity goldens (`ci/parity/`)
+
+Every later migration card must show it changed no route contract compared
+with **pure Hono**, not with the strangler Kit build: that build already
+differs before its hook runs (trailing-slash 308, method handling, automatic
+304). So the goldens are recorded from root `wrangler.jsonc` (main
+`src/worker.ts`) and never from a Kit or staging Worker.
+
+- `ci/parity/record.mjs` runs the target Worker under `wrangler dev --local`
+  (never `vite dev`) behind `ci/parity/harness.ts`. Each run gets a fresh clone
+  of one migrated template database seeded by `ci/parity/fixture.mjs` (the
+  `e2e/seed.mjs` events, member and moderator users, one member profile and
+  member, moderator and expired sessions). Seeded timestamps are fixed,
+  because the feeds publish `updated_at`. The template keeps a copy of every
+  table and sequence in a `parity_seed` schema, and `parity_seed.reset()`
+  restores them before each vector, so no golden depends on an earlier
+  vector's writes, session rotation or queued jobs. The
+  harness freezes the JS clock at 2026-07-01T12:00:00Z, reseeds
+  `crypto.getRandomValues`/`randomUUID` per vector, derives `cf-ray` and the
+  throttle client key from the vector id, and answers outbound fetches only
+  from the shared Discord fixture (`e2e/discord-stub.ts`).
+- The matrix (`ci/parity/vectors.mjs`) covers all of
+  `test/fixtures/route-inventory.json`, every file under `public/` and every
+  `ROUTE_MANIFEST` GET path. Per path: all seven methods (unsafe ones as a
+  same-origin empty form), `Accept` HTML and JSON, member, moderator, expired
+  and forged-signature sessions, trailing slash, the `__data.json` suffix,
+  `%2F` and `%25`, multi-segment values for `{.+...}` params (`/e/a/b.md`,
+  `/events/a/b.ics`), and `If-None-Match` exact, `W/` and `*`. Per unsafe
+  registration: cross-origin and missing Origin, `Accept` HTML and JSON,
+  `text/plain` and JSON bodies, a body one byte over 1 MiB, each session, wrong
+  and malformed bearers and wrong and valid QA tokens where the route takes
+  them. Bearer routes also get the wrong and malformed bearers on GET, and the
+  ops-overrides routes get the fixture operator bearer on GET and each write method;
+  `check:route-parity` fails unless that bearer gets past the 401. Source
+  evidence and agent events are disabled in the fixture (404 before the bearer
+  check), so they get no valid-bearer vector. Four throttle bursts (`/join/discord`, `/auth/discord`,
+  `POST /logout`, `/events`) record the response after the limit.
+- Each response keeps status, the full header set, Set-Cookie names and
+  attributes, the body sha256 (and a JSON shape for JSON), the request-log
+  route and its tail alert-line label (`tail/worker.ts` `ALERT_ROUTES`), any
+  `error.alert` route and the outbound calls attempted. `date`,
+  `x-request-id` and `cf-ray` values, cookie values, CSP nonces and the
+  `Retry-After` value are masked. So are 32-hex asset `ETag` values: under
+  `wrangler dev` they hash the file's absolute path and mtime, which change
+  with every checkout. The app's own 64-hex sha256 ETags are kept.
+- Goldens live in `test/fixtures/parity/hono-<sha>/`, where `<sha>` is the
+  newest commit that changed a runtime input (`src`, `public`, `tail`,
+  `drizzle`, `wrangler.jsonc`, `package-lock.json`). `index.json` records the
+  git trees of those inputs and of the harness, plus the coverage map. To
+  re-record, copy the `route-parity-<sha>` artifact from the `check` job into
+  that directory unchanged. The recorder (`ci/parity/golden.mjs`) writes one
+  vector per line and stores each request header set, response header set,
+  Set-Cookie list and body descriptor once, in the `shared` table of
+  `index.json`, keyed by a sha256 prefix; a vector holds only `"=<key>"`.
+  `loadRecording` expands the table before any comparison and fails on a
+  missing key or an unused entry. This keeps a re-record diff small (a changed
+  CSP is one table line) and the set under GitHub's 20,000-line pull request
+  diff limit; past it the diff API returns 406 and Devin Review fails without
+  reviewing. Biome skips these directories. The committed set was
+  recorded at `9822a6e60c6b2229c8b823bb481c87fb29fa85c9`.
+- `test/fixtures/parity/signed-cookies.json` holds `hono/cookie` vectors for
+  every cookie `src/` signs (`node ci/parity/signed-cookies.mjs --write`).
+- `npm run check:route-parity` (the `check` job) records pure Hono twice and
+  fails on any difference. While the runtime inputs match the committed
+  goldens' `index.json`, it also fails if a fresh run differs from them; once
+  `src/` moves on it prints a notice instead, and the next parity card
+  re-records before comparing. `node ci/parity/compare.mjs --baseline <golden>
+  --config <wrangler config>` records any other Worker and compares it.
+
+| Route group | Goldens | Owner today |
+| --- | --- | --- |
+| Public pages (`/`, `/about`, `/faq`, `/rules`, `/privacy`, `/join`, `/community`, `/discord`, `/login`, `/members`, `/hotzones*`, `/events`, `/events/past`) | `routes/*.json`, `kit/hotzones_*.json` | Hono (Kit for enabled manifest entries on preview/staging only) |
+| Markdown, feeds and SEO (`*.md`, `/events.ics`, `/events.rss`, `/events.json`, `/llms.txt`, `/robots.txt`, `/sitemap_index.xml`, `/.well-known/security.txt`) | `routes/*.json` | Hono |
+| Event detail, RSVP and moderator event writes (`/e/*`, `/events/:key*`, `POST /events`) | `routes/e_*.json`, `routes/events_*.json` | Hono |
+| Sign-in, OAuth, session and QA (`/auth/*`, `/logout*`, `/join/discord`, `/join/callback`) | `routes/auth_*.json`, `routes/logout*.json`, `routes/join_*.json` | Hono |
+| Members, profile and leaderboard (`/profile`, `/members/*`, `/leaderboards/members`) | `routes/profile.json`, `routes/members_*.json`, `routes/leaderboards_members.json` | Hono |
+| Moderator admin (`/admin`, `/admin/events*`, `/admin/featured*`, `/admin/activity-log`, `/admin/join-attempts*`) | `routes/admin*.json` | Hono |
+| Bearer and staging-operator admin (`/admin/ops-overrides`, `/admin/queue/*`) | `routes/admin_ops-overrides.json`, `routes/admin_queue_*.json` | Hono |
+| Public API, OpenAPI, MCP and agent ingress (`/api/public/*`, `/openapi.json`, `/mcp`, `/api/agent-events`) | `routes/api_*.json`, `routes/openapi.json.json`, `routes/mcp.json` | Hono |
+| Health, version, CSP sink and alert probe (`/up`, `/version`, `/csp-reports`, `/__probe/alert`) | `routes/up.json`, `routes/version.json`, `routes/csp-reports.json`, `routes/__probe_alert.json` | Hono |
+| Wildcard middleware and branded 404 (`/*`, `/admin/*`, `/admin/queue/*`, `/members/*`) | `routes/ALL.json`, `routes/*_ALL.json` | Hono |
+| Static assets (`public/**`) | `static/*.json` | Hono (Workers assets, `run_worker_first`) |
+
+### Approved route-parity exceptions
+
+`ci/parity/compare.mjs` reads this table. A row approves one field of one
+vector (`*` globs the vector key; field `*` approves every field). Each row
+needs a reason; a row that matches nothing is reported. Hono-vs-Hono runs
+take no exceptions.
+
+<!-- route-parity-exceptions:start -->
+| Vector (`file#vector id`) | Field | Reason |
+| --- | --- | --- |
+<!-- route-parity-exceptions:end -->
 
 ## Journey gates (`ci/kit-parity-gates.mjs`)
 
@@ -419,10 +511,9 @@ preview; the served detail is pinned by the unit fixtures and the hermetic
 Kit suites because no seeded attempt id is stable on staging). Hot-zone coverage is distinct: the suite performs raw
 no-JavaScript API checks for all four paths and the two-width browser journey
 renders `/hotzones`, `/hotzones/joins`, `/hotzones/voice` and
-`/hotzones/games`. The latter two currently have only shared heading/grid/layout
-assertions; see [Voice and games rendered acceptance contract](#voice-and-games-rendered-acceptance-contract)
-for the content-specific browser assertions that remain the next implementation
-slice. The unit contract exercises shared contract branches on canonical
+`/hotzones/games`, with the voice and games content assertions in
+[Voice and games rendered acceptance contract](#voice-and-games-rendered-acceptance-contract).
+The unit contract exercises shared contract branches on canonical
 fixtures (one synthetic `/hotzones` shell, one member-board fixture, the
 `/about` and `/faq` leaves); per-path coverage of all four hot-zone signals
 also comes from API checks (and preview mode when an operator runs it).

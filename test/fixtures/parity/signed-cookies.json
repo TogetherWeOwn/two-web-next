@@ -1,0 +1,182 @@
+{
+  "secret": "parity-signed-cookie-vector-secret-not-a-real-key",
+  "library": "hono/cookie generateSignedCookie",
+  "options": {
+    "path": "/",
+    "secure": true,
+    "httpOnly": true,
+    "sameSite": "Lax"
+  },
+  "cookies": [
+    {
+      "name": "__Host-two_expired_write",
+      "signedIn": ["src/write-recovery.tsx"],
+      "vectors": [
+        {
+          "value": "pending|/events/01J00000000000000000000001",
+          "cookieValue": "pending%7C%2Fevents%2F01J00000000000000000000001.9znK%2FZCIu%2Bhtd7Thm57nOTTdewlTm%2B787fSWcCIBoOM%3D",
+          "header": "__Host-two_expired_write=pending%7C%2Fevents%2F01J00000000000000000000001.9znK%2FZCIu%2Bhtd7Thm57nOTTdewlTm%2B787fSWcCIBoOM%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        },
+        {
+          "value": "/events?q=a b&x=|;,%ü",
+          "cookieValue": "%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D",
+          "header": "__Host-two_expired_write=%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        }
+      ]
+    },
+    {
+      "name": "__Host-two_join_next",
+      "signedIn": ["src/join/route-start.ts"],
+      "vectors": [
+        {
+          "value": "/events/01J00000000000000000000001",
+          "cookieValue": "%2Fevents%2F01J00000000000000000000001.fCeXwDrS6sZPlDjkH9RIKIA7ITSg7wWDC3oFvDqcYLU%3D",
+          "header": "__Host-two_join_next=%2Fevents%2F01J00000000000000000000001.fCeXwDrS6sZPlDjkH9RIKIA7ITSg7wWDC3oFvDqcYLU%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        },
+        {
+          "value": "/events?q=a b&x=|;,%ü",
+          "cookieValue": "%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D",
+          "header": "__Host-two_join_next=%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        }
+      ]
+    },
+    {
+      "name": "__Host-two_join_result",
+      "signedIn": ["src/return-journey.ts"],
+      "vectors": [
+        {
+          "value": "joined",
+          "cookieValue": "joined.lfwpV%2BVUN5%2B3QDZaXdznQ6UeHXls4%2BV%2FR2EWhICDopU%3D",
+          "header": "__Host-two_join_result=joined.lfwpV%2BVUN5%2B3QDZaXdznQ6UeHXls4%2BV%2FR2EWhICDopU%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        },
+        {
+          "value": "/events?q=a b&x=|;,%ü",
+          "cookieValue": "%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D",
+          "header": "__Host-two_join_result=%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        }
+      ]
+    },
+    {
+      "name": "__Host-two_join_source",
+      "signedIn": ["src/join/route-start.ts"],
+      "vectors": [
+        {
+          "value": "discord-widget",
+          "cookieValue": "discord-widget.5709D2Yjt3ZMVcTN6Gpf5yDPJwwKHgv8TRdCgqHoCyo%3D",
+          "header": "__Host-two_join_source=discord-widget.5709D2Yjt3ZMVcTN6Gpf5yDPJwwKHgv8TRdCgqHoCyo%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        },
+        {
+          "value": "/events?q=a b&x=|;,%ü",
+          "cookieValue": "%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D",
+          "header": "__Host-two_join_source=%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        }
+      ]
+    },
+    {
+      "name": "__Host-two_join_state",
+      "signedIn": ["src/join/route-start.ts"],
+      "vectors": [
+        {
+          "value": "parity-join-state-0123456789abcdef",
+          "cookieValue": "parity-join-state-0123456789abcdef.sLd3EhXWLgGaKA%2FeuGlkVM9uMiJar1CPrKTmUtXGv6Q%3D",
+          "header": "__Host-two_join_state=parity-join-state-0123456789abcdef.sLd3EhXWLgGaKA%2FeuGlkVM9uMiJar1CPrKTmUtXGv6Q%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        },
+        {
+          "value": "/events?q=a b&x=|;,%ü",
+          "cookieValue": "%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D",
+          "header": "__Host-two_join_state=%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        }
+      ]
+    },
+    {
+      "name": "__Host-two_login_intended",
+      "signedIn": [
+        "src/auth/routes.ts",
+        "src/profiles/kit.ts",
+        "src/return-journey.ts",
+        "src/write-recovery.tsx"
+      ],
+      "vectors": [
+        {
+          "value": "/admin/events?page=2",
+          "cookieValue": "%2Fadmin%2Fevents%3Fpage%3D2.uQhMXtltBLD25HRxpL1v9ogN5NE9sWGF0Vrm49uyiJ0%3D",
+          "header": "__Host-two_login_intended=%2Fadmin%2Fevents%3Fpage%3D2.uQhMXtltBLD25HRxpL1v9ogN5NE9sWGF0Vrm49uyiJ0%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        },
+        {
+          "value": "/events?q=a b&x=|;,%ü",
+          "cookieValue": "%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D",
+          "header": "__Host-two_login_intended=%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        }
+      ]
+    },
+    {
+      "name": "__Host-two_login_next",
+      "signedIn": ["src/return-journey.ts"],
+      "vectors": [
+        {
+          "value": "/profile",
+          "cookieValue": "%2Fprofile.B1ThPigcuF0Sb76l1c72SnllUh2zceSd%2FSQ2tWpzF%2BM%3D",
+          "header": "__Host-two_login_next=%2Fprofile.B1ThPigcuF0Sb76l1c72SnllUh2zceSd%2FSQ2tWpzF%2BM%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        },
+        {
+          "value": "/events?q=a b&x=|;,%ü",
+          "cookieValue": "%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D",
+          "header": "__Host-two_login_next=%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        }
+      ]
+    },
+    {
+      "name": "__Host-two_oauth_state",
+      "signedIn": ["src/auth/routes.ts"],
+      "vectors": [
+        {
+          "value": "parity-oauth-state-0123456789abcdef",
+          "cookieValue": "parity-oauth-state-0123456789abcdef.nipKqqQqSedDJNSJK88TqXJgrJuk6uEfeIAL9bgFJC8%3D",
+          "header": "__Host-two_oauth_state=parity-oauth-state-0123456789abcdef.nipKqqQqSedDJNSJK88TqXJgrJuk6uEfeIAL9bgFJC8%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        },
+        {
+          "value": "/events?q=a b&x=|;,%ü",
+          "cookieValue": "%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D",
+          "header": "__Host-two_oauth_state=%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        }
+      ]
+    },
+    {
+      "name": "__Host-two_session",
+      "signedIn": [
+        "src/admin/guard.ts",
+        "src/index.tsx",
+        "src/kit-session.ts",
+        "src/profiles/routes-gate.ts"
+      ],
+      "vectors": [
+        {
+          "value": "two_parityVectorSession000000000000000000000000",
+          "cookieValue": "two_parityVectorSession000000000000000000000000.SSZKnn1ZrHWCz0JMFp5Psk%2FyHLCRGMXF1heo6Lw5tZE%3D",
+          "header": "__Host-two_session=two_parityVectorSession000000000000000000000000.SSZKnn1ZrHWCz0JMFp5Psk%2FyHLCRGMXF1heo6Lw5tZE%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        },
+        {
+          "value": "/events?q=a b&x=|;,%ü",
+          "cookieValue": "%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D",
+          "header": "__Host-two_session=%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        }
+      ]
+    },
+    {
+      "name": "__Host-two_session_status",
+      "signedIn": ["src/auth-status.ts", "src/kit-session.ts"],
+      "vectors": [
+        {
+          "value": "parity-status-key-0123456789abcdef",
+          "cookieValue": "parity-status-key-0123456789abcdef.zNocHd%2F3caoOgCDj8vTfrCsR%2BdmLqcQfiwCVwHNVV%2Bw%3D",
+          "header": "__Host-two_session_status=parity-status-key-0123456789abcdef.zNocHd%2F3caoOgCDj8vTfrCsR%2BdmLqcQfiwCVwHNVV%2Bw%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        },
+        {
+          "value": "/events?q=a b&x=|;,%ü",
+          "cookieValue": "%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D",
+          "header": "__Host-two_session_status=%2Fevents%3Fq%3Da%20b%26x%3D%7C%3B%2C%25%C3%BC.fUT3cQ3Iukd6St3b7WXFQ4zrgjDxmF7AuQh1BOtlndc%3D; Path=/; HttpOnly; Secure; SameSite=Lax"
+        }
+      ]
+    }
+  ]
+}

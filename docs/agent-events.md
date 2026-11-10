@@ -25,7 +25,13 @@ one admitted caller, one staging guild. Wire contract follows two-web `AgentEven
   increasing wall times; updates still refuse a resolved end at or before the start.
   Shared-row edits also enforce the Going capacity floor and promote available FIFO seats under the row lock.
 - Atomicity is Postgres only: `pg_advisory_xact_lock` per grant (create/read) or per event (mutations), with
-  `lock_timeout` → `503 operation_busy`. Idempotency rows are re-checked under the lock, so concurrent duplicate
+  transaction-local `lock_timeout` and `statement_timeout` → `503 operation_busy` for lock waits
+  (`55P03`) or cancelled executing statements (`57014`). Both bounds use
+  `max(1, floor(lockWaitMs))` milliseconds per statement. Shield, inner-budget and operation transactions
+  install them before work; grant lookup, pre-transaction replay lookup and denial audits each use a
+  separate short bounded transaction. No transaction-duration deadline bounds the read's bot HTTP await,
+  and write-back still starts only after commit. Aborted verdicts add no hits of their own; earlier
+  committed admission layers keep their hits. Idempotency rows are re-checked under the lock, so concurrent duplicate
   deliveries execute once and all get the original answer (`replayed: true`). A pre-found replay revalidates
   grant liveness after the idempotency wait under a grant lock (no operation lock): a grant disabled, removed
   or expired during the wait is refused `403 grant_disabled`/`grant_expired` instead of replaying. Caller next

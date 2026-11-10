@@ -74,6 +74,14 @@ const islands =
       <p role="status" aria-atomic="true" data-copy-toast data-testid="subscription-copy-status"></p>
       <p>{SUBSCRIPTION_GUIDANCE[2]}</p>
     </details>
+    <!-- Plain GET navigation outside the binder's swapped zones: submitting
+        starts from page 1 with JS off, and fragment turns never swallow it.
+        Same shape as the calendar search form. -->
+    <form method="get" action="/events/past" role="search">
+      <label class="sr-only" for="past-events-search-input">Search past events</label>
+      <input id="past-events-search-input" type="search" name="q" value={q} placeholder="Search past events" />
+      <button class="btn" type="submit">Search</button>
+    </form>
     <div data-archive-state>
       {#if q}<p role="status">Past events matching “{q}”. <a href="/events/past">Clear search</a></p>{/if}
       {#if rows.length === 0}
@@ -90,7 +98,7 @@ const islands =
       {/if}
     </div>
     <ul data-testid={PAST_EVENTS_LIST_TESTID} data-archive-list hidden={rows.length === 0}>{#if import.meta.env?.SSR !== false}{#each rows as e (e.eventKey)}<EventCard {e} {q} archive={{ page, q }} />{/each}{/if}</ul>
-    <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>{#if page > 1 && totalPages > 0}<a data-testid={PAST_EVENTS_PAGER_NEWER_TESTID} data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if hasMore}<a data-testid={PAST_EVENTS_PAGER_OLDER_TESTID} data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
+    <nav aria-label="Past event pages" data-archive-pager data-testid={PAST_EVENTS_PAGER_TESTID}>{#if page > 1 && totalPages > 0}<a data-testid={PAST_EVENTS_PAGER_NEWER_TESTID} data-archive-page href={pastEventsUrl(Math.min(page - 1, totalPages), q)}>Newer</a>{/if}{" "}{#if totalPages > 0}<span>{`Page ${page} of ${totalPages}`}</span>{/if}{" "}{#if hasMore}<a data-testid={PAST_EVENTS_PAGER_OLDER_TESTID} data-archive-page href={pastEventsUrl(page + 1, q)}>Older</a>{/if}</nav>
     <p><a data-testid={PAST_EVENTS_BACK_TESTID} href="/events">Back to upcoming events</a></p>
     <p role="status" data-archive-feedback></p>
   </section>

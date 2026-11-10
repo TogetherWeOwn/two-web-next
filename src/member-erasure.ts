@@ -1,9 +1,15 @@
 // Member erasure (TOG-12548). Backs the published deletion promise
 // (src/privacy-content.ts "Deletion"): one Discord id, one transaction,
 // six member tables: users, profiles, rsvps, web_sessions, the session
-// predecessor-grace table, and join_attempts. Authorship columns (events.created_by,
+// predecessor-grace table, and join_attempts. Seats the member held go to
+// the waitlist in the same transaction. Authorship columns (events.created_by,
 // featured_contents.created_by) and the append-only audit tables are
 // deliberately out of scope — see docs/member-erasure.md.
+import { inArray } from "drizzle-orm";
+import { events } from "./db/admin-schema";
+import { drizzleOver, type UnsafeClient } from "./db/proxy";
+import { lockWaitlist, promoteWaitlist } from "./events/waitlist";
+
 export const DISCORD_ID_RE = /^[1-9]\d{0,19}$/;
 
 export class InvalidMemberIdError extends Error {
@@ -59,11 +65,13 @@ export const ERASURE_TABLES = [
 
 export type ErasureTable = (typeof ERASURE_TABLES)[number];
 
-/** Minimal postgres.js surface the erasure needs: templated queries + begin. */
-export type ErasureTx = <T = Record<string, unknown>[]>(
+/** Minimal postgres.js surface the erasure needs: templated queries + begin,
+ * plus `unsafe` for the Drizzle bridge the waitlist promotion runs on. */
+export type ErasureTx = (<T = Record<string, unknown>[]>(
   strings: TemplateStringsArray,
   ...values: unknown[]
-) => Promise<T>;
+) => Promise<T>) &
+  UnsafeClient;
 
 export type ErasureSql = ErasureTx & {
   begin: <T>(fn: (tx: ErasureTx) => Promise<T>) => Promise<T>;
@@ -109,10 +117,33 @@ export async function countMemberRows(sql: ErasureTx, discordId: string): Promis
   return counts;
 }
 
+/** Hand each seat the member released to its waitlist, like the RSVP verbs do
+ * on a withdrawal. Runs behind the event row locks eraseMember takes first. */
+async function promoteFreedSeats(
+  tx: ErasureTx,
+  released: { event_id: number; status: string }[],
+): Promise<void> {
+  const ids = [...new Set(released.filter((r) => r.status === "going").map((r) => r.event_id))];
+  if (ids.length === 0) return;
+  const db = drizzleOver(tx);
+  const seated = await db.select().from(events).where(inArray(events.id, ids)).orderBy(events.id);
+  // Finish every head-row wait before reading the clock, then judge expiry
+  // and stamp promotions on that one database instant, like the RSVP verbs.
+  for (const ev of seated) await lockWaitlist(db, ev.id);
+  // Epoch milliseconds, not a timestamptz: a client Drizzle has wrapped
+  // parses timestamps as strings, while the CLI's own client returns Dates.
+  const [clock] = await tx<
+    { ms: number }[]
+  >`select extract(epoch from clock_timestamp())::float8 * 1000 as ms`;
+  const now = new Date(clock!.ms);
+  for (const ev of seated) await promoteWaitlist(db, ev, () => now);
+}
+
 /**
  * Erase one member's rows. Dry-run counts only and writes nothing; apply
- * deletes all six member tables in one transaction and returns rows removed
- * plus the session-chase pass forensics. The id is validated before any
+ * deletes all six member tables in one transaction, promotes the waitlist of
+ * every event where the member held a seat, and returns rows removed plus the
+ * session-chase pass forensics. The id is validated before any
  * query runs.
  */
 export async function eraseMember(
@@ -127,9 +158,20 @@ export async function eraseMember(
   }
   return sql.begin(async (tx) => {
     const counts = zeroCounts();
+    // Lock the member's events in id order, the RSVP verbs' event-then-RSVP
+    // order. The rsvps sync-revision trigger would otherwise take these locks
+    // in delete order, and the promotion below needs them held.
+    await tx`select id from events
+      where id in (select event_id from rsvps where user_id = ${discordId})
+      order by id for update`;
     const users = await tx`delete from users where id = ${discordId} returning 1`;
     const profiles = await tx`delete from profiles where user_id = ${discordId} returning 1`;
-    const rsvps = await tx`delete from rsvps where user_id = ${discordId} returning 1`;
+    const rsvps = await tx<
+      { event_id: number; status: string }[]
+    >`delete from rsvps where user_id = ${discordId} returning event_id, status`;
+    // The delete and each promotion advance the event's sync_revision through
+    // the rsvps trigger, so the reconcile cron re-syncs Discord.
+    await promoteFreedSeats(tx, rsvps);
     // An in-flight rotation can replace a locked source row after this
     // DELETE's statement snapshot. Recount with a fresh snapshot and delete
     // its successor, like revokeMemberSessions does for revocation stamps.

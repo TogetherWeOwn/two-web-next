@@ -1,3 +1,4 @@
+import { renderDate } from "../../../../../src/render-clock";
 import { error, redirect } from "@sveltejs/kit";
 import { env } from "cloudflare:workers";
 import type { PageServerLoad } from "./$types";
@@ -33,6 +34,10 @@ export const load: PageServerLoad = async ({
 }) => {
   const outcome = await resolveKitEventDetail({
     key: params.key ?? "",
+    now:
+      typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true
+        ? renderDate(request, env)
+        : undefined,
     search: url.search,
     path: url.pathname,
     env,

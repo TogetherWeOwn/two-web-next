@@ -11,12 +11,22 @@
 // audit; this only tells the load which rows and page controls to render.
 // The fetch stays bounded: listEvents over-fetches by exactly one row
 // (EVENT_PAGE_SIZE + 1, no count query), and the view slices to the page.
-import { EVENT_PAGE_SIZE, eventEmptyText, type EventListQuery } from "./event-list";
+import {
+  EVENT_PAGE_SIZE,
+  eventEmptyText,
+  pageTitleDuplicates,
+  sameTitleSuffix,
+  type EventListQuery,
+} from "./event-list";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 import type { EventListRow } from "./store-event-reads";
 
 /** One events-table row with its timestamps pre-rendered, exactly as the
- * Hono page emits them (<time datetime=ISO>ISO</time>). */
+ * Hono page emits them (<time datetime=ISO>ISO</time>). A stored instant
+ * Postgres can hold but a JS Date cannot represent (infinity, out-of-range
+ * years) decodes to an Invalid Date: it renders as "" so the page shows its
+ * unrenderable-time placeholder and the row stays listed for repair,
+ * instead of one bad row throwing the whole inventory. */
 export type KitEventListRow = {
   eventKey: string;
   title: string;
@@ -41,14 +51,23 @@ export type KitEventListView = {
   pauseReviews: Record<string, string>;
 };
 
+/**
+ * ISO text for a stored instant, or "" when it cannot be rendered. The
+ * finite check mirrors the Hono edit twin (src/admin/routes.tsx eventValues):
+ * never call toISOString() on a nonfinite instant.
+ */
+export function renderableIso(instant: Date): string {
+  return Number.isFinite(instant.getTime()) ? instant.toISOString() : "";
+}
+
 export function serializeEventListRow(row: EventListRow): KitEventListRow {
   return {
     eventKey: row.eventKey,
     title: row.title,
     game: row.game,
     status: row.status,
-    startsAt: row.startsAt.toISOString(),
-    endsAt: row.endsAt.toISOString(),
+    startsAt: renderableIso(row.startsAt),
+    endsAt: renderableIso(row.endsAt),
     capacity: row.capacity,
     rsvpOpen: row.rsvpOpen,
     goingCount: row.goingCount,
@@ -60,10 +79,17 @@ export function buildEventListView(
   query: EventListQuery,
   fetched: EventListRow[],
 ): KitEventListView {
+  // §4a: same-title rows share one page; only those pause names take the ISO suffix.
+  const duplicates = pageTitleDuplicates(fetched.slice(0, EVENT_PAGE_SIZE));
   const pauseReviews: Record<string, string> = {};
   for (const row of fetched.slice(0, EVENT_PAGE_SIZE)) {
     if (row.status === "published" && row.rsvpOpen) {
-      pauseReviews[row.eventKey] = renderRsvpPauseReviewHtml(row.title, row.eventKey);
+      const iso = Number.isFinite(row.startsAt.getTime()) ? row.startsAt.toISOString() : null;
+      pauseReviews[row.eventKey] = renderRsvpPauseReviewHtml(
+        row.title,
+        row.eventKey,
+        sameTitleSuffix(row.title, iso, duplicates),
+      );
     }
   }
   return {

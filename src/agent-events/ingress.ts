@@ -22,6 +22,7 @@ import { shield } from "./shield";
 import { lookupReplay, replayAnswer } from "./idempotency";
 import { rateLimit } from "./rate-limit";
 import { execute } from "./dispatch";
+import { isIngressBusy, setIngressDeadlines } from "./deadline";
 
 // The longest captured Bearer credential the ingress will hash, look up or
 // count. Anything longer dies here as unauthenticated before the shield hash,
@@ -125,7 +126,58 @@ async function processAgentEvent(
   // traversing the payload (forbidden pre-auth), so any per-hit 401 sampling
   // would flake those pins — zero satisfies the bounded pins' lower bound.
   // Throttling repudiation is the sampled outer-shield rows plus counters.
-  const grant = credential ? await findGrant(sql, credential) : null;
+  const busy = async (
+    grant: Grant | null,
+    op: string,
+    eventKey: string | null,
+    key: string | null,
+    dig: string | null,
+  ): Promise<Answer> => {
+    await auditOperationBusy(sql, cfg.lockWaitMs, grant, op, eventKey, key, dig, requestId);
+    return {
+      status: 503,
+      body: ingressDenial(
+        "operation_busy",
+        "The ingress is busy admitting requests. Retry with the same idempotency key.",
+        requestId,
+      ),
+    };
+  };
+  // Denial audits have no surrounding operation transaction. Settle their
+  // bounded transaction before attempting the separate busy receipt.
+  const auditedDenial = async (
+    grant: Grant | null,
+    op: string,
+    eventKey: string | null,
+    key: string | null,
+    dig: string,
+    result: string,
+    reason: string,
+    answer: Answer,
+  ): Promise<Answer> => {
+    try {
+      await sql.begin(async (tx) => {
+        await setIngressDeadlines(tx, cfg.lockWaitMs);
+        await audit(tx, grant, op, eventKey, key, dig, requestId, result, reason);
+      });
+    } catch (err) {
+      if (!isIngressBusy(err)) throw err;
+      return busy(grant, op, eventKey, key, dig);
+    }
+    return answer;
+  };
+  let grant: Grant | null = null;
+  if (credential) {
+    try {
+      grant = await sql.begin(async (tx) => {
+        await setIngressDeadlines(tx, cfg.lockWaitMs);
+        return findGrant(tx, credential);
+      });
+    } catch (err) {
+      if (!isIngressBusy(err)) throw err;
+      return busy(null, "unknown", null, null, null);
+    }
+  }
   if (!grant) {
     warnPreAuthRefusal(requestId);
     if (hasIngressControlBytes(doc.op) || hasIngressControlBytes(doc.idempotency_key)) {
@@ -151,21 +203,19 @@ async function processAgentEvent(
     dig = await digest(isPlainObject(body) ? body : {});
   } catch (err) {
     if (err instanceof PayloadTooDeepError) {
-      await audit(
-        sql,
+      return auditedDenial(
         grant,
         "unknown",
         null,
         null,
         "unhashable",
-        requestId,
         "denied",
         "payload_too_deep",
+        {
+          status: 422,
+          body: ingressDenial("payload_too_deep", PAYLOAD_TOO_DEEP_MESSAGE, requestId),
+        },
       );
-      return {
-        status: 422,
-        body: ingressDenial("payload_too_deep", PAYLOAD_TOO_DEEP_MESSAGE, requestId),
-      };
     }
     throw err;
   }
@@ -198,8 +248,10 @@ async function processAgentEvent(
     message: string,
     eventKey: string | null = null,
   ): Promise<Answer> => {
-    await audit(sql, grant, op, eventKey, key, dig, requestId, result, reason);
-    return { status, body: ingressDenial(reason, message, requestId) };
+    return auditedDenial(grant, op, eventKey, key, dig, result, reason, {
+      status,
+      body: ingressDenial(reason, message, requestId),
+    });
   };
 
   if (!cfg.enabled) {
@@ -325,7 +377,16 @@ async function processAgentEvent(
   }
 
   // Replays are answered from the store without spending rate budget.
-  const replay = await lookupReplay(sql, grant.id, idem);
+  let replay: Awaited<ReturnType<typeof lookupReplay>>;
+  try {
+    replay = await sql.begin(async (tx) => {
+      await setIngressDeadlines(tx, cfg.lockWaitMs);
+      return lookupReplay(tx, grant.id, idem);
+    });
+  } catch (err) {
+    if (!isIngressBusy(err)) throw err;
+    return busy(grant, op, null, idem, dig);
+  }
   if (!replay) {
     const limited = await rateLimit(sql, cfg, grant, op as Op, requestId);
     if (limited) {
@@ -342,8 +403,7 @@ async function processAgentEvent(
           ...(limited.headers ? { headers: limited.headers } : {}),
         };
       }
-      await audit(sql, grant, op, null, idem, dig, requestId, "denied", "rate_limited");
-      return limited;
+      return auditedDenial(grant, op, null, idem, dig, "denied", "rate_limited", limited);
     }
   }
 
@@ -355,7 +415,7 @@ async function processAgentEvent(
         ? `agent-event-grant:${grant.id}`
         : `agent-event:${eventKeyIn ?? `owned:${grant.id}`}`;
     const committed = await sql.begin(async (tx) => {
-      await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
+      await setIngressDeadlines(tx, cfg.lockWaitMs);
       // Replay identity spans operations and explicit/implicit event addresses.
       // Acquire its lock before the operation lock and transactional replay check.
       await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-idempotency:${grant.id}:${idem}`}, 0))`;
@@ -415,8 +475,7 @@ async function processAgentEvent(
     }
     return { status: committed.status, body: committed.body };
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    if (code === "55P03") {
+    if (isIngressBusy(err)) {
       // A replay's grant may be held/deleted: do not wait on the same FK again.
       // The error receipt uses the shared bounded busy audit: its own short
       // transaction with the admission's lock/statement deadlines, holding no

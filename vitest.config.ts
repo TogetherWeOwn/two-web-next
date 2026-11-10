@@ -9,6 +9,7 @@ export default defineConfig({
       "test/smoke.test.mjs",
       "test/json-smoke.test.mjs",
       "test/revision-check.test.mjs",
+      "test/version-check.test.mjs",
       "test/smoke-ordinary-traffic-identity-acceptance.test.mjs",
       "test/smoke-public-api-acceptance.test.mjs",
       "test/promotion-smoke-identity-acceptance.test.mjs",

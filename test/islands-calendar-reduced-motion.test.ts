@@ -122,7 +122,7 @@ describe("calendar reduced-motion loader SSR", () => {
         expect(html).toContain(`data-testid="${EVENTS_LIST_TESTID}"`);
       } else {
         expect(html).toContain("data-cal-jump");
-        expect(html).toContain("20:00 Reduced motion gam…");
+        expect(html).toContain("20:00 UTC Reduced motion gam…");
       }
       expect(html).toContain(`data-testid="${EVENTS_CONTENT_TESTID}"`);
 

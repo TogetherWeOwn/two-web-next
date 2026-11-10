@@ -14,7 +14,7 @@
 // IDs for check-set failures. The validator is read-only and idempotent.
 //
 // Usage: node ci/require-auth-browser-evidence.mjs [artifacts/auth-browser]
-import { appendFileSync, existsSync, readdirSync, readFileSync, statSync } from "node:fs";
+import { appendFileSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { AUTH_BROWSER_CHECK_IDS, AUTH_EVIDENCE_SCHEMA_VERSION } from "./auth-evidence-schema.mjs";
@@ -40,13 +40,36 @@ function fail(code, detail, extra) {
   throw error;
 }
 
+function evidenceStat(path) {
+  try {
+    return statSync(path);
+  } catch (error) {
+    // Only a missing path means "the suite wrote nothing". Any other stat
+    // failure (EACCES, ELOOP, ...) must surface as unreadable at the call
+    // site so the validator never misreports a permission error as missing.
+    if (error?.code === "ENOENT" || error?.code === "ENOTDIR") return null;
+    throw error;
+  }
+}
+
 export function checkAuthBrowserEvidence(dir = "artifacts/auth-browser") {
-  if (!existsSync(dir) || !statSync(dir).isDirectory())
+  let dirStat;
+  try {
+    dirStat = evidenceStat(dir);
+  } catch {
+    fail("AUTH_BROWSER_DIR_UNREADABLE", `${dir}: auth-browser evidence directory is unreadable`);
+  }
+  if (!dirStat?.isDirectory())
     fail(
       "AUTH_BROWSER_NO_EVIDENCE_DIR",
       `${dir}: no auth-browser evidence directory (the suite wrote nothing)`,
     );
-  const files = readdirSync(dir).sort();
+  let files;
+  try {
+    files = readdirSync(dir).sort();
+  } catch {
+    fail("AUTH_BROWSER_DIR_UNREADABLE", `${dir}: auth-browser evidence directory is unreadable`);
+  }
   if (files.length === 0)
     fail(
       "AUTH_BROWSER_EMPTY_DIR",
@@ -110,7 +133,13 @@ export function checkAuthBrowserEvidence(dir = "artifacts/auth-browser") {
     );
   for (const shot of report.screenshots) {
     const shotPath = join(dir, shot);
-    if (!existsSync(shotPath) || !statSync(shotPath).isFile() || statSync(shotPath).size === 0)
+    let stat;
+    try {
+      stat = evidenceStat(shotPath);
+    } catch {
+      fail("AUTH_BROWSER_SCREENSHOT_FILE_MISSING", `${dir}: screenshot ${shot} is unreadable`);
+    }
+    if (!stat?.isFile() || stat.size === 0)
       fail(
         "AUTH_BROWSER_SCREENSHOT_FILE_MISSING",
         `${dir}: screenshot ${shot} is missing or empty`,

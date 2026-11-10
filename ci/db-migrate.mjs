@@ -4,7 +4,12 @@ import { fileURLToPath } from "node:url";
 import { readMigrationFiles } from "drizzle-orm/migrator";
 import postgres from "postgres";
 import { assertMigrationAdmission } from "./migration-admission.mjs";
-import { DefaultAclRefusal, assertRuntimeDefaultAcl } from "./migration-runtime-rights.mjs";
+import { OwnershipRefusal, assertMigratorOwnership } from "./migration-ownership.mjs";
+import {
+  DefaultAclRefusal,
+  assertRuntimeDefaultAcl,
+  assertRuntimeLedgerAcl,
+} from "./migration-runtime-rights.mjs";
 
 const migrationsFolder = fileURLToPath(new URL("../drizzle", import.meta.url));
 const ledger = "drizzle.__drizzle_migrations";
@@ -280,6 +285,17 @@ export async function runMigration(mode, env = process.env, options = {}) {
       if (error instanceof DefaultAclRefusal) refuse(error.message);
       throw error;
     }
+    // Same surfacing rule as the default-ACL guard: a reviewed object the
+    // migrator cannot ALTER (owned by a role it does not inherit) must
+    // refuse here, named, instead of failing inside the apply transaction
+    // behind the masked driver message. plan() also runs under the apply
+    // lock before any DDL, so apply stays covered without a second call.
+    try {
+      await assertMigratorOwnership(connection);
+    } catch (error) {
+      if (error instanceof OwnershipRefusal) refuse(error.message);
+      throw error;
+    }
     const pending = await pendingMigrations(connection, migrations);
     await summary(`### Web migrations: ${config.target} / ${mode}`);
     await summary(
@@ -337,6 +353,15 @@ export async function runMigration(mode, env = process.env, options = {}) {
       await transaction`create table if not exists drizzle.__drizzle_migrations (
         id serial primary key, hash text not null, created_at bigint
       )`;
+      // A default ACL that fired on this bootstrap (or an older exposed
+      // ledger) must roll the whole transaction back before any migration
+      // statement runs. Surface only the intentional refusal, as in plan.
+      try {
+        await assertRuntimeLedgerAcl(transaction);
+      } catch (error) {
+        if (error instanceof DefaultAclRefusal) refuse(error.message);
+        throw error;
+      }
       for (const migration of pending) {
         for (const statement of migration.sql) await transaction.unsafe(statement);
         await transaction`insert into drizzle.__drizzle_migrations (hash, created_at)
@@ -371,7 +396,7 @@ if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.ur
   try {
     await runMigration(process.argv[2]);
   } catch (error) {
-    console.error(safeMigrationError(error));
+    if (!settled) console.error(safeMigrationError(error));
     process.exitCode = 1;
   } finally {
     settled = true;

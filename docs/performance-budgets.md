@@ -93,8 +93,8 @@ npm run build:assets:check    # fail when the output drifted from its source
 
 The binder and stylesheet suites run against the minified bytes, so they prove
 each build equivalent; only whitespace-tolerant assertions survive
-minification. The deploy workflow rebuilds and re-checks drift after `npm run
-check`, so the deployed bytes are the reviewed bytes.
+minification. The deploy workflow re-checks drift with `npm run build:assets:check`
+before deploying, so the deployed bytes are the reviewed bytes.
 
 ## Local verification
 
@@ -128,6 +128,17 @@ repository floor above. The performance regression suite
 temporary-file cleanup and both CommonJS/ESM Puppeteer entry points.
 These import checks do not replace actual Chromium collection: the Lighthouse
 job must still collect all twenty-four samples (eight routes, three runs each) and pass the unchanged assertions.
+
+Mobile collection survives one transient the same way desktop does:
+`npm run lighthouse` runs `ci/lighthouse-perf-run.mjs`, which uses the desktop
+runner's flow with the mobile config. It reruns the whole `lhci autorun` once
+when any planned URL is short of its three samples, and never when full
+evidence failed an assertion. Every run writes `.lighthouseci/perf-collect.log`
+and, on failure, `.lighthouseci/perf-collect-diagnosis.md` (COLLECT FAILURE,
+BUDGET BREACH or an unclassified step failure). Both ship in the
+`lighthouse-<sha>` artifact. Its selftest evaluates the real mobile assertions
+over synthetic reports: a short collect retries, and an LCP over budget fails
+without a retry.
 
 LHCI starts/stops the fixture worker itself, listening only on `127.0.0.1:8787`.
 Do not run another service on that port. The dedicated Wrangler config has no
@@ -437,15 +448,34 @@ accounting reads only its fresh top-level LHRs, never these mobile archives.
 For deployed mobile collection, an informative, unscored `main-document-timing`
 audit reads the same already-collected main resource as `server-response-time`.
 Each archived LHR's `audits["main-document-timing"].details` contains schema
-version 1, UTC request timestamp, validated `requestId` / `cfRay`, protocol,
+version 2, UTC request timestamp, validated `requestId` / `cfRay`, the bounded
+`cfCacheStatus`, `ageSeconds` and `serverTiming` response headers, protocol,
 `edgeColo` from the response ray suffix, `servingRevision`, CDP `timingMs`
 (DNS/connect/TLS/send/receive-header offsets), and `serverWaitMs`
-(`receiveHeadersStart - sendEnd`, matching the native audit). Missing or invalid
-fields are `unknown`. The served revision is currently unknown: a checkout SHA
-is not evidence of the revision that served the response. Existing `fetchTime`
-and requested URL identify each LHR; the new diagnostic fields contain no URL,
-query values, arbitrary headers, credentials, response bodies or raw CDP log.
-No additional navigation or probe is made. The audit has no category weight,
+(`receiveHeadersStart - sendEnd`, matching the native audit). Missing, duplicated
+or invalid fields are `unknown`. The per-navigation `servingRevision` stays
+unknown: a checkout SHA is not evidence of the revision that served the response.
+Existing `fetchTime` and requested URL identify each LHR; the diagnostic fields
+contain no URL, query values, arbitrary headers, credentials, response bodies or
+raw CDP log. The audit itself makes no additional navigation or probe.
+
+`watch-summary.md` and `watch-summary.json` surface that evidence for every
+mobile navigation in a "Serving evidence per navigation" table, so an
+over-budget `/events` sample can be read next to its edge cache disposition,
+age and `Server-Timing` without opening the LHR archive. The runner also issues
+one read-only `GET /up` immediately before and after each mobile collect attempt
+and records `revision.commit` for both ("Served revision" table, JSON
+`servedRevision`): a deploy landing mid-collect shows as `changed during collect`
+instead of a silently mixed sample. Two equal reads are only `same at both reads`:
+they do not prove every navigation in between reached that revision during a
+rollout. `/up` failures (including a read that exceeds its 10-second bound, or only
+one of the two reads failing) record `unknown`; they never change a verdict, retry
+or budget. `origin-collect-diagnosis.md` lists each attempt's revision reads and
+stops calling a twice-breached marginal retry "systematic" when any attempt's
+verdict is `changed during collect` (`unknown` alone does not qualify it). `Server-Timing` is kept only when every
+comma-separated metric is a token with numeric `dur=` and/or token or quoted `desc=`
+params without pipes, markup or backslashes; the summary re-validates every stored
+field and shows `unknown` for anything else, including numeric fields stored as text. The audit has no category weight,
 assertion, or role in sample quotas, budget values or retry decisions.
 
 To investigate, use **all three mobile samples for a route**, not the
@@ -509,7 +539,7 @@ The byte ceilings are specific to Next's unbundled assets, based on the measured
 headroom. They are not copied from legacy Vite/Filament bundles that Next does not
 serve. The checker exits **0** if every asset fits, **1** for size breaches or
 missing budgeted assets, **2** for missing/invalid configuration or unenforced
-assets. Its 31-case selftest isolates raw/gzip breaches, exact boundaries,
+assets. Its 34-case selftest isolates raw/gzip breaches, exact boundaries,
 missing files, malformed/empty/invalid budgets and newly unbudgeted assets,
 including imported nested helpers and dot-prefixed files/directories that Workers
 also serves. Hidden paths require explicit ceilings and cannot escape raw/gzip enforcement. Islands that landed after the

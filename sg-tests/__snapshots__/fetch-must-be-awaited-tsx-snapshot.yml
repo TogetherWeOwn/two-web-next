@@ -2,13 +2,13 @@ id: fetch-must-be-awaited-tsx
 snapshots:
   await run(async () => { fetch(u); });:
     labels:
-    - source: fetch(u)
-      style: primary
-      start: 24
-      end: 32
+      - source: fetch(u)
+        style: primary
+        start: 24
+        end: 32
   export const X = <div />; function f(u) { fetch(u); }:
     labels:
-    - source: fetch(u)
-      style: primary
-      start: 42
-      end: 50
+      - source: fetch(u)
+        style: primary
+        start: 42
+        end: 50

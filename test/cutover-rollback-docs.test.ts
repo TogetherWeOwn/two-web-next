@@ -201,35 +201,36 @@ function headerMainSha() {
   return match![1]!;
 }
 
-describe("cutover gates snapshot freshness", () => {
-  it("names a refresh date and full main SHA at top with no stale release SHA", () => {
-    expect(gates).toMatch(/^Snapshot taken \d{4}-\d{2}-\d{2}.*`main`\s+`[0-9a-f]{40}`/m);
+describe("cutover gates closed record", () => {
+  it("names a close date and full main SHA at top with no stale release SHA", () => {
+    expect(gates).toMatch(/^Record closed \d{4}-\d{2}-\d{2}.*`main`\s+`[0-9a-f]{40}`/m);
+    headerMainSha();
     expect(gates).not.toContain("315e1612");
     expect(gates).not.toContain("9fc93bb2");
   });
 
-  it("pins six gate rows with decisions unchanged", () => {
-    expect(gateRow(1)).toContain("**NO-GO**");
-    expect(gateRow(2)).toContain("**GO (staging only)**");
-    expect(gateRow(3)).toContain("**NO-GO**");
-    expect(gateRow(4)).toContain("**NO-GO**");
-    expect(gateRow(5)).toContain("**GO on staging rehearsal evidence;");
-    expect(gateRow(6)).toContain("**NO-GO**");
-  });
-
-  it("shows state at the named main SHA with a linked run or doc in every row", () => {
-    const sha = headerMainSha();
-    const short = sha.slice(0, 8);
+  it("closes all six gate rows and no longer reads NO-GO", () => {
     for (let id = 1; id <= 6; id++) {
-      const row = gateRow(id);
-      expect(row, `gate ${id} names the header main SHA`).toMatch(new RegExp(`${sha}|${short}`));
-      expect(row, `gate ${id} links a run or doc`).toMatch(/\]\((https?:\/\/|\S+\.md[#\S]*)\)/);
+      expect(gateRow(id), `gate ${id}`).toContain("**GO (closed)**");
     }
+    expect(gates).not.toContain("NO-GO");
+    expect(gates).toContain("**The production cutover is complete.**");
   });
 
-  it("keeps operator-owned facts unverified", () => {
-    expect(gateRow(3)).toContain("unverified (operator)");
-    expect(gateRow(4)).toContain("unverified (operator)");
+  it("cites a linked doc in every row and the zero-pending /up receipt", () => {
+    for (let id = 1; id <= 6; id++) {
+      expect(gateRow(id), `gate ${id} links a run or doc`).toMatch(
+        /\]\((https?:\/\/|\S+\.md[#\S]*)\)/,
+      );
+    }
+    expect(gateRow(3)).toContain("**0 pending migrations**");
+    expect(gateRow(3)).toContain("cutover-migration-ledger.md#production-apply-outcome");
+  });
+
+  it("keeps operator-owned facts off-repo instead of claiming them", () => {
+    expect(gateRow(3)).toContain("not in this repository");
+    expect(gateRow(4)).toContain("not in this repository");
+    expect(gates).toContain("Nothing here was probed");
   });
 });
 

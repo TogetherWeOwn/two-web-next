@@ -10,8 +10,14 @@ requires queue-visible waiver trailers (`ci/pr-lint-output.py:26-71`).
 
 - No new suppression comments that silence a checker.
 - No unimplemented stubs and no empty catch blocks that turn failure silent.
-- No added test skips. Test-file deletion, assertion removal, enforced-row
-  removal, and ignore-list addition require a reasoned commit trailer:
+- No added test skips, unconditional or conditional (`.skipIf`/`.runIf`, an
+  options-object `skip:`, or ternary suite/test selection routing to a
+  skip); replacing one gated form with another in the same file, keeping
+  the executable gated count, is not an addition. Comments, strings and
+  fixture data never pay for a new JavaScript/TypeScript gate; wrapping or
+  packing expressions does not change their count. Test-file deletion, assertion
+  removal, enforced-row removal, and ignore-list addition require a
+  reasoned commit trailer:
   `Floor-waiver: test-deleted <path> -- <reason>`,
   `Floor-waiver: assertion-removed <path> -- <reason>`,
   `Floor-waiver: threshold-removed <Dimension> -- <reason>`, or

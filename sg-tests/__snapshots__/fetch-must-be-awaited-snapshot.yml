@@ -2,19 +2,19 @@ id: fetch-must-be-awaited
 snapshots:
   await run(async () => { fetch(u); });:
     labels:
-    - source: fetch(u)
-      style: primary
-      start: 24
-      end: 32
+      - source: fetch(u)
+        style: primary
+        start: 24
+        end: 32
   function f() { return () => { fetch(u); }; }:
     labels:
-    - source: fetch(u)
-      style: primary
-      start: 30
-      end: 38
+      - source: fetch(u)
+        style: primary
+        start: 30
+        end: 38
   function f(u) { fetch(u); }:
     labels:
-    - source: fetch(u)
-      style: primary
-      start: 16
-      end: 24
+      - source: fetch(u)
+        style: primary
+        start: 16
+        end: 24

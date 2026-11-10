@@ -24,6 +24,7 @@ import type { Session } from "../src/env";
 import type { Env } from "../src/env";
 import { aboutPageData } from "../src/about-content";
 import { FALLBACK_RANKS, HOME_JOIN_RESULT_COPY, HOME_NOTICES } from "../src/home-copy";
+import { withEventDetailHtml, type DetailLeavesModel } from "../src/events/detail-leaves";
 import { loginUrl } from "../src/islands/contracts";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { renderEventsHtml } from "../src/kit-events-html";
@@ -180,13 +181,17 @@ const kitNonMemberSession = {
   moderator: false,
 };
 
-const baseDetailModel = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
+const rawDetailModel = (
+  overrides: Record<string, unknown> = {},
+): DetailLeavesModel & Record<string, unknown> => ({
   eventKey: EVENT_KEY,
   title: "Fixture game night",
   game: "Chess",
   description: "Play together.",
   shareDescription: "Play together.",
   location: "Lobby",
+  directionsUrl: null,
+  organizerName: null,
   status: "published",
   isDraft: false,
   isPast: false,
@@ -224,6 +229,9 @@ const baseDetailModel = (overrides: Record<string, unknown> = {}): Record<string
   siteJsonLd: "{}",
   ...overrides,
 });
+
+const baseDetailModel = (overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+  withEventDetailHtml(rawDetailModel(overrides));
 
 const baseGoneModel = (overrides: Record<string, unknown> = {}): Record<string, unknown> => ({
   title: "Cancelled game night",

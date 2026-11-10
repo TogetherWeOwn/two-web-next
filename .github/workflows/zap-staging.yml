@@ -18,7 +18,7 @@ name: zap-staging
 on:
   workflow_call:
   schedule:
-    - cron: '41 3 * * *'
+    - cron: "41 3 * * *"
   workflow_dispatch:
 
 permissions:

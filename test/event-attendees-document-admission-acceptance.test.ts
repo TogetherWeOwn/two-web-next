@@ -15,6 +15,13 @@
 //   removes the section, and a guest page for the same event commits
 //   the same way it does today. The attendee-page query and the
 //   server-rendered fallback are preserved.
+// - Correction: when that same-event document is the authoritative
+//   guest or members-only shell (the session downgraded between the
+//   RSVP write and the fragment read), the refresh still removes every
+//   private name AND mounts the returned audience shell — exactly one
+//   shell, the visitor's own focus restored into it, no reload. The
+//   populated/empty member swaps and foreign-document refusal controls
+//   keep passing unchanged.
 // - An invalid document does not tear down the live section node, so
 //   focus living inside the roster is never dropped by a document that
 //   was not admitted.
@@ -386,13 +393,15 @@ const baseEvent: PublicEvent = {
 type Attendee = { id: string; name: string };
 
 function renderPage(opts: {
-  attendees: Attendee[];
+  attendees: readonly Attendee[];
   viewerGoing: boolean;
   member?: boolean;
+  signedIn?: boolean;
   eventKey?: string;
   title?: string;
 }): string {
   const eventKey = opts.eventKey ?? EVENT_KEY;
+  const signedIn = opts.signedIn ?? opts.member ?? true;
   return String(
     EventPage({
       e: {
@@ -402,12 +411,21 @@ function renderPage(opts: {
         goingCount: opts.attendees.length,
         goingOccupancy: opts.attendees.length,
       },
+      session: signedIn
+        ? {
+            id: VIEWER.id,
+            username: opts.member === false ? "outsider" : "vera",
+            avatar: null,
+            member: opts.member ?? true,
+            moderator: false,
+          }
+        : null,
       member: opts.member ?? true,
       answer: opts.viewerGoing ? { status: "going", syncedToDiscordAt: null } : null,
       returnTo: `/e/${eventKey}`,
       neighbors: { previous: null, next: null },
       related: [],
-      attendees: opts.attendees,
+      attendees: [...opts.attendees],
       appUrl: "https://next.example.test",
       jsonLd: "{}",
     }),
@@ -461,6 +479,7 @@ function browser(opts: { before: Attendee[]; viewerGoingBefore: boolean; search?
   };
 
   const documentStub = {
+    activeElement: null as El | null,
     documentElement: page,
     body: page,
     querySelector: (selector: string) => page.querySelector(selector),
@@ -552,7 +571,10 @@ function browser(opts: { before: Attendee[]; viewerGoingBefore: boolean; search?
   context.window = context;
   context.self = context;
   context.globalThis = context;
-  focusSink = (target) => notifyDocument("focusin", target);
+  focusSink = (target) => {
+    documentStub.activeElement = target;
+    notifyDocument("focusin", target);
+  };
 
   const rsvpRoot = page.querySelector('[data-island="rsvp-button"]');
   rsvpRoot?.setAttribute("data-login-url", `/join/discord?next=%2Fe%2F${EVENT_KEY}`);
@@ -708,9 +730,12 @@ describe("roster refresh admits only authoritative same-event documents", () => 
   it("inserts the roster on a first RSVP from a populated same-event document", async () => {
     const { b } = await start({ before: [] });
     expect(b.byTestId("event-attendees")).toBeNull();
+    expect(b.byTestId("event-roster-empty")).not.toBeNull();
     answer(b, 0, sameEvent([VIEWER]));
     await b.settle();
     expect(rosterNames(b)).toEqual([VIEWER.name]);
+    // The swap consumes the empty placeholder: exactly one roster section.
+    expect(b.byTestId("event-roster-empty")).toBeNull();
     expect(staleShown(b)).toBe(false);
   });
 
@@ -719,16 +744,53 @@ describe("roster refresh admits only authoritative same-event documents", () => 
     answer(b, 0, sameEvent([], false));
     await b.settle();
     expect(b.byTestId("event-attendees"), "empty same-event roster still prunes").toBeNull();
+    // A last withdrawal swaps the list for the honest empty state, not for
+    // nothing: the placeholder arrives with the same refresh, no reload.
+    expect(b.byTestId("event-roster-empty")).not.toBeNull();
     expect(att(b)).toHaveLength(1);
   });
 
-  it("commits a guest document for the same event the way it does today", async () => {
-    const { b } = await start({ withdraw: true });
-    answer(b, 0, ok(renderPage({ attendees: [], viewerGoing: false, member: false })));
-    await b.settle();
-    expect(b.byTestId("event-attendees"), "same-event guest page still prunes").toBeNull();
-    expect(att(b)).toHaveLength(1);
-  });
+  it.each([
+    [
+      "guest",
+      "event-roster-guest-nudge",
+      /sign in to see who's in/i,
+      { attendees: [], viewerGoing: false, member: false, signedIn: false } as const,
+    ],
+    [
+      "non-member",
+      "event-roster-members-only",
+      /members only/i,
+      { attendees: [], viewerGoing: false, member: false, signedIn: true } as const,
+    ],
+  ])(
+    "mounts the authoritative %s shell when the session downgrades before the refresh read",
+    async (_label, shellTestid, shellCopy, incoming) => {
+      const { b } = await start({ withdraw: true });
+      // Focus inside the private roster while the fragment read is in
+      // flight: the swap removes that element, so focus must travel into
+      // the mounted shell instead of dropping.
+      b.byTestId("event-attendees")!.querySelector("a")!.focus();
+      answer(b, 0, ok(renderPage(incoming)));
+      await b.settle();
+      // Private names are still removed...
+      expect(b.byTestId("event-attendees"), "same-event audience page still prunes").toBeNull();
+      expect(rosterNames(b)).toEqual([]);
+      expect(b.page.textContent).not.toContain(HOST.name);
+      expect(b.page.textContent).not.toContain(VIEWER.name);
+      // ...and the returned audience shell replaces them: exactly one,
+      // with its explanation, no stale report and no reload.
+      const shells = b.page.querySelectorAll(`[data-testid="${shellTestid}"]`);
+      expect(shells, "exactly one audience shell").toHaveLength(1);
+      expect(shells[0]!.textContent).toMatch(shellCopy);
+      expect(b.page.textContent).not.toMatch(/could not refresh/i);
+      expect(att(b)).toHaveLength(1);
+      expect(b.reloads()).toBe(0);
+      const heading = shells[0]!.querySelector("#event-roster-heading")!;
+      expect(heading.focused, "focus restored into the mounted shell").toBe(true);
+      expect(heading.getAttribute("tabindex")).toBe("-1");
+    },
+  );
 
   it("preserves the attendee-page query on the refresh read", async () => {
     const { b } = await start({ search: "?attendees=2" });

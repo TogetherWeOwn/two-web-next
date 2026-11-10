@@ -88,7 +88,12 @@ synchronization.
 
 ## Running and inspecting evidence
 
-- Locally/controller: `env -u DATABASE_URL npm run check` (no live SQL/browser).
+- Locally/controller: `env -u DATABASE_URL npm run check` runs fixture-only
+  checks, not live SQL or browser journeys. Featured-unpublish SQL cases use
+  the existing integration gate in `test/admin.test.ts`; six registration and
+  rendering cases remain ungated in the two featured-unpublish suites. No new
+  conditional skip is added. Full SQL verification still needs the disposable
+  test database described in the README.
 - On the `ubuntu-latest` runner: `npm run e2e` after prepare, migrations,
   seed and `npx playwright install --with-deps chromium`.
 - Chromium only, one worker, fresh browser context per spec, zero retries.
@@ -252,7 +257,9 @@ Markdown ledger, never the raw report. The `e2e-staging-failure-*` artifact, ret
 the derived ledger; the raw report, HTML report and traces are not published
 as artifacts. For a failed run on `main`, follow the [documented host-flake loop](rum-web-vitals.md):
 it reruns once, then opens a private main-red card for the Web Engineer if it
-fails again. Never rerun-until-green to clear a failure.
+fails again. Never rerun-until-green to clear a failure: the production gate
+refuses any commit whose `e2e-staging` run failed or was re-run
+([runbook](runbook.md)), so a re-run green never promotes.
 
 ### Diagnostic receipt contract
 

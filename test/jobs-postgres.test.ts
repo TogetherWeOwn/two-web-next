@@ -2,6 +2,7 @@ import type postgres from "postgres";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { pgPruneStores, pgSingleFlight, pgUniqueLock } from "../src/jobs/postgres";
 import { createJobsFixture, type JobsFixture } from "./helpers/jobs-db";
+import { registerJobsServerTimeoutsAcceptance } from "./helpers/jobs-server-timeouts-acceptance";
 
 // Real Postgres, guarded before driver construction: agent-testdb or the CI
 // service only. Each fixture migrates and drops only its disposable schema.
@@ -206,4 +207,6 @@ describe.skipIf(!process.env.DATABASE_URL)("postgres single-flight + unique lock
       expect(await leaseCoversTtlFromAcquire(tx, key, 60, elapsed)).toBe(true);
     });
   });
+
+  registerJobsServerTimeoutsAcceptance();
 });

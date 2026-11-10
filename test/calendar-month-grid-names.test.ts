@@ -183,9 +183,10 @@ describe("month grid accessible names", () => {
       // Useful day context follows the title.
       expect(name).toContain(wallTimeHm(e.startsAt, ZONE));
       expect(name).toContain(cardDayLabel(e.startsAt, ZONE));
-      // Compact visible label plus the uncapped availability suffix.
+      // The host zone identifies the compact clock without changing truncation,
+      // plus the uncapped availability suffix.
       expect(link.visible).toBe(
-        `${wallTimeHm(e.startsAt, ZONE)} ${gridTitle(e.title)} <span data-testid="event-schedule-availability">No seat limit</span>`,
+        `${wallTimeHm(e.startsAt, ZONE)} ${ZONE} ${gridTitle(e.title)} <span data-testid="event-schedule-availability">No seat limit</span>`,
       );
       // Link target / jump behavior unchanged.
       expect(link.href).toBe(calendarJumpUrl(false, rowKey(e)));
@@ -236,7 +237,7 @@ describe("month grid accessible names", () => {
     expect(dName).toContain(wallTimeHm(d.startsAt, ZONE));
     expect(dName).toContain(cardDayLabel(d.startsAt, ZONE));
     expect(dLink.visible).toBe(
-      `${wallTimeHm(d.startsAt, ZONE)} ${gridTitle(d.title)} <span data-testid="event-schedule-availability">Discord-managed</span>`,
+      `${wallTimeHm(d.startsAt, ZONE)} ${ZONE} ${gridTitle(d.title)} <span data-testid="event-schedule-availability">Discord-managed</span>`,
     );
   });
 
@@ -316,14 +317,16 @@ describe("month grid accessible names", () => {
     expect(links).toHaveLength(1);
     const link = links[0]!;
     expect(link.visible).toBe(
-      '20:00 NY raid night <span data-testid="event-schedule-availability">No seat limit</span>',
+      '20:00 America/New_York NY raid night <span data-testid="event-schedule-availability">No seat limit</span>',
     );
-    expect(ariaOf(link.attrs)).toBe("20:00 NY raid night No seat limit, Mon 14 Jan");
+    expect(ariaOf(link.attrs)).toBe(
+      "20:00 America/New_York NY raid night No seat limit, Mon 14 Jan",
+    );
     const cell = new RegExp(`<td[^>]*data-date="2030-01-14"[^>]*>([\\s\\S]*?)</td>`).exec(
       html,
     )![1]!;
     expect(cell).toContain(
-      '>20:00 NY raid night <span data-testid="event-schedule-availability">No seat limit</span></a>',
+      '>20:00 America/New_York NY raid night <span data-testid="event-schedule-availability">No seat limit</span></a>',
     );
   });
 });

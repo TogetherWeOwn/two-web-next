@@ -151,6 +151,36 @@ export async function updateFeatured(
   return row;
 }
 
+export async function unpublishFeatured(db: Db, actor: Actor, id: number): Promise<void> {
+  const changed = await db.transaction(async (tx) => {
+    await boundModeratorWrite(tx);
+    const [locked] = await tx
+      .select({ title: featuredContents.title, isPublished: featuredContents.isPublished })
+      .from(featuredContents)
+      .where(eq(featuredContents.id, id))
+      .for("update");
+    if (!locked) throw new NotFoundError("featured content");
+    if (!locked.isPublished) return false;
+    await tx
+      .update(featuredContents)
+      .set({ isPublished: false, updatedAt: new Date() })
+      .where(eq(featuredContents.id, id));
+    await audit(tx, {
+      subjectType: "FeaturedContent",
+      subjectId: String(id),
+      causerId: actor.id,
+      description: `unpublished featured content ${locked.title}`,
+      properties: dirty<Pick<FeaturedRow, "isPublished">>(
+        { isPublished: locked.isPublished },
+        { isPublished: false },
+      ),
+    });
+    return true;
+  });
+  // Only a committed change retires the cache; repeated withdrawals are no-ops.
+  if (changed) await retireHomeGuestCache();
+}
+
 /**
  * Deleting featured content is safe — nothing downstream refers to it — one row at a time, audited.
  * The delete audit snapshots the full locked row (update-audit value shape, after null per field),

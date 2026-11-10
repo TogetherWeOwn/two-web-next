@@ -127,7 +127,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       };
       const res = await post("/admin/events", values);
       expect(res.status).toBe(303);
-      const key = res.headers.get("location")!.split("/").pop()!;
+      const key = new URL(res.headers.get("location")!, APP_URL).pathname.split("/").pop()!;
       const [savedRow] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
       expect(savedRow).toMatchObject({
         title: values.title,

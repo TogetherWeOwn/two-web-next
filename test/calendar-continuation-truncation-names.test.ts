@@ -61,7 +61,7 @@ describe("gridAccessibleName truncation", () => {
 
   it("returns the short form unchanged (no duplication)", () => {
     expect(gridAccessibleName(SHORT_TITLE, START_DAY_START, START_DAY_ZONE)).toBe(
-      `${time} ${SHORT_TITLE}, ${day}`,
+      `${time} UTC ${SHORT_TITLE}, ${day}`,
     );
   });
 
@@ -69,7 +69,7 @@ describe("gridAccessibleName truncation", () => {
     const truncated = gridTitle(gatheringTitle);
     expect(truncated).not.toBe(gatheringTitle);
     const name = gridAccessibleName(gatheringTitle, START_DAY_START, START_DAY_ZONE);
-    expect(name).toContain(`${time} ${truncated}`);
+    expect(name).toContain(`${time} UTC ${truncated}`);
     expect(name).toContain(gatheringTitle);
     expect(name).toContain(day);
   });
@@ -78,7 +78,7 @@ describe("gridAccessibleName truncation", () => {
     const truncated = gridTitle(UNICODE_TITLE);
     expect(truncated.endsWith("…")).toBe(true);
     const name = gridAccessibleName(UNICODE_TITLE, START_DAY_START, START_DAY_ZONE);
-    expect(name).toContain(`${time} ${truncated}`);
+    expect(name).toContain(`${time} UTC ${truncated}`);
     expect(name).toContain(UNICODE_TITLE);
   });
 });
@@ -129,7 +129,7 @@ for (const twin of TWINS) {
       const start = links.find((link) => link.day === "2027-02-14");
       expect(start).toBeDefined();
       const truncated = gridTitle(gatheringTitle);
-      expect(start!.text).toBe(`23:30 ${truncated} 6 seats left`);
+      expect(start!.text).toBe(`23:30 UTC ${truncated} 6 seats left`);
       // Axe label-content-name-mismatch: the visible words must appear in the name,
       // including the truncated ellipsis form.
       expect(start!.name).toContain(start!.text);
@@ -147,9 +147,9 @@ for (const twin of TWINS) {
       ]);
       const links = calendarLinks(html);
       const start = links.find((link) => link.day === "2027-02-14");
-      expect(start!.text).toBe(`23:30 ${SHORT_TITLE} 6 seats left`);
+      expect(start!.text).toBe(`23:30 UTC ${SHORT_TITLE} 6 seats left`);
       expect(start!.name).toBe(
-        `23:30 ${SHORT_TITLE} 6 seats left, ${cardDayLabel(START_DAY_START, START_DAY_ZONE)}`,
+        `23:30 UTC ${SHORT_TITLE} 6 seats left, ${cardDayLabel(START_DAY_START, START_DAY_ZONE)}`,
       );
     });
   });

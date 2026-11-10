@@ -24,6 +24,7 @@ import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { feedUrl, rssUrl, webcalUrl } from "./feeds";
 import { subscriptionHelp } from "./subscription-help";
 import type { PublicEvent } from "./reads";
+import { effectiveZone } from "./date-format";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
 import { searchContext } from "./search-context";
 
@@ -51,8 +52,10 @@ const Card: FC<{ e: PublicEvent; q: string; archive: ArchiveContext }> = ({ e, q
         {/* Upcoming-card shape (time · zone · location): the zone always
             renders, the location only when the row has one. */}
         <p>
-          <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}
-          <span>{e.timezone}</span>
+          <time datetime={e.startsAt.toISOString()}>
+            {fmt(e.startsAt, effectiveZone(e.timezone))}
+          </time>{" "}
+          <span>{effectiveZone(e.timezone)}</span>
           {e.location ? (
             <>
               {" · "}
@@ -118,6 +121,24 @@ export const PastEventsPage: FC<{
         <a href={rssUrl(appUrl)}>RSS feed</a> <a href={feedUrl(appUrl)}>Download calendar (.ics)</a>
       </p>
       {subscriptionHelp(appUrl)}
+      {/* Plain GET navigation outside the binder's swapped zones: submitting
+          starts from page 1 with JS off, and fragment turns never swallow it.
+          Same shape as the calendar search form. */}
+      <form method="get" action="/events/past" role="search">
+        <label class="sr-only" for="past-events-search-input">
+          Search past events
+        </label>
+        <input
+          id="past-events-search-input"
+          type="search"
+          name="q"
+          value={q}
+          placeholder="Search past events"
+        />
+        <button class="btn" type="submit">
+          Search
+        </button>
+      </form>
       <div data-archive-state>
         {q ? (
           <p role="status">
@@ -158,6 +179,11 @@ export const PastEventsPage: FC<{
           >
             Newer
           </a>
+        ) : null}{" "}
+        {totalPages > 0 ? (
+          <span>
+            Page {page} of {totalPages}
+          </span>
         ) : null}{" "}
         {hasMore ? (
           <a

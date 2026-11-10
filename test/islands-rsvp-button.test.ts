@@ -363,7 +363,7 @@ function mount(html: string): string {
 }
 
 describe("rsvp-button SSR/server drift", () => {
-  afterEach(() => vi.restoreAllMocks());
+  afterEach(() => vi.useRealTimers().restoreAllMocks());
 
   it("SSR binds the event key and guest page-return link without exposing actions or reading an answer", async () => {
     const p = page();
@@ -372,13 +372,34 @@ describe("rsvp-button SSR/server drift", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("cache-control")).toBe("private, no-store");
     expect(mount(html)).toContain(`data-event-key="${KEY}"`);
-    expect(mount(html)).toContain(`href="${loginUrl(`/e/${KEY}?from=calendar`)}"`);
+    expect(mount(html)).toContain(`href="${loginUrl(`/e/${KEY}`)}"`);
     expect(mount(html)).toContain(RSVP_COPY.guestCta);
     expect(mount(html)).not.toContain("data-action");
     expect(html).toContain('src="/islands/rsvp-button.js"');
     expect(
       p.queries.filter((q) => q.sql.includes('from "rsvps"') && !q.sql.includes("group by")),
     ).toHaveLength(0);
+  });
+
+  it("SSR preserves validated archive and attendee context on both primary guest login destinations", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-01T21:00:00Z"));
+    const p = page();
+    const res = await p.request(`/e/${KEY}?archivePage=2&archiveQuery=raid&attendees=2`);
+    expect(res.status).toBe(200);
+    const primary = mount(await res.text());
+    const anchor = /<a\b[^>]*\bhref="([^"]+)"/.exec(primary);
+    const controller = /\bdata-login-url="([^"]+)"/.exec(primary);
+    expect(anchor).not.toBeNull();
+    expect(controller).not.toBeNull();
+    const href = new URL(anchor![1]!, "https://next.example.test");
+    const dataLoginUrl = new URL(controller![1]!, "https://next.example.test");
+    expect([href.pathname, dataLoginUrl.pathname]).toEqual(["/join/discord", "/join/discord"]);
+    const expectedNext = `/e/${KEY}?attendees=2&archivePage=2&archiveQuery=raid`;
+    expect({
+      href: href.searchParams.get("next"),
+      dataLoginUrl: dataLoginUrl.searchParams.get("next"),
+    }).toEqual({ href: expectedNext, dataLoginUrl: expectedNext });
   });
 
   it.each([

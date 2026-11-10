@@ -66,8 +66,9 @@ job (`npm run ledger:timeouts:selftest && npm run ledger:timeouts`):
   `--test-timeout`. An explicitly
   selected Vite config without a `test` block also fails closed; auto-discovered
   plain Vite configs without a `test` block are not treated as test scopes,
-  but a `root` in one must still match the package root, since another config
-  could merge it. A `testTimeout` reference in a `globalSetup` module or its
+  but a statically named `root` object property in one must still match the
+  package root, since another config could merge it. This is not a check of
+  arbitrary computed keys or later mutations in those skipped configs. A `testTimeout` reference in a `globalSetup` module or its
   imports fails closed, as does a member write, delete, or object/class key
   through a computed name the checker cannot see through (literals and
   `"a" + "b"` folds are transparent): setup-time config mutation would bind

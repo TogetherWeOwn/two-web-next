@@ -52,7 +52,13 @@ jobs:
     # collide across concurrent jobs. A job container has its own network
     # namespace.
     container:
-      image: node:24-bookworm
+      # Pinned by digest, like the action SHAs in this file: the image changes
+      # only through a reviewed PR, never by the tag moving upstream. This is
+      # node:24-bookworm as of 2026-11-01 (Node 24.22.2). Refresh monthly and
+      # on Node security releases: resolve the new digest with
+      # `docker buildx imagetools inspect node:24-bookworm`, then update the
+      # image line and this note together.
+      image: node:24-bookworm@sha256:e7add2a490bb17d97b485b8641bd88455fff7839ade0f5eba493c3508124d413
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -265,6 +271,17 @@ jobs:
       # still serves.
       - name: Verify deployed revision
         run: node bin/revision-check.mjs https://next.togetherweown.com "$DEPLOY_SHA"
+        env:
+          DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
+      # The owner-facing marker (src/version.ts) must agree once the step above
+      # proved the new Version serves. Kept out of bin/smoke.mjs on purpose: a
+      # rollback to a Version that predates /version must still pass the
+      # post-rollback smoke. The workflow file comes from main but the tree is
+      # DEPLOY_SHA, so a deploy of a commit older than the checker skips it:
+      # that commit has no /version to verify.
+      - name: Verify /version reports the deployed commit
+        if: hashFiles('bin/version-check.mjs') != ''
+        run: node bin/version-check.mjs https://next.togetherweown.com "$DEPLOY_SHA"
         env:
           DEPLOY_SHA: ${{ github.event_name == 'workflow_run' && github.event.workflow_run.head_sha || github.sha }}
       # Post-deploy smoke scope (mirrors e2e-staging.yml): a deploy whose
