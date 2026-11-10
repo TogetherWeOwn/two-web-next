@@ -96,8 +96,8 @@ as live evidence.
 In the order the canonical product roadmap tracks them (weekly-review header
 2026-11-09):
 
-1. **Clear the release hold** — land the critical-CSS LCP remedy (see
-   [Decision 0004](decisions/0004-critical-css-lcp-remedy.md)), the promotion
+1. **Clear the release hold** — run the schedule-only removal investigation
+   (see [Decision 0004](decisions/0004-critical-css-lcp-remedy.md)), the promotion
    resolver fix, and the production Kit Worker cutover
    ([#2092](https://github.com/TogetherWeOwn/two-web-next/pull/2092)).
 2. The Release Manager **re-qualifies exact-`main` staging**.
