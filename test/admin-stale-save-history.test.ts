@@ -32,6 +32,7 @@ function loadIslands(
     hasAttribute: (name: string) => attrs.has(name),
     setAttribute: (name: string) => attrs.add(name),
     removeAttribute: (name: string) => attrs.delete(name),
+    querySelector: (selector: string) => (selector.includes("saved_baseline") ? baseline : null),
     addEventListener: (type: string, listener: (event: Event) => void) => {
       const prior = formListeners.get(type);
       formListeners.set(type, (event) => {

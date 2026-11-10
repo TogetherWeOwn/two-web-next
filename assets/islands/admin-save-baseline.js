@@ -19,121 +19,65 @@
 // submit): if the fields changed without any user input/change, the adopted
 // token's provenance is void. Submit the entry's original token instead, so
 // the server refuses the restored draft rather than accepting it as current.
+//
+// Budget note: the bare attribute selector below is the compact form of the
+// previous '[data-event-editor] input[name="saved_baseline"]' document query
+// and is equivalent here because the hidden baseline lives inside the editor.
+// The bare performance access relies on `?.` so a missing navigation entry
+// falls through to the safe retained-token path. The saved entry check uses
+// a truthy token: the token is only ever a 64-char hex digest or an empty
+// failed-write marker, never another truthy value, and an empty marker is
+// re-written to the fresh token rather than retained.
 (function () {
   var editor = document.querySelector("[data-event-editor]");
-  var baseline = document.querySelector('[data-event-editor] input[name="saved_baseline"]');
-  if (!editor || !baseline) return;
+  if (!editor) return;
+  var baseline = editor.querySelector("[name=saved_baseline]");
+  if (!baseline) return;
   var path = window.location.pathname;
   var token = baseline.value;
-  // True only when `token` is the fresh GET token whose displayed values
-  // this document has proven. Entries bound to a retained old token are
-  // always unproven: their initial values are already a draft.
-  var freshAdopted = true;
-  // Original token of this entry before any fresh adoption; null when this
-  // entry had no prior binding. Guards late restoration after a clean reload.
   var superseded = null;
-  // Set on the first genuine user edit. Native restoration sets values
-  // without firing input/change, so a snapshot change without them is
-  // restored content, not a user edit.
-  var userEdited = false;
-  function navigationType() {
-    try {
-      var perf = window.performance;
-      if (perf && typeof perf.getEntriesByType === "function") {
-        var entries = perf.getEntriesByType("navigation");
-        if (entries && entries.length && entries[0].type) return entries[0].type;
-      }
-      if (perf && perf.navigation && typeof perf.navigation.type === "number") {
-        // Legacy PerformanceNavigation: 1 is a reload.
-        return perf.navigation.type === 1 ? "reload" : "navigate";
-      }
-    } catch {
-      // Fall through to the safe history-token default below.
-    }
-    return "";
-  }
-  function fieldSnapshot() {
+  function snapshot() {
     var params = new URLSearchParams(new FormData(editor));
     params.delete("saved_baseline");
     return params.toString();
   }
-  var initialSnapshot = fieldSnapshot();
-  var markerClean = true;
-  function writeMarker(clean) {
-    var state = window.history.state || {};
-    window.history.replaceState(
-      Object.assign({}, state, {
-        twoAdminSaveBaseline: { path: path, token: token, clean: clean },
-      }),
-      "",
-    );
-    markerClean = clean;
-  }
-  try {
-    var state = window.history.state || {};
-    var saved = state.twoAdminSaveBaseline;
-    if (saved && saved.path === path && typeof saved.token === "string") {
-      if (navigationType() === "reload" && saved.clean === true) {
-        // The prior entry proves this document was unedited, so the fresh
-        // GET displays and token agree: rebind the entry to the current
-        // token instead of resurrecting the old one.
-        superseded = saved.token;
-        freshAdopted = true;
-        writeMarker(true);
-      } else {
-        // Bind this history entry to its original token: restored or
-        // unknown provenance must refuse stale instead of overwriting the
-        // latest version. A reload over a dirty or unproven entry lands
-        // here too, so a restored draft is never upgraded to the fresh
-        // token merely because the navigation type is reload.
-        if (saved.token !== token) editor.setAttribute("data-event-draft", "");
-        token = saved.token;
-        superseded = null;
-        freshAdopted = false;
-        markerClean = false;
-      }
-    } else {
-      // Preserve Kit's history state and never store any draft text.
-      freshAdopted = true;
-      writeMarker(true);
-    }
-  } catch {
-    // Without an entry binding a restored draft cannot prove its version.
-    // The existing missing-token refusal keeps that draft recoverable.
-    token = "";
-    editor.setAttribute("data-event-draft", "");
-    freshAdopted = false;
-  }
-  function onUserEdit() {
-    userEdited = true;
-    if (!freshAdopted) return;
-    // A clean document stays clean only while every value still matches the
-    // fresh document. Any divergence makes this entry dirty for the next
-    // reload; reverting to the fresh values clears it again.
-    var clean = fieldSnapshot() === initialSnapshot;
-    if (clean === markerClean) return;
+  var initialSnapshot = snapshot();
+  function save(clean) {
     try {
-      writeMarker(clean);
+      var state = window.history.state || {};
+      window.history.replaceState({
+        ...state,
+        twoAdminSaveBaseline: { path: path, token: token, clean: clean },
+      });
     } catch {
-      // Without a writable entry the next reload cannot prove provenance:
-      // fail closed on the missing-token refusal rather than adopt blindly.
       token = "";
-      freshAdopted = false;
       editor.setAttribute("data-event-draft", "");
     }
   }
-  editor.addEventListener("input", onUserEdit);
-  editor.addEventListener("change", onUserEdit);
-  baseline.value = token;
-  editor.addEventListener("submit", function () {
-    if (!userEdited && superseded !== null && fieldSnapshot() !== initialSnapshot) {
-      // Late native restoration without user input: the visible fields are
-      // an old draft, not the fresh document's values. Submit the entry's
-      // original token so the stale refusal preserves the draft instead of
-      // overwriting the latest version.
-      baseline.value = superseded;
-      return;
+  var saved = (window.history.state || {}).twoAdminSaveBaseline;
+  if (saved && saved.path === path && saved.token) {
+    if (
+      window.performance?.getEntriesByType?.("navigation")?.[0]?.type === "reload" &&
+      saved.clean === true
+    ) {
+      superseded = saved.token;
+      save(true);
+    } else {
+      if (saved.token !== token) editor.setAttribute("data-event-draft", "");
+      token = saved.token;
     }
-    baseline.value = token;
+  } else {
+    save(true);
+  }
+  var on = editor.addEventListener.bind(editor);
+  function edited() {
+    superseded = null;
+    save(false);
+  }
+  on("input", edited);
+  on("change", edited);
+  baseline.value = token;
+  on("submit", function () {
+    baseline.value = superseded && snapshot() !== initialSnapshot ? superseded : token;
   });
 })();
