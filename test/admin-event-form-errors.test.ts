@@ -4,6 +4,7 @@ import { Hono } from "hono";
 import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { adminApp } from "../src/admin/routes";
+import { mergePatchInput, type PatchBase } from "../src/admin/store";
 import { ValidationError, wallToUtc } from "../src/admin/validation";
 import * as writeback from "../src/admin/writeback";
 import { activityLog, events } from "../src/db/admin-schema";
@@ -91,6 +92,47 @@ it("keeps the shared wallToUtc error keys and second-fold resolution unchanged",
   expect(wallToUtc("2026-10-25 01:30", "Europe/London").toISOString()).toBe(
     "2026-10-25T01:30:00.000Z",
   );
+});
+
+describe("mergePatchInput newline policy", () => {
+  const patchBase: PatchBase = {
+    title: "Stored",
+    game: null,
+    description: "one\r\ntwo\rthree",
+    accessibilityNotes: "ramp\r\nlift",
+    timezone: "UTC",
+    location: "hall\rroom",
+    organizer_name: "Ada\r\nLovelace",
+    join_url: "https://example.com/join",
+    join_instructions: "step 1\r\nstep 2\rstep 3",
+    capacity: null,
+    startsAt: new Date("2026-11-04T20:00:00Z"),
+    endsAt: new Date("2026-11-04T22:00:00Z"),
+  };
+
+  it("keeps omitted stored CRLF and lone CR exactly (raw machine policy)", () => {
+    const input = mergePatchInput(patchBase, { title: "Renamed" });
+    expect(input.title).toBe("Renamed");
+    expect(input.description).toBe("one\r\ntwo\rthree");
+    expect(input.accessibilityNotes).toBe("ramp\r\nlift");
+    expect(input.location).toBe("hall\rroom");
+    expect(input.organizer_name).toBe("Ada\r\nLovelace");
+    expect(input.join_instructions).toBe("step 1\r\nstep 2\rstep 3");
+  });
+
+  it("still clears organizer, join link and accessibility notes on explicit blank", () => {
+    for (const blank of ["", "  \r\n\t "]) {
+      const input = mergePatchInput(patchBase, {
+        organizer_name: blank,
+        join_url: blank,
+        accessibility_notes: blank,
+      });
+      expect(input.organizer_name).toBeNull();
+      expect(input.join_url).toBeNull();
+      expect(input.accessibilityNotes).toBeNull();
+      expect(input.join_instructions).toBe("step 1\r\nstep 2\rstep 3");
+    }
+  });
 });
 
 describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated test DB)", () => {
@@ -269,6 +311,119 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
       expect(await fixture.db.select().from(activityLog)).toEqual([]);
     });
   }
+
+  describe("human newline normalization", () => {
+    const sevenFields = [
+      { name: "title", column: "title", max: 100 },
+      { name: "game", column: "game", max: 100 },
+      { name: "location", column: "location", max: 255 },
+      { name: "organizer_name", column: "organizer_name", max: 500 },
+      { name: "description", column: "description", max: 1000 },
+      { name: "accessibility_notes", column: "accessibilityNotes", max: 1000 },
+      { name: "join_instructions", column: "join_instructions", max: 5000 },
+    ] as const;
+    // N code points after normalisation: mixed CRLF, CR and LF breaks, astral filler.
+    const mixed = (n: number) => `a\r\n😀\rb\n${"😀".repeat(n - 6)}`;
+    const mixedStored = (n: number) => `a\n😀\nb\n${"😀".repeat(n - 6)}`;
+    const nonMutating = async (run: () => Promise<Response> | Response, status: number) => {
+      const before = await fixture.db.select().from(events);
+      const res = await run();
+      expect(res.status).toBe(status);
+      expect(await fixture.db.select().from(events)).toEqual(before);
+      expect(await fixture.db.select().from(activityLog)).toEqual([]);
+      return res;
+    };
+    const savedRow = async (res: Response, mode: "new" | "edit") => {
+      const key =
+        mode === "edit"
+          ? KEY
+          : new URL(res.headers.get("location")!, APP_URL).pathname.split("/").pop()!;
+      const [row] = await fixture.db.select().from(events).where(eq(events.eventKey, key));
+      return row!;
+    };
+
+    for (const mode of ["new", "edit"] as const) {
+      const path = mode === "new" ? "/admin/events" : `/admin/events/${KEY}`;
+      for (const { name, column, max } of sevenFields) {
+        it(`${mode}: ${name} saves ${max} normalised characters as LF`, async () => {
+          const res = await post(path, { ...FORM, [name]: mixed(max) });
+          expect(res.status).toBe(303);
+          const row = (await savedRow(res, mode)) as Record<string, unknown>;
+          expect(row[column]).toBe(mixedStored(max));
+          expect(String(row[column])).not.toContain("\r");
+        });
+        it(`${mode}: ${name} at ${max + 1} answers 422 without writes`, async () => {
+          const res = await nonMutating(() => post(path, { ...FORM, [name]: mixed(max + 1) }), 422);
+          const html = await res.text();
+          expect([...html.matchAll(/data-testid="error-([^"]+)"/g)].map((m) => m[1])).toEqual([
+            name,
+          ]);
+        });
+        it(`${mode}: ${name} refuses a raw BOM without writes`, async () => {
+          const res = await nonMutating(() => post(path, { ...FORM, [name]: "\uFEFFa\r\nb" }), 422);
+          expect(await res.text()).toContain('data-testid="error-' + name + '"');
+        });
+      }
+    }
+
+    it("edit: the re-rendered form shows saved LF values with no CR", async () => {
+      const values = {
+        ...FORM,
+        description: "one\r\ntwo\rthree",
+        accessibility_notes: "ramp\r\nlift",
+        join_instructions: "a\r\nb",
+      };
+      expect((await post(`/admin/events/${KEY}`, values)).status).toBe(303);
+      const res = await app.request(`${APP_URL}/admin/events/${KEY}`, { headers: { cookie } }, env);
+      expect(res.status).toBe(200);
+      const html = await res.text();
+      expect(html).not.toContain("\r");
+      expect(html).toContain("one\ntwo\nthree");
+      expect(html).toContain("ramp\nlift");
+    });
+
+    it("edit: an explicit blank organizer clears the stored value", async () => {
+      await fixture.db
+        .update(events)
+        .set({ organizer_name: "Ada\nLovelace" })
+        .where(eq(events.eventKey, KEY));
+      const res = await post(`/admin/events/${KEY}`, { ...FORM, organizer_name: "\r\n \t" });
+      expect(res.status).toBe(303);
+      expect((await savedRow(res, "edit")).organizer_name).toBeNull();
+    });
+
+    it("rejects a cross-origin POST with no writes", async () => {
+      await nonMutating(
+        () =>
+          app.request(
+            `${APP_URL}/admin/events/${KEY}`,
+            {
+              method: "POST",
+              headers: { cookie, origin: "https://evil.example.test" },
+              body: new URLSearchParams({ ...FORM, description: "a\r\nb" }),
+            },
+            env,
+          ),
+        403,
+      );
+    });
+
+    it("refuses a POST without the session cookie with no writes", async () => {
+      const before = await fixture.db.select().from(events);
+      const res = await app.request(
+        `${APP_URL}/admin/events/${KEY}`,
+        {
+          method: "POST",
+          headers: { origin: APP_URL },
+          body: new URLSearchParams({ ...FORM, description: "a\r\nb" }),
+        },
+        env,
+      );
+      expect(res.status).not.toBe(303);
+      expect(res.status).not.toBe(200);
+      expect(await fixture.db.select().from(events)).toEqual(before);
+    });
+  });
 
   afterEach(() => {
     vi.restoreAllMocks();

@@ -5,7 +5,8 @@ import { chromium, type Browser, type Page } from "playwright";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { EventFormPage } from "../src/admin/pages";
 import type { EventRow } from "../src/admin/store";
-import { parseEventForm, ValidationError } from "../src/admin/validation";
+import { parseHumanEventForm, ValidationError } from "../src/admin/validation";
+import { attr, controlNamed, submittedFields } from "./helpers/kit-edit-controls";
 
 const base = {
   title: "Game night",
@@ -86,13 +87,42 @@ const { eventTextLimitError, bindAdminEventTextLimits } = runInNewContext(
 
 // These always-on fixtures prove SSR wiring and parity, not native browser behavior.
 describe("admin event code-point contract", () => {
+  for (const mode of ["new", "edit"] as const) {
+    for (const field of ["title", "game", "location", "organizer_name"]) {
+      it(`${mode}: ${field} selects a visible multiline control with the same field wiring`, () => {
+        const id = `f-${field.replaceAll("_", "-")}`;
+        const single = controlNamed(form(mode, { ...base, [field]: "Jordan Smith" }), field)!;
+        expect(single.tagName).toBe("input");
+        expect(attr(single, "type")).toBe("text");
+        for (const newline of ["\n", "\r", "\r\n"]) {
+          const html = form(
+            mode,
+            { ...base, [field]: `Jordan${newline}Smith` },
+            { [field]: "Server feedback" },
+          );
+          const control = controlNamed(html, field)!;
+          expect(control.tagName).toBe("textarea");
+          expect(attr(control, "rows")).toBe("2");
+          expect(attr(control, "id")).toBe(id);
+          expect(attr(control, "aria-invalid")).toBe("true");
+          expect(attr(control, "aria-describedby")?.split(" ")).toContain(`${id}-error`);
+          expect(attr(control, "data-event-text-limit")).toBe(
+            attr(single, "data-event-text-limit"),
+          );
+          expect(attr(control, "required")).toBe(attr(single, "required"));
+          expect(html).toContain(`<a href="#${id}">`);
+          expect(submittedFields(html)[field]).toBe("Jordan\r\nSmith");
+        }
+      });
+    }
+  }
   for (const { field, max } of limits) {
     it.each(patterns)(
       `${field} measures $label code points like the unchanged server`,
       ({ characters }) => {
         const value = text(characters, max);
         expect(eventTextLimitError(value, field, max)).toBe("");
-        const parsed = parseEventForm({ ...base, [field]: value });
+        const parsed = parseHumanEventForm({ ...base, [field]: value });
         expect(field === "accessibility_notes" ? parsed.accessibilityNotes : parsed[field]).toBe(
           value,
         );
@@ -107,7 +137,7 @@ describe("admin event code-point contract", () => {
                 : message;
         expect(eventTextLimitError(value + "x", field, max)).toBe(message);
         try {
-          parseEventForm({ ...base, [field]: value + "x" });
+          parseHumanEventForm({ ...base, [field]: value + "x" });
           throw new Error("Expected server validation to reject N+1 without JS");
         } catch (error) {
           expect(error).toBeInstanceOf(ValidationError);
@@ -125,28 +155,27 @@ describe("admin event code-point contract", () => {
       );
     }
   });
-  it("description with line breaks matches the server verdict (browsers submit CRLF)", () => {
-    // Browsers serialize textarea LF as CRLF on submit, so the server counts
-    // two code points per break while textarea .value holds one.
+  it("description with line breaks matches the human server verdict (canonical LF)", () => {
+    // Native POST expands LF to CRLF; the human parser counts canonical LF.
     const toSubmitted = (value: string): string => value.replace(/\n/g, "\r\n");
     const serverMessage = (value: string): string => {
       try {
-        parseEventForm({ ...base, description: toSubmitted(value) });
+        parseHumanEventForm({ ...base, description: toSubmitted(value) });
         return "";
       } catch (error) {
         expect(error).toBeInstanceOf(ValidationError);
         return (error as ValidationError).fields.description ?? "";
       }
     };
-    // 47 lines of 20 chars: 986 code points by .value, 1032 as submitted.
-    const over = Array.from({ length: 47 }, () => "x".repeat(20)).join("\n");
-    expect([...over].length).toBe(986);
+    // 48 lines of 20 chars: 1007 canonical code points, independent of wire CRLF.
+    const over = Array.from({ length: 48 }, () => "x".repeat(20)).join("\n");
+    expect([...over].length).toBe(1007);
     expect(eventTextLimitError(over, "description", 1000)).toBe(
       "Keep the description to 1000 characters.",
     );
     expect(serverMessage(over)).toBe("Keep the description to 1000 characters.");
-    // 45 lines of 20 chars: 944 by .value, 988 as submitted — both pass.
-    const under = Array.from({ length: 45 }, () => "x".repeat(20)).join("\n");
+    // The old 986-code-point refusal now passes despite 1032 wire code points.
+    const under = Array.from({ length: 47 }, () => "x".repeat(20)).join("\n");
     expect(eventTextLimitError(under, "description", 1000)).toBe("");
     expect(serverMessage(under)).toBe("");
   });
@@ -318,36 +347,30 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
         const request = await requestPromise;
         expect(request.headers()["content-type"]).toBe("application/x-www-form-urlencoded");
         const wireFields = Object.fromEntries(new URLSearchParams(request.postData()!));
+        expect(submittedFields(form("edit", values))).toEqual(wireFields);
         return { domFields, wireFields };
       } finally {
         await context.close();
       }
     }
 
-    for (const newline of ["\n", "\r", "\r\n"]) {
-      it(`characterizes accepted organizer ${JSON.stringify(newline)} loss on untouched native save`, async () => {
-        const organizerName = `Jordan${newline}Smith`;
-        expect(parseEventForm({ ...base, organizer_name: organizerName }).organizer_name).toBe(
-          organizerName,
-        );
-        const { domFields, wireFields } = await nativeSubmission({
-          ...base,
-          organizer_name: organizerName,
+    for (const field of ["title", "game", "location", "organizer_name"] as const) {
+      for (const newline of ["\n", "\r", "\r\n"]) {
+        it(`preserves accepted ${field} ${JSON.stringify(newline)} on untouched native save`, async () => {
+          const value = `Jordan${newline}Smith`;
+          expect(parseHumanEventForm({ ...base, [field]: value })[field]).toBe("Jordan\nSmith");
+          const { domFields, wireFields } = await nativeSubmission({ ...base, [field]: value });
+          expect(domFields[field]).toBe("Jordan\nSmith");
+          expect(wireFields[field]).toBe("Jordan\r\nSmith");
+          expect(parseHumanEventForm(wireFields)[field]).toBe("Jordan\nSmith");
         });
-        // Baseline characterization, not the desired preservation contract.
-        // Replace this expectation with the approved fidelity regression in the repair.
-        expect(domFields.organizer_name).toBe("JordanSmith");
-        expect(wireFields.organizer_name).toBe("JordanSmith");
-        expect(parseEventForm(wireFields).organizer_name).toBe("JordanSmith");
-      });
+      }
     }
 
-    for (const { field, max } of limits.filter(({ field }) =>
-      ["description", "accessibility_notes", "join_instructions"].includes(field),
-    )) {
+    for (const { field, max } of limits) {
       for (const character of ["x", "😀"]) {
-        it(`characterizes ${field} ${character} LF/FormData versus CRLF native wire at N/N+1`, async () => {
-          for (const count of [max - 3, max - 2]) {
+        it(`counts ${field} ${character} LF/FormData and CRLF native wire equally at N/N+1`, async () => {
+          for (const count of [max - 2, max - 1]) {
             const value = `${character.repeat(count)}\ny`;
             const expectedWire = value.replace(/\n/g, "\r\n");
             const { domFields, wireFields } = await nativeSubmission({ ...base, [field]: value });
@@ -355,19 +378,20 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
             expect(wireFields[field]).toBe(expectedWire);
             expect([...value]).toHaveLength(count + 2);
             expect([...expectedWire]).toHaveLength(count + 3);
-            const parsedDom = parseEventForm(domFields);
-            expect(
-              field === "accessibility_notes" ? parsedDom.accessibilityNotes : parsedDom[field],
-            ).toBe(value);
-            if (count === max - 3) {
-              const parsedWire = parseEventForm(wireFields);
+            if (count === max - 2) {
+              const parsedDom = parseHumanEventForm(domFields);
+              expect(
+                field === "accessibility_notes" ? parsedDom.accessibilityNotes : parsedDom[field],
+              ).toBe(value);
+              const parsedWire = parseHumanEventForm(wireFields);
               expect(
                 field === "accessibility_notes" ? parsedWire.accessibilityNotes : parsedWire[field],
-              ).toBe(expectedWire);
+              ).toBe(value);
             } else {
-              expect(() => parseEventForm(wireFields)).toThrow(ValidationError);
+              expect(() => parseHumanEventForm(domFields)).toThrow(ValidationError);
+              expect(() => parseHumanEventForm(wireFields)).toThrow(ValidationError);
               try {
-                parseEventForm(wireFields);
+                parseHumanEventForm(wireFields);
               } catch (error) {
                 expect((error as ValidationError).fields).toHaveProperty(field);
               }
@@ -430,7 +454,7 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
                 await page.evaluate<Record<string, string>[]>("window.submissions");
               expect(submissions).toHaveLength(1);
               expect(submissions[0]![field]).toBe(value);
-              const parsedSubmission = parseEventForm(submissions[0]!);
+              const parsedSubmission = parseHumanEventForm(submissions[0]!);
               expect(
                 field === "accessibility_notes"
                   ? parsedSubmission.accessibilityNotes

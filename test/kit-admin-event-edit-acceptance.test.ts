@@ -27,6 +27,7 @@ import {
   type KitEventEditView,
 } from "../src/admin/kit-event-edit";
 import { ROSTER_PAGE_SIZE } from "../src/admin/table-list";
+import { attr, controlNamed, submittedFields } from "./helpers/kit-edit-controls";
 
 const db = {} as Db;
 const now = new Date("2026-06-15T12:00:00.000Z");
@@ -470,6 +471,33 @@ export function renderPage(data) { return render(Page, { props: { data } }).body
   afterAll(() => {
     if (scratch) rmSync(scratch, { recursive: true, force: true });
   });
+
+  for (const field of ["title", "game", "location"] as const) {
+    it(`${field}: compiled Kit SSR uses the shared multiline control contract`, async () => {
+      const view = await okView();
+      const single = controlNamed(renderPage({ view }), field)!;
+      expect(single.tagName).toBe("input");
+      for (const newline of ["\n", "\r", "\r\n"]) {
+        const html = renderPage({
+          view: {
+            ...view,
+            values: { ...view.values, [field]: `first${newline}second` },
+            errors: { [field]: "Server feedback" },
+            hasErrors: true,
+          },
+        });
+        const control = controlNamed(html, field)!;
+        expect(control.tagName).toBe("textarea");
+        expect(attr(control, "rows")).toBe("2");
+        expect(attr(control, "id")).toBe(`f-${field}`);
+        expect(attr(control, "aria-invalid")).toBe("true");
+        expect(attr(control, "aria-describedby")).toBe(`f-${field}-error`);
+        expect(attr(control, "data-event-text-limit")).toBe(attr(single, "data-event-text-limit"));
+        expect(attr(control, "required")).toBe(attr(single, "required"));
+        expect(submittedFields(html)[field]).toBe("first\r\nsecond");
+      }
+    });
+  }
 
   // Mutant: change only the page's duplicate form action to /cancel. Form
   // counts stay identical, but each executed status branch must fail here.
