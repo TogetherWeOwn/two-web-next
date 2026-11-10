@@ -80,20 +80,35 @@ test("moderator publishes, filters and cancels an event; guests see the notice",
     // event renders for guests and on the public calendar.
     const draft = await guest.request.get(`/e/${draftKey}`, { maxRedirects: 0 });
     expect(draft.status()).toBe(403);
-    const captureReview = async (state: string) => {
+    const captureReview = async (state: string, reviewPage = page) => {
       for (const viewport of [
         { width: 1280, height: 800 },
         { width: 390, height: 844 },
       ]) {
-        await page.setViewportSize(viewport);
-        await expectSavedReviewActions(page, state, viewport.width);
+        await reviewPage.setViewportSize(viewport);
+        await expectSavedReviewActions(reviewPage, state, viewport.width);
         const name = `hono-review-${state}-${viewport.width}`;
         const path = test.info().outputPath(`${name}.png`);
-        await page.screenshot({ path, fullPage: true });
+        await reviewPage.screenshot({ path, fullPage: true });
         await test.info().attach(name, { path, contentType: "image/png" });
       }
     };
     // Review always reads the saved row, even when the editor is dirty.
+    const reviewLink = page.getByTestId("review-event");
+    await expect(reviewLink).toHaveAttribute("href", `${localOrigin}/e/${pausedKey}?review=1`);
+    await page.getByLabel("Title", { exact: true }).fill("Not saved");
+    await expect(reviewLink).toHaveAttribute("href", /\?review=1&unsaved=1$/);
+    const [reviewTab] = await Promise.all([
+      context.waitForEvent("page"),
+      reviewLink.click({ button: "middle" }),
+    ]);
+    await expect(reviewTab.getByTestId("event-review-unsaved")).toBeVisible();
+    await expect(reviewTab.getByRole("heading", { name: pausedTitle, exact: true })).toBeVisible();
+    await expect(page.getByLabel("Title", { exact: true })).toHaveValue("Not saved");
+    await captureReview("unsaved-new-tab", reviewTab);
+    await reviewTab.close();
+    await page.getByLabel("Title", { exact: true }).fill(pausedTitle);
+    await expect(reviewLink).toHaveAttribute("href", /\?review=1$/);
     await page.getByLabel("Title", { exact: true }).fill("Not saved");
     page.once("dialog", (dialog) => dialog.accept());
     await page.getByTestId("review-event").click();

@@ -16,7 +16,13 @@ function reviewBrowser(draft = false) {
     string,
     (event: { preventDefault: () => void; returnValue?: string }) => void
   >();
-  const editor = { hasAttribute: () => draft, addEventListener: vi.fn() };
+  const editorListeners = new Map<string, Array<() => void>>();
+  const editor = {
+    hasAttribute: () => draft,
+    addEventListener: (name: string, fn: () => void) => {
+      editorListeners.set(name, [...(editorListeners.get(name) ?? []), fn]);
+    },
+  };
   runInNewContext(
     readFileSync(new URL("../public/islands/admin-event-editor.js", import.meta.url), "utf8"),
     {
@@ -45,7 +51,9 @@ function reviewBrowser(draft = false) {
   return {
     values,
     link,
-    click: () => link.onclick!(),
+    edit: (name: "input" | "change") => {
+      for (const fn of editorListeners.get(name) ?? []) fn();
+    },
     navigate: () => {
       const event = { preventDefault: vi.fn(), returnValue: undefined as string | undefined };
       listeners.get("beforeunload")!(event);
@@ -64,27 +72,35 @@ describe("Admin event editor navigation guard", () => {
     },
   );
 
-  it("marks review navigation only while edits are unsaved and leaves protection armed", () => {
-    const b = reviewBrowser();
-    const link = b.link;
-    b.click();
-    expect(link.href).toBe("https://next.example/e/abc?review=1");
-    const saved = b.values.get("title")!;
-    b.values.set("title", "Unsaved title");
-    b.click();
-    expect(link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
-    expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
-    b.values.set("title", saved);
-    b.click();
-    expect(link.href).toBe("https://next.example/e/abc?review=1");
-    expect(b.navigate().preventDefault).not.toHaveBeenCalled();
-  });
+  it.each(["input", "change"] as const)(
+    "syncs the review href on %s without a click and leaves protection armed",
+    (kind) => {
+      const b = reviewBrowser();
+      const link = b.link;
+      expect(link.href).toBe("https://next.example/e/abc?review=1");
+      const saved = b.values.get("title")!;
+      b.values.set("title", "Unsaved title");
+      b.edit(kind);
+      expect(link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+      expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
+      b.edit(kind);
+      expect(link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
+      b.values.set("title", saved);
+      b.edit(kind);
+      expect(link.href).toBe("https://next.example/e/abc?review=1");
+      expect(b.navigate().preventDefault).not.toHaveBeenCalled();
+    },
+  );
 
-  it("marks a rejected Save as unsaved even without another keystroke", () => {
+  it("marks a rejected Save as unsaved without a click or another keystroke", () => {
     const b = reviewBrowser(true);
-    b.click();
     expect(b.link.href).toContain("&unsaved=1");
     expect(b.navigate().preventDefault).toHaveBeenCalledOnce();
+    b.values.set("title", "Edited rejected draft");
+    b.edit("input");
+    b.values.set("title", "Game night");
+    b.edit("change");
+    expect(b.link.href).toBe("https://next.example/e/abc?review=1&unsaved=1");
   });
 
   it.each(["search", "sort"] as const)("allows clean roster %s navigation", (kind) => {

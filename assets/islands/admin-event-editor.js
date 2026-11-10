@@ -111,9 +111,13 @@
   if (reviewLink) {
     // Both renderers emit the canonical saved-review URL ending in ?review=1.
     var reviewHref = reviewLink.href;
-    reviewLink.onclick = function () {
+    function syncReviewHref() {
       reviewLink.href = reviewHref + (draft || snapshot() !== initial ? "&unsaved=1" : "");
-    };
+    }
+    // New-tab and context-menu navigation use href without a click handler.
+    syncReviewHref();
+    editor.addEventListener("input", syncReviewHref);
+    editor.addEventListener("change", syncReviewHref);
   }
   window.addEventListener("beforeunload", function (event) {
     // Only Save or a normal, explicit recovery activation exempts one trip.
