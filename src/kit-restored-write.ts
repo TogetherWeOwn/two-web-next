@@ -2,9 +2,9 @@ import { parseSigned } from "hono/utils/cookie";
 import { safeNext } from "./join/service";
 import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 
-// A browser fetch can request a full HTML page but discard its shell (the past
-// archive island does exactly that). Fetch metadata distinguishes it from a
-// navigation without changing the island or trusting its Accept header.
+// A browser fetch can request a full HTML page but discard its shell. Islands
+// must mark those reads explicitly: Fetch Metadata also distinguishes them from
+// navigations when present, but older clients may omit it. Accept is not proof.
 export function isKitNoticeDocument(request: Request, isDataRequest = false): boolean {
   if (request.method !== "GET" || isDataRequest) return false;
   const headers = request.headers;

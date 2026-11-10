@@ -69,6 +69,7 @@ async function dispatch(
     sessionSecret: SECRET,
     manifest: [
       { method: "GET", path: "/about", enabled: true, reads: "public" },
+      { method: "GET", path: "/events/past", enabled: true, reads: "public" },
       { method: "GET", path: "/auth/error", enabled: true, reads: "public" },
     ],
     honoFetch: async () => new Response("must not hono", { status: 500 }),
@@ -261,6 +262,35 @@ describe("dispatch: release boundary and caching", () => {
     req({ ...NAV, "cf-ray": RAY, ...headers, cookie: await signed("restored|/events/42") }, path);
   const pending = (res: Response) =>
     expect(res.headers.getSetCookie().join("\n")).not.toContain(EXPIRED_WRITE_COOKIE);
+
+  it("metadata-less archive pagination retains the notice until a document navigation", async () => {
+    const cookie = await signed("restored|/events/42");
+    const render = (event: HookEventLike) => {
+      const data = rootLoad({ locals: event.locals as Record<string, unknown> });
+      return html(
+        data.restoredWrite
+          ? FULL_HTML
+          : "<!doctype html><html><body><main>Archive</main></body></html>",
+      );
+    };
+    const fragment = await dispatch(
+      req({ accept: "text/html", "x-two-island": "past-events", cookie }, "/events/past?page=2"),
+      render,
+    );
+    expect(fragment.status).toBe(200);
+    expect(await fragment.text()).not.toContain('data-testid="auth-error"');
+    expect(fragment.headers.get("cache-control")).toBe("private, no-store");
+    pending(fragment);
+
+    // No deletion was returned by pagination, so the browser sends the same
+    // signed cookie on the next full navigation (also without Fetch Metadata).
+    const document = await dispatch(req({ accept: "text/html", cookie }, "/events/past"), render);
+    expect(document.status).toBe(200);
+    expect(await document.text()).toBe(FULL_HTML);
+    expect(document.headers.getSetCookie().join("\n")).toContain(`${EXPIRED_WRITE_COOKIE}=`);
+    expect(document.headers.getSetCookie().join("\n")).toMatch(/Max-Age=0/i);
+    expect(document.headers.get("cache-control")).toBe("private, no-store");
+  });
 
   it("consumes the cookie on a released full-document 200 with the marker", async () => {
     const res = await dispatch(await restoredNav(), () =>
