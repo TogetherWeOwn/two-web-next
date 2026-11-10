@@ -1,7 +1,7 @@
 // Events calendar screen: composes the controls, empty states, list and month grid.
 import type { FC } from "hono/jsx";
 import type { HeaderSession, Session } from "../env";
-import { canonicalUrl } from "../seo";
+import { canonicalUrl, EVENTS_SEARCH_TOO_LONG_TITLE, eventsTitle } from "../seo";
 import {
   CALENDAR_MONTH_EMPTY_RECOVERY_COPY,
   CALENDAR_MONTH_EMPTY_TESTID,
@@ -182,7 +182,7 @@ export const EventsCalendarPage: FC<{
     !searchMiss;
   return (
     <ScheduleShell
-      title="Events"
+      title={eventsTitle(state)}
       canonical={canonicalUrl(appUrl, "/events")}
       description="Game nights, tournaments and whatever else the community puts on."
       robots={robots}
@@ -360,7 +360,7 @@ export const EventsSearchTooLongPage: FC<{ appUrl: string; archive?: boolean }> 
   archive = false,
 }) => (
   <ScheduleShell
-    title="Events"
+    title={EVENTS_SEARCH_TOO_LONG_TITLE}
     canonical={canonicalUrl(appUrl, "/events")}
     robots="noindex, follow"
   >

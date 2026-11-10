@@ -1,6 +1,6 @@
 // Past events archive screen: paginated list of what already happened.
 import type { FC } from "hono/jsx";
-import { canonicalUrl } from "../seo";
+import { canonicalUrl, pastEventsTitle } from "../seo";
 import {
   EVENT_CARD_HOST_TESTID,
   EVENTS_EMPTY_COPY,
@@ -87,7 +87,7 @@ export const PastEventsPage: FC<{
   q?: string;
 }> = ({ rows, page, hasMore, totalPages, appUrl, q = "" }) => (
   <ScheduleShell
-    title="Past events"
+    title={pastEventsTitle(page, q)}
     canonical={canonicalUrl(appUrl, pastEventsUrl(page, q))}
     description="Look back at the community’s game nights and tournaments."
     robots="noindex, follow"

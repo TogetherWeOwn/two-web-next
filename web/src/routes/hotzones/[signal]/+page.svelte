@@ -1,6 +1,6 @@
 <script lang="ts">
 import Shell from "#lib/Shell.svelte";
-import { canonicalUrl } from "../../../../../src/seo";
+import { canonicalUrl, hotzoneSignalTitle } from "../../../../../src/seo";
 import type { PageProps } from "./$types";
 
 let { data }: PageProps = $props();
@@ -25,7 +25,7 @@ const qs = $derived(season === "all" ? "" : `?season=${season}`);
 </script>
 
 <Shell
-  title="{signal} hot zone"
+  title={hotzoneSignalTitle(signal, season)}
   canonical={canonicalUrl(appUrl, destination)}
   robots="noindex, follow"
   description="When {signal} activity peaks, by hour and weekday."
