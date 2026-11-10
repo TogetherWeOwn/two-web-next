@@ -17,6 +17,7 @@ import { describe, expect, it, vi } from "vitest";
 import { featuredStatus } from "../src/featured-status";
 import { parseRecordId } from "../src/admin/record-id";
 import { resolveKitFeaturedEdit } from "../src/admin/kit-featured-edit";
+import { featuredSaveBaseline } from "../src/admin/save-baseline";
 import { CHECKED_AT, savedFeatured } from "./helpers/featured-saved-content-cases";
 import { renderSavedKit } from "./helpers/featured-saved-content-render";
 
@@ -40,6 +41,11 @@ describe("Kit featured-edit page contract", () => {
     expect(source).toContain("/delete");
     expect(source).not.toContain("on:submit");
     expect(source).not.toContain("onsubmit");
+  });
+
+  it("carries the saved baseline in a hidden field of the edit form only", () => {
+    expect(source).toContain('type="hidden" name="saved_baseline"');
+    expect(source.indexOf('name="saved_baseline"')).toBeLessThan(source.indexOf('name="title"'));
   });
 
   it("keeps every Hono field name the server validator reads", () => {
@@ -229,6 +235,7 @@ describe("resolveKitFeaturedEdit", () => {
     if (outcome.kind !== "ok") throw new Error("expected ok");
     expect(outcome.view.id).toBe(7);
     expect(outcome.view.values).toMatchObject({
+      saved_baseline: await featuredSaveBaseline(baseRow),
       title: "Game night",
       body: "Bring a friend",
       position: "2",
@@ -241,6 +248,32 @@ describe("resolveKitFeaturedEdit", () => {
     expect(outcome.view.checkedAt).toBe("2026-09-30T20:00:00.000Z");
     expect(outcome.view.imageSrc).toBeNull();
     expect(outcome.view.imageAlt).toBe("Game night");
+  });
+
+  it("carries a baseline that moves with the version and the exact UTC text", async () => {
+    const baselineOf = async (row: Parameters<typeof featuredSaveBaseline>[0]) => {
+      const outcome = await resolveKitFeaturedEdit("7", { db: {} as never, get: async () => row });
+      if (outcome.kind !== "ok") throw new Error("expected ok");
+      return outcome.view.values.saved_baseline;
+    };
+    const original = await baselineOf(baseRow);
+    expect(original).toMatch(/^[0-9a-f]{64}$/);
+    expect(
+      await baselineOf({ ...baseRow, updatedAt: new Date("2026-10-01T12:00:00.001Z") }),
+    ).not.toBe(original);
+    expect(await baselineOf({ ...baseRow, startsAtText: "2026-10-02 00:00:00.000000" })).not.toBe(
+      original,
+    );
+  });
+
+  it("loads a nonfinite saved version without throwing", async () => {
+    const outcome = await resolveKitFeaturedEdit("7", {
+      db: {} as never,
+      get: async () => ({ ...baseRow, updatedAt: new Date(Number.NaN) }),
+    });
+    if (outcome.kind !== "ok") throw new Error("expected ok");
+    expect(outcome.view.updatedAt).toBe("");
+    expect(outcome.view.values.saved_baseline).toMatch(/^[0-9a-f]{64}$/);
   });
 
   it("suppresses an off-allowlist preview host like the homepage", async () => {

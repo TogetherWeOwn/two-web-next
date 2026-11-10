@@ -28,6 +28,7 @@ import { retireAnonEventCaches } from "../events/anon-cache";
 import { retireHomeGuestCache } from "../home-cache";
 import { retireApiPublicEventCache } from "../public-data/cache";
 import { audit, boundModeratorWrite, dirty, NotFoundError, type Actor } from "./store-shared";
+import { eventSaveBaseline, StaleSaveError } from "./save-baseline";
 
 export type EventRow = Omit<typeof events.$inferSelect, "accessibilityNotes"> & {
   /** Optional for older in-memory row fixtures; live database rows include this nullable column. */
@@ -297,6 +298,7 @@ export async function updateEvent(
   actor: Actor,
   eventKey: string,
   input: EventFormInput,
+  expectedBaseline?: string,
 ): Promise<{ row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] }> {
   const result: { row: EventRow; writeBack: WriteBack; childWriteBacks: NonNullable<WriteBack>[] } =
     await db.transaction(async (tx) => {
@@ -309,6 +311,12 @@ export async function updateEvent(
         .where(eq(events.eventKey, eventKey))
         .for("update");
       if (!locked) throw new NotFoundError("event");
+      if (
+        expectedBaseline !== undefined &&
+        expectedBaseline !== (await eventSaveBaseline(locked))
+      ) {
+        throw new StaleSaveError(locked);
+      }
       return commitLockedUpdate(tx, actor, eventKey, locked, input);
     });
   // Committed: the edit is visible to guests on the next fetch (N6).

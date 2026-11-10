@@ -74,6 +74,7 @@ const island = '<script src="/islands/admin-event-editor.js" defer></' + "script
     </p>
   </section>
   <form method="post" action={`/admin/featured/${data.view.id}`} data-event-editor="">
+    <input type="hidden" name="saved_baseline" value={data.view.values.saved_baseline} />
     <!-- Native maxlength counts UTF-16 units and truncates supplementary
         characters early; the 255-code-point limits belong to the server
         validator so valid headlines and image descriptions survive. -->

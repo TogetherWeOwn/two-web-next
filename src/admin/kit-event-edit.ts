@@ -46,6 +46,7 @@ import {
   type SortOrder,
 } from "./table-list";
 import { isKnownTimezone, utcToWall } from "./validation-wall-time";
+import { eventSaveBaseline, SAVE_BASELINE_FIELD, type EventSaveSnapshot } from "./save-baseline";
 import { renderRsvpPauseReviewHtml } from "./rsvp-review";
 import { rosterWaitlistHint } from "./roster-copy";
 import { formatAdminTime } from "./chronology";
@@ -54,13 +55,19 @@ import { EventRosterSection } from "./pages/event-form-roster";
 
 /** The edit-form values the Hono eventValues() helper renders. */
 export type KitEventEditValues = {
+  /** Hidden stale-save carrier: the digest of the row as displayed. */
+  [SAVE_BASELINE_FIELD]: string;
   title: string;
   game: string;
   description: string;
+  accessibility_notes: string;
   starts_at: string;
   ends_at: string;
   timezone: string;
   location: string;
+  organizer_name: string;
+  join_url: string;
+  join_instructions: string;
   capacity: string;
 };
 
@@ -149,18 +156,7 @@ export type KitEventEditOutcome =
 /** Structural minimum the resolver reads: the real getEvent EventRow and the
  * real listRoster RosterEntry both extend these, so the load passes the
  * shared helpers straight through. */
-export type KitEventEditRow = {
-  eventKey: string;
-  title: string;
-  game: string | null;
-  description: string | null;
-  startsAt: Date;
-  endsAt: Date;
-  timezone: string;
-  location: string | null;
-  capacity: number | null;
-  status: string;
-  rsvpOpen: boolean;
+export type KitEventEditRow = EventSaveSnapshot & {
   recurrenceFrequency: string | null;
 };
 
@@ -273,15 +269,20 @@ export async function resolveKitEventEdit(
           ? renderSavedEventNoticeHtml(row.eventKey)
           : null,
       values: {
+        [SAVE_BASELINE_FIELD]: await eventSaveBaseline(row),
         title: row.title,
         game: row.game ?? "",
         description: row.description ?? "",
+        accessibility_notes: row.accessibilityNotes ?? "",
         // Wall text in the row's zone — what the moderator typed is what they
         // see; the stored instant is preserved by the Hono UTC carriers.
         starts_at: knownTimezone && startFinite ? utcToWall(row.startsAt, row.timezone) : "",
         ends_at: knownTimezone && endFinite ? utcToWall(row.endsAt, row.timezone) : "",
         timezone: row.timezone,
         location: row.location ?? "",
+        organizer_name: row.organizer_name ?? "",
+        join_url: row.join_url ?? "",
+        join_instructions: row.join_instructions ?? "",
         capacity: row.capacity === null ? "" : String(row.capacity),
       },
       errors: {},

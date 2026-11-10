@@ -6,9 +6,11 @@
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
 import { adminSaveStatus } from "../save-status";
+import { SAVE_BASELINE_FIELD } from "../save-baseline";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
+import { StaleSaveNotice } from "./stale-save-notice";
 
 export const EventFormFields: FC<{
   mode: "new" | "edit";
@@ -16,16 +18,34 @@ export const EventFormFields: FC<{
   values: Record<string, unknown>;
   errors: Record<string, string>;
   action: string;
-}> = ({ mode, row, values, errors, action }) => {
+  saveRefused?: "stale" | "unverified";
+}> = ({ mode, row, values, errors, action, saveRefused }) => {
   return (
     <>
-      <ValidationSummary errors={errors} kind="event" mode={mode} />
+      {saveRefused ? (
+        <StaleSaveNotice
+          kind="event"
+          action={action}
+          updatedAt={row?.updatedAt}
+          unverified={saveRefused === "unverified"}
+          errors={errors}
+        />
+      ) : (
+        <ValidationSummary errors={errors} kind="event" mode={mode} />
+      )}
       <form
         method="post"
         action={action}
         data-event-editor=""
-        data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
+        data-event-draft={saveRefused || Object.keys(errors).length > 0 ? "" : undefined}
       >
+        {mode === "edit" ? (
+          <input
+            type="hidden"
+            name={SAVE_BASELINE_FIELD}
+            value={val(values, SAVE_BASELINE_FIELD)}
+          />
+        ) : null}
         <Field name="title" label="Title" errors={errors}>
           {(id) => (
             <input

@@ -116,6 +116,14 @@ async function cookieFor(
   return serialized.split(";")[0]!;
 }
 
+/** The hidden stale-save carrier the guarded edit GET renders. */
+function baselineFrom(html: string): string {
+  const tag = html.match(/<input\b[^>]*\bname="saved_baseline"[^>]*>/)?.[0];
+  const token = tag?.match(/\bvalue="([0-9a-f]{64})"/)?.[1];
+  if (!token) throw new Error("edit page carries no saved_baseline token");
+  return token;
+}
+
 const MOD = { userId: "100000000000000111", username: "mod", moderator: true };
 const PLEB = { userId: "222", username: "pleb", moderator: false };
 
@@ -314,6 +322,12 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       retainCookie(
         await app.request(new URL(path, APP_URL + EDIT_PATH).href, { headers: { cookie } }, env),
       );
+    // Every edit POST carries the token the guarded GET currently renders.
+    const currentToken = async () => {
+      const res = await get(EDIT_PATH);
+      expect(res.status).toBe(200);
+      return baselineFrom(await res.text());
+    };
     const post = async (path: string, values: Record<string, string>) =>
       retainCookie(
         await app.request(
@@ -340,7 +354,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     it("a form-parse refusal (invalid start) shows the notice, leaks no roster, writes nothing", async () => {
       const eventsBefore = await fixture.db.select().from(events);
       const rsvpsBefore = await fixture.db.select().from(rsvps);
-      const res = await post(EDIT_PATH, { ...FORM, starts_at: "not-a-time" });
+      const res = await post(EDIT_PATH, {
+        ...FORM,
+        saved_baseline: await currentToken(),
+        starts_at: "not-a-time",
+      });
       expect(res.status).toBe(422);
       const notice = expectRefusedEditNotice(await res.text());
       expect(notice.href.startsWith(EDIT_PATH)).toBe(true);
@@ -353,7 +371,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       const rsvpsBefore = await fixture.db.select().from(rsvps);
       // Two members are going; capacity 1 parses fine but the locked
       // update refuses it, exercising the second 422 re-render.
-      const res = await post(EDIT_PATH, { ...FORM, capacity: "1" });
+      const res = await post(EDIT_PATH, {
+        ...FORM,
+        saved_baseline: await currentToken(),
+        capacity: "1",
+      });
       expect(res.status).toBe(422);
       expectRefusedEditNotice(await res.text());
       expect(await fixture.db.select().from(events)).toEqual(eventsBefore);
@@ -361,7 +383,11 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
     });
 
     it("following the notice link reloads the canonical edit page with the roster back", async () => {
-      const res = await post(EDIT_PATH, { ...FORM, starts_at: "not-a-time" });
+      const res = await post(EDIT_PATH, {
+        ...FORM,
+        saved_baseline: await currentToken(),
+        starts_at: "not-a-time",
+      });
       expect(res.status).toBe(422);
       const notice = expectRefusedEditNotice(await res.text());
       const linked = new URL(notice.href, APP_URL + EDIT_PATH);
@@ -414,6 +440,18 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       body: new URLSearchParams(fields),
     });
 
+    const retain = (res: Response): Response => {
+      const rotated = res.headers.get("set-cookie")?.match(/__Host-two_session=[^;,]+/)?.[0];
+      if (rotated) cookie = rotated;
+      return res;
+    };
+    // The saved_baseline the guarded edit GET renders right now.
+    const tokenFor = async (path: string): Promise<string> => {
+      const res = retain(await app().request(path, { headers: { cookie } }, liveEnv()));
+      expect(res.status).toBe(200);
+      return baselineFrom(await res.text());
+    };
+
     beforeEach(async () => {
       // Keep event fixtures in the future without faking Postgres timers.
       vi.useFakeTimers({ toFake: ["Date"] });
@@ -463,6 +501,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       const edit = await app().request(
         `/events/${key}`,
         form({
+          saved_baseline: await tokenFor(`/events/${key}`),
           title: "Game night v2",
           starts_at: "2026-11-04 20:00",
           ends_at: "2026-11-04 23:00",
@@ -557,6 +596,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       const fix = await app().request(
         `/events/${key}`,
         form({
+          saved_baseline: await tokenFor(`/events/${key}`),
           title: "No-location night",
           starts_at: "2026-11-04 20:00",
           ends_at: "2026-11-04 22:00",
@@ -580,6 +620,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       const blank = await app().request(
         `/events/${key}`,
         form({
+          saved_baseline: await tokenFor(`/events/${key}`),
           title: "No-location night",
           starts_at: "2026-11-04 20:00",
           ends_at: "2026-11-04 22:00",
@@ -606,7 +647,13 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
 
       const update = await app().request(
         `/featured/${id}`,
-        form({ title: "Slot one", body: "Hello", is_published: "on", position: "0" }),
+        form({
+          saved_baseline: await tokenFor(`/featured/${id}`),
+          title: "Slot one",
+          body: "Hello",
+          is_published: "on",
+          position: "0",
+        }),
         liveEnv(),
       );
       expect(update.status).toBe(303);
@@ -726,6 +773,348 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
       const denied = await app().request("/events", { headers: { cookie: plebCookie } }, liveEnv());
       expect(denied.status).toBe(403);
       expect(await db.select().from(memberDataAccessLogs)).toHaveLength(0);
+    });
+
+    describe("stale full-form saves (shared saved_baseline token)", () => {
+      const EVENT_KEY = "01K00000000000000000000091";
+      const EVENT_PATH = `/events/${EVENT_KEY}`;
+      const EVENT_FORM = {
+        title: "Seeded night",
+        game: "Chess",
+        description: "Boards out",
+        accessibility_notes: "Step-free",
+        starts_at: "2026-11-04 20:00",
+        ends_at: "2026-11-04 22:00",
+        timezone: "Europe/London",
+        location: "Voice",
+        organizer_name: "Sam",
+        join_url: "https://example.test/join",
+        join_instructions: "Ring the bell",
+        capacity: "8",
+      };
+
+      // An independent moderator: own session, own rotating bearer.
+      async function moderator(userId: string) {
+        let own = await cookieFor(store, { userId, username: userId, moderator: true });
+        const keep = (res: Response): Response => {
+          const rotated = res.headers.get("set-cookie")?.match(/__Host-two_session=[^;,]+/)?.[0];
+          if (rotated) own = rotated;
+          return res;
+        };
+        return {
+          get: async (path: string) =>
+            keep(await app().request(path, { headers: { cookie: own } }, liveEnv())),
+          post: async (path: string, fields: Record<string, string>) =>
+            keep(
+              await app().request(
+                path,
+                {
+                  method: "POST",
+                  headers: {
+                    cookie: own,
+                    origin: APP_URL,
+                    "content-type": "application/x-www-form-urlencoded",
+                  },
+                  body: new URLSearchParams(fields),
+                },
+                liveEnv(),
+              ),
+            ),
+          token: async (path: string) => {
+            const res = keep(await app().request(path, { headers: { cookie: own } }, liveEnv()));
+            expect(res.status).toBe(200);
+            return baselineFrom(await res.text());
+          },
+        };
+      }
+
+      const seedEvent = async () => {
+        const [row] = await db
+          .insert(events)
+          .values({
+            eventKey: EVENT_KEY,
+            title: EVENT_FORM.title,
+            game: EVENT_FORM.game,
+            description: EVENT_FORM.description,
+            accessibilityNotes: EVENT_FORM.accessibility_notes,
+            timezone: EVENT_FORM.timezone,
+            location: EVENT_FORM.location,
+            organizer_name: EVENT_FORM.organizer_name,
+            join_url: EVENT_FORM.join_url,
+            join_instructions: EVENT_FORM.join_instructions,
+            capacity: 8,
+            status: "draft",
+            recurrenceFrequency: "weekly",
+            recurrenceCount: 4,
+            recurrenceIndex: 1,
+            startsAt: new Date("2026-11-04T20:00:00Z"),
+            endsAt: new Date("2026-11-04T22:00:00Z"),
+          })
+          .returning();
+        return row!;
+      };
+      const eventRow = async () =>
+        (await db.select().from(events).where(eq(events.eventKey, EVENT_KEY)))[0]!;
+      const auditCount = async () => (await db.select().from(activityLog)).length;
+
+      const seedFeatured = async () => {
+        const [row] = await db
+          .insert(featuredContents)
+          .values({
+            title: "Slot",
+            body: "Body",
+            url: "https://example.test/a",
+            isPublished: true,
+            position: 3,
+          })
+          .returning();
+        return row!;
+      };
+      const featuredRow = async (id: number) =>
+        (await db.select().from(featuredContents).where(eq(featuredContents.id, id)))[0]!;
+      const featuredForm = (over: Record<string, string> = {}) => ({
+        title: "Slot",
+        body: "Body",
+        url: "https://example.test/a",
+        is_published: "on",
+        position: "3",
+        ...over,
+      });
+
+      it("rejects a missing or malformed token with 400 and writes nothing", async () => {
+        await seedEvent();
+        const mod = await moderator("100000000000000201");
+        const before = await eventRow();
+        for (const bad of [undefined, "", "A".repeat(64), "a".repeat(63), "zz"]) {
+          const fields: Record<string, string> = { ...EVENT_FORM, title: "Bypass" };
+          if (bad !== undefined) fields.saved_baseline = bad;
+          expect((await mod.post(EVENT_PATH, fields)).status).toBe(400);
+        }
+        const slot = await seedFeatured();
+        for (const bad of [undefined, "", "A".repeat(64), "a".repeat(63)]) {
+          const fields = featuredForm({ title: "Bypass" });
+          if (bad !== undefined) Object.assign(fields, { saved_baseline: bad });
+          expect((await mod.post(`/featured/${slot.id}`, fields)).status).toBe(400);
+        }
+        expect(await eventRow()).toEqual(before);
+        expect((await featuredRow(slot.id)).title).toBe("Slot");
+        expect(await auditCount()).toBe(0);
+        expect(dispatchWriteBack).not.toHaveBeenCalled();
+      });
+
+      it("event: two moderators share a token; the first saves, the second gets a retained 409 until a fresh GET", async () => {
+        const seeded = await seedEvent();
+        const first = await moderator("100000000000000202");
+        const second = await moderator("100000000000000203");
+        const tokenA = await first.token(EVENT_PATH);
+        const tokenB = await second.token(EVENT_PATH);
+        expect(tokenB).toBe(tokenA);
+
+        const saved = await first.post(EVENT_PATH, {
+          ...EVENT_FORM,
+          saved_baseline: tokenA,
+          title: "First moderator title",
+          organizer_name: "Alex",
+        });
+        expect(saved.status).toBe(303);
+        const afterFirst = await eventRow();
+        expect(afterFirst.title).toBe("First moderator title");
+        expect(afterFirst.updatedAt.getTime()).toBeGreaterThan(seeded.updatedAt.getTime());
+        const audits = await auditCount();
+        const writebacks = vi.mocked(dispatchWriteBack).mock.calls.length;
+
+        const losing = {
+          ...EVENT_FORM,
+          saved_baseline: tokenB,
+          title: "Second moderator title",
+          accessibility_notes: "Second notes",
+          organizer_name: "Second host",
+          join_instructions: "Second instructions",
+        };
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const stale = await second.post(EVENT_PATH, losing);
+          expect(stale.status).toBe(409);
+          const html = await stale.text();
+          // Exact submitted text and the original token survive the refusal.
+          expect(html).toContain("Second moderator title");
+          expect(html).toContain("Second notes");
+          expect(html).toContain("Second host");
+          expect(html).toContain("Second instructions");
+          expect(baselineFrom(html)).toBe(tokenB);
+          expect(await eventRow()).toEqual(afterFirst);
+          expect(await auditCount()).toBe(audits);
+          expect(vi.mocked(dispatchWriteBack).mock.calls.length).toBe(writebacks);
+        }
+
+        const fresh = await second.token(EVENT_PATH);
+        expect(fresh).not.toBe(tokenB);
+        const retry = await second.post(EVENT_PATH, { ...losing, saved_baseline: fresh });
+        expect(retry.status).toBe(303);
+        const finalRow = await eventRow();
+        expect(finalRow.title).toBe("Second moderator title");
+        expect(finalRow.organizer_name).toBe("Second host");
+        expect(await auditCount()).toBe(audits + 1);
+        // Unrelated identity, state and recurrence fields never moved.
+        for (const key of [
+          "id",
+          "eventKey",
+          "status",
+          "recurrenceFrequency",
+          "recurrenceCount",
+          "recurrenceIndex",
+          "parentEventId",
+          "createdBy",
+        ] as const) {
+          expect(finalRow[key]).toEqual(seeded[key]);
+        }
+      });
+
+      it("event: a stale token is judged before validation, so invalid fields get 409 not 422", async () => {
+        await seedEvent();
+        const first = await moderator("100000000000000204");
+        const second = await moderator("100000000000000205");
+        const token = await first.token(EVENT_PATH);
+        expect(
+          (await first.post(EVENT_PATH, { ...EVENT_FORM, saved_baseline: token, title: "Moved" }))
+            .status,
+        ).toBe(303);
+        const before = await eventRow();
+        const res = await second.post(EVENT_PATH, {
+          ...EVENT_FORM,
+          saved_baseline: token,
+          title: "",
+          starts_at: "nope",
+        });
+        expect(res.status).toBe(409);
+        expect(await eventRow()).toEqual(before);
+      });
+
+      it("event: a change followed by a revert under a frozen clock still stales an old draft", async () => {
+        await seedEvent();
+        const editor = await moderator("100000000000000206");
+        const stale = await moderator("100000000000000207");
+        const original = await stale.token(EVENT_PATH);
+        const t1 = await editor.token(EVENT_PATH);
+        expect(
+          (await editor.post(EVENT_PATH, { ...EVENT_FORM, saved_baseline: t1, title: "Changed" }))
+            .status,
+        ).toBe(303);
+        const t2 = await editor.token(EVENT_PATH);
+        expect((await editor.post(EVENT_PATH, { ...EVENT_FORM, saved_baseline: t2 })).status).toBe(
+          303,
+        );
+        const reverted = await eventRow();
+        expect(reverted.title).toBe(EVENT_FORM.title);
+        const res = await stale.post(EVENT_PATH, {
+          ...EVENT_FORM,
+          saved_baseline: original,
+          title: "Stale overwrite",
+        });
+        expect(res.status).toBe(409);
+        expect(await eventRow()).toEqual(reverted);
+      });
+
+      it("event: parallel same-token saves commit exactly one and refuse the other", async () => {
+        await seedEvent();
+        const first = await moderator("100000000000000208");
+        const second = await moderator("100000000000000209");
+        const token = await first.token(EVENT_PATH);
+        expect(await second.token(EVENT_PATH)).toBe(token);
+        const [a, b] = await Promise.all([
+          first.post(EVENT_PATH, { ...EVENT_FORM, saved_baseline: token, title: "Racer A" }),
+          second.post(EVENT_PATH, { ...EVENT_FORM, saved_baseline: token, title: "Racer B" }),
+        ]);
+        expect([a.status, b.status].sort()).toEqual([303, 409]);
+        const winner = a.status === 303 ? "Racer A" : "Racer B";
+        expect((await eventRow()).title).toBe(winner);
+        expect(await auditCount()).toBe(1);
+      });
+
+      it("featured: first save wins, the second keeps its exact text, checkbox and token in a 409, then retries from a fresh GET", async () => {
+        const slot = await seedFeatured();
+        const path = `/featured/${slot.id}`;
+        const first = await moderator("100000000000000210");
+        const second = await moderator("100000000000000211");
+        const tokenA = await first.token(path);
+        const tokenB = await second.token(path);
+        expect(tokenB).toBe(tokenA);
+
+        // The first moderator withdraws the slot by leaving Published unchecked.
+        const withdrawn = featuredForm({ saved_baseline: tokenA, title: "Withdrawn slot" });
+        delete (withdrawn as Record<string, string>).is_published;
+        expect((await first.post(path, withdrawn)).status).toBe(303);
+        const afterFirst = await featuredRow(slot.id);
+        expect(afterFirst.isPublished).toBe(false);
+        const audits = await auditCount();
+
+        const losing = featuredForm({ saved_baseline: tokenB, title: "Second headline" });
+        for (let attempt = 0; attempt < 2; attempt++) {
+          const stale = await second.post(path, losing);
+          expect(stale.status).toBe(409);
+          const html = await stale.text();
+          expect(html).toContain("Second headline");
+          expect(html).toMatch(/name="is_published"[^>]*checked/);
+          expect(baselineFrom(html)).toBe(tokenB);
+          expect(await featuredRow(slot.id)).toEqual(afterFirst);
+          expect(await auditCount()).toBe(audits);
+        }
+
+        const fresh = await second.token(path);
+        expect(fresh).not.toBe(tokenB);
+        expect((await second.post(path, { ...losing, saved_baseline: fresh })).status).toBe(303);
+        const finalRow = await featuredRow(slot.id);
+        expect(finalRow.title).toBe("Second headline");
+        expect(finalRow.isPublished).toBe(true);
+        expect(finalRow.id).toBe(slot.id);
+        expect(finalRow.createdAt).toEqual(slot.createdAt);
+        expect(await auditCount()).toBe(audits + 1);
+      });
+
+      it("featured: publish, unpublish, republish under a frozen clock never revives an old draft", async () => {
+        const slot = await seedFeatured();
+        const path = `/featured/${slot.id}`;
+        const editor = await moderator("100000000000000212");
+        const stale = await moderator("100000000000000213");
+        const original = await stale.token(path);
+        // Unpublish through the dedicated route, then restore identical content.
+        const unpublish = await editor.post(`/featured/${slot.id}/unpublish`, {});
+        expect(unpublish.status).toBe(303);
+        const withdrawn = await featuredRow(slot.id);
+        expect(withdrawn.isPublished).toBe(false);
+        expect(withdrawn.updatedAt.getTime()).toBeGreaterThan(slot.updatedAt.getTime());
+        const restoreToken = await editor.token(path);
+        expect(
+          (await editor.post(path, featuredForm({ saved_baseline: restoreToken }))).status,
+        ).toBe(303);
+        const restored = await featuredRow(slot.id);
+        expect(restored.isPublished).toBe(true);
+        expect(restored.updatedAt.getTime()).toBeGreaterThan(withdrawn.updatedAt.getTime());
+        const audits = await auditCount();
+
+        const res = await stale.post(
+          path,
+          featuredForm({ saved_baseline: original, title: "Stale overwrite" }),
+        );
+        expect(res.status).toBe(409);
+        expect(await featuredRow(slot.id)).toEqual(restored);
+        expect(await auditCount()).toBe(audits);
+      });
+
+      it("featured: parallel same-token saves commit exactly one and refuse the other", async () => {
+        const slot = await seedFeatured();
+        const path = `/featured/${slot.id}`;
+        const first = await moderator("100000000000000214");
+        const second = await moderator("100000000000000215");
+        const token = await first.token(path);
+        expect(await second.token(path)).toBe(token);
+        const [a, b] = await Promise.all([
+          first.post(path, featuredForm({ saved_baseline: token, title: "Racer A" })),
+          second.post(path, featuredForm({ saved_baseline: token, title: "Racer B" })),
+        ]);
+        expect([a.status, b.status].sort()).toEqual([303, 409]);
+        expect((await featuredRow(slot.id)).title).toBe(a.status === 303 ? "Racer A" : "Racer B");
+        expect(await auditCount()).toBe(1);
+      });
     });
   });
 
