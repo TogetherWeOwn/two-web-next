@@ -5,6 +5,7 @@
 
 import { raw } from "hono/html";
 import type { FC } from "hono/jsx";
+import { eventTextHasLineBreak } from "../event-text";
 import { adminSaveStatus } from "../save-status";
 import type { EventRow } from "../store";
 import { Field, val } from "./shell";
@@ -27,27 +28,39 @@ export const EventFormFields: FC<{
         data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
       >
         <Field name="title" label="Title" errors={errors}>
-          {(id) => (
-            <input
-              id={id}
-              name="title"
-              type="text"
-              value={val(values, "title")}
-              data-event-text-limit={100}
-              required
-            />
-          )}
+          {(id) =>
+            eventTextHasLineBreak(val(values, "title")) ? (
+              <textarea id={id} name="title" rows={2} data-event-text-limit={100} required>
+                {val(values, "title")}
+              </textarea>
+            ) : (
+              <input
+                id={id}
+                name="title"
+                type="text"
+                value={val(values, "title")}
+                data-event-text-limit={100}
+                required
+              />
+            )
+          }
         </Field>
         <Field name="game" label="Game" errors={errors}>
-          {(id) => (
-            <input
-              id={id}
-              name="game"
-              type="text"
-              value={val(values, "game")}
-              data-event-text-limit={100}
-            />
-          )}
+          {(id) =>
+            eventTextHasLineBreak(val(values, "game")) ? (
+              <textarea id={id} name="game" rows={2} data-event-text-limit={100}>
+                {val(values, "game")}
+              </textarea>
+            ) : (
+              <input
+                id={id}
+                name="game"
+                type="text"
+                value={val(values, "game")}
+                data-event-text-limit={100}
+              />
+            )
+          }
         </Field>
         <Field name="description" label="Description" errors={errors}>
           {(id) => (
@@ -94,15 +107,21 @@ export const EventFormFields: FC<{
           )}
         </Field>
         <Field name="location" label="Location" errors={errors}>
-          {(id) => (
-            <input
-              id={id}
-              name="location"
-              type="text"
-              value={val(values, "location")}
-              data-event-text-limit={255}
-            />
-          )}
+          {(id) =>
+            eventTextHasLineBreak(val(values, "location")) ? (
+              <textarea id={id} name="location" rows={2} data-event-text-limit={255}>
+                {val(values, "location")}
+              </textarea>
+            ) : (
+              <input
+                id={id}
+                name="location"
+                type="text"
+                value={val(values, "location")}
+                data-event-text-limit={255}
+              />
+            )
+          }
         </Field>
         <Field
           name="organizer_name"
@@ -110,15 +129,21 @@ export const EventFormFields: FC<{
           errors={errors}
           hint="Use a name the organizer has agreed to show publicly. Do not enter contact details."
         >
-          {(id) => (
-            <input
-              id={id}
-              name="organizer_name"
-              type="text"
-              value={val(values, "organizer_name")}
-              data-event-text-limit={500}
-            />
-          )}
+          {(id) =>
+            eventTextHasLineBreak(val(values, "organizer_name")) ? (
+              <textarea id={id} name="organizer_name" rows={2} data-event-text-limit={500}>
+                {val(values, "organizer_name")}
+              </textarea>
+            ) : (
+              <input
+                id={id}
+                name="organizer_name"
+                type="text"
+                value={val(values, "organizer_name")}
+                data-event-text-limit={500}
+              />
+            )
+          }
         </Field>
         <Field
           name="join_url"
