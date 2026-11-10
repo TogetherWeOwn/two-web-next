@@ -1,19 +1,19 @@
 name: Kit edit regression proof
 
+# One-off historical comparison, not a recurring gate for future admin changes.
 on:
-  pull_request:
-    paths:
-      - .github/workflows/kit-edit-regression-proof.yml
-      - src/admin/kit-event-edit.ts
-      - web/src/routes/admin/events/**
-      - test/admin.test.ts
-      - test/helpers/kit-edit-controls.ts
+  workflow_dispatch:
+    inputs:
+      head_sha:
+        description: Exact 40-character commit SHA at the dispatch ref
+        required: true
+        type: string
 
 permissions:
   contents: read
 
 concurrency:
-  group: kit-edit-regression-proof-${{ github.event.pull_request.number }}
+  group: kit-edit-regression-proof-${{ inputs.head_sha }}
   cancel-in-progress: true
 
 jobs:
@@ -37,9 +37,18 @@ jobs:
       npm_config_ignore_scripts: "true"
       npm_config_min_release_age: "3"
     steps:
+      - name: Validate exact dispatch SHA
+        shell: bash
+        env:
+          HEAD_SHA: ${{ inputs.head_sha }}
+          DISPATCH_SHA: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          [[ "$HEAD_SHA" =~ ^[0-9a-f]{40}$ ]]
+          test "$HEAD_SHA" = "$DISPATCH_SHA"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ inputs.head_sha }}
           fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -99,7 +108,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: kit-edit-regression-${{ github.event.pull_request.head.sha }}
+          name: kit-edit-regression-${{ inputs.head_sha }}
           path: artifacts/kit-edit-regression/
           if-no-files-found: error
           retention-days: 14
