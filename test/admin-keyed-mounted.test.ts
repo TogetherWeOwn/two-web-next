@@ -81,7 +81,25 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const failure = Object.assign(new Error("private roster SQL syntax error"), {
         code: "42601",
       });
-      const execute = vi.spyOn(fixture.db, "execute").mockRejectedValueOnce(failure);
+      const execute = vi.fn(async () => {
+        throw failure;
+      });
+      const listRoster = reads.listRoster;
+      // Inject after dbFor's observation clone, retaining the real count read
+      // and listRoster control flow before its raw page statement rejects.
+      vi.spyOn(reads, "listRoster").mockImplementationOnce((db, key, query) =>
+        listRoster(
+          new Proxy(db, {
+            get(target, property) {
+              if (property === "execute") return execute;
+              const value = Reflect.get(target, property);
+              return typeof value === "function" ? value.bind(target) : value;
+            },
+          }),
+          key,
+          query,
+        ),
+      );
       const response = await request(`/events/${EVENT_KEY}`);
       expect(execute).toHaveBeenCalledOnce();
       const body = await response.clone().text();
