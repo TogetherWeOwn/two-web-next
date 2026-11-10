@@ -85,9 +85,11 @@ deployment ran. GitHub Actions is the CI of record; exact-head Actions results
 are recorded in the pull request body. A merged pull request was not treated
 as live evidence.
 
-- Candidate head SHA: see the pull request head at review time.
-- CI run for the candidate head: recorded in the pull request body with its
-  Actions run URL.
+- Candidate head SHA: `689d6a27` (the link-only commit after it changes
+  only these lines).
+- CI run for the candidate head: [Actions run 42886309702](https://github.com/TogetherWeOwn/two-web-next/actions/runs/42886309702)
+  — all required checks green on `689d6a27` (`ci-ok`, `gitleaks`, `e2e-ok`,
+  `pr-lint`, `check`, `docs-links`, `node22-compat`, `pr-standards`).
 
 ## Next unfinished step
 
