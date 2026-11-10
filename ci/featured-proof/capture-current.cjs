@@ -141,12 +141,12 @@ async function main() {
             check('keyboard can scroll the list', keyboardScrollPx > 0);
             await scroll.evaluate(el => { el.scrollLeft = 0; });
           } else if (fixture.name === 'upcoming.html') {
-            check('upcoming heading', (await page.locator('h1').innerText()).trim() === 'Events');
+            check('upcoming heading', (await page.locator('h1').textContent()).trim() === 'Events');
             check('upcoming heading visible', await page.locator('h1').isVisible());
             check('upcoming fictional entries', await page.locator('[data-testid="events-list"] .schedule-row').count() === 2);
             const rules = await page.locator('head style').evaluateAll(nodes => nodes.map(node => node.sheet?.cssRules.length ?? 0));
             check('two inline style blocks applied', rules.length === 2 && rules.every(count => count > 0));
-            check('leaf styles applied', await page.locator('main').evaluate(el => getComputedStyle(el).paddingLeft) === '24px');
+            check('leaf styles applied', await page.locator('footer').evaluate(el => getComputedStyle(el).textAlign) === 'center');
             check('schedule styles applied', await page.locator('.schedule-heading').evaluate(el => getComputedStyle(el).borderLeftWidth) === '4px');
             check('no replaced stylesheet links', ![...html[fixture.name].matchAll(/<link\b[^>]*>/gi)].some(m => /\brel\s*=\s*["']?[^"'>]*\bstylesheet\b/i.test(m[0])));
             const upcomingBoxes = await page.locator('.schedule-heading, [data-testid="events-list"], .schedule-row').evaluateAll(els => els.map(el => {

@@ -108,6 +108,7 @@ function installFakePlaywright() {
           return status[1];
         },
         textContent: async () => {
+          if (selector === 'h1') return 'Events';
           assert.ok(selector === 'h3' || selector === 'p');
           return selector === 'h3' ? 'a'.repeat(255) : `https://example.test/${'a'.repeat(400)}`;
         },
@@ -117,6 +118,7 @@ function installFakePlaywright() {
           return true;
         },
         evaluate: async () => selector === 'main' ? '24px'
+          : selector === 'footer' ? 'center'
           : selector === '.schedule-heading' ? '4px'
           : selector === '[data-testid="featured-table-scroll"]' ? 1 : true,
       });
