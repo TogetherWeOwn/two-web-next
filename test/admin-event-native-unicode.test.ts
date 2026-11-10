@@ -61,7 +61,11 @@ const row: EventRow = {
 function text(characters: string[], count: number): string {
   return Array.from({ length: count }, (_, i) => characters[i % characters.length]).join("");
 }
-function form(mode: "new" | "edit", values = base, errors: Record<string, string> = {}): string {
+function form(
+  mode: "new" | "edit",
+  values: Record<string, unknown> = base,
+  errors: Record<string, string> = {},
+): string {
   return String(EventFormPage({ mode, row, values, errors }));
 }
 const source = readFileSync(
@@ -291,6 +295,87 @@ describe.skipIf(process.env.ADMIN_EVENT_BROWSER_TESTS !== "true")(
     afterAll(async () => {
       await browser?.close();
     });
+
+    // Unlike the submit-event fixtures below, this captures the browser's
+    // actual urlencoded request. JS is disabled so the current wire-counting
+    // island cannot prevent a server-boundary reproduction.
+    async function nativeSubmission(values: Record<string, unknown>) {
+      const context = await browser.newContext({ javaScriptEnabled: false });
+      try {
+        const nativePage = await context.newPage();
+        await nativePage.route("**/*", async (route) => {
+          await route.fulfill({
+            contentType: "text/html",
+            body: route.request().method() === "POST" ? "Saved fixture" : form("edit", values),
+          });
+        });
+        await nativePage.goto("https://next.example.test/admin/events/new");
+        const domFields = await nativePage.evaluate<Record<string, string>>(
+          "Object.fromEntries(new FormData(document.querySelector('form')))",
+        );
+        const requestPromise = nativePage.waitForRequest((request) => request.method() === "POST");
+        await nativePage.locator('[data-testid="save-event"]').click();
+        const request = await requestPromise;
+        expect(request.headers()["content-type"]).toBe("application/x-www-form-urlencoded");
+        const wireFields = Object.fromEntries(new URLSearchParams(request.postData()!));
+        return { domFields, wireFields };
+      } finally {
+        await context.close();
+      }
+    }
+
+    for (const newline of ["\n", "\r", "\r\n"]) {
+      it(`characterizes accepted organizer ${JSON.stringify(newline)} loss on untouched native save`, async () => {
+        const organizerName = `Jordan${newline}Smith`;
+        expect(parseEventForm({ ...base, organizer_name: organizerName }).organizer_name).toBe(
+          organizerName,
+        );
+        const { domFields, wireFields } = await nativeSubmission({
+          ...base,
+          organizer_name: organizerName,
+        });
+        // Baseline characterization, not the desired preservation contract.
+        // Replace this expectation with the approved fidelity regression in the repair.
+        expect(domFields.organizer_name).toBe("JordanSmith");
+        expect(wireFields.organizer_name).toBe("JordanSmith");
+        expect(parseEventForm(wireFields).organizer_name).toBe("JordanSmith");
+      });
+    }
+
+    for (const { field, max } of limits.filter(({ field }) =>
+      ["description", "accessibility_notes", "join_instructions"].includes(field),
+    )) {
+      for (const character of ["x", "😀"]) {
+        it(`characterizes ${field} ${character} LF/FormData versus CRLF native wire at N/N+1`, async () => {
+          for (const count of [max - 3, max - 2]) {
+            const value = `${character.repeat(count)}\ny`;
+            const expectedWire = value.replace(/\n/g, "\r\n");
+            const { domFields, wireFields } = await nativeSubmission({ ...base, [field]: value });
+            expect(domFields[field]).toBe(value);
+            expect(wireFields[field]).toBe(expectedWire);
+            expect([...value]).toHaveLength(count + 2);
+            expect([...expectedWire]).toHaveLength(count + 3);
+            const parsedDom = parseEventForm(domFields);
+            expect(
+              field === "accessibility_notes" ? parsedDom.accessibilityNotes : parsedDom[field],
+            ).toBe(value);
+            if (count === max - 3) {
+              const parsedWire = parseEventForm(wireFields);
+              expect(
+                field === "accessibility_notes" ? parsedWire.accessibilityNotes : parsedWire[field],
+              ).toBe(expectedWire);
+            } else {
+              expect(() => parseEventForm(wireFields)).toThrow(ValidationError);
+              try {
+                parseEventForm(wireFields);
+              } catch (error) {
+                expect((error as ValidationError).fields).toHaveProperty(field);
+              }
+            }
+          }
+        });
+      }
+    }
 
     async function load(currentMode: "new" | "edit") {
       mode = currentMode;
