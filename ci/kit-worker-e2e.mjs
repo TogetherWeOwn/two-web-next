@@ -4,6 +4,7 @@
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
+import { request as httpRequest } from "node:http";
 import { createServer } from "node:net";
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
@@ -86,6 +87,33 @@ async function unusedPort() {
     server.close((error) => (error ? reject(error) : resolveClose())),
   );
   return port;
+}
+
+// Fetch strips a custom Host. Send HTTP directly, as in the Worker asset
+// host tests, so this control actually presents the foreign authority.
+function requestWithHost(url, host, method) {
+  return new Promise((resolveResponse, reject) => {
+    const request = httpRequest(url, { method, headers: { host } }, (response) => {
+      const chunks = [];
+      response.on("data", (chunk) => chunks.push(chunk));
+      response.on("error", reject);
+      response.on("end", () => {
+        const headers = [];
+        for (let i = 0; i < response.rawHeaders.length; i += 2) {
+          headers.push([response.rawHeaders[i], response.rawHeaders[i + 1]]);
+        }
+        resolveResponse(
+          new Response(chunks.length ? Buffer.concat(chunks) : null, {
+            status: response.statusCode,
+            headers,
+          }),
+        );
+      });
+    });
+    request.on("error", reject);
+    request.setTimeout(5_000, () => request.destroy(new Error("Host control timed out")));
+    request.end();
+  });
 }
 
 requireDisposableDatabase(databaseUrl);
@@ -290,12 +318,25 @@ try {
       error: "cross_origin",
       request_id: refusedRequestId,
     });
-    const badHost = await fetch(`${origin}${path}`, {
-      headers: { host: "foreign.invalid" },
-      redirect: "manual",
-    });
-    assert.equal(badHost.status, 404, "pre-Kit dispatch retains the Hono host guard");
-    assert.match(badHost.headers.get("content-type") ?? "", /text\/html/);
+  }
+  for (const path of [
+    "/api/public/join",
+    "/api/public/unknown/",
+    "/api/public/unknown?x-sveltekit-foo=bar",
+  ]) {
+    for (const method of ["GET", "HEAD"]) {
+      const badHost = await requestWithHost(`${origin}${path}`, "foreign.invalid", method);
+      assert.equal(badHost.status, 404, "pre-Kit dispatch retains the Hono host guard");
+      assert.match(badHost.headers.get("content-type") ?? "", /text\/html/);
+      assert.equal(badHost.headers.get("cache-control"), "no-store, private");
+      assert.equal(badHost.headers.get("location"), null);
+      assert.equal(badHost.headers.get("x-two-renderer"), null);
+      assert.ok(badHost.headers.get("x-request-id"));
+      const body = await badHost.text();
+      if (method === "HEAD") assert.equal(body, "");
+      else assert.match(body, /We cannot find that page/);
+      assert.doesNotMatch(body, /foreign\.invalid/);
+    }
   }
   const outsideApi = await fetch(`${origin}/api/publicity`, { redirect: "manual" });
   assert.equal(outsideApi.status, 404);
