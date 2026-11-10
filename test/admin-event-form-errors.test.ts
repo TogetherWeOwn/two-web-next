@@ -105,7 +105,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin event field errors (isolated t
     const token = newSessionToken();
     await store.create({
       tokenHash: await hashToken(token),
-      userId: "wall-error-mod",
+      userId: "700000000000000001",
       username: "mod",
       avatar: null,
       member: true,

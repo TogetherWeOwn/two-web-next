@@ -86,7 +86,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       const token = newSessionToken();
       await store.create({
         tokenHash: await hashToken(token),
-        userId: "position-mod",
+        userId: "700000000000000004",
         username: "mod",
         avatar: null,
         member: true,

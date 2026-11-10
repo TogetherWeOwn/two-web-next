@@ -106,7 +106,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     const token = newSessionToken();
     await sessions.create({
       tokenHash: await hashToken(token),
-      userId: "test-user",
+      userId: "700000000000000003",
       username: "test-user",
       avatar: null,
       member: true,
@@ -303,7 +303,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     it(`RSVP ${operation} dispatches exactly one tracked message`, async () => {
       const id = await seed();
       if (operation !== "answer")
-        await sql`insert into rsvps (event_id, user_id, status) values (${id}, 'test-user', 'going')`;
+        await sql`insert into rsvps (event_id, user_id, status) values (${id}, '700000000000000003', 'going')`;
       const response = await request(
         operation === "withdraw" ? "DELETE" : "PUT",
         `/events/${eventKey}/rsvp`,
@@ -341,7 +341,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
   it("publish then cancel during debounce selects cancel at send time, with the built key", async () => {
     const eventId = await seed();
     await sql`insert into rsvps (event_id, user_id, status, updated_at)
-      values (${eventId}, 'test-user', 'going', '2026-01-01T00:00:00Z')`;
+      values (${eventId}, '700000000000000003', 'going', '2026-01-01T00:00:00Z')`;
     const built = buildSyncMessage(eventKey, "published")!;
     await enqueueSyncEvent(env, built);
     await sql`update events set status = 'cancelled' where event_key = ${eventKey}`;
@@ -418,7 +418,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     it(`reconciliation recovers ${operation} after a carrier failure`, async () => {
       const id = await seed();
       await sql`insert into rsvps (event_id, user_id, status, synced_to_discord_at)
-        values (${id}, 'test-user', 'going', now())`;
+        values (${id}, '700000000000000003', 'going', now())`;
       await sql`update events set discord_event_id = 'discord-1', synced_revision = sync_revision where id = ${id}`;
       expect(await pgEventStore(sql).staleEventKeys()).toEqual([]);
       const carrier = env.SYNC_EVENT_QUEUE;
@@ -1362,7 +1362,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
     await expect(
       sql.begin(async (tx) => {
         await tx`update events set title = 'Never committed' where id = ${id}`;
-        await tx`insert into rsvps (event_id, user_id, status) values (${id}, 'test-user', 'going')`;
+        await tx`insert into rsvps (event_id, user_id, status) values (${id}, '700000000000000003', 'going')`;
         throw new Error("abort");
       }),
     ).rejects.toThrow("abort");
@@ -1372,7 +1372,7 @@ describe.skipIf(!process.env.DATABASE_URL)("event write-back through W13 (test c
 
   it("mirror stamping does not mark an RSVP written during the bot call as synced", async () => {
     const id = await seed();
-    await sql`insert into rsvps (event_id, user_id, status, updated_at) values (${id}, 'test-user', 'going', '2026-01-01')`;
+    await sql`insert into rsvps (event_id, user_id, status, updated_at) values (${id}, '700000000000000003', 'going', '2026-01-01')`;
     const cutoff = new Date("2026-01-02T00:00:00Z");
     const events = pgEventStore(sql);
     const attempt = await events.prepareSync(eventKey, crypto.randomUUID(), cutoff);

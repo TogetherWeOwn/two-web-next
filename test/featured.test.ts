@@ -316,7 +316,7 @@ describe.skipIf(!process.env.DATABASE_URL)("featured homepage (isolated test Pos
     const token = newSessionToken();
     await store.create({
       tokenHash: await hashToken(token),
-      userId: "featured-mod",
+      userId: "700000000000000005",
       username: "moderator",
       avatar: null,
       member: true,
