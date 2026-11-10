@@ -1,7 +1,7 @@
 import type postgres from "postgres";
 import { and, inArray, isNotNull } from "drizzle-orm";
-import { drizzle } from "drizzle-orm/pg-proxy";
 import * as schema from "../db/admin-schema";
+import { drizzleOver } from "../db/proxy";
 import { materializeMissingInstances } from "../admin/store";
 import { LEDGER_DB_LOCK_TIMEOUT_MS, LEDGER_DB_TIMEOUT_MS, SYNC_EVENT } from "./constants";
 import { queueExceptionClass } from "./queue-error";
@@ -420,25 +420,7 @@ export function pgEventStore(
     async materializeSeries() {
       // Reconciliation owns the transaction/advisory lock. Do not begin a
       // nested transaction on its reserved postgres.js client.
-      // pg-proxy avoids postgres-js Drizzle's global timestamp/JSON parser
-      // mutation: snapshot/ledger queries on this client still need native types.
-      const db = drizzle(
-        async (query, params, _method, typings) => ({
-          // Drizzle already JSON-encodes these parameters; native postgres.js
-          // must receive the decoded value to avoid a JSON string audit payload.
-          rows: await (sql as postgres.Sql)
-            .unsafe(
-              query,
-              params.map((value, index) =>
-                typings?.[index] === "json" && typeof value === "string"
-                  ? JSON.parse(value)
-                  : value,
-              ) as never[],
-            )
-            .values(),
-        }),
-        { schema },
-      );
+      const db = drizzleOver(sql as postgres.Sql);
       // Single-flight excludes other schedulers, not moderator edits. Acquire
       // the same parent row lock as updateEvent before reading occurrence times;
       // a waiting READ COMMITTED select returns the newly committed parent.

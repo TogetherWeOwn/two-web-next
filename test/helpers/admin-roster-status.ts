@@ -65,6 +65,7 @@ type Answer = {
   username: string | null;
   status: string;
   answeredAt: Date;
+  position: number | null;
 };
 export type Statement = { sql: string; params: unknown[]; fields: string[] };
 
@@ -99,6 +100,8 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
           username: orphan ? null : `${needle} ${i}`,
           status: statuses[s]!,
           answeredAt: new Date("2026-10-01T12:00:00Z"),
+          // Synthetic display ranks only; the separate PostgreSQL suite proves FIFO.
+          position: s === 1 ? i + 1 : null,
         });
       }
     // Same names and statuses on a different event must never affect totals/subjects.
@@ -110,6 +113,7 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
         username: needle,
         status: statuses[s]!,
         answeredAt: new Date("2026-10-02T12:00:00Z"),
+        position: s === 1 ? 1 : null,
       });
   }
   const statements: Statement[] = [];
@@ -162,16 +166,19 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
         mutations++;
         throw new Error(`unexpected fixture mutation: ${sql}`);
       }
-      if (sql.includes('from "events"') && !sql.includes('from "rsvps"')) return [{ ...row }];
-      if (!sql.includes('from "rsvps"')) throw new Error(`unsupported fixture read: ${sql}`);
-      const where = sql.split(" where ")[1]?.split(/ order by | limit /)[0] ?? "";
+      const unquoted = sql.replaceAll('"', "");
+      if (unquoted.includes("from events") && !unquoted.includes("from rsvps")) return [{ ...row }];
+      if (!unquoted.includes("from rsvps")) throw new Error(`unsupported fixture read: ${sql}`);
+      const ranked = unquoted.startsWith(
+        "select line.user_id, users.username, line.status, line.updated_at, line.position from (",
+      );
       const param = (re: RegExp) => {
-        const m = where.match(re);
+        const m = unquoted.match(re);
         return m ? params[Number(m[1]) - 1] : undefined;
       };
-      const event = param(/"events"\."event_key" = \$(\d+)/);
-      const status = param(/"rsvps"\."status" = \$(\d+)/);
-      const search = param(/"users"\."username" ilike \$(\d+)/i);
+      const event = param(/events\.event_key = \$(\d+)/);
+      const status = param(ranked ? /line\.status = \$(\d+)/ : /rsvps\.status = \$(\d+)/);
+      const search = param(/users\.username ilike \$(\d+)/i);
       if (event === undefined) throw new Error("fixture requires bound event predicate");
       let selected = answers.filter(
         (a) =>
@@ -180,11 +187,26 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
           (search === undefined || (a.username !== null && like(String(search), a.username))),
       );
       if (sql.startsWith("select count(*)")) return [{ n: selected.length }];
-      const order = sql.match(
-        /order by "rsvps"\."(status|updated_at)" (asc|desc), "rsvps"\."user_id"(?: asc)? limit/,
+      const order = unquoted.match(
+        ranked
+          ? /order by line\.(status|updated_at|position) (asc|desc)( nulls last)?\s*, line\.user_id asc limit/
+          : /order by rsvps\.(status|updated_at) (asc|desc), rsvps\.user_id(?: asc)? limit/,
       );
       if (!order) throw new Error("fixture requires deterministic roster order");
       selected = selected.sort((a, b) => {
+        // The waitlist sort is nulls-last in both directions, like the SQL.
+        if (order[1]!.startsWith("position")) {
+          if (a.position === null || b.position === null)
+            return (
+              (a.position === null ? 1 : 0) - (b.position === null ? 1 : 0) ||
+              a.userId.localeCompare(b.userId)
+            );
+          const flip = unquoted.includes("line.position desc") ? -1 : 1;
+          return (
+            (a.position < b.position ? -1 : a.position > b.position ? 1 : 0) * flip ||
+            a.userId.localeCompare(b.userId)
+          );
+        }
         const left = order[1] === "status" ? a.status : a.answeredAt.toISOString();
         const right = order[1] === "status" ? b.status : b.answeredAt.toISOString();
         const primary = left < right ? -1 : left > right ? 1 : 0;
@@ -192,11 +214,21 @@ export function rosterDb(options: { auditFails?: boolean; noAnswers?: boolean } 
       });
       const limit = sql.match(/ limit \$(\d+)/);
       const offset = sql.match(/ offset \$(\d+)/);
-      if (!limit) throw new Error("fixture refuses an unbounded roster page");
+      if (ranked ? !/ limit 100 offset \$\d+$/.test(sql) : !limit)
+        throw new Error("fixture refuses an unbounded roster page");
+      const size = ranked ? 100 : Number(params[Number(limit![1]) - 1]);
       const start = offset ? Number(params[Number(offset[1]) - 1]) : 0;
-      return selected
-        .slice(start, start + Number(params[Number(limit[1]) - 1]))
-        .map(({ eventKey: _eventKey, ...a }) => a);
+      return selected.slice(start, start + size).map(({ eventKey: _eventKey, position, ...a }) =>
+        ranked
+          ? {
+              user_id: a.userId,
+              username: a.username,
+              status: a.status,
+              updated_at: a.answeredAt,
+              position,
+            }
+          : a,
+      );
     },
   });
   return {
@@ -230,7 +262,7 @@ export async function compileRosterKit() {
   bridgeModules.env = `export const env=${JSON.stringify(env)};`;
   const built = await build({
     stdin: {
-      contents: `import {state} from "bridge"; import {load} from ${JSON.stringify(load)}; import {load as layout} from ${JSON.stringify(layout)}; import P from ${JSON.stringify(page)}; import {render} from "svelte/server"; export function configure(deps){Object.assign(state,deps);} export {load,layout}; export const html=(data)=>render(P,{props:{data}}).body;`,
+      contents: `import {state} from "bridge"; import {load} from ${JSON.stringify(load)}; import {load as layout} from ${JSON.stringify(layout)}; import P from ${JSON.stringify(page)}; import {render} from "svelte/server"; export function configure(deps){Object.assign(state,deps);} export {load,layout}; export function html(data){const {head,body}=render(P,{props:{data}}); return state.template.replace(/%sveltekit\\.(head|body)%/g,(_match,part)=>part==='head'?head:body);}`,
       resolveDir: root,
       sourcefile: "roster-status-ssr.mjs",
     },
@@ -238,7 +270,7 @@ export async function compileRosterKit() {
     format: "esm",
     platform: "node",
     write: false,
-    tsconfigRaw: { compilerOptions: {} },
+    tsconfigRaw: { compilerOptions: { jsx: "react-jsx", jsxImportSource: "hono/jsx" } },
     nodePaths: [join(root, "web/node_modules"), join(root, "node_modules")],
     alias: { "#lib": join(root, "web/src/lib") },
     logLevel: "silent",
@@ -278,7 +310,12 @@ export async function compileRosterKit() {
   const compiled = await import(
     `data:text/javascript;base64,${Buffer.from(built.outputFiles[0]!.text).toString("base64")}`
   );
-  compiled.configure({ dbFor, listRoster, getEvent });
+  compiled.configure({
+    dbFor,
+    listRoster,
+    getEvent,
+    template: readFileSync(join(root, "web/src/app.html"), "utf8"),
+  });
   return compiled as {
     load: (event: {
       parent: () => Promise<unknown>;
@@ -301,7 +338,7 @@ export type Admission = "moderator" | "member" | "guest";
 
 export async function readRoster(
   renderer: Renderer,
-  fixture: RosterFixture,
+  fixture: Pick<RosterFixture, "db">,
   query = "",
   kit?: RosterKit,
   admission: Admission = "moderator",

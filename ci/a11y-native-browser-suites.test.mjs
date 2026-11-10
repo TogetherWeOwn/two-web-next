@@ -411,7 +411,7 @@ test("a11y job runs ci/rsvp-focus-browser.test.mjs with its opt-in after Chromiu
 
 const SHARE_FILE = "ci/event-native-share-browser.test.mjs";
 const SHARE_SUITE = "Native event sharing";
-const SHARE_MIN = 34;
+const SHARE_MIN = 44;
 
 test("a11y job runs ci/event-native-share-browser.test.mjs unconditionally after Chromium and Kit installs", async () => {
   const step = steps.find(

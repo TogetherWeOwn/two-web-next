@@ -10,7 +10,7 @@ export {
   featuredListUrl,
   featuredEmptyText,
 } from "./featured-list-query";
-export type RosterSort = "status" | "answered";
+export type RosterSort = "status" | "answered" | "waitlist";
 /** RSVP-answer facet: exact allowlist values; "" reads as All. */
 export type RosterStatus = "" | "going" | "waitlisted" | "maybe" | "not_going";
 export const ROSTER_STATUSES: { value: RosterStatus; label: string }[] = [
@@ -46,6 +46,11 @@ const withoutNul = (raw: string | undefined): string =>
 const FREE_TEXT_MAX_LENGTH = 128;
 const boundFreeText = (value: string): string => (value.length > FREE_TEXT_MAX_LENGTH ? "" : value);
 
+/** Sort-header accessible name that preserves the UTC designator (§4c). */
+export function sortHeaderAriaLabel(label: string, next: SortOrder): string {
+  return `Sort by ${label.toLowerCase().replaceAll("(utc)", "(UTC)")} ${next === "asc" ? "ascending" : "descending"}`;
+}
+
 export function parseRosterQuery(params: ListParams): RosterQuery {
   const page = Number(params.roster_page);
   // Same unsafe-OFFSET guard as the join-attempts viewer: PostgreSQL OFFSET
@@ -68,7 +73,10 @@ export function parseRosterQuery(params: ListParams): RosterQuery {
   return {
     q: boundFreeText(withoutNul(params.roster_q).trim()),
     status,
-    sort: params.roster_sort === "status" ? "status" : "answered",
+    sort:
+      params.roster_sort === "status" || params.roster_sort === "waitlist"
+        ? params.roster_sort
+        : "answered",
     order: params.roster_order === "asc" ? "asc" : "desc",
     page: validPage ? page : 1,
   };
@@ -155,6 +163,25 @@ export function activityLogUrl(query: ActivityLogQuery, page: number): string {
   return `/admin/activity-log?${params}`;
 }
 
+/**
+ * Empty activity-log page links, mirroring rosterRecovery: clear drops the
+ * subject and causer filters, and a later page offers page 1 of the same
+ * filters. There is no count query, so an empty later page always offers
+ * page 1. Both stay null while rows render. The cleared target is the
+ * constant activityLogUrl renders for empty filters on page 1, inlined so
+ * the Kit server chunk does not pay for a second URL builder call.
+ */
+export function activityLogRecovery(
+  query: ActivityLogQuery,
+  rowCount: number,
+): { clearUrl: string | null; firstUrl: string | null } {
+  if (rowCount > 0) return { clearUrl: null, firstUrl: null };
+  return {
+    clearUrl: query.subject || query.causer ? "/admin/activity-log?page=1" : null,
+    firstUrl: query.page > 1 ? activityLogUrl(query, 1) : null,
+  };
+}
+
 /** Zero-row copy for the RSVP roster on the event edit page. */
 export function rosterEmptyText(query: RosterQuery): string {
   if (query.q && query.status) return "No RSVPs match these roster filters.";
@@ -173,5 +200,6 @@ export function formatActivityCauser(causerId: string | null): string {
 
 /** Zero-row copy for the activity-log viewer. */
 export function activityLogEmptyText(query: ActivityLogQuery): string {
+  if (query.page > 1) return "No activity on this page.";
   return query.subject || query.causer ? "No activity matches these filters." : "No activity yet.";
 }

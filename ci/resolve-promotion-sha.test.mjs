@@ -19,9 +19,27 @@ const lhSteps = (conclusions) =>
 // runs: newest first, as the API returns them; jobs: run id -> staging-journeys conclusion, or
 // { journeys, quality, qualitySteps, qualityJobs } (quality defaults to success with both
 // Lighthouse steps executed successfully; null leaves the job out, like runs before the gate existed).
-function stub(runs, jobs) {
+// history: the full per-commit e2e-staging history (stagingRunsSinceCommit),
+// served for the `created` query; it defaults to runs. committed: the commit's
+// committer date, or null for a commit the API cannot date.
+function stub(runs, jobs, { history = runs, committed = "2025-12-01T00:00:00Z" } = {}) {
   return async (url) => {
     const { pathname, searchParams } = new URL(url);
+    if (/\/commits\/[0-9a-f]{40}$/.test(pathname)) {
+      return { ok: true, json: async () => ({ commit: { committer: { date: committed } } }) };
+    }
+    if (
+      pathname.endsWith("/actions/workflows/e2e-staging.yml/runs") &&
+      searchParams.has("created")
+    ) {
+      assert.equal(searchParams.get("branch"), "main");
+      assert.equal(searchParams.get("created"), ">=2025-11-30T00:00:00.000Z");
+      const page = Number(searchParams.get("page"));
+      return {
+        ok: true,
+        json: async () => ({ workflow_runs: history.slice((page - 1) * 100, page * 100) }),
+      };
+    }
     if (pathname.endsWith("/actions/workflows/e2e-staging.yml/runs")) {
       assert.equal(searchParams.get("branch"), "main");
       assert.equal(searchParams.get("event"), "workflow_run");
@@ -62,13 +80,14 @@ const run = (id, deployed, conclusion = "success", status = "completed", updated
   display_title: `e2e-staging deploy ${deployed}`,
   status,
   conclusion,
+  run_attempt: 1,
   updated_at,
 });
-const resolve = (runs, jobs, nowMs) =>
+const resolve = (runs, jobs, nowMs, history) =>
   resolvePromotionSha({
     repository: "o/r",
     token: "t",
-    fetchImpl: stub(runs, jobs),
+    fetchImpl: stub(runs, jobs, history),
     ...(nowMs ? { nowMs } : {}),
   });
 
@@ -600,6 +619,80 @@ test("a newer cancelled run does not block the older green", async () => {
   assert.equal(await resolve([run(3, A, "cancelled"), run(2, B)], { 2: "success" }), B);
 });
 
+// Fix forward, never re-run: a red staging verdict is answered by a new
+// commit. The run list shows only a run's latest attempt, so a re-run (attempt
+// 2+) is red evidence itself, for its commit and for every older candidate.
+
+test("a green re-run attempt is never promoted and blocks older greens (red then re-run until green)", async () => {
+  // Run 42301172423 on 9ee70484: attempt 1 failed staging-quality, attempt 2 passed.
+  for (const run_attempt of [2, 3, undefined]) {
+    assert.equal(
+      await resolve([{ ...run(3, A), run_attempt }, run(2, B)], { 3: "success", 2: "success" }),
+      null,
+      `attempt ${run_attempt}`,
+    );
+  }
+});
+
+test("a re-run still in progress blocks older greens", async () => {
+  assert.equal(
+    await resolve([{ ...run(3, A, null, "in_progress"), run_attempt: 2 }, run(2, B)], {
+      2: "success",
+    }),
+    null,
+  );
+});
+
+test("an older failed run of a commit disqualifies its newer first-attempt pass", async () => {
+  // A re-run deploy starts a fresh e2e-staging run (attempt 1) for the same
+  // commit; the older red verdict still stands. B is older than the red run.
+  assert.equal(
+    await resolve([run(4, A), run(3, A, "failure"), run(2, B)], { 4: "success", 2: "success" }),
+    null,
+  );
+});
+
+test("an older red run on a later page still disqualifies the newer pass of its commit", async () => {
+  const C = "c".repeat(40);
+  const filler = Array.from({ length: 19 }, (_, i) => run(200 - i, C));
+  assert.equal(
+    await resolve([run(300, A), ...filler, run(3, A, "failure")], { 300: "success" }),
+    null,
+  );
+});
+
+test("an older red run past the resolver's window still disqualifies the newer pass of its commit", async () => {
+  // The window (5 pages of 20) shows only A's fresh first-attempt pass; A's
+  // failed run sits 150 runs back in its full history and still decides.
+  const C = "c".repeat(40);
+  const filler = Array.from({ length: 150 }, (_, i) => run(1000 - i, C, "cancelled"));
+  const history = [run(2000, A), ...filler, run(3, A, "failure")];
+  assert.equal(await resolve([run(2000, A)], { 2000: "success" }, undefined, { history }), null);
+  // Positive control: the same history without the red run promotes A.
+  assert.equal(
+    await resolve([run(2000, A)], { 2000: "success" }, undefined, {
+      history: history.slice(0, -1),
+    }),
+    A,
+  );
+});
+
+test("a commit history too long to read in full, or an undatable commit, is refused", async () => {
+  const history = Array.from({ length: 1000 }, (_, i) => run(5000 - i, A));
+  await assert.rejects(
+    resolve([run(5000, A)], { 5000: "success" }, undefined, { history }),
+    /More than 1000 e2e-staging runs since a{40} was committed: cannot prove it never went red/,
+  );
+  await assert.rejects(
+    resolve([run(2, A)], { 2: "success" }, undefined, { committed: null }),
+    /Cannot date commit a{40}/,
+  );
+});
+
+test("a cancelled first attempt of the same commit does not disqualify its pass", async () => {
+  assert.equal(await resolve([run(4, A), run(3, A, "cancelled")], { 4: "success" }), A);
+});
+
 // Spawned resolver CLI tests: per-event behavior pins, not source greps.
 // Inverting the empty-input clean skip (automatic exit 0 with an empty sha)
 // or breaking explicit-sha dispatch must fail here.
@@ -635,6 +728,7 @@ function cliRun(id, deployed, at) {
     display_title: `e2e-staging deploy ${deployed}`,
     status: "completed",
     conclusion: "success",
+    run_attempt: 1,
     updated_at: at,
   };
 }
@@ -665,6 +759,7 @@ test("resolver CLI promotes a soaked green on automatic triggers", () => {
       body: { workflow_runs: [cliRun(7, A, oldAt)] },
     },
     cliJobs(7),
+    { match: `/commits/${A}`, body: { commit: { committer: { date: oldAt } } } },
   ]);
   assert.equal(result.status, 0);
   assert.equal(result.written, `sha=${A}\n`);

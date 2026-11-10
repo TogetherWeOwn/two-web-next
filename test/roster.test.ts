@@ -216,11 +216,14 @@ describe("staging QA seam writes the roster", () => {
   it("the fixture login upserts the roster row for W7 reads", async () => {
     const { roster, env: e } = isolated({
       APP_URL: "https://next.togetherweown.com",
-      QA_AUTH_TOKEN: "qa-secret",
+      QA_AUTH_TOKEN: "qa-secret-".padEnd(32, "x"),
     });
     const res = await app.request(
       "/auth/qa/qa-member",
-      { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret" } },
+      {
+        method: "POST",
+        headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret-".padEnd(32, "x") },
+      },
       e,
     );
     expect(res.status).toBe(204);

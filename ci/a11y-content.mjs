@@ -1,8 +1,94 @@
 import assert from "node:assert/strict";
 import { A11Y_FREEZE_DATES } from "./a11y-cases.mjs";
 
+// Exact status guidance per audited review state. The cancelled line is the
+// whole paragraph: cancelled events still appear in moderator listings, so a
+// trailing listing claim must fail the text match.
+const REVIEW_GUIDANCE = {
+  "review-corrections": "This is a draft. Only moderators can see this page.",
+  "review-published": "This event is already published. This is what members see now.",
+  "review-cancelled": "This event is cancelled.",
+};
+
+function auditEventKey(scenario) {
+  return new URL(scenario.path, "https://a11y.invalid").pathname.split("/").at(-1);
+}
+
+// Moderator review: the banner names the saved state and any corrections, and
+// the RSVP stays a disabled, form-free placeholder with no live RSVP controls.
+function reviewExpectations(scenario) {
+  const review = '[data-testid="event-review"]';
+  const key = auditEventKey(scenario);
+  const corrections = scenario.state === "review-corrections";
+  return [
+    {
+      selector: review,
+      attributes: {
+        role: corrections ? "alert" : "status",
+        "aria-label": "Preview — moderator only",
+      },
+    },
+    {
+      selector: `${review} > p:first-of-type strong`,
+      text: corrections ? "Fix these before publishing" : "Preview — as members will see it",
+    },
+    { selector: `${review} > p:nth-of-type(2)`, text: REVIEW_GUIDANCE[scenario.state] },
+    { selector: `${review} > p:nth-of-type(3)`, includes: "Saved record last updated:" },
+    // The draft fixture has no location and a readable future window, so the
+    // blank location is its only correction.
+    {
+      selector: `${review} li`,
+      count: corrections ? 1 : 0,
+      ...(corrections ? { includes: "Location is blank. Add a location and save." } : {}),
+    },
+    ...(corrections
+      ? [
+          {
+            selector: `${review} li a[href="/admin/events/${key}#f-location"]`,
+            text: "Edit location",
+          },
+        ]
+      : []),
+    {
+      selector: 'button[aria-describedby="preview-rsvp-hint"]',
+      text: "RSVP",
+      attributes: { disabled: "" },
+    },
+    { selector: "#preview-rsvp-hint", text: "RSVP is disabled in preview." },
+    { selector: '[data-island="rsvp-button"]', count: 0 },
+    { selector: "[data-rsvp-form]", count: 0 },
+    { selector: 'form[action*="/rsvp"]', count: 0 },
+    { selector: 'button[name="status"]', count: 0 },
+    {
+      selector: `[data-testid="event-review-actions"] a[href="/admin/events/${key}"]`,
+      text: "Back to edit",
+    },
+    ...(scenario.state === "review-cancelled"
+      ? [{ selector: '[data-testid="event-cancelled"]', text: "Cancelled" }]
+      : []),
+  ];
+}
+
 export function contentExpectations(scenario) {
   const unavailable = scenario.readState === "unavailable";
+  if (scenario.route === "/admin/ops-overrides") {
+    if (scenario.state === "operator-refused") {
+      return [{ selector: "main h1", text: "Operator access required" }];
+    }
+    return [
+      { selector: "main h1", text: "Operator overrides" },
+      { selector: "main", includes: "300 seconds" },
+      { selector: "main form, main input, main button", count: 0 },
+      ...(scenario.state === "operator-unavailable"
+        ? [{ selector: '[role="status"]', includes: "Operator record unavailable" }]
+        : [
+            { selector: "main dl", includes: "98741" },
+            ...(scenario.state === "operator-empty"
+              ? [{ selector: "main", includes: "No overrides are set." }]
+              : [{ selector: "main table", includes: "TWO_AUTOMOD_MENTION_LIMIT" }]),
+          ]),
+    ];
+  }
   if (scenario.route === "/events/past" && scenario.state === "past-page-overflow") {
     return [
       {
@@ -88,11 +174,24 @@ export function contentExpectations(scenario) {
       },
       {
         selector: '[data-testid="event-attendees"]',
-        count: scenario.identity === "guest" || scenario.identity === "moderator" ? 0 : 1,
+        count: scenario.identity === "member" || scenario.state === "review-published" ? 1 : 0,
       },
       {
         selector: '[data-testid="event-join-pitch"]',
         count: scenario.identity === "guest" ? 1 : 0,
+      },
+      ...(Object.hasOwn(REVIEW_GUIDANCE, scenario.state) ? reviewExpectations(scenario) : []),
+    ];
+  }
+  if (scenario.route === "/admin/events/:key" && scenario.status === 200) {
+    const notice = '[data-testid="event-saved-review"]';
+    // Only a saved draft carries the notice; a plain edit page must not.
+    if (scenario.state !== "saved-draft") return [{ selector: notice, count: 0 }];
+    return [
+      { selector: notice, includes: "Saved.", attributes: { role: "status" } },
+      {
+        selector: `${notice} a[href="/e/${auditEventKey(scenario)}?review=1"]`,
+        text: "Review the saved event before publishing",
       },
     ];
   }

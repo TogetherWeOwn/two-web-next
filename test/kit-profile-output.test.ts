@@ -33,7 +33,7 @@ function expectBrandImage(head: string) {
       .map(([tag]) => tag)
       .filter((tag) => tag.includes(`property="${property}"`))
       .map((tag) => tag.match(/content="([^"]*)"/)?.[1]);
-  expect(contents("og:image")).toEqual(["https://next.example.test/icons/icon-512.png"]);
+  expect(contents("og:image")).toEqual(["https://next.example.test/og-1200x630.png"]);
   expect(contents("og:image:alt")).toEqual(["Together We Own community logo"]);
 }
 

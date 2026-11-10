@@ -3,21 +3,19 @@
 // The Builder incorporates this file unchanged; corrections return to its author.
 //
 // RED cases fail until the shared admin read gains elapsed-published eligibility.
-// CONTROL cases pin behavior already present. Live cases use only the disposable
-// DATABASE_URL fixture (ungated: CI always provides it); the read-budget case
-// is hermetic.
+// CONTROL cases pin behavior already present. All cases run ungated: a supplied
+// DATABASE_URL uses the guarded disposable PostgreSQL fixture; an absent URL
+// uses a local SQL fixture. Offline evidence does not replace PostgreSQL CI.
 // Run: npm test -- test/admin-events-past-filter-acceptance.test.ts
-import { drizzle } from "drizzle-orm/postgres-js";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { EVENT_PAGE_SIZE, parseEventListQuery } from "../src/admin/event-list";
 import { buildEventListView } from "../src/admin/kit-events";
 import { listEvents } from "../src/admin/store-event-reads";
-import { events } from "../src/db/admin-schema";
-import { adminSchema, schema, type Db } from "../src/db/index";
+import type { Db } from "../src/db/index";
 import { listPast } from "../src/events/reads";
-import { insertSavedNight, savedNightRow } from "./helpers/admin-event-find-saved-nights";
+import { savedNightRow } from "./helpers/admin-event-find-saved-nights";
 import { inventoryDb } from "./helpers/admin-inventory-recovery";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
+import { createPastFilterFixture, type PastFilterFixture } from "./helpers/admin-past-filter-db";
 
 const NOW = new Date("2030-06-15T20:00:00.000Z");
 const at = (delta: number) => new Date(NOW.getTime() + delta);
@@ -58,25 +56,24 @@ describe("admin Past filter read budget (hermetic)", () => {
   });
 });
 
-// Live cases run ungated: CI always provides DATABASE_URL (floor guard #1852
-// forbids added conditional skips; new DB tests land ungated).
-describe("admin Past filter (disposable SQL fixture)", () => {
-  let fixture: MemberDataFixture;
+// The assertions are shared by both backends; a configured database is never
+// silently replaced with local fixtures, including on connection failures.
+describe("admin Past filter (SQL fixture)", () => {
+  let fixture: PastFilterFixture;
   let countedDb: Db;
   let statements: string[] = [];
   const list = (params: Parameters<typeof listEvents>[1]) => listEvents(fixture.db, params);
 
   beforeAll(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-    countedDb = drizzle(fixture.client, {
-      schema: { ...schema, ...adminSchema },
-      logger: { logQuery: (sql) => statements.push(sql) },
-    });
+    fixture = await createPastFilterFixture(process.env.DATABASE_URL);
+    console.info(`Past-filter acceptance backend: ${fixture.backend}`);
+    countedDb = fixture.countedDb;
+    statements = fixture.statements;
   });
   afterAll(() => fixture?.dispose());
   beforeEach(async () => {
     await fixture.reset();
-    await fixture.db.insert(events).values([
+    await fixture.seed([
       {
         eventKey: "stored-past",
         title: "Stored night",
@@ -128,7 +125,7 @@ describe("admin Past filter (disposable SQL fixture)", () => {
         endsAt: at(-HOUR),
       },
     ]);
-    statements = [];
+    statements.length = 0;
   });
 
   it("RED: returns exactly stored-past and published-ended, keeping true stored labels", async () => {
@@ -196,21 +193,25 @@ describe("admin Past filter (disposable SQL fixture)", () => {
       const suffix = String(i).padStart(2, "0");
       const eventKey = `page-${suffix}`;
       expected.push(eventKey);
-      await insertSavedNight(fixture.db, {
-        eventKey,
-        title: `Paged night ${suffix}`,
-        status: i % 2 === 0 ? "past" : "published",
-        startsAt: at(-2 * HOUR),
-        endsAt: at(-HOUR),
-      });
+      await fixture.seed([
+        {
+          eventKey,
+          title: `Paged night ${suffix}`,
+          status: i % 2 === 0 ? "past" : "published",
+          startsAt: at(-2 * HOUR),
+          endsAt: at(-HOUR),
+        },
+      ]);
       // Interleaved by title: filtering after LIMIT creates short/missing pages.
-      await insertSavedNight(fixture.db, {
-        eventKey: `decoy-${suffix}`,
-        title: `Paged night ${suffix} decoy`,
-        status: i % 2 === 0 ? "draft" : "published",
-        startsAt: at(-HOUR),
-        endsAt: i % 2 === 0 ? at(-1) : at(1),
-      });
+      await fixture.seed([
+        {
+          eventKey: `decoy-${suffix}`,
+          title: `Paged night ${suffix} decoy`,
+          status: i % 2 === 0 ? "draft" : "published",
+          startsAt: at(-HOUR),
+          endsAt: i % 2 === 0 ? at(-1) : at(1),
+        },
+      ]);
     }
     const params = { status: "past", q: "Paged night", sort: "title", order: "asc" } as const;
     const first = await list(params);
@@ -239,7 +240,7 @@ describe("admin Past filter (disposable SQL fixture)", () => {
     await listEvents(countedDb, { status: "published" });
     const publishedCount = statements.length;
     const publishedSelects = statements.filter((sql) => /^select\b/i.test(sql)).length;
-    statements = [];
+    statements.length = 0;
     await listEvents(countedDb, { status: "past" });
     expect(statements.length).toBeLessThanOrEqual(publishedCount);
     expect(statements.filter((sql) => /^select\b/i.test(sql)).length).toBeLessThanOrEqual(

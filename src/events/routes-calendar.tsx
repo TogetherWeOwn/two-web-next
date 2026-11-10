@@ -1,3 +1,4 @@
+import { captureRequest, renderDate } from "../render-clock";
 // Calendar/collection event routes: GET /events and GET /events/past.
 // Split out of src/events/routes.tsx; behavior unchanged.
 import { dbFor } from "../admin/db";
@@ -249,13 +250,19 @@ export function registerCalendarRoutes(
     // Only data pages settle — empty and out-of-range renders stay uncached
     // so a fresh archive never pins a stale "never ran" state, and keys stay
     // bounded.
-    const pastEligible = isAnonCacheEligible({
-      method: c.req.method,
-      hasCookie: c.req.header("cookie") !== undefined,
-      hasSession: false,
-      searching: input.searching,
-      flashed: false,
-    });
+    const pastEligible =
+      !(
+        typeof __TWO_LOCAL_CAPTURE__ !== "undefined" &&
+        __TWO_LOCAL_CAPTURE__ === true &&
+        captureRequest(c.req.raw, c.env)
+      ) &&
+      isAnonCacheEligible({
+        method: c.req.method,
+        hasCookie: c.req.header("cookie") !== undefined,
+        hasSession: false,
+        searching: input.searching,
+        flashed: false,
+      });
     const pastSource = pastEligible ? anonCacheSource(c.env) : null;
     const pastKey = pastEligible ? anonPastKey(c.req.method, page) : null;
     if (pastSource && pastKey) {
@@ -272,7 +279,14 @@ export function registerCalendarRoutes(
     // Same retire-generation guard as `/events`: an edit that commits while
     // this archive render awaits its read must stop stale bytes settling.
     const pastGen = pastSource ? anonCacheGeneration() : 0;
-    const { rows, hasMore, totalPages } = await listPast(db, page, new Date(), q);
+    const { rows, hasMore, totalPages } = await listPast(
+      db,
+      page,
+      typeof __TWO_LOCAL_CAPTURE__ !== "undefined" && __TWO_LOCAL_CAPTURE__ === true
+        ? renderDate(c.req.raw, c.env)
+        : new Date(),
+      q,
+    );
     c.header("cache-control", input.searching ? "private, no-store" : "public, max-age=300");
     // Browsing renders are public and shared, like the Kit twin: name the
     // Cookie variance so shared caches key anonymous and signed-in shells

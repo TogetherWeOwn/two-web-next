@@ -379,11 +379,13 @@ export const ALERT_ROUTES = new Set([
   "/admin/featured/:id",
   "/admin/featured/new",
   "/admin/featured/:id/delete",
+  "/admin/featured/:id/unpublish",
   "/admin/featured-contents",
   "/admin/featured-contents/:id/edit",
   "/admin/featured-contents/create",
   "/admin/join-attempts",
   "/admin/join-attempts/:id",
+  "/admin/ops-overrides",
   "/admin/queue/failed/:id/preview",
   "/admin/queue/failed/:id/redispatch",
   "/admin/queue/source-evidence/:id",
@@ -446,6 +448,7 @@ export const ALERT_ROUTES = new Set([
   "/rules.md",
   "/sitemap_index.xml",
   "/up",
+  "/version",
 ]);
 const JOB_NAMES = new Set(["SyncEventToDiscord", "CallInternalAction", "AlertProbe"]);
 // Allowlisted scheduled-job discriminators for the direct scheduled.failing

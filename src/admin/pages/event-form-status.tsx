@@ -11,15 +11,29 @@ export const EventStatusSection: FC<{ row: EventRow }> = ({ row }) => {
       <h2>Status: {row.status}</h2>
       <div class="actions rsvp-actions">
         {row.status === "draft" ? (
-          <form method="post" action={`/admin/events/${row.eventKey}/publish`}>
-            <button type="submit" class="btn" data-testid="publish-event">
-              Publish
-            </button>
-          </form>
+          <>
+            <a
+              class="btn"
+              href={`/e/${encodeURIComponent(row.eventKey)}?review=1`}
+              data-testid="review-event"
+            >
+              Review before publishing
+            </a>
+            <form method="post" action={`/admin/events/${row.eventKey}/publish`}>
+              <button type="submit" class="btn" data-testid="publish-event">
+                Publish
+              </button>
+            </form>
+          </>
         ) : null}
         {row.status === "draft" || row.status === "published" ? (
           <form method="post" action={`/admin/events/${row.eventKey}/cancel`}>
-            <button type="submit" class="link" data-testid="cancel-event">
+            <button
+              type="submit"
+              class="link"
+              data-testid="cancel-event"
+              aria-label={`Cancel event ${row.title}`}
+            >
               Cancel event
             </button>
           </form>

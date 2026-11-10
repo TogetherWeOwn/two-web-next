@@ -1,0 +1,309 @@
+{
+  "version": 1,
+  "seedId": "ember-capture-v1",
+  "renderInstant": "2098-12-31T20:00:00.000Z",
+  "dataHash": "b131fecff021b82d78c8c47d7f904423a9ca344718bdc5266d0df094202d62ef",
+  "bindingsHash": "6f10abfeee876c8fe7fa55cfd1f55d7d9993c464097c34833e2c48af7887e367",
+  "hashProvenance": "SHA-256 of canonical UTF-8 JSON: sorted object keys, declared array order, ISO UTC timestamps; seed-owned table columns plus shipped voice/game priors. Excludes session material, schema names and runtime audit writes.",
+  "ids": {
+    "events": {
+      "upcoming": "01J00000000000000000000001",
+      "past": "01J00000000000000000000002",
+      "may": "01J00000000000000000000003",
+      "june": "01J00000000000000000000004",
+      "paused": "01J00000000000000000000005",
+      "cancelled": "01J00000000000000000000006"
+    },
+    "member": "900000000000009802",
+    "moderator": "900000000000009803",
+    "featured": 1,
+    "joinAttempt": 1,
+    "activity": 1
+  },
+  "sessions": {
+    "guest": {
+      "kind": "anonymous",
+      "member": false,
+      "moderator": false
+    },
+    "member": {
+      "kind": "ephemeral-local",
+      "member": true,
+      "moderator": false,
+      "ttlSeconds": 7200,
+      "absoluteMaxAgeSeconds": 86400
+    },
+    "moderator": {
+      "kind": "ephemeral-local",
+      "member": true,
+      "moderator": true,
+      "ttlSeconds": 7200,
+      "absoluteMaxAgeSeconds": 86400
+    }
+  },
+  "aggregates": {
+    "joins": {
+      "source": "join_attempts + profiles + events",
+      "successfulAttempts": 2,
+      "allTimeEventCount": 5
+    },
+    "voice": {
+      "source": "shipped priorGrid(voice), estimate, not live Discord",
+      "hash": "8d4f8c88914d56fcc7208c402c8be8941a8016f3b1ecf68c506857eec74b12ed"
+    },
+    "games": {
+      "source": "shipped priorGrid(games), estimate, not live Discord",
+      "hash": "5500d6601f59405043fcb28ca6b9dc37afe28f91009aa069506612146692db9a"
+    },
+    "leaderboard": {
+      "source": "users + profiles + rsvps + events",
+      "allTime": [
+        {
+          "userId": "900000000000009802",
+          "count": 3
+        },
+        {
+          "userId": "900000000000009803",
+          "count": 1
+        }
+      ]
+    }
+  },
+  "routeStates": [
+    {
+      "id": "home-guest",
+      "route": "/",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": ["events", "featured_contents"]
+    },
+    {
+      "id": "home-member",
+      "route": "/",
+      "persona": "member",
+      "expectedStatus": 200,
+      "requires": ["events", "featured_contents"]
+    },
+    {
+      "id": "events-guest",
+      "route": "/events",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": ["events"]
+    },
+    {
+      "id": "past-guest",
+      "route": "/events/past",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": ["events:2"]
+    },
+    {
+      "id": "event-guest",
+      "route": "/e/01J00000000000000000000001",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": ["events:1", "rsvps"]
+    },
+    {
+      "id": "event-member",
+      "route": "/e/01J00000000000000000000001",
+      "persona": "member",
+      "expectedStatus": 200,
+      "requires": ["events:1", "rsvps:1", "rsvps:2"]
+    },
+    {
+      "id": "event-paused-member",
+      "route": "/e/01J00000000000000000000005",
+      "persona": "member",
+      "expectedStatus": 200,
+      "requires": ["events:5", "rsvps:5"]
+    },
+    {
+      "id": "event-cancelled-guest",
+      "route": "/e/01J00000000000000000000006",
+      "persona": "guest",
+      "expectedStatus": 410,
+      "requires": ["events:6"]
+    },
+    {
+      "id": "about-guest",
+      "route": "/about",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": []
+    },
+    {
+      "id": "faq-guest",
+      "route": "/faq",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": []
+    },
+    {
+      "id": "rules-guest",
+      "route": "/rules",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": []
+    },
+    {
+      "id": "privacy-guest",
+      "route": "/privacy",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": []
+    },
+    {
+      "id": "join-guest",
+      "route": "/join",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": []
+    },
+    {
+      "id": "auth-recover-guest",
+      "route": "/auth/recover",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": []
+    },
+    {
+      "id": "profile-member",
+      "route": "/profile",
+      "persona": "member",
+      "expectedStatus": 200,
+      "requires": ["users:900000000000009802", "profiles:900000000000009802"]
+    },
+    {
+      "id": "member-guest",
+      "route": "/members/900000000000009802",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": ["users:900000000000009802", "profiles:900000000000009802"]
+    },
+    {
+      "id": "member-member",
+      "route": "/members/900000000000009802",
+      "persona": "member",
+      "expectedStatus": 200,
+      "requires": ["users:900000000000009802", "profiles:900000000000009802"]
+    },
+    {
+      "id": "leaderboard-member",
+      "route": "/leaderboards/members",
+      "persona": "member",
+      "expectedStatus": 200,
+      "requires": ["leaderboard"]
+    },
+    {
+      "id": "hotzones-guest",
+      "route": "/hotzones",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": ["joins", "voice", "games"]
+    },
+    {
+      "id": "hotzones-joins-guest",
+      "route": "/hotzones/joins",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": ["joins"]
+    },
+    {
+      "id": "voice-guest",
+      "route": "/voice",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": ["voice"]
+    },
+    {
+      "id": "games-guest",
+      "route": "/games",
+      "persona": "guest",
+      "expectedStatus": 200,
+      "requires": ["games"]
+    },
+    {
+      "id": "admin-moderator",
+      "route": "/admin",
+      "persona": "moderator",
+      "expectedStatus": 200,
+      "requires": ["events", "join_attempts"]
+    },
+    {
+      "id": "admin-events-moderator",
+      "route": "/admin/events",
+      "persona": "moderator",
+      "expectedStatus": 200,
+      "requires": ["events"]
+    },
+    {
+      "id": "admin-events-new-moderator",
+      "route": "/admin/events/new",
+      "persona": "moderator",
+      "expectedStatus": 200,
+      "requires": []
+    },
+    {
+      "id": "admin-event-moderator",
+      "route": "/admin/events/01J00000000000000000000001",
+      "persona": "moderator",
+      "expectedStatus": 200,
+      "requires": ["events:1", "rsvps"]
+    },
+    {
+      "id": "admin-featured-moderator",
+      "route": "/admin/featured",
+      "persona": "moderator",
+      "expectedStatus": 200,
+      "requires": ["featured_contents"]
+    },
+    {
+      "id": "admin-featured-new-moderator",
+      "route": "/admin/featured/new",
+      "persona": "moderator",
+      "expectedStatus": 200,
+      "requires": []
+    },
+    {
+      "id": "admin-featured-detail-moderator",
+      "route": "/admin/featured/1",
+      "persona": "moderator",
+      "expectedStatus": 200,
+      "requires": ["featured_contents:1"]
+    },
+    {
+      "id": "admin-activity-moderator",
+      "route": "/admin/activity-log",
+      "persona": "moderator",
+      "expectedStatus": 200,
+      "requires": ["activity_log"]
+    },
+    {
+      "id": "admin-joins-moderator",
+      "route": "/admin/join-attempts",
+      "persona": "moderator",
+      "expectedStatus": 200,
+      "requires": ["join_attempts"]
+    },
+    {
+      "id": "admin-join-detail-moderator",
+      "route": "/admin/join-attempts/1",
+      "persona": "moderator",
+      "expectedStatus": 200,
+      "requires": ["join_attempts:1"]
+    },
+    {
+      "id": "unknown-guest",
+      "route": "/ember-capture-unknown",
+      "persona": "guest",
+      "expectedStatus": 404,
+      "requires": []
+    }
+  ],
+  "readiness": {
+    "pilot": "not_ready",
+    "note": "Data prerequisite only. Adapter, server render clock, Ember shell/fonts/tokens and migration qualification remain separate. Guest member-page access currently redirects; never omit or relabel that declared 200 row."
+  }
+}

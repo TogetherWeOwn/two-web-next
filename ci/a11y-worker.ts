@@ -3,6 +3,7 @@ import { drizzle } from "drizzle-orm/postgres-js";
 import postgres from "postgres";
 import { auditDatabaseOptions, auditDatabaseUrl } from "./a11y-policy.mjs";
 import { auditFixtureState, auditReadDatabase } from "./a11y-read-models";
+import { A11Y_OPS_CONTROL_TOKEN } from "./a11y-cases.mjs";
 import app from "../src/index";
 import {
   maintenanceHandler,
@@ -30,7 +31,22 @@ export default {
     env: Env & { A11Y_DATABASE_URL: string; A11Y_SCHEMA: string; A11Y_CI: string },
     ctx: ExecutionContext,
   ) {
-    globalThis.fetch = async () => {
+    globalThis.fetch = async (input, init) => {
+      const url = input instanceof Request ? input.url : String(input);
+      if (
+        url === "https://ops-audit.invalid/ops/config" &&
+        init?.method === "GET" &&
+        new Headers(init.headers).get("authorization") === `Bearer ${A11Y_OPS_CONTROL_TOKEN}`
+      ) {
+        const state = request.headers.get("x-a11y-ops-state");
+        if (state === "unavailable") return new Response(null, { status: 503 });
+        return Response.json({
+          epoch: 98741,
+          overrides: state === "empty" ? {} : { TWO_AUTOMOD_MENTION_LIMIT: "7" },
+          baseline: state === "empty" ? {} : { TWO_AUTOMOD_MENTION_LIMIT: "5" },
+          enforcement: "pending",
+        });
+      }
       throw new Error("Outbound HTTP is disabled in the local audit worker");
     };
     if (!/^w15_[a-f0-9]{32}$/.test(env.A11Y_SCHEMA))
@@ -43,6 +59,8 @@ export default {
     try {
       const bindings = {
         ...env,
+        OPS_CONTROL_TOKEN: A11Y_OPS_CONTROL_TOKEN,
+        BOT_ENDPOINT_URL: "https://ops-audit.invalid",
         FREEZE_BANNER_ENABLED:
           request.headers.get("x-a11y-freeze-banner") === "true" ? "true" : "false",
         A11Y_READ_STATE: readState,

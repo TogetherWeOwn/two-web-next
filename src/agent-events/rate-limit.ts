@@ -1,5 +1,6 @@
 import type { Sql } from "postgres";
 import { ingressDenial } from "./envelope";
+import { isIngressBusy, setIngressDeadlines } from "./deadline";
 import { ulid } from "./payload";
 import { pruneAgentEventHits } from "./prune-hits";
 import type { Answer, Grant, IngressConfig, Op } from "./types";
@@ -52,7 +53,7 @@ export async function rateLimit(
   let verdict: Answer | null;
   try {
     verdict = await sql.begin(async (tx) => {
-      await tx.unsafe(`SET LOCAL lock_timeout = '${Math.max(1, Math.floor(cfg.lockWaitMs))}ms'`);
+      await setIngressDeadlines(tx, cfg.lockWaitMs);
       let retry = 0;
       for (const [bucket] of [...buckets].sort((a, b) => (a[0] < b[0] ? -1 : 1))) {
         await tx`SELECT pg_advisory_xact_lock(hashtextextended(${`agent-event-hits:${bucket}`}, 0))`;
@@ -69,7 +70,7 @@ export async function rateLimit(
       return null;
     });
   } catch (err) {
-    if ((err as { code?: string }).code !== "55P03") throw err;
+    if (!isIngressBusy(err)) throw err;
     // Inner-budget lock contention: the verdict transaction aborted with no
     // hits inserted. Best-effort cleanup runs outside the bucket locks so a
     // busy pass still attempts to drain expired rows, then answer retryable

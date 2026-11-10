@@ -21,6 +21,13 @@ env -u DATABASE_URL -u REDIS_URL timeout 10s node node_modules/vitest/vitest.mjs
 env -u DATABASE_URL -u REDIS_URL npm run check
 ```
 
+The DB-free `check` lane runs fixture-only proofs, not live SQL or browser
+journeys. Existing integration gates skip their SQL cases when `DATABASE_URL`
+is unset; the featured-unpublish SQL cases share the pre-existing gate in
+`test/admin.test.ts`, while their registration and rendering proofs remain
+ungated. Full SQL verification requires the approved disposable test database
+from the README; a DB-free run is not a substitute.
+
 Every fast-check assertion uses seed **10849** and **100 runs**. Important boundary
 and failing inputs are explicit examples, not left to random chance. The suite
 contains 25 tests / 26 property assertions. Vitest prints the seed, shrink path

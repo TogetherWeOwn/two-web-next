@@ -199,7 +199,7 @@ describe("admin table query state (no DB)", () => {
     await listRoster(db, "roster", parseRosterQuery({ roster_page: "3" }));
     expect(statements).toHaveLength(2);
     expect(statements[0]).toMatch(/^select count\(\*\)/);
-    expect(statements[1]).toMatch(/limit \$\d+ offset \$\d+/);
+    expect(statements[1]).toMatch(/limit 100 offset \$\d+/);
   });
 
   it("keeps filtered/sorted/paged views behind the existing moderator guard", async () => {
@@ -646,7 +646,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
       );
       expect(fallback.indexOf("Unknown member")).toBeLessThan(fallback.indexOf("Alice"));
       expect(fallback).not.toContain("100000000000001005");
-      expect(fallback).toContain('aria-label="Sort by answered ascending"');
+      expect(fallback).toContain('aria-label="Sort by answered (UTC) ascending"');
       const html = await request(
         "/events/01K00000000000000000000011?roster_q=alice&roster_sort=status&roster_order=asc",
       );

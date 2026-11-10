@@ -269,6 +269,27 @@ describe.skipIf(!process.env.DATABASE_URL)(
       expect((await request(`${path}/rsvp`, "PUT", false, { status: "maybe" })).status).toBe(200);
     });
 
+    it("advances pause and reopen review stamps under a frozen clock, but not no-ops", async () => {
+      const frozen = new Date("2098-01-01T00:00:00.123Z");
+      const row = await seed({ updatedAt: frozen });
+      const clock = () => frozen;
+      const paused = await setRsvpOpen(fixture.db, actor, row.eventKey, false, clock);
+      expect(paused.row.rsvpOpen).toBe(false);
+      expect(paused.row.updatedAt.getTime()).toBe(frozen.getTime() + 1);
+      const repeatPause = await setRsvpOpen(fixture.db, actor, row.eventKey, false, clock);
+      expect(repeatPause.row.updatedAt).toEqual(paused.row.updatedAt);
+      expect(repeatPause.writeBack).toBeNull();
+      const reopened = await setRsvpOpen(fixture.db, actor, row.eventKey, true, clock);
+      expect(reopened.row.rsvpOpen).toBe(true);
+      expect(reopened.row.updatedAt.getTime()).toBe(frozen.getTime() + 2);
+      const repeatReopen = await setRsvpOpen(fixture.db, actor, row.eventKey, true, clock);
+      expect(repeatReopen.row.updatedAt).toEqual(reopened.row.updatedAt);
+      expect(repeatReopen.writeBack).toBeNull();
+      const [saved] = await fixture.db.select().from(events);
+      expect(saved!.updatedAt).toEqual(reopened.row.updatedAt);
+      expect(await audits()).toHaveLength(2);
+    });
+
     it("counts only this event's going answers, including zero, on changed and no-op responses", async () => {
       const row = await seed({ capacity: 2 });
       const other = await seed();

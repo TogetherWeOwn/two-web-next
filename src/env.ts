@@ -11,8 +11,9 @@ export type Env = AgentEventsEnv & {
   // staging and production web Workers and the staging jobs Worker; absent
   // locally, so `/up` carries no revision and log release fields stay null
   // there. `id` is the Version ID that `wrangler rollback` takes; `tag`
-  // carries the deploy commit (src/release-tag.ts parses both tag shapes).
-  CF_VERSION_METADATA?: Partial<Pick<WorkerVersionMetadata, "id" | "tag">>;
+  // carries the deploy commit (src/release-tag.ts parses both tag shapes);
+  // `timestamp` is the Version's upload time, read only by `/version`.
+  CF_VERSION_METADATA?: Partial<Pick<WorkerVersionMetadata, "id" | "tag" | "timestamp">>;
   DISCORD_CLIENT_ID: string;
   DISCORD_GUILD_ID: string;
   DISCORD_INVITE_URL: string;
@@ -45,6 +46,9 @@ export type Env = AgentEventsEnv & {
   BOT_DATABASE_URL?: string;
   DISCORD_MODERATOR_ROLE_IDS?: string;
   QA_AUTH_TOKEN?: string;
+  // Optional runtime-only bot control bearer for the read-only operator panel.
+  // Unset/short values leave it dark; never provisioned by checked-in config.
+  OPS_CONTROL_TOKEN?: string;
   // Separate default-off operational read boundary. No grant or principal is
   // provisioned here; both settings require independent security review.
   QUEUE_RECONCILE_PREVIEW_ENABLED?: string;
@@ -88,6 +92,8 @@ export type Env = AgentEventsEnv & {
   // stays disabled until the companion passes; honoured only for an http
   // loopback APP_URL (src/route-ownership.ts fixtureManifestFor).
   KIT_PARITY_FIXTURE_EVENT_DETAIL?: string;
+  // Generated local capture build only; no deployed config defines the build gate.
+  SSR_CAPTURE_FIXTURE?: string;
   // Staging Kit rollout controls (web/wrangler.staging.jsonc only). The exact
   // staging APP_URL activates a fail-closed route manifest: unset or malformed
   // values keep archive and static families on Hono. Preview fixture workers

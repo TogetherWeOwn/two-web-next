@@ -32,7 +32,7 @@ import {
   statsDate,
   statsLabel,
   type ProfileFormValues,
-} from "../../../src/profiles/pages";
+} from "../../../src/profiles/presentation";
 import {
   PROFILE_BIO_COUNT_ID,
   PROFILE_BIO_HINT_COPY,

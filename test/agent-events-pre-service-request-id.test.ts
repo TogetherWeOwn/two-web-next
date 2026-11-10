@@ -118,11 +118,15 @@ function handlerOutageSql(fakeSql: postgres.Sql): postgres.Sql {
       ) => Promise<unknown[]>
     )(strings, ...values);
   }) as unknown as postgres.Sql;
-  for (const key of ["unsafe", "end", "begin"] as const) {
+  for (const key of ["unsafe", "end"] as const) {
     (run as unknown as Record<string, unknown>)[key] = (
       fakeSql as unknown as Record<string, unknown>
     )[key];
   }
+  // Keep fault injection on the grant lookup inside its bounded transaction.
+  (run as unknown as { begin: unknown }).begin = async (
+    fn: (tx: postgres.Sql) => Promise<unknown>,
+  ) => fn(run);
   return run;
 }
 
