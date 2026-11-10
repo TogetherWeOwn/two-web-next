@@ -254,10 +254,14 @@ describe("ErrorShell titles stay exactly as they are", () => {
     }
   });
 
-  it("keeps the Kit ErrorShell on a bare copy.title through Shell", () => {
+  it("keeps Kit error titles bare and preserves the heading fallback through Shell", () => {
     const tag = shellTag(errorShellLib);
-    expect(shellProp(tag, "title")).toBe("copy.title");
+    expect(shellProp(tag, "title")).toBe("copy.documentTitle ?? copy.title");
     expect(tag).not.toContain("Together We Own");
+    for (const status of statuses) {
+      const copy = kitErrorCopy(status);
+      expect(copy.documentTitle ?? copy.title).toBe(copy.title);
+    }
   });
 
   it("leaves the shared SiteMetadata suffix derivation untouched", () => {

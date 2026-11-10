@@ -54,7 +54,7 @@ class Node {
 }
 
 function archive(page: number) {
-  const document = new Node("document");
+  const document = Object.assign(new Node("document"), { title: `Past events — page ${page}` });
   const root = new Node("archive");
   const zones = ZONES.map((selector, i) => {
     const zone = new Node(selector);
@@ -200,6 +200,7 @@ function browser() {
           expect(live.root.dataset.totalPages).toBe(incoming.root.dataset.totalPages);
           expect(live.canonical.href).toBe(incoming.canonical.href);
           expect(live.og.content).toBe(incoming.og.content);
+          expect(document.title).toBe(incoming.document.title);
           history.push(url);
           location.href = ORIGIN + url;
         },
@@ -254,6 +255,7 @@ function browser() {
         hidden: zone.hidden,
       })),
       dataset: { ...live.root.dataset },
+      title: document.title,
       canonical: live.canonical.href,
       og: live.og.content,
       history: history.slice(),
@@ -628,6 +630,7 @@ describe("PastEvents complete-snapshot admission", () => {
       zone.hidden = !zone.hidden;
     });
     b.incoming.root.dataset.totalPages = "99";
+    b.incoming.document.title = "stale title";
     b.finish(0);
     await b.settle();
     expect(b.snapshot()).toEqual(snapshot);
@@ -661,6 +664,7 @@ describe("PastEvents complete-snapshot admission", () => {
     await b.settle();
     expect(b.history).toEqual([]);
     expect(b.live.root.dataset.page).toBe("2");
+    expect(b.live.document.title).toBe(b.incoming.document.title);
     b.location.href = `${ORIGIN}/events/past`;
     b.popstate();
     b.incoming.document.matches.set(OG, []);

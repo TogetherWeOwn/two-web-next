@@ -223,7 +223,7 @@ describe("RED: Kit past overlong answers the 422 notice", () => {
 
   it("422 SSR offers exactly events and home recovery, never 503 invite/retry actions", () => {
     const { head, body } = renderErrorShell(422);
-    expect(head).toContain("<title>Events — Together We Own</title>");
+    expect(head).toContain("<title>Events — search too long — Together We Own</title>");
     expect(body).toContain('<h1 id="error-heading">Events</h1>');
     const main = body.match(/<main\b[^>]*>([\s\S]*?)<\/main>/)?.[1];
     expect(main).toBeDefined();

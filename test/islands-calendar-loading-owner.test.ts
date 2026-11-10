@@ -131,6 +131,7 @@ function browser(entry = "/events") {
   const timers = new Map<number, { ms: number; callback: () => void }>();
   let nextTimer = 0;
   let popstate: () => void = () => {};
+  const document = { title: "initial title" };
   runInNewContext(
     binder,
     {
@@ -142,7 +143,7 @@ function browser(entry = "/events") {
         return nextTimer;
       },
       clearTimeout: (id: number) => timers.delete(id),
-      document: {
+      document: Object.assign(document, {
         // The fixture mounts no header or hero auth links, so unknown selectors
         // match nothing — og:url only answers its own meta selector.
         querySelector: (selector: string) =>
@@ -154,7 +155,7 @@ function browser(entry = "/events") {
                 ? og
                 : null,
         importNode: (node: string) => node,
-      },
+      }),
       window: {
         location,
         history: {
@@ -230,6 +231,7 @@ function browser(entry = "/events") {
       querySelectorAll: (selector: string) => (selector === "[data-cal-zone]" ? sourceZones : []),
     };
     pages.set(token, {
+      title: `response title ${index}`,
       querySelector: (selector: string) =>
         selector === MOUNT
           ? next
@@ -257,6 +259,7 @@ function browser(entry = "/events") {
   }
 
   return {
+    document,
     root,
     skeleton,
     content,
@@ -373,6 +376,9 @@ describe("EventsCalendar loading belongs to the current action", () => {
       ]);
       expect(b.feedback.textContent).toBe(
         currentOutcome === "success" ? "" : b.root.dataset.loadError,
+      );
+      expect(b.document.title).toBe(
+        currentOutcome === "success" ? "response title 1" : "initial title",
       );
       expect(b.history).toEqual(currentOutcome === "success" ? [b.requests[1]!.url] : []);
       expect(b.reloads).toEqual([]);
@@ -500,6 +506,15 @@ describe("EventsCalendar owned read deadline", () => {
     expectLoading(b, false);
     expect(b.content.childNodes).toEqual(["response-1"]);
     expect(b.history).toEqual([b.requests[1]!.url]);
+  });
+
+  it("adopts the response title on Back/forward without pushing history", async () => {
+    const b = browser("/events?q=old");
+    b.back("/events");
+    b.complete(0, "success");
+    await settle();
+    expect(b.document.title).toBe("response title 0");
+    expect(b.history).toEqual([]);
   });
 
   it("reconciles the address when a Back/forward read hits the deadline", async () => {
