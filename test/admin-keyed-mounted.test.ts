@@ -77,6 +77,21 @@ describe.skipIf(!process.env.DATABASE_URL)(
     });
     afterAll(() => fixture?.dispose());
 
+    it("refuses a roster programming error instead of rendering an empty roster", async () => {
+      const failure = Object.assign(new Error("private roster SQL syntax error"), {
+        code: "42601",
+      });
+      const execute = vi.spyOn(fixture.db, "execute").mockRejectedValueOnce(failure);
+      const response = await request(`/events/${EVENT_KEY}`);
+      expect(execute).toHaveBeenCalledOnce();
+      const body = await response.clone().text();
+      await denial(response);
+      expect(body).not.toContain("No RSVPs yet.");
+      expect(body).not.toContain("No RSVPs match this member search.");
+      expect(body).not.toContain('data-testid="rsvp-roster"');
+      expect(body).not.toContain(failure.message);
+    });
+
     it.each(["roster", "dashboard"])(
       "refuses an added unwrapped sensitive query in the existing %s handler",
       async (surface) => {

@@ -487,6 +487,9 @@ describe("resolveKitEventEdit: rosterHtml is the shared EventRosterSection rende
     expect(html).toBe(honoRoster({}, list));
     expect(html).toContain('<time datetime="2026-06-01T12:00:00.000Z">');
     expect(html).toContain("Unknown member");
+    expect(html).toContain(
+      "Answered shows the latest response update in UTC, not the original waitlist join time.",
+    );
     expect(html.match(/<time\b/g) ?? []).toHaveLength(2);
   });
 

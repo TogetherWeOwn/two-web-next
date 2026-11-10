@@ -105,6 +105,13 @@ describe("Kit activity-log rendered output", () => {
     );
   });
 
+  it("explains the read-only, access-logged and legacy-ID semantics in the page hint", () => {
+    const html = renderPage(pageData());
+    expect(html).toContain("Read-only. Who changed what, when (UTC).");
+    expect(html).toContain("Views that name a member are access-logged;");
+    expect(html).toContain("imported causer IDs are labeled legacy.");
+  });
+
   it("labels valid instants in UTC and keeps a null instant visible", () => {
     const html = renderPage(
       pageData({
