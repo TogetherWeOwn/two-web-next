@@ -1150,11 +1150,29 @@ jobs:
       - run: npm ci --include=dev --no-audit --no-fund
       # The served public/ files are the deterministic esbuild output of
       # assets/; fail when a source changed without its rebuilt output.
-      - run: node ci/minify-assets.mjs --selftest
-      - run: node ci/minify-assets.mjs --check
+      - id: asset_selftest
+        run: node ci/minify-assets.mjs --selftest
+      - id: asset_check
+        run: node ci/minify-assets.mjs --check
       # The checker uses only Node built-ins; no network needed.
       - run: node ci/check-bundle-budget.mjs --selftest
       - run: node ci/check-bundle-budget.mjs
+      # Retain canonical bytes for repair without turning a drift failure green.
+      - name: Generate asset drift evidence
+        id: asset_drift
+        if: failure() && (steps.asset_selftest.outcome == 'failure' || steps.asset_check.outcome == 'failure')
+        run: |
+          mkdir -p artifacts/asset-drift
+          npm run build:assets
+          git diff --binary -- public/ > artifacts/asset-drift/public-assets.patch
+      - name: Upload asset drift evidence
+        if: failure() && steps.asset_drift.outcome == 'success'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: asset-drift-${{ github.sha }}
+          path: artifacts/asset-drift/public-assets.patch
+          if-no-files-found: error
+          retention-days: 3
 
   lighthouse:
     needs: scope
