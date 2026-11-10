@@ -31,6 +31,9 @@ import { serializeSigned } from "hono/utils/cookie";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import type { EnvWithAdminDb } from "../src/admin/db";
 import { adminApp } from "../src/admin/routes";
+import { resolveKitEventEdit } from "../src/admin/kit-event-edit";
+import { listRoster } from "../src/admin/reads";
+import { getEvent } from "../src/admin/store-event-reads";
 import { listFeatured } from "../src/admin/store-featured";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
@@ -967,6 +970,84 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         ] as const) {
           expect(finalRow[key]).toEqual(seeded[key]);
         }
+      });
+
+      it("event: Kit-minted SQL values save through Hono, retain the stale draft, and reconcile from a fresh Kit load", async () => {
+        const seeded = await seedEvent();
+        const first = await moderator("100000000000000216");
+        const second = await moderator("100000000000000217");
+        const kitValues = async () => {
+          const outcome = await resolveKitEventEdit(
+            EVENT_KEY,
+            {},
+            {
+              db,
+              get: getEvent,
+              list: listRoster,
+              appUrl: APP_URL,
+            },
+          );
+          if (outcome.kind !== "ok") throw new Error("expected Kit edit values");
+          return outcome.view.values;
+        };
+        const values = await kitValues();
+        expect(values).toEqual({
+          ...EVENT_FORM,
+          saved_baseline: await first.token(EVENT_PATH),
+        });
+        expect((await first.post(EVENT_PATH, { ...values, title: "Kit first save" })).status).toBe(
+          303,
+        );
+        const saved = await eventRow();
+        expect(saved).toEqual({
+          ...seeded,
+          title: "Kit first save",
+          updatedAt: expect.any(Date),
+        });
+        expect(saved.updatedAt.getTime()).toBeGreaterThan(seeded.updatedAt.getTime());
+        const audits = await auditCount();
+        const writebacks = vi.mocked(dispatchWriteBack).mock.calls.length;
+        const losing = {
+          ...values,
+          title: "Kit second draft",
+          accessibility_notes: "Keep these access notes",
+          organizer_name: "Second host",
+          join_url: "https://example.test/second",
+          join_instructions: "Keep these joining instructions",
+        };
+        const refused = await second.post(EVENT_PATH, losing);
+        expect(refused.status).toBe(409);
+        const html = await refused.text();
+        expect(baselineFrom(html)).toBe(values.saved_baseline);
+        for (const text of [
+          losing.title,
+          losing.accessibility_notes,
+          losing.organizer_name,
+          losing.join_url,
+          losing.join_instructions,
+        ]) {
+          expect(html).toContain(text);
+        }
+        expect(await eventRow()).toEqual(saved);
+        expect(await auditCount()).toBe(audits);
+        expect(vi.mocked(dispatchWriteBack).mock.calls.length).toBe(writebacks);
+
+        const fresh = await kitValues();
+        expect(fresh.saved_baseline).not.toBe(values.saved_baseline);
+        expect(
+          (await second.post(EVENT_PATH, { ...losing, saved_baseline: fresh.saved_baseline }))
+            .status,
+        ).toBe(303);
+        expect(await eventRow()).toEqual({
+          ...saved,
+          title: losing.title,
+          accessibilityNotes: losing.accessibility_notes,
+          organizer_name: losing.organizer_name,
+          join_url: losing.join_url,
+          join_instructions: losing.join_instructions,
+          updatedAt: expect.any(Date),
+        });
+        expect(await auditCount()).toBe(audits + 1);
       });
 
       it("event: a stale token is judged before validation, so invalid fields get 409 not 422", async () => {
