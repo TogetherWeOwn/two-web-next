@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { LEDGER_DB_LOCK_TIMEOUT_MS, LEDGER_DB_TIMEOUT_MS } from "../src/jobs/constants";
 import { consume } from "../src/jobs/consumer";
 import { pgQueueDepth, pgQueueLedger } from "../src/jobs/postgres";
 import {
@@ -41,6 +42,11 @@ describe("terminal failure SQL contract", () => {
     expect(queries).toEqual([
       {
         statement:
+          "select set_config('lock_timeout', ?, true), set_config('statement_timeout', ?, true)",
+        values: [`${LEDGER_DB_LOCK_TIMEOUT_MS}ms`, `${LEDGER_DB_TIMEOUT_MS}ms`],
+      },
+      {
+        statement:
           "select pg_advisory_xact_lock(hashtextextended('queue-failed:' || ?::uuid::text, 0))",
         values: [id],
       },
@@ -59,9 +65,10 @@ describe("terminal failure SQL contract", () => {
     await expect(
       pgQueueLedger(sql).failed(randomUUID(), "announcement", null, "failed"),
     ).rejects.toBe(error);
-    expect(queries).toHaveLength(2);
-    expect(queries[0]!.statement).toMatch(/^select pg_advisory_xact_lock/);
-    expect(queries[1]!.statement).toMatch(/^insert/);
+    expect(queries).toHaveLength(3);
+    expect(queries[0]!.statement).toMatch(/^select set_config\('lock_timeout'/);
+    expect(queries[1]!.statement).toMatch(/^select pg_advisory_xact_lock/);
+    expect(queries[2]!.statement).toMatch(/^insert/);
   });
 });
 

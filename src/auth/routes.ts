@@ -32,7 +32,15 @@ import {
 } from "../error-responses";
 import { safeNext } from "../join/service";
 import { safeRequestId } from "../request-log";
-import { QA_HEADER, qaEnabled, qaIdentity, qaTokenMatches, type QaIdentity } from "../qa";
+import {
+  QA_HEADER,
+  qaEnabled,
+  qaIdentity,
+  qaTokenMatches,
+  refundQaAttempt,
+  takeQaAttempt,
+  type QaIdentity,
+} from "../qa";
 import {
   consumeLoginReturn,
   JOURNEY_TTL_SECONDS,
@@ -44,6 +52,7 @@ import { hashToken, isValidSessionToken, REVOKE_ALL_EXCEPT, type SessionStore } 
 import {
   AUTH_THROTTLE_PER_MINUTE,
   WRITE_THROTTLE_PER_MINUTE,
+  clientKey,
   throttle,
   throttleGuard,
 } from "../throttle";
@@ -482,8 +491,17 @@ export function registerAuthRoutes(app: Hono<{ Bindings: Env }>, hooks: AuthHook
     async (c, next) => {
       const fixture = qaIdentity(c.req.param("identity") ?? "");
       if (!fixture) return c.notFound();
-      const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, c.req.header(QA_HEADER) ?? "");
+      // Failed guesses drain a per-client attempt budget (src/qa.ts): a
+      // presented token takes an attempt before the digest compare and a
+      // match refunds it, so a guess flood throttles itself — with this
+      // same 404, and still without touching the shared qa-login counter
+      // below. A request presenting no token takes no attempt.
+      const presented = c.req.header(QA_HEADER) ?? "";
+      const client = clientKey(c);
+      if (presented && !takeQaAttempt(client)) return c.notFound();
+      const ok = await qaTokenMatches(c.env.QA_AUTH_TOKEN, presented);
       if (!ok) return c.notFound();
+      if (presented) refundQaAttempt(client);
       c.set("qaFixture", fixture);
       await next();
     },

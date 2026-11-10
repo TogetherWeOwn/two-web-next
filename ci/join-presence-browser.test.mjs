@@ -173,7 +173,7 @@ describe("Join presence browser", () => {
               assert.match(text, /42 members online/);
               assert.match(
                 text,
-                f.name === "stale" ? /as of the last update/ : /In Together We Own now/,
+                f.name === "stale" ? /as of the last update/ : /In Together We Own now/i,
               );
               assert.match(
                 text,

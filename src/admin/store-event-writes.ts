@@ -362,11 +362,23 @@ export function mergePatchInput(base: PatchBase, patch: Record<string, unknown>)
       ? merged.timezone.trim() || "Europe/London"
       : "Europe/London";
   if (!isKnownTimezone(tz)) throw new ValidationError({ timezone: `Unknown timezone: ${tz}.` });
-  merged.starts_at ??= utcToWall(base.startsAt, tz);
-  merged.ends_at ??= utcToWall(base.endsAt, tz);
+  // A stored instant a JS Date cannot represent has no wall text and no UTC
+  // carrier: an omitted field refuses as a field error (same copy as the
+  // duplicate guard), while a supplied replacement parses fresh — exactly
+  // how the edit POST treats a nonfinite carrier.
+  const fields: Record<string, string> = {};
+  if (merged.starts_at == null) {
+    if (Number.isFinite(base.startsAt.getTime())) merged.starts_at = utcToWall(base.startsAt, tz);
+    else fields.starts_at = "Enter a valid start time.";
+  }
+  if (merged.ends_at == null) {
+    if (Number.isFinite(base.endsAt.getTime())) merged.ends_at = utcToWall(base.endsAt, tz);
+    else fields.ends_at = "Enter a valid end time.";
+  }
+  if (Object.keys(fields).length > 0) throw new ValidationError(fields);
   return parseEventForm(merged, {
-    startsAtUtc: base.startsAt.toISOString(),
-    endsAtUtc: base.endsAt.toISOString(),
+    startsAtUtc: Number.isFinite(base.startsAt.getTime()) ? base.startsAt.toISOString() : undefined,
+    endsAtUtc: Number.isFinite(base.endsAt.getTime()) ? base.endsAt.toISOString() : undefined,
   });
 }
 
@@ -398,6 +410,13 @@ export async function patchEvent(
   retireApiPublicEventCache();
   await retireHomeGuestCache();
   return result;
+}
+
+// A locked write must invalidate review even within one millisecond or when
+// the worker clock moves backwards. Nonfinite imported stamps can be repaired.
+function nextUpdatedAt(row: EventRow, now = new Date()): Date {
+  const previous = row.updatedAt.getTime();
+  return new Date(Math.max(now.getTime(), Number.isFinite(previous) ? previous + 1 : 0));
 }
 
 async function commitLockedUpdate(
@@ -440,7 +459,7 @@ async function commitLockedUpdate(
       capacity: input.capacity,
       // A moderator edit must invalidate an agent's full-field stale write.
       agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
-      updatedAt: new Date(),
+      updatedAt: nextUpdatedAt(locked),
     })
     .where(eq(events.eventKey, eventKey))
     .returning();
@@ -461,7 +480,7 @@ async function commitLockedUpdate(
     });
   }
   const childWriteBacks = row.recurrenceFrequency
-    ? await shiftFutureChildren(tx, actor, row, locked.startsAt, locked.endsAt)
+    ? await shiftFutureChildren(tx, actor, row, locked)
     : [];
   const status = toEventStatus(row.status);
   return {
@@ -473,26 +492,22 @@ async function commitLockedUpdate(
 
 /**
  * A parent whose times moved reprograms the future: children not yet started
- * shift by the same absolute delta (seconds, not wall arithmetic: DST-proof),
- * so the series stays weekly around the edit. Started or finished instances
- * keep their times. Returns the write-backs the shifted mirrored children owe.
+ * shift by the difference between their old and new scheduled instants. This
+ * preserves individual deviations while keeping the weekly host-local time
+ * across offset transitions. Started or finished instances keep their times.
+ * Returns the write-backs the shifted mirrored children owe.
  */
 async function shiftFutureChildren(
   tx: Writer,
   actor: Actor,
   parent: EventRow,
-  oldStartsAt: Date,
-  oldEndsAt: Date,
+  old: EventRow,
 ): Promise<NonNullable<WriteBack>[]> {
   // Repairing a nonfinite parent time supplies no old instant to shift from.
   // Preserve that child column, while still applying any finite peer delta.
-  const startDelta = Number.isFinite(oldStartsAt.getTime())
-    ? parent.startsAt.getTime() - oldStartsAt.getTime()
-    : 0;
-  const endDelta = Number.isFinite(oldEndsAt.getTime())
-    ? parent.endsAt.getTime() - oldEndsAt.getTime()
-    : 0;
-  if (startDelta === 0 && endDelta === 0) return [];
+  const delta = (column: "startsAt" | "endsAt") =>
+    Number.isFinite(old[column].getTime()) ? parent[column].getTime() - old[column].getTime() : 0;
+  if (delta("startsAt") === 0 && delta("endsAt") === 0) return [];
   const lockedChildren = await tx
     .select()
     .from(events)
@@ -502,14 +517,30 @@ async function shiftFutureChildren(
   // all child locks are held, for both validation and every reschedule effect.
   const now = Date.now();
   const children = lockedChildren.filter((child) => child.startsAt.getTime() > now);
+  // Move each child column by its own slot's old-to-new difference, so it
+  // keeps the weekly local time across clock and timezone changes. Legacy rows
+  // without a slot, or a repaired nonfinite time, keep the flat parent deltas.
+  const slots =
+    parent.recurrenceFrequency === "weekly" &&
+    Number.isFinite(old.startsAt.getTime() + old.endsAt.getTime()) &&
+    isKnownTimezone(old.timezone)
+      ? [
+          occurrences(old.startsAt, old.endsAt, old.timezone, "weekly"),
+          occurrences(parent.startsAt, parent.endsAt, parent.timezone, "weekly"),
+        ]
+      : [];
+  const shift = (child: EventRow, column: "startsAt" | "endsAt") => {
+    const [from, to] = slots.map((slot) => slot.get(child.recurrenceIndex ?? 0)?.[column]);
+    return new Date(
+      child[column].getTime() + (from && to ? to.getTime() - from.getTime() : delta(column)),
+    );
+  };
   // A parent delta must never invert (or zero) a future occurrence the
   // moderator shortened individually: refuse the whole edit with the existing
   // ends_at response before any child write, so the surrounding transaction
   // rolls the parent, audit and waitlist writes back atomically.
   for (const child of children) {
-    const proposedStart = child.startsAt.getTime() + startDelta;
-    const proposedEnd = child.endsAt.getTime() + endDelta;
-    if (proposedEnd <= proposedStart) {
+    if (shift(child, "endsAt") <= shift(child, "startsAt")) {
       throw new ValidationError({
         ends_at: `The end is after the start. Blocking occurrence: ${child.eventKey}.`,
       });
@@ -520,10 +551,10 @@ async function shiftFutureChildren(
     const [moved] = await tx
       .update(events)
       .set({
-        startsAt: new Date(child.startsAt.getTime() + startDelta),
-        endsAt: new Date(child.endsAt.getTime() + endDelta),
+        startsAt: shift(child, "startsAt"),
+        endsAt: shift(child, "endsAt"),
         agentVersion: child.agentGrantId === null ? child.agentVersion : child.agentVersion + 1,
-        updatedAt: new Date(),
+        updatedAt: nextUpdatedAt(child),
       })
       .where(eq(events.id, child.id))
       .returning();
@@ -559,6 +590,7 @@ export async function transitionEvent(
   actor: Actor,
   eventKey: string,
   to: "published" | "cancelled",
+  reviewedUpdatedAt?: string,
 ): Promise<{ row: EventRow; writeBack: WriteBack }> {
   const result: { row: EventRow; writeBack: WriteBack } = await db.transaction(async (tx) => {
     await boundModeratorWrite(tx);
@@ -570,8 +602,24 @@ export async function transitionEvent(
       .where(eq(events.eventKey, eventKey))
       .for("update");
     if (!locked) throw new NotFoundError("event");
+    // Review publication must judge the saved revision after every earlier
+    // writer commits, before any transition, audit or write-back can happen.
+    if (
+      to === "published" &&
+      reviewedUpdatedAt !== undefined &&
+      (!Number.isFinite(locked.updatedAt.getTime()) ||
+        reviewedUpdatedAt !== locked.updatedAt.toISOString())
+    ) {
+      throw new ValidationError({ reviewed_updated_at: "The reviewed draft has changed." });
+    }
     const from = toEventStatus(locked.status);
     const target = nextStatus(from, to);
+    if (
+      to === "published" &&
+      (!Number.isFinite(locked.startsAt.getTime()) || !Number.isFinite(locked.endsAt.getTime()))
+    ) {
+      throw new ValidationError({ dates: "The saved event times cannot be read." });
+    }
     // Judge persisted dates only after the lock wait. Equality is still legal
     // for publication (legacy's strict isPast boundary); cancellation is exempt.
     if (to === "published" && locked.endsAt.getTime() < Date.now()) {
@@ -592,7 +640,7 @@ export async function transitionEvent(
       .set({
         status: target,
         agentVersion: locked.agentGrantId === null ? locked.agentVersion : locked.agentVersion + 1,
-        updatedAt: new Date(),
+        updatedAt: nextUpdatedAt(locked),
       })
       .where(eq(events.eventKey, eventKey))
       .returning();
@@ -637,7 +685,14 @@ export async function setRsvpOpen(
     if (open && !locked.rsvpOpen && locked.status === "published")
       await lockWaitlist(tx, locked.id);
     const now = clock();
-    if (locked.status !== "published" || locked.endsAt <= now) {
+    // An unrenderable end (Invalid Date) is not a live event: every
+    // comparison with it is false, so without the finite check the writer
+    // would accept a pause/reopen the inventory refuses to offer.
+    if (
+      locked.status !== "published" ||
+      !Number.isFinite(locked.endsAt.getTime()) ||
+      locked.endsAt <= now
+    ) {
       throw new ValidationError({
         rsvp_open: "Only published events that have not ended can pause or reopen RSVPs.",
       });
@@ -645,7 +700,7 @@ export async function setRsvpOpen(
     if (locked.rsvpOpen === open) return { row: locked, writeBack: null };
     const [row] = await tx
       .update(events)
-      .set({ rsvpOpen: open, updatedAt: now })
+      .set({ rsvpOpen: open, updatedAt: nextUpdatedAt(locked, now) })
       .where(eq(events.eventKey, eventKey))
       .returning();
     if (!row) throw new Error("event RSVP toggle returned no row");

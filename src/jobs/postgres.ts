@@ -1,6 +1,10 @@
 import type postgres from "postgres";
 import { SESSION_ABSOLUTE_MAX_AGE_SECONDS } from "../sessions";
-import { PRUNE_DELETE_BATCH_SIZE } from "./constants";
+import {
+  LEDGER_DB_LOCK_TIMEOUT_MS,
+  LEDGER_DB_TIMEOUT_MS,
+  PRUNE_DELETE_BATCH_SIZE,
+} from "./constants";
 import type { SingleFlight } from "./cron";
 import type {
   AgePrunedTable,
@@ -247,6 +251,52 @@ export function pgPruneStores(sql: TxClient | Sql): PruneStores {
 }
 
 /**
+ * Server-side bound for queue-ledger and unique-lock statements, the same
+ * posture as `failSync`: the consumer races these waits client-side at the
+ * `LEDGER_DB_TIMEOUT_MS` bound, but a `Promise.race` only stops the wait —
+ * Postgres must cancel a wedged statement to free the `max: 1` pool
+ * connection for the next message. The timeouts are applied via
+ * `set_config(..., true)` inside a transaction (or a savepoint on a caller's
+ * transaction client) so they expire with that scope and never leak onto the
+ * pooled connection's next user. A cancellation surfaces as the driver's
+ * `57014`/`55P03` error to the existing catch/retry paths; nothing is
+ * swallowed here.
+ */
+async function withLedgerTimeout<T>(
+  sql: TxClient | Sql,
+  work: (client: TxClient | Sql) => Promise<T>,
+): Promise<T> {
+  const candidate = sql as unknown as {
+    savepoint?: <R>(fn: (client: TxClient | Sql) => Promise<R>) => Promise<R>;
+    begin?: <R>(fn: (client: TxClient | Sql) => Promise<R>) => Promise<R>;
+  };
+  const bounded = async (client: TxClient | Sql): Promise<T> => {
+    await client`select set_config('lock_timeout', ${`${LEDGER_DB_LOCK_TIMEOUT_MS}ms`}, true),
+      set_config('statement_timeout', ${`${LEDGER_DB_TIMEOUT_MS}ms`}, true)`;
+    return work(client);
+  };
+  if (typeof candidate.savepoint === "function") {
+    const [previous] = await sql`select current_setting('lock_timeout') as lock,
+      current_setting('statement_timeout') as statement`;
+    return candidate.savepoint(async (client) => {
+      const result = await bounded(client);
+      // Successful savepoints do not undo SET LOCAL. Restore the enclosing
+      // transaction's settings before yielding to siblings. On failure, let
+      // the savepoint rollback restore them; SQL in an aborted scope would
+      // only mask the original cancellation with 25P02.
+      await client`select set_config('lock_timeout', ${previous.lock}, true),
+        set_config('statement_timeout', ${previous.statement}, true)`;
+      return result;
+    });
+  }
+  if (typeof candidate.begin === "function") return candidate.begin(bounded);
+  // Tag-only client doubles have no transaction scope to bound; real
+  // postgres.js pools always provide begin() and transaction clients
+  // savepoint(). Keep the legacy bare path for those doubles only.
+  return work(sql);
+}
+
+/**
  * ShouldBeUnique TTL uses acquisition time, not transaction-start `now()`.
  * https://www.postgresql.org/docs/current/functions-datetime.html#FUNCTIONS-DATETIME-CURRENT
  * Atomic: one upsert that only wins over expired rows.
@@ -255,18 +305,22 @@ export function pgUniqueLock(sql: TxClient | Sql): UniqueLock {
   return {
     async acquire(key, ttlSeconds) {
       const leaseToken = crypto.randomUUID();
-      const rows = await sql`
-        insert into job_unique_locks (key, expires_at, owner_token)
-        values (${key}, clock_timestamp() + make_interval(secs => ${ttlSeconds}), ${leaseToken}::uuid)
-        on conflict (key) do update set
-          expires_at = clock_timestamp() + make_interval(secs => ${ttlSeconds}),
-          owner_token = excluded.owner_token
-          where job_unique_locks.expires_at < clock_timestamp()
-        returning owner_token`;
-      return rows[0]?.owner_token ?? null;
+      return withLedgerTimeout(sql, async (client) => {
+        const rows = await client`
+          insert into job_unique_locks (key, expires_at, owner_token)
+          values (${key}, clock_timestamp() + make_interval(secs => ${ttlSeconds}), ${leaseToken}::uuid)
+          on conflict (key) do update set
+            expires_at = clock_timestamp() + make_interval(secs => ${ttlSeconds}),
+            owner_token = excluded.owner_token
+            where job_unique_locks.expires_at < clock_timestamp()
+          returning owner_token`;
+        return rows[0]?.owner_token ?? null;
+      });
     },
     async release(key, leaseToken) {
-      await sql`delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid`;
+      await withLedgerTimeout(sql, async (client) => {
+        await client`delete from job_unique_locks where key = ${key} and owner_token = ${leaseToken}::uuid`;
+      });
     },
   };
 }
@@ -293,23 +347,36 @@ export function pgQueueLedger(sql: Sql): QueueLedger {
       // Deleting by age undercounts live depth (TOG-9895 review: 21 accepted
       // reported 20/healthy). Stale rows, if any, stay visible as backlog
       // until the consumer settles them; /up reports, never deletes.
-      await sql`
-        insert into queue_jobs (job_id, kind, key, available_at)
-        values (${jobId}::uuid, ${kind}, ${key}, ${availableAt})`;
+      await withLedgerTimeout(sql, async (client) => {
+        await client`
+          insert into queue_jobs (job_id, kind, key, available_at)
+          values (${jobId}::uuid, ${kind}, ${key}, ${availableAt})`;
+      });
     },
     async reserved(jobId) {
-      await sql`update queue_jobs set reserved_at = now() where job_id = ${jobId}::uuid`;
+      await withLedgerTimeout(sql, async (client) => {
+        await client`update queue_jobs set reserved_at = now() where job_id = ${jobId}::uuid`;
+      });
     },
     async released(jobId, availableAt) {
-      await sql`
-        update queue_jobs set reserved_at = null, available_at = ${availableAt}
-        where job_id = ${jobId}::uuid`;
+      await withLedgerTimeout(sql, async (client) => {
+        await client`
+          update queue_jobs set reserved_at = null, available_at = ${availableAt}
+          where job_id = ${jobId}::uuid`;
+      });
     },
     async dequeued(jobId) {
-      await sql`delete from queue_jobs where job_id = ${jobId}::uuid`;
+      await withLedgerTimeout(sql, async (client) => {
+        await client`delete from queue_jobs where job_id = ${jobId}::uuid`;
+      });
     },
     async failed(jobId, kind, key, reason) {
       await sql.begin("isolation level read committed", async (tx) => {
+        // Same server-side bound as the sibling ledger statements, set before
+        // the advisory lock so a lock-blocked or wedged settlement is
+        // cancelled by Postgres (rolling the whole move back) instead of
+        // outliving the consumer's client-side race on this connection.
+        await tx`select set_config('lock_timeout', ${`${LEDGER_DB_LOCK_TIMEOUT_MS}ms`}, true), set_config('statement_timeout', ${`${LEDGER_DB_TIMEOUT_MS}ms`}, true)`;
         // Fence one dispatch even before the additive unique constraint lands.
         // Keep the insert separate: after waiting for the lock, READ COMMITTED
         // takes a fresh snapshot and sees the preceding delivery's commit.

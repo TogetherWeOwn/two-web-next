@@ -49,6 +49,8 @@ export interface EventGoneAlternative {
   key: string;
   title: string;
   whenText: string;
+  /** Full instant for the <time> element, as served. */
+  datetime: string;
   location: string | null;
 }
 
@@ -189,6 +191,7 @@ export async function resolveEventState(req: EventStateRequest): Promise<EventSt
               key: link.eventKey,
               title: link.title,
               whenText: fmt(link.startsAt, link.timezone),
+              datetime: link.startsAt.toISOString(),
               location: link.location,
             })),
             jsonLd: eventJsonLd(event, appUrl),

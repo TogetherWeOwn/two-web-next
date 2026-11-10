@@ -129,13 +129,13 @@ hashed by this guard.
    SQL is a separate gated operation; these authoring commands do not authorize
    a database connection or deployment.
 
-The pinned versions are Drizzle Kit `0.31.11` and ORM `0.45.3` in
+The pinned versions are Drizzle Kit `0.31.11` and ORM `0.45.4` in
 `package-lock.json`. See the official [generate/custom migration options](https://orm.drizzle.team/docs/drizzle-kit-generate)
 and [migrate behavior](https://orm.drizzle.team/docs/drizzle-kit-migrate). Current
 upstream docs show a newer timestamp-folder layout; this repo still uses the
 pinned flat SQL + `meta/_journal.json` layout, verified against the published
 [Kit package](https://registry.npmjs.org/drizzle-kit/-/drizzle-kit-0.31.11.tgz)
-and [ORM migrator package](https://registry.npmjs.org/drizzle-orm/-/drizzle-orm-0.45.3.tgz).
+and [ORM migrator package](https://registry.npmjs.org/drizzle-orm/-/drizzle-orm-0.45.4.tgz).
 Do not convert historical migrations to the newer layout in a numbering PR.
 
 CI obtains its base from GitHub's event: `pull_request.base.sha` for PRs, `before`
@@ -196,9 +196,29 @@ enable/disable/force changes outside a separately reviewed policy change.
 The custom migration runner also performs a read-only catalog preflight against
 the active migration role's table/sequence defaults before planning or applying.
 It refuses to run as the runtime role, refuses table defaults, and refuses any
-sequence default outside the reviewed `two_web_app` `USAGE`/`SELECT` set; the
-refusal names the offending reason while other database errors stay masked. The
-runner also pins `standard_conforming_strings=on` per connection and
+sequence default outside the reviewed `public`-scoped `two_web_app`
+`USAGE`/`SELECT` set. A global sequence default is not reviewed: it also fires
+in the `drizzle` schema, so it would grant the runtime role the migration
+ledger's own sequence, and a `drizzle`-scoped default targets that ledger
+directly, so both scopes are examined and refused. The preflight, and the
+apply transaction again right after ledger bootstrap, also refuse while the
+ledger table or its serial sequence (found through `pg_get_serial_sequence`)
+carries any `two_web_app` or `PUBLIC` right. That includes ownership even
+with NULL or explicitly revoked relation ACLs, non-dropped-column grants,
+and rights the runtime can reach through any role it is a member of
+(`pg_has_role` with `MEMBER`, which follows multi-hop chains; bare
+membership without `INHERIT`/`SET` still counts because a holder on an
+`ADMIN`-carrying link can re-grant itself `INHERIT`/`SET` link by link,
+and the guard over-approximates a plain membership the same way).
+The `drizzle` schema itself gets the same check: its owner (`nspowner`)
+can drop and recreate the ledger whatever the ledger's own ACLs say, and
+any `nspacl` right (`CREATE` or `USAGE`) for `two_web_app`, `PUBLIC`, or a
+role the runtime is a member of also refuses, because the runtime has no
+reviewed need for the schema.
+Unrelated owners and grantees stay allowed. The runner
+never revokes such a right itself, so an already-exposed ledger stays refused
+until the right is removed outside the runner. The refusal names the offending
+reason while other database errors stay masked. The runner also pins `standard_conforming_strings=on` per connection and
 transaction, matching the guard's string lexing even under a hostile database
 default. It does not change ACLs or role membership. The ledger keeps the canonical Drizzle
 serial format both this runner and `drizzle-kit migrate` insert through, so the
@@ -207,6 +227,17 @@ in the existing `check` job, which feeds the required `ci-ok` status. CI and
 runner selftests use disposable Postgres only; this check does not authorize a
 staging or production connection or any live grant, revoke, role, or
 default-ACL change.
+
+The runner also refuses at plan time while any reviewed object (the
+runtime-rights table/sequence census, plus the `drizzle` migration ledger and
+its sequence) is owned by a role the migrator cannot
+act as: an `ALTER` needs ownership in PostgreSQL's sense, so equivalence is
+`pg_has_role(current_user, owner, 'USAGE')` — an inherited group owner passes,
+a non-inherited membership or a foreign owner does not — with a superuser
+migrator exempt. The refusal names the object and its owner before any DDL is
+attempted, instead of surfacing as a masked mid-transaction failure; repairing
+the ownership is an operator action outside the runner, which never changes
+owners or role memberships itself.
 
 ## Audit tables are append-only (deployed-role prerequisite)
 
@@ -269,7 +300,10 @@ with `target: production`, behind the `production` Environment:
   that inherits `pg_read_all_data` and no write, DDL or admin role, on the
   PlanetScale direct endpoint, same `pg_dump -Fc` path — direct `5432`, never
   the pooled `6432` port).
-  Also needs `CLOUDFLARE_API_TOKEN`, `CLOUDFLARE_ACCOUNT_ID`.
+  Also needs Cloudflare credentials from the bound Environment:
+  `CLOUDFLARE_API_TOKEN` / `CLOUDFLARE_ACCOUNT_ID` (staging Environment), or
+  `PRODUCTION_CLOUDFLARE_API_TOKEN` / `PRODUCTION_CLOUDFLARE_ACCOUNT_ID`
+  (production Environment) behind the same `inputs.target` guard.
 - Branch/target correspondence: `branch` must be empty (defaults to `target`),
   equal to `target`, or `test-*`; staging↔production swaps and other overrides
   refuse before provisioning or I/O. Local operators must declare
@@ -313,6 +347,10 @@ nor a data rollback target. Use the reviewed procedures:
   recorded known-good version ID; production uses the `rollback-production`
   workflow. It does not undo migrations, data writes, Discord side effects,
   queue messages or external-resource changes.
+  Promotion therefore refuses a candidate whose new migrations drop, rename,
+  retype or tighten (`SET NOT NULL`) schema the live Worker may use, unless
+  the migration carries a reviewed `-- rollback-safe: <reason>` line
+  ([rollback target](runbook.md#daily-staging-rollback-drill-and-the-promotion-rollback-target)).
 - **Schema and data:** the **Rollback** rules under
   [web schema migrations](runbook.md#neon-web-schema-migrations-separate-operator-action).
   Prefer a reviewed forward repair. An authorized PITR or backup restore

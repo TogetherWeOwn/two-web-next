@@ -187,6 +187,8 @@ function fakeClient(failure) {
     const text = strings.join("?").replace(/\s+/g, " ").trim();
     queries.push({ text, values });
     if (failure) throw failure;
+    // The fixture holds no RSVP rows, so the event lock finds no events.
+    if (/^select id from events /i.test(text)) return [];
     const table = text.match(/(?:from|update) (\w+)/i)?.[1];
     if (!(table in remaining)) throw new Error(`Unexpected fixture SQL: ${text}`);
     if (/^select count\(/i.test(text)) return [{ n: remaining[table] }];

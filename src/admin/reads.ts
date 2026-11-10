@@ -1,7 +1,7 @@
 // Admin read surfaces (W12: M6 roster, M8 join viewer + funnel stats).
 // Read-only by construction: nothing here inserts, updates or deletes.
 
-import { and, asc, count, desc, eq, gte, ilike, or, type SQL } from "drizzle-orm";
+import { and, asc, count, desc, eq, gte, ilike, or, sql, type SQL } from "drizzle-orm";
 import {
   ACTIVITY_LOG_PAGE_SIZE,
   JOIN_ATTEMPT_PAGE_SIZE,
@@ -12,6 +12,7 @@ import {
 } from "./table-list";
 import { escapeLikeTerm } from "../islands/contracts";
 import type { Db } from "../db/index";
+import { rankedRosterPrefix } from "../db/roster-statement";
 import { activityLog, events, rsvps } from "../db/admin-schema";
 import { joinAttempts, users } from "../db/schema";
 import { JOIN_ATTEMPT_RETENTION_DAYS } from "../jobs/constants";
@@ -26,6 +27,8 @@ export type RosterEntry = {
   username: string | null;
   status: string;
   answeredAt: Date;
+  /** Global FIFO queue rank for waitlisted rows; null for other statuses. */
+  waitlistPosition?: number | null;
 };
 
 /** Paged read-only RSVP roster for one event; most recent first unless explicitly sorted.
@@ -56,8 +59,6 @@ export async function listRoster(
     : search
       ? and(eq(events.eventKey, eventKey), search)
       : eq(events.eventKey, eventKey);
-  const column = query.sort === "status" ? rsvps.status : rsvps.updatedAt;
-  const order = query.order === "asc" ? asc(column) : desc(column);
   const countRows = await nonSensitiveRead("roster-count", () => {
     const counted = db
       .select({ n: count() })
@@ -67,23 +68,41 @@ export async function listRoster(
       ? counted.leftJoin(users, eq(users.id, rsvps.userId)).where(conds)
       : counted.where(conds);
   });
-  const rows = await keyedMemberRead(() =>
-    db
-      .select({
-        userId: rsvps.userId,
-        memberId: users.id,
-        username: users.username,
-        status: rsvps.status,
-        answeredAt: rsvps.updatedAt,
-      })
-      .from(rsvps)
-      .innerJoin(events, eq(events.id, rsvps.eventId))
-      .leftJoin(users, eq(users.id, rsvps.userId))
-      .where(conds)
-      .orderBy(order, rsvps.userId)
-      .limit(ROSTER_PAGE_SIZE)
-      .offset((page - 1) * ROSTER_PAGE_SIZE),
-  );
+  // Rank the whole event before any member/facet/page predicate so positions
+  // stay global: searching, filtering, or paging never renumbers the queue.
+  // The FIFO key matches the promotion path (created_at, coalesced legacy
+  // key, native id), keeping sub-millisecond ties exact in Postgres.
+  const filters: SQL[] = [];
+  if (query.status) filters.push(sql`line.status = ${query.status}`);
+  if (query.q) filters.push(sql`users.username ilike ${`%${escapeLikeTerm(query.q)}%`}`);
+  const direction = query.order === "asc" ? sql`asc` : sql`desc`;
+  const column =
+    query.sort === "waitlist"
+      ? sql`line.position`
+      : query.sort === "status"
+        ? sql`line.status`
+        : sql`line.updated_at`;
+  const ranked = (await keyedMemberRead(() =>
+    db.execute(sql`
+      ${sql.raw(rankedRosterPrefix)} ${eventKey}
+      ) line left join users on users.id = line.user_id
+      ${filters.length ? sql`where ${sql.join(filters, sql` and `)}` : sql``}
+      order by ${column} ${direction} ${query.sort === "waitlist" ? sql`nulls last,` : sql`,`} line.user_id asc
+      limit 100 offset ${(page - 1) * ROSTER_PAGE_SIZE}`),
+  )) as unknown as {
+    user_id: string;
+    username: string | null;
+    status: string;
+    updated_at: Date | string;
+    position: number | null;
+  }[];
+  const rows = ranked.map((r) => ({
+    userId: r.user_id,
+    username: r.username,
+    status: r.status,
+    answeredAt: new Date(r.updated_at),
+    waitlistPosition: r.position,
+  }));
   return { rows, total: Number(countRows[0]?.n ?? 0) };
 }
 

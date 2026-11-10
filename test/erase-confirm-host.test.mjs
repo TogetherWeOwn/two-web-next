@@ -42,6 +42,8 @@ function fakeClient() {
   const sql = vi.fn(async (strings) => {
     const text = strings.join("?").replace(/\s+/g, " ").trim();
     if (/^select count\(/i.test(text)) return [{ n: 0 }];
+    // The fixture holds no RSVP rows, so the event lock finds no events.
+    if (/^select id from events /i.test(text)) return [];
     if (/^delete from /i.test(text)) return [];
     throw new Error(`Unexpected fixture SQL: ${text}`);
   });

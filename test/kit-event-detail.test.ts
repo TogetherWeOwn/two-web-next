@@ -12,7 +12,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { getTableColumns } from "drizzle-orm";
 import { drizzle } from "drizzle-orm/pg-proxy";
 import { serializeSigned } from "hono/utils/cookie";
@@ -39,6 +39,7 @@ import {
   resolveKitEventDetail,
   type KitEventDetailStore,
 } from "../src/events/kit-detail";
+import { withEventDetailHtml } from "../src/events/detail-leaves";
 import { ROUTE_MANIFEST, resolveRouteOwner } from "../src/route-ownership";
 
 const APP_URL = "https://next.example.test";
@@ -235,6 +236,122 @@ describe("event-detail route ownership", () => {
   });
 });
 
+describe("member-detail review mode", () => {
+  it.each(["draft", "published", "cancelled"])(
+    "admits only moderators for %s review",
+    async (status) => {
+      const store = fakeStore({ event: { ...row({ status }), goingCount: 0, goingOccupancy: 0 } });
+      for (const session of [GUEST, memberSession(), UNKNOWN]) {
+        const { outcome } = await resolve(KEY, store, session, null, "?review=1");
+        expect(outcome.kind).toBe(session === UNKNOWN ? "unavailable" : "forbidden");
+      }
+      const { outcome } = await resolve(KEY, store, memberSession(MOD_ID, true), null, "?review=1");
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error(outcome.kind);
+      expect(outcome.headers["x-robots-tag"]).toBe("noindex, nofollow");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html.match(/<h1\b/g)).toHaveLength(1);
+      expect(html).toContain('data-testid="event-review"');
+      expect(html).toContain("RSVP is disabled in preview.");
+      expect(html).not.toContain("data-rsvp-form");
+      expect(html.indexOf('data-testid="event-review-actions"')).toBeGreaterThan(
+        html.indexOf('class="event-discovery"'),
+      );
+      if (status !== "draft") expect(html).not.toContain("Fix these before publishing");
+    },
+  );
+
+  it("carries publish_error and unsaved into escaped shared chrome with a live publish form", async () => {
+    const event = {
+      ...row({ status: "draft", title: '<b>Chess</b> "night"' }),
+      goingCount: 0,
+      goingOccupancy: 0,
+    };
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event }),
+      memberSession(MOD_ID, true),
+      null,
+      "?review=1&publish_error=stale&unsaved=1",
+    );
+    if (outcome.kind !== "ok") throw new Error(outcome.kind);
+    const { banner, actions } = outcome.model.review!;
+    expect(banner).toContain('data-testid="event-review-error"');
+    expect(banner).toContain("This draft changed after you opened review.");
+    expect(banner).toContain('data-testid="event-review-unsaved"');
+    expect(actions).toContain(`action="/admin/events/${KEY}/publish"`);
+    expect(actions).toContain(
+      `name="reviewed_updated_at" value="${event.updatedAt.toISOString()}"`,
+    );
+    expect(actions).not.toMatch(/disabled=""[^>]*data-testid="publish-reviewed-event"/);
+    expect(actions).not.toContain("<b>Chess</b>");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-review-error"');
+    expect(html).not.toContain("<b>Chess</b>");
+  });
+
+  it("offers the published notice only to moderators on a published, non-review view", async () => {
+    const event = { ...row({ status: "published" }), goingCount: 0, goingOccupancy: 0 };
+    const store = fakeStore({ event });
+    const mod = memberSession(MOD_ID, true);
+    const ok = await resolve(KEY, store, mod, null, "?published=1");
+    if (ok.outcome.kind !== "ok") throw new Error(ok.outcome.kind);
+    expect(ok.outcome.model.publishedNotice).toContain('data-testid="event-published"');
+    expect(ok.outcome.model.review).toBeUndefined();
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(ok.outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-published"');
+    expect(html).not.toContain('data-testid="event-review"');
+    for (const session of [GUEST, memberSession()]) {
+      const res = await resolve(KEY, store, session, null, "?published=1");
+      if (res.outcome.kind !== "ok") throw new Error(res.outcome.kind);
+      expect(res.outcome.model.publishedNotice).toBeUndefined();
+    }
+    for (const [search, status] of [
+      ["", "published"],
+      ["?published=1", "draft"],
+      ["?review=1&published=1", "published"],
+    ] as const) {
+      const res = await resolve(
+        KEY,
+        fakeStore({ event: { ...row({ status }), goingCount: 0, goingOccupancy: 0 } }),
+        mod,
+        null,
+        search,
+      );
+      if (res.outcome.kind !== "ok") throw new Error(res.outcome.kind);
+      expect(res.outcome.model.publishedNotice).toBeUndefined();
+    }
+  });
+
+  it("keeps unreadable dates renderable without inventing JSON-LD instants", async () => {
+    const event = {
+      ...row({ status: "draft", startsAt: new Date(NaN), endsAt: new Date(NaN) }),
+      goingCount: 0,
+      goingOccupancy: 0,
+    };
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event }),
+      memberSession(MOD_ID, true),
+      null,
+      "?review=1",
+    );
+    if (outcome.kind !== "ok") throw new Error(outcome.kind);
+    expect(outcome.model.review?.banner).toContain("Fix these before publishing");
+    expect(outcome.model.whenText).toBe("Time unavailable");
+    expect(outcome.model.endsWhenText).toBe("Time unavailable");
+    expect(JSON.parse(outcome.model.jsonLd)).not.toHaveProperty("startDate");
+    expect(JSON.parse(outcome.model.jsonLd)).not.toHaveProperty("endDate");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    expect(renderDetail(outcome.model as unknown as Record<string, unknown>)).toContain(
+      "Time unavailable",
+    );
+  });
+});
+
 describe("event-detail gate order", () => {
   it("301s a lowercase ULID to the canonical key before any read, keeping the query", async () => {
     const store = fakeStore();
@@ -418,7 +535,7 @@ describe("event-detail guest reads", () => {
     const queried = await resolve(KEY, fakeStore(), GUEST, null, "?tab=about");
     expect(queried.outcome.kind).toBe("ok");
     if (queried.outcome.kind !== "ok") throw new Error("unreachable");
-    expect(queried.outcome.model.joinReturnTo).toBe(`/e/${KEY}?tab=about`);
+    expect(queried.outcome.model.joinReturnTo).toBe(`/e/${KEY}`);
     expect(model.neighbors.next?.key).toBe(RELATED[0]!.eventKey);
     expect(model.copyLink).toBe(`${APP_URL}/e/${KEY}`);
     expect(model.jsonLd).toContain("https://schema.org/EventScheduled");
@@ -775,6 +892,44 @@ async function memberHtml(): Promise<string> {
 }
 
 describe("Kit detail presentation", () => {
+  afterEach(() => vi.useRealTimers());
+
+  it("renders identical Kit HTML at different wall times with an explicit display snapshot", async () => {
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html: string[] = [];
+    for (const wall of ["2026-11-05T12:00:00Z", "2110-06-01T09:00:00Z"]) {
+      vi.useFakeTimers({ toFake: ["Date"] }).setSystemTime(new Date(wall));
+      const outcome = await resolveKitEventDetail({
+        key: KEY,
+        path: `/e/${KEY}`,
+        search: "",
+        env,
+        session: GUEST,
+        joinResult: null,
+        setHeaders: () => {},
+        store: fakeStore({
+          event: {
+            ...row(),
+            goingCount: 3,
+            startsAt: new Date("2098-12-31T19:00:00Z"),
+            endsAt: new Date("2098-12-31T21:00:00Z"),
+          } as PublicEvent,
+        }),
+        now: new Date("2098-12-31T20:00:00Z"),
+      });
+      if (outcome.kind !== "ok") throw new Error("Expected a rendered fixture");
+      html.push(renderDetail(outcome.model as unknown as Record<string, unknown>));
+      expect(Date.now()).toBe(new Date(wall).getTime());
+    }
+    expect(html[0]).toContain("Happening now");
+    expect(html[0]).toBe(html[1]);
+  });
+
+  function freezeRosterClock() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(new Date("2030-01-10T21:00:00Z"));
+  }
+
   it("emits one event block and one site block, byte-identical for guest and member", async () => {
     const jsonLdBlocks = (html: string) =>
       [
@@ -828,10 +983,136 @@ describe("Kit detail presentation", () => {
     expect(html).not.toContain('name="robots"');
   });
 
+  it("shows the signed-in join path for a non-member with an empty username", async () => {
+    const session: KitRequestSession = {
+      status: "authenticated",
+      session: { userId: MEMBER_ID, username: "", avatar: null, member: false, moderator: false },
+    };
+    const { outcome } = await resolve(KEY, fakeStore(), session);
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-roster-members-only"');
+    expect(html).toContain(`href="/join?next=${encodeURIComponent(`/e/${KEY}`)}"`);
+    expect(html).not.toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).not.toContain("sign in to see who's in");
+    expect(html).not.toContain(">ann<");
+  });
+
+  it("renders the guest zero-named-going nudge line, never a 0-going line", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row(), goingCount: 0 } as PublicEvent }),
+      GUEST,
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    // The roster lists named going rows only: an empty list never claims
+    // there are no RSVP responses, and never promises a first going seat.
+    expect(html).toContain("No one is listed as going yet.");
+    expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+    expect(html).not.toContain("sign in to be the first");
+    expect(html).toContain(`href="/join/discord?next=${encodeURIComponent(`/e/${KEY}`)}"`);
+    // The old nudge line is gone; the lineup's "0 of 10 going" stays.
+    expect(html).not.toContain("0 going —");
+  });
+
+  it.each([
+    ["past status", { status: "past" }, "This one has been and gone", false],
+    [
+      "ended event",
+      { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
+      "This one has been and gone",
+      false,
+    ],
+    ["paused RSVPs", { rsvpOpen: false }, "RSVPs are paused for this event", false],
+    ["draft", { status: "draft" }, "Not published yet", true],
+  ])(
+    "renders a plain member empty line on %s, never an RSVP invitation",
+    async (_label, over, verdict, moderator) => {
+      if (_label === "paused RSVPs") freezeRosterClock();
+      // Hono parity: past, paused and draft events keep a plain honest empty
+      // line because the RSVP block on the same page already says no seat
+      // can be taken.
+      const { outcome } = await resolve(
+        KEY,
+        fakeStore({
+          event: { ...row(over), goingCount: 0 } as PublicEvent,
+          attendees: [],
+          answer: null,
+        }),
+        moderator ? memberSession(MOD_ID, true) : memberSession(),
+      );
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error("unreachable");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html).toContain(verdict);
+      expect(html).toContain('data-testid="event-roster-empty"');
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+      expect(html).not.toContain("RSVP to start the list");
+    },
+  );
+
+  it.each([
+    ["past status", { status: "past" }, "This one has been and gone"],
+    [
+      "ended event",
+      { startsAt: new Date("2020-01-10T20:00:00Z"), endsAt: new Date("2020-01-10T22:00:00Z") },
+      "This one has been and gone",
+    ],
+    ["paused RSVPs", { rsvpOpen: false }, "Log in with Discord"],
+  ])(
+    "renders a plain guest zero-named-going line on %s, never a be-the-first nudge",
+    async (_label, over, rsvpCopy) => {
+      if (_label === "paused RSVPs") freezeRosterClock();
+      // Drafts 403 for non-moderators, so the draft guest has no roster
+      // surface to pin.
+      const { outcome } = await resolve(
+        KEY,
+        fakeStore({
+          event: { ...row(over), goingCount: 0 } as PublicEvent,
+          attendees: [],
+        }),
+        GUEST,
+      );
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error("unreachable");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html).toContain(rsvpCopy);
+      expect(html).toContain('data-testid="event-roster-guest-nudge"');
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+      expect(html).not.toContain("sign in to be the first");
+    },
+  );
+
+  it("keeps the guest sign-in nudge on a past event with RSVPs they can still see", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({ event: { ...row({ status: "past" }), goingCount: 2 } as PublicEvent }),
+      GUEST,
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain("This one has been and gone");
+    expect(html).toContain('data-testid="event-roster-guest-nudge"');
+    expect(html).toContain("2 going");
+    expect(html).toContain("sign in to see who&#39;s in");
+  });
+
   it("renders the member contract: attendees with profile links, no join pitch", async () => {
     const html = await memberHtml();
     expect(html).toContain('data-testid="event-attendees"');
-    expect(html).toContain("Who's going (2)");
+    expect(html).toContain("Who&#39;s going (2)");
     expect(html).toContain(">ann<");
     expect(html).toContain('href="/members/100000000000000003"');
     expect(html).toContain('data-testid="event-attendees-refresh"');
@@ -868,6 +1149,66 @@ describe("Kit detail presentation", () => {
     expect(html).toContain(">Full<");
   });
 
+  it.each([
+    ["maybe", "maybe", /down as a maybe/i],
+    ["waitlisted", "waitlisted", /on the waitlist/i],
+  ])(
+    "member with a current %s answer and no listed going sees no listed going, never 'no RSVPs'",
+    async (_label, status, answerCopy) => {
+      freezeRosterClock();
+      // Correction: the roster lists named going rows only, so an existing
+      // maybe/waitlisted answer beside an empty roster must not be
+      // contradicted by a "no RSVP responses" claim.
+      const { outcome } = await resolve(
+        KEY,
+        fakeStore({
+          event: { ...row(), goingCount: 0 } as PublicEvent,
+          attendees: [],
+          answer: { status, syncedToDiscordAt: null },
+        }),
+        memberSession(),
+      );
+      expect(outcome.kind).toBe("ok");
+      if (outcome.kind !== "ok") throw new Error("unreachable");
+      const { renderDetail } = await buildKitEventDetailBundle();
+      const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+      expect(html).toMatch(answerCopy);
+      expect(html).toContain('data-testid="event-roster-empty"');
+      expect(html).toContain("No one is listed as going yet.");
+      expect(html).not.toMatch(/No RSVPs(\.| yet)/);
+      expect(html).not.toContain("RSVP to start the list");
+    },
+  );
+
+  it("full by a nameless seat: waitlist CTA beside a neutral empty roster, never a first-going invite", async () => {
+    freezeRosterClock();
+    // Correction: capacity 1, goingOccupancy 1, named goingCount 0 and an
+    // empty named roster — the divergent fixture shape from the
+    // going-count/roster agreement contract. The page offers only the
+    // waitlist, so roster copy must not invite a going RSVP.
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: { ...row({ capacity: 1 }), goingCount: 0, goingOccupancy: 1 } as PublicEvent,
+        attendees: [],
+        answer: null,
+      }),
+      memberSession(),
+    );
+    expect(outcome.kind).toBe("ok");
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.goingCount).toBe(0);
+    expect(outcome.model.goingOccupancy).toBe(1);
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain("0 of 1 going");
+    expect(html).toContain('data-testid="waitlist-join"');
+    expect(html).not.toContain('data-testid="rsvp-going"');
+    expect(html).toContain('data-testid="event-roster-empty"');
+    expect(html).toContain("No one is listed as going yet.");
+    expect(html).not.toMatch(/No RSVPs(\.| yet)|RSVP to start the list|sign in to be the first/);
+  });
+
   it("renders draft and past states with their notices and noindex", async () => {
     const { renderDetail } = await buildKitEventDetailBundle();
     const draft = await resolve(
@@ -901,6 +1242,86 @@ describe("Kit detail presentation", () => {
     expect(pastMemberHtml).toContain('data-testid="rsvp-closed"');
   });
 
+  // The host/join fields are independently optional, so each one renders on
+  // its own: Hosted-by never waits on a joining link, and How-to-join opens
+  // for instructions alone. Rendering all three together (the acceptance
+  // fixtures) cannot catch a gate narrowed to a single field.
+  it("renders Hosted by for an organizer with no joining details", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: {
+          ...row({ organizer_name: "Solo host", join_url: null, join_instructions: null }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.organizerName).toBe("Solo host");
+    expect(outcome.model.joinUrl).toBeNull();
+    expect(outcome.model.joinInstructions).toBeNull();
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-organizer">Solo host');
+    expect(html).not.toContain('data-testid="event-join-details"');
+  });
+
+  it("renders How to join for instructions with no joining link or organizer", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: {
+          ...row({
+            organizer_name: null,
+            join_url: null,
+            join_instructions: "Ask at the desk for the room key.",
+          }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.organizerName).toBeNull();
+    expect(outcome.model.joinUrl).toBeNull();
+    expect(outcome.model.joinInstructions).toBe("Ask at the desk for the room key.");
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-join-details"');
+    expect(html).toContain(
+      'data-testid="event-join-instructions">Ask at the desk for the room key.',
+    );
+    expect(html).not.toContain('data-testid="event-public-join-link"');
+    expect(html).not.toContain('data-testid="event-organizer"');
+  });
+
+  it("renders How to join for a joining link with no instructions or organizer", async () => {
+    const { outcome } = await resolve(
+      KEY,
+      fakeStore({
+        event: {
+          ...row({
+            organizer_name: null,
+            join_url: "https://meet.example.test/solo-room",
+            join_instructions: null,
+          }),
+          goingCount: 3,
+        } as PublicEvent,
+      }),
+    );
+    if (outcome.kind !== "ok") throw new Error("unreachable");
+    expect(outcome.model.organizerName).toBeNull();
+    expect(outcome.model.joinUrl).toBe("https://meet.example.test/solo-room");
+    expect(outcome.model.joinInstructions).toBeNull();
+    const { renderDetail } = await buildKitEventDetailBundle();
+    const html = renderDetail(outcome.model as unknown as Record<string, unknown>);
+    expect(html).toContain('data-testid="event-join-details"');
+    expect(html).toContain(
+      '<a href="https://meet.example.test/solo-room" data-testid="event-public-join-link">',
+    );
+    expect(html).not.toContain('data-testid="event-join-instructions"');
+    expect(html).not.toContain('data-testid="event-organizer"');
+  });
+
   it("keeps a hostile title inside the data block on both renderers", async () => {
     const hostile = '</script><script>alert("xss")</script>';
     const { outcome } = await resolve(
@@ -930,7 +1351,7 @@ describe("Kit detail presentation", () => {
     if (outcome.kind !== "ok") throw new Error("unreachable");
     expect(outcome.model.attendeesPaging.page).toBe(page);
     const { renderDetail } = await buildKitEventDetailBundle();
-    const html = renderDetail({ ...outcome.model, eventKey: key });
+    const html = renderDetail(withEventDetailHtml({ ...outcome.model, eventKey: key }));
     expect(html.match(/<form[^>]*action="([^"]*)"[^>]*data-rsvp-form/)?.[1]).toBe(action);
   });
 
@@ -1110,8 +1531,10 @@ describe("Kit detail presentation", () => {
 
 describe("event-detail gone presentation", () => {
   it("carries the branded gone model: alternatives, ICS entry and structured data", async () => {
+    const startsAt = new Date("2030-02-01T19:00:00.456Z");
     const store = fakeStore({
       event: { ...row({ status: "cancelled" }), goingCount: 3 } as PublicEvent,
+      related: [{ ...RELATED[0]!, startsAt }],
     });
     const attendeesFn = vi.fn(store.attendeesFn);
     const viewerRsvpFn = vi.fn(store.viewerRsvpFn);
@@ -1137,6 +1560,7 @@ describe("event-detail gone presentation", () => {
       location: "The lobby",
     });
     expect(model.related[0]!.whenText).toContain("2030");
+    expect(model.related[0]!.datetime).toBe("2030-02-01T19:00:00.456Z");
     expect(model.jsonLd).toContain("https://schema.org/EventCancelled");
     expect(model.jsonLd).toContain("Chess night");
     expect(model.siteJsonLd).toContain("Together We Own");

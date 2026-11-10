@@ -3,6 +3,7 @@
 // re-exports every public name below, so all existing importers keep working
 // untouched.
 
+import { isPublicJoinUrl } from "../events/public-join-url";
 import {
   containsControlCharacters,
   fail,
@@ -176,22 +177,6 @@ export function parseEventForm(
     join_instructions: joinInstructions,
     capacity,
   };
-}
-
-function isPublicJoinUrl(value: string): boolean {
-  if (!/^https?:\/\/[^/?#@\\\s]+(?:[/?#]|$)/i.test(value) || /[\\\u0000- \u007f]/.test(value))
-    return false;
-  try {
-    const url = new URL(value);
-    return (
-      (url.protocol === "https:" || url.protocol === "http:") &&
-      url.hostname !== "" &&
-      url.username === "" &&
-      url.password === ""
-    );
-  } catch {
-    return false;
-  }
 }
 
 function preservedOrParsed(wall: string, carrier: string | undefined, timezone: string): Date {

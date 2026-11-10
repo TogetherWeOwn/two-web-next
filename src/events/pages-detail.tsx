@@ -1,7 +1,9 @@
 // Event detail screen: hero, RSVP, share, attendees, discovery.
 import type { FC } from "hono/jsx";
+import { isPublicJoinUrl } from "./public-join-url";
 import { canonicalUrl } from "../seo";
-import { isValidZone, renderGoingCount } from "../islands/contracts";
+import { EVENT_ONGOING_TESTID, isValidZone } from "../islands/contracts";
+import { EventMetadata, EventRoster, EventShare } from "./detail-leaves";
 import type { Session } from "../env";
 import { JoinResultBanner } from "../pages";
 import type { JoinResult } from "../return-journey";
@@ -9,6 +11,7 @@ import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
 import { eventLinkAvailability } from "./link-availability";
+import { ONGOING_COPY, isOngoing } from "./ongoing";
 import type {
   EventAttendee,
   EventLink,
@@ -20,7 +23,13 @@ import type {
 import { RsvpButton } from "./rsvp-button";
 import { EventDetailShell } from "./pages-shared";
 
-import { formatElapsedDuration, formatEventWhen as fmtWithOffset } from "./date-format";
+import {
+  formatElapsedDuration,
+  formatDetailWhen as fmtWithOffset,
+  instantIso,
+} from "./date-format";
+import { EventPublishedNotice, EventReviewSection } from "../admin/pages/event-form-review";
+import type { SavedEventReview } from "../admin/event-saved-review";
 
 const DestinationPreview: FC<{ event: EventLink; now: Date }> = ({ event, now }) => {
   const availability = eventLinkAvailability(event, now);
@@ -90,6 +99,9 @@ export const EventPage: FC<{
   attendeePage?: number;
   /** Rooted .md alternate path (A2), e.g. `/e/<key>.md`. */
   markdownAlternate?: string;
+  now?: Date;
+  review?: SavedEventReview;
+  publishedNotice?: boolean;
 }> = ({
   e,
   neighbors,
@@ -109,12 +121,16 @@ export const EventPage: FC<{
   returnTo,
   attendeePage = 1,
   markdownAlternate,
+  now = new Date(),
+  review: requestedReview,
+  publishedNotice = false,
 }) => {
+  const review = session?.moderator ? requestedReview : undefined;
   const path = `/e/${e.eventKey}`;
   const canonical = canonicalUrl(appUrl, path);
-  const accessibilityNotes = e.accessibilityNotes?.trim();
   const duration = formatElapsedDuration(e.endsAt.getTime() - e.startsAt.getTime());
-  const now = new Date();
+  // Share the supplied display instant with the lineup and RSVP control.
+  const accessibilityNotes = e.accessibilityNotes?.trim();
   // Finite but non-wire years stay a readable page: only the Google Calendar
   // deep link (an ICS instant pair) is omitted, never the whole render.
   const gcalUrl =
@@ -126,11 +142,17 @@ export const EventPage: FC<{
       session={session}
       loginReturnTo={path}
       description={e.description || "An event at Together We Own."}
-      robots={e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined}
+      robots={
+        review || e.status === "draft" || e.status === "past" ? "noindex, nofollow" : undefined
+      }
       markdownAlternate={markdownAlternate}
       siteJsonLd={siteJsonLd}
       backLink={archiveReturnLink(archive)}
     >
+      {review ? <EventReviewSection review={review} /> : null}
+      {publishedNotice && session?.moderator && e.status === "published" && !review ? (
+        <EventPublishedNotice />
+      ) : null}
       <section class="event-hero" aria-label="Event overview">
         <p class="event-kicker">{e.game || "Community event"}</p>
         {e.status === "draft" ? (
@@ -148,132 +170,52 @@ export const EventPage: FC<{
             Cancelled
           </p>
         ) : null}
+        {isOngoing(e, now) ? (
+          <p class="notice" data-testid={EVENT_ONGOING_TESTID}>
+            {ONGOING_COPY}
+          </p>
+        ) : null}
         <h1 data-waitlist-position={waitlistPosition ?? ""}>{e.title}</h1>
       </section>
       {joinResult ? <JoinResultBanner result={joinResult} /> : null}
-      <dl class="event-meta" aria-label="Event details">
-        <div>
-          <dt>Starts</dt>
-          <dd>
-            <time datetime={e.startsAt.toISOString()}>
-              {fmtWithOffset(e.startsAt, e.timezone)} (
-              {isValidZone(e.timezone) ? e.timezone : "UTC"})
-            </time>
-          </dd>
-          <dd class="event-device-timezone" data-event-device-timezone>
-            <button type="button" hidden data-testid="event-device-timezone-starts-button">
-              Show in my device timezone
-            </button>
-            <p
-              role="status"
-              aria-live="polite"
-              data-testid="event-device-timezone-starts-status"
-            ></p>
-          </dd>
-        </div>
-        <div>
-          <dt>Ends</dt>
-          <dd>
-            <time datetime={e.endsAt.toISOString()}>
-              {fmtWithOffset(e.endsAt, e.timezone)} ({isValidZone(e.timezone) ? e.timezone : "UTC"})
-            </time>
-          </dd>
-          <dd class="event-device-timezone" data-event-device-timezone>
-            <button type="button" hidden data-testid="event-device-timezone-ends-button">
-              Show in my device timezone
-            </button>
-            <p role="status" aria-live="polite" data-testid="event-device-timezone-ends-status"></p>
-          </dd>
-        </div>
-        {duration ? (
-          <div>
-            <dt>Duration</dt>
-            <dd>{duration}</dd>
-          </div>
-        ) : null}
-        {e.location ? (
-          <div>
-            <dt>Where</dt>
-            <dd>
-              <p data-testid="event-venue">{e.location}</p>
-              <p>
-                <a href={directionsUrl(e.location)} data-testid="event-directions" rel="noopener">
-                  Get directions
-                </a>
-              </p>
-            </dd>
-          </div>
-        ) : null}
-        {e.organizer_name ? (
-          <div>
-            <dt>Hosted by</dt>
-            <dd>
-              <p data-testid="event-organizer">{e.organizer_name}</p>
-            </dd>
-          </div>
-        ) : null}
-        {series && series.hosts.length > 0 ? (
-          <div>
-            <dt>Series hosts</dt>
-            <dd>
-              <p data-testid="event-series-hosts">{series.hosts.join(", ")}</p>
-            </dd>
-          </div>
-        ) : null}
-        <div>
-          <dt>The lineup</dt>
-          <dd>
-            <p
-              dangerouslySetInnerHTML={{
-                __html: renderGoingCount(e.eventKey, {
-                  going: e.goingCount,
-                  occupancy: e.goingOccupancy,
-                  capacity: e.capacity,
-                  // Reconciliation can lag: published rows stop inviting at
-                  // their end, using the same server instant as RSVP below.
-                  // Draft previews retain the line. The binder patches existing
-                  // spots nodes only, so refresh cannot recreate it after close.
-                  showSpotsLeft:
-                    e.status === "draft" || (e.status === "published" && e.endsAt > now),
-                  announcement: null,
-                }),
-              }}
-            />
-          </dd>
-        </div>
-        <div hidden>
-          <dt>Compare in another timezone</dt>
-          <dd class="event-device-timezone" data-event-chosen-timezone>
-            <label for="chosen-timezone-input">Timezone (IANA identifier)</label>
-            <input
-              type="text"
-              id="chosen-timezone-input"
-              data-testid="event-chosen-timezone-input"
-              maxlength={64}
-              hidden
-              autocomplete="off"
-              spellcheck={false}
-            />
-            <p data-testid="event-chosen-timezone-examples">e.g. Europe/London, Asia/Tokyo</p>
-            <button type="button" hidden data-testid="event-chosen-timezone-button">
-              Compare times
-            </button>
-            <p role="status" aria-live="polite" data-testid="event-chosen-timezone-status"></p>
-          </dd>
-        </div>
-      </dl>
+      <EventMetadata
+        model={{
+          eventKey: e.eventKey,
+          status: e.status,
+          whenText: fmtWithOffset(e.startsAt, e.timezone),
+          endsWhenText: fmtWithOffset(e.endsAt, e.timezone),
+          timeDatetime: instantIso(e.startsAt),
+          endsAt: instantIso(e.endsAt),
+          zoneLabel: isValidZone(e.timezone) ? e.timezone : "UTC",
+          durationText: duration,
+          location: e.location,
+          directionsUrl: e.location ? directionsUrl(e.location) : null,
+          organizerName: e.organizer_name ?? null,
+          series,
+          goingCount: e.goingCount,
+          goingOccupancy: e.goingOccupancy,
+          capacity: e.capacity,
+        }}
+        showTimeFromNow={e.status !== "draft" && e.status !== "cancelled"}
+        showSpotsLeft={e.status === "draft" || (e.status === "published" && e.endsAt > now)}
+      />
       <div class="event-rsvp">
-        <RsvpButton
-          e={e}
-          now={now}
-          member={member}
-          answer={answer}
-          waitlistPosition={waitlistPosition}
-          returnTo={returnTo ?? path}
-          attendeePage={attendeePage}
-        />
-        <script src="/islands/rsvp-button.js" defer />
+        {review ? (
+          <EventReviewSection review={review} part="rsvp" />
+        ) : (
+          <RsvpButton
+            e={e}
+            now={now}
+            member={member}
+            answer={answer}
+            waitlistPosition={waitlistPosition}
+            returnTo={returnTo ?? path}
+            attendeePage={attendeePage}
+          />
+        )}
+        {review ? null : <script src="/islands/rsvp-button.js" defer />}
         <script src="/islands/event-device-timezone.js" defer />
+        <script src="/islands/event-time-from-now.js" defer />
       </div>
       <div class="event-detail-grid">
         <div>
@@ -302,7 +244,7 @@ export const EventPage: FC<{
             >
               <h2 id="event-join-details-heading">How to join</h2>
               {e.join_url ? (
-                e.status === "published" ? (
+                e.status === "published" && isPublicJoinUrl(e.join_url) ? (
                   <p>
                     <a href={e.join_url} data-testid="event-public-join-link">
                       Open the public joining link
@@ -339,107 +281,32 @@ export const EventPage: FC<{
             </section>
           ) : null}
         </div>
-        <section class="event-share" aria-labelledby="event-share-heading">
-          <h2 id="event-share-heading">Save the date</h2>
-          <p>
-            <a href={`/events/${e.eventKey}.ics`} data-testid="event-ics">
-              Add to calendar (.ics)
-            </a>
-            {gcalUrl ? (
-              <>
-                {" · "}
-                <a href={gcalUrl} data-testid="event-google-calendar" rel="noopener">
-                  Google Calendar
-                </a>
-              </>
-            ) : null}
-            {" · "}
-            <a href={canonical} data-copy-link={canonical} data-testid="event-copy-link">
-              Copy link
-            </a>
-            {e.status === "published" ? (
-              <>
-                <span hidden data-native-share-sep aria-hidden="true">
-                  {" · "}
-                </span>
-                <button
-                  type="button"
-                  hidden
-                  data-native-share
-                  data-share-title={e.title}
-                  data-share-url={canonical}
-                  data-testid="event-share"
-                >
-                  Share
-                </button>
-              </>
-            ) : null}
-          </p>
-          <p role="status" aria-live="polite" data-testid="event-copy-toast" data-copy-toast></p>
-          {e.status === "published" ? (
-            <p
-              role="status"
-              aria-live="polite"
-              data-testid="event-share-status"
-              data-native-share-status
-            ></p>
-          ) : null}
-        </section>
+        <EventShare
+          model={{
+            status: e.status,
+            title: e.title,
+            canonical,
+            icsUrl: `/events/${e.eventKey}.ics`,
+            googleCalendarUrl: gcalUrl,
+          }}
+        />
       </div>
-      {attendees.length > 0 || (member && attendeesPaging.page > 1) ? (
-        <section
-          aria-labelledby="event-attendees-heading"
-          data-testid="event-attendees"
-          data-island="attendees-live"
-        >
-          {attendeesPaging.prevHref || attendeesPaging.nextHref ? (
-            <h2 id="event-attendees-heading">Who's going</h2>
-          ) : (
-            <h2 id="event-attendees-heading">Who's going ({attendees.length})</h2>
-          )}
-          {attendees.length > 0 ? (
-            <ul class="event-attendee-grid">
-              {attendees.map((attendee) => (
-                <li>
-                  <span class="event-attendee-mark" aria-hidden="true">
-                    {Array.from(attendee.name)[0]}
-                  </span>
-                  <a href={`/members/${encodeURIComponent(attendee.id)}`}>{attendee.name}</a>
-                </li>
-              ))}
-            </ul>
-          ) : (
-            <p>There are no more attendees on this page.</p>
-          )}
-          {attendeesPaging.prevHref || attendeesPaging.nextHref ? (
-            <nav class="event-attendees-pagination" aria-label="Attendee pages">
-              {attendeesPaging.prevHref ? (
-                <a href={attendeesPaging.prevHref} rel="prev" data-testid="event-attendees-prev">
-                  ← Previous attendees
-                </a>
-              ) : null}{" "}
-              <span data-testid="event-attendees-current-page" aria-current="page">
-                Page {attendeesPaging.page}
-              </span>{" "}
-              {attendeesPaging.nextHref ? (
-                <a href={attendeesPaging.nextHref} rel="next" data-testid="event-attendees-next">
-                  Next attendees →
-                </a>
-              ) : null}
-            </nav>
-          ) : null}
-          <p>
-            Attendees shown at page load.{" "}
-            <a
-              href={archiveEventHref(e.eventKey, archive, attendeesPaging.page)}
-              data-testid="event-attendees-refresh"
-            >
-              Refresh attendees
-            </a>
-            .
-          </p>
-        </section>
-      ) : null}
+      <EventRoster
+        model={{
+          attendees,
+          attendeesPaging,
+          viewerMember: member,
+          showJoinPitch: !session,
+          joinReturnTo: returnTo ?? path,
+          attendeesRefreshHref: archiveEventHref(
+            e.eventKey,
+            archive,
+            attendeesPaging.page,
+            Boolean(review),
+          ),
+          goingCount: e.goingCount,
+        }}
+      />
       <script src="/islands/copy-link.js" defer />
       <script src="/islands/event-share.js" defer />
       <script src="/islands/going-count.js" defer />
@@ -517,6 +384,7 @@ export const EventPage: FC<{
           </section>
         ) : null}
       </div>
+      {review ? <EventReviewSection review={review} part="actions" /> : null}
     </EventDetailShell>
   );
 };

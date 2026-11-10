@@ -86,7 +86,10 @@ membership. A bounced write goes to write recovery, never back into a resubmit.
 
 When a guest or expired session tries to submit a write, the write is refused.
 A JSON request stays a **401** and includes a safe `recovery` URL; it does not
-silently redirect an API client through OAuth. A native form submission gets a
+silently redirect an API client through OAuth. Exception: event JSON writes from
+an unknown guest (no cookie or an invalid bearer) return **401** without
+`recovery`; a recognized expired bearer still gets the recovery URL.
+A native form submission gets a
 **303** to `/auth/recover?next=...`, where `next` is a safe GET destination —
 a same-origin safe Referer when available, otherwise the route's GET fallback.
 The write URL is never used as the return destination.

@@ -83,6 +83,40 @@ describe("every registered write route is body-limited", () => {
     );
   });
 
+  it.each(["POST", "PUT", "PATCH", "DELETE", "OPTIONS"])(
+    "%s operator override refusal uses the action cap before its 405",
+    async (method) => {
+      const handlers = rawApp.routes.filter(
+        (route) => route.method === method && route.path === "/admin/ops-overrides",
+      );
+      expect(handlers.length).toBeGreaterThan(0);
+      expect(handlers.some((route) => bodyLimitClass(route.handler) === "action")).toBe(true);
+      const remote = vi
+        .spyOn(globalThis, "fetch")
+        .mockRejectedValue(new Error("unexpected upstream"));
+      try {
+        for (const bytes of [BODY_LIMIT_BYTES.action, BODY_LIMIT_BYTES.action + 1]) {
+          const response = await app.request(
+            "/admin/ops-overrides",
+            {
+              method,
+              body: "x".repeat(bytes),
+              headers: { origin: "https://next.example.test", accept: "application/json" },
+            },
+            { APP_URL: "https://next.example.test" } as Env,
+          );
+          expect(response.status).toBe(bytes === BODY_LIMIT_BYTES.action ? 405 : 413);
+          if (bytes === BODY_LIMIT_BYTES.action) {
+            expect(response.headers.get("allow")).toBe("GET, HEAD");
+          } else expect(await response.json()).toMatchObject(ERROR);
+        }
+        expect(remote).not.toHaveBeenCalled();
+      } finally {
+        remote.mockRestore();
+      }
+    },
+  );
+
   // Agent ingress needs its SQL admission fixture; its HTTP cap/cap+1 and
   // environment-gate precedence are pinned in body-limit-route-admission.test.ts.
   it.each(
@@ -115,7 +149,7 @@ describe("every registered write route is body-limited", () => {
       const env = {
         // Enables the QA seam for this in-process boundary fixture only.
         APP_URL: "https://next.togetherweown.com",
-        QA_AUTH_TOKEN: "test-only-qa-token",
+        QA_AUTH_TOKEN: "test-only-qa-token-with-32-plus-chars",
         SESSION_SECRET: "test-session-secret-at-least-32-bytes-long",
         SESSION_STORE: store,
         // The staging-operator boundary opens only for its dedicated

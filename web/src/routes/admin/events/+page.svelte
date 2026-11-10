@@ -5,8 +5,11 @@ import {
   eventListUrl,
   eventListHasFilters,
   eventListClearUrl,
+  pageTitleDuplicates,
+  sameTitleSuffix,
   type EventSort,
 } from "../../../../../src/admin/event-list";
+import { sortHeaderAriaLabel } from "../../../../../src/admin/table-list";
 import { goingCountText } from "../../../../../src/islands/contracts-going-count";
 import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 
@@ -24,6 +27,9 @@ import type { KitEventListRow } from "../../../../../src/admin/kit-events";
 // file-count ceilings. The parity test fails on drift.
 let { data }: PageProps = $props();
 const { query, rows, hasNext, emptyText, pauseReviews } = $derived(data);
+// §4a: same-title rows share one page; only those names take the ISO suffix.
+const duplicates = $derived(pageTitleDuplicates(rows));
+const rowIso = (r: (typeof rows)[number]): string | null => r.startsAt || null;
 const now = new Date();
 </script>
 
@@ -33,7 +39,7 @@ const now = new Date();
   <th scope="col" aria-sort={active ? (query.order === "asc" ? "ascending" : "descending") : "none"}>
     <a
       href={eventListUrl(query, { sort, order, page: 1 })}
-      aria-label={`Sort by ${label.toLowerCase()} ${order === "asc" ? "ascending" : "descending"}`}
+      aria-label={sortHeaderAriaLabel(label, order)}
     >
       {label}{active ? (query.order === "asc" ? " ↑" : " ↓") : ""}
     </a>
@@ -147,18 +153,36 @@ const now = new Date();
               </td>
               <td data-testid={`event-status-${r.eventKey}`}>{r.status}</td>
               <td>
-                <time datetime={r.startsAt}>{r.startsAt}</time>
+                {#if r.startsAt}
+                  <time datetime={r.startsAt}>{r.startsAt}</time>
+                {:else}
+                  <span data-testid={`event-unrenderable-time-${r.eventKey}`}>Unrenderable time</span>
+                {/if}
+                {#if r.startsAt && !r.endsAt}
+                  <span data-testid={`event-unrenderable-time-${r.eventKey}`}> (unrenderable end time)</span>
+                {/if}
               </td>
               {@render fillCell(r)}
               <td>
                 {#if r.status === "draft"}
+                  <a class="link" href={`/e/${encodeURIComponent(r.eventKey)}?review=1`} aria-label={`Review ${r.title}${sameTitleSuffix(r.title, rowIso(r), duplicates)}`} data-testid="review-event">Review</a>
                   <form method="post" action={`/admin/events/${r.eventKey}/publish`}>
-                    <button type="submit" class="link">Publish</button>
+                    <button
+                      type="submit"
+                      class="link"
+                      aria-label={`Publish ${r.title}${sameTitleSuffix(r.title, rowIso(r), duplicates)}`}
+                      >Publish</button
+                    >
                   </form>
                 {/if}
                 {#if r.status === "draft" || r.status === "published"}
                   <form method="post" action={`/admin/events/${r.eventKey}/cancel`}>
-                    <button type="submit" class="link">Cancel</button>
+                    <button
+                      type="submit"
+                      class="link"
+                      aria-label={`Cancel ${r.title}${sameTitleSuffix(r.title, rowIso(r), duplicates)}`}
+                      >Cancel</button
+                    >
                   </form>
                 {/if}
                 {#if r.status === "published" && new Date(r.endsAt) > now}
@@ -166,7 +190,12 @@ const now = new Date();
                     {@html pauseReviews[r.eventKey] ?? ""}
                   {:else}
                     <form method="post" action={`/admin/events/${r.eventKey}/rsvp-reopen`}>
-                      <button type="submit" class="link" data-testid="rsvp-reopen">
+                      <button
+                        type="submit"
+                        class="link"
+                        data-testid="rsvp-reopen"
+                        aria-label={`Reopen RSVPs for ${r.title}${sameTitleSuffix(r.title, rowIso(r), duplicates)}`}
+                      >
                         Reopen RSVPs
                       </button>
                     </form>

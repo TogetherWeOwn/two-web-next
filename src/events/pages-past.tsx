@@ -24,6 +24,7 @@ import { archiveEventHref, type ArchiveContext } from "./attendee-paths";
 import { feedUrl, rssUrl, webcalUrl } from "./feeds";
 import { subscriptionHelp } from "./subscription-help";
 import type { PublicEvent } from "./reads";
+import { effectiveZone } from "./date-format";
 import { fmt, ScheduleDate, ScheduleShell } from "./pages-shared";
 import { searchContext } from "./search-context";
 
@@ -51,8 +52,10 @@ const Card: FC<{ e: PublicEvent; q: string; archive: ArchiveContext }> = ({ e, q
         {/* Upcoming-card shape (time · zone · location): the zone always
             renders, the location only when the row has one. */}
         <p>
-          <time datetime={e.startsAt.toISOString()}>{fmt(e.startsAt, e.timezone)}</time>{" "}
-          <span>{e.timezone}</span>
+          <time datetime={e.startsAt.toISOString()}>
+            {fmt(e.startsAt, effectiveZone(e.timezone))}
+          </time>{" "}
+          <span>{effectiveZone(e.timezone)}</span>
           {e.location ? (
             <>
               {" · "}

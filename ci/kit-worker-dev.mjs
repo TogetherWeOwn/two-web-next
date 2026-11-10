@@ -10,6 +10,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isLoopbackHostname } from "../lib/loopback-hosts.mjs";
+import { requireCaptureArtifact } from "./kit-capture-build.mjs";
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const web = join(repo, "web");
@@ -36,6 +37,10 @@ try {
   throw new Error(
     `kit-worker-dev: built worker missing at ${worker} (run npm run build --prefix web)`,
   );
+}
+
+if (process.env.SSR_CAPTURE_FIXTURE === "true") {
+  requireCaptureArtifact(join(web, ".svelte-kit/output/server"));
 }
 
 const scratch = mkdtempSync(
@@ -101,8 +106,13 @@ writeFileSync(
     compatibility_date: "2026-09-29",
     compatibility_flags: ["nodejs_compat"],
     assets: { directory: assets, binding: "ASSETS", run_worker_first: true },
+    // Never present in a deployed configuration. The build gate alone is inert.
+    ...(process.env.SSR_CAPTURE_FIXTURE === "true"
+      ? { define: { __TWO_LOCAL_CAPTURE__: "true" } }
+      : {}),
     vars: {
       APP_URL: `http://127.0.0.1:${port}`,
+      ...(process.env.SSR_CAPTURE_FIXTURE === "true" ? { SSR_CAPTURE_FIXTURE: "true" } : {}),
       DATABASE_URL: databaseUrl,
       FEATURED_IMAGE_HOSTS: "",
       SESSION_SECRET: "ci-fixture-session-secret-at-least-32-bytes",

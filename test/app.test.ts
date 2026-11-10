@@ -386,17 +386,23 @@ describe("staging-only QA seam", () => {
   });
 
   it("404s off the staging host even with a token configured", async () => {
-    const e = { ...staging("qa-secret"), APP_URL: "https://evil.example.test" };
+    const e = {
+      ...staging("qa-secret-".padEnd(32, "x")),
+      APP_URL: "https://evil.example.test",
+    };
     const res = await app.request(
       "/auth/qa/qa-member",
-      { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret" } },
+      {
+        method: "POST",
+        headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret-".padEnd(32, "x") },
+      },
       e,
     );
     expect(res.status).toBe(404);
   });
 
   it("404s byte-identically for a bad token and an unknown identity", async () => {
-    const e = staging("qa-secret");
+    const e = staging("qa-secret-".padEnd(32, "x"));
     const badToken = await app.request(
       "/auth/qa/qa-member",
       { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "wrong" } },
@@ -404,7 +410,10 @@ describe("staging-only QA seam", () => {
     );
     const badIdentity = await app.request(
       "/auth/qa/nope",
-      { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret" } },
+      {
+        method: "POST",
+        headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret-".padEnd(32, "x") },
+      },
       e,
     );
     expect(badToken.status).toBe(404);
@@ -418,10 +427,13 @@ describe("staging-only QA seam", () => {
       ["qa-member", "QA Member", false],
       ["qa-moderator", "QA Moderator", true],
     ] as const) {
-      const e = staging("qa-secret");
+      const e = staging("qa-secret-".padEnd(32, "x"));
       const res = await app.request(
         `/auth/qa/${identity}`,
-        { method: "POST", headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret" } },
+        {
+          method: "POST",
+          headers: { origin: e.APP_URL, [QA_HEADER]: "qa-secret-".padEnd(32, "x") },
+        },
         e,
       );
       expect(res.status).toBe(204);

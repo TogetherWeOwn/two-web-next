@@ -32,25 +32,28 @@ let { model }: { model: EventGoneModel } = $props();
     <p class="notice" role="status" data-testid="event-cancelled">Cancelled</p>
     <h1>{model.title}</h1>
     <p data-testid={EXISTING_RESPONSES_TESTID}>{existingResponsesText(model.existingResponses)}</p>
-    {#if model.related.length > 0}
-      <ul class="facts" data-testid="event-cancelled-alternatives">
-        {#each model.related as alternative (alternative.key)}
-          <li class="card">
-            <a href="/e/{alternative.key}">{alternative.title}</a>
-            <p>
-              <time>{alternative.whenText}</time>
-              {#if alternative.location} · {alternative.location}{/if}
-            </p>
-          </li>
-        {/each}
-      </ul>
-    {/if}
     <p>
       <a class="btn" href={model.upcomingUrl}>See upcoming events</a>
     </p>
     <p>
       <a href={model.icsUrl} data-testid="event-cancelled-ics">Download calendar entry (.ics)</a>
     </p>
+    {#if model.related.length > 0}
+      <section aria-labelledby="event-cancelled-alternatives-heading">
+        <h2 id="event-cancelled-alternatives-heading">Other upcoming events</h2>
+        <ul class="facts" data-testid="event-cancelled-alternatives">
+          {#each model.related as alternative (alternative.key)}
+            <li class="card">
+              <a href="/e/{alternative.key}" data-testid="event-cancelled-alternative">{alternative.title}</a>
+              <p>
+                <time datetime={alternative.datetime}>{alternative.whenText}</time>
+                {#if alternative.location} · {alternative.location}{/if}
+              </p>
+            </li>
+          {/each}
+        </ul>
+      </section>
+    {/if}
   </section>
   <JsonLd testid="event-jsonld" json={model.jsonLd} />
   <JsonLd testid="site-jsonld" json={model.siteJsonLd} />

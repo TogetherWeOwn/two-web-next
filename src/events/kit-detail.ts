@@ -18,6 +18,11 @@
 // session is unavailable (never a false logout, never a guest render of
 // member state), and every database failure is a 503 before bytes.
 import { dbFor } from "../admin/db";
+import { savedEventReview } from "../admin/event-saved-review";
+import {
+  renderEventPublishedNoticeHtml,
+  renderSavedEventReviewHtml,
+} from "../admin/pages/event-form-review";
 import { alertRequestError, exceptionClass } from "../alerts";
 import type { Db } from "../db/index";
 import type { Env } from "../env";
@@ -28,6 +33,7 @@ import type {
   EventMissingModel,
   EventMissingSuggestion,
 } from "../kit-event-states";
+import { MAX_RETURN_DESTINATION_BYTES } from "../join/service";
 import { kitPublicReadGuard } from "../kit-past-events";
 import { declareMemberResult } from "../member-reads";
 import { cachedNotFoundSuggestions } from "../not-found-suggestions";
@@ -35,13 +41,22 @@ import { safeRequestId } from "../request-log";
 import type { JoinResult } from "../return-journey";
 import { canonicalUrl } from "../seo";
 import { eventJsonLd, siteJsonLd } from "../seo-json-ld";
-import { formatElapsedDuration, formatEventWhen, isValidZone } from "./date-format";
+import { withEventDetailHtml, type EventDetailHtml } from "./detail-leaves";
+import {
+  formatDetailWhen,
+  formatElapsedDuration,
+  formatEventWhen,
+  instantIso,
+  isValidZone,
+} from "./date-format";
 import { directionsUrl, googleCalendarUrl, isWireInstant } from "./feeds";
 import { canonicalEventKey, eventKeyAllowed } from "./keys";
 import { fmt } from "./pages-shared";
 import { eventLinkAvailability } from "./link-availability";
+import { isOngoing } from "./ongoing";
 import {
   ATTENDEE_PAGE_SIZE,
+  getEventForModeratorReview,
   getEventNeighbors,
   getEventSeriesContext,
   getPublicEvent,
@@ -60,15 +75,17 @@ import {
 } from "./reads";
 import type { SuggestedEvent } from "./suggestions";
 import { archiveContext } from "./archive-context";
-import { archiveEventHref } from "./attendee-paths";
+import { archiveEventHref, authReturnHref } from "./attendee-paths";
 import { archiveReturnLink } from "./archive-links";
 import { waitlistPosition } from "./waitlist";
 
 export interface KitEventDetailStore {
   dbForFn: (ctx: { env: Env }) => Promise<Db | null>;
   getEventFn: (db: Db, key: string) => Promise<PublicEvent | null>;
-  neighborsFn: (db: Db, event: Pick<PublicEvent, "id">) => Promise<EventNeighbors>;
-  relatedFn: (db: Db, event: Pick<PublicEvent, "id" | "game">) => Promise<EventLink[]>;
+  /** Selected only after moderator review admission; legacy fakes can reuse their read. */
+  getReviewEventFn?: (db: Db, key: string) => Promise<PublicEvent | null>;
+  neighborsFn: (db: Db, event: Pick<PublicEvent, "id">, now?: Date) => Promise<EventNeighbors>;
+  relatedFn: (db: Db, event: Pick<PublicEvent, "id" | "game">, now?: Date) => Promise<EventLink[]>;
   /** Series run read. Optional so existing fakes keep compiling: the resolver
    * falls back to the shared read, which skips standalone events with zero
    * queries and fails open everywhere else. */
@@ -97,6 +114,8 @@ export interface KitEventDetailRequest {
   /** Called exactly once per resolution: SvelteKit throws on a double-set. */
   setHeaders: (headers: Record<string, string>) => void;
   store: KitEventDetailStore;
+  /** Display snapshot only; never used by the session or write paths. */
+  now?: Date;
   /** Optional correlation ID from the caller (validated before logging, omitted otherwise). */
   requestId?: string;
 }
@@ -124,6 +143,11 @@ export interface KitEventDetailSeries {
 }
 
 export interface KitEventDetailModel {
+  /** Escaped server-only member presentation; created after disclosure declaration. */
+  detailHtml: EventDetailHtml;
+  /** Moderator-only escaped leaves; the member rendering is shared unchanged. */
+  review?: { banner: string; actions: string; rsvp: string };
+  publishedNotice?: string;
   eventKey: string;
   title: string;
   game: string | null;
@@ -138,9 +162,19 @@ export interface KitEventDetailModel {
   /** Maps search URL for the venue; null when no venue is set. The view
    * renders this verbatim and never builds URLs from location itself. */
   directionsUrl: string | null;
+  /** Verified host display name; null when unset. */
+  organizerName: string | null;
+  /** Public joining link; null when unset. */
+  joinUrl: string | null;
+  /** Joining instructions; null when unset. */
+  joinInstructions: string | null;
   status: string;
   isDraft: boolean;
   isPast: boolean;
+  /** Server snapshot at the render instant (`isOngoing`): the "Happening now"
+   * hero badge. Never a client clock; RSVP verdicts are unaffected. Optional
+   * so a pre-existing fixture without the flag reads as not ongoing. */
+  isOngoing?: boolean;
   goingCount: number;
   /** Seat occupancy for full/spots/CTA; required so a missed wiring fails typecheck. */
   goingOccupancy: number;
@@ -279,8 +313,9 @@ export function kitEventDetailStore(env: Env): KitEventDetailStore {
   return {
     dbForFn: ({ env: bound }) => dbFor({ env: bound }),
     getEventFn: (db, key) => getPublicEvent(db, key),
-    neighborsFn: (db, event) => getEventNeighbors(db, event),
-    relatedFn: (db, event) => listRelatedEvents(db, event),
+    getReviewEventFn: (db, key) => getEventForModeratorReview(db, key),
+    neighborsFn: getEventNeighbors,
+    relatedFn: listRelatedEvents,
     seriesFn: (db, event) => getEventSeriesContext(db, event),
     attendeesFn: async (db, eventId, page) => {
       // Same bounded window as the served handler: the requested page plus
@@ -340,6 +375,7 @@ export async function resolveKitEventDetail(
 ): Promise<KitEventDetailOutcome> {
   const { key, search, path, env, session, joinResult, setHeaders, store, requestId } = req;
   const appUrl = env.APP_URL;
+  const now = req.now ?? new Date();
 
   // One canonical key form per event: a valid key in another letter case 301s
   // to the canonical URL before any read, query preserved.
@@ -366,9 +402,20 @@ export async function resolveKitEventDetail(
       setHeaders(headers);
       return { kind: "unavailable", status: 503, headers };
     }
+    const wantsReview = new URLSearchParams(search).get("review") === "1";
+    if (wantsReview && (session.status === "unknown" || !session.session?.moderator)) {
+      const status = session.status === "unknown" ? 503 : 403;
+      const headers = { "cache-control": NO_STORE, "x-robots-tag": NOINDEX };
+      setHeaders(headers);
+      return status === 503
+        ? { kind: "unavailable", status, headers }
+        : { kind: "forbidden", status, headers };
+    }
     let event: PublicEvent | null;
     try {
-      event = await store.getEventFn(db, key);
+      event = wantsReview
+        ? await (store.getReviewEventFn ?? store.getEventFn)(db, key)
+        : await store.getEventFn(db, key);
     } catch (err) {
       reportDetailLoadFailure(err, requestId);
       const headers = { "cache-control": NO_STORE };
@@ -383,10 +430,10 @@ export async function resolveKitEventDetail(
       // resolveEventState), so the route-level error page renders the branded
       // cancellation instead of the generic shell. A failing alternatives
       // lookup degrades to an empty list, never an outage.
-      if (event.status === "cancelled") {
+      if (event.status === "cancelled" && !wantsReview) {
         let related: EventLink[] = [];
         try {
-          related = await store.relatedFn(db, event);
+          related = await store.relatedFn(db, event, now);
         } catch (err) {
           // The cancelled page still serves with an empty alternatives list;
           // warn once with the exception class so the degrade is visible.
@@ -415,6 +462,7 @@ export async function resolveKitEventDetail(
               key: link.eventKey,
               title: link.title,
               whenText: fmt(link.startsAt, link.timezone),
+              datetime: link.startsAt.toISOString(),
               location: link.location,
             })),
             jsonLd: eventJsonLd(event, appUrl),
@@ -449,11 +497,11 @@ export async function resolveKitEventDetail(
       // rejecting the whole model. Both reads stay nonSensitive
       // published-only, so no audit row is skipped; viewer reads below stay
       // closed and their throws still reject.
-      const neighborsSettled = store.neighborsFn(db, event).then(
+      const neighborsSettled = store.neighborsFn(db, event, now).then(
         (neighbors) => neighbors,
         (): EventNeighbors => ({ previous: null, next: null }),
       );
-      const relatedSettled = store.relatedFn(db, event).then(
+      const relatedSettled = store.relatedFn(db, event, now).then(
         (related) => related,
         (): EventLink[] => [],
       );
@@ -491,11 +539,12 @@ export async function resolveKitEventDetail(
                 event.eventKey,
                 archive,
                 attendees.length === 0 ? 1 : attendeePage - 1,
+                wantsReview,
               )
             : null,
         nextHref:
           attendeeRows.length > ATTENDEE_PAGE_SIZE
-            ? archiveEventHref(event.eventKey, archive, attendeePage + 1)
+            ? archiveEventHref(event.eventKey, archive, attendeePage + 1, wantsReview)
             : null,
       };
       // RSVP closure is decided once here, on the server render instant, with
@@ -503,7 +552,6 @@ export async function resolveKitEventDetail(
       // past for non-published rows, or past when endsAt is at or before now.
       // Cancelled returns the gone outcome above, so it never reaches this
       // model. The view renders this verdict verbatim.
-      const now = new Date();
       const rsvpClosed: RsvpClosedReason | null =
         event.status === "draft"
           ? "draft"
@@ -512,7 +560,8 @@ export async function resolveKitEventDetail(
             : null;
       const pagePath = `/e/${event.eventKey}`;
       const pageCanonical = canonicalUrl(appUrl, pagePath);
-      const robots = event.status === "draft" || event.status === "past" ? NOINDEX : null;
+      const review = wantsReview ? savedEventReview(event, now, search) : null;
+      const robots = review || event.status === "draft" || event.status === "past" ? NOINDEX : null;
       const headers: Record<string, string> = {
         "cache-control": NO_STORE,
         vary: "Cookie",
@@ -523,7 +572,22 @@ export async function resolveKitEventDetail(
         kind: "ok",
         status: 200,
         headers,
-        model: {
+        model: withEventDetailHtml({
+          ...(viewer?.moderator &&
+          event.status === "published" &&
+          !review &&
+          new URLSearchParams(search).get("published") === "1"
+            ? { publishedNotice: renderEventPublishedNoticeHtml() }
+            : {}),
+          ...(review
+            ? {
+                review: {
+                  banner: renderSavedEventReviewHtml(review),
+                  actions: renderSavedEventReviewHtml(review, "actions"),
+                  rsvp: renderSavedEventReviewHtml(review, "rsvp"),
+                },
+              }
+            : {}),
           eventKey: event.eventKey,
           title: event.title,
           game: event.game,
@@ -534,9 +598,13 @@ export async function resolveKitEventDetail(
           accessibilityNotes: event.accessibilityNotes?.trim() || null,
           location: event.location,
           directionsUrl: event.location ? directionsUrl(event.location) : null,
+          organizerName: event.organizer_name ?? null,
+          joinUrl: event.join_url ?? null,
+          joinInstructions: event.join_instructions ?? null,
           status: event.status,
           isDraft: event.status === "draft",
           isPast: event.status === "past",
+          isOngoing: isOngoing(event, now),
           goingCount: event.goingCount,
           goingOccupancy: event.goingOccupancy,
           capacity: event.capacity,
@@ -545,7 +613,12 @@ export async function resolveKitEventDetail(
           canonical: pageCanonical,
           path: pagePath,
           // Keep validated roster/archive state only, never raw query text.
-          attendeesRefreshHref: archiveEventHref(event.eventKey, archive, attendeePage),
+          attendeesRefreshHref: archiveEventHref(
+            event.eventKey,
+            archive,
+            attendeePage,
+            wantsReview,
+          ),
           archiveReturn: archiveReturnLink(archive),
           robots,
           // Drafts have no Markdown view: the session-free .md route 403s for
@@ -559,11 +632,11 @@ export async function resolveKitEventDetail(
               ? googleCalendarUrl(event)
               : null,
           copyLink: pageCanonical,
-          whenText: formatEventWhen(event.startsAt, event.timezone),
-          endsWhenText: formatEventWhen(event.endsAt, event.timezone),
+          whenText: formatDetailWhen(event.startsAt, event.timezone),
+          endsWhenText: formatDetailWhen(event.endsAt, event.timezone),
           durationText: formatElapsedDuration(event.endsAt.getTime() - event.startsAt.getTime()),
           zoneLabel: isValidZone(event.timezone) ? event.timezone : "UTC",
-          timeDatetime: event.startsAt.toISOString(),
+          timeDatetime: instantIso(event.startsAt),
           attendees,
           attendeesPaging,
           answer,
@@ -581,17 +654,23 @@ export async function resolveKitEventDetail(
               }
             : null,
           showJoinPitch: !viewer,
-          // The sign-in return keeps the query string, exactly as served;
-          // the join pitch and related-join links use the bare page path.
-          joinReturnTo: `${pagePath}${search}`,
+          // The sign-in return keeps normalized archive/attendee context
+          // bounded to auth's byte cap, never the raw query string; the
+          // join pitch and related-join links use the bare page path.
+          joinReturnTo: authReturnHref(
+            event.eventKey,
+            archive,
+            attendeePage,
+            MAX_RETURN_DESTINATION_BYTES,
+          ),
           joinResult,
           viewerMember: member,
           viewerModerator: viewer?.moderator === true,
           viewerUsername: viewer?.username ?? null,
-          endsAt: event.endsAt.toISOString(),
+          endsAt: instantIso(event.endsAt),
           jsonLd: eventJsonLd(event, appUrl),
           siteJsonLd: siteJsonLd(appUrl),
-        },
+        }),
       };
     }
   }

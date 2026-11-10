@@ -734,6 +734,19 @@
     }, 0);
   });
 
+  // Refusal pages render Cancel as a link to the saved profile so the no-JS
+  // path discards the rejected draft (there the draft is the controls' HTML
+  // default, which a native reset would restore). A plain click with the
+  // island live keeps the in-place reset above; modified clicks still open
+  // the fresh profile as the member asked.
+  var cancelLink = root.querySelector('[data-testid="profile-cancel"]');
+  if (cancelLink && cancelLink.tagName === "A")
+    cancelLink.addEventListener("click", function (ev) {
+      if (ev.button !== 0 || ev.ctrlKey || ev.metaKey || ev.shiftKey || ev.altKey) return;
+      ev.preventDefault();
+      form.reset();
+    });
+
   // Detection only offers a shortcut; it never changes a saved or live draft.
   // Keep the browser's alias verbatim and leave final validation to the server.
   (function deviceTimezoneHelper() {

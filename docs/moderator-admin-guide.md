@@ -10,6 +10,15 @@ This guide is checked against repository source; it is not a claim that staging
 or production has been exercised. The [parity matrix](parity.md) tracks the
 migration, but its older pending labels are not a substitute for current screens.
 
+## Read response and activity times
+
+The event roster's **Answered** column shows the latest response update in UTC,
+not attendance or the original waitlist join time. The activity log's **When**
+column shows the same UTC instant for each change. Valid times keep their exact
+machine instant in semantic HTML. **Unrenderable time** means that row has no
+usable timestamp; the other rows stay visible. On a narrow screen, focus the
+labelled table region and scroll horizontally to read every column.
+
 ## Get into the panel
 
 1. Open `/admin`. There is no separate admin password or login form: guests go
@@ -17,8 +26,10 @@ migration, but its older pending labels are not a substitute for current screens
 2. Approve using the Discord account that has the authorized moderator role.
    Successful Next sign-in and one-click join both recompute moderator status
    through a bot role lookup, matching configured role **IDs**, not role names.
-3. After a role change, sign out using the homepage's **Sign out** button and
-   sign in again, then open `/admin` explicitly.
+3. After a role change, a live session re-checks its Discord roles within
+   five minutes, so the change lands on its own while you keep browsing.
+   Sign out using the homepage's **Sign out** button and sign in again only
+   when you need the change immediately, then open `/admin` explicitly.
 4. A signed-in non-moderator gets 403. A failed role lookup or blank allowed-role
    configuration also fails closed; 403 does not prove the Discord role is
    missing. Ask the maintainers to check after one fresh sign-in.
@@ -29,16 +40,22 @@ do not bypass it with direct database queries or another endpoint.
 
 ## A moderator lost their role
 
-Moderator status is copied into the session at sign-in, so removing a Discord
-role does not update existing sessions. First confirm the Discord moderator
+Moderator status is copied into the session at sign-in. A live session also
+re-checks its Discord roles during use: when the stored flags are at least
+five minutes old, the next page that relies on them refreshes them from
+Discord first, so removing the Discord role takes effect on its own within
+minutes while the moderator keeps browsing. If Discord cannot answer, the
+stored flags stand until a later recheck or the session's 24-hour limit.
+First confirm the Discord moderator
 role has been removed. If the moderator stops visiting pages, the idle session
 expires within two hours (120 minutes after its last session-refreshing page view);
 normal browsing can rotate and extend that idle window, but never beyond
 24 hours from the login that started the session lineage. Rotation preserves
 that start time; reaching the absolute cap requires a fresh sign-in and role
 lookup. Kit-served admin pages rotate the session exactly like the Hono
-panel, under the same absolute cap. For immediate invalidation,
-an authorized operator should run the command below. It does not depend on the
+panel, under the same absolute cap, and run the same mid-session recheck.
+For immediate invalidation — during an incident, or while Discord is
+unavailable — an authorized operator should run the command below. It does not depend on the
 moderator signing out. First dry-run, check the active-session count, then apply
 revocation for the moderator's Discord snowflake:
 
@@ -96,10 +113,11 @@ IDs. Exit codes:
 | 1 | Drift: the sets differ | Record `discord-only` as information; clear app-only access with the revoke procedure above, then re-run until `app-only` is 0 |
 | 2 | Usage or malformed input (missing side, both sources for one side, unknown flag, bad file, non-snowflake ID) | Fix the invocation or input, then re-run |
 
-`discord-only` means the person has the Discord role but no live app session;
-they gain the panel at next sign-in, so this is not a denial to troubleshoot.
+`discord-only` means the person has the Discord role but no live app session
+carrying it; they gain the panel at next sign-in, or at the next five-minute
+role recheck of a live member session, so this is not a denial to troubleshoot.
 `app-only` means a live app session without the Discord role: excess privilege
-until the session expires or is revoked.
+until the session's next five-minute role recheck, its expiry, or revocation.
 
 Keep evidence counts-only: the text report prints exact counts plus at most 20
 IDs per side (`…and N more` beyond that), and `--json` reports exact
@@ -168,8 +186,9 @@ the maintainers.
 ## Pending or unconfirmed saves
 
 With JavaScript enabled, event and featured-content editors show **Saving… Please
-wait.** when you submit. Repeating the action during the next ten seconds sends
-no extra submission and explains that saving is already pending. This feedback
+wait.** when you submit. Repeating the action in the same open form during the
+next ten seconds sends no extra submission and explains that saving is already
+pending; this does not suppress submissions in another tab or document. This feedback
 does not move keyboard focus or confirm success.
 
 If the page has not navigated after ten seconds, the message says saving is not
@@ -243,12 +262,13 @@ POST paths are form actions, **not URLs to open or call manually**.
 | POST | `/admin/featured` | **Create** a slot. |
 | GET | `/admin/featured/:id` | Edit a slot. |
 | POST | `/admin/featured/:id` | **Save** slot settings. |
+| POST | `/admin/featured/:id/unpublish` | **Unpublish** a slot without revalidating its other saved fields. |
 | POST | `/admin/featured/:id/delete` | **Delete this slot**. |
 | GET | `/admin/join-attempts` | Read-only join diagnostics, filters and pagination. |
 | GET | `/admin/join-attempts/:id` | Read-only attempt outcome and trace detail. |
 | GET | `/admin/activity-log` | Read-only activity log, subject/causer filters and pagination. |
 
-These are the 20 canonical routes in `src/admin/routes.tsx` (10 GET, 10 POST).
+These are the 21 canonical routes in `src/admin/routes.tsx` (10 GET, 11 POST).
 Five additional GET routes retain legacy bookmarks as 301 redirects:
 
 | Legacy path | Destination |
@@ -259,7 +279,7 @@ Five additional GET routes retain legacy bookmarks as 301 redirects:
 | `/admin/featured-contents/create` | `/admin/featured/new` |
 | `/admin/featured-contents/:id/edit` | `/admin/featured/:id` with the native ID resolved from the imported legacy ID, not a native-ID fallback. |
 
-All 25 routes (15 GET, 10 POST) use the moderator guard. Legacy redirects drop
+All 26 routes (15 GET, 11 POST) use the moderator guard. Legacy redirects drop
 query strings; an invalid or unmapped legacy featured ID returns 404, and an
 unavailable lookup returns 503. Use the canonical links for new instructions.
 Pausing RSVPs opens a native review first: open **Review pause**, check the
@@ -271,7 +291,7 @@ editor's separate browser warning for unsaved changes is not action approval.
 ### Kit admin shells (shipped; join-attempts pair Kit-served)
 
 Each of the 10 admin GET routes above also ships a Kit shell. The
-mixed-mode truth: the migration is GET-only; all 10 POST form actions stay
+mixed-mode truth: the migration is GET-only; all 11 POST form actions stay
 Hono with no manifest entries of their own. Most shell entries in
 `src/route-ownership.ts` (`ROUTE_MANIFEST`) still read `enabled: false`, so
 Hono serves those pages; the join-attempts list and detail entries read
@@ -372,6 +392,31 @@ or other navigation: with JavaScript enabled, the edit screen requests a browser
 leave-page warning for unsaved changes (including after a rejected Save).
 **Save** itself is exempt; the warning is not a substitute for saving.
 
+### Save → review → publish
+
+1. **Save** edits first. A rejected Save retains attempted edits but does not
+   change the saved event. Correct the errors and save successfully.
+2. For a saved draft, choose **Review before publishing** in Status, or **Review**
+   in the events list. `/e/<key>?review=1` renders the actual member detail page
+   with moderator-only preview chrome. New, unsaved forms have no review link.
+3. Check the saved title, times, venue and description. **Saved record last
+   updated** shows the persisted UTC update time, not the rendering clock.
+   Unsaved editor changes never appear in preview. Save and review again after editing.
+4. Follow correction links back to the editor, fix the fields and save. Only
+   drafts receive publication corrections. RSVP is disabled in preview; other
+   member links work normally. Published and cancelled previews describe their
+   current state without offering another publication.
+5. Choose **Publish** at the bottom of the review, or **Back to edit** to correct
+   something. Publish uses only the saved record shown, not unsaved editor edits.
+   If another save happened since you opened review, nothing publishes: the page
+   shows the latest saved record and a change warning. Check that record before
+   trying again. Validation refusals also return to review with a specific reason.
+6. Successful publication lands on the live member detail page with **Published.
+   Members can now see this event.** The editor and list still offer their direct
+   Publish actions; those keep the existing editor landing.
+
+Hono and Kit share the preview chrome without duplicating the member rendering.
+
 ### Cancel, past events and unsupported controls
 
 - **Cancel** on the list / **Cancel event** on edit is available for drafts and
@@ -469,8 +514,11 @@ still follow the event form's validation rules.
 
 Each occurrence has its own event page and status. Cancelling an occurrence does
 not cancel the whole series. Moving the parent's start/end times also shifts
-not-yet-started children by the corresponding time differences; started instances
-retain their times. Shifted published/cancelled children attempt asynchronous
+not-yet-started children by the differences between their old and new weekly
+schedules in the host's timezone, including clock changes. Individual adjustments
+relative to the schedule are retained; started instances retain their times.
+If the same edit also changes the timezone, children follow the new timezone's
+weekly schedule for both start and end. Shifted published/cancelled children attempt asynchronous
 Discord write-back even when the edited parent is draft or past. For example,
 saving new times on a draft parent can move a published future child and enqueue
 its Discord update. This does not change the children's statuses or confirm
@@ -479,12 +527,20 @@ series cancel or repeat-rule editor.
 
 ### Read the RSVP roster
 
-The event edit screen shows **RSVPs (count)** with **Member**, **Status**, and
-**Answered** (UTC), newest responses first by default. **Search members** with
-**Search** matches username text case-insensitively; **Status** and **Answered**
-column links toggle sorting while retaining the search. The count is the number
+The event edit screen shows **RSVPs (count)** with **Member**, **Status**,
+**Answered** (UTC), and **Waitlist position**, newest responses first by default.
+**Search members** with **Search** matches username text case-insensitively;
+**Status**, **Answered**, and **Waitlist position** column links toggle sorting while
+retaining the search. The count is the number
 of matching answers (all statuses, not just going seats), so searching can
-reduce it. The roster shows 100 answers per page with a "Showing a-b of N"
+reduce it. The **Waitlist position** column shows each waitlisted member's place
+in this event's whole queue (`#1` is next to be promoted); other answers show a dash.
+Searching, filtering, paging, or sorting never renumbers the queue, so numbers
+can skip. Positions reflect the queue at page render and can change after RSVPs
+move; reload before quoting one. A place in line is not a promised seat, and paused
+or closed queues do not advance. **Answered** is answer recency, not queue priority.
+Sorting by **Waitlist position** lists the queue head first (last in descending
+order); unranked answers always sort last. The roster shows 100 answers per page with a "Showing a-b of N"
 line; **Previous** and **Next** keep the search and sort and return to the
 roster section. Sorting or searching again starts back on page 1. Save event
 edits before these controls reload the page. This is a read-only roster: no adding/removing answers,
@@ -556,6 +612,14 @@ while retaining filters and return to page 1. Use **Previous**/**Next** for
 25-row pages, which keep filters and sort; the bar shows the current page
 number. There is no drag-and-drop ordering.
 
+Published rows offer **Unpublish** below the title, including scheduled and expired
+slots. It immediately turns off publication and returns to the list, without
+changing or revalidating any other saved field. Use it to withdraw a slot even
+when an old image URL would fail the current edit-form rules. Unpublished rows
+have no action; repeating the same withdrawal succeeds without another change
+or activity-log entry. Changed withdrawals are audited and retire the guest
+homepage cache. There is no list action to republish a slot.
+
 ### Field rules
 
 | Field | Rule |
@@ -599,15 +663,19 @@ Follow one coherent workflow per approved change:
    the submitted values stay in the form.
 3. On success the page reloads: inspect the refreshed preview and status badge.
 4. Verify the homepage as a guest before claiming the change is live.
-5. To withdraw a slot without removing its record, uncheck **Published** and save.
+5. To withdraw a slot without removing its record, use **Unpublish** on the list.
+   Unchecking **Published** in the editor and saving also works when all fields
+   pass current validation.
 
 Leaving the page with unsaved changes triggers a browser warning; the
 rejected-save redisplay is guarded the same way. There is no autosave: an
 unsaved draft exists only in the open document, so leaving or reloading without
-saving loses it. A repeated **Save** within 10 seconds is ignored; if a save
-seems interrupted, reopen the slot and check its stored settings before saving
-again. An expired session shows a notice and keeps the edits; use its sign-in
-link to recover.
+saving loses it. With JavaScript, a repeated **Save** in the same open form
+within 10 seconds is ignored; if a save seems interrupted, reopen the slot and
+check its stored settings before saving again. When the background session check
+detects expiry, it shows a notice and keeps the edits in that document; use its
+sign-in link to recover. Expiry first discovered by a submitted POST can instead
+navigate to write recovery without preserving the draft.
 
 Use only public links and media you are authorized to share; do not paste
 private-service URLs, personal data, or expiring/signed URLs into site content.

@@ -319,9 +319,11 @@ describe("calendar year-boundary Hono SSR", () => {
     const cell = /<td[^>]*data-date="\+010000-01-01"[^>]*>([\s\S]*?)<\/td>/.exec(html)![1]!;
     expect(cell).toContain("data-cal-jump");
     expect(cell).toContain(
-      '>00:30 Etc/GMT-1 Boundary fixture <span data-testid="event-schedule-availability">Discord-managed</span></a>',
+      '>00:30 Etc/GMT-1 Boundary fixture <span class="schedule-badge" data-testid="event-ongoing">Happening now</span> <span data-testid="event-schedule-availability">Discord-managed</span></a>',
     );
-    expect(cell).toContain('aria-label="00:30 Etc/GMT-1 Boundary fixture Discord-managed, ');
+    expect(cell).toContain(
+      'aria-label="00:30 Etc/GMT-1 Boundary fixture Happening now Discord-managed, ',
+    );
     expect(
       renderedDays(html)
         .filter((day) => day.isToday)

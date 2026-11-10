@@ -19,7 +19,7 @@
 //   `count DESC, userId ASC`, including the tie-break at the cap boundary:
 //   of two members tied on count at ranks 100/101, the lower user id keeps
 //   the last capped slot.
-// - Counting is unchanged: only `going` RSVPs for published events inside
+// - Counting is unchanged: only `going` RSVPs for published or past events inside
 //   the season window count; the `?activity=` game filter still applies;
 //   opted-out members and non-members never appear and never consume a
 //   capped slot.
