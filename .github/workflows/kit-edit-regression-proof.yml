@@ -1,0 +1,100 @@
+name: Kit edit regression proof
+
+on:
+  pull_request:
+    paths:
+      - .github/workflows/kit-edit-regression-proof.yml
+      - src/admin/kit-event-edit.ts
+      - web/src/routes/admin/events/**
+      - test/admin.test.ts
+      - test/helpers/kit-edit-controls.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kit-edit-regression-proof-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  persistence:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: agent_test
+          POSTGRES_DB: two_web_next
+          POSTGRES_HOST_AUTH_METHOD: trust
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U agent_test -d two_web_next"
+          --health-interval 5s --health-timeout 5s --health-retries 10
+    env:
+      DATABASE_URL: postgres://agent_test@127.0.0.1:5432/two_web_next
+      BASELINE_SHA: 1fe09ab868a6fea4a7873e4a096523b78747b232
+      npm_config_ignore_scripts: "true"
+      npm_config_min_release_age: "3"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Install frozen dependencies without hooks
+        run: |
+          npm --version
+          npm ci --include=dev --no-audit --no-fund
+          npm ci --prefix web --include=dev --no-audit --no-fund
+          node ci/build-leaf-css.mjs
+      - name: Prepare only the disposable service
+        run: npm run db:migrate
+      - name: Prove corrected persistence and historical data loss
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p artifacts/kit-edit-regression
+          git merge-base --is-ancestor "$BASELINE_SHA" HEAD
+          printf 'head=%s\nbaseline=%s\n' "$(git rev-parse HEAD)" "$BASELINE_SHA" > artifacts/kit-edit-regression/provenance.txt
+          timeout -k 10 300 node_modules/.bin/vitest run test/admin.test.ts -t 'Kit native edit POST persists' --reporter=default --reporter=json --outputFile=artifacts/kit-edit-regression/corrected.json
+          # Keep the exact same tests, parser, authorization and database writes.
+          # Restore only the two production files that dropped these controls.
+          git restore --source="$BASELINE_SHA" -- src/admin/kit-event-edit.ts 'web/src/routes/admin/events/[key]/+page.svelte'
+          set +e
+          timeout -k 10 300 node_modules/.bin/vitest run test/admin.test.ts -t 'Kit native edit POST persists untouched' --reporter=default --reporter=json --outputFile=artifacts/kit-edit-regression/baseline.json
+          baseline_status=$?
+          set -e
+          test "$baseline_status" = 1
+          node --input-type=module <<'JS'
+          import assert from 'node:assert/strict';
+          import { readFileSync } from 'node:fs';
+          const results = (name) => JSON.parse(readFileSync(`artifacts/kit-edit-regression/${name}.json`, 'utf8'));
+          const cases = (report) => report.testResults.flatMap((file) => file.assertionResults).filter((test) => test.title.startsWith('Kit native edit POST persists'));
+          const corrected = results('corrected');
+          assert.equal(corrected.success, true);
+          assert.equal(cases(corrected).length, 3);
+          for (const test of cases(corrected)) assert.equal(test.status, 'passed');
+          const failed = cases(results('baseline')).filter((test) => test.status === 'failed');
+          assert.equal(failed.length, 1);
+          assert.match(failed[0].title, /persists untouched/);
+          const message = failed[0].failureMessages.join('\n');
+          for (const field of ['accessibilityNotes', 'organizer_name', 'join_url', 'join_instructions']) assert.ok(message.includes(field), `missing persisted-field diff: ${field}`);
+          assert.match(message, /null/);
+          console.log('Corrected: 3 persisted round trips passed. Baseline: untouched save failed with all four stored fields cleared to null.');
+          JS
+      - name: Restore the exact head implementation
+        if: always()
+        run: git restore --source=HEAD -- src/admin/kit-event-edit.ts 'web/src/routes/admin/events/[key]/+page.svelte'
+      - name: Upload regression evidence
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: kit-edit-regression-${{ github.event.pull_request.head.sha }}
+          path: artifacts/kit-edit-regression/
+          if-no-files-found: error
+          retention-days: 14

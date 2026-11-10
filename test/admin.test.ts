@@ -526,8 +526,8 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         }
         expect(attr(firstForm(html), "action")).toBe(`/admin/events/${KEY}`);
         const fields = submittedFields(html);
+        const fieldNames = Object.keys(fields);
         const names = ["accessibility_notes", "organizer_name", "join_url", "join_instructions"];
-        expect(Object.keys(fields)).toEqual(expect.arrayContaining(names));
         for (const name of names) {
           if (mode === "cleared") fields[name] = "";
           if (mode === "omitted") delete fields[name];
@@ -556,6 +556,7 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         };
         expect(await getEvent(db, KEY)).toMatchObject({ ...unchanged, ...expectedAccess });
         expect(await getPublicEvent(db, KEY)).toMatchObject({ ...unchanged, ...expectedAccess });
+        expect(fieldNames).toEqual(expect.arrayContaining(names));
         const reloaded = await load();
         if (reloaded.kind !== "ok") throw new Error(`expected edit view, got ${reloaded.kind}`);
         for (const name of names) {
