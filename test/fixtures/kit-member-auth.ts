@@ -292,5 +292,7 @@ export async function restoredWriteCookie(
   value = "restored|/events/42",
   secret = SECRET,
 ): Promise<string> {
-  return (await serializeSigned(EXPIRED_WRITE_COOKIE, value, secret)).split(";")[0]!;
+  return (
+    await serializeSigned(EXPIRED_WRITE_COOKIE, value, secret, { path: "/", secure: true })
+  ).split(";")[0]!;
 }

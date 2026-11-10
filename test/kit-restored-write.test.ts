@@ -40,7 +40,9 @@ beforeAll(async () => {
 });
 
 async function signed(value: string, secret = SECRET): Promise<string> {
-  return (await serializeSigned(EXPIRED_WRITE_COOKIE, value, secret)).split(";")[0]!;
+  return (
+    await serializeSigned(EXPIRED_WRITE_COOKIE, value, secret, { path: "/", secure: true })
+  ).split(";")[0]!;
 }
 
 function req(headers: Record<string, string> = {}, path = "/about", method = "GET"): Request {
