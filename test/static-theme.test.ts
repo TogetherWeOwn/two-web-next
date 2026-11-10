@@ -130,9 +130,7 @@ it("keeps the join targets, guarded return path, widget and fallback in the auth
     await app.request("/join?next=https://evil.test", {}, { ...env, DISCORD_GUILD_ID: "unset" })
   ).text();
   expect(fallback).toContain('href="/join/discord"');
-  expect(fallback).toContain(
-    "Live server preview is unavailable — the join button above still works.",
-  );
+  expect(fallback).toContain("Live server preview is unavailable — Join with Discord still works.");
   expect(fallback).not.toContain("<iframe");
 });
 

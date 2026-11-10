@@ -137,7 +137,7 @@ export const Join: FC<{
               </div>
             ) : (
               <p class="strap" data-testid="join-widget-fallback">
-                Live server preview is unavailable — the join button above still works.
+                Live server preview is unavailable — Join with Discord still works.
               </p>
             )}
           </div>
