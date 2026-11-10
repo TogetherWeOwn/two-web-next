@@ -169,6 +169,58 @@ describe("refused moderator save documents", () => {
     expect(updateEvent).not.toHaveBeenCalled();
   });
 
+  it("keeps a fold ordering error that is invalid across every interpretation", async () => {
+    // London 2026-10-25: end 01:30 is 00:30Z or 01:30Z; start 02:00 is
+    // 02:00Z. The latest end is still before the earliest start.
+    const res = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-10-25 02:00",
+      ends_at: "2026-10-25 01:30",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(res.status).toBe(409);
+    const html = await res.text();
+    expect(html).toContain('data-testid="stale-save"');
+    expect(html).toContain('data-testid="error-ends_at"');
+    expect(html).toContain("The end is after the start.");
+    expect(html).toContain("Also fix before saving:");
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps a fold ordering error with an ambiguous start that is invalid either way", async () => {
+    // London 2026-10-25: start 01:30 is 00:30Z or 01:30Z; end 00:30 is
+    // 23:30Z the previous day. Every interpretation ends before it starts.
+    const res = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-10-25 01:30",
+      ends_at: "2026-10-25 00:30",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(res.status).toBe(409);
+    const html = await res.text();
+    expect(html).toContain('data-testid="error-ends_at"');
+    expect(html).toContain("The end is after the start.");
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("defers a minute-identical ordering error that may have lost its seconds", async () => {
+    // A valid stored pair with seconds (e.g. 12:00:10Z to 12:00:50Z) renders
+    // as 12:00/12:00; the carrier-less reparse resolves both to :00 and
+    // invents the error. It must be deferred to the carried fresh editor.
+    const res = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-10-26 12:00",
+      ends_at: "2026-10-26 12:00",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(res.status).toBe(409);
+    const html = await res.text();
+    expect(html).toContain('data-testid="stale-save"');
+    expect(html).not.toContain("The end is after the start.");
+    expect(html).not.toContain('data-testid="error-ends_at"');
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
   it("retains non-schedule and missing-date diagnostics within the single stale notice", async () => {
     const res = await post(`/events/${key}`, {
       ...values,

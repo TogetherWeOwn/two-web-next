@@ -200,21 +200,37 @@ function formError(
   return render(err.fields, values);
 }
 
-// A wall time inside an autumn fold names two instants an hour apart, so a
-// carrier-less reparse can shift one of them onto the other and invent an
-// ordering error. Syntax and gap errors do not depend on the carrier and
-// always survive; only a fold-ambiguous ordering error is deferred to the
-// fresh editor, where the saved carriers are trustworthy again.
-function foldAmbiguous(wall: unknown, timezone: string): boolean {
-  if (typeof wall !== "string" || !wall.trim()) return false;
+// A carrier-less reparse of a refused draft loses two things the saved
+// carriers preserve: which side of an autumn fold a wall time came from,
+// and any seconds (the form speaks minutes). Either loss can invent an
+// ordering error — a fold wall can shift onto the other endpoint, and
+// minute-identical walls can hide a valid seconds-ordered pair. So an
+// ordering error survives only when it holds across every possible
+// interpretation: the latest possible end (later fold instant plus the
+// whole minute) is still at or before the earliest possible start.
+// Syntax and gap errors do not depend on the carrier and always survive.
+function possibleRange(wall: unknown, timezone: string): { min: number; max: number } | null {
+  if (typeof wall !== "string" || !wall.trim()) return null;
   try {
-    return (
-      wallToUtc(wall, timezone, "earlier").getTime() !==
-      wallToUtc(wall, timezone, "later").getTime()
-    );
+    const earlier = wallToUtc(wall, timezone, "earlier").getTime();
+    const later = wallToUtc(wall, timezone, "later").getTime();
+    return { min: Math.min(earlier, later), max: Math.max(earlier, later) + 59_999 };
   } catch {
-    return false;
+    return null;
   }
+}
+
+function orderingDefinitelyInvalid(
+  startWall: unknown,
+  endWall: unknown,
+  timezone: string,
+): boolean {
+  const start = possibleRange(startWall, timezone);
+  const end = possibleRange(endWall, timezone);
+  // An unresolvable wall already carries its own intrinsic error; keep the
+  // ordering diagnostic rather than dropping the only signal.
+  if (!start || !end) return true;
+  return end.max <= start.min;
 }
 
 function refusedEventSave(
@@ -235,7 +251,7 @@ function refusedEventSave(
         : "Europe/London";
     if (
       errors.ends_at === "The end is after the start." &&
-      (foldAmbiguous(values.starts_at, timezone) || foldAmbiguous(values.ends_at, timezone))
+      !orderingDefinitelyInvalid(values.starts_at, values.ends_at, timezone)
     ) {
       delete errors.ends_at;
     }

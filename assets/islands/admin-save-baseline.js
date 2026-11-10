@@ -9,10 +9,10 @@
 // version. When the navigation type cannot be determined, keep the older
 // token: a needless stale refusal is recoverable, a stale overwrite is not.
 (function () {
-  "use strict";
   var editor = document.querySelector("[data-event-editor]");
   var baseline = document.querySelector('[data-event-editor] input[name="saved_baseline"]');
   if (!editor || !baseline) return;
+  var path = window.location.pathname;
   var token = baseline.value;
   function navigationType() {
     try {
@@ -33,13 +33,13 @@
   try {
     var state = window.history.state || {};
     var saved = state.twoAdminSaveBaseline;
-    if (saved && saved.path === window.location.pathname && typeof saved.token === "string") {
+    if (saved && saved.path === path && typeof saved.token === "string") {
       if (navigationType() === "reload") {
         // Fresh GET on this same entry: display and token agree, so rebind
         // the entry to the current token instead of resurrecting the old one.
         window.history.replaceState(
           Object.assign({}, state, {
-            twoAdminSaveBaseline: { path: window.location.pathname, token: token },
+            twoAdminSaveBaseline: { path: path, token: token },
           }),
           "",
         );
@@ -51,7 +51,7 @@
       // Preserve Kit's history state and never store any draft text.
       window.history.replaceState(
         Object.assign({}, state, {
-          twoAdminSaveBaseline: { path: window.location.pathname, token: token },
+          twoAdminSaveBaseline: { path: path, token: token },
         }),
         "",
       );
