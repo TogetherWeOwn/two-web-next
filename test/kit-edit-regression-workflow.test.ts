@@ -38,7 +38,7 @@ describe("Kit edit historical proof isolation", () => {
       DISPATCH_SHA: "${{ github.sha }}",
     });
     expect(checkout.with).toMatchObject({
-      ref: "${{ inputs.head_sha }}",
+      ref: "${{ github.sha }}",
       "persist-credentials": false,
     });
     expect(workflow.concurrency.group).toBe("kit-edit-regression-proof-${{ inputs.head_sha }}");
@@ -47,6 +47,17 @@ describe("Kit edit historical proof isolation", () => {
     );
     expect(upload.with.name).toBe("kit-edit-regression-${{ inputs.head_sha }}");
     expect(validate(head, head).status).toBe(0);
+  });
+
+  it("does not expose a dependency cache to the historical code", () => {
+    const setup = steps.find((step: { uses?: string }) =>
+      step.uses?.startsWith("actions/setup-node@"),
+    );
+    expect(setup.with["package-manager-cache"]).toBe(false);
+    expect(setup.with.cache).toBeUndefined();
+    expect(steps.some((step: { uses?: string }) => step.uses?.startsWith("actions/cache"))).toBe(
+      false,
+    );
   });
 
   it.each(["", "main", head.slice(0, 8), `${head}0`, "g".repeat(40), "$(exit 0)"])(
