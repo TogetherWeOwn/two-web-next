@@ -117,9 +117,11 @@ test("identity evidence files retain only validated SHA and timestamp, never res
       raw: [canary],
     };
     const mock = join(directory, "fetch.mjs");
+    const data = join(directory, "fetch-body.json");
+    writeFileSync(data, JSON.stringify(body));
     writeFileSync(
       mock,
-      `globalThis.fetch = async () => new Response(${JSON.stringify(JSON.stringify(body))});\n`,
+      'import { readFileSync } from "node:fs";\nconst text = readFileSync(new URL("./fetch-body.json", import.meta.url), "utf8");\nglobalThis.fetch = async () => new Response(text);\n',
     );
     for (const phase of ["before", "after"]) {
       const output = execFileSync(
