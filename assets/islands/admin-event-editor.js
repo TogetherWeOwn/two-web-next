@@ -52,11 +52,7 @@
       announce("Saving is not confirmed. Check the saved record before resubmitting.");
     }, SUBMIT_LOCK_MS);
   });
-  editor.addEventListener("input", function () {
-    saving = false;
-  });
   window.addEventListener("pageshow", function () {
-    saving = false;
     leavingForRecovery = false;
     unlock();
     announce("");
@@ -108,17 +104,17 @@
     notice.focus();
   });
   var reviewLink = document.querySelector('[data-testid="review-event"]');
-  if (reviewLink) {
-    // Both renderers emit the canonical saved-review URL ending in ?review=1.
-    var reviewHref = reviewLink.href;
-    function syncReviewHref() {
+  // Both renderers emit the canonical saved-review URL ending in ?review=1.
+  var reviewHref = reviewLink && reviewLink.href;
+  function onEdit() {
+    saving = false;
+    if (reviewLink)
       reviewLink.href = reviewHref + (draft || snapshot() !== initial ? "&unsaved=1" : "");
-    }
-    // New-tab and context-menu navigation use href without a click handler.
-    syncReviewHref();
-    editor.addEventListener("input", syncReviewHref);
-    editor.addEventListener("change", syncReviewHref);
   }
+  // New-tab and context-menu navigation use href without a click handler.
+  onEdit();
+  editor.addEventListener("input", onEdit);
+  editor.addEventListener("change", onEdit);
   window.addEventListener("beforeunload", function (event) {
     // Only Save or a normal, explicit recovery activation exempts one trip.
     // Modified/middle recovery clicks keep the current-document guard.
