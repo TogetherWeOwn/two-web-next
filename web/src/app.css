@@ -110,7 +110,8 @@ html body {
  * field errors rust (#9a3412), so on this canvas the inherited ink measured
  * ~1.0:1, the UA dark-scheme summary links ~2.3:1 and the errors ~2.5:1. The
  * summary takes the raised surface (keeping the inherited lobby ink) with
- * accent links; field errors take lobby ink with weight and the summary's
+ * accent links; field errors inherit the lobby ink from .field (inherit, not
+ * the token, keeps the client CSS budget) with weight and the summary's
  * existing --brand rail (3.49:1 on the canvas), so they read as errors
  * without relying on text color alone. The shared :focus-visible outline is
  * dark --ink (1.24:1 on the raised surface), so summary links take the lobby
@@ -123,7 +124,7 @@ html body {
   outline-color: var(--color-lobby-focus);
 }
 .kit-admin .field .error {
-  color: var(--color-lobby-ink);
+  color: inherit;
   font-weight: 600;
   border-left: 3px solid var(--brand);
   padding-left: 0.5rem;
