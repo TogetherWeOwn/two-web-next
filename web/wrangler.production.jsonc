@@ -1,0 +1,47 @@
+// Production Kit Worker config. It targets the same script name as
+// the root config's env.production (two-web-next-production) so a code-only
+// Version upload can replace the Hono Worker. Preparation only, not deploy
+// authority. Deliberately no "routes": the apex custom domain stays managed
+// by the root config, and this file never creates, moves or removes it.
+// Production consumers and crons live on two-web-jobs-production; this Worker
+// only produces. No QA_AUTH_TOKEN in production.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "two-web-next-production",
+  "main": "worker.js",
+  "compatibility_date": "2026-09-29",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  "workers_dev": false,
+  "preview_urls": false,
+  "placement": { "mode": "off" },
+  "tail_consumers": [{ "service": "two-web-next-alerts-production" }],
+  "version_metadata": { "binding": "CF_VERSION_METADATA" },
+  "keep_vars": true,
+  "triggers": { "crons": [] },
+  "queues": {
+    "producers": [
+      { "queue": "two-web-next-production-sync-event", "binding": "SYNC_EVENT_QUEUE" },
+      { "queue": "two-web-next-production-internal-action", "binding": "INTERNAL_ACTION_QUEUE" }
+    ]
+  },
+  "assets": {
+    "directory": ".svelte-kit/cloudflare",
+    "binding": "ASSETS",
+    "run_worker_first": true
+  },
+  "hyperdrive": [
+    { "binding": "DB", "id": "7489f6ad630042148cdef83602f27b8a" },
+    { "binding": "BOT_DB", "id": "14c00d84d1d446c1b117861f3b49473f" }
+  ],
+  "vars": {
+    "APP_URL": "https://togetherweown.com",
+    "FEATURED_IMAGE_HOSTS": "",
+    "DISCORD_CLIENT_ID": "1539711683898118154",
+    "DISCORD_GUILD_ID": "326474832151838730",
+    "DISCORD_MODERATOR_ROLE_IDS": "1546777855801954408,1546777856984481792",
+    "DISCORD_INVITE_URL": "https://discord.gg/4GwEDNRTtx",
+    "KIT_ROUTE_ARCHIVE": "false",
+    "KIT_ROUTE_STATIC": "false"
+  }
+}

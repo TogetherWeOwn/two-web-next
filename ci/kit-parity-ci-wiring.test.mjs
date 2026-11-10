@@ -97,6 +97,13 @@ test("both loopback parity workers inject the same healthy-empty Discord seam", 
     /env\.DISCORD_EVENTS = \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \};/,
   );
   assert.doesNotMatch(worker, /\{\s*\.\.\.env,\s*DISCORD_EVENTS/);
+  const harness = readFileSync(new URL("./parity/harness.ts", import.meta.url), "utf8");
+  assert.match(
+    harness,
+    /env\.DISCORD_EVENTS = \{ upcoming: async \(\) => \[\], lastReadFailed: \(\) => false \};/,
+  );
+  assert.doesNotMatch(harness, /\{\s*\.\.\.env,\s*DISCORD_EVENTS/);
+  assert.match(harness, /inner\.fetch\(mapped, env as never, ctx\)/);
   const hono = readFileSync(new URL("../e2e/worker.ts", import.meta.url), "utf8");
   assert.match(
     hono,
@@ -235,6 +242,6 @@ test("the required check runs the parity selftests in their own fail-closed step
   assert.doesNotMatch(step, /continue-on-error:/);
   assert.equal(
     step.match(/^        run: (.+)$/m)?.[1],
-    "node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/budget-fragments.test.mjs ci/bundle-inventory-acceptance.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs",
+    "node --test ci/kit-parity-gates.test.mjs ci/kit-parity-origin.test.mjs ci/check-kit-parity.test.mjs ci/check-kit-perf.test.mjs ci/budget-fragments.test.mjs ci/bundle-inventory-acceptance.test.mjs ci/kit-visual-accept.test.mjs ci/kit-parity-ci-wiring.test.mjs ci/kit-section-normalization.test.mjs ci/kit-canonical-retention.test.mjs ci/kit-canonical-source.test.mjs ci/kit-canonical-capture.test.mjs ci/kit-canonical-execute.test.mjs",
   );
 });

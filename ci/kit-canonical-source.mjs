@@ -1,0 +1,859 @@
+// Source-bound candidate interfaces. No collection admission or qualification is implied.
+import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
+import {
+  closeSync,
+  constants,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readdirSync,
+  openSync,
+  readSync,
+  realpathSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
+import { dirname, join, relative, resolve, sep } from "node:path";
+import { pathToFileURL } from "node:url";
+import { sha256 } from "./worker-bundle-evidence.mjs";
+
+const BASELINE = {
+  commit: "1fe09ab868a6fea4a7873e4a096523b78747b232",
+  tree: "454843aa9ac7b9f911020108ba539a4353ee977d",
+};
+const LIMITS = { files: 20000, fileBytes: 64 * 1024 * 1024, bytes: 512 * 1024 * 1024 };
+
+export function canonicalCellIdentity({ cell, candidateSha, collectorSha }) {
+  for (const value of [candidateSha, collectorSha]) {
+    assert.ok(
+      typeof value === "string" && /^[0-9a-f]{40}$/.test(value),
+      "explicit full source SHA required",
+    );
+  }
+  // Later cells have no accepted immutable source mapping yet. Never infer one.
+  assert.equal(cell, "B", "canonical cell has no approved source mapping");
+  assert.equal(candidateSha, BASELINE.commit, "canonical candidate does not match cell");
+  assert.notEqual(collectorSha, candidateSha, "collector cannot be the measured baseline");
+  return { cell, candidateSha, candidateTree: BASELINE.tree, collectorSha };
+}
+
+function directory(path) {
+  const root = resolve(path);
+  let current = root;
+  while (true) {
+    assert.ok(lstatSync(current).isDirectory(), "source directory missing or symlinked");
+    const parent = dirname(current);
+    if (parent === current) break;
+    current = parent;
+  }
+  assert.equal(realpathSync(root), root, "source directory alias");
+  return root;
+}
+
+function git(root, args) {
+  const result = spawnSync("git", ["-c", "core.fsmonitor=false", "-C", root, ...args], {
+    env: { PATH: process.env.PATH, LC_ALL: "C", GIT_OPTIONAL_LOCKS: "0" },
+    encoding: "utf8",
+    timeout: 30000,
+    maxBuffer: 8 * 1024 * 1024,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  assert.ok(!result.error && result.status === 0, "canonical source Git inspection failed");
+  return result.stdout;
+}
+
+function sourceBytes(root, path, remaining) {
+  assert.ok(
+    path.length <= 1024 &&
+      !/[\\\u0000-\u001f\u007f]/.test(path) &&
+      path.split("/").every((part) => part && part !== "." && part !== ".."),
+    "unsafe tracked source path",
+  );
+  directory(dirname(join(root, path)));
+  const fd = openSync(
+    join(root, path),
+    constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+  );
+  try {
+    const stat = fstatSync(fd);
+    assert.ok(
+      stat.isFile() && stat.size <= LIMITS.fileBytes && stat.size <= remaining,
+      "tracked source file exceeds bound or is not regular",
+    );
+    const bytes = Buffer.alloc(stat.size + 1);
+    let size = 0;
+    while (size < bytes.length) {
+      const count = readSync(fd, bytes, size, bytes.length - size, null);
+      if (!count) break;
+      size += count;
+    }
+    assert.equal(size, stat.size, "tracked source changed while reading");
+    return bytes.subarray(0, size);
+  } finally {
+    closeSync(fd);
+  }
+}
+
+export function inspectCanonicalSource(path, expectedSha) {
+  assert.ok(
+    typeof expectedSha === "string" && /^[0-9a-f]{40}$/.test(expectedSha),
+    "explicit full source SHA required",
+  );
+  const root = directory(path);
+  assert.equal(git(root, ["rev-parse", "--show-toplevel"]).trim(), root, "not source root");
+  const identity = () => {
+    assert.equal(git(root, ["rev-parse", "HEAD"]).trim(), expectedSha, "source HEAD mismatch");
+    assert.equal(
+      git(root, ["status", "--porcelain=v1", "--untracked-files=all"]),
+      "",
+      "source checkout is dirty",
+    );
+  };
+  identity();
+  const tree = git(root, ["rev-parse", `${expectedSha}^{tree}`]).trim();
+  const parents = git(root, ["show", "-s", "--format=%P", expectedSha]).trim();
+  assert.match(tree, /^[0-9a-f]{40}$/, "invalid source tree");
+  assert.ok(!parents || parents.split(" ").every((sha) => /^[0-9a-f]{40}$/.test(sha)));
+  const records = git(root, ["ls-tree", "-r", "-z", expectedSha]).split("\0");
+  assert.equal(records.pop(), "", "unterminated source inventory");
+  assert.ok(records.length > 0 && records.length <= LIMITS.files, "source file count bound");
+  let totalBytes = 0;
+  const files = records.map((record) => {
+    const match = /^(100644|100755) blob ([0-9a-f]{40})\t(.+)$/.exec(record);
+    assert.ok(match, "unsupported source tree member");
+    const [, mode, blob, path] = match;
+    const bytes = sourceBytes(root, path, LIMITS.bytes - totalBytes);
+    totalBytes += bytes.length;
+    const actual = createHash("sha1").update(`blob ${bytes.length}\0`).update(bytes).digest("hex");
+    assert.equal(actual, blob, "tracked source bytes differ from pinned tree");
+    assert.equal(
+      Boolean(lstatSync(join(root, path)).mode & 0o111),
+      mode === "100755",
+      "tracked source mode differs from pinned tree",
+    );
+    return { path, mode, blob, bytes: bytes.length, sha256: sha256(bytes) };
+  });
+  identity();
+  return {
+    commit: expectedSha,
+    tree,
+    parents: parents ? parents.split(" ") : [],
+    files,
+    filesSha256: sha256(JSON.stringify(files)),
+  };
+}
+
+export async function loadCanonicalAuthority(path, expectedSha) {
+  const root = directory(path);
+  const source = inspectCanonicalSource(root, expectedSha);
+  const input = source.files.find((file) => file.path === "ci/bundle-inventory.mjs");
+  assert.ok(input && input.bytes > 0 && input.bytes <= 256 * 1024, "candidate authority missing");
+  // Import the candidate's pinned authority in place, never a collector copy.
+  // A commit-specific URL also prevents a cached earlier revision at this path
+  // from silently supplying the inventory after a supported checkout changes.
+  const url = pathToFileURL(join(root, input.path));
+  url.searchParams.set("source", expectedSha);
+  let module;
+  try {
+    module = await import(url.href);
+  } catch {
+    throw new Error("candidate authority could not be loaded");
+  }
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  assert.equal(module.JSON_VERSION, 1, "unsupported candidate authority version");
+  const authority = {};
+  for (const key of ["KIT_WORKER_PATH", "KIT_SERVER_DIR", "KIT_CLIENT_DIR"]) {
+    assert.ok(
+      typeof module[key] === "string" && module[key].length > 0 && module[key].length <= 1024,
+      "invalid candidate authority path",
+    );
+    authority[key] = module[key];
+  }
+  assert.ok(
+    Array.isArray(module.KIT_GROUP_IDS) &&
+      module.KIT_GROUP_IDS.length === 4 &&
+      module.KIT_GROUP_IDS.every((id) => typeof id === "string" && /^[a-z.]{1,64}$/.test(id)) &&
+      new Set(module.KIT_GROUP_IDS).size === 4,
+    "invalid candidate authority groups",
+  );
+  authority.KIT_GROUP_IDS = Object.freeze([...module.KIT_GROUP_IDS]);
+  return {
+    evidence: "source-bound-candidate-authority-only",
+    source,
+    input,
+    // Retention still validates the canonical path/group contract. Loading does
+    // not execute the checker, establish tool provenance or admit collection.
+    authority: Object.freeze(authority),
+  };
+}
+
+export async function loadCanonicalStartup(path, expectedSha) {
+  const root = directory(path);
+  const source = inspectCanonicalSource(root, expectedSha);
+  const paths = [
+    "ci/check-worker-startup.mjs",
+    "ci/worker-startup-runner.mjs",
+    "ci/worker-startup-budget.json",
+  ];
+  const inputs = paths.map((path) => {
+    const file = source.files.find((file) => file.path === path);
+    assert.ok(
+      file && file.bytes > 0 && file.bytes <= 256 * 1024,
+      "candidate startup input missing",
+    );
+    return file;
+  });
+  assert.ok(inputs[2].bytes <= 4096, "candidate startup budget exceeds bound");
+  let startup;
+  let runner;
+  let budget;
+  try {
+    // Relative imports and the module-owned root remain in the candidate tree.
+    // Never copy the diagnostic or substitute the collector's budget/runner.
+    const load = (path) => {
+      const url = pathToFileURL(join(root, path));
+      url.searchParams.set("source", expectedSha);
+      return import(url.href);
+    };
+    startup = await load(paths[0]);
+    runner = await load(paths[1]);
+    budget = JSON.parse(sourceBytes(root, paths[2], 4096).toString("utf8"));
+  } catch {
+    throw new Error("candidate startup inputs could not be loaded");
+  }
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  assert.equal(
+    startup.METRIC,
+    "local_startup_non_idle_sample_ms",
+    "candidate startup metric drift",
+  );
+  for (const key of ["collect", "runCommand", "validateBudget", "validateEvidence", "summary"]) {
+    assert.equal(typeof startup[key], "function", "candidate startup interface missing");
+  }
+  assert.equal(typeof runner.runnerIdentity, "function", "candidate runner interface missing");
+  assert.ok(
+    typeof runner.RUNNER_IMAGE === "string" &&
+      /^node:24-bookworm@sha256:[0-9a-f]{64}$/.test(runner.RUNNER_IMAGE),
+    "candidate runner image invalid",
+  );
+  const original = JSON.stringify(budget);
+  try {
+    startup.validateBudget(budget);
+  } catch {
+    throw new Error("candidate startup budget invalid");
+  }
+  assert.equal(JSON.stringify(budget), original, "candidate startup budget mutated");
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  return {
+    evidence: "source-bound-candidate-startup-only",
+    source,
+    inputs,
+    budget: Object.freeze({ ...budget, tools: Object.freeze({ ...budget.tools }) }),
+    startup: Object.freeze({
+      collect: startup.collect,
+      runCommand: startup.runCommand,
+      validateEvidence: startup.validateEvidence,
+      summary: startup.summary,
+    }),
+    runner: Object.freeze({ image: runner.RUNNER_IMAGE, identity: runner.runnerIdentity }),
+    // Loading exports does not execute the build, collect profiles, verify the
+    // installed tools or establish the actual process/container identity.
+    executionVerified: false,
+  };
+}
+
+export async function observeCanonicalRunner(path, expectedSha) {
+  const root = directory(path);
+  const startup = await loadCanonicalStartup(root, expectedSha);
+  let runner;
+  try {
+    // Reuse the candidate's image/OS/Node/cgroup checks, not a collector replica.
+    // The image field is pipeline-declared, not independent image attestation.
+    const observed = startup.runner.identity();
+    assert.ok(observed && typeof observed === "object" && !Array.isArray(observed));
+    assert.equal(observed.image, startup.runner.image);
+    const bytes = JSON.stringify(observed);
+    assert.ok(bytes.length > 0 && Buffer.byteLength(bytes) <= 65536);
+    runner = JSON.parse(bytes);
+    // Bind the executable mapped into this Linux process, not a PATH lookup or
+    // version string. This fingerprint is observed locally, not a trusted pin.
+    const executable = realpathSync(process.execPath);
+    assert.equal(realpathSync("/proc/self/exe"), executable);
+    const fd = openSync(
+      executable,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
+    try {
+      const before = fstatSync(fd, { bigint: true });
+      assert.ok(before.isFile() && before.size > 0n && before.size <= 256n * 1024n * 1024n);
+      const identity = (stat) =>
+        ["dev", "ino", "mode", "nlink", "size", "mtimeNs", "ctimeNs"].map((key) => stat[key]);
+      assert.deepEqual(identity(statSync("/proc/self/exe", { bigint: true })), identity(before));
+      const hash = createHash("sha256");
+      const buffer = Buffer.alloc(1024 * 1024);
+      let size = 0n;
+      while (size <= before.size) {
+        const count = readSync(fd, buffer, 0, buffer.length, null);
+        if (!count) break;
+        size += BigInt(count);
+        assert.ok(size <= before.size);
+        hash.update(buffer.subarray(0, count));
+      }
+      assert.equal(size, before.size);
+      assert.deepEqual(identity(fstatSync(fd, { bigint: true })), identity(before));
+      assert.deepEqual(identity(lstatSync(executable, { bigint: true })), identity(before));
+      assert.deepEqual(identity(statSync("/proc/self/exe", { bigint: true })), identity(before));
+      assert.equal(realpathSync("/proc/self/exe"), executable);
+      runner.nodeExecutable = {
+        evidence: "observed-process-executable-only",
+        bytes: Number(size),
+        sha256: hash.digest("hex"),
+        version: process.version,
+        zlib: process.versions.zlib,
+        authenticated: false,
+      };
+    } finally {
+      closeSync(fd);
+    }
+  } catch {
+    throw new Error("candidate runner provenance unavailable");
+  }
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), startup.source);
+  return {
+    evidence: "unqualified-candidate-runner-observation",
+    source: startup.source,
+    inputs: startup.inputs,
+    runner,
+    executionVerified: false,
+  };
+}
+
+export const CANONICAL_PROFILE_FILES = Object.freeze([
+  "checkpoint.json",
+  "cold-1.cpuprofile",
+  "cold-1.json",
+  "cold-2.cpuprofile",
+  "cold-2.json",
+  "cold-3.cpuprofile",
+  "cold-3.json",
+  "empty.env",
+  "report.json",
+  "worker.bundle",
+]);
+
+// The candidate owns serialization/profiling and its numeric policy. Capture has
+// already completed; collect does not rebuild or replace any candidate source.
+export async function runCanonicalCandidateProfile(path, expectedSha, destination, identity) {
+  try {
+    const root = directory(path);
+    const startup = await loadCanonicalStartup(root, expectedSha);
+    const output = resolve(destination);
+    directory(dirname(output));
+    for (const [a, b] of [
+      [root, output],
+      [output, root],
+    ]) {
+      const distance = relative(a, b);
+      assert.ok(distance === ".." || distance.startsWith(`..${sep}`));
+    }
+    const encoded = JSON.stringify(identity);
+    assert.ok(encoded.length > 0 && Buffer.byteLength(encoded) <= 1024 * 1024);
+    const expected = JSON.parse(encoded);
+    assert.equal(expected.sha, expectedSha);
+    assert.equal(expected.commands, undefined);
+    assert.equal(expected.uploadSha256, undefined);
+    mkdirSync(output, { mode: 0o700 });
+    const report = await startup.startup.collect({
+      outdir: output,
+      budget: startup.budget,
+      identity: JSON.parse(encoded),
+      cli: join(root, "node_modules/wrangler/bin/wrangler.js"),
+      run: (command, args, options = {}) =>
+        startup.startup.runCommand(command, args, { ...options, cwd: root }),
+    });
+    for (const [key, value] of Object.entries(expected)) {
+      assert.deepEqual(report.identity[key], value, "candidate profile identity changed");
+    }
+    const profiles = [1, 2, 3].map((i) =>
+      sourceBytes(output, `cold-${i}.cpuprofile`, 8 * 1024 * 1024),
+    );
+    const status = startup.startup.validateEvidence(
+      report,
+      report.identity,
+      profiles,
+      startup.budget,
+    );
+    assert.ok(status === "pass" || status === "warn", "candidate profile failed");
+    assert.equal(report.status, status);
+    assert.equal(
+      sha256(sourceBytes(output, "worker.bundle", 32 * 1024 * 1024)),
+      report.identity.uploadSha256,
+    );
+    assert.equal(sourceBytes(output, "empty.env", 1).length, 0);
+    for (let i = 1; i <= 3; i++) {
+      assert.deepEqual(
+        JSON.parse(sourceBytes(output, `cold-${i}.json`, 1024 * 1024)),
+        report.runs[i - 1],
+      );
+    }
+    assert.deepEqual(JSON.parse(sourceBytes(output, "checkpoint.json", 1024 * 1024)), {
+      version: 1,
+      metric: "local_startup_non_idle_sample_ms",
+      status: "unavailable",
+      identity: report.identity,
+      runs: report.runs,
+    });
+    writeFileSync(join(output, "report.json"), `${JSON.stringify(report, null, 2)}\n`, {
+      flag: "wx",
+      mode: 0o600,
+    });
+    assert.deepEqual(readdirSync(output).sort(), CANONICAL_PROFILE_FILES);
+    const files = CANONICAL_PROFILE_FILES.map((path) => {
+      const bound =
+        path === "worker.bundle"
+          ? 32 * 1024 * 1024
+          : path.endsWith(".cpuprofile")
+            ? 8 * 1024 * 1024
+            : 1024 * 1024;
+      const bytes = sourceBytes(output, path, bound);
+      assert.ok(bytes.length > 0 || path === "empty.env");
+      return { path, bytes: bytes.length, sha256: sha256(bytes) };
+    });
+    assert.deepEqual(inspectCanonicalSource(root, expectedSha), startup.source);
+    return {
+      evidence: "unqualified-candidate-profile-return",
+      source: startup.source,
+      inputs: startup.inputs,
+      budget: startup.budget,
+      report,
+      files,
+      executionVerified: false,
+    };
+  } catch {
+    throw new Error("candidate profiling failed; retain output without retry");
+  }
+}
+
+export function inspectCanonicalPristineSource(path, expectedSha) {
+  const root = directory(path);
+  const inspectExtras = () => {
+    // status excludes ignored inputs: stale CSS, dependency trees and local env
+    // files can otherwise affect a nominally clean candidate before installation.
+    // --directory also reports ignored empty directories and nested repositories.
+    const ignored = git(root, [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--directory",
+      "-z",
+    ]);
+    assert.ok(ignored === "", "candidate has ignored pre-install inputs");
+    const untracked = git(root, ["ls-files", "--others", "--exclude-standard", "-z"]);
+    assert.ok(untracked === "", "candidate has untracked pre-install inputs");
+  };
+  // Inventory tracked bytes between two overlay checks. No cleanup or source
+  // repair is allowed here: unsupported candidate execution must stop instead.
+  inspectExtras();
+  const source = inspectCanonicalSource(root, expectedSha);
+  inspectExtras();
+  return {
+    ...source,
+    installBoundary: {
+      evidence: "observed-pristine-pre-install-source-only",
+      ignoredEntries: 0,
+      untrackedEntries: 0,
+    },
+  };
+}
+
+export function inspectCanonicalInstalledSource(path, expectedSha) {
+  const root = directory(path);
+  const source = inspectCanonicalSource(root, expectedSha);
+  const generatedPath = "src/leaf-critical-css.ts";
+  const dependencyPaths = ["node_modules", "web/node_modules"];
+  const inputPaths = [
+    "package.json",
+    "package-lock.json",
+    "web/package.json",
+    "web/package-lock.json",
+    "ci/build-leaf-css.mjs",
+    "public/styles.css",
+    "public/theme-tokens.css",
+    "public/theme.css",
+  ];
+  const inputs = inputPaths.map((path) => {
+    const file = source.files.find((file) => file.path === path);
+    assert.ok(file && file.bytes > 0, "candidate generator or install input missing");
+    return file;
+  });
+  assert.ok(
+    !source.files.some((file) => file.path === generatedPath),
+    "generated input unexpectedly tracked",
+  );
+  const observe = () => {
+    const ignored = git(root, [
+      "ls-files",
+      "--others",
+      "--ignored",
+      "--exclude-standard",
+      "--directory",
+      "-z",
+    ]).split("\0");
+    assert.equal(ignored.pop(), "", "missing post-install ignored inputs");
+    assert.deepEqual(
+      ignored.sort(),
+      [...dependencyPaths.map((path) => `${path}/`), generatedPath].sort(),
+      "unexpected post-install ignored inputs",
+    );
+    for (const path of dependencyPaths) directory(join(root, path));
+    return [generatedPath, ...dependencyPaths.map((path) => `${path}/.package-lock.json`)].map(
+      (path) => {
+        const bytes = sourceBytes(root, path, LIMITS.fileBytes);
+        assert.ok(bytes.length > 0, "empty generated input or installed lock");
+        return { path, bytes: bytes.length, sha256: sha256(bytes) };
+      },
+    );
+  };
+  const observed = observe();
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  assert.deepEqual(observe(), observed, "post-install inputs changed during observation");
+  return {
+    ...source,
+    installBoundary: {
+      evidence: "observed-post-install-inputs-only",
+      inputs,
+      generated: observed[0],
+      installedLocks: observed.slice(1),
+      // Lock snapshots are observations, not proof of installed package contents
+      // or that the candidate generator produced the observed CSS module.
+      dependenciesVerified: false,
+      generatorExecutionVerified: false,
+    },
+  };
+}
+
+// Use native npm policy, never a second resolver or an overlay in the candidate.
+// The observed version/config is not a package-byte or actual image/tool pin.
+export async function installCanonicalCandidate(path, expectedSha, { query = npmQuery } = {}) {
+  const root = directory(path);
+  const temporaryRoot = directory(tmpdir());
+  const outside = relative(root, temporaryRoot);
+  assert.ok(
+    outside === ".." || outside.startsWith(`..${sep}`),
+    "npm config would overlay candidate",
+  );
+  const configDirectory = mkdtempSync(join(temporaryRoot, "canonical-npm-config-"));
+  const globalConfig = join(configDirectory, "global.npmrc");
+  try {
+    // npm refuses loading the same /dev/null as both user and global config.
+    // Keep a distinct empty global file outside both source trees; never overlay B.
+    writeFileSync(globalConfig, "", { flag: "wx", mode: 0o600 });
+    return await nativeCandidateInstall(path, expectedSha, query, globalConfig);
+  } finally {
+    rmSync(configDirectory, { recursive: true, force: true });
+  }
+}
+
+async function nativeCandidateInstall(path, expectedSha, query, globalConfig) {
+  const root = directory(path);
+  const { installBoundary: pristine, ...source } = inspectCanonicalPristineSource(
+    root,
+    expectedSha,
+  );
+  const startup = await loadCanonicalStartup(root, expectedSha);
+  assert.deepEqual(startup.source, source, "candidate source changed");
+  const policyArgs = [
+    "--userconfig=/dev/null",
+    `--globalconfig=${globalConfig}`,
+    "--ignore-scripts",
+  ];
+  const version = query([...policyArgs, "--version"], root).trim();
+  assert.match(version, /^(10|11)\.[0-9]+\.[0-9]+$/, "unsupported candidate npm version");
+  assert.equal(
+    query([...policyArgs, "config", "get", "ignore-scripts"], root).trim(),
+    "true",
+    "native npm script refusal unavailable",
+  );
+  // Source review established this option on 11.19.0, not on npm 10. Do not
+  // silently upgrade the tool, pass unknown options or claim a lock age audit.
+  const ageSupported = Number(version.split(".")[0]) === 11 && Number(version.split(".")[1]) >= 19;
+  if (ageSupported) {
+    policyArgs.push("--min-release-age=3");
+    assert.equal(
+      query([...policyArgs, "config", "get", "min-release-age"], root).trim(),
+      "3",
+      "native npm release age unavailable",
+    );
+  }
+  assert.deepEqual(inspectCanonicalPristineSource(root, expectedSha), {
+    ...source,
+    installBoundary: pristine,
+  });
+  const commands = [];
+  for (const prefix of [[], ["--prefix", "web"]]) {
+    const command = {
+      executable: "npm",
+      args: [
+        ...policyArgs,
+        "ci",
+        ...prefix,
+        "--include=dev",
+        "--include=optional",
+        "--no-audit",
+        "--no-fund",
+      ],
+      cwd: "candidate-root",
+      timeoutMs: 240000,
+      maxBytes: 2097152,
+    };
+    try {
+      await startup.startup.runCommand(command.executable, [...command.args], {
+        cwd: root,
+        timeoutMs: command.timeoutMs,
+        maxBytes: command.maxBytes,
+      });
+    } catch {
+      throw new Error("candidate native install failed; retain output without retry");
+    }
+    commands.push(command);
+    assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  }
+  // Root/web lifecycle hooks were refused. Generate only with the pinned
+  // first-party input; build will independently rerun and compare these bytes.
+  try {
+    await startup.startup.runCommand(process.execPath, ["ci/build-leaf-css.mjs"], {
+      cwd: root,
+      timeoutMs: 30000,
+      maxBytes: 2097152,
+    });
+  } catch {
+    throw new Error("candidate install generator failed");
+  }
+  const installed = inspectCanonicalInstalledSource(root, expectedSha);
+  assert.deepEqual(installed, { ...source, installBoundary: installed.installBoundary });
+  return {
+    evidence: "unqualified-native-candidate-install-return",
+    source,
+    npmVersion: version,
+    scriptPolicy: "ignore-scripts",
+    releaseAge: ageSupported
+      ? { days: 3, configured: true, lockedReleaseAgesVerified: false }
+      : { configured: false, reason: "support-not-established-for-observed-version" },
+    commands,
+    generator: { executable: process.execPath, args: ["ci/build-leaf-css.mjs"] },
+    installBoundary: installed.installBoundary,
+    dependenciesVerified: false,
+    executionVerified: false,
+  };
+}
+
+function npmQuery(args, cwd) {
+  // CLI entrypoint already refuses credential-bearing environment variables.
+  // Ignore inherited npm config files even when HOME points at a shared cache.
+  const result = spawnSync("npm", args, {
+    cwd,
+    encoding: "utf8",
+    timeout: 10000,
+    maxBuffer: 16384,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  assert.ok(!result.error && result.status === 0 && !result.signal, "native npm query failed");
+  return result.stdout;
+}
+
+export function verifyCanonicalInstalledInputs(path, boundary) {
+  const root = directory(path);
+  const files = [boundary.generated, ...boundary.installedLocks];
+  assert.deepEqual(
+    files.map((file) => file.path),
+    [
+      "src/leaf-critical-css.ts",
+      "node_modules/.package-lock.json",
+      "web/node_modules/.package-lock.json",
+    ],
+    "candidate installed input paths changed",
+  );
+  for (const file of files) {
+    assert.ok(Number.isSafeInteger(file.bytes) && file.bytes > 0 && file.bytes <= LIMITS.fileBytes);
+    assert.match(file.sha256, /^[0-9a-f]{64}$/);
+    const bytes = sourceBytes(root, file.path, LIMITS.fileBytes);
+    assert.equal(bytes.length, file.bytes, "candidate installed input changed");
+    assert.equal(sha256(bytes), file.sha256, "candidate installed input changed");
+  }
+}
+
+export async function runCanonicalCandidateBuild(path, expectedSha, capture) {
+  assert.equal(typeof capture, "function", "candidate build capture required");
+  const root = directory(path);
+  const startup = await loadCanonicalStartup(root, expectedSha);
+  const inventory = await loadCanonicalAuthority(root, expectedSha);
+  const { installBoundary, ...source } = inspectCanonicalInstalledSource(root, expectedSha);
+  assert.deepEqual(startup.source, source, "candidate source changed");
+  assert.deepEqual(inventory.source, source, "candidate source changed");
+  const generatorCommand = {
+    executable: process.execPath,
+    args: ["ci/build-leaf-css.mjs"],
+    cwd: "candidate-root",
+    timeoutMs: 30000,
+    maxBytes: 2097152,
+  };
+  try {
+    await startup.startup.runCommand(generatorCommand.executable, [...generatorCommand.args], {
+      cwd: root,
+      timeoutMs: generatorCommand.timeoutMs,
+      maxBytes: generatorCommand.maxBytes,
+    });
+  } catch {
+    throw new Error("candidate generator execution failed");
+  }
+  // Re-run the pinned candidate's generator, not a collector replica. An
+  // installation that supplied different generated bytes is not silently fixed:
+  // require the exact pre-observed module/locks and unchanged overlay/source set.
+  assert.deepEqual(
+    inspectCanonicalInstalledSource(root, expectedSha),
+    { ...source, installBoundary },
+    "candidate generator inputs or output changed",
+  );
+  // The pinned generator already ran and its bytes were checked above. Native
+  // npm script refusal still runs the named build, without implicit pre/post
+  // hooks that would execute the generator again outside that observed boundary.
+  const command = {
+    executable: "npm",
+    args: ["--ignore-scripts", "run", "build", "--prefix", "web"],
+    cwd: "candidate-root",
+    timeoutMs: 240000,
+    maxBytes: 2097152,
+  };
+  let failed = false;
+  let buildError;
+  try {
+    await startup.startup.runCommand(command.executable, [...command.args], {
+      cwd: root,
+      timeoutMs: command.timeoutMs,
+      maxBytes: command.maxBytes,
+    });
+  } catch (error) {
+    failed = true;
+    buildError = error;
+  }
+  let captured;
+  try {
+    // The collector observes the return boundary before any source rechecks or
+    // profiler work, including when the candidate command failed. It owns raw
+    // byte retention and its failure journal; no later retry is performed here.
+    captured = await capture({
+      root,
+      authority: inventory.authority,
+      producerOutcome: failed ? "failure" : "success",
+    });
+  } catch (error) {
+    if (!failed) throw error;
+  }
+  if (failed) throw buildError;
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  // Build output is now expected. Recheck only the previously observed inputs,
+  // not the pre-build overlay set, without classifying dependency contents.
+  verifyCanonicalInstalledInputs(root, installBoundary);
+  return {
+    evidence: "unqualified-candidate-build-return",
+    source,
+    installBoundary,
+    startupInputs: startup.inputs,
+    authorityInput: inventory.input,
+    generator: {
+      evidence: "unqualified-candidate-generator-return",
+      command: generatorCommand,
+      input: installBoundary.inputs.find((file) => file.path === "ci/build-leaf-css.mjs"),
+      output: installBoundary.generated,
+      matchesObservedOutput: true,
+      executionVerified: false,
+    },
+    command,
+    capture: captured,
+    // A call through candidate code is not actual runtime/tool/image provenance,
+    // verified dependency contents, a separated workflow or collection admission.
+    dependenciesVerified: false,
+    executionVerified: false,
+  };
+}
+
+export async function runCanonicalCandidateBudget(path, expectedSha) {
+  const root = directory(path);
+  const source = inspectCanonicalSource(root, expectedSha);
+  const input = source.files.find((file) => file.path === "ci/check-kit-perf.mjs");
+  assert.ok(input && input.bytes > 0 && input.bytes <= 256 * 1024, "candidate checker missing");
+  const url = pathToFileURL(join(root, input.path));
+  url.searchParams.set("source", expectedSha);
+  let checker;
+  try {
+    checker = await import(url.href);
+  } catch {
+    throw new Error("candidate checker could not be loaded");
+  }
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  assert.equal(typeof checker.runJson, "function", "candidate checker interface missing");
+  let result;
+  try {
+    // The candidate resolves its own inventory, fragments and numeric ceilings.
+    // Never execute a collector checker against the candidate's build output.
+    result = checker.runJson(root);
+  } catch {
+    throw new Error("candidate checker execution failed");
+  }
+  assert.deepEqual(inspectCanonicalSource(root, expectedSha), source, "candidate source changed");
+  assert.ok([0, 1, 2].includes(result?.code), "candidate checker exit invalid");
+  assert.ok(
+    result.report && !Array.isArray(result.report) && result.report.version === 1,
+    "candidate report invalid",
+  );
+  const report = JSON.stringify(result.report);
+  assert.ok(report && Buffer.byteLength(report) <= 1024 * 1024, "candidate report bound");
+  return {
+    evidence: "unqualified-candidate-budget-execution",
+    source,
+    input,
+    code: result.code,
+    report: JSON.parse(report),
+    executionVerified: false,
+  };
+}
+
+export function bindCanonicalSources(collectorPath, candidatePath, context) {
+  const identity = canonicalCellIdentity(context);
+  const collectorRoot = directory(collectorPath);
+  const candidateRoot = directory(candidatePath);
+  for (const [a, b] of [
+    [collectorRoot, candidateRoot],
+    [candidateRoot, collectorRoot],
+  ]) {
+    const relation = relative(a, b);
+    assert.ok(
+      relation === ".." || relation.startsWith(`..${sep}`),
+      "collector and candidate roots must be separate and non-nested",
+    );
+  }
+  const collector = inspectCanonicalSource(collectorRoot, identity.collectorSha);
+  const candidate = inspectCanonicalPristineSource(candidateRoot, identity.candidateSha);
+  assert.equal(candidate.tree, identity.candidateTree, "canonical candidate tree mismatch");
+  assert.ok(
+    collector.files.some((file) => file.path === ".github/workflows/ci.yml"),
+    "collector workflow missing",
+  );
+  return {
+    schema: "two.kit-canonical-source.v1",
+    evidence: "unqualified-source-identity-only",
+    // Post-install generated inputs/dependencies and build environment need separate proof.
+    trackedFilesOnly: true,
+    cell: identity.cell,
+    collector,
+    candidate,
+    // For B the approved patch inventory is exactly empty, not a workflow diff.
+    sourcePatch: { base: BASELINE.commit, files: [] },
+  };
+}

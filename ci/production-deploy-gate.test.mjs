@@ -743,14 +743,15 @@ test("manual production workflow routes runners by repo visibility and uses prod
   assert.ok(!/secrets\.PRODUCTION_/.test(soak), "staging-soak never sees production secrets");
   assert.match(soak, /run: node ci\/production-deploy-gate\.mjs --staging-soak\n/);
   // Credentials check, required-secrets preflight, rollback-target check,
-  // production Tail deploy, version upload, promotion and the auto-rollback
-  // explicit secret map: all production-only. The regression check keeps
+  // production Tail deploy, version upload, promotion, native pure-Hono
+  // capture and the auto-rollback explicit secret map: all production-only.
+  // The regression check keeps
   // the production account id for its baseline query but reads analytics
   // with the repo-level read-only token, so only the account id appears
   // there.
   for (const [key, count] of Object.entries({
-    CLOUDFLARE_API_TOKEN: 7,
-    CLOUDFLARE_ACCOUNT_ID: 8,
+    CLOUDFLARE_API_TOKEN: 8,
+    CLOUDFLARE_ACCOUNT_ID: 9,
   })) {
     assert.equal(
       (workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length,
@@ -767,7 +768,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   const upload = workflow.indexOf("npx wrangler versions upload --env production --tag ");
   const gradual = workflow.indexOf(
-    "uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06",
+    "uses: TogetherWeOwn/.github/actions/gradual-promote@97cadcb231e55fad95cbc6468be078ecef571bc2 # v0.9.1",
   );
   assert.ok(
     credentialCheck > 0 &&
@@ -783,7 +784,7 @@ test("manual production workflow routes runners by repo visibility and uses prod
   );
   // Promotion lives in the shared composite action: the caller only passes
   // the tag built from the exact same three parts as the upload tag above.
-  const call = workflow.slice(gradual, gradual + 800);
+  const call = workflow.slice(gradual, workflow.indexOf("\n      - name: ", gradual));
   assert.match(call, /worker-name: two-web-next-production/);
   assert.match(
     call,
@@ -983,11 +984,24 @@ test("rollback workflow reuses the production gate with no wider permissions", (
   // Credential check before the mutation.
   for (const key of ["CLOUDFLARE_API_TOKEN", "CLOUDFLARE_ACCOUNT_ID"]) {
     // Credentials check, live-version guard, rollback target-version secrets
-    // preflight and the rollback itself.
+    // preflight, read-only dry-run report and the rollback itself.
     const selector = `\${{ inputs.environment == 'production' && secrets.PRODUCTION_${key} || inputs.environment != 'production' && secrets.${key} || '' }}`;
-    assert.equal(workflow.split(selector).length - 1, 4);
-    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 4);
-    assert.equal((workflow.match(new RegExp(`secrets\\.${key}\\b`, "g")) ?? []).length, 4);
+    assert.equal(workflow.split(selector).length - 1, 5);
+    // The archive verifier has one additional production-only reference,
+    // never a staging fallback or a job-wide credential grant.
+    const archive = workflow.slice(
+      workflow.indexOf("      - name: Verify requested pure-Hono rollback archive (read-only)"),
+      workflow.indexOf("      - name: Archive verified pure-Hono rollback receipt"),
+    );
+    assert.ok(
+      archive.includes(
+        `${key}: \${{ inputs.environment == 'production' && secrets.PRODUCTION_${key} || '' }}`,
+      ),
+    );
+    assert.ok(!archive.includes(`secrets.${key}`));
+    assert.ok(archive.includes("assert.equal(process.env.ROLLBACK_ENVIRONMENT, 'production'"));
+    assert.equal((workflow.match(new RegExp(`secrets\\.PRODUCTION_${key}`, "g")) ?? []).length, 6);
+    assert.equal((workflow.match(new RegExp(`secrets\\.${key}\\b`, "g")) ?? []).length, 5);
   }
   const versionCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --version-id");
   const credentialCheck = workflow.indexOf("run: node ci/production-deploy-gate.mjs --credentials");
@@ -1622,10 +1636,7 @@ test("each gradual stage also judges the new version's live error rate before ro
   assert.equal((action.match(/id: error-rate-(5|50|100)\n/g) ?? []).length, 3);
   // End-of-line anchor: a trailing `|| true` on the run line would
   // neutralize the gate while an unanchored count stays green.
-  assert.equal(
-    (action.match(/node "\$\{\{ github\.action_path \}\}\/error-rate-gate\.mjs"$/gm) ?? []).length,
-    3,
-  );
+  assert.equal((action.match(/node "\$ACTION_PATH\/error-rate-gate\.mjs"$/gm) ?? []).length, 3);
   // The gate reads analytics with the same caller-supplied token/account
   // pair as the wrangler steps; the rehearsal-only fixture override must
   // never be reachable from the production promotion path.
@@ -1679,6 +1690,7 @@ test("each gradual stage also judges the new version's live error rate before ro
     const block = stepBlock(`Live error-rate gate at ${pct} percent`);
     assert.ok(block.includes("if: inputs.error-rate-gate == 'true'\n"), `gate ${pct} if guard`);
     for (const envLine of [
+      "ACTION_PATH: ${{ github.action_path }}",
       "WORKER_NAME: ${{ inputs.worker-name }}",
       "NEW_VERSION: ${{ steps.promoted-version.outputs.id }}",
       "CLOUDFLARE_API_TOKEN: ${{ inputs.api-token }}",
@@ -1695,6 +1707,29 @@ test("each gradual stage also judges the new version's live error rate before ro
     // A swallowed failure would never reach the rollback step.
     assert.ok(!block.includes("continue-on-error"), `gate ${pct} must not swallow its failure`);
   }
+});
+
+test("production promotion refuses a missing recovery verifier before spawning a caller", async () => {
+  const { runPrePromotionCheck } = await import(
+    "../.github/actions/gradual-promote/pre-promotion-check.mjs"
+  );
+  let calls = 0;
+  const spawn = () => {
+    calls += 1;
+    throw new Error("an absent verifier must not execute a caller");
+  };
+  await assert.rejects(
+    runPrePromotionCheck({ REQUIRE_PRE_PROMOTION_VERIFIER: "true" }, spawn),
+    /verifier must be a repository-relative checked-in/,
+  );
+  assert.equal(calls, 0);
+  await runPrePromotionCheck({}, spawn);
+  assert.equal(calls, 0, "non-opted-in synthetic callers retain the existing behavior");
+  await assert.rejects(
+    runPrePromotionCheck({ REQUIRE_PRE_PROMOTION_VERIFIER: "unknown" }, spawn),
+    /invalid verifier requirement/,
+  );
+  assert.equal(calls, 0);
 });
 
 test("the staging rehearsal requires the elevated-rate verdict, not any non-zero exit", () => {

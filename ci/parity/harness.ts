@@ -156,14 +156,10 @@ export function parityWorker(inner: InnerWorker) {
         redirect: "manual",
       });
       try {
-        const response = await inner.fetch(
-          mapped,
-          {
-            ...env,
-            DISCORD_EVENTS: { upcoming: async () => [], lastReadFailed: () => false },
-          } as never,
-          ctx,
-        );
+        // Kit reads the ambient cloudflare:workers env, not a spread copy.
+        // Both targets must observe the same healthy-empty Discord fixture.
+        env.DISCORD_EVENTS = { upcoming: async () => [], lastReadFailed: () => false };
+        const response = await inner.fetch(mapped, env as never, ctx);
         const out = new Response(response.body, response);
         out.headers.set("x-parity-route", capture.route ?? "");
         out.headers.set("x-parity-alerts", JSON.stringify(capture.alerts));

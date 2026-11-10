@@ -236,6 +236,77 @@ differs before its hook runs (trailing-slash 308, method handling, automatic
 | Wildcard middleware and branded 404 (`/*`, `/admin/*`, `/admin/queue/*`, `/members/*`) | `routes/ALL.json`, `routes/*_ALL.json` | Hono |
 | Static assets (`public/**`) | `static/*.json` | Hono (Workers assets, `run_worker_first`) |
 
+### Production all-families-off comparison
+
+The `check` job runs `node --import tsx ci/parity/production.mjs` after the
+adapter build. It records fresh pure-Hono goldens from the retained root entry
+with `env.production` configuration, then compares the complete inventory with
+`web/wrangler.production.jsonc` under `wrangler dev --local`. Both targets use
+the production origin and production vars, with fixture credentials and separate
+clones of the disposable Actions Postgres service. Same-origin vectors follow
+the target origin; cross-origin and missing-Origin vectors remain hostile. This
+avoids accidentally testing only cross-origin refusals or enabling the preview
+manifest while claiming to test the production all-off configuration.
+
+The `production-kit-parity-<sha>` artifact retains both recordings and the
+comparison report, including route/tail labels and full response headers. The
+existing committed goldens and pure-Hono determinism gate are unchanged. A fresh
+production-origin recording does not claim the staging-origin committed bytes
+are interchangeable. Missing vectors and unapproved differences fail the gate;
+a draft fast-pass, dry-run bundle, or unexecuted step is not parity evidence.
+
+The production comparison also discovers every generated `/_app/immutable/*`
+file and `/_app/version.json` from the built asset directory. Both Workers
+receive the same supplemental paths and the same method and conditional vectors.
+`asset-headers.json` compares every security-header name emitted by
+`securityHeadersFor` against Hono at that URL, byte for byte; it fails on a
+missing header even when both sides omit it. Plain GET and HEAD must actually
+serve the built asset (200), not a hook fallback or missing-file response. The
+artifact retains each complete response, not only the selected header values.
+
+These supplemental files did not exist in the pure-Hono public inventory, so
+this is a security-header contract, not a claim that their bodies, cache policy,
+status or route labels equal Hono's 404. No existing route/static inventory row
+is projected this way: all of those still compare their entire responses,
+including headers, bodies, cookies and tail labels. Supplemental paths cannot
+replace a shared public file. The gate also requires the built `_headers` to
+retain the reviewed source policy. Adapter 8.0.2 reads `_headers` from the web
+project root itself; moving it into `static/` is explicitly unsupported.
+
+The hook preempts Kit's automatic conditional-response rewrite only for its
+exact match rule (including a leading weak validator). It returns the 304 with
+the complete header set and cookies, rather than Kit's cache-header-only copy.
+Existing Hono 304s pass through unchanged. A pure-Hono 200 that becomes a 304 is
+still a parity difference: no exception is approved by implementing the header
+protection. Record its exact vector and obtain the required technical approval
+before adding any row below.
+
+The production config wraps the unmodified adapter entry with `web/worker.js`.
+Its outer response boundary covers Kit's fatal error rendering and post-hook
+rewrites. Responses with all shared security headers return untouched; a missing
+or empty security header triggers the complete path/method envelope, no-store,
+renderer/origin markers and safe request correlation. The exact existing fatal
+style hash is allowed only on HTML error bodies containing that style element.
+This is not a new parity exception or a change to the fatal template. Production
+parity now exercises that wrapper as the config entry. The separate built fatal
+fixture replaces only the compiled hook in an ephemeral bundle, throws before
+`resolve`, and checks Kit's real fatal HTML/JSON/HEAD responses through the same
+wrapper. It deploys nothing and uses no database or live credentials. Its
+`kit-worker-fatal-<sha>` evidence is a failure/success receipt, not a substitute
+for full inventory parity, independent Security review or release approval.
+
+These comparisons use ephemeral Actions-local Workers and databases. They do
+not start a staging service, attach alarms, provision resources or deploy a
+version. Staging qualification and rollback drills remain separate evidence;
+idle staging/preview must incur no recurring always-on runtime cost. Inventory
+Containers, Durable Objects and alarms, scheduled Workers, Stream inputs and DB
+compute; use pipeline-owned bounded startup/readiness tied to the tested SHA,
+then native stop/scale-to-zero and cleanup/expiry even on failure or cancellation.
+An unsupported lifecycle control is a prerequisite, not permission to skip
+qualification. Always-on exceptions require dated owner spend authorization
+with resource scope, recurring cost and expiry/review date. Production is
+untouched by this local comparison.
+
 ### Approved route-parity exceptions
 
 `ci/parity/compare.mjs` reads this table. A row approves one field of one

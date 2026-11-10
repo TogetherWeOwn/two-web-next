@@ -1,0 +1,145 @@
+import { readFileSync } from "node:fs";
+import { createRequire } from "node:module";
+import { describe, expect, it } from "vitest";
+
+const require = createRequire(import.meta.url);
+const { readWranglerConfig } = require("../ci/wrangler-config.mjs");
+
+// web/wrangler.production.jsonc is the reviewed Kit Worker config for the
+// production script name. It must mirror the root env.production bindings and
+// vars, add only the two Kit route flags, own no routes, crons or consumers,
+// and leave the root Hono entry unchanged.
+
+const read = (path: string) => readFileSync(path, "utf8");
+const kit = readWranglerConfig(read("web/wrangler.production.jsonc"));
+const main = readWranglerConfig(read("wrangler.jsonc"));
+const jobs = readWranglerConfig(read("wrangler.jobs.jsonc"));
+const prod = main.env.production;
+
+describe("production Kit Worker config (web/wrangler.production.jsonc)", () => {
+  it("uses the production script name and the Kit build output", () => {
+    expect(kit.name).toBe("two-web-next-production");
+    expect(kit.name).toBe(prod.name);
+    expect(kit.main).toBe("worker.js");
+    const adapter = readWranglerConfig(read("web/wrangler.jsonc"));
+    expect(adapter.main).toBe(".svelte-kit/cloudflare/_worker.js");
+    const entry = read("web/worker.js");
+    expect(entry).toContain('import adapter from "./.svelte-kit/cloudflare/_worker.js"');
+    expect(entry).toContain(
+      'import { protectKitWorkerResponse } from "../src/kit-worker-response.ts"',
+    );
+    expect(entry).toContain(
+      "protectKitWorkerResponse(request, await adapter.fetch(request, env), env)",
+    );
+    expect(kit.assets).toEqual({
+      directory: ".svelte-kit/cloudflare",
+      binding: "ASSETS",
+      run_worker_first: true,
+    });
+  });
+
+  it("types the production boundary before the generated adapter exists", () => {
+    const entry = read("web/worker.js");
+    const declaration = read("web/src/adapter-worker.d.ts");
+    const tsconfig = JSON.parse(read("web/tsconfig.json"));
+    expect(entry).toContain("@param {Request} request");
+    expect(entry).toContain("@param {Cloudflare.Env} env");
+    expect(declaration).toContain('declare module "*/.svelte-kit/cloudflare/_worker.js"');
+    expect(declaration).toContain(
+      "fetch(request: Request, env: Cloudflare.Env): Promise<Response>",
+    );
+    expect(tsconfig.include).toContain("src");
+    expect(tsconfig.include).toContain("*");
+    expect(tsconfig.compilerOptions.strict).toBe(true);
+    expect(tsconfig.exclude).not.toContain("worker.js");
+  });
+
+  it("requires the built fatal-response proof after the adapter build in Actions", () => {
+    const workflow = read(".github/workflows/ci.yml");
+    const build = workflow.indexOf("name: Kit adapter build and local startup diagnostic");
+    const fatal = workflow.indexOf("name: Production Kit fatal-response boundary");
+    const parity = workflow.indexOf("name: Production Kit all-family-off route parity");
+    expect(build).toBeGreaterThan(-1);
+    expect(fatal).toBeGreaterThan(build);
+    expect(parity).toBeGreaterThan(fatal);
+    expect(workflow).toContain(
+      "node --import tsx --test --test-timeout=150000 ci/kit-worker-fatal.test.mjs",
+    );
+    expect(workflow).toContain("KIT_WORKER_FATAL_EVIDENCE_DIR: artifacts/kit-worker-fatal");
+  });
+
+  it("rehearses the same-byte Kit upload and retains build-only evidence", () => {
+    const workflow = read(".github/workflows/ci.yml");
+    const build = workflow.indexOf("name: Production Kit Worker config dry run (no deploy)");
+    const replay = workflow.indexOf("name: Production Kit same-byte upload rehearsal (no deploy)");
+    const archive = workflow.indexOf("name: Production Kit bundle build evidence");
+    const fatal = workflow.indexOf("name: Production Kit fatal-response boundary");
+    expect(build).toBeGreaterThan(-1);
+    expect(replay).toBeGreaterThan(build);
+    expect(archive).toBeGreaterThan(replay);
+    expect(fatal).toBeGreaterThan(archive);
+    const steps = workflow.slice(build, fatal);
+    expect(steps).toContain(
+      '--metafile "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/bundle-meta.json"',
+    );
+    expect(steps).toContain(
+      'node node_modules/wrangler/bin/wrangler.js versions upload --config web/wrangler.production.jsonc --dry-run --no-bundle "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js"',
+    );
+    expect(steps).toContain(
+      'cmp "$GITHUB_WORKSPACE/artifacts/kit-production-worker-dry-run/worker.js" "$GITHUB_WORKSPACE/artifacts/kit-production-worker-replay/worker.js"',
+    );
+    expect(steps).toContain("if-no-files-found: error");
+    expect(steps).not.toContain("continue-on-error");
+    expect(steps).toContain("artifacts/kit-production-worker-dry-run/");
+    expect(steps).toContain("artifacts/kit-production-worker-replay/");
+    expect(steps).not.toContain("${{ runner.temp }}");
+  });
+
+  it("preserves the production runtime settings", () => {
+    expect(kit.placement).toEqual({ mode: "off" });
+    expect(kit.placement).toEqual(prod.placement);
+    expect(kit.compatibility_date).toBe(main.compatibility_date);
+    expect(kit.compatibility_flags).toEqual(main.compatibility_flags);
+    expect(kit.observability).toEqual(main.observability);
+    expect(kit.workers_dev).toBe(false);
+    expect(kit.preview_urls).toBe(false);
+    expect(kit.keep_vars).toBe(true);
+    expect(kit.tail_consumers).toEqual(prod.tail_consumers);
+    expect(kit.version_metadata).toEqual(prod.version_metadata);
+  });
+
+  it("repeats every production binding and var", () => {
+    expect(kit.hyperdrive).toEqual(prod.hyperdrive);
+    expect(kit.queues).toEqual(prod.queues);
+    const { KIT_ROUTE_ARCHIVE, KIT_ROUTE_STATIC, ...inherited } = kit.vars;
+    expect(inherited).toEqual(prod.vars);
+    expect(KIT_ROUTE_ARCHIVE).toBe("false");
+    expect(KIT_ROUTE_STATIC).toBe("false");
+  });
+
+  it("has no QA surface, consumers, crons or routes", () => {
+    expect(kit.vars).not.toHaveProperty("QA_AUTH_TOKEN");
+    expect(JSON.stringify(kit)).not.toMatch(/QA_/);
+    expect(kit.queues.consumers).toBeUndefined();
+    expect(kit.queues.producers).toHaveLength(2);
+    expect(kit.triggers).toEqual({ crons: [] });
+    expect(kit.routes).toBeUndefined();
+    expect(kit.route).toBeUndefined();
+    expect(kit.env).toBeUndefined();
+  });
+
+  it("leaves consumers and crons solely with the production jobs Worker", () => {
+    const jobsProd = jobs.env.production;
+    const consumed = (jobsProd.queues?.consumers ?? []).map((c: { queue: string }) => c.queue);
+    const produced = kit.queues.producers.map((p: { queue: string }) => p.queue);
+    expect(consumed.sort()).toEqual([...produced].sort());
+    expect(jobsProd.triggers.crons.length).toBeGreaterThan(0);
+    expect(kit.triggers.crons).toEqual([]);
+  });
+
+  it("leaves the root Hono production entry unchanged", () => {
+    expect(main.main).toBe("src/worker.ts");
+    expect(prod.name).toBe("two-web-next-production");
+    expect(prod.routes).toEqual([{ pattern: "togetherweown.com", custom_domain: true }]);
+  });
+});

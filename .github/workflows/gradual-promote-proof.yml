@@ -238,7 +238,7 @@ jobs:
       # never masked (no continue-on-error anywhere in this workflow).
       - name: Gradual promotion via the pinned central action
         id: gradual
-        uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06
+        uses: TogetherWeOwn/.github/actions/gradual-promote@97cadcb231e55fad95cbc6468be078ecef571bc2 # v0.9.1
         with:
           worker-name: two-gradual-promote-proof
           version-tag: ${{ steps.candidate.outputs.candidate_tag }}
@@ -246,6 +246,8 @@ jobs:
           api-token: ${{ secrets.CLOUDFLARE_API_TOKEN }}
           account-id: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
           allow-indexable: "false"
+          # Disposable synthetic fixture only; never production recovery proof.
+          require-pre-promotion-verifier: "false"
 
       # Independent readback (not the action's helper): the final live
       # deployment must be the candidate at 100% after a successful

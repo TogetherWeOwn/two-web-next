@@ -16,6 +16,15 @@ on:
         required: false
         type: boolean
         default: false
+      kit_route_family:
+        description: Kit production route family; the default keeps all routes on Hono. Automatic runs always use hono. Not yet consumed by the deploy
+        type: choice
+        required: true
+        default: hono
+        options:
+          - hono
+          - archive
+          - archive-static
   workflow_run:
     workflows: [e2e-staging]
     types: [completed]
@@ -51,6 +60,9 @@ jobs:
       rollback_version_id: ${{ steps.rollback-target.outputs.version_id }}
       rollback_commit: ${{ steps.rollback-target.outputs.commit }}
       started_at: ${{ steps.start.outputs.started_at }}
+      kit_route_family: ${{ steps.kit-route-flags.outputs.family }}
+      kit_archive: ${{ steps.kit-route-flags.outputs.archive }}
+      kit_static: ${{ steps.kit-route-flags.outputs.static }}
     # The org's two-selfhosted runner group refuses public repos (TOG-12326):
     # GitHub-hosted while public, the self-hosted fleet while private.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
@@ -78,6 +90,19 @@ jobs:
           INPUT_SHA: ${{ inputs.sha }}
           GITHUB_TOKEN: ${{ github.token }}
           GITHUB_EVENT_NAME: ${{ github.event_name }}
+      - name: Select and validate Kit route families
+        id: kit-route-flags
+        # Tip code, validated before approval. Only an explicit dispatch input
+        # can leave hono; schedule and workflow_run promotions always keep every
+        # Kit route family off. Validation only: no later step consumes these
+        # outputs yet, so the input changes nothing that deploys.
+        if: steps.target.outputs.sha != ''
+        run: |
+          set -euo pipefail
+          node ci/kit-route-flags.mjs
+          echo "family=${KIT_ROUTE_FAMILY:-hono}" >> "$GITHUB_OUTPUT"
+        env:
+          KIT_ROUTE_FAMILY: ${{ github.event_name == 'workflow_dispatch' && inputs.kit_route_family || 'hono' }}
       # Clean skip when automatic promotion has nothing soaked and green to
       # promote: the resolver exits 0 with an empty sha, and every step below
       # stands down so the run stays green without deploying.
@@ -492,8 +517,12 @@ jobs:
       # stays above.
       - name: Gradual promotion 5-50-100 with automatic rollback
         id: gradual
-        uses: TogetherWeOwn/.github/actions/gradual-promote@89c290be20c0044efaf6916f28341c76e75fff06
+        uses: TogetherWeOwn/.github/actions/gradual-promote@97cadcb231e55fad95cbc6468be078ecef571bc2 # v0.9.1
         with:
+          # No verifier is configured until custody and current-environment
+          # qualification are implemented. Missing evidence blocks promotion;
+          # do not substitute the build-only archive verifier or a no-op.
+          require-pre-promotion-verifier: "true"
           worker-name: two-web-next-production
           version-tag: ${{ needs.preflight.outputs.sha }}-${{ github.run_id }}-${{ github.run_attempt }}
           domain: togetherweown.com
@@ -584,6 +613,15 @@ jobs:
         env:
           BUILD_SHA: ${{ needs.preflight.outputs.sha }}
           PROMOTED_VERSION_ID: ${{ steps.gradual.outputs.promoted-version-id }}
+      - name: Capture native pure-Hono rollback evidence
+        # The current upload remains Hono. Do not classify a Kit all-off build
+        # as pure Hono. Only the digest-bound pointer is archived, never the
+        # native response's binding values. This archive still expires.
+        run: node workflow-tip/ci/pure-hono-rollback.mjs capture dist-production dist-production/pure-hono-rollback.json
+        env:
+          BUILD_SHA: ${{ needs.preflight.outputs.sha }}
+          CLOUDFLARE_API_TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.PRODUCTION_CLOUDFLARE_ACCOUNT_ID }}
       - name: Archive production bundle inventory and receipts
         if: ${{ !cancelled() && steps.inventory.outcome == 'success' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2

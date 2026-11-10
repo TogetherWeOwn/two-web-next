@@ -1,6 +1,8 @@
 import { safeRequestId } from "../../../src/request-log";
 import type { LayoutServerLoad } from "./$types";
 
+export const trailingSlash = "ignore";
+
 // Root layout data: forward the dispatch's validated request id to every page
 // and error boundary as page.data.requestId. No session, cookie or DB reads —
 // the hook merged the id into locals before resolve, so this load only

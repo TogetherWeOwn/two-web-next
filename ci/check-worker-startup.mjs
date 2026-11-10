@@ -9,6 +9,7 @@ import { arch, platform } from "node:os";
 import { runnerIdentity } from "./worker-startup-runner.mjs";
 import { join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { captureAfterCanonicalBuild } from "./kit-canonical-capture.mjs";
 
 const root = fileURLToPath(new URL("../", import.meta.url));
 export const METRIC = "local_startup_non_idle_sample_ms";
@@ -587,7 +588,28 @@ async function main() {
       [],
     );
     stage = "build";
-    await runCommand("npm", ["run", "build", "--prefix", "web"], { timeoutMs: 240000 });
+    const runBuild = () =>
+      runCommand("npm", ["run", "build", "--prefix", "web"], { timeoutMs: 240000 });
+    if (process.env.CANONICAL_CAPTURE_DIRECTORY) {
+      const destination = resolve(root, process.env.CANONICAL_CAPTURE_DIRECTORY);
+      requireValue(
+        relative(root, destination).startsWith("artifacts/"),
+        "Canonical capture must be a new directory under artifacts/",
+      );
+      await captureAfterCanonicalBuild(
+        root,
+        destination,
+        {
+          sourceSha: process.env.GITHUB_SHA,
+          workflowSha: process.env.GITHUB_WORKFLOW_SHA,
+          runId: process.env.GITHUB_RUN_ID,
+          runAttempt: process.env.GITHUB_RUN_ATTEMPT,
+        },
+        runBuild,
+      );
+    } else {
+      await runBuild();
+    }
     stage = "serialize/profile";
     const evidence = await collect({
       outdir,

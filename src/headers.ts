@@ -33,7 +33,7 @@ export const SECURITY_HEADERS: Record<string, string> = {
 // dev/test host — crawlers must not index it (ports the nginx
 // `map $host $robots_tag` staging-noindex half of TOG-8729; the Sitemap-host
 // half already lives in src/seo.ts per TOG-7071).
-const PRODUCTION_APEX = "togetherweown.com";
+export const PRODUCTION_APEX = "togetherweown.com";
 
 const hostOf = (value: string): string | null => {
   try {

@@ -27,7 +27,7 @@
     "capture:verify": "node --import tsx bin/ember-capture.mjs verify",
     "check:hono-payloads": "node ci/check-hono-payloads.mjs",
     "check:route-parity": "node --import tsx ci/parity/check.mjs",
-    "check:route-parity:selftest": "node --test ci/parity/parity.test.mjs && node ci/parity/signed-cookies.mjs",
+    "check:route-parity:selftest": "node --test ci/parity/*.test.mjs && node ci/parity/signed-cookies.mjs",
     "check:offline": "node ci/offline-check.mjs",
     "check:refusals": "node --import tsx ci/check-refusal-vocabulary.mjs",
     "check:machine-contract": "node --import tsx ci/check-machine-contract.mjs",
