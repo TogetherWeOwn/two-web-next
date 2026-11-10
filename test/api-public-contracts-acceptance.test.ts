@@ -23,26 +23,21 @@
 // corrections return to the Test Author.
 import { readFileSync, readdirSync } from "node:fs";
 import { URL } from "node:url";
-import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import app from "./app";
-import { events } from "../src/db/admin-schema";
 import type { Env } from "../src/env";
 import { PUBLIC_EVENT_READS_PER_MINUTE } from "../src/events/routes-shared";
-import {
-  API_PUBLIC_BOUNDS,
-  PUBLIC_DATA_ERROR_CODES,
-  PUBLIC_DATA_ERROR_NEXT,
-} from "../src/public-data/contracts";
+import { API_PUBLIC_BOUNDS, PUBLIC_DATA_ERROR_CODES } from "../src/public-data/contracts";
 import { API_PUBLIC_CACHE_TTL_MS, __resetApiPublicCacheForTests } from "../src/public-data/cache";
 import { getOpenApiDocument } from "../src/public-data/openapi";
 import type { Sql } from "../src/sessions";
 import type { EnvWithThrottle } from "../src/throttle";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 import { validatePublicSchema } from "./helpers/public-api-schema";
 
 const APP_URL = "https://next.example.test";
 const INVITE_URL = "https://discord.gg/test-invite-handoff";
 const ASSET_CANARY = "ASSET-BYTES-SHOULD-NOT-LEAK";
+const QUERY_CANARY = "query-canary-7f3a9c41";
 
 // All-digit 26-char keys, same shape as the api-public-events pins, so no
 // secret scanner trips and every key parses as a public event id.
@@ -60,6 +55,7 @@ const UNKNOWN_PATHS = [
   "/api/public/community/extra",
   "/api/public/join/extra",
   "/api/public/unknown?probe=1",
+  `/api/public/unknown?q=${QUERY_CANARY}`,
 ] as const;
 
 // Every entry must stay an unknown path inside /api/public after WHATWG URL
@@ -135,6 +131,15 @@ async function expectUnknownJson(res: Response, path: string): Promise<PublicErr
   expect(raw, `${path} no asset bytes`).not.toContain(ASSET_CANARY);
   expect(raw, `${path} no reflected path`).not.toContain(encodeURIComponent(path));
   expect(raw, `${path} no plain reflected path`).not.toContain(path.split("?")[0]);
+  const query = path.includes("?") ? path.slice(path.indexOf("?") + 1) : "";
+  if (query) {
+    // The query is caller input too: neither its raw nor encoded form echoes.
+    expect(raw, `${path} no raw reflected query`).not.toContain(query);
+    expect(raw, `${path} no encoded reflected query`).not.toContain(encodeURIComponent(query));
+  }
+  if (path.includes(QUERY_CANARY)) {
+    expect(raw, `${path} no query canary`).not.toContain(QUERY_CANARY);
+  }
   // The raw path must never echo: hostile bytes stay inert.
   for (const fragment of ["<script", "etc/passwd", "%2e", "%00", "%3C"]) {
     if (path.toLowerCase().includes(fragment.toLowerCase())) {
@@ -145,8 +150,7 @@ async function expectUnknownJson(res: Response, path: string): Promise<PublicErr
   expect(validatePublicSchema(body, "PublicDataError"), path).toEqual([]);
   expect(body.error.code, path).toBe("not_found");
   expect(body.error.next, path).toBe("Check the API path and retry.");
-  expect(typeof body.error.message, path).toBe("string");
-  expect(body.error.message.length, path).toBeGreaterThan(0);
+  expect(body.error.message, path).toBe("No such API path.");
   expect(body.error.request_id, path).toBe(headerId);
   return body;
 }
@@ -586,8 +590,19 @@ describe("public API conditional-read OpenAPI docs (offline)", () => {
 // ---------------------------------------------------------------------------
 
 describe("public API conditional runtime without a database (offline)", () => {
+  // Freeze the clock for the whole suite so a minute boundary cannot turn the
+  // warm max-age from 60 into 59 between the baseline and the conditional read.
+  let clock: MockInstance<typeof Date.now>;
+  let frozenAt: number;
+
   beforeEach(() => {
+    frozenAt = Date.now();
+    clock = vi.spyOn(Date, "now").mockReturnValue(frozenAt);
     __resetApiPublicCacheForTests();
+  });
+
+  afterEach(() => {
+    clock.mockRestore();
   });
 
   const paths = ["/api/public/join", "/api/public/community"] as const;
@@ -681,23 +696,18 @@ describe("public API conditional runtime without a database (offline)", () => {
     }
 
     it(`${path} serves a 304 hit at t0+59s with max-age=1`, async () => {
-      const t0 = Date.now();
-      const nowSpy = vi.spyOn(Date, "now").mockReturnValue(t0);
-      try {
-        __resetApiPublicCacheForTests();
-        const first = await get(path);
-        expect(first.status).toBe(200);
-        const etag = first.headers.get("etag");
-        expect(etag).not.toBeNull();
-        await first.text();
-        nowSpy.mockReturnValue(t0 + 59_000);
-        const hit = await get(path, etag as string);
-        expect(hit.status, path).toBe(304);
-        expect(hit.headers.get("etag"), path).toBe(etag);
-        expect(maxAgeOf(hit), path).toBe(1);
-      } finally {
-        nowSpy.mockRestore();
-      }
+      // The suite clock is frozen at t0 by beforeEach; advance it explicitly.
+      __resetApiPublicCacheForTests();
+      const first = await get(path);
+      expect(first.status).toBe(200);
+      const etag = first.headers.get("etag");
+      expect(etag).not.toBeNull();
+      await first.text();
+      clock.mockReturnValue(frozenAt + 59_000);
+      const hit = await get(path, etag as string);
+      expect(hit.status, path).toBe(304);
+      expect(hit.headers.get("etag"), path).toBe(etag);
+      expect(maxAgeOf(hit), path).toBe(1);
     });
 
     it(`${path} refuses before 304 when the shared budget is spent`, async () => {
@@ -749,61 +759,26 @@ describe("public API conditional runtime without a database (offline)", () => {
 });
 
 // ---------------------------------------------------------------------------
-// DB slice: unknown paths with a database, plus preserved boundaries.
+// Offline: unknown paths never touch the database, and the docs still name
+// the disposable-DB proof. The database-backed slice of this contract lives
+// in test/api-public-events.test.ts, behind its existing DATABASE_URL gate.
 // ---------------------------------------------------------------------------
 
-describe("public API contracts with a database", () => {
-  let fixture: MemberDataFixture;
-  let db: MemberDataFixture["db"];
-  let env: Env & EnvWithThrottle;
-
-  beforeAll(async () => {
-    fixture = await createMemberDataFixture(process.env.DATABASE_URL as string);
-    db = fixture.db;
-    env = {
-      APP_URL,
-      DATABASE_URL: process.env.DATABASE_URL as string,
-      DISCORD_INVITE_URL: INVITE_URL,
-      DISCORD_BOT_TOKEN: "bot-token-canary-never-served",
-      THROTTLE_STORE: async () => null,
-      get ADMIN_DB() {
-        return db;
-      },
-    } as unknown as Env & EnvWithThrottle;
-  });
-
-  beforeEach(async () => {
-    await fixture.reset();
+describe("public API unknown paths and docs (offline)", () => {
+  beforeEach(() => {
     __resetApiPublicCacheForTests();
   });
 
-  afterAll(async () => {
-    await fixture?.dispose();
-  });
-
-  const get = (path: string, init: RequestInit = {}, ip = "192.0.2.97") =>
-    app.request(path, { ...init, headers: { "cf-connecting-ip": ip, ...init.headers } }, env);
-
-  const seed = (n: number, extra: Record<string, unknown> = {}) =>
-    db.insert(events).values({
-      eventKey: key(n),
-      title: `Game ${n}`,
-      status: "published",
-      startsAt: new Date(Date.UTC(2099, 0, n, 20)),
-      endsAt: new Date(Date.UTC(2099, 0, n, 22)),
-      ...extra,
-    });
-
-  it.each([...UNKNOWN_PATHS])("GET %s answers JSON with a database present", async (path) => {
-    await seed(21);
-    await expectUnknownJson(await get(path), path);
-  });
-
   it("answers unknown JSON without touching the database", async () => {
+    // The getter is a spy, so a handler that reads ADMIN_DB and swallows the
+    // error still fails the zero-read assertion.
+    const adminDb = vi.fn((): never => {
+      throw new Error("Unknown paths must not read the database");
+    });
     const offline = {
-      ...env,
+      ...baseEnv,
       get ADMIN_DB(): never {
-        throw new Error("Unknown paths must not read the database");
+        return adminDb();
       },
     } as unknown as Env & EnvWithThrottle;
     const res = await app.request(
@@ -812,190 +787,7 @@ describe("public API contracts with a database", () => {
       offline,
     );
     await expectUnknownJson(res, "/api/public/unknown");
-  });
-
-  it("keeps known event routes on their existing envelopes", async () => {
-    // Controls: the unknown handler must not swallow known behaviour.
-    await seed(31);
-    const listed = await get("/api/public/events");
-    expect(listed.status).toBe(200);
-    expect(listed.headers.get("cache-control")).toBe("public, max-age=60");
-    const detail = await get(`/api/public/events/${key(31)}`);
-    expect(detail.status).toBe(200);
-    const missing = await get(`/api/public/events/${key(99)}`);
-    expect(missing.status).toBe(404);
-    expect(await missing.json()).toEqual({
-      error: {
-        code: "not_found",
-        message: "No published event with that key.",
-        request_id: expect.any(String),
-        next: PUBLIC_DATA_ERROR_NEXT.not_found,
-      },
-    });
-    const invalid = await get("/api/public/events/not-a-key!!!");
-    expect(invalid.status).toBe(422);
-    const community = await get("/api/public/community");
-    expect(community.status).toBe(200);
-    const join = await get("/api/public/join");
-    expect(join.status).toBe(200);
-  });
-
-  it("keeps ICS errors on their existing contracts", async () => {
-    // Controls: feed paths never speak the REST envelope.
-    await seed(41);
-    await seed(42, { status: "draft" });
-    const collection = await get("/events.ics");
-    expect(collection.status).toBe(200);
-    expect(collection.headers.get("content-type")).toBe("text/calendar; charset=utf-8");
-    const ok = await get(`/events/${key(41)}.ics`);
-    expect(ok.status).toBe(200);
-    expect(ok.headers.get("content-disposition")).toBe(`attachment; filename="${key(41)}.ics"`);
-    const draft = await get(`/events/${key(42)}.ics`);
-    expect(draft.status).toBe(403);
-    expect(await draft.text()).toBe("Forbidden");
-    for (const path of [`/events/${key(99)}.ics`, "/events/nope.ics"]) {
-      const res = await get(path);
-      expect(res.status, path).toBe(404);
-      expect(res.headers.get("content-type"), path).toContain("text/html");
-      expect(await res.text(), path).toMatch(/We cannot find that page|error-heading/);
-    }
-  });
-
-  it("keeps the shared 429 envelope ahead of any event read", async () => {
-    // Control: known-route admission still refuses with JSON before the store.
-    const now = Date.now();
-    const ip = "192.0.2.99";
-    const hits: { bucket: string; at: number }[] = Array.from({ length: 60 }, () => ({
-      bucket: `events-read:${ip}`,
-      at: now,
-    }));
-    const sql = Object.assign(
-      async (strings: TemplateStringsArray, ...values: unknown[]) => {
-        const statement = strings.join("?");
-        if (statement.includes("pg_advisory_xact_lock")) return [];
-        if (statement.includes("SELECT count(*)")) {
-          const rows = hits.filter((hit) => hit.bucket === values[0] && hit.at > now - 60_000);
-          return [{ n: rows.length, wait: 60 }];
-        }
-        if (statement.includes("INSERT INTO web_throttle_hits")) {
-          hits.push({ bucket: String(values[0]), at: now });
-          return [];
-        }
-        if (statement.includes("DELETE FROM web_throttle_hits")) return [];
-        throw new Error("Unexpected throttle statement");
-      },
-      {
-        begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql),
-        unsafe: async () => [],
-      },
-    );
-    const throttled = {
-      ...env,
-      THROTTLE_STORE: async () => sql as unknown as Sql,
-    } as unknown as Env & EnvWithThrottle;
-    for (const path of ["/api/public/events", `/api/public/events/${key(1)}`]) {
-      const res = await app.request(path, { headers: { "cf-connecting-ip": ip } }, throttled);
-      expect(res.status, path).toBe(429);
-      expect(res.headers.get("retry-after"), path).toBe("60");
-      expect(await res.json(), path).toEqual({
-        error: {
-          code: "rate_limited",
-          message: "Too many requests. Try again in 60 seconds.",
-          request_id: expect.any(String),
-          next: PUBLIC_DATA_ERROR_NEXT.rate_limited,
-        },
-      });
-    }
-  });
-
-  it.each(["/api/public/events", `/api/public/events/${key(51)}`])(
-    "%s answers 304 for exact, weak, list and wildcard validators",
-    async (path) => {
-      await seed(51);
-      const first = await get(path);
-      expect(first.status).toBe(200);
-      const etag = first.headers.get("etag");
-      expect(etag).not.toBeNull();
-      await first.text();
-      for (const validator of [
-        etag as string,
-        weakForm(etag as string),
-        `${junkEtag(etag as string)}, ${etag as string}`,
-        `${junkEtag(etag as string)}, ${weakForm(etag as string)}`,
-        "*",
-      ]) {
-        const res = await get(path, { headers: { "if-none-match": validator } });
-        expect(res.status, `${path} ${validator}`).toBe(304);
-        expect(await res.text(), validator).toBe("");
-        expect(res.headers.get("etag"), validator).toBe(etag);
-      }
-      const fresh = await get(path, { headers: { "if-none-match": junkEtag(etag as string) } });
-      expect(fresh.status).toBe(200);
-    },
-  );
-
-  it("serves the canonical empty page conditionally when the game is unknown", async () => {
-    await seed(52);
-    const first = await get("/api/public/events?game=unknown-game-xyz");
-    expect(first.status).toBe(200);
-    const etag = first.headers.get("etag");
-    expect(etag).not.toBeNull();
-    await first.text();
-    const cached = await get("/api/public/events?game=unknown-game-xyz", {
-      headers: { "if-none-match": etag as string },
-    });
-    expect(cached.status).toBe(304);
-    expect(await cached.text()).toBe("");
-    expect(cached.headers.get("etag")).toBe(etag);
-  });
-
-  it("refuses before 304 on event reads when the shared budget is spent", async () => {
-    await seed(53);
-    const first = await get("/api/public/events");
-    const etag = first.headers.get("etag");
-    expect(etag).not.toBeNull();
-    await first.text();
-    const now = Date.now();
-    const ip = "192.0.2.100";
-    const hits: { bucket: string; at: number }[] = Array.from({ length: 60 }, () => ({
-      bucket: `events-read:${ip}`,
-      at: now,
-    }));
-    const sql = Object.assign(
-      async (strings: TemplateStringsArray, ...values: unknown[]) => {
-        const statement = strings.join("?");
-        if (statement.includes("pg_advisory_xact_lock")) return [];
-        if (statement.includes("SELECT count(*)")) {
-          const rows = hits.filter((hit) => hit.bucket === values[0] && hit.at > now - 60_000);
-          return [{ n: rows.length, wait: 60 }];
-        }
-        if (statement.includes("INSERT INTO web_throttle_hits")) {
-          hits.push({ bucket: String(values[0]), at: now });
-          return [];
-        }
-        if (statement.includes("DELETE FROM web_throttle_hits")) return [];
-        throw new Error("Unexpected throttle statement");
-      },
-      {
-        begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql),
-        unsafe: async () => [],
-      },
-    );
-    const throttled = {
-      ...env,
-      THROTTLE_STORE: async () => sql as unknown as Sql,
-    } as unknown as Env & EnvWithThrottle;
-    for (const path of ["/api/public/events", `/api/public/events/${key(53)}`]) {
-      const res = await app.request(
-        path,
-        { headers: { "cf-connecting-ip": ip, "if-none-match": etag as string } },
-        throttled,
-      );
-      // The collection ETag does not match the detail, so only the
-      // collection case proves admission-before-304; the detail case proves
-      // admission still runs (429 either way, never a 200/304 read).
-      expect(res.status, path).toBe(429);
-    }
+    expect(adminDb).not.toHaveBeenCalled();
   });
 
   it("keeps the agent-runnable freshness proof discoverable", () => {

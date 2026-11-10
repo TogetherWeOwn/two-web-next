@@ -21,6 +21,7 @@ import type { Env } from "../src/env";
 import {
   API_PUBLIC_BOUNDS,
   PUBLIC_API_EVENT_FIELDS,
+  PUBLIC_DATA_ERROR_NEXT,
   type PublicApiEventCollectionDto,
   type PublicApiEventDto,
 } from "../src/public-data/contracts";
@@ -742,5 +743,254 @@ describe.skipIf(!process.env.DATABASE_URL)("public read API: events", () => {
 
     // None of the denials retired: the re-warmed bytes stay served.
     expect(await (await get("/api/public/events")).text()).toContain("Smuggled one");
+  });
+
+  // Database slice of the public API contract acceptance (the offline slice
+  // lives in test/api-public-contracts-acceptance.test.ts): unknown paths with
+  // a database present, preserved known-route boundaries, and conditional
+  // reads. Inherits this suite's DATABASE_URL gate.
+  describe("unknown paths, boundaries and conditional reads", () => {
+    const ASSET_CANARY = "ASSET-BYTES-SHOULD-NOT-LEAK";
+    const QUERY_CANARY = "query-canary-7f3a9c41";
+    const UNKNOWN_PATHS = [
+      "/api/public",
+      "/api/public/",
+      "/api/public/cache",
+      "/api/public/invalidate",
+      "/api/public/unknown",
+      "/api/public/unknown/nested/deep",
+      "/api/public/events/",
+      `/api/public/events/${key(1)}/extra`,
+      "/api/public/community/extra",
+      "/api/public/join/extra",
+      "/api/public/unknown?probe=1",
+      `/api/public/unknown?q=${QUERY_CANARY}`,
+    ] as const;
+
+    type PublicErrorBody = {
+      error: { code: string; message: string; request_id: string; next: string };
+    };
+
+    const junkEtag = (etag: string) => {
+      const flipped = etag.replace(
+        /^(W\/)?"(.)/,
+        (_m, weak: string | undefined, ch: string) => `${weak ?? ""}"${ch === "0" ? "1" : "0"}`,
+      );
+      return flipped !== etag ? flipped : '"junk-not-the-current-validator"';
+    };
+    const weakForm = (etag: string) => `W/${etag.replace(/^W\//, "")}`;
+
+    const expectUnknownJson = async (res: Response, path: string) => {
+      expect(res.status, path).toBe(404);
+      expect(res.headers.get("content-type"), path).toContain("application/json");
+      expect(res.headers.get("cache-control"), path).toBe("no-store, private");
+      expect(res.headers.get("set-cookie"), path).toBeNull();
+      const headerId = res.headers.get("x-request-id");
+      expect(headerId, `${path} x-request-id`).toBeTruthy();
+      const raw = await res.text();
+      expect(raw, `${path} no branded HTML`).not.toMatch(/<!doctype|<html|error-heading/i);
+      expect(raw, `${path} no asset bytes`).not.toContain(ASSET_CANARY);
+      expect(raw, `${path} no reflected path`).not.toContain(encodeURIComponent(path));
+      expect(raw, `${path} no plain reflected path`).not.toContain(path.split("?")[0]);
+      const query = path.includes("?") ? path.slice(path.indexOf("?") + 1) : "";
+      if (query) {
+        expect(raw, `${path} no raw reflected query`).not.toContain(query);
+        expect(raw, `${path} no encoded reflected query`).not.toContain(encodeURIComponent(query));
+      }
+      const body = JSON.parse(raw) as PublicErrorBody;
+      expect(validatePublicSchema(body, "PublicDataError"), path).toEqual([]);
+      expect(body.error.code, path).toBe("not_found");
+      expect(body.error.next, path).toBe("Check the API path and retry.");
+      expect(body.error.message, path).toBe("No such API path.");
+      expect(body.error.request_id, path).toBe(headerId);
+    };
+
+    // Env resolved lazily: the shared env's ADMIN_DB getter is live, and the
+    // ICS routes also read DATABASE_URL.
+    const dbEnv = () =>
+      ({ ...env, DATABASE_URL: process.env.DATABASE_URL as string }) as unknown as Env &
+        EnvWithThrottle;
+
+    // A throttle store whose bucket for `ip` is already spent.
+    const spentThrottleEnv = (ip: string) => {
+      const at = Date.now();
+      const spent: { bucket: string; at: number }[] = Array.from({ length: 60 }, () => ({
+        bucket: `events-read:${ip}`,
+        at,
+      }));
+      const sql = Object.assign(
+        async (strings: TemplateStringsArray, ...values: unknown[]) => {
+          const statement = strings.join("?");
+          if (statement.includes("pg_advisory_xact_lock")) return [];
+          if (statement.includes("SELECT count(*)")) {
+            const rows = spent.filter((hit) => hit.bucket === values[0] && hit.at > at - 60_000);
+            return [{ n: rows.length, wait: 60 }];
+          }
+          if (statement.includes("INSERT INTO web_throttle_hits")) {
+            spent.push({ bucket: String(values[0]), at });
+            return [];
+          }
+          if (statement.includes("DELETE FROM web_throttle_hits")) return [];
+          throw new Error("Unexpected throttle statement");
+        },
+        {
+          begin: (run: (tx: Sql) => Promise<unknown>) => run(sql as unknown as Sql),
+          unsafe: async () => [],
+        },
+      );
+      return {
+        ...dbEnv(),
+        THROTTLE_STORE: async () => sql as unknown as Sql,
+      } as unknown as Env & EnvWithThrottle;
+    };
+
+    const dbGet = (path: string, init: RequestInit = {}, ip = "192.0.2.97") =>
+      app.request(path, { ...init, headers: { "cf-connecting-ip": ip, ...init.headers } }, dbEnv());
+
+    it.each([...UNKNOWN_PATHS])("GET %s answers JSON with a database present", async (path) => {
+      await seed(21);
+      await expectUnknownJson(await dbGet(path), path);
+    });
+
+    it("keeps known event routes on their existing envelopes", async () => {
+      // Controls: the unknown handler must not swallow known behaviour.
+      await seed(31);
+      const listed = await dbGet("/api/public/events");
+      expect(listed.status).toBe(200);
+      expect(listed.headers.get("cache-control")).toBe("public, max-age=60");
+      const detail = await dbGet(`/api/public/events/${key(31)}`);
+      expect(detail.status).toBe(200);
+      const missing = await dbGet(`/api/public/events/${key(99)}`);
+      expect(missing.status).toBe(404);
+      expect(await missing.json()).toEqual({
+        error: {
+          code: "not_found",
+          message: "No published event with that key.",
+          request_id: expect.any(String),
+          next: PUBLIC_DATA_ERROR_NEXT.not_found,
+        },
+      });
+      const invalid = await dbGet("/api/public/events/not-a-key!!!");
+      expect(invalid.status).toBe(422);
+      const community = await dbGet("/api/public/community");
+      expect(community.status).toBe(200);
+      const join = await dbGet("/api/public/join");
+      expect(join.status).toBe(200);
+    });
+
+    it("keeps ICS errors on their existing contracts", async () => {
+      // Controls: feed paths never speak the REST envelope.
+      await seed(41);
+      await seed(42, { status: "draft" });
+      const collection = await dbGet("/events.ics");
+      expect(collection.status).toBe(200);
+      expect(collection.headers.get("content-type")).toBe("text/calendar; charset=utf-8");
+      const ok = await dbGet(`/events/${key(41)}.ics`);
+      expect(ok.status).toBe(200);
+      expect(ok.headers.get("content-disposition")).toBe(`attachment; filename="${key(41)}.ics"`);
+      const draft = await dbGet(`/events/${key(42)}.ics`);
+      expect(draft.status).toBe(403);
+      expect(await draft.text()).toBe("Forbidden");
+      for (const path of [`/events/${key(99)}.ics`, "/events/nope.ics"]) {
+        const res = await dbGet(path);
+        expect(res.status, path).toBe(404);
+        expect(res.headers.get("content-type"), path).toContain("text/html");
+        expect(await res.text(), path).toMatch(/We cannot find that page|error-heading/);
+      }
+    });
+
+    it("keeps the shared 429 envelope ahead of any event read", async () => {
+      // Control: known-route admission still refuses with JSON before the store.
+      const ip = "192.0.2.99";
+      const throttled = spentThrottleEnv(ip);
+      for (const path of ["/api/public/events", `/api/public/events/${key(1)}`]) {
+        const res = await app.request(path, { headers: { "cf-connecting-ip": ip } }, throttled);
+        expect(res.status, path).toBe(429);
+        expect(res.headers.get("retry-after"), path).toBe("60");
+        expect(await res.json(), path).toEqual({
+          error: {
+            code: "rate_limited",
+            message: "Too many requests. Try again in 60 seconds.",
+            request_id: expect.any(String),
+            next: PUBLIC_DATA_ERROR_NEXT.rate_limited,
+          },
+        });
+      }
+    });
+
+    it.each(["/api/public/events", `/api/public/events/${key(51)}`])(
+      "%s answers 304 for exact, weak, list and wildcard validators",
+      async (path) => {
+        await seed(51);
+        const first = await dbGet(path);
+        expect(first.status).toBe(200);
+        const etag = first.headers.get("etag");
+        expect(etag).not.toBeNull();
+        await first.text();
+        for (const validator of [
+          etag as string,
+          weakForm(etag as string),
+          `${junkEtag(etag as string)}, ${etag as string}`,
+          `${junkEtag(etag as string)}, ${weakForm(etag as string)}`,
+          "*",
+        ]) {
+          const res = await dbGet(path, { headers: { "if-none-match": validator } });
+          expect(res.status, `${path} ${validator}`).toBe(304);
+          expect(await res.text(), validator).toBe("");
+          expect(res.headers.get("etag"), validator).toBe(etag);
+        }
+        const fresh = await dbGet(path, {
+          headers: { "if-none-match": junkEtag(etag as string) },
+        });
+        expect(fresh.status).toBe(200);
+      },
+    );
+
+    it("serves the canonical empty page conditionally when the game is unknown", async () => {
+      await seed(52);
+      const first = await dbGet("/api/public/events?game=unknown-game-xyz");
+      expect(first.status).toBe(200);
+      const etag = first.headers.get("etag");
+      expect(etag).not.toBeNull();
+      await first.text();
+      const cached = await dbGet("/api/public/events?game=unknown-game-xyz", {
+        headers: { "if-none-match": etag as string },
+      });
+      expect(cached.status).toBe(304);
+      expect(await cached.text()).toBe("");
+      expect(cached.headers.get("etag")).toBe(etag);
+    });
+
+    it("refuses before 304 on event reads when the shared budget is spent", async () => {
+      await seed(53);
+      // Warm each endpoint independently and keep its own validator.
+      const paths = ["/api/public/events", `/api/public/events/${key(53)}`];
+      const etags = new Map<string, string>();
+      for (const path of paths) {
+        const first = await dbGet(path);
+        expect(first.status, path).toBe(200);
+        const etag = first.headers.get("etag");
+        expect(etag, path).not.toBeNull();
+        etags.set(path, etag as string);
+        await first.text();
+      }
+      // Control: each validator really is a 304 before the budget is spent.
+      for (const path of paths) {
+        const warm = await dbGet(path, { headers: { "if-none-match": etags.get(path) as string } });
+        expect(warm.status, `${path} warm 304`).toBe(304);
+        await warm.text();
+      }
+      const ip = "192.0.2.100";
+      const throttled = spentThrottleEnv(ip);
+      for (const path of paths) {
+        const res = await app.request(
+          path,
+          { headers: { "cf-connecting-ip": ip, "if-none-match": etags.get(path) as string } },
+          throttled,
+        );
+        expect(res.status, path).toBe(429);
+        expect(res.headers.get("etag"), path).toBeNull();
+      }
+    });
   });
 });

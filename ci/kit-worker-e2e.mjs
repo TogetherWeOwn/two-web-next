@@ -226,6 +226,80 @@ try {
   assert.equal((await api.json()).reason, "ingress_disabled");
   console.log("PASS generated Worker Hono API dispatch");
 
+  // These URL forms are intercepted before hooks.handle in unwrapped Kit.
+  // Test the generated deployment entry, not just direct Hono or the hook.
+  const unknownApiPaths = [
+    "/api/public",
+    "/api/public/",
+    "/api/public/unknown",
+    "/api/public/events/?game=",
+    "/api/public/unknown/",
+    "/api/public/unknown/__route.js",
+    "/api/public/unknown/__data.json",
+    "/api/public/unknown?probe=query-canary-7f3a9c41",
+    "/api/public/unknown?x-sveltekit-foo=bar",
+  ];
+  for (const path of unknownApiPaths) {
+    for (const method of ["GET", "HEAD"]) {
+      const response = await fetch(`${origin}${path}`, { method, redirect: "manual" });
+      assert.equal(response.status, 404, `${method} ${path} is not normalized or intercepted`);
+      assert.match(response.headers.get("content-type") ?? "", /application\/json/);
+      assert.equal(response.headers.get("cache-control"), "no-store, private");
+      assert.equal(response.headers.get("location"), null);
+      assert.equal(response.headers.get("etag"), null);
+      assert.equal(response.headers.get("x-two-renderer"), null);
+      const requestId = response.headers.get("x-request-id");
+      assert.ok(requestId, `${method} ${path} has Hono request correlation`);
+      if (method === "HEAD") {
+        assert.equal(await response.text(), "");
+      } else {
+        assert.deepEqual(await response.json(), {
+          error: {
+            code: "not_found",
+            message: "No such API path.",
+            request_id: requestId,
+            next: "Check the API path and retry.",
+          },
+        });
+      }
+    }
+  }
+  for (const suffix of ["", "?x-sveltekit-foo=bar"]) {
+    const join = await fetch(`${origin}/api/public/join${suffix}`);
+    assert.equal(join.status, 200, "known API reads remain Hono-owned");
+    assert.ok((await join.json()).invite_url);
+    const wrongMethod = await fetch(`${origin}/api/public/join${suffix}`, {
+      method: "POST",
+      headers: { origin },
+      redirect: "manual",
+    });
+    assert.equal(wrongMethod.status, 404, "known wrong methods retain the Hono contract");
+    assert.equal(wrongMethod.headers.get("x-two-renderer"), null);
+  }
+  for (const path of ["/api/public/unknown/", "/api/public/unknown?x-sveltekit-foo=bar"]) {
+    const refused = await fetch(`${origin}${path}`, {
+      method: "POST",
+      headers: { origin: "https://foreign.invalid" },
+      body: "unread",
+      redirect: "manual",
+    });
+    assert.equal(refused.status, 403, "pre-Kit dispatch retains the Hono origin guard");
+    assert.deepEqual(await refused.json(), { error: "cross_origin" });
+    assert.ok(refused.headers.get("x-request-id"));
+    const badHost = await fetch(`${origin}${path}`, {
+      headers: { host: "foreign.invalid" },
+      redirect: "manual",
+    });
+    assert.equal(badHost.status, 404, "pre-Kit dispatch retains the Hono host guard");
+    assert.match(badHost.headers.get("content-type") ?? "", /text\/html/);
+  }
+  const outsideApi = await fetch(`${origin}/api/publicity`, { redirect: "manual" });
+  assert.equal(outsideApi.status, 404);
+  assert.match(outsideApi.headers.get("content-type") ?? "", /text\/html/);
+  const pageSlash = await fetch(`${origin}/about/`, { redirect: "manual" });
+  assert.equal(pageSlash.status, 308, "non-API pages retain Kit slash normalization");
+  console.log("PASS generated Worker public API URL, method and security contracts");
+
   // Kit's built-in form CSRF check is disabled, so a cross-origin form POST
   // must reach the hardened gate: the Hono cross_origin 403 with security
   // headers, never Kit's bare "Cross-site POST form submissions" text.
