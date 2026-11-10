@@ -103,10 +103,7 @@ html body {
  * The light ink is set directly on those elements: overriding --muted on the
  * shell would also recolor the dashboard's light resource cards
  * (.card p uses var(--muted) on #fffdf8), dropping them to 1.81:1. */
-.kit-admin :is(.field .hint, .hint) {
-  color: var(--color-lobby-muted);
-}
-.kit-admin footer {
+.kit-admin :is(.field .hint, .hint, footer) {
   color: var(--color-lobby-muted);
 }
 /* Validation states. The shared sheet paints the summary cream (#fff7ed) and
@@ -115,12 +112,15 @@ html body {
  * summary takes the raised surface (keeping the inherited lobby ink) with
  * accent links; field errors take lobby ink with weight and the summary's
  * existing --brand rail (3.49:1 on the canvas), so they read as errors
- * without relying on text color alone. */
+ * without relying on text color alone. The shared :focus-visible outline is
+ * dark --ink (1.24:1 on the raised surface), so summary links take the lobby
+ * focus color. */
 .kit-admin :is(fieldset, .notice) {
   background: var(--color-lobby-raised);
 }
 .kit-admin .notice a {
   color: var(--color-lobby-accent);
+  outline-color: var(--color-lobby-focus);
 }
 .kit-admin .field .error {
   color: var(--color-lobby-ink);

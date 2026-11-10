@@ -283,6 +283,19 @@ describe("Kit admin contrast", () => {
               ),
             );
           }
+          if (errorFixtures.has(name)) {
+            const link = page.locator("[data-admin-validation-summary] a").first();
+            await link.focus();
+            assert.deepEqual(
+              await link.evaluate((el) => [
+                el.matches(":focus-visible"),
+                getComputedStyle(el).outlineColor,
+              ]),
+              // --color-lobby-focus: the shared --ink outline is 1.24:1 here.
+              [true, "rgb(255, 255, 255)"],
+              "summary link focus ring stays visible on the raised surface",
+            );
+          }
           assert.deepEqual(unexpected, [], "no live or mutating requests");
           assert.deepEqual(errors, [], "shipped islands execute without errors");
           assert.deepEqual(
