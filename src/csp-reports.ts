@@ -115,7 +115,12 @@ export function cspReportLogFields(report: CspReportFields): {
  */
 export function parseCspSampleRate(raw: string | undefined): number {
   if (raw === undefined) return 1.0;
-  const rate = Number.parseFloat(raw);
+  let rate: number;
+  try {
+    rate = Number.parseFloat(raw);
+  } catch {
+    rate = Number.NaN;
+  }
   if (!Number.isFinite(rate)) return 1.0;
   return Math.min(1, Math.max(0, rate));
 }
