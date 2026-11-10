@@ -63,6 +63,7 @@ const groupedEvents = $derived(groupTeaserEvents<HomeUpcomingRow>(upcomingEvents
 {/snippet}
 
 <Shell
+  restoredWrite={data.restoredWrite}
   title="The lobby is open"
   exactTitle="Together We Own — the lobby is open"
   {canonical}

@@ -386,7 +386,7 @@ jobs:
         run: |
           mkdir -p artifacts/a11y
           node --import tsx --test --test-timeout=60000 --test-reporter=tap --test-reporter-destination=artifacts/a11y/kit-member-auth.tap ci/kit-member-auth-browser.test.mjs
-          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/kit-member-auth.tap "Kit member auth in Chromium" 15
+          node ci/rsvp-focus-require-executed.mjs artifacts/a11y/kit-member-auth.tap "Kit member auth in Chromium" 20
       - name: Native event share (real Chromium, Hono and Kit fixtures)
         run: |
           mkdir -p artifacts/a11y

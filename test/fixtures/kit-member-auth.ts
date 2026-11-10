@@ -6,6 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL, URL } from "node:url";
 import { build } from "esbuild";
+import { serializeSigned } from "hono/utils/cookie";
 import type { AccessEntry } from "../../src/access-log";
 import type { Db } from "../../src/db/index";
 import { kitAuthStatusCookieFor, kitSessionBridge, type KitLocals } from "../../src/kit-session";
@@ -13,7 +14,8 @@ import { loadMembersBoardData } from "../../src/kit-members";
 import { declareMemberResult, keyedMemberRead, memberQueryPermit } from "../../src/member-reads";
 import { resolveKitProfile } from "../../src/profiles/kit";
 import { dispatchHookRequest, ROUTE_MANIFEST, type HookEventLike } from "../../src/route-ownership";
-import { MEMBER, recoveryFixture } from "./session-recovery";
+import { EXPIRED_WRITE_COOKIE } from "../../src/write-recovery";
+import { MEMBER, SECRET, recoveryFixture } from "./session-recovery";
 
 export { MEMBER, SECRET } from "./session-recovery";
 export const OTHER = "100000000000000002";
@@ -27,6 +29,11 @@ export type MemberAuthRenderers = {
   profile: (data: Data) => string;
   other: (data: Data) => string;
   admin: () => string;
+  // The real root +layout.server.ts load, bundled from the shipped file.
+  root: (locals: Record<string, unknown>) => Data;
+  // Public content leaves: real +page.svelte with root data and the page load's data.
+  about: (appUrl: string, locals: Record<string, unknown>) => string;
+  faq: (appUrl: string, locals: Record<string, unknown>) => string;
   dispose: () => void;
 };
 
@@ -44,6 +51,8 @@ export async function memberAuthRenderers(): Promise<MemberAuthRenderers> {
     admin,
     `<script>import Shell from ${JSON.stringify(join(root, "web/src/lib/AdminShell.svelte"))};</script><Shell title="Fixture"><h1>Moderator control</h1></Shell>`,
   );
+  // CI generates this module before tests; missing CSS must fail the fixture.
+  const leafCssImport = `import { LEAF_CRITICAL_CSS as leafCss } from ${JSON.stringify(join(root, "src/leaf-critical-css.ts"))};`;
   const entry = join(scratch, "render.mjs");
   writeFileSync(
     entry,
@@ -53,14 +62,26 @@ import Board from ${JSON.stringify(join(root, "web/src/routes/leaderboards/membe
 import Profile from ${JSON.stringify(join(root, "web/src/routes/profile/+page.svelte"))};
 import Other from ${JSON.stringify(join(root, "web/src/routes/members/[user]/+page.svelte"))};
 import Admin from ${JSON.stringify(admin)};
-function documentFor(component, props) {
+import About from ${JSON.stringify(join(root, "web/src/routes/about/+page.svelte"))};
+import Faq from ${JSON.stringify(join(root, "web/src/routes/faq/+page.svelte"))};
+import { aboutPageData } from ${JSON.stringify(join(root, "src/about-content.ts"))};
+import { faqPageData } from ${JSON.stringify(join(root, "src/faq-content.ts"))};
+${leafCssImport}
+import { load as rootLoad } from ${JSON.stringify(join(root, "web/src/routes/+layout.server.ts"))};
+function documentFor(component, props, authorStyles = true) {
   const { head, body } = render(component, { props });
-  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="/styles.css">' + head + '</head><body>' + body + '</body></html>';
+  const styles = authorStyles ? '<link rel="stylesheet" href="/styles.css">' : '';
+  return '<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">' + styles + head + '</head><body>' + body + '</body></html>';
 }
 export const board = data => documentFor(Board, { data });
 export const profile = data => documentFor(Profile, { data });
 export const other = data => documentFor(Other, { data });
 export const admin = () => documentFor(Admin, {});
+export const root = locals => rootLoad({ locals });
+export const about = (appUrl, locals) =>
+  documentFor(About, { data: { ...rootLoad({ locals }), ...aboutPageData(appUrl), leafCss } }, false);
+export const faq = (appUrl, locals) =>
+  documentFor(Faq, { data: { ...rootLoad({ locals }), ...faqPageData(appUrl), leafCss } }, false);
 `,
   );
   const outfile = join(scratch, "rendered.mjs");
@@ -138,6 +159,7 @@ export function kitMemberAuthFixture(
     };
     return dispatchHookRequest(event, {
       appUrl: f.env.APP_URL,
+      sessionSecret: f.env.SESSION_SECRET,
       // Held profile/admin twins only: never mutate the shipped manifest or claim a rollout.
       ...(isProfile || isAdmin
         ? {
@@ -160,7 +182,7 @@ export function kitMemberAuthFixture(
         audit.push(entry);
         return true;
       },
-      resolve: async (hookEvent) => {
+      resolve: async (hookEvent, opts) => {
         state.rendered++;
         const locals = hookEvent.locals as KitLocals;
         const headers = new Headers({ "content-type": "text/html" });
@@ -194,7 +216,7 @@ export function kitMemberAuthFixture(
                   ];
                 }),
             });
-            html = render.board(data);
+            html = render.board({ ...render.root(hookEvent.locals as Data), ...data });
           } else if (isProfile) {
             const outcome = await resolveKitProfile(
               {
@@ -221,7 +243,17 @@ export function kitMemberAuthFixture(
             }
             headers.set("cache-control", "private, no-store");
             const data = { ...outcome, appUrl: f.env.APP_URL };
-            html = url.pathname === "/profile" ? render.profile(data) : render.other(data);
+            // SvelteKit merges root layout data under page data; do the same.
+            const merged = { ...render.root(hookEvent.locals as Data), ...data };
+            html = url.pathname === "/profile" ? render.profile(merged) : render.other(merged);
+          } else if (url.pathname === "/about" || url.pathname === "/faq") {
+            // Same cache policy as the shipped about/faq page loads.
+            headers.set("cache-control", "public, max-age=3600");
+            const locals = hookEvent.locals as Data;
+            html =
+              url.pathname === "/about"
+                ? render.about(f.env.APP_URL, locals)
+                : render.faq(f.env.APP_URL, locals);
           } else if (isAdmin) {
             if (locals?.status !== "authenticated" || !locals.session?.moderator)
               return new Response("Forbidden", { status: 403 });
@@ -242,6 +274,7 @@ export function kitMemberAuthFixture(
             },
           });
         }
+        if (opts?.transformPageChunk) html = opts.transformPageChunk({ html });
         if (variant === "json") {
           headers.set("content-type", "application/json");
           html = '{"ok":true}';
@@ -252,4 +285,12 @@ export function kitMemberAuthFixture(
     });
   }
   return { ...f, referenceRequest: f.request, profileState: f.state, clock, request, audit, state };
+}
+
+/** Signed restored-write cookie pair ("name=value") as the recovery flow sets it. */
+export async function restoredWriteCookie(
+  value = "restored|/events/42",
+  secret = SECRET,
+): Promise<string> {
+  return (await serializeSigned(EXPIRED_WRITE_COOKIE, value, secret)).split(";")[0]!;
 }

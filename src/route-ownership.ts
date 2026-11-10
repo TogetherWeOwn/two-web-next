@@ -26,6 +26,8 @@ import { STAGING_APP_URL } from "./qa";
 import { newRequestId, safeRequestId } from "./request-log";
 import { transformContentLeafChunk } from "./kit-content-chunk";
 import type { KitLocals } from "./kit-session";
+import { isKitNoticeDocument, readKitRestoredWrite } from "./kit-restored-write";
+import { EXPIRED_WRITE_COOKIE } from "./write-recovery";
 import { type MemberRead, memberReadResponse } from "./member-reads";
 import { JOIN_RESULT_COOKIE, deleteOpts } from "./return-journey";
 import { SAME_ORIGIN_EXEMPTIONS, UNSAFE_METHODS } from "./same-origin";
@@ -481,6 +483,7 @@ export interface HookEventLike {
   // generated) and an index-signature bag would reject that interface; the
   // merge below narrows through one documented cast.
   locals?: unknown;
+  isDataRequest?: boolean;
 }
 
 // SvelteKit resolve options the core forwards for content leaves only.
@@ -493,6 +496,8 @@ export interface KitResolveOptions {
 
 export interface HookDispatchDeps {
   appUrl: string;
+  // Signature-only notice peek, independent of the public route's session store.
+  sessionSecret?: string;
   // Staging-only rollout controls. The staging APP_URL selects a fail-closed
   // manifest that admits only these reviewed families; unset or malformed
   // values keep every route on Hono. Preview/local parity stays unchanged.
@@ -881,6 +886,15 @@ export async function dispatchHookRequest(
     refused.headers.set("x-request-id", requestId);
     return refused;
   }
+  // The notice has no session authority: public renders must not wait for a
+  // session store just to verify it. Keep the verified bit outside mutable
+  // locals too, so a load cannot invent the proof used for cookie consumption.
+  const restoredWrite = await readKitRestoredWrite(
+    event.request,
+    deps.sessionSecret,
+    event.isDataRequest,
+  );
+  event.locals = { ...(event.locals as Record<string, unknown>), restoredWrite };
   // Kit branch only: one read-only session decision merged into locals before
   // resolve. A bridge failure must not 500 the render — public Kit pages fail
   // closed to guest-equivalent locals, exactly as if no bridge were wired.
@@ -1069,6 +1083,46 @@ export async function dispatchHookRequest(
     c.res = response;
     deleteCookie(c, JOIN_RESULT_COOKIE, deleteOpts);
     response = c.res;
+  }
+  // Vary even the clean representation: a warm public page must not hide a
+  // later cookie-bearing notice. Cookie-bearing documents/data are private,
+  // including fetches that discard their shell and leave the notice pending.
+  if (
+    response.status === 200 &&
+    (response.headers.get("content-type")?.includes("text/html") || event.isDataRequest)
+  ) {
+    const vary = response.headers.get("vary");
+    if (!vary?.split(",").some((name) => ["cookie", "*"].includes(name.trim().toLowerCase())))
+      response.headers.set("vary", vary ? `${vary}, Cookie` : "Cookie");
+    if (event.request.headers.has("cookie"))
+      response.headers.set("cache-control", "no-store, private");
+  }
+  if (
+    restoredWrite &&
+    isKitNoticeDocument(event.request, event.isDataRequest) &&
+    response.status === 200 &&
+    response.headers.get("content-type")?.includes("text/html")
+  ) {
+    const html = await response.clone().text();
+    // Checking the delivered markup is essential: a route may omit its shared
+    // prop, return a fragment, or render an auth/error shell after loading.
+    if (
+      /<!doctype html>/i.test(html) &&
+      /<html[\s>]/i.test(html) &&
+      html.includes("</body>") &&
+      /<main\b[^>]*>[\s\S]*?<div role="status" tabindex="-1" data-testid="auth-error">You signed in again\. Your earlier changes were not saved\. Review and submit them again\.<\/div>/.test(
+        html,
+      )
+    ) {
+      const c = new Context(event.request);
+      c.res = response;
+      deleteCookie(c, EXPIRED_WRITE_COOKIE, deleteOpts);
+      response = c.res;
+      response.headers.set("cache-control", "no-store, private");
+      // Never let a conditional cache replay a one-shot notice as a bodyless
+      // response. Errors/304s above keep the cookie pending instead.
+      response.headers.delete("etag");
+    }
   }
   // The Hono-fallback return above stays undecorated (Hono answering
   // through Kit keeps its own header); every other Kit response carries the
