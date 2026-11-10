@@ -93,16 +93,20 @@ describe.skipIf(!url)("concurrent disjoint PATCHes preserve omitted fields (live
       { method: "POST", headers: { cookie, origin: baseEnv.APP_URL } },
       jsonEnv,
     );
-  const postForm = async (key: string, values: Record<string, string>) => {
-    // The full form posts the token of the stored row it displayed.
+  const currentBaseline = async (key: string) => {
     const [current] = await db.select().from(events).where(eq(events.eventKey, key));
-    const saved_baseline = await eventSaveBaseline(current!);
+    return eventSaveBaseline(current!);
+  };
+  const postForm = async (key: string, values: Record<string, string>) => {
+    // The full form posts the token of the stored row it displayed, unless the
+    // caller replays an earlier tab's token explicitly.
+    const saved_baseline = values.saved_baseline ?? (await currentBaseline(key));
     return native().request(
       `/events/${key}`,
       {
         method: "POST",
         headers: { cookie },
-        body: new URLSearchParams({ saved_baseline, ...values }),
+        body: new URLSearchParams({ ...values, saved_baseline }),
       },
       liveEnv(),
     );
@@ -445,5 +449,52 @@ describe.skipIf(!url)("concurrent disjoint PATCHes preserve omitted fields (live
     expect(row.capacity).toBe(9);
     expect(row.startsAt.toISOString()).toBe("2099-11-04T21:00:00.000Z");
     expect(row.endsAt.toISOString()).toBe("2099-11-04T23:30:00.000Z");
+  });
+
+  it("two full-form saves from one baseline: the first wins, the second waits then is refused stale", async () => {
+    await seed();
+    // Both tabs displayed the same stored row, so both hold this token.
+    const original = await currentBaseline(KEY);
+    const fields = {
+      game: "Go",
+      description: "Form description",
+      capacity: "9",
+      starts_at: "2099-11-04 21:00",
+      ends_at: "2099-11-04 23:30",
+      timezone: "Europe/London",
+      saved_baseline: original,
+    };
+    const [first, second] = await race(
+      () => postForm(KEY, { ...fields, title: "Winner title", location: "Winner hall" }),
+      () => postForm(KEY, { ...fields, title: "Loser title", location: "Loser hall" }),
+    );
+    expect(first!.status).toBe(303);
+    expect(second!.status).toBe(409);
+    const html = await second!.text();
+    // The refused draft stays recoverable and still carries the original token.
+    expect(html).toContain("Loser title");
+    expect(html).toContain("Loser hall");
+    expect(html).toContain(`name="saved_baseline" value="${original}"`);
+    const row = await stored(KEY);
+    expect(row.title).toBe("Winner title");
+    expect(row.location).toBe("Winner hall");
+    expect(row.game).toBe("Go");
+    expect(row.description).toBe("Form description");
+    expect(row.capacity).toBe(9);
+    expect(row.startsAt.toISOString()).toBe("2099-11-04T21:00:00.000Z");
+    expect(row.endsAt.toISOString()).toBe("2099-11-04T23:30:00.000Z");
+    expect(row.agentVersion).toBe(1);
+    // Only the winner audited and wrote back; the refusal left nothing.
+    const logs = await auditsFor(KEY);
+    expect(logs).toHaveLength(1);
+    expect(logs[0]!.properties).toMatchObject({
+      title: { before: ORIGINAL.title, after: "Winner title" },
+    });
+    expect(JSON.stringify(logs[0]!.properties)).not.toContain("Loser");
+    expect(vi.mocked(dispatchWriteBack).mock.calls).toHaveLength(1);
+    expect(vi.mocked(dispatchWriteBack).mock.calls[0]![1]).toEqual({
+      eventKey: KEY,
+      status: "published",
+    });
   });
 });

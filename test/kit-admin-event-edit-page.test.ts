@@ -220,6 +220,11 @@ describe("Kit event-edit page contract", () => {
   it("keeps the progressive text-limit and editor islands with no framework handlers", () => {
     expect(source).toContain("/islands/admin-event-text-limits.js");
     expect(source).toContain("/islands/admin-event-editor.js");
+    expect(source).toContain("/islands/admin-save-baseline.js");
+    expect(source.indexOf("/islands/admin-save-baseline.js")).toBeLessThan(
+      source.indexOf("/islands/admin-event-editor.js"),
+    );
+    expect(source).toContain('name="saved_baseline" value={val("saved_baseline")}');
     expect(source).toContain("data-event-text-limit");
     expect(source).not.toContain("on:click");
     expect(source).not.toContain("onclick");

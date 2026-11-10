@@ -190,6 +190,7 @@ for (const kind of ["event", "featured"] as const) {
           );
           await expect(b.getByTestId("admin-session-expired")).toBeFocused();
           await expect(b.locator('[name="title"]')).toHaveValue("My retained draft");
+          await capture(b, `${kind}-expired-${invalid ? "errors" : "valid"}-${viewport.width}`);
           expect(
             await b.evaluate(() => {
               const e = new Event("beforeunload", { cancelable: true });
@@ -207,7 +208,7 @@ for (const kind of ["event", "featured"] as const) {
 
   test(`${kind}: Back restoration cannot refresh a losing draft's token`, async ({ browser }) => {
     const f = fixture(kind);
-    const context = await browser.newContext();
+    const context = await browser.newContext({ viewport: widths[0] });
     try {
       await f.mount(context);
       const page = await context.newPage();
@@ -227,6 +228,9 @@ for (const kind of ["event", "featured"] as const) {
       expect(await submit(page, kind)).toBe(409);
       await expect(page.locator('[name="saved_baseline"]')).toHaveValue(original);
       await expect(page.locator('[name="title"]')).toHaveValue("Restored draft");
+      await capture(page, `${kind}-history-1280`);
+      await page.setViewportSize(widths[1]!);
+      await capture(page, `${kind}-history-390`);
     } finally {
       await context.close();
     }
@@ -234,7 +238,7 @@ for (const kind of ["event", "featured"] as const) {
 
   test(`${kind}: stale recovery works with JavaScript disabled`, async ({ browser }) => {
     const f = fixture(kind);
-    const context = await browser.newContext({ javaScriptEnabled: false });
+    const context = await browser.newContext({ javaScriptEnabled: false, viewport: widths[0] });
     try {
       await f.mount(context);
       const a = await context.newPage();
@@ -246,6 +250,9 @@ for (const kind of ["event", "featured"] as const) {
       await b.locator('[name="title"]').fill("No-JavaScript draft");
       expect(await submit(b, kind)).toBe(409);
       await expect(b.locator('[name="title"]')).toHaveValue("No-JavaScript draft");
+      await capture(b, `${kind}-no-js-1280`);
+      await b.setViewportSize(widths[1]!);
+      await capture(b, `${kind}-no-js-390`);
       const opened = b.waitForEvent("popup");
       await b.getByTestId("stale-open-latest").click();
       await expect((await opened).locator('[name="title"]')).toHaveValue("Winner");
@@ -255,21 +262,25 @@ for (const kind of ["event", "featured"] as const) {
   });
 }
 
-test("current invalid event draft retains the existing 422 presentation", async ({ browser }) => {
-  const f = fixture("event");
-  const context = await browser.newContext({ viewport: widths[0] });
-  try {
-    await f.mount(context);
-    const page = await context.newPage();
-    await page.goto(origin + f.path);
-    await page.locator('[name="capacity"]').fill("-1");
-    expect(await submit(page, "event")).toBe(422);
-    await expect(page.getByTestId("form-errors")).toBeFocused();
-    await expect(page.getByTestId("stale-save")).toHaveCount(0);
-    await capture(page, "event-current-422-1280");
-    await page.setViewportSize(widths[1]!);
-    await capture(page, "event-current-422-390");
-  } finally {
-    await context.close();
-  }
-});
+for (const kind of ["event", "featured"] as const) {
+  test(`current invalid ${kind} draft retains the existing 422 presentation`, async ({
+    browser,
+  }) => {
+    const f = fixture(kind);
+    const context = await browser.newContext({ viewport: widths[0] });
+    try {
+      await f.mount(context);
+      const page = await context.newPage();
+      await page.goto(origin + f.path);
+      await page.locator(`[name="${kind === "event" ? "capacity" : "position"}"]`).fill("-1");
+      expect(await submit(page, kind)).toBe(422);
+      await expect(page.getByTestId("form-errors")).toBeFocused();
+      await expect(page.getByTestId("stale-save")).toHaveCount(0);
+      await capture(page, `${kind}-current-422-1280`);
+      await page.setViewportSize(widths[1]!);
+      await capture(page, `${kind}-current-422-390`);
+    } finally {
+      await context.close();
+    }
+  });
+}

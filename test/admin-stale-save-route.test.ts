@@ -36,6 +36,13 @@ const fold = {
   startsAt: new Date("2026-10-25T00:30:00Z"),
   endsAt: new Date("2026-10-25T01:30:00Z"),
 };
+function expectHistoryBeforeDeparture(html: string) {
+  expect(html.match(/src="\/islands\/admin-save-baseline.js"/g)).toHaveLength(1);
+  expect(html.indexOf('src="/islands/admin-save-baseline.js"')).toBeLessThan(
+    html.indexOf('src="/islands/admin-event-editor.js"'),
+  );
+}
+
 const values = {
   title: "Retained title",
   timezone: "Europe/London",
@@ -61,7 +68,7 @@ async function post(path: string, fields: Record<string, string>) {
       },
       body: new URLSearchParams(fields).toString(),
     },
-    env,
+    { ...env, ADMIN_DB: db },
   );
 }
 
@@ -93,6 +100,7 @@ describe("refused moderator save documents", () => {
       expect(html).not.toContain('data-testid="error-ends_at"');
       expect(html).toContain('src="/islands/auth-status.js"');
       expect(html.match(/data-testid="auth-tab-sync"/g)).toHaveLength(1);
+      expectHistoryBeforeDeparture(html);
       expect(updateEvent).toHaveBeenCalledTimes(path === "early" ? 0 : 1);
       expect(dbTouched).not.toHaveBeenCalled();
     },
@@ -147,6 +155,7 @@ describe("refused moderator save documents", () => {
       expect(html).toContain('src="/islands/admin-event-editor.js"');
       expect(html).toContain('src="/islands/auth-status.js"');
       expect(html.match(/data-testid="auth-tab-sync"/g)).toHaveLength(1);
+      expectHistoryBeforeDeparture(html);
       expect(updateFeatured).not.toHaveBeenCalled();
       expect(dbTouched).not.toHaveBeenCalled();
     },

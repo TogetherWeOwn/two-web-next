@@ -3,13 +3,18 @@ import { URL } from "node:url";
 import { runInNewContext } from "node:vm";
 import { describe, expect, it, vi } from "vitest";
 
-const source = ["admin-save-baseline", "admin-event-editor"]
-  .map((name) => readFileSync(new URL(`../assets/islands/${name}.js`, import.meta.url), "utf8"))
-  .join("\n");
+const scripts = ["admin-save-baseline", "admin-event-editor"];
+function islandSource(directory: string) {
+  return scripts
+    .map((name) =>
+      readFileSync(new URL(`../${directory}/islands/${name}.js`, import.meta.url), "utf8"),
+    )
+    .join("\n");
+}
 const A = "a".repeat(64);
 const B = "b".repeat(64);
 
-function load(token: string, state: unknown = null, unavailable = false) {
+function loadIslands(directory: string, token: string, state: unknown, unavailable: boolean) {
   const baseline = { value: token };
   const values = new Map([["title", "Saved title"]]);
   const formListeners = new Map<string, (event: Event) => void>();
@@ -34,7 +39,7 @@ function load(token: string, state: unknown = null, unavailable = false) {
       history.state = next;
     }),
   };
-  runInNewContext(source, {
+  runInNewContext(islandSource(directory), {
     document: {
       querySelector: (selector: string) =>
         selector === "[data-event-editor]"
@@ -61,7 +66,9 @@ function load(token: string, state: unknown = null, unavailable = false) {
   return { baseline, history, values, formListeners, windowListeners };
 }
 
-describe("moderator draft history token binding", () => {
+describe.each(["assets", "public"])("%s moderator draft history token binding", (directory) => {
+  const load = (token: string, state: unknown = null, unavailable = false) =>
+    loadIslands(directory, token, state, unavailable);
   it("pins the displayed token in this entry without storing any form contents or replacing Kit state", () => {
     const b = load(A, { kit: { index: 7 } });
     expect(b.history.state).toEqual({

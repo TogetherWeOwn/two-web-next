@@ -107,6 +107,11 @@ describe("Kit featured-edit page contract", () => {
   it("mounts the progressive dirty-draft/double-submit guard island and no client handlers, so repeat submits cannot apply twice with JS and the page works without it", () => {
     expect(source).toContain('data-event-editor=""');
     expect(source).toContain("/islands/admin-event-editor.js");
+    expect(source).toContain("/islands/admin-save-baseline.js");
+    expect(source.indexOf("/islands/admin-save-baseline.js")).toBeLessThan(
+      source.indexOf("/islands/admin-event-editor.js"),
+    );
+    expect(source).toContain('name="saved_baseline" value={data.view.values.saved_baseline}');
     expect(source).not.toMatch(/on:[a-z]+=/);
   });
 
