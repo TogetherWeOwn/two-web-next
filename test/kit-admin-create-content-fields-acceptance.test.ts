@@ -1,7 +1,7 @@
 // Test Author owned: pre-enable create-form parity, not edit or route enablement.
 // Compile the real Svelte component; only SQL is replaced with a fail-closed
 // effect counter. Native submissions exercise the real Hono guard and validators.
-import { eq } from "drizzle-orm";
+// Real-store success proofs register in admin.test.ts via the persistence helper.
 import { Hono } from "hono";
 import { readFileSync } from "node:fs";
 import { runInNewContext } from "node:vm";
@@ -11,135 +11,22 @@ import { EventFormPage } from "../src/admin/pages";
 import { parseRecurrenceForm } from "../src/admin/recurrence";
 import { adminApp } from "../src/admin/routes";
 import { parseEventForm } from "../src/admin/validation";
-import { activityLog, events } from "../src/db/admin-schema";
 import type { Db } from "../src/db/index";
-import type { Env } from "../src/env";
-import { getPublicEvent } from "../src/events/reads";
-import { registerDetailRoutes } from "../src/events/routes";
 import { decideOwner, ROUTE_MANIFEST } from "../src/route-ownership";
 import { sameOrigin } from "../src/same-origin";
 import { createMemorySessionStore } from "../src/sessions";
+import {
+  content,
+  control,
+  decode,
+  fields,
+  nativeForm,
+  values,
+} from "./helpers/admin-create-content-form";
 import { eventEditorBrowser } from "./helpers/admin-event-editor";
 import { compileKitForms, summaryFragment } from "./helpers/admin-validation-correction";
 import { cookieFor, env, MEMBER, MODERATOR } from "./helpers/member-data";
-import { createMemberDataFixture, type MemberDataFixture } from "./helpers/member-data-db";
 
-const fields = [
-  {
-    name: "accessibility_notes",
-    id: "f-accessibility-notes",
-    tag: "textarea",
-    limit: 1000,
-    label: "Accessibility notes",
-    hint: "Optional; include only confirmed details, not personal contact information.",
-    message: "Keep accessibility notes to 1000 characters.",
-    value: "Step-free entrance; quiet room available.",
-  },
-  {
-    name: "organizer_name",
-    id: "f-organizer-name",
-    tag: "input",
-    limit: 500,
-    label: "Organizer display name (optional)",
-    hint: "Use a name the organizer has agreed to show publicly. Do not enter contact details.",
-    message: "Keep the organizer name to 500 characters.",
-    value: "Riley & friends",
-  },
-  {
-    name: "join_url",
-    id: "f-join-url",
-    tag: "input",
-    limit: 2048,
-    label: "Public joining link (optional)",
-    hint: "HTTPS or HTTP link visible to everyone. Never use attendee-only or private links.",
-    message: "Keep the public joining link to 2048 characters.",
-    value: "https://meet.example.test/lobby?room=9&mode=public",
-  },
-  {
-    name: "join_instructions",
-    id: "f-join-instructions",
-    tag: "textarea",
-    limit: 5000,
-    label: "Public joining instructions (optional)",
-    hint: "Share only verified details that are safe for anyone to see. Do not enter contact details.",
-    message: "Keep joining instructions to 5000 characters.",
-    value: "Use the public lobby.\nAsk the host for the next game.",
-  },
-] as const;
-const content = Object.fromEntries(fields.map((field) => [field.name, field.value]));
-const values = {
-  title: "Public game night",
-  game: "Chess",
-  description: "Bring a board",
-  starts_at: "2030-06-05 20:00",
-  ends_at: "2030-06-05 22:00",
-  timezone: "Europe/London",
-  location: "Community voice",
-  capacity: "8",
-  recurrence_frequency: "weekly",
-  recurrence_count: "3",
-  recurrence_ends_on: "",
-  ...content,
-};
-
-// This bounded HTML reader consumes rendered form controls, never Svelte source.
-// It decodes values before URL encoding and uses native textarea CRLF submission.
-// No expected content field is inserted by the serializer: missing markup loses it.
-function decode(value: string): string {
-  return value.replace(/&(#x[0-9a-f]+|#\d+|amp|lt|gt|quot|apos);/gi, (_, entity: string) => {
-    if (entity.startsWith("#x")) return String.fromCodePoint(Number.parseInt(entity.slice(2), 16));
-    if (entity.startsWith("#")) return String.fromCodePoint(Number(entity.slice(1)));
-    return ({ amp: "&", lt: "<", gt: ">", quot: '"', apos: "'" } as Record<string, string>)[
-      entity
-    ]!;
-  });
-}
-function attributes(tag: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const match of tag.matchAll(/\s([\w:-]+)(?:="([^"]*)"|='([^']*)'|=([^\s>]+))?/g))
-    out[match[1]!] = decode(match[2] ?? match[3] ?? match[4] ?? "");
-  return out;
-}
-function controls(html: string) {
-  return [
-    ...html.matchAll(
-      /<(input|textarea|select)\b((?:"[^"]*"|'[^']*'|[^'">])*)(?:>([\s\S]*?)<\/\1>|>)/g,
-    ),
-  ].map((match) => ({
-    tag: match[1]!,
-    attrs: attributes(` ${match[2]}`),
-    body: match[3] ?? "",
-  }));
-}
-function control(html: string, name: string) {
-  const found = controls(html).filter((entry) => entry.attrs.name === name);
-  expect(found, `render one actual successful control named ${name}`).toHaveLength(1);
-  return found[0]!;
-}
-function nativeForm(html: string) {
-  const form = /<form\b[^>]*>([\s\S]*?)<\/form>/.exec(html);
-  expect(form, "real native create form").not.toBeNull();
-  const attrs = attributes(form![0].slice(0, form![0].indexOf(">")));
-  const body = new URLSearchParams();
-  for (const entry of controls(form![1]!)) {
-    const a = entry.attrs;
-    if (!a.name || Object.hasOwn(a, "disabled")) continue;
-    if (["submit", "button", "reset", "file"].includes(a.type ?? "")) continue;
-    if (["checkbox", "radio"].includes(a.type ?? "") && !Object.hasOwn(a, "checked")) continue;
-    if (entry.tag === "select") {
-      const options = [...entry.body.matchAll(/<option\b([^>]*)>([\s\S]*?)<\/option>/g)];
-      const selected =
-        options.find((option) => Object.hasOwn(attributes(` ${option[1]}`), "selected")) ??
-        options[0];
-      if (selected)
-        body.append(a.name, attributes(` ${selected[1]}`).value ?? decode(selected[2]!));
-    } else {
-      const value = entry.tag === "textarea" ? decode(entry.body) : (a.value ?? "");
-      body.append(a.name, entry.tag === "textarea" ? value.replace(/\r\n?|\n/g, "\r\n") : value);
-    }
-  }
-  return { attrs, body };
-}
 function boundary(name: string, limit: number): string {
   if (name !== "join_url") return "😀".repeat(limit);
   const prefix = "https://example.test/";
@@ -462,155 +349,6 @@ describe("existing Hono authority preservation controls", () => {
     expect(dbTouched).not.toHaveBeenCalled();
   });
 });
-
-// Composed success proofs require DATABASE_URL and canonical migrations in an
-// owned disposable schema. Unlike the refusal fixture above, no store is mocked.
-// Keep these in Actions when no disposable database is supplied locally.
-describe.skipIf(!process.env.DATABASE_URL)(
-  "Kit native create persistence and public readback (disposable Postgres)",
-  () => {
-    let fixture: MemberDataFixture;
-    beforeAll(async () => {
-      fixture = await createMemberDataFixture(process.env.DATABASE_URL!);
-    });
-    afterAll(() => fixture?.dispose());
-    beforeEach(async () => fixture.reset());
-
-    async function submit(
-      body: URLSearchParams,
-      actor: typeof MEMBER | null = MODERATOR,
-      origin = env.APP_URL,
-    ) {
-      const sessions = createMemorySessionStore();
-      const cookie = actor ? await cookieFor(sessions, actor) : "";
-      const app = new Hono<{ Bindings: Env }>()
-        .use("*", sameOrigin)
-        .route("/admin", adminApp({ sessionStore: sessions, db: fixture.db }));
-      registerDetailRoutes(
-        app,
-        async () => null,
-        async () => null,
-      );
-      const bindings = { ...env, ADMIN_DB: fixture.db };
-      const response = await app.request(
-        "/admin/events",
-        {
-          method: "POST",
-          headers: {
-            cookie,
-            origin,
-            accept: "text/html",
-            "content-type": "application/x-www-form-urlencoded",
-          },
-          body,
-        },
-        bindings,
-      );
-      return { response, app, bindings };
-    }
-
-    for (const state of ["populated", "blank", "whitespace", "omitted"] as const) {
-      it(`${state} controls survive native create, storage and the guest detail read`, async () => {
-        const empty = Object.fromEntries(
-          fields.map((field) => [field.name, state === "whitespace" ? "   " : ""]),
-        );
-        const form = nativeForm(
-          renderKit({
-            ...values,
-            ...(state === "populated" ? {} : empty),
-            recurrence_frequency: "",
-            recurrence_count: "",
-          }),
-        );
-        if (state === "omitted") for (const field of fields) form.body.delete(field.name);
-        const { response, app, bindings } = await submit(form.body);
-        expect(response.status).toBe(303);
-        const redirect = new URL(response.headers.get("location")!, env.APP_URL);
-        expect(redirect.pathname).toMatch(/^\/admin\/events\/[0-9A-Z]{26}$/);
-        expect(redirect.search).toBe("?saved=1");
-        const stored = await fixture.db.select().from(events);
-        expect(stored).toHaveLength(1);
-        const row = stored[0]!;
-        const expected =
-          state === "populated"
-            ? {
-                accessibilityNotes: "Step-free entrance; quiet room available.",
-                organizer_name: "Riley & friends",
-                join_url: "https://meet.example.test/lobby?room=9&mode=public",
-                join_instructions: "Use the public lobby.\r\nAsk the host for the next game.",
-              }
-            : {
-                accessibilityNotes: null,
-                organizer_name: null,
-                join_url: null,
-                join_instructions: null,
-              };
-        expect(redirect.pathname).toBe(`/admin/events/${row.eventKey}`);
-        expect(row).toMatchObject({
-          ...expected,
-          status: "draft",
-          createdBy: MODERATOR.userId,
-          startsAt: new Date("2030-06-05T19:00:00Z"),
-          endsAt: new Date("2030-06-05T21:00:00Z"),
-          timezone: "Europe/London",
-        });
-        expect(await fixture.db.select().from(activityLog)).toEqual([
-          expect.objectContaining({
-            subjectType: "Event",
-            subjectId: row.eventKey,
-            causerId: MODERATOR.userId,
-            description: "created event Public game night",
-          }),
-        ]);
-        const path = `/e/${row.eventKey}`;
-        const draft = await app.request(path, {}, bindings);
-        expect(draft.status).toBe(403);
-        expect(await draft.text()).not.toContain('data-testid="event-organizer"');
-
-        // Fixture-only publication models a later authorized publish. The create
-        // endpoint above must never publish, and no bot/write-back is invoked here.
-        await fixture.db.update(events).set({ status: "published" }).where(eq(events.id, row.id));
-        expect(await getPublicEvent(fixture.db, row.eventKey)).toMatchObject(expected);
-        const published = await app.request(path, {}, bindings);
-        expect(published.status).toBe(200);
-        expect(published.headers.get("cache-control")).toContain("private");
-        expect(published.headers.get("cache-control")).toContain("no-store");
-        const html = await published.text();
-        for (const id of [
-          "event-accessibility",
-          "event-organizer",
-          "event-public-join-link",
-          "event-join-instructions",
-        ]) {
-          if (state === "populated") expect(html).toContain(`data-testid="${id}"`);
-          else expect(html).not.toContain(`data-testid="${id}"`);
-        }
-        if (state === "populated") {
-          const text = decode(html).replace(/\r\n/g, "\n");
-          for (const value of Object.values(expected))
-            expect(text).toContain(value!.replace(/\r\n/g, "\n"));
-          expect(html).toContain('href="https://meet.example.test/lobby?room=9&amp;mode=public"');
-        }
-      });
-    }
-
-    it.each([null, MEMBER])("denies %j before creating any row or audit", async (actor) => {
-      const form = nativeForm(renderKit(values));
-      const { response } = await submit(form.body, actor);
-      expect(response.status).toBe(actor ? 403 : 303);
-      expect(await fixture.db.select().from(events)).toEqual([]);
-      expect(await fixture.db.select().from(activityLog)).toEqual([]);
-    });
-
-    it("denies a cross-origin serialized form without a row or audit", async () => {
-      const form = nativeForm(renderKit(values));
-      const { response } = await submit(form.body, MODERATOR, "https://other.example.test");
-      expect(response.status).toBe(403);
-      expect(await fixture.db.select().from(events)).toEqual([]);
-      expect(await fixture.db.select().from(activityLog)).toEqual([]);
-    });
-  },
-);
 
 const island = readFileSync(
   new URL("../public/islands/admin-event-text-limits.js", import.meta.url).pathname,
