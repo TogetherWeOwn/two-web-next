@@ -4,9 +4,19 @@ Material decisions that shape this repository, each with its context, the
 actual decision, why it was made, the date and its provenance. Reversals and
 supersession are preserved here, not smoothed away.
 
+The SvelteKit page-renderer decision's canonical record is
+[ADR 0001](../adr/0001-sveltekit-page-renderer.md) under `docs/adr/`; this
+directory is the index for repo-wide material decisions and links to that
+record rather than restating it, so the two cannot drift apart.
+
 | Decision | Record |
 | --- | --- |
-| SvelteKit with Svelte 5 is the single page renderer; Hono keeps non-page APIs until the page-renderer milestone | [0001](0001-sveltekit-page-renderer.md) (also recorded as ADR 0001 at `docs/adr/0001-sveltekit-page-renderer.md`) |
+| SvelteKit with Svelte 5 is the single page renderer; Hono keeps non-page APIs until the page-renderer milestone | [ADR 0001](../adr/0001-sveltekit-page-renderer.md) (canonical) |
+| Merges to `main` deploy production and need exact-head Release Manager confirmation | [0002](0002-production-merge-confirmation.md) |
+| Gate-green PRs merge without owner approval; CodeRabbit is advisory | [0003](0003-gate-green-merge-and-advisory-review.md) |
+| Critical CSS extraction is the chosen remedy for the mobile `/events` LCP release hold | [0004](0004-critical-css-lcp-remedy.md) |
+| The post-cutover milestone proposal is superseded and kept only as history | [0005](0005-post-cutover-milestone-superseded.md) |
+| `ROADMAP.md` is the public direction entry point, not a delivery schedule or task tracker | [0006](0006-roadmap-authority.md) |
 | Cutover to the Cloudflare Worker completed; production serves the Worker | [cutover gates](../cutover-gates.md) and [parity matrix](../parity.md); operations consequences in the [runbook](../runbook.md) |
 
 ## How decisions are recorded
