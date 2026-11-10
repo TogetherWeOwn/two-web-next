@@ -1849,6 +1849,8 @@ test.describe("archive page turns prove successful paging and history", () => {
           if (key.startsWith("sec-fetch-")) delete headers[key];
         return route.continue({ headers });
       });
+      // Read the newly seeded archive rows, not the isolate's earlier guest entry.
+      await context.addCookies([{ name: "e2e-archive-bypass", value: "1", url: KIT_ORIGIN }]);
       const page = await context.newPage();
       await page.goto("/events/past");
       await expect(page.getByTestId("auth-error")).toHaveCount(0);
@@ -1860,7 +1862,7 @@ test.describe("archive page turns prove successful paging and history", () => {
         {
           name,
           value: encodeURIComponent(`${raw}.${signature}`),
-          domain: "localhost",
+          domain: new URL(KIT_ORIGIN).hostname,
           path: "/",
           secure: true,
           httpOnly: true,
@@ -1876,12 +1878,18 @@ test.describe("archive page turns prove successful paging and history", () => {
       await page.locator('a[data-archive-page]:has-text("Older")').click();
       const pagination = await responsePromise;
       expect(pagination.status()).toBe(200);
-      expect((await pagination.request().allHeaders())["x-two-island"]).toBe("past-events");
+      const paginationHeaders = await pagination.request().allHeaders();
+      expect(paginationHeaders["x-two-island"]).toBe("past-events");
+      expect(paginationHeaders["sec-fetch-dest"]).toBeUndefined();
+      expect(paginationHeaders["sec-fetch-mode"]).toBeUndefined();
+      expect((paginationHeaders["cookie"] ?? "").includes(`${name}=`)).toBe(true);
       expect(await pagination.text()).not.toContain('data-testid="auth-error"');
       await expect(page.getByTestId("past-events")).toHaveAttribute("data-page", "2");
       await expect(page.getByTestId("past-events")).not.toHaveAttribute("aria-busy");
       expect(await page.evaluate("window.__noticeSameDoc")).toBe(1);
-      expect((await context.cookies()).filter((cookie) => cookie.name === name)).toHaveLength(1);
+      expect((await context.cookies(KIT_ORIGIN)).filter((cookie) => cookie.name === name)).toHaveLength(
+        1,
+      );
       expect(
         (await pagination.headerValues("set-cookie")).some((cookie) =>
           cookie.startsWith(`${name}=`),
@@ -1892,7 +1900,9 @@ test.describe("archive page turns prove successful paging and history", () => {
       expect(navigation?.status()).toBe(200);
       expect(navigation?.headers()["x-two-renderer"]).toBe("kit");
       await expect(page.getByTestId("auth-error")).toHaveCount(1);
-      expect((await context.cookies()).filter((cookie) => cookie.name === name)).toHaveLength(0);
+      expect((await context.cookies(KIT_ORIGIN)).filter((cookie) => cookie.name === name)).toHaveLength(
+        0,
+      );
       await page.goto("/events/past");
       await expect(page.getByTestId("auth-error")).toHaveCount(0);
     } finally {
