@@ -1,8 +1,9 @@
 # Decision 0006: `ROADMAP.md` is the public direction entry point, not a tracker
 
-- Status: accepted (recorded 2026-11-09)
-- Deciders: the Product Lead (roadmap); the Engineering Lead (repo placement)
+- Status: accepted (owner docs-pilot authorization, 2026-11-10)
+- Deciders: the project owner (docs-pilot authorization, 2026-11-10), implemented by the roadmap entry pull request (2026-11-09)
 - Entry point: [website roadmap](../../ROADMAP.md)
+- Scope: this repository only
 
 ## Context
 
@@ -19,6 +20,10 @@ not a task tracker. Priorities, assignments and live status stay in the
 internal planning system; durable product and engineering knowledge lives in
 the repository.
 
+This record applies to this repository only. Whether other projects adopt
+the same entry point remains an open owner question; no company-wide rule
+is established by this record.
+
 ## Why
 
 A repo-only reader must be able to resume the work from the repository
@@ -28,6 +33,6 @@ live work, but no decision should exist only in a tracker description.
 
 ## Provenance
 
-Project direction authorized for the repository on 2026-11-10 (each project
-must be understandable and resumable from its git repo alone). Implemented
-by the public roadmap entry pull request of 2026-11-09.
+Owner authorization for the repository-only docs pilot on 2026-11-10 (each
+project must be understandable and resumable from its git repo alone).
+Implemented by the public roadmap entry pull request of 2026-11-09.
