@@ -65,13 +65,15 @@ jobs:
           # Restore only the two production files that dropped these controls.
           git restore --source="$BASELINE_SHA" -- src/admin/kit-event-edit.ts 'web/src/routes/admin/events/[key]/+page.svelte'
           set +e
-          timeout -k 10 300 node_modules/.bin/vitest run test/admin.test.ts -t 'Kit native edit POST persists untouched' --reporter=default --reporter=json --outputFile=artifacts/kit-edit-regression/baseline.json
-          baseline_status=$?
+          timeout -k 10 300 node_modules/.bin/vitest run test/admin.test.ts -t 'Kit native edit POST persists untouched' --reporter=default --reporter=json --outputFile=artifacts/kit-edit-regression/baseline.json 2>&1 | tee artifacts/kit-edit-regression/baseline.log
+          baseline_status=("${PIPESTATUS[@]}")
           set -e
-          test "$baseline_status" = 1
+          test "${baseline_status[0]}" = 1
+          test "${baseline_status[1]}" = 0
           node --input-type=module <<'JS'
           import assert from 'node:assert/strict';
           import { readFileSync } from 'node:fs';
+          import { stripVTControlCharacters } from 'node:util';
           const results = (name) => JSON.parse(readFileSync(`artifacts/kit-edit-regression/${name}.json`, 'utf8'));
           const cases = (report) => report.testResults.flatMap((file) => file.assertionResults).filter((test) => test.title.startsWith('Kit native edit POST persists'));
           const corrected = results('corrected');
@@ -81,9 +83,13 @@ jobs:
           const failed = cases(results('baseline')).filter((test) => test.status === 'failed');
           assert.equal(failed.length, 1);
           assert.match(failed[0].title, /persists untouched/);
-          const message = failed[0].failureMessages.join('\n');
-          for (const field of ['accessibilityNotes', 'organizer_name', 'join_url', 'join_instructions']) assert.ok(message.includes(field), `missing persisted-field diff: ${field}`);
-          assert.match(message, /null/);
+          // Vitest's JSON reporter omits assertion diffs; retain its console diff.
+          const message = stripVTControlCharacters(readFileSync('artifacts/kit-edit-regression/baseline.log', 'utf8'));
+          assert.match(failed[0].failureMessages.join('\n'), /AssertionError/);
+          for (const field of ['accessibilityNotes', 'organizer_name', 'join_url', 'join_instructions']) {
+            assert.ok(message.includes(`-   "${field}": "`), `missing populated-field diff: ${field}`);
+            assert.ok(message.includes(`+   "${field}": null`), `missing persisted-field diff: ${field}`);
+          }
           console.log('Corrected: 3 persisted round trips passed. Baseline: untouched save failed with all four stored fields cleared to null.');
           JS
       - name: Restore the exact head implementation
