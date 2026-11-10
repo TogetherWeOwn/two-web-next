@@ -203,6 +203,10 @@ jobs:
       # Parse the Vitest sources on every change, including ledger-only edits.
       # No install hooks or browser/database fixtures are needed by this gate.
       - run: npm ci --include=dev --ignore-scripts --no-audit --no-fund
+      # Run on draft heads too: these isolated fixtures prove fresh-source
+      # resolution and explicit selection without an app build or database.
+      - name: Fresh-worktree check bootstrap
+        run: env -u DATABASE_URL -u BOT_DATABASE_URL npm --ignore-scripts run test:unit -- test/check-bootstrap.test.ts test/leaf-css-build-time.test.ts test/leaf-css-drift.test.ts
       - name: Timeout ledger ratchet (HARD)
         run: npm run ledger:timeouts:selftest && npm run ledger:timeouts
 
