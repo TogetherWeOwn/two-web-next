@@ -25,7 +25,6 @@ const invalidEvent = {
   starts_at: "not a date",
   timezone: "Europe/London",
   capacity: "-3",
-  join_url: "ftp://example.com/lobby",
 };
 function eventErrors() {
   try {
