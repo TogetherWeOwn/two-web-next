@@ -16,7 +16,15 @@
 // Adapted from the acceptance test of closed PR #1739 (e0457c82), authored by
 // Together We Own / Rick7C2, keeping its limit, URL-policy and round-trip
 // intent but replacing its source-string assertions with executed ones.
-import { parse, type DefaultTreeAdapterMap } from "parse5";
+import {
+  attr,
+  controlNamed,
+  disabled,
+  elements,
+  firstForm,
+  submittedFields,
+  textOf,
+} from "./helpers/kit-edit-controls";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { compileKitForms } from "./helpers/admin-validation-correction";
 import type { Db } from "../src/db/index";
@@ -29,9 +37,6 @@ import {
 import { parseEventForm, type EventFormInput } from "../src/admin/validation-event-form";
 import { ValidationError } from "../src/admin/validation-shared";
 import { ROUTE_MANIFEST } from "../src/route-ownership";
-
-type Node = DefaultTreeAdapterMap["node"];
-type Element = DefaultTreeAdapterMap["element"];
 
 const db = {} as Db;
 const now = new Date("2026-06-15T12:00:00.000Z");
@@ -91,47 +96,6 @@ beforeAll(async () => {
 });
 afterAll(() => compiler?.dispose());
 
-function attr(el: Element, name: string): string | undefined {
-  return el.attrs.find((a) => a.name === name)?.value;
-}
-
-function elements(node: Node, out: Element[] = []): Element[] {
-  if ("tagName" in node) out.push(node);
-  const kids = "childNodes" in node ? node.childNodes : [];
-  for (const kid of kids) elements(kid, out);
-  return out;
-}
-
-function textOf(node: Node): string {
-  if ("value" in node && node.nodeName === "#text") return node.value;
-  return ("childNodes" in node ? node.childNodes : []).map(textOf).join("");
-}
-
-function firstForm(html: string): Element {
-  const form = elements(parse(html)).find((el) => el.tagName === "form");
-  if (!form) throw new Error("no form rendered");
-  return form;
-}
-
-function controls(form: Element): Element[] {
-  return elements(form).filter((el) => el.tagName === "input" || el.tagName === "textarea");
-}
-
-/** What a no-JS browser submits from the first form: native named controls. */
-function submittedFields(html: string): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const el of controls(firstForm(html))) {
-    const name = attr(el, "name");
-    if (!name) continue;
-    out[name] = el.tagName === "textarea" ? textOf(el) : (attr(el, "value") ?? "");
-  }
-  return out;
-}
-
-function controlNamed(html: string, name: string): Element | undefined {
-  return controls(firstForm(html)).find((el) => attr(el, "name") === name);
-}
-
 const render = (view: KitEventEditView) => compiler.renderForm(1, { view });
 
 /** The stored row after a Hono full-form update writes the parsed input. */
@@ -173,6 +137,29 @@ function fieldErrors(form: Record<string, unknown>): Record<string, string> {
   return {};
 }
 
+describe("native edit control extraction", () => {
+  it("excludes disabled, unchecked and submitter controls, but keeps readonly values", () => {
+    expect(
+      submittedFields(`<form>
+        <input name="disabled-input" value="lost" disabled>
+        <textarea name="disabled-textarea" disabled>lost</textarea>
+        <fieldset disabled>
+          <legend><input name="legend" value="kept"></legend>
+          <input name="disabled-descendant" value="lost">
+          <textarea name="disabled-descendant-text">lost</textarea>
+        </fieldset>
+        <input name="unchecked" type="checkbox" value="lost">
+        <input name="unchecked-radio" type="radio" value="lost">
+        <input name="submitter" type="submit" value="lost">
+        <input name="readonly" value="kept" readonly>
+        <input name="checked" type="checkbox" checked>
+        <input name="radio" type="radio" value="kept" checked>
+        <textarea name="text">kept</textarea>
+      </form>`),
+    ).toEqual({ legend: "kept", readonly: "kept", checked: "on", radio: "kept", text: "kept" });
+  });
+});
+
 describe("Kit edit read carries the access/joining fields", () => {
   it("resolves the stored values into the edit view", async () => {
     const values = (await viewOf(storedRow)).values as unknown as Record<string, string>;
@@ -209,6 +196,7 @@ describe("Kit edit page renders the access/joining controls", () => {
       expect(el, name).toBeDefined();
       expect(el?.tagName).toBe(kinds[name][0]);
       expect(attr(el!, "type")).toBe(kinds[name][1]);
+      expect(disabled(el!), name).toBe(false);
     }
     expect(attr(controlNamed(html, "accessibility_notes")!, "data-event-text-limit")).toBe("1000");
     expect(attr(controlNamed(html, "organizer_name")!, "data-event-text-limit")).toBe("500");
@@ -425,10 +413,18 @@ describe("rejected save re-renders the access/joining fields inline", () => {
       const el = controlNamed(html, name)!;
       const id = `f-${name.replaceAll("_", "-")}-error`;
       expect(attr(el, "aria-invalid"), name).toBe("true");
-      expect(attr(el, "aria-describedby"), name).toContain(id);
+      const describedBy = (attr(el, "aria-describedby") ?? "").split(/\s+/).filter(Boolean);
+      expect(describedBy, name).toContain(id);
+      for (const reference of describedBy) {
+        expect(
+          elements(form).filter((e) => attr(e, "id") === reference),
+          reference,
+        ).toHaveLength(1);
+      }
       expect(submitted[name]).toBe(rejected[name]);
       const alert = elements(form).find((e) => attr(e, "data-testid") === `error-${name}`);
       expect(alert, name).toBeDefined();
+      expect(attr(alert!, "id")).toBe(id);
       expect(attr(alert!, "role")).toBe("alert");
       expect(textOf(alert!).trim()).toBe(errors[name]);
     }
