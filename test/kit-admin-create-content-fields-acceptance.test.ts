@@ -525,7 +525,9 @@ describe.skipIf(!process.env.DATABASE_URL)(
         if (state === "omitted") for (const field of fields) form.body.delete(field.name);
         const { response, app, bindings } = await submit(form.body);
         expect(response.status).toBe(303);
-        expect(response.headers.get("location")).toMatch(/^\/admin\/events\/[0-9A-Z]{26}$/);
+        const redirect = new URL(response.headers.get("location")!, env.APP_URL);
+        expect(redirect.pathname).toMatch(/^\/admin\/events\/[0-9A-Z]{26}$/);
+        expect(redirect.search).toBe("?saved=1");
         const stored = await fixture.db.select().from(events);
         expect(stored).toHaveLength(1);
         const row = stored[0]!;
@@ -543,7 +545,7 @@ describe.skipIf(!process.env.DATABASE_URL)(
                 join_url: null,
                 join_instructions: null,
               };
-        expect(response.headers.get("location")).toBe(`/admin/events/${row.eventKey}`);
+        expect(redirect.pathname).toBe(`/admin/events/${row.eventKey}`);
         expect(row).toMatchObject({
           ...expected,
           status: "draft",
