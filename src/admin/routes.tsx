@@ -86,7 +86,7 @@ import { parseRecordId } from "./record-id";
 import { parseRecurrenceForm } from "./recurrence";
 import {
   isKnownTimezone,
-  parseEventForm,
+  parseHumanEventForm,
   parseFeaturedForm,
   utcToWall,
   ValidationError,
@@ -241,7 +241,7 @@ function refusedEventSave(
 ) {
   let errors: Record<string, string> = {};
   try {
-    parseEventForm(values);
+    parseHumanEventForm(values);
   } catch (err) {
     if (!(err instanceof ValidationError)) throw err;
     errors = { ...err.fields };
@@ -545,7 +545,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
         // rules own starts/timezone errors, the recurrence rules own theirs.
         const errors: Record<string, string> = {};
         try {
-          input = parseEventForm(values);
+          input = parseHumanEventForm(values);
         } catch (err) {
           if (!(err instanceof ValidationError)) throw err;
           Object.assign(errors, err.fields);
@@ -633,7 +633,7 @@ export function adminApp(overrides?: AdminOverrides | SessionStore) {
       };
       let input;
       try {
-        input = parseEventForm(values, carriers);
+        input = parseHumanEventForm(values, carriers);
       } catch (err) {
         if (err instanceof ValidationError) {
           return formError(

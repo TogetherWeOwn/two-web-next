@@ -1,11 +1,7 @@
-// Native maxlength counts UTF-16 units; the server counts trimmed code points
-// as submitted (browsers serialize textarea line breaks as CRLF, two code
-// points per break, while textarea .value holds a single LF).
+// Native maxlength counts UTF-16 units; human event forms count trimmed
+// canonical LF code points, independent of native POST CRLF serialization.
 export function eventTextLimitError(value, field, limit) {
-  // Normalize to LF first so a pre-existing CRLF is not double-expanded,
-  // then count as the server sees it (CRLF per break). Inputs never contain
-  // line breaks, so this is a no-op for them.
-  const submitted = value.trim().replace(/\r\n?/g, "\n").replace(/\n/g, "\r\n");
+  const submitted = value.replace(/\r\n?/g, "\n").trim();
   return [...submitted].length > limit ? `Keep the ${field} to ${limit} characters.` : "";
 }
 
