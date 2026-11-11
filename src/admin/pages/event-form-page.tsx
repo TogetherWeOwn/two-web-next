@@ -25,6 +25,7 @@ export const EventFormPage: FC<{
   // section silently. Carries no roster data of any kind.
   rosterHiddenNotice?: boolean;
   saved?: boolean;
+  saveRefused?: "stale" | "unverified";
 }> = ({
   mode,
   row,
@@ -35,6 +36,7 @@ export const EventFormPage: FC<{
   rosterQuery,
   rosterHiddenNotice,
   saved,
+  saveRefused,
 }) => {
   const action = mode === "new" ? "/admin/events" : `/admin/events/${row!.eventKey}`;
   return (
@@ -44,7 +46,14 @@ export const EventFormPage: FC<{
         {mode === "edit" && saved && row?.status === "draft" ? (
           <SavedEventNotice eventKey={row.eventKey} />
         ) : null}
-        <EventFormFields mode={mode} row={row} values={values} errors={errors} action={action} />
+        <EventFormFields
+          mode={mode}
+          row={row}
+          values={values}
+          errors={errors}
+          action={action}
+          saveRefused={saveRefused}
+        />
         {mode === "edit" && row ? <EventStatusSection row={row} /> : null}
         {mode === "edit" && roster ? (
           <EventRosterSection
@@ -57,17 +66,32 @@ export const EventFormPage: FC<{
         ) : mode === "edit" && rosterHiddenNotice && row ? (
           <section aria-label="RSVP roster" data-testid="roster-hidden-notice">
             <h2>RSVPs</h2>
-            <p class="notice">
-              The RSVP roster is hidden here because this save was refused. No RSVP data has changed
-              — every response is still recorded. <a href={action}>Reload the edit page</a> to show
-              the roster again. Reloading discards the unsaved edits currently shown, so fix the
-              highlighted fields and save first if you want to keep them.
-            </p>
+            {saveRefused ? (
+              <p class="notice">
+                The RSVP roster is hidden because this save was refused. No RSVP data has changed.{" "}
+                <a href={action} target="_blank" rel="noopener">
+                  Open the latest version
+                </a>{" "}
+                to see the roster.
+              </p>
+            ) : (
+              <p class="notice">
+                The RSVP roster is hidden here because this save was refused. No RSVP data has
+                changed — every response is still recorded.{" "}
+                <a href={action}>Reload the edit page</a> to show the roster again. Reloading
+                discards the unsaved edits currently shown, so fix the highlighted fields and save
+                first if you want to keep them.
+              </p>
+            )}
           </section>
         ) : null}
       </section>
       <script type="module" src="/islands/admin-event-text-limits.js" />
+      {mode === "edit" ? <script src="/islands/admin-save-baseline.js" defer /> : null}
       <script src="/islands/admin-event-editor.js" defer />
+      {saveRefused ? (
+        <script src="/islands/auth-status.js" defer data-testid="auth-tab-sync" />
+      ) : null}
     </Shell>
   );
 };

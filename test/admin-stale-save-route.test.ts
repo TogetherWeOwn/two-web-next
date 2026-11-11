@@ -1,0 +1,313 @@
+import { Hono } from "hono";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+import { adminApp } from "../src/admin/routes";
+import {
+  eventSaveBaseline,
+  featuredSaveBaseline,
+  StaleSaveError,
+} from "../src/admin/save-baseline";
+import {
+  duplicateEvent,
+  getEvent,
+  getFeatured,
+  transitionEvent,
+  updateEvent,
+  updateFeatured,
+} from "../src/admin/store";
+import { ValidationError } from "../src/admin/validation";
+import type { Db } from "../src/db/index";
+import { sameOrigin } from "../src/same-origin";
+import { createMemorySessionStore } from "../src/sessions";
+import { cookieFor, env, MODERATOR } from "./helpers/member-data";
+import { eventRow, featuredRow, key } from "./helpers/admin-validation-correction";
+
+vi.mock("../src/admin/store", async (original) => ({
+  ...(await original<typeof import("../src/admin/store")>()),
+  duplicateEvent: vi.fn(),
+  getEvent: vi.fn(),
+  transitionEvent: vi.fn(),
+  getFeatured: vi.fn(),
+  updateEvent: vi.fn(),
+  updateFeatured: vi.fn(),
+}));
+
+const dbTouched = vi.fn(() => {
+  throw new Error("refused-save fixture must not query SQL");
+});
+const db = {
+  select: dbTouched,
+  insert: dbTouched,
+  update: dbTouched,
+  execute: dbTouched,
+} as unknown as Db;
+const fold = {
+  ...eventRow,
+  timezone: "Europe/London",
+  startsAt: new Date("2026-10-25T00:30:00Z"),
+  endsAt: new Date("2026-10-25T01:30:00Z"),
+};
+function expectHistoryBeforeDeparture(html: string) {
+  expect(html.match(/src="\/islands\/admin-save-baseline.js"/g)).toHaveLength(1);
+  expect(html.indexOf('src="/islands/admin-save-baseline.js"')).toBeLessThan(
+    html.indexOf('src="/islands/admin-event-editor.js"'),
+  );
+}
+
+const values = {
+  title: "Retained title",
+  timezone: "Europe/London",
+  starts_at: "2026-10-25 01:30",
+  ends_at: "2026-10-25 01:30",
+};
+
+async function post(path: string, fields: Record<string, string>) {
+  const sessions = createMemorySessionStore();
+  const cookie = await cookieFor(sessions, MODERATOR);
+  const app = new Hono()
+    .use("*", sameOrigin)
+    .route("/admin", adminApp({ sessionStore: sessions, db }));
+  return app.request(
+    `${env.APP_URL}/admin${path}`,
+    {
+      method: "POST",
+      headers: {
+        cookie,
+        origin: env.APP_URL,
+        accept: "text/html",
+        "content-type": "application/x-www-form-urlencoded",
+      },
+      body: new URLSearchParams(fields).toString(),
+    },
+    { ...env, ADMIN_DB: db },
+  );
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  vi.mocked(getEvent).mockResolvedValue(fold);
+  vi.mocked(getFeatured).mockResolvedValue({
+    ...featuredRow,
+    startsAtText: null,
+    endsAtText: null,
+  });
+});
+
+describe("refused moderator save documents", () => {
+  it.each(["early", "locked"])(
+    "does not falsely reject a fold-spanning schedule on the %s stale path",
+    async (path) => {
+      const baseline = await eventSaveBaseline(
+        path === "early" ? { ...fold, title: "Older saved title" } : fold,
+      );
+      vi.mocked(updateEvent).mockRejectedValue(new StaleSaveError({ ...fold, title: "Winner" }));
+      const res = await post(`/events/${key}`, { ...values, saved_baseline: baseline });
+      expect(res.status).toBe(409);
+      const html = await res.text();
+      expect(html).toContain('data-testid="stale-save"');
+      expect(html).toContain('value="Retained title"');
+      expect(html).toContain('data-event-draft=""');
+      expect(html).toContain('src="/islands/admin-event-editor.js"');
+      expect(html).toContain(`name="saved_baseline" value="${baseline}"`);
+      expect(html).not.toContain("The end is after the start.");
+      expect(html).not.toContain('data-testid="error-ends_at"');
+      expect(html).toContain('src="/islands/auth-status.js"');
+      expect(html.match(/data-testid="auth-tab-sync"/g)).toHaveLength(1);
+      expectHistoryBeforeDeparture(html);
+      expect(updateEvent).toHaveBeenCalledTimes(path === "early" ? 0 : 1);
+      expect(dbTouched).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["early", "locked"])(
+    "keeps intrinsic %s schedule errors on a refused draft",
+    async (path) => {
+      const baseline = await eventSaveBaseline(
+        path === "early" ? { ...fold, title: "Older saved title" } : fold,
+      );
+      vi.mocked(updateEvent).mockRejectedValue(new StaleSaveError({ ...fold, title: "Winner" }));
+      const res = await post(`/events/${key}`, {
+        ...values,
+        starts_at: "not-a-time",
+        saved_baseline: baseline,
+      });
+      // Early refusal renders the stale document; a matching baseline reaches
+      // normal validation first, which reports the same intrinsic error.
+      expect(res.status).toBe(path === "early" ? 409 : 422);
+      const html = await res.text();
+      if (path === "early") {
+        expect(html).toContain('data-testid="stale-save"');
+        expect(html).toContain("Also fix before saving:");
+      }
+      expect(html).toContain('data-testid="error-starts_at"');
+      expect(html).toContain("Not a date and time");
+      expect(updateEvent).not.toHaveBeenCalled();
+      expect(dbTouched).not.toHaveBeenCalled();
+    },
+  );
+
+  it("keeps a gap-time error and a genuine ordering error on a refused draft", async () => {
+    const gap = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-03-29 01:30",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(gap.status).toBe(409);
+    const gapHtml = await gap.text();
+    expect(gapHtml).toContain('data-testid="error-starts_at"');
+    expect(gapHtml).toContain("That time never occurred");
+
+    const ordering = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-10-26 02:00",
+      ends_at: "2026-10-26 01:00",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(ordering.status).toBe(409);
+    const orderingHtml = await ordering.text();
+    expect(orderingHtml).toContain('data-testid="error-ends_at"');
+    expect(orderingHtml).toContain("The end is after the start.");
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps a fold ordering error that is invalid across every interpretation", async () => {
+    // London 2026-10-25: end 01:30 is 00:30Z or 01:30Z; start 02:00 is
+    // 02:00Z. The latest end is still before the earliest start.
+    const res = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-10-25 02:00",
+      ends_at: "2026-10-25 01:30",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(res.status).toBe(409);
+    const html = await res.text();
+    expect(html).toContain('data-testid="stale-save"');
+    expect(html).toContain('data-testid="error-ends_at"');
+    expect(html).toContain("The end is after the start.");
+    expect(html).toContain("Also fix before saving:");
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("keeps a fold ordering error with an ambiguous start that is invalid either way", async () => {
+    // London 2026-10-25: start 01:30 is 00:30Z or 01:30Z; end 00:30 is
+    // 23:30Z the previous day. Every interpretation ends before it starts.
+    const res = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-10-25 01:30",
+      ends_at: "2026-10-25 00:30",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(res.status).toBe(409);
+    const html = await res.text();
+    expect(html).toContain('data-testid="error-ends_at"');
+    expect(html).toContain("The end is after the start.");
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("defers a minute-identical ordering error that may have lost its seconds", async () => {
+    // A valid stored pair with seconds (e.g. 12:00:10Z to 12:00:50Z) renders
+    // as 12:00/12:00; the carrier-less reparse resolves both to :00 and
+    // invents the error. It must be deferred to the carried fresh editor.
+    const res = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-10-26 12:00",
+      ends_at: "2026-10-26 12:00",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(res.status).toBe(409);
+    const html = await res.text();
+    expect(html).toContain('data-testid="stale-save"');
+    expect(html).not.toContain("The end is after the start.");
+    expect(html).not.toContain('data-testid="error-ends_at"');
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("retains non-schedule and missing-date diagnostics within the single stale notice", async () => {
+    const res = await post(`/events/${key}`, {
+      ...values,
+      title: "",
+      starts_at: "",
+      saved_baseline: "a".repeat(64),
+    });
+    expect(res.status).toBe(409);
+    const html = await res.text();
+    expect(html).toContain('data-testid="error-title"');
+    expect(html).toContain('data-testid="error-starts_at"');
+    expect(html.match(/data-admin-validation-summary/g)).toHaveLength(1);
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it("still rejects an invalid ordering on a current draft as 422", async () => {
+    const res = await post(`/events/${key}`, {
+      ...values,
+      starts_at: "2026-10-26 02:00",
+      ends_at: "2026-10-26 01:00",
+      saved_baseline: await eventSaveBaseline(fold),
+    });
+    expect(res.status).toBe(422);
+    expect(await res.text()).toContain("The end is after the start.");
+    expect(updateEvent).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["duplicate", "/duplicate", "title"],
+    ["publish", "/publish", "location"],
+  ])(
+    "re-renders the %s refusal editor with the current saved_baseline and a mounted draft marker",
+    async (action, suffix, field) => {
+      const refusal = new ValidationError({ [field]: "Fix this field." });
+      if (action === "duplicate") vi.mocked(duplicateEvent).mockRejectedValue(refusal);
+      else vi.mocked(transitionEvent).mockRejectedValue(refusal);
+      const res = await post(`/events/${key}${suffix}`, {});
+      expect(res.status).toBe(422);
+      const html = await res.text();
+      const baseline = html.match(/name="saved_baseline" value="([0-9a-f]{64})"/)?.[1];
+      expect(baseline).toBe(await eventSaveBaseline(fold));
+      expect(html).toContain('data-event-draft=""');
+      expect(html).toContain(`data-testid="error-${field}"`);
+      expect(updateEvent).not.toHaveBeenCalled();
+      vi.mocked(updateEvent).mockResolvedValue({ row: fold, writeBack: null, childWriteBacks: [] });
+      const corrected = await post(`/events/${key}`, {
+        ...values,
+        location: "Community voice room",
+        saved_baseline: baseline!,
+      });
+      expect(corrected.status).toBe(303);
+      expect(updateEvent).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ select: expect.any(Function), update: expect.any(Function) }),
+        expect.objectContaining({ id: MODERATOR.userId }),
+        key,
+        expect.objectContaining({ title: values.title, location: "Community voice room" }),
+        baseline,
+      );
+      expect(dbTouched).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([400, 409])(
+    "mounts expiry recovery exactly once on a featured %s draft",
+    async (status) => {
+      const baseline =
+        status === 400
+          ? ""
+          : await featuredSaveBaseline({
+              ...featuredRow,
+              title: "Older",
+              startsAtText: null,
+              endsAtText: null,
+            });
+      const res = await post(`/featured/${featuredRow.id}`, {
+        title: "My draft",
+        saved_baseline: baseline,
+      });
+      expect(res.status).toBe(status);
+      const html = await res.text();
+      expect(html).toContain('data-event-draft=""');
+      expect(html).toContain('src="/islands/admin-event-editor.js"');
+      expect(html).toContain('src="/islands/auth-status.js"');
+      expect(html.match(/data-testid="auth-tab-sync"/g)).toHaveLength(1);
+      expectHistoryBeforeDeparture(html);
+      expect(updateFeatured).not.toHaveBeenCalled();
+      expect(dbTouched).not.toHaveBeenCalled();
+    },
+  );
+});

@@ -6,6 +6,7 @@ import postgres from "postgres";
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import app from "./app";
 import { adminApp } from "../src/admin/routes";
+import { eventSaveBaseline } from "../src/admin/save-baseline";
 import { events, rsvps } from "../src/db/admin-schema";
 import { users } from "../src/db/schema";
 import type { Env } from "../src/env";
@@ -262,12 +263,15 @@ describe.skipIf(!process.env.DATABASE_URL)("RSVP waitlist (agent-testdb)", () =>
     // Standalone adminApp mounts no requestLog, so c.get("requestId") is
     // undefined and the dispatch omits correlation (safeRequestId(undefined)
     // is undefined). Live-mounted /admin inherits the outer requestLog.
+    // The token of the row as stored now (earlier saves in a test move it).
+    const [current] = await db.select().from(events).where(eq(events.id, ev.id));
     return adminApp({ sessionStore: store, db }).request(
       `/events/${ev.eventKey}`,
       {
         method: "POST",
         headers: { cookie: await cookieFor("moderator", true), origin: APP_URL },
         body: new URLSearchParams({
+          saved_baseline: await eventSaveBaseline(current!),
           title: ev.title,
           timezone: "UTC",
           location: ev.location ?? "Voice",

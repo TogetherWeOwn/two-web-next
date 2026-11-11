@@ -17,6 +17,8 @@ import { adminSaveStatus } from "../save-status";
 import type { FeaturedRow } from "../store";
 import { Field, Shell, val } from "./shell";
 import { ValidationSummary } from "./validation-summary";
+import { StaleSaveNotice } from "./stale-save-notice";
+import { SAVE_BASELINE_FIELD } from "../save-baseline";
 
 function savedBoundView(display: FeaturedBoundDisplay | null, openCopy: string) {
   if (display?.kind === "instant") return <time datetime={display.iso}>{display.iso}</time>;
@@ -32,7 +34,8 @@ export const FeaturedFormPage: FC<{
   now?: Date;
   appUrl: string;
   imageHosts?: string;
-}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts }) => {
+  saveRefused?: "stale" | "unverified";
+}> = ({ mode, row, values, errors, now = new Date(), appUrl, imageHosts, saveRefused }) => {
   const action = mode === "new" ? "/admin/featured" : `/admin/featured/${row!.id}`;
   const checked =
     values.is_published === "on" || values.is_published === true || values.is_published === "true";
@@ -55,7 +58,12 @@ export const FeaturedFormPage: FC<{
               <time datetime={now.toISOString()}>{now.toISOString()}</time> (UTC). Save changes to
               refresh this preview.
             </p>
-            {Object.keys(errors).length > 0 ? (
+            {saveRefused ? (
+              <p>
+                The form below holds your submitted draft. The card and eligibility show the latest
+                saved version, which changed after you opened this page.
+              </p>
+            ) : Object.keys(errors).length > 0 ? (
               <p>
                 The form below holds your submitted draft — the card and eligibility still show the
                 last saved row.
@@ -84,13 +92,30 @@ export const FeaturedFormPage: FC<{
             </p>
           </section>
         ) : null}
-        <ValidationSummary errors={errors} kind="featured" mode={mode} />
+        {saveRefused ? (
+          <StaleSaveNotice
+            kind="featured"
+            action={action}
+            updatedAt={row?.updatedAt}
+            unverified={saveRefused === "unverified"}
+            errors={errors}
+          />
+        ) : (
+          <ValidationSummary errors={errors} kind="featured" mode={mode} />
+        )}
         <form
           method="post"
           action={action}
           data-event-editor=""
-          data-event-draft={Object.keys(errors).length > 0 ? "" : undefined}
+          data-event-draft={saveRefused || Object.keys(errors).length > 0 ? "" : undefined}
         >
+          {mode === "edit" ? (
+            <input
+              type="hidden"
+              name={SAVE_BASELINE_FIELD}
+              value={val(values, SAVE_BASELINE_FIELD)}
+            />
+          ) : null}
           {/* Native maxlength counts UTF-16 units and truncates supplementary
               characters early; the 255-code-point limits belong to the server
               validator so valid headlines and image descriptions survive. */}
@@ -181,7 +206,11 @@ export const FeaturedFormPage: FC<{
           </form>
         ) : null}
       </section>
+      {mode === "edit" ? <script src="/islands/admin-save-baseline.js" defer /> : null}
       <script src="/islands/admin-event-editor.js" defer />
+      {saveRefused ? (
+        <script src="/islands/auth-status.js" defer data-testid="auth-tab-sync" />
+      ) : null}
     </Shell>
   );
 };
