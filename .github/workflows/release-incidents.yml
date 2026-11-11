@@ -1,0 +1,78 @@
+name: release-incidents
+
+# Observation is outside qualification and production approval/concurrency waits.
+# The existing scheduled promotion's request supplies the backstop event; no new schedule.
+on:
+  workflow_run:
+    workflows: [e2e-staging, deploy-production]
+    types: [requested, completed]
+
+permissions:
+  contents: read
+
+jobs:
+  observe:
+    if: >-
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      github.event.workflow_run.name == 'e2e-staging' && github.event.action == 'completed'
+    concurrency:
+      group: staging-incident-observation
+      cancel-in-progress: false
+      queue: max
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      # Trusted workflow code only; never checkout the source run's ref or artifacts.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Observe release incidents without deciding qualification or deployment
+        run: node ci/release-incidents.mjs
+        env:
+          INCIDENT_MODE: staging
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          GITHUB_TOKEN: ${{ github.token }}
+
+  observe-production:
+    # ci -> deploy -> e2e-staging -> observer is three workflow_run hops.
+    # Observing automatic deploy-production requests would need an unsupported fourth.
+    if: >-
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository &&
+      (github.event.workflow_run.name == 'e2e-staging' && github.event.action == 'completed' ||
+      github.event.workflow_run.name == 'deploy-production' && github.event.action == 'requested')
+    concurrency:
+      group: production-incident-observation
+      cancel-in-progress: false
+      queue: max
+    runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.workflow_sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Observe production backlog independently of approval or staging reporting
+        run: node ci/release-incidents.mjs
+        env:
+          INCIDENT_MODE: hold
+          SOURCE_RUN_ID: ${{ github.event.workflow_run.id }}
+          SOURCE_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
+          GITHUB_TOKEN: ${{ github.token }}

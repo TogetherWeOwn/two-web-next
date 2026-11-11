@@ -44,6 +44,7 @@ follow its linked legacy-origin readiness precondition, which still applies.
 | Symptom or alert | Runbook section | First read-only diagnostic | Escalate to |
 | --- | --- | --- | --- |
 | Any incident: start here | [Safety and escalation](#safety-and-escalation) | Re-read the authorization box; confirm staging-vs-production scope first (staging targets below do not triage production); record UTC time, commit, Worker version IDs, route/job and redacted error class; keep logs private | DevOps & Reliability Engineer; Director of Engineering for technical dead-ends |
+| Failed staging gate, promotion hold, or production held over six hours | [Release-gate incidents](#release-gate-incidents) | Read the linked incident issue and source Actions run/attempt; compare the tested or candidate SHA, failed job/step and required versus observed outcome; skipped jobs are not recovery evidence | DevOps & Reliability Engineer |
 | Moderator lost their Discord role but sessions still authenticate | [A moderator lost their role](#a-moderator-lost-their-role) | Confirm the Discord role removal first; dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging` to read the active-session count (idle sessions expire within two hours); do not `--apply` from this table | DevOps & Reliability Engineer |
 | Still signed in elsewhere after a fresh sign-in (`prior session sweep failed`) | [Still signed in elsewhere after a fresh sign-in](#still-signed-in-elsewhere-after-a-fresh-sign-in) | Read the `prior session sweep failed` warning by `request_id` in Observability per [runbook-logs.md](runbook-logs.md#privacy-and-boundaries); dry-run `node --import ./bin/ts-hook.mjs bin/revoke-sessions.mjs --discord-id=<snowflake> --target staging` to read the active-session count; do not `--apply` from this table | DevOps & Reliability Engineer |
 | `GET /up` 503 (`db:error`, `pending_migrations` nonzero or `null`, `config:missing`) | [Read `/up` without mistaking liveness for readiness](#read-up-without-mistaking-liveness-for-readiness) | `curl -sS --max-time 10 https://next.togetherweown.com/up`; compare HTTP status, `db`, `pending_migrations` and `config` against the readiness tables | DevOps & Reliability Engineer |
@@ -67,6 +68,76 @@ Not an incident entry: [Final import and reconcile](#final-import-and-reconcile)
 (scheduled quarterly review, not incident response) and
 [security.txt expiry review and renewal](#securitytxt-expiry-review-and-renewal)
 are not incident entries; read those sections directly when that work is authorized.
+
+## Release-gate incidents
+
+The downstream [staging observer](../.github/workflows/release-incidents.yml)
+and final reporting job in [deploy-production](../.github/workflows/deploy-production.yml) use
+[the release incident reporter](../ci/release-incidents.mjs). They create the
+`incident` label when missing and open one stable-key issue per failed gate:
+`staging-quality`, `staging-journeys`, `e2e-staging`, or `production-promotion`.
+Repeated failures comment on the open issue. The next executed green gate
+comments **Recovered** and closes it; skipped jobs and a superseded watch are
+not recovery evidence. A clean promotion needs the watch's explicit `pass` verdict.
+Before staging issue writes, the reporter checks authoritative main-workflow
+history by source run number and source attempt, not the observer's rerun number.
+A newer meaningful observation supersedes the older one separately for each
+stable key, even when the newer green run never opened an issue or already
+closed it. Skipped or incomplete gates do not hide a useful earlier failure;
+aggregate recovery requires every selected job in both required gates to pass.
+History reads are bounded to five run-list pages and twenty newer attempt
+snapshots (each job list retains its own page cap). Missing, malformed,
+unavailable or over-cap history fails reporting before staging issue mutations.
+Use the current source's observer for a fresh report; an old observer rerun is
+not a new qualification and cannot reverse newer source evidence.
+The sink follows the stable-key/deduplication pattern from
+[two-bot-next](https://github.com/TogetherWeOwn/two-bot-next/blob/main/scripts/incident_issue.py).
+
+Promotion reporting includes clean no-candidate skips, not just red runs. Each
+attempt compares the live production `/up` revision with current main.
+The independent observer checks age on staging completion, within the supported
+three-hop chain (`ci → deploy → e2e-staging → observer`), even when automatic
+promotion waits for approval or concurrency. It also handles promotion
+`workflow_run: requested` events from the existing daily 14:17 UTC backstop and
+manual dispatch. Automatic promotion requests would require a fourth hop, so
+they are not relied on. Observation does not wait for production Environment
+approval, deploy-job completion, staging incident reporting or the production
+concurrency group. The observer and final production reporter share a job-level
+`production-incident-observation` concurrency group with `queue: max` and no
+cancellation; each reads live identity only after entering the group. Staging
+reporting uses a separate queued group. No workflow-level replaceable pending
+slot can discard a request in favor of a skipped completion event. GitHub bounds
+each queue to 100 pending jobs; excess jobs are cancelled, not observed. No
+schedule is added or changed. On squash-only linear main, the
+oldest pending commit's committer time is `held since`; age **strictly greater
+than six hours** opens `production held > 6h`. It records both SHAs, age and the
+failed step or candidate-selection reason (pending source runs link the active
+hold for investigation). Checks occur on request/completion events, not on a
+new hourly scheduler, so this is not a six-hour notification SLA. Staging
+observation runs downstream: an Issues API outage fails reporting visibly but
+cannot turn an otherwise-green staging qualification run red. Partial promotion recalculates age from the oldest still-pending commit.
+Missing identity/ancestry/date evidence raises a separate incident and fails
+reporting; it never clears the existing held-production incident.
+
+Issues include run/attempt links, the tested or candidate SHA, failed job/step
+and required versus observed outcome. Quality failures additionally extract
+allowlisted numeric Lighthouse assertion values when available. Raw logs,
+member content, URLs from logs and arbitrary remote errors are never copied.
+If the log is unavailable, the issue says so and links the source run instead
+of inventing measurements. Reporting has only job-scoped `issues: write`,
+Actions/contents read and no deployment or environment secret. It does not
+change qualification, production guards, runtime startup, expiry or scheduling.
+No staging/preview runtime or recurring always-on service is added.
+
+After merge, use [incident-rehearsal](../.github/workflows/incident-rehearsal.yml)
+with `force_fail=true` twice, then `false`. This is a throwaway, report-only
+staging-failure simulation: it never contacts staging, production or a database.
+Check one labelled rehearsal issue, a repeat comment and a recovery closure.
+Before recovery, retain the issue URL and confirm that incident intake maps it
+to an assigned response card within one hour; record that routine run and card
+in the private delivery evidence. A fixture-test pass alone proves no live
+issue creation or intake. Every production merge/deploy still follows the
+exact-head review, confirmation and release gates above.
 
 ## Safety and escalation
 

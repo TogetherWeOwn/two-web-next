@@ -1,0 +1,61 @@
+name: incident-rehearsal
+
+# Report-only throwaway path. Never calls a deploy, staging, database or production probe.
+on:
+  pull_request:
+    paths:
+      - ci/release-incidents*.mjs
+      - .github/workflows/incident-rehearsal.yml
+      - .github/workflows/release-incidents.yml
+      - .github/workflows/e2e-staging.yml
+      - .github/workflows/deploy-production.yml
+  workflow_dispatch:
+    inputs:
+      force_fail:
+        description: "Simulate a failed staging gate (false records recovery)"
+        required: true
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: incident-rehearsal-${{ github.event_name }}-${{ github.event.pull_request.number || 'dispatch' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  selftest:
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Reporter fixture tests (also on draft PRs)
+        run: node --test ci/release-incidents.test.mjs
+
+  report:
+    needs: selftest
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ${{ github.event.repository.private && github.event_name != 'pull_request' && github.event_name != 'merge_group' && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: Simulate staging failure or recovery without deploying
+        run: node ci/release-incidents.mjs
+        env:
+          INCIDENT_MODE: rehearsal
+          FORCE_FAIL: ${{ inputs.force_fail }}
+          GITHUB_TOKEN: ${{ github.token }}

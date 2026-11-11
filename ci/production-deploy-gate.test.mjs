@@ -713,21 +713,46 @@ test("preflight checkouts materialize ci and wrangler.jsonc for the production g
   }
 });
 
+function workflowJob(workflow, id) {
+  const blocks = workflow.split(`\n  ${id}:\n`);
+  assert.equal(blocks.length, 2, `expected exactly one ${id} job`);
+  return blocks[1].split(/\n  [A-Za-z0-9_-]+:\n/)[0];
+}
+
+function assertProductionRunnerRouting(workflow) {
+  const runsOn = `    runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
+  for (const id of [
+    "preflight",
+    "staging-soak",
+    "regression",
+    "deploy-production",
+    "post-deploy-watch",
+    "notify",
+    "incidents",
+  ]) {
+    assert.ok(workflowJob(workflow, id).includes(runsOn), `${id} must route by repo visibility`);
+  }
+  assert.equal(workflow.split(runsOn).length - 1, 7);
+  assert.equal(workflow.split("ubuntu-latest").length - 1, 7, "hosted only as the public branch");
+}
+
 test("manual production workflow routes runners by repo visibility and uses production-only secrets", () => {
   const workflow = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
     "utf8",
   );
-  // Self-hosted while private; GitHub-hosted only while public (TOG-12326).
-  const runsOn = `runs-on: \${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}\n`;
-  // preflight, staging-soak, regression, deploy-production,
-  // post-deploy-watch and notify.
-  assert.equal(workflow.split(runsOn).length - 1, 6);
-  assert.equal(
-    workflow.split("ubuntu-latest").length - 1,
-    6,
-    "ubuntu-latest only as the public-repo branch",
-  );
+  // The reporter follows the same public/private policy as the six existing jobs.
+  assertProductionRunnerRouting(workflow);
+  const incidents = workflowJob(workflow, "incidents");
+  assert.doesNotMatch(incidents, /secrets\.|^    environment:/m);
+  const runner = incidents.match(/^    runs-on: .+$/m)[0];
+  for (const invalid of ["    runs-on: ubuntu-latest", "    runs-on: self-hosted", ""]) {
+    assert.throws(() =>
+      assertProductionRunnerRouting(
+        workflow.replace(incidents, incidents.replace(runner, invalid)),
+      ),
+    );
+  }
   // Staging credentials appear only in the staging-soak job, which binds
   // the staging Environment, runs no wrangler and makes one gate call.
   const soak = workflow.slice(
@@ -1094,6 +1119,43 @@ function jobConcurrencyBlocks(workflow) {
   ].map((match) => ({ group: match[1].trim(), cancel: match[2] }));
 }
 
+function assertProductionMutationLocks(deploy, production) {
+  const incidents = workflowJob(deploy, "incidents");
+  assert.deepEqual(jobConcurrencyBlocks(incidents), [
+    { group: "production-incident-observation", cancel: "false" },
+  ]);
+  assert.match(incidents, /^      queue: max$/m);
+  assert.doesNotMatch(incidents, /secrets\.|^    environment:/m);
+  for (const [label, workflow, id] of [
+    ["deploy-production.yml", deploy, "deploy-production"],
+    ["rollback-production.yml (production)", production, "rollback-production"],
+  ]) {
+    const mutation = workflowJob(workflow, id);
+    const blocks = jobConcurrencyBlocks(mutation);
+    assert.equal(blocks.length, 1, `${label} must hold exactly one job-level mutation lock`);
+    assert.equal(blocks[0].group, sharedMutationGroup, `${label} mutation lock diverged`);
+    assert.equal(blocks[0].cancel, "false", `${label} mutation lock must not cancel`);
+    assert.ok(!blocks[0].group.includes("${{"), `${label} mutation lock must be static`);
+    for (const suffix of ["github.", "run_id", "run_number", "run_attempt", "ref", "sha"]) {
+      assert.ok(
+        !blocks[0].group.toLowerCase().includes(suffix),
+        `${label} mutation lock must not carry a run-specific suffix (${suffix})`,
+      );
+    }
+    const outsideMutation = workflow.replace(mutation, "");
+    assert.deepEqual(
+      jobConcurrencyBlocks(outsideMutation),
+      id === "deploy-production" ? jobConcurrencyBlocks(incidents) : [],
+      `${label} has no other job-level lock except the isolated observer`,
+    );
+  }
+  assert.equal(
+    jobConcurrencyBlocks(workflowJob(deploy, "deploy-production"))[0].group,
+    jobConcurrencyBlocks(workflowJob(production, "rollback-production"))[0].group,
+    "promotion and rollback locks must match exactly",
+  );
+}
+
 test("production promotion and rollback mutations share one static non-cancelling lock", () => {
   const deploy = readFileSync(
     new URL("../.github/workflows/deploy-production.yml", import.meta.url),
@@ -1118,28 +1180,52 @@ test("production promotion and rollback mutations share one static non-cancellin
     ["deploy-staging"],
     "the staging rollback lock must match deploy.yml's job-level lock",
   );
-  for (const [label, workflow] of [
-    ["deploy-production.yml", deploy],
-    ["rollback-production.yml (production)", production],
+  assertProductionMutationLocks(deploy, production);
+  const mutation = workflowJob(deploy, "deploy-production");
+  const lock = mutation.match(
+    /^    concurrency:\n      group: .+\n      cancel-in-progress: false\n/m,
+  )[0];
+  for (const invalid of [
+    "",
+    lock + lock,
+    lock.replace("false", "true"),
+    lock.replace(sharedMutationGroup, "production-incident-observation"),
+    lock.replace(sharedMutationGroup, "production-worker-mutation-${{ github.run_id }}"),
   ]) {
-    const blocks = jobConcurrencyBlocks(workflow);
-    // Exactly one job-level mutation lock per workflow: deleting it fails here.
-    assert.equal(blocks.length, 1, `${label} must hold exactly one job-level mutation lock`);
-    assert.equal(blocks[0].group, sharedMutationGroup, `${label} mutation lock diverged`);
-    // A cancelling lock would let a queued run kill the active Worker mutation.
-    assert.equal(blocks[0].cancel, "false", `${label} mutation lock must not cancel`);
-    // The lock is independent of run/ref: no expression and no run-specific suffix.
-    assert.ok(!blocks[0].group.includes("${{"), `${label} mutation lock must be static`);
-    for (const suffix of ["github.", "run_id", "run_number", "run_attempt", "ref", "sha"]) {
-      assert.ok(
-        !blocks[0].group.toLowerCase().includes(suffix),
-        `${label} mutation lock must not carry a run-specific suffix (${suffix})`,
-      );
-    }
+    assert.throws(() =>
+      assertProductionMutationLocks(
+        deploy.replace(mutation, mutation.replace(lock, invalid)),
+        production,
+      ),
+    );
   }
-  const deployGroup = jobConcurrencyBlocks(deploy)[0].group;
-  const rollbackGroup = jobConcurrencyBlocks(production)[0].group;
-  assert.equal(deployGroup, rollbackGroup, "promotion and rollback locks must match exactly");
+  // A matching global count must not hide a lock moved to a non-mutating job.
+  const moved = deploy.replace(mutation, mutation.replace(lock, ""));
+  const preflight = workflowJob(moved, "preflight");
+  assert.throws(() =>
+    assertProductionMutationLocks(moved.replace(preflight, lock + preflight), production),
+  );
+  const incidents = workflowJob(deploy, "incidents");
+  for (const invalid of [
+    incidents.replace("      queue: max\n", ""),
+    incidents.replace("cancel-in-progress: false", "cancel-in-progress: true"),
+    incidents.replace("production-incident-observation", sharedMutationGroup),
+    incidents + "    environment: production\n",
+    incidents + "    env:\n      TOKEN: ${{ secrets.PRODUCTION_CLOUDFLARE_API_TOKEN }}\n",
+  ]) {
+    assert.throws(() =>
+      assertProductionMutationLocks(deploy.replace(incidents, invalid), production),
+    );
+  }
+  assert.throws(() =>
+    assertProductionMutationLocks(
+      deploy.replace("\n  incidents:\n", "\n  hidden-observer:\n"),
+      production,
+    ),
+  );
+  assert.throws(() =>
+    assertProductionMutationLocks(deploy, production.replace(sharedMutationGroup, "other-lock")),
+  );
 });
 
 test("shared production mutation lock never nests at workflow level nor leaks into release", () => {

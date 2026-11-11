@@ -695,6 +695,30 @@ describe("ci heavy-job scope gates", () => {
     }
   });
 
+  it("queue-syntax-smoke runs on every verdict and ci-ok fails unless it passes", () => {
+    const block = jobBlock("queue-syntax-smoke");
+    expect(block).toMatch(/(^|\n)    needs: scope\n/);
+    expect(block).not.toMatch(/\n    if: /);
+    const guard = jobBlock("ci-ok").match(
+      /- name: Require successful queue syntax smoke\n        env:\n          QUEUE_SMOKE_RESULT: \$\{\{ needs\.queue-syntax-smoke\.result \}\}\n        run: ([^\n]+)\n/,
+    )?.[1];
+    expect(guard, "queue-syntax-smoke guard must sit unconditionally in ci-ok").toBeDefined();
+    for (const [result, expected] of [
+      ["success", 0],
+      ["failure", 1],
+      ["cancelled", 1],
+      ["skipped", 1],
+      ["", 1],
+      ["unknown", 1],
+    ] as const) {
+      const run = spawnSync("bash", ["-c", guard ?? "exit 99"], {
+        env: { QUEUE_SMOKE_RESULT: result },
+        encoding: "utf8",
+      });
+      expect(run.status, `queue-syntax-smoke result ${result || "missing"}`).toBe(expected);
+    }
+  });
+
   it("ci-ok fails unless the Node 22 compatibility leg passes", () => {
     const guard = jobBlock("ci-ok").match(
       /- name: Require successful Node 22 compatibility leg\n        env:\n          NODE22_COMPAT_RESULT: \$\{\{ needs\.node22-compat\.result \}\}\n        run: ([^\n]+)\n/,
@@ -718,7 +742,7 @@ describe("ci heavy-job scope gates", () => {
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
     expect(block).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
+      /\n    needs:\s*\[a11y, lighthouse, bundle-budget, docs-links, queue-syntax-smoke, check, node22-compat, scope\]\n/,
     );
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
