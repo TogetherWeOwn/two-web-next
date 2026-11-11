@@ -137,9 +137,11 @@ export async function resolvePromotionSha({
     if (seenNewerRed) continue;
     // A commit with any red or re-run staging verdict is never evidence.
     if (redShas.has(sha)) continue;
-    // Soak: the green must be at least 30 minutes old, so a just-passed
-    // staging has time to reveal a flake before it rides to production.
-    // A missing or unparsable timestamp fails closed (not promotable).
+    // Retained legacy age floor, not proof of actual observation coverage.
+    // No shipped staging receipt records interval/serving-identity observations;
+    // do not claim age satisfies the retained 30-minute actual coverage floor.
+    // Missing coverage remains UNKNOWN/INSUFFICIENT under the release hold.
+    // A missing or unparsable timestamp still fails closed (not promotable).
     const completedAt = runCompletedAtMs(run);
     if (!Number.isFinite(completedAt) || nowMs - completedAt < PROMOTION_SOAK_MS) continue;
     const { jobs = [] } = await get(`/actions/runs/${run.id}/jobs?per_page=100`);

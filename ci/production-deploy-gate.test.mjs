@@ -25,6 +25,8 @@ import {
   readLedgerState,
   readLiveProductionCommit,
   readLiveProductionLedger,
+  requireStagingEvidence,
+  requireStagingSoakIfEvident,
   stagingQualityJob,
   stagingQualitySteps,
   targetWebEndUnknown,
@@ -1336,6 +1338,31 @@ test("auto-approve passes without reviewers when CI, staging deploy and e2e-stag
   ]);
   assert.equal(seen["deploy.yml"], 1);
   assert.equal(seen["e2e-staging.yml"], 1);
+});
+
+test("legacy green age and reviewer approval do not report actual coverage as measured", async () => {
+  const notices = [];
+  const candidate = { repository: "fixture/repo", sha: dispatchSha };
+  const legacy = await requireStagingEvidence(candidate, {
+    fetchImpl: stubAutoApi(stagingEvidence()),
+    log: (line) => notices.push(line),
+  });
+  assert.equal(
+    legacy.length,
+    2,
+    "transitional routing is retained, not a new missing-receipt bypass",
+  );
+  const noPass = await requireStagingSoakIfEvident(candidate, {
+    fetchImpl: stubAutoApi({ "e2e-staging.yml": [] }),
+    log: (line) => notices.push(line),
+  });
+  assert.equal(noPass, null, "legacy reviewer routing remains, not coverage proof");
+  assert.equal(notices.length, 2);
+  for (const line of notices) {
+    assert.match(line, /actual staging coverage: UNKNOWN\/INSUFFICIENT/);
+    assert.match(line, /no identity-bound interval receipt/);
+    assert.match(line, /retain release holds/);
+  }
 });
 
 for (const [name, pattern, mutate] of [

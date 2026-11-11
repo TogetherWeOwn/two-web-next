@@ -17,8 +17,14 @@
 //
 // The error rate reuses the gradual-promote gate (Workers analytics for the
 // promoted scriptVersion since the watch began, same 5% threshold and
-// 20-request floor). An insufficient sample passes; a query error warns and
-// does not roll back, because readiness still probes the version directly.
+// 20-request floor). Scheduling is anchored to a monotonic clock: each
+// scheduled probe/rate slot keeps its original deadline despite probe/query
+// latency, and periodic opportunities lost to that latency are counted as
+// missed and never backfilled. Attempted rate calls that return an
+// insufficient sample or a query error are counted separately as incomplete
+// rate evidence. Either kind of missing evidence leaves the rate evidence
+// incomplete: the watch continues to its original deadline and reports
+// insufficient, never a measured pass or a breach, and never rolls back.
 import { appendFileSync, realpathSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { runErrorRateGate } from "../.github/actions/gradual-promote/error-rate-gate.mjs";
@@ -92,6 +98,7 @@ export async function watchProduction(config, deps = {}) {
   let judged = 0;
   let handled = 0;
   let missed = 0;
+  let incomplete = 0;
   let nextProbeAt = 0;
   for (;;) {
     const before = elapsed();
@@ -148,10 +155,13 @@ export async function watchProduction(config, deps = {}) {
         log("::error::error-rate breach on the promoted version");
         return { verdict: "breach", reason: "error-rate", judged: judged + 1 };
       }
-      if (rate.verdict === "error") {
-        log("::warning::error-rate query failed; readiness still gates this watch");
-      } else {
+      if (rate.verdict === "pass") {
         judged += 1;
+      } else {
+        incomplete += 1;
+        log(
+          "::warning::error-rate evidence unavailable or insufficient; not a rate pass or breach",
+        );
       }
     }
     if (final) break;
@@ -160,18 +170,31 @@ export async function watchProduction(config, deps = {}) {
       nextProbeAt = Math.max(nextProbeAt, (Math.floor(after / intervalMs) + 1) * intervalMs);
     }
   }
-  if (missed > 0) {
-    log(
-      `::warning::${missed}/${opportunities} scheduled error-rate opportunities missed; ` +
-        "post-deploy watch insufficient, no automatic rollback",
-    );
-    return { verdict: "insufficient", judged, missed };
+  if (missed > 0 || incomplete > 0) {
+    if (missed > 0) {
+      log(
+        `::warning::${missed}/${opportunities} scheduled error-rate opportunities missed; ` +
+          "post-deploy watch insufficient, no automatic rollback",
+      );
+    }
+    if (incomplete > 0) {
+      log(
+        `::warning::post-deploy watch insufficient for ${settings.versionId}: ` +
+          `${incomplete} missing rate judgments; no automatic rollback`,
+      );
+    }
+    if (judged === 0) {
+      log(
+        "::warning::no error-rate judgment succeeded during the watch; readiness held throughout",
+      );
+    }
+    return { verdict: "insufficient", judged, missed, incomplete };
   }
   if (judged === 0) {
     log("::warning::no error-rate judgment succeeded during the watch; readiness held throughout");
   }
   log(`post-deploy watch passed for ${settings.versionId}`);
-  return { verdict: "pass", judged, missed };
+  return { verdict: "pass", judged, missed, incomplete };
 }
 
 export function configFromEnv(env) {
