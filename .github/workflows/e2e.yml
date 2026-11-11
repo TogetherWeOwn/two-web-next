@@ -79,7 +79,7 @@ jobs:
       - name: Check out pinned application
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: ${{ inputs.join_capture_sha }}
+          ref: 60c47d13e96b254e71303f24e777932a0e506713
           path: application
           persist-credentials: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -119,7 +119,7 @@ jobs:
           cd "$APP_ROOT"
           env -i PATH="$PATH" HOME="$HOME" APP_ROOT="$APP_ROOT" \
             JOIN_EVIDENCE_DIR="$JOIN_EVIDENCE_DIR" \
-            node --import tsx --test --test-timeout=60000 "$CONTROLLER_ROOT/ci/join-state-evidence.test.mjs" \
+            node --import tsx --test --test-reporter=tap --test-timeout=60000 "$CONTROLLER_ROOT/ci/join-state-evidence.test.mjs" \
             2>&1 | tee "$JOIN_EVIDENCE_DIR/test-report.tap"
           git diff --exit-code
           git diff --cached --exit-code
