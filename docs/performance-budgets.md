@@ -96,6 +96,87 @@ each build equivalent; only whitespace-tolerant assertions survive
 minification. The deploy workflow re-checks drift with `npm run build:assets:check`
 before deploying, so the deployed bytes are the reviewed bytes.
 
+## Draft asset generation
+
+Agents and contributors do not run `npm run build:assets` locally. For a draft
+PR the controlled
+[`asset-generation`](../.github/workflows/asset-generation.yml) workflow runs
+the reviewed generator (`ci/minify-assets.mjs`, locked esbuild) on Actions and
+returns the bytes. It is optional and non-deploying: it is not a required
+check, it does not change `bundle-budget`, drift gating, thresholds or any
+route, and it never commits or pushes. It runs on `pull_request` (not
+`pull_request_target`) for same-repository heads that touch generator inputs
+(`assets/`, `public/`, `vendor/`, the budget fragments, the generator and
+lockfile), draft or not, with `contents: read`, no secrets and no environment.
+
+What the job does, in order:
+
+1. Checks out the exact PR head SHA (not the merge ref) and records it.
+2. Inventories the root install, prepare, pack and publish hooks and every
+   `hasInstallScript` entry in the lock. Only the reviewed `postinstall`, which
+   runs the named first-party generators `ci/build-ember-tokens.mjs` and
+   `ci/build-leaf-css.mjs`, is accepted; any other hook or script fails closed.
+3. Proves, on loopback fixtures, that this runner's npm supports **and
+   enforces** `min-release-age` (an old publication is chosen over a new one;
+   a control run without the policy picks the new one) and `ignore-scripts`
+   (root and dependency hook markers are absent; a control run with scripts on
+   creates them). A config read alone is not accepted. Node is pinned to the
+   exact release `v24.21.0` and its bundled npm to `11.19.0` (the job asserts
+   both and that npm is the copy inside that Node, so there is no npm
+   bootstrap); npm older than 11.10.0 would fail early regardless.
+4. Installs the unchanged root lock with
+   `npm ci --include=dev --ignore-scripts --min-release-age=3`, using a
+   job-private npm cache. The policy is job-scoped environment only: no
+   `.npmrc` is added, so other install jobs are unchanged. Optional platform
+   packages are kept. There is no `npm rebuild`; a hook exception would need
+   its own Security-reviewed package, version, integrity, script, scope and
+   expiry.
+5. Proves locked esbuild 0.28.2 runs from its `@esbuild/<platform>` package
+   with its own install script not run.
+6. Runs `node ci/minify-assets.mjs --check` first and keeps that result, then
+   the generator, then the canonical `--check` again.
+7. Fails closed on any tracked or untracked change outside the generator's
+   `public/` outputs. The generator also rewrites non-public Ember outputs
+   (`web/src/ember-theme.css`, `web/src/error.html`,
+   `src/ember-fallback-style.ts`); if those drift, the job fails and uploads
+   no patch, because this route only transports `public/` bytes. Repair those
+   by their own reviewed generator, not from this artifact. Deletions,
+   renames, mode changes and symlinks are rejected too.
+8. Uploads `public-assets.patch` (only when bytes changed) and
+   `manifest.json` as `asset-generation-<head-sha>-<attempt>`, kept 3 days.
+   The manifest holds repository, PR, exact source SHA, base SHA, lock and
+   generator identities, Node, npm and esbuild versions, per-file output
+   hashes, the hook inventory, the npm enforcement results and the run link.
+   No environment, credentials, `node_modules` or caches are included.
+9. Fails the job when the head's committed output was stale. A patch is repair
+   evidence, never a green result for the head that needed it.
+
+Limits that remain: `min-release-age` does not re-evaluate versions already
+frozen in `package-lock.json`, packages without registry timestamps and
+non-registry sources are not age-checked, and a lock is not retrospective
+provenance proof. The job disables install scripts; it does not review them.
+
+Consumer procedure:
+
+1. Make source changes in the assigned worktree and run only bounded pre-push
+   checks (lint, typecheck or one focused test). Push to the draft PR branch.
+   Do not mark the PR ready to force generation.
+2. Wait for the `asset-generation` run for that exact head and download its
+   artifact (`gh run download <run-id> -n asset-generation-<head-sha>-<n>`).
+3. Read `manifest.json`: `sourceSha` must equal your pushed head, `status` must
+   be `drift-patch`, `unexpectedOutputs` empty, and the patch `files` must be
+   `public/` paths you expect from your source change. A `failed` or
+   `no-drift` manifest means no patch applies.
+4. In the worktree run `git apply --check public-assets.patch`, then
+   `git apply public-assets.patch`. Confirm `git status` shows only those
+   paths. Hash them against `outputs` in the manifest.
+5. Commit and push once. The artifact is pre-repair evidence only. Require
+   fresh exact-final-head Actions runs of `bundle-budget` (drift and budget)
+   and all existing CI; the job for the new head should report no drift.
+
+Screenshots, UX QA, specialist review and Release Manager confirmation for a UI
+change stay with the owning UI change and are not replaced by this artifact.
+
 ## Local verification
 
 Use Node **22.23.0+ on the 22.x line, or 24+**, as declared by

@@ -1,0 +1,157 @@
+name: asset-generation
+
+# Controlled, draft-capable, non-deploy asset generation. It runs the reviewed
+# generator (ci/minify-assets.mjs) on the exact PR head, then uploads the
+# allowed public/ diff and a provenance manifest for a human or agent to apply
+# and commit. It never writes to the repository, holds no secrets, and is not a
+# required check: the ordinary `bundle-budget` drift gate and every other
+# existing gate are unchanged. A patch from this job is repair evidence, never
+# a green verdict on stale committed output; the job fails when the head's
+# committed output was stale. Procedure: docs/performance-budgets.md
+# ("Draft asset generation").
+#
+# pull_request only (never pull_request_target): untrusted head code runs with
+# a read-only token and no deployment environment. Same-repository heads only.
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+    paths:
+      - .github/workflows/asset-generation.yml
+      - ci/asset-generation*
+      - ci/minify-assets.mjs
+      - ci/build-ember-tokens.mjs
+      - ci/budget-fragments.mjs
+      - ci/budgets/bundle/**
+      - assets/**
+      - public/**
+      - vendor/**
+      - tsconfig.json
+      - package.json
+      - package-lock.json
+      - web/src/app.css
+      - web/src/ember-theme.css
+      - web/src/error.html
+      - src/ember-fallback-style.ts
+
+permissions:
+  contents: read
+
+concurrency:
+  group: asset-generation-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  asset-generation:
+    name: asset-generation
+    if: github.event.pull_request.head.repo.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    env:
+      # Job-scoped native npm policy. Nothing is written to a repository or
+      # user .npmrc, so no other install job changes behavior.
+      npm_config_ignore_scripts: "true"
+      npm_config_min_release_age: "3"
+      PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+      PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+      PR_NUMBER: ${{ github.event.pull_request.number }}
+      # Exact reviewed pair: this Node release ships this npm. The job fails
+      # closed if the runner's bundled npm differs, and never bootstraps npm.
+      ASSET_GEN_NODE: v24.21.0
+      ASSET_GEN_NPM: 11.19.0
+    steps:
+      # The exact PR head, never the implicit merge ref.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.21.0
+          package-manager-cache: false
+      - name: Record exact head and prepare job-private directories
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$PR_HEAD_SHA"
+          test "$(node --version)" = "$ASSET_GEN_NODE"
+          test "$(npm --version)" = "$ASSET_GEN_NPM"
+          # npm must be the copy shipped inside this Node release, not a bootstrap.
+          node_prefix="$(dirname "$(dirname "$(command -v node)")")"
+          test "$(realpath "$(command -v npm)")" = "$(realpath "$node_prefix/lib/node_modules/npm/bin/npm-cli.js")"
+          base="$RUNNER_TEMP/asset-generation"
+          mkdir -p "$base/work" "$base/upload" "$base/npm-cache"
+          {
+            echo "WORK_DIR=$base/work"
+            echo "UPLOAD_DIR=$base/upload"
+            echo "npm_config_cache=$base/npm-cache"
+          } >> "$GITHUB_ENV"
+          echo "source head: $PR_HEAD_SHA"
+          node --version
+          npm --version
+          npm --version > "$base/work/npm.version"
+      - name: Self-test the asset-generation helpers (no install, local fixtures)
+        run: node --test ci/asset-generation.test.mjs
+      # Reviewed before installing: root and locked dependency hooks are
+      # inventoried, and an unreviewed root hook fails closed.
+      - name: Inventory install hooks and lock sources
+        run: node ci/asset-generation.mjs inventory "$WORK_DIR/inventory.json"
+      - name: Prove npm enforces min-release-age and ignore-scripts (loopback fixtures)
+        run: node ci/asset-generation.mjs npm-fixtures "$WORK_DIR/npm-fixtures.json"
+      - name: Install the unchanged root lock without hooks
+        run: |
+          set -euo pipefail
+          npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund
+          git diff --exit-code -- package.json package-lock.json
+      - name: Prove locked esbuild runs from its platform package with scripts disabled
+        run: node ci/asset-generation.mjs verify-esbuild "$WORK_DIR/esbuild.json"
+      # The initial verdict is preserved before anything is regenerated.
+      - name: Initial drift check (preserved)
+        run: |
+          set -u
+          set +e
+          node ci/minify-assets.mjs --check > "$WORK_DIR/initial.log" 2>&1
+          code=$?
+          set -e
+          echo "$code" > "$WORK_DIR/initial.exit"
+          tail -n 30 "$WORK_DIR/initial.log"
+          # 1 is drift (recorded, judged by the verdict step); anything else is a broken generator.
+          [ "$code" = 0 ] || [ "$code" = 1 ]
+      - name: Run the reviewed generator
+        run: node ci/minify-assets.mjs
+      - name: Canonical check of the generated tree
+        run: |
+          set -u
+          set +e
+          node ci/minify-assets.mjs --check
+          code=$?
+          set -e
+          echo "$code" > "$WORK_DIR/post.exit"
+          exit "$code"
+      - name: Validate allowed paths, write patch and manifest
+        id: collect
+        run: node ci/asset-generation.mjs collect --out "$UPLOAD_DIR" --work "$WORK_DIR"
+      - name: Upload allowed patch and manifest
+        if: always() && (steps.collect.outcome == 'success' || steps.collect.outcome == 'failure')
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: asset-generation-${{ github.event.pull_request.head.sha }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/asset-generation/upload/
+          if-no-files-found: error
+          retention-days: 3
+      # Red when the committed output was stale, so a repaired patch is never
+      # mistaken for a verdict on the head that needed it.
+      - name: Verdict on the initial drift result
+        if: always() && steps.collect.outcome == 'success'
+        run: |
+          set -euo pipefail
+          {
+            echo "### Asset generation"
+            echo "- Source head: \`$PR_HEAD_SHA\`"
+            echo "- Run: $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID (attempt $GITHUB_RUN_ATTEMPT)"
+            echo "- Artifact: \`asset-generation-$PR_HEAD_SHA-$GITHUB_RUN_ATTEMPT\` (manifest.json and, on drift, public-assets.patch)"
+          } >> "$GITHUB_STEP_SUMMARY"
+          node ci/asset-generation.mjs verdict "$UPLOAD_DIR/manifest.json"
+      - name: Remove job-private files
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/asset-generation" node_modules
