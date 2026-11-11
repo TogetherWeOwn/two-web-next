@@ -397,26 +397,27 @@ skips heavy steps, dispatch the existing CI workflow on that PR branch for full
 verification. Every required check, database-safety rule, native review and
 release gate remains in force.
 
-Local agent test execution is limited to an authorized focused reproduction of
-one failing test or crate. Neither the builder nor its caller may run local
+Local agent test execution is limited to the bounded pre-push fixture checks
+below and, when Actions cannot run it, an authorized focused reproduction of
+one failing non-Rust test. Neither the builder nor its caller may run local
 full suites or CI mirrors on the shared host, in Boat or through a fallback;
-do not split a suite into successive focused commands. Any heavy build needed
-for that reproduction must use the guarded `boat` PATH wrapper with approved
-source-only export, sizing/budget controls, `--no-env`, and verified cleanup.
-Never bypass the wrapper or use a heavy raw-host fallback. If no compliant
-path is available, defer to Actions or route the actual prerequisite. Report
-focused reproduction output separately as diagnostic evidence; it does not
-replace Actions evidence. Read-only reviewers inspect source and existing
-evidence and do not execute tests, builds or installs.
+do not split a suite into successive focused commands. Do not use Boat or a
+heavy raw-host fallback for non-Cargo work. If no compliant path is available,
+defer to Actions or route the actual prerequisite. Report focused reproduction
+output separately as diagnostic evidence; it does not replace Actions evidence.
+Read-only reviewers inspect source and existing evidence and do not execute
+tests, builds or installs.
 
 Before every push, agents verify a fresh worktree with a bounded,
 offline-fixture set of checks. GitHub Actions is the only place agents run the
 full suite, the database tests, Docker and the browser gates.
 
 Install once per worktree and reuse it unless a lockfile changes. Use `--ignore-scripts`
-so no dependency lifecycle script runs, a per-task npm cache, and the release-age
-guard (npm 11.19 supports `--min-release-age`; a frozen lockfile is not
-retrospective proof of a package's age). Use the Node floor stated in the README.
+so no dependency lifecycle script runs and use a per-task npm cache. `npm ci`
+uses the frozen lockfile and its integrity checks; this change does not add or
+update dependencies. Although npm 11.19 accepts `--min-release-age`, it does not
+enforce that age on locked packages installed by `npm ci`. Do not treat this
+command as a package-age check. Use the Node floor stated in the README.
 
 ```sh
 nice timeout -k 10 300 npm ci --include=dev --ignore-scripts --min-release-age=3 --no-audit --no-fund --cache "$PAPERCLIP_TASK_SCRATCH_DIR/npm-cache"
