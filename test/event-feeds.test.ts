@@ -411,6 +411,7 @@ describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
 
     const ics = await req("/events.ics");
     const icsBody = await ics.text();
+    expect(ics.status).toBe(200);
     expect(ics.headers.get("content-type")).toBe("text/calendar; charset=utf-8");
     expect(ics.headers.get("set-cookie")).toBeNull();
     expect(icsBody).toContain("PXB1");
@@ -437,9 +438,15 @@ describe.skipIf(!process.env.DATABASE_URL)("feed routes (agent-testdb)", () => {
         })
       ).status,
     ).toBe(304);
-    expect((await req("/events/01J0000000000000000000DRF1.ics")).status).toBe(403);
-    expect((await req("/events/01J0000000000000000000NONE.ics")).status).toBe(404);
-    expect((await req("/events/nope.ics")).status).toBe(404);
+    const draft = await req("/events/01J0000000000000000000DRF1.ics");
+    expect(draft.status).toBe(403);
+    expect(await draft.text()).toBe("Forbidden");
+    for (const path of ["/events/01J0000000000000000000NONE.ics", "/events/nope.ics"]) {
+      const missing = await req(path);
+      expect(missing.status, path).toBe(404);
+      expect(missing.headers.get("content-type"), path).toContain("text/html");
+      expect(await missing.text(), path).toMatch(/We cannot find that page|error-heading/);
+    }
   });
 
   it.each([
