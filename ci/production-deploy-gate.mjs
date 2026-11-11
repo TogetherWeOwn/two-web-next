@@ -8,6 +8,7 @@ import {
   e2eTitle,
   isRedStagingRun,
   PROMOTION_SOAK_MS,
+  STAGING_COVERAGE_NOTICE,
   stagingRunsSinceCommit,
 } from "./resolve-promotion-sha.mjs";
 import { requireSuccessfulCi } from "./staging-deploy-gate.mjs";
@@ -406,10 +407,12 @@ function refuseRedOrRerunStaging(runs, sha) {
 // passed staging-journeys (it concludes success with the job skipped), and no
 // e2e-staging run on the SHA may be red or a re-run (refuseRedOrRerunStaging).
 // Automatic promotion, including an explicit-SHA dispatch, also requires the
-// e2e-staging pass to have soaked for PROMOTION_SOAK_MS (30 minutes), the same
-// floor the automatic resolver applies. A reviewer approval stands in for the
-// resolver but not for the soak floor: requireStagingSoakIfEvident below still
-// ages a staging pass the reviewer approved early.
+// e2e-staging pass to be at least PROMOTION_SOAK_MS (30 minutes) old, the same
+// legacy floor the automatic resolver applies. Age is NOT actual observation
+// coverage: shipped artifacts have no interval/serving-identity receipt. Keep
+// this floor pending that producer; missing receipt remains UNKNOWN/INSUFFICIENT
+// under the release hold, never an evidence-complete shortcut. Reviewer
+// approval does not supply missing coverage (docs/runbook.md).
 export async function requireStagingEvidence(
   { repository, sha },
   {
@@ -418,8 +421,10 @@ export async function requireStagingEvidence(
     workflows = stagingEvidenceWorkflows,
     pages = 3,
     nowMs = Date.now(),
+    log = console.warn,
   } = {},
 ) {
+  log(STAGING_COVERAGE_NOTICE);
   async function get(path) {
     const response = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
       headers: {
@@ -489,15 +494,15 @@ export async function requireStagingEvidence(
   return evidence;
 }
 
-// Reviewer-mode soak floor: a reviewer approval stands in for the automatic
-// resolver, but it must not shortcut the 30-minute soak when staging already
-// passed the candidate. When no e2e-staging run names the SHA yet (a
-// reviewer-approved promotion without staging evidence), there is nothing to
-// age and the reviewer's approval is the gate.
+// Legacy reviewer-mode age check: retain the implemented floor while the
+// observation receipt producer is unresolved. The no-pass return below is
+// existing behavior, not proof of observation or permission to lift a release
+// hold. Neither a timestamp nor reviewer approval supplies missing coverage.
 export async function requireStagingSoakIfEvident(
   { repository, sha },
-  { token, fetchImpl = fetch, nowMs = Date.now() } = {},
+  { token, fetchImpl = fetch, nowMs = Date.now(), log = console.warn } = {},
 ) {
+  log(STAGING_COVERAGE_NOTICE);
   async function get(path) {
     const response = await fetchImpl(`https://api.github.com/repos/${repository}${path}`, {
       headers: {

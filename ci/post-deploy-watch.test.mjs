@@ -116,6 +116,8 @@ test("a healthy release passes after 30 minutes of minute probes and five-minute
   // Every five minutes, plus the final judgment at the deadline.
   assert.equal(calls.rate.length, 6);
   assert.equal(result.judged, 6);
+  assert.equal(result.missed, 0);
+  assert.equal(result.incomplete, 0);
   const [first] = calls.rate;
   assert.equal(first.versionId, PROMOTED);
   assert.equal(first.scriptName, "two-web-next-production");
@@ -237,11 +239,28 @@ test("missed periodic opportunities remain incomplete despite later successful q
     const result = await watchProduction(config, deps);
     assert.equal(result.verdict, "insufficient");
     assert.equal(result.judged + result.missed, 6);
+    assert.equal(result.incomplete, 0);
     assert.equal(result.missed, delay === 700 ? 1 : 4);
     assert.equal(calls.rate.length, result.judged, "never backfill missed slots with query bursts");
     assert.ok(calls.log.some((line) => line.includes("scheduled error-rate opportunities missed")));
     assert.ok(!calls.log.some((line) => line.includes("post-deploy watch passed")));
   }
+});
+
+test("missed and unreadable opportunities are reported together without hiding each other", async () => {
+  const { deps, calls } = harness({
+    rateSeconds: (n) => (n === 1 ? 700 : 0),
+    rates: (n) => ({ verdict: n === 2 ? "error" : "pass" }),
+  });
+  const result = await watchProduction(config, deps);
+  assert.equal(result.verdict, "insufficient");
+  assert.equal(result.missed, 1);
+  assert.equal(result.incomplete, 1);
+  assert.equal(result.judged + result.missed + result.incomplete, 6);
+  assert.equal(calls.rate.length, result.judged + result.incomplete);
+  assert.ok(calls.log.some((line) => line.includes("scheduled error-rate opportunities missed")));
+  assert.ok(calls.log.some((line) => line.includes("missing rate judgments")));
+  assert.ok(!calls.log.some((line) => line.includes("post-deploy watch passed")));
 });
 
 test("probe overruns also account for unavailable scheduled analytics opportunities", async () => {
@@ -305,14 +324,50 @@ test("an error-rate fail verdict breaches at once", async () => {
   assert.equal(calls.rate.length, 2);
 });
 
-test("analytics errors warn but never roll back; insufficient samples pass", async () => {
+test("analytics errors and low samples retain every opportunity without a passing rate or breach", async () => {
   const errors = harness({ rates: () => ({ verdict: "error" }) });
   const result = await watchProduction(config, errors.deps);
-  assert.equal(result.verdict, "pass");
+  assert.equal(result.verdict, "insufficient");
   assert.equal(result.judged, 0);
+  assert.equal(result.missed, 0);
+  assert.equal(result.incomplete, 6);
   assert.ok(errors.calls.log.some((line) => line.includes("no error-rate judgment succeeded")));
   const quiet = harness({ rates: () => ({ verdict: "insufficient" }) });
-  assert.equal((await watchProduction(config, quiet.deps)).verdict, "pass");
+  const lowSample = await watchProduction(config, quiet.deps);
+  assert.equal(lowSample.verdict, "insufficient");
+  assert.equal(lowSample.judged, 0, "a low sample is not a rate judgment");
+  assert.equal(lowSample.missed, 0);
+  assert.equal(lowSample.incomplete, 6);
+  for (const { calls } of [errors, quiet]) {
+    assert.equal(calls.probe, 31);
+    assert.equal(calls.sleeps, 30);
+    assert.equal(calls.rate.length, 6);
+    assert.ok(!calls.log.some((line) => line.includes("post-deploy watch passed")));
+  }
+});
+
+test("early rate successes cannot replace a missing final opportunity or hide a later breach", async () => {
+  for (const verdict of ["error", "insufficient", "fail"]) {
+    const { deps, calls } = harness({
+      rates: (n) => ({ verdict: n === 6 ? verdict : "pass" }),
+    });
+    const result = await watchProduction(config, deps);
+    assert.equal(result.verdict, verdict === "fail" ? "breach" : "insufficient");
+    assert.equal(calls.probe, 31);
+    assert.equal(calls.sleeps, 30);
+    assert.equal(calls.rate.length, 6);
+  }
+});
+
+test("a later healthy sample cannot replace an unreadable periodic observation", async () => {
+  const { deps, calls } = harness({
+    rates: (n) => ({ verdict: n === 1 ? "error" : "pass" }),
+  });
+  const result = await watchProduction(config, deps);
+  assert.equal(result.verdict, "insufficient");
+  assert.equal(result.judged, 5);
+  assert.equal(calls.rate.length, 6);
+  assert.equal(calls.sleeps, 30);
 });
 
 test("a superseded release stands down without a verdict on it", async () => {

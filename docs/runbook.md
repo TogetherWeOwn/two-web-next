@@ -648,10 +648,27 @@ verification, the `post-deploy-watch` job (`ci/post-deploy-watch.mjs`) probes
 every five minutes with the gradual gate's thresholds (5%, 20-request floor).
 Three consecutive readiness misses or a failed error-rate verdict set
 `breach=true`, and `auto-rollback` restores the target the same way. An
-analytics query error only warns; a different live version makes the watch
-stand down. The `release` job tags only after the watch passes with an
-explicit `pass` verdict, so a superseded watch never tags the displaced
-commit. The watch reads only the repo-level read-only analytics token, binds
+analytics query error or a sample below 20 requests leaves that rate
+observation insufficient, not a measured pass or a breach. The watch continues
+probing and querying after an incomplete call until its original 30-minute
+deadline; an early successful call does not end the watch. If any **attempted**
+rate judgment was unavailable, it reports `insufficient`, retains the release
+hold and does not trigger automatic rollback. This change accounts for attempted
+calls only: the existing elapsed-interval scheduler shifts with probe/query
+latency and does not count missed original periodic opportunities. Its `pass`
+is not proof of complete scheduled coverage. Correcting that scheduler and its
+adjustable-clock duration remains a separate obligation; this limitation does
+not waive the required temporal coverage or authorize release qualification.
+The deploy notification reports failed qualification with the hold and explicitly
+names the promoted version as still live, including when a deploy step failed
+after successful verification; any rollback outcome takes precedence. It must
+not report a clean verified release. Route missing observations, traffic or
+analytics evidence to the existing release qualification owner; do not restart
+the watch to erase missing observations. A different
+live version makes the watch stand down without qualifying the superseding
+version. The `release` job tags only after the watch passes with an explicit
+`pass` verdict, so neither an insufficient nor a superseded watch tags the
+displaced commit. The watch reads only the repo-level read-only analytics token, binds
 no Environment, and needs no approval in either mode. The `auto-rollback`
 call restores through the production Environment binding, so in reviewer
 mode it waits for a reviewer like any other production mutation; in
@@ -737,6 +754,35 @@ other applicable promotion gates. `migrations_applied=true` does not bypass
 default ancestry admission, and neither does an empty-SHA manual dispatch.
 The rollback workflow remains a separate already-served-version route.
 
+#### Gradual promotion analytics opportunities
+
+The `5/50/100` labels are traffic percentages, not calendar soaks. The
+[gradual action mirror](../.github/actions/gradual-promote/action.yml) queries the
+candidate version's post-smoke analytics at the first valid opportunity when
+retries are available, retaining the smoke-finish-plus-one-second inclusive-bound
+exclusion. A complete sample of at least 20 requests at no more than 5% errors
+finishes immediately; a measured breach fails immediately through the existing
+rollback path. It makes no more than the configured three calls. The former
+60-second initial aggregation allowance moves to the first retry: default
+queries start immediately, then wait 120 seconds and 60 seconds as needed. This
+retains the original final aggregation opportunity instead of spending all calls
+early. A single-attempt configuration retains its allowance before its only
+query. The maximum remains the original `60 + 2 × 60` scheduled seconds plus
+three bounded 30-second API calls. A monotonic deadline prevents wall-clock
+adjustments from renewing that budget. Insufficiency at the bound stays explicitly
+insufficient under the existing low-sample procedural policy, never a measured
+rate pass; persistent query/identity failures still fail closed. A validated sufficient-sample
+breach returned at or after the deadline retains its counts and fails immediately;
+late success is refused as insufficient, never accepted as a rate pass.
+
+The production workflow pins
+`TogetherWeOwn/.github/actions/gradual-promote@9907b4adaf8c06b0953d156b363db102886e0ef9`
+(v0.8.0), delivered by [central PR #65](https://github.com/TogetherWeOwn/.github/pull/65).
+The complete three-file local mirror matches that immutable source; the parity
+test appends its verified hashes without rewriting the historical mapping.
+Production still runs the central action, never a candidate-checkout local action.
+This source adoption does not authorize a live rollout or qualify a candidate.
+
 #### Regression check against production
 
 Before the deploy job, `deploy-production` runs two more gates
@@ -757,16 +803,36 @@ Before the deploy job, `deploy-production` runs two more gates
   candidate's checkers, and refuses promotion when a check that passes on
   production did not pass on staging, or when the staging soak error rate is
   above 1.5× production's last 24 hours (floor 1%; under 20 staging requests
-  the rate cannot be judged and passes). A candidate without the ledger
+  the rate is explicitly insufficient; existing procedural continuation is
+  not a measured rate pass or observation-coverage shortcut). A candidate without the ledger
   artifact (an `e2e-staging` run that predates it, or an expired artifact)
   is refused; roll back with `rollback-production` instead of redeploying it.
 
-Automatic promotion, including an explicit-SHA dispatch, also requires the
-candidate's `e2e-staging` pass to be at least 30 minutes old. In reviewer
-mode the approval stands in for the resolver but not for the soak floor:
-when a staging pass for the candidate exists, it must still have soaked 30
-minutes; a promotion with no staging evidence yet rides on the reviewer's
-approval alone.
+**Retained observation requirement and current evidence limit:** the existing
+source still enforces a minimum age of 30 minutes for the candidate's
+`e2e-staging` pass (including explicit-SHA dispatch); reviewer mode enforces
+that age when a pass exists. This age check is not proof of 30 minutes of
+actual staging observation. Current passive/journey artifacts record checks,
+not an interval of continued serving identity. Missing observation receipt is
+UNKNOWN/INSUFFICIENT, never coverage synthesized from run age, version creation
+time or queue time. Reviewer approval is not a substitute for that coverage.
+Keep the release hold until the existing qualification owner can supply a
+receipt bound to exact SHA, candidate-tagged deployed versions, observation
+interval and actual identity-bound observations, green required journeys and
+passive ledger, with no red or rerun credit. Count complete valid coverage
+already collected for that same candidate once; do not impose a second
+30-minute wait after it. The retained **30-minute actual coverage floor** is
+unchanged; no equivalent shorter proof is approved.
+
+A proposed observation attempt records its original UTC start and deadline
+(`observation_start + 40 minutes`, or any shorter existing job/grant bound)
+in advance. Do not reset or renew it. At the deadline missing traffic,
+analytics, exact serving identity or coverage means INSUFFICIENT, not success.
+Retain receipts and the release hold, and route the exact missing prerequisite
+to the existing qualification owner. This is a maximum for a proposed attempt,
+not a runtime grant, new collector or permission to extend a job. The shipped
+age check remains in place pending the bounded receipt integration; it does
+not certify that the observation requirement has been met.
 
 Both modes refuse a candidate with red staging evidence: any failed or
 timed-out `e2e-staging` run that names it, or any run past its first attempt.
