@@ -154,9 +154,30 @@ const PAGING_PARAMETERS = [
   },
 ];
 
+const CONDITIONAL_PARAMETER = {
+  name: "If-None-Match",
+  in: "header",
+  required: false,
+  schema: { type: "string" },
+  description: "A matching ETag (including weak tags, lists or *) returns 304 after admission.",
+};
+
+const CACHE_HEADERS = {
+  ETag: { description: "Validator for the response representation.", schema: { type: "string" } },
+  "Cache-Control": {
+    description: "Public cache policy; cached events carry only their remaining freshness.",
+    schema: { type: "string" },
+  },
+};
+
+function notModified() {
+  return { description: "Not modified; no response body.", headers: CACHE_HEADERS };
+}
+
 function jsonRef(name: string, description: string) {
   return {
     description,
+    headers: CACHE_HEADERS,
     content: {
       "application/json": { schema: { $ref: `#/components/schemas/${name}` } },
     },
@@ -191,9 +212,10 @@ export function getOpenApiDocument(appUrl: string) {
       "/api/public/events": {
         get: {
           summary: "Published events, soonest first",
-          parameters: PAGING_PARAMETERS,
+          parameters: [...PAGING_PARAMETERS, CONDITIONAL_PARAMETER],
           responses: {
             "200": jsonRef("PublicApiEventCollection", "At most 20 published events."),
+            "304": notModified(),
             "429": error(429, "Shared public-read budget exhausted."),
             "500": error(500, "Unexpected failure reading event data. Try again shortly."),
             "503": error(503, "Event data temporarily unavailable."),
@@ -211,9 +233,11 @@ export function getOpenApiDocument(appUrl: string) {
               schema: { type: "string" },
               description: "Stored uppercase ULID event key.",
             },
+            CONDITIONAL_PARAMETER,
           ],
           responses: {
             "200": jsonRef("PublicApiEvent", "The published event."),
+            "304": notModified(),
             "404": error(404, "No published event with that key (drafts and cancelled rows 404)."),
             "422": error(422, "That event key is not valid."),
             "429": error(429, "Shared public-read budget exhausted."),
@@ -225,11 +249,13 @@ export function getOpenApiDocument(appUrl: string) {
       "/api/public/community": {
         get: {
           summary: "Community snapshot",
+          parameters: [CONDITIONAL_PARAMETER],
           responses: {
             "200": jsonRef(
               "CommunitySnapshot",
               "Live counts, null when the collectors are unavailable.",
             ),
+            "304": notModified(),
             "429": error(429, "Shared public-read budget exhausted."),
           },
         },
@@ -238,8 +264,10 @@ export function getOpenApiDocument(appUrl: string) {
         get: {
           summary: "Join handoff",
           description: "Joining happens in Discord only; this is the public invite.",
+          parameters: [CONDITIONAL_PARAMETER],
           responses: {
             "200": jsonRef("JoinHandoff", "The public invite and intro."),
+            "304": notModified(),
             "429": error(429, "Shared public-read budget exhausted."),
           },
         },
