@@ -25,7 +25,7 @@ let {
   <script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script>
 </svelte:head>
 
-<div class="kit-admin">
+<div class="base-theme kit-admin">
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="bar">
   <a class="brand" href="/admin">TWO admin</a>

@@ -221,8 +221,11 @@ describe("Kit admin route group: thin guard binding, shared reads", () => {
     // must fail this test.
     const sheet = read("public/admin-theme.css");
     expect(sheet).toContain(".kit-admin :focus-visible");
-    expect(sheet).toContain("var(--focus-width)");
-    expect(sheet).toContain("var(--focus-ring)");
+    // The focus vars carry literal fallbacks now (the wrapper resolves
+    // them), so pin the reference plus its fallback comma, not the bare
+    // closing paren.
+    expect(sheet).toContain("var(--focus-width,");
+    expect(sheet).toContain("var(--focus-ring,");
     expect(sheet).toContain(".admin-table-scroll");
   });
 

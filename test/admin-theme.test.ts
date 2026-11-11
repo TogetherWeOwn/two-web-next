@@ -29,13 +29,30 @@ describe("admin theme sheet", () => {
     expect(theme).toBeGreaterThan(base);
   });
 
+  it("renders the generated alias wrapper so every token resolves", () => {
+    // The sheet is served as a static file and never passes through
+    // Tailwind, so the kit `@theme` variables (`--color-*`, `--space-*`,
+    // ...) are pruned from the Kit bundle — an undefined `var()` makes
+    // the winning declaration compute to `unset` and discards the Hono
+    // value underneath. The `.base-theme` aliases are plain CSS in the
+    // bundle, so the wrapper must carry that class, exactly as the
+    // public Shell does. Deleting it must fail this test.
+    const shell = read("web/src/lib/AdminShell.svelte");
+    expect(shell).toContain('class="base-theme kit-admin"');
+  });
+
   it("uses kit tokens, never hex literals", () => {
     const css = read("public/admin-theme.css");
     expect(css).not.toMatch(/#[0-9a-fA-F]{3,8}\b/);
-    expect(css).toContain("var(--color-g1)");
-    expect(css).toContain("var(--focus-ring)");
-    expect(css).toContain("var(--font-data)");
-    expect(css).toContain("var(--space-1)");
+    expect(css).toContain("var(--g1)");
+    expect(css).toContain("var(--focus-ring,");
+    expect(css).toContain("var(--font-data");
+    expect(css).toContain("var(--space-1");
+  });
+
+  it("keeps the focused skip link legible on hover", () => {
+    const css = read("public/admin-theme.css");
+    expect(css).toContain(":not(.skip-link):hover");
   });
 
   it("scopes every rule under .kit-admin", () => {
