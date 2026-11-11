@@ -125,11 +125,16 @@ describe("workflow runner labels", () => {
 
   // Org reusable workflows whose pinned ref was verified to run only on
   // GitHub-hosted runners with no caller-side runner input (checked at the
-  // pin on 2026-11-01). A repin fails this test until the new pin is
-  // re-verified and this list updated; any other org reusable call from a
-  // PR-triggered workflow must pass an explicit hosted runner input.
+  // pin on 2026-11-01; the three pr-size pins below re-verified on
+  // 2026-11-11: each defaults its `runs-on` input to '["ubuntu-latest"]' and
+  // runs its job via fromJSON(inputs.runs-on)). A repin fails this test until
+  // the new pin is re-verified and this list updated; any other org reusable
+  // call from a PR-triggered workflow must pass an explicit hosted runner input.
   const verifiedHostedOrgReusables = [
     "TogetherWeOwn/.github/.github/workflows/test-guard.yml@3fffeb9f9465f371763fcc3c789ed4baefe38f95",
+    "TogetherWeOwn/.github/.github/workflows/pr-size.yml@ac9ce8d63e0cebd19ede904ac79137190c329964",
+    "TogetherWeOwn/.github/.github/workflows/pr-size-gate.yml@ac9ce8d63e0cebd19ede904ac79137190c329964",
+    "TogetherWeOwn/.github/.github/workflows/pr-size-weekly.yml@ac9ce8d63e0cebd19ede904ac79137190c329964",
   ];
 
   it("keeps pull_request and merge_group runs off the self-hosted fleet", () => {
