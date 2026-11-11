@@ -49,6 +49,19 @@ describe("Kit edit historical proof isolation", () => {
     expect(validate(head, head).status).toBe(0);
   });
 
+  it("limits the historical carrier adapter to the baseline command", () => {
+    const flag = "KIT_HISTORICAL_BASELINE_ADAPTER";
+    expect(workflow.jobs.persistence.env[flag]).toBeUndefined();
+    const runs = steps.flatMap((step: { run?: string; env?: Record<string, string> }) => {
+      expect(step.env?.[flag]).toBeUndefined();
+      return (step.run ?? "").split("\n").filter((line) => line.includes(flag));
+    });
+    expect(runs).toHaveLength(1);
+    expect(runs[0]).toMatch(
+      /^KIT_HISTORICAL_BASELINE_ADAPTER=1 timeout .*vitest run test\/admin\.test\.ts -t 'Kit native edit POST persists untouched'/,
+    );
+  });
+
   it("does not expose a dependency cache to the historical code", () => {
     const setup = steps.find((step: { uses?: string }) =>
       step.uses?.startsWith("actions/setup-node@"),

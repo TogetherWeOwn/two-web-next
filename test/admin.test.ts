@@ -36,7 +36,7 @@ import { listRoster } from "../src/admin/reads";
 import { getEvent } from "../src/admin/store-event-reads";
 import { getPublicEvent } from "../src/events/reads";
 import { compileKitForms } from "./helpers/admin-validation-correction";
-import { attr, firstForm, submittedFields } from "./helpers/kit-edit-controls";
+import { attr, controlNamed, firstForm, submittedFields } from "./helpers/kit-edit-controls";
 import { listFeatured } from "../src/admin/store-featured";
 import { dispatchWriteBack } from "../src/admin/writeback";
 import { BODY_LIMIT_BYTES } from "../src/body-limit";
@@ -528,6 +528,13 @@ describe.skipIf(!process.env.DATABASE_URL)("admin round-trips (agent-testdb)", (
         const fields = submittedFields(html);
         const fieldNames = Object.keys(fields);
         const names = ["accessibility_notes", "organizer_name", "join_url", "join_instructions"];
+        if (process.env.KIT_HISTORICAL_BASELINE_ADAPTER === "1") {
+          expect(mode).toBe("untouched");
+          for (const name of ["saved_baseline", ...names]) {
+            expect(controlNamed(html, name)).toBeUndefined();
+          }
+          fields.saved_baseline = await tokenFor(`/events/${KEY}`);
+        }
         for (const name of names) {
           if (mode === "cleared") fields[name] = "";
           if (mode === "omitted") delete fields[name];

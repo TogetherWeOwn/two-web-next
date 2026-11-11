@@ -69,13 +69,13 @@ jobs:
           set -euo pipefail
           mkdir -p artifacts/kit-edit-regression
           git merge-base --is-ancestor "$BASELINE_SHA" HEAD
-          printf 'head=%s\nbaseline=%s\n' "$(git rev-parse HEAD)" "$BASELINE_SHA" > artifacts/kit-edit-regression/provenance.txt
+          printf 'head=%s\nbaseline=%s\nmode=historical field omission with a current authenticated save-baseline carrier\ntoken_source=authenticated edit GET for the seeded event and moderator session\n' "$(git rev-parse HEAD)" "$BASELINE_SHA" > artifacts/kit-edit-regression/provenance.txt
           timeout -k 10 300 node_modules/.bin/vitest run test/admin.test.ts -t 'Kit native edit POST persists' --reporter=default --reporter=json --outputFile=artifacts/kit-edit-regression/corrected.json
           # Keep the exact same tests, parser, authorization and database writes.
           # Restore only the two production files that dropped these controls.
           git restore --source="$BASELINE_SHA" -- src/admin/kit-event-edit.ts 'web/src/routes/admin/events/[key]/+page.svelte'
           set +e
-          timeout -k 10 300 node_modules/.bin/vitest run test/admin.test.ts -t 'Kit native edit POST persists untouched' --reporter=default --reporter=json --outputFile=artifacts/kit-edit-regression/baseline.json 2>&1 | tee artifacts/kit-edit-regression/baseline.log
+          KIT_HISTORICAL_BASELINE_ADAPTER=1 timeout -k 10 300 node_modules/.bin/vitest run test/admin.test.ts -t 'Kit native edit POST persists untouched' --reporter=default --reporter=json --outputFile=artifacts/kit-edit-regression/baseline.json 2>&1 | tee artifacts/kit-edit-regression/baseline.log
           baseline_status=("${PIPESTATUS[@]}")
           set -e
           test "${baseline_status[0]}" = 1
@@ -100,7 +100,7 @@ jobs:
             assert.ok(message.includes(`-   "${field}": "`), `missing populated-field diff: ${field}`);
             assert.ok(message.includes(`+   "${field}": null`), `missing persisted-field diff: ${field}`);
           }
-          console.log('Corrected: 3 persisted round trips passed. Baseline: untouched save failed with all four stored fields cleared to null.');
+          console.log('Corrected: 3 persisted round trips passed. Historical field omission with a current authenticated save-baseline carrier: all four stored fields cleared to null.');
           JS
       - name: Restore the exact head implementation
         if: always()
