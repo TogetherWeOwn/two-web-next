@@ -91,16 +91,20 @@ results without changing the event's canonical or share URLs.
 
 ## Develop and test safely
 
-**AI contributors:** full suites and CI gates run only on GitHub Actions for
-the exact PR head. Push to the PR branch, keep the PR draft while incomplete,
-and record exact-head Actions run/job links and conclusions. The local command
-examples below document human development tooling; they do not authorize agent
-full-suite or CI-mirror execution, including in Boat, through a fallback or by
-the delegated builder's caller. Local agent test execution is limited to an
-authorized focused reproduction of one failing test or crate, with the guarded
-heavy-build controls in [AGENTS.md](AGENTS.md#commands). See the
-[verification workflow](CONTRIBUTING.md#verify-a-change-before-opening-a-pr).
-All database-safety and merge/release gates still apply.
+**Full suites and CI gates run on GitHub Actions, not locally on the shared host.** For AI contributors, this means the exact PR head: push a public-safe PR branch and open a draft PR while work is incomplete; mark it ready when complete. The existing workflow [`.github/workflows/ci.yml`](.github/workflows/ci.yml)
+(`check` → `ci-ok`) applies its normal draft/docs scope rules. Cite Actions
+run/job links for the exact PR head SHA, with observed conclusions and skips,
+not local transcripts. See [the verification procedure](CONTRIBUTING.md#verify-a-change-with-github-actions)
+for commands, reviewer and Release Manager evidence, and the focused-only local
+limit. Local reproduction is limited to one failing test; heavy builds for that
+reproduction use the guarded `boat` PATH wrapper, `--no-env`, source-only export
+and verified cleanup. Never bypass its controls. Boat fallback is not permission
+for a full suite/CI mirror or a heavy raw-host run; defer to Actions or route the
+actual prerequisite instead. This changes execution location, not required
+checks, security floors, review or exact-head production approval gates.
+The local command examples below are a tooling reference for human development;
+they do not authorize agent full-suite or CI-mirror execution, including in
+Boat, through a fallback or by the delegated builder's caller.
 
 Use Node **22.23.0+ on the 22.x line, or 24+** (CI uses Node 24; the probe CLIs
 require default native TypeScript stripping, not early Node 22/23 releases).
@@ -156,10 +160,10 @@ Schema is in `src/db/`, migrations in `drizzle/`. Tests are permitted only on
 `agent-testdb` (user `agent_test`, empty password), the CI job's disposable
 Postgres service, or local fixtures. On `agent-testdb`, the shared
 `testDatabaseUrl` guard allows only `postgres`, `two_web_next`, `w15_tests`, and
-numeric `two_web_next_tog<digits>` databases; arbitrary names are refused. For a
-full local check, use a fresh, run-owned database named
-`two_web_next_tog<unique-digits>`; do not run the full suite against the shared
-`two_web_next` database. **Never point tests, probes or verification at a
+numeric `two_web_next_tog<digits>` databases; arbitrary names are refused. For
+focused reproduction of one failing test, use a fresh, run-owned database named
+`two_web_next_tog<unique-digits>`. Full suites and CI mirrors run only on GitHub
+Actions, never locally, even with an isolated database. **Never point tests, probes or verification at a
 production or staging database.** If access fails, stop; do not substitute
 another credential or database.
 
@@ -173,18 +177,17 @@ export PGPASSWORD=
 export W1_AGENT_TESTDB=0
 npm run db:migrate    # apply tracked migrations to this run-owned test database
 npm run db:check      # validate migration history
-npm run format        # formatting only; no lint fixes or import reordering
-npm run lint          # read-only Biome lint + format gate
-env -u BOT_DATABASE_URL npm run check # lint + format + types + config drift/selftest + Vitest
+# Reproduce only the failing case; do not expand this into a local suite or CI mirror.
+npx vitest run test/events.test.ts -t '<exact failing test name>'
 ```
 
 For schema changes, `npm run db:generate` generates a migration; use the web
 numbering range `1000–1999` described in [docs/db-migrations.md](docs/db-migrations.md).
 Review generated SQL before applying it. Do not edit existing migrations.
 
-Always supply the test URL for full-suite SQL coverage. The DB-free lane
-(`env -u DATABASE_URL npm run check`) runs fixture-only checks; existing live
-suites skip when `DATABASE_URL` is unset. `test/review-p1-verify.test.ts` keeps
+CI supplies its disposable service URL for full-suite SQL coverage. Existing live
+suites skip when `DATABASE_URL` is unset; a DB-free full check is still a CI gate,
+not an allowed local workaround. `test/review-p1-verify.test.ts` keeps
 its P1-3 refusal proofs offline. Featured-unpublish SQL proofs run under the
 pre-existing integration gate in `test/admin.test.ts`; the six registration
 and rendering proofs in `test/admin-featured-unpublish-acceptance.test.ts`
@@ -213,7 +216,7 @@ no-member-data check with stable per-route IDs. See the
 ### Machine-docs check
 
 Agents fetch `/join.md`, `/llms.txt` and `/events.md` literally, so this one
-command re-proves the three truths after any machine-doc change: the join
+Actions command re-proves the three truths after a machine-doc change: the join
 invite resolves through the sanitized floor, llms.txt guidance matches its
 content, and documented per-event URLs are fetchable or marked templates.
 
@@ -228,18 +231,11 @@ For added-line coverage, JSON receipts and the hermetic fixture check, see the
 `node ci/patch-coverage.mjs --help`. The 80% patch floor remains WARN by default;
 missing or malformed coverage evidence fails in every mode.
 
-```sh
-# Choose a fresh, unused numeric suffix for each run.
-export TEST_DB="two_web_next_tog1234567890123456"
-export DATABASE_URL="postgres://agent_test@agent-testdb:5432/$TEST_DB"
-export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
-unset LEGACY_DATABASE_URL
-export PGPASSWORD=
-export W1_AGENT_TESTDB=0
-npm run db:migrate
-npm run test:coverage
-node ci/coverage-summary.mjs
-```
+Coverage measurement runs in GitHub Actions, not through a local full-suite
+command. Push the PR branch and use the exact-head `check` job's coverage summary
+and artifact. Record scope-approved skips honestly; if a full measurement is
+needed for a docs-only change, use the existing `ci.yml` manual Actions run on
+that branch and verify its head SHA.
 
 Coverage includes every
 `src/**/*.{ts,tsx}` file, even if no test imports it. Global and aggregate
@@ -254,8 +250,8 @@ typecheck and the coverage gate against its Postgres service, writes a job summa
 with the ten least-covered files, and uploads the JSON coverage summary for 14 days,
 including on failure.
 
-When intentionally raising a floor, re-measure with the same locked provider
-and Node 24 against the test database, leave a one-percentage-point margin
+When intentionally raising a floor, re-measure in Actions with the same locked
+provider and Node 24 against the disposable service, leave a one-percentage-point margin
 (rounded down to one decimal place), and include the summary in the PR.
 Never lower a floor simply to make a regression pass.
 
@@ -296,12 +292,17 @@ ordinary-login versus join endpoints and attribution parameters. Unsent search
 drafts and failed, superseded or invalid fragments do not install new destinations;
 replacement links and zones are admitted together without replacing the search input.
 
-```sh
-npm run build:assets                 # regenerate public/ from assets/
-npm run build:assets:check           # fail when the output drifted
-npm run config:check                 # drift check + its local-fixture selftests
-npx wrangler deploy --dry-run --outdir dist   # bundle check; does not deploy
-```
+In Actions, the `bundle-budget` job owns the `public/` asset drift check
+(`node ci/minify-assets.mjs --check`) and bundle budgets; the `check` job owns the
+configuration drift check and the scoped Wrangler dry-runs. Drafts and
+scope-approved docs-only fast-passes skip heavy `check` steps; a test, gate or
+build reading changed Markdown prevents that docs-only fast-pass. Other jobs,
+including `bundle-budget`, follow their own scope verdicts. Inspect the relevant
+job's steps: a green skip is not proof they ran. Push the PR branch for those CI
+gates; do not mirror them on the shared host. Regenerating reviewed `public/` assets after a source edit
+still uses `npm run build:assets`. Any heavy build for a focused failing-test
+reproduction follows the guarded Boat procedure in CONTRIBUTING, not a raw-host
+Wrangler/Kit build. A dry-run bundle does not deploy, but is still a build.
 
 WebMCP tool errors (`assets/islands/model-context.js`): every tool call owns
 a 10 s deadline over fetch plus body consumption and a 32 KiB body cap
@@ -313,8 +314,8 @@ seconds (1–86400) on rate limits only. Codes: `timeout`,
 `invalid_response` (oversize, malformed, or unexpected redirect),
 `unavailable` (5xx, transport, or pagehide), `rate_limited` (429, never
 retried automatically), `not_found` (unknown event key, no retry),
-`invalid_request` (bad event key, thrown synchronously). Local check,
-fixtures only:
+`invalid_request` (bad event key, thrown synchronously). Actions checks,
+fixtures only (locally, select only one failing case as described above):
 
 ```sh
 npx vitest run test/islands-model-context-bounds-acceptance.test.ts test/islands-model-context.test.ts
@@ -343,10 +344,12 @@ than dropping case identities. Human output can still verify larger suites.
 The minimums live in `.github/workflows/ci.yml`. The `SUITES` registry in
 `ci/a11y-native-browser-suites.test.mjs` is the single source of truth that
 every gated file and browser Vitest config is wired there; check it with
-`node --test ci/a11y-native-browser-suites.test.mjs`. Run any listed command locally
-to execute the same Chromium proof.
+`node --test ci/a11y-native-browser-suites.test.mjs` in Actions. The commands below
+identify the existing Actions proofs; they are not instructions to mirror the
+browser gate locally. For one failing case, follow the focused-only reproduction
+and guarded-build limits in [CONTRIBUTING.md](CONTRIBUTING.md#verify-a-change-with-github-actions).
 
-| Suite | Opt-in variable | Local command |
+| Suite | Opt-in variable | Actions command |
 | --- | --- | --- |
 | `test/admin-event-native-unicode.test.ts` | `ADMIN_EVENT_BROWSER_TESTS` | `ADMIN_EVENT_BROWSER_TESTS=true npx vitest run test/admin-event-native-unicode.test.ts` |
 | `test/featured-native-length.test.ts` | `FEATURED_NATIVE_BROWSER_TESTS` | `FEATURED_NATIVE_BROWSER_TESTS=true npx vitest run test/featured-native-length.test.ts` |
@@ -378,8 +381,9 @@ to execute the same Chromium proof.
 The admin, featured and calendar suites use intercepted synthetic fixtures or
 loopback servers with mocked reads, and the profile suite uses loopback fixtures
 with memory stores. None needs a database, staging or the network. For rows that
-require Kit dependencies, install them once with `npm ci --prefix web --include=dev`.
-Install the browser once, then run a suite with its variable set:
+require Kit dependencies, Actions installs them with `npm ci --prefix web --include=dev`.
+Actions installs the browser, then runs the selected suites with their variables set
+(the host must not install system packages to reproduce CI):
 
 ```sh
 npx playwright install --with-deps chromium

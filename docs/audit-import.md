@@ -133,24 +133,17 @@ read-only transactions and does not insert-then-rollback or touch sequences.
 
 ## Fixture verification
 
-For a full local check, first create and migrate a fresh run-owned database using the
-[README database setup](../README.md#database-and-migrations).
+Verify with GitHub Actions: push the PR branch, keep the PR draft while
+incomplete, mark it ready when complete, and cite the exact-head run and job
+URLs (`ci.yml`, `check` -> `ci-ok`). Policy: [Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions). Do not run
+the full suite, `npm run check`, or whole test files locally. To reproduce one
+failing test, run only that test against the approved disposable test service
+(never staging or production):
 
 ```sh
-# Focused tests own and drop their schemas; use only the approved test service.
 env -u DATABASE_URL -u LEGACY_DATABASE_URL -u BOT_DATABASE_URL \
   AUDIT_IMPORT_TEST_DATABASE_URL=postgres://agent_test@agent-testdb:5432/two_web_next \
-  npm exec vitest run test/import-audit*.test.*
-# Full local checks require a fresh run-owned database; replace the suffix each run.
-export TEST_DB=two_web_next_tog1234567890123456
-export DATABASE_URL="postgres://agent_test@agent-testdb:5432/${TEST_DB}"
-export AUDIT_IMPORT_TEST_DATABASE_URL="$DATABASE_URL"
-unset LEGACY_DATABASE_URL
-export PGPASSWORD=
-export W1_AGENT_TESTDB=0
-npm run db:migrate
-npm run db:check
-env -u BOT_DATABASE_URL npm run check
+  npx vitest run test/import-audit.test.ts -t '<exact failing test name>'
 ```
 
 The DB suite validates URLs through `testDatabaseUrl`: agent-testdb at port 5432

@@ -3,9 +3,9 @@
 The browser smoke suite runs **only in GitHub Actions on Linux** (public
 repo: standard GitHub-hosted `ubuntu-latest` runners only — never paid larger
 runners or Blacksmith).
-Never install/run Playwright browsers on the controller. `npm run check` only
-checks the specs' types, safety guards and existing Vitest tests; it does not
-launch a browser. The Playwright config, fixture preparation and seeding refuse
+Never install/run Playwright browsers on the controller. The `npm run check`
+command checks the specs' types, safety guards and existing Vitest tests; it does
+not launch the Playwright journeys. It is a CI command, not a local workaround. The Playwright config, fixture preparation and seeding refuse
 non-Actions execution.
 
 | Journey | Spec | Evidence required |
@@ -88,12 +88,17 @@ synchronization.
 
 ## Running and inspecting evidence
 
-- Locally/controller: `env -u DATABASE_URL npm run check` runs fixture-only
-  checks, not live SQL or browser journeys. Featured-unpublish SQL cases use
+- Verification: push the PR branch (draft while incomplete, ready when
+  complete) and cite the exact-head GitHub Actions run and job URLs; do not run
+  `npm run check` locally. Policy: [Verify a change with GitHub Actions](../CONTRIBUTING.md#verify-a-change-with-github-actions).
+  The `check` job runs fixture and disposable-service SQL checks, not live
+  database verification or the Playwright journeys, and only when its heavy steps
+  run: a draft or docs-scope fast-pass skips them and is not executed-suite
+  evidence. Confirm the relevant step ran and succeeded on the exact head. Featured-unpublish SQL cases use
   the existing integration gate in `test/admin.test.ts`; six registration and
   rendering cases remain ungated in the two featured-unpublish suites. No new
-  conditional skip is added. Full SQL verification still needs the disposable
-  test database described in the README.
+  conditional skip is added. Full SQL verification runs in CI against its
+  disposable Postgres service.
 - On the `ubuntu-latest` runner: `npm run e2e` after prepare, migrations,
   seed and `npx playwright install --with-deps chromium`.
 - Chromium only, one worker, fresh browser context per spec, zero retries.
