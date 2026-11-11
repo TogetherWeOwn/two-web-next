@@ -1,15 +1,10 @@
 // Kit content leaves render the display face through the optional content face
 // and must not preload the Mona Sans webfont.
-// Staging mobile LCP on /about, /faq, /rules and /privacy measured 2197–2255
-// ms against the 2000 ms budget while FCP sat at 1687–1750 ms: the swap face
-// arrives after first paint and its swap re-lays-out the leaf, so the largest
-// text block repaints late and becomes LCP. The leaves now paint through a
-// content-only 'Mona Sans Content' face with font-display: optional over the
-// same woff2, unguarded display rules resolving through --font-display, and no
-// preload. The Hono shell (src/page-shell.tsx) already skips the Mona Sans
-// preload for theme "content"; the SvelteKit twin (web/src/lib/SiteMetadata.svelte)
-// must agree, or enabling the Kit routes reintroduces the same unused
-// high-priority fetch on the same mobile-LCP pages.
+// Staging mobile LCP measured 2197–2255 ms against the 2000 ms budget while
+// FCP sat at 1687–1750 ms: the swap face arrives after first paint and its
+// swap re-lays-out the leaf (see the Hono twin's pin test). The SvelteKit twin
+// (web/src/lib/SiteMetadata.svelte) must agree with the Hono shell
+// (src/page-shell.tsx continues to skip the preload for theme "content").
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -97,10 +92,7 @@ const rulesOf = (css: string): Array<{ selector: string; body: string }> =>
 const isDisplayBody = (body: string): boolean =>
   body
     .split(";")
-    .some(
-      (declaration) =>
-        /^\s*font(?:-family)?\s*:/.test(declaration) && declaration.includes("var(--font-display)"),
-    );
+    .some((declaration) => /font(?:-family)?\s*:[^;{}]*var\(--font-display\)/.test(declaration));
 
 describe("Kit content shell preloads no Mona Sans webfont", () => {
   let renderMeta: (props: { title: string; theme: Theme; leafCss?: string }) => string;
@@ -141,15 +133,14 @@ describe("Kit content shell preloads no Mona Sans webfont", () => {
     const displayRules = rulesOf(LEAF_CRITICAL_CSS).filter(
       (rule) => !/^@font-face/.test(rule.selector) && isDisplayBody(rule.body),
     );
-    // Counted per target (selector): the minifier merges rules that share a
+    // Counted per target (selector): the minifier merges rules sharing a
     // declaration once the guards are gone.
     const targets = displayRules.flatMap((rule) =>
       rule.selector.split(/,(?![^(]*\))/).map((part) => part.trim()),
     );
     expect(targets.length).toBeGreaterThanOrEqual(7);
-    expect(displayRules.filter((rule) => rule.selector.includes(":not(.content-theme)"))).toEqual(
-      [],
-    );
+    const guards = displayRules.filter((rule) => rule.selector.includes(":not(.content-theme)"));
+    expect(guards).toEqual([]);
   });
 
   it("ships the content face with font-display: optional over the same file as the main face", () => {

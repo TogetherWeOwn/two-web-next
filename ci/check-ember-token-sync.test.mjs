@@ -456,10 +456,8 @@ test("a consumed UI stack does not depend on an omitted display alias", () => {
   withScratch((root) => {
     for (const path of HONO_CONSUMERS) {
       const file = join(root, path);
-      // Simulate a world with no display consumption: the authored
-      // content-theme override declares the display alias itself, so it
-      // must be neutralized alongside the var() reads or the omission
-      // assertions below would see a declaration nothing reads.
+      // No-display simulation: the authored content-theme override declares
+      // the alias itself, so neutralize it alongside the var() reads.
       writeFileSync(
         file,
         readFileSync(file, "utf8")

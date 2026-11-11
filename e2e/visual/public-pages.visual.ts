@@ -25,20 +25,13 @@ for (const [viewport, size] of VIEWPORTS) {
   for (const [name, path] of ROUTES) {
     test(`${name} @ ${viewport}`, async ({ page }) => {
       await page.setViewportSize(size);
-      // The content display face is font-display: optional: once fallback
-      // paints, a late-arriving face never swaps in, so any load-timing
-      // settle (scroll, fonts.load(), warm + reload + check()) still raced
-      // first paint on the long privacy page (8741px vs 8727px, five flakes
-      // in a row). The screenshot must prove the final brand rendering, so
-      // on content pages this suite registers the same woff2 face with
-      // font-display: swap through the FontFace API — in-test only; the
-      // served document and its CSP hash are untouched (a document
-      // rewrite invalidates the leaf CSS hash and blocks the inline
-      // stylesheet). A constructed face loads over font-src, and faces
-      // added later win for matching text, so painted text swaps to the
-      // brand metrics deterministically before capture. The exact-match
-      // anchor below fails loudly on content pages if the shipped face
-      // signature ever changes.
+      // The content face is font-display: optional, so once fallback paints a
+      // late face never swaps in and load-timing settles raced first paint
+      // (privacy-mobile, five flakes). On content pages register the same
+      // woff2 with display: swap via the FontFace API (in-test only; the
+      // served document and its CSP hash stay untouched) so text settles on
+      // brand metrics before capture. The anchor fails loudly if the shipped
+      // face signature ever changes.
       const OPTIONAL_FACE =
         "font-family:Mona Sans Content;font-weight:200 900;font-stretch:75% 125%;font-display:optional";
       const LATIN_RANGE =
@@ -50,11 +43,11 @@ for (const [viewport, size] of VIEWPORTS) {
         Boolean(document.querySelector(".content-theme")),
       );
       if (isContentPage) {
-        const sawContentFace = await page.evaluate(
-          (signature: string) => Boolean(document.head.textContent?.includes(signature)),
+        const saw = await page.evaluate(
+          (s: string) => Boolean(document.head.textContent?.includes(s)),
           OPTIONAL_FACE,
         );
-        expect(sawContentFace).toBe(true);
+        expect(saw).toBe(true);
       }
       await page.evaluate(
         async (args: { range: string }) => {
@@ -77,9 +70,8 @@ for (const [viewport, size] of VIEWPORTS) {
             ]);
             const deadline = Date.now() + 10000;
             while (!document.fonts.check('700 16px "Mona Sans Content"')) {
-              if (Date.now() > deadline) {
+              if (Date.now() > deadline)
                 throw new Error("Mona Sans Content face never became available");
-              }
               await new Promise((resolve) => setTimeout(resolve, 50));
             }
           }

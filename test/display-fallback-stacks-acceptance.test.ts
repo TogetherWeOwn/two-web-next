@@ -42,8 +42,7 @@ const FONT_DECLARATION = /(?:font-family|font)\s*:[^;{}]+(?:;|(?=\}))/g;
 const BARE_MONA = /(?<!['"-\w])Mona Sans(?!['"-\w])/;
 // theme.css position: the fallback sits directly after Mona Sans.
 const UNIFIED_STACK = /Mona Sans["']?,\s*["']Mona Sans Fallback["']/;
-// Content position: the fallback sits directly after Mona Sans Content.
-const UNIFIED_CONTENT_STACK = /Mona Sans Content["']?,\s*["']Mona Sans Fallback["']/;
+// The fallback sits directly after Mona Sans or after Mona Sans Content.
 const UNIFIED_STACK_OR_CONTENT =
   /(?:Mona Sans Content["']?|Mona Sans["']?),\s*["']Mona Sans Fallback["']/;
 const HEX_LITERAL = /#[0-9a-fA-F]{3,8}\b/g;
@@ -60,18 +59,18 @@ const tokenDefinitions = (): string[] =>
 // The served hook value every var(--font-display) usage resolves to is the
 // base definition; the content-theme override re-points the same hook at the
 // optional content face, so it is read separately below.
+const hookDefinitions = (): string[] =>
+  stripComments(sheet("theme.css")).match(TOKEN_DECLARATION) ?? [];
+
 const hookValue = (): string => {
-  const definitions = stripComments(sheet("theme.css")).match(TOKEN_DECLARATION) ?? [];
+  const definitions = hookDefinitions();
   expect(definitions.length).toBeGreaterThanOrEqual(1);
   return tokenValue(definitions[0]!);
 };
 
-const hookDefinitions = (): string[] =>
-  stripComments(sheet("theme.css")).match(TOKEN_DECLARATION) ?? [];
-
 const contentHookValue = (): string => {
   const override = hookDefinitions().find((definition) =>
-    UNIFIED_CONTENT_STACK.test(tokenValue(definition)),
+    /Mona Sans Content/.test(tokenValue(definition)),
   );
   expect(override, "theme.css must define a content-theme --font-display override").toBeDefined();
   return tokenValue(override!);
@@ -160,7 +159,7 @@ describe("--font-display token", () => {
     expect(families.slice(2)).toContain("system-ui");
     const definitions = hookDefinitions();
     expect(
-      definitions.filter((definition) => UNIFIED_CONTENT_STACK.test(tokenValue(definition))),
+      definitions.filter((definition) => /Mona Sans Content/.test(tokenValue(definition))),
     ).toHaveLength(1);
     expect(
       definitions.filter((definition) => UNIFIED_STACK.test(tokenValue(definition))),
