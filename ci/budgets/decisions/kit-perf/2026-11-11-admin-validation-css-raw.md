@@ -30,9 +30,26 @@ count, and every other unit are unchanged.
   interval, the exact 3584 ceiling, and 3585 one-over. A revert rejects
   the interval; a further widening fails the one-over case.
 
+## Route CSS raw: 3072 -> 3584 on the 24 pages (gzip 1280 and file caps unchanged)
+
+- The root layout imports `web/src/app.css` on every Kit page, so the
+  same +203 raw lands in every page's route closure. The step
+  `Kit route performance budgets` was skipped in run 42983341143
+  because the aggregate step failed first; it would breach next.
+- `2026-11-04-route-client-closure-and-ratchet.md` sets each page's CSS
+  raw ceiling to min(ceil(measured x1.25 / 512) x 512, aggregate
+  ceiling). Its measured 2784B (2861B for `/admin`) gives a 3584 target
+  that it clipped to the 3072 aggregate. With the aggregate at 3584, the
+  same rule gives 3584 for every page.
+- Paired pins: every page's `css.maxRawBytes` in `ci/budgets/kit-routes.json`
+  and in that decision's `Initial approved route plan` snapshot (the
+  ratchet replay anchor, with a dated amendment note), and the
+  snapshot's pinned digest in `ci/kit-client-ratchet.test.mjs`. The two
+  endpoint-only routes stay at zero.
+
 ## Scope
 
 Measured bytes only; it does not approve the feature, which merges
-separately. No checker, gate, route budget or exclusion changes; the
-ratchet may still lower this ceiling from future measurements. Undo:
-revert this allocation.
+separately. No checker, gate, route inventory, file cap or exclusion
+changes; the ratchet may still lower these ceilings from future
+measurements. Undo: revert this allocation.
