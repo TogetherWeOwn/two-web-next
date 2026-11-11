@@ -157,7 +157,7 @@
   background: var(--color-live-bg);
 }
 .kit-admin .featured-status-scheduled {
-  color: var(--color-echo);
+  color: var(--color-t2);
   background: var(--color-echo-bg);
 }
 .kit-admin :is(.featured-status-expired, .featured-status-unpublished) {

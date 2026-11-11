@@ -215,11 +215,15 @@ describe("Kit admin route group: thin guard binding, shared reads", () => {
   it("keeps the scroll-region focus outline visible on the dark canvas", () => {
     // Without this rule the new tabindex regions fall back to the shared
     // sheet's dark outline on the Kit dark root canvas — nearly invisible
-    // for the keyboard users the regions were added for. Deleting the style
-    // block must fail this test.
-    const page = read("web/src/routes/admin/+page.svelte");
-    expect(page).toContain(".admin-table-scroll:focus-visible");
-    expect(page).toContain("outline-color: currentColor");
+    // for the keyboard users the regions were added for. The dashboard's
+    // inline style block moved into the token sheet (assets/admin-theme.css,
+    // minified to public/admin-theme.css) — deleting the :focus-visible rule
+    // must fail this test.
+    const sheet = read("public/admin-theme.css");
+    expect(sheet).toContain(".kit-admin :focus-visible");
+    expect(sheet).toContain("var(--focus-width)");
+    expect(sheet).toContain("var(--focus-ring)");
+    expect(sheet).toContain(".admin-table-scroll");
   });
 
   it("admin chrome is responsive, labelled, skippable and never indexed", () => {
