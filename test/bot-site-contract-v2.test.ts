@@ -36,6 +36,14 @@ const object = (value: unknown): value is JsonObject =>
 const SNOWFLAKE = /^\d{1,20}$/;
 const ISO_ZULU = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 const EVENT_KEY = /^[A-Za-z0-9._:-]{1,200}$/;
+const BOTLOG_KINDS = [
+  "event.opened",
+  "event.updated",
+  "event.cancelled",
+  "announcement.posted",
+  "rank.assigned",
+  "member.joined",
+];
 
 const loadFixture = (): JsonObject => {
   const parsed: unknown = JSON.parse(raw.toString("utf8"));
@@ -124,14 +132,6 @@ function assertBotlogPage(request: JsonObject, page: JsonObject): void {
   expect(page.v).toBe(1);
   const entries = arr(page.entries);
   expect(entries.length <= (limit as number)).toBe(true);
-  const kinds = [
-    "event.opened",
-    "event.updated",
-    "event.cancelled",
-    "announcement.posted",
-    "rank.assigned",
-    "member.joined",
-  ];
   for (const entry of entries) {
     if (!object(entry)) throw new Error("entry shape");
     const seq = str(entry.seq);
@@ -141,7 +141,7 @@ function assertBotlogPage(request: JsonObject, page: JsonObject): void {
     expect(/^\d+$/.test(seq)).toBe(false);
     expect(/:/.test(seq)).toBe(false);
     assertZulu(entry.at);
-    expect(kinds).toContain(str(entry.kind));
+    expect(BOTLOG_KINDS).toContain(str(entry.kind));
     expect(rankDetailValid(entry)).toBe(true);
     if ("subject_id" in entry) expect(isSnowflake(entry.subject_id)).toBe(true);
   }
@@ -266,14 +266,7 @@ describe("bot-site contract v2 pinned mirror", () => {
   it("accepts botlog.read pages with opaque cursors and retained empty position", () => {
     const fixture = loadFixture();
     const botlog = verb(fixture, "botlog.read");
-    expect(arr(botlog.kinds)).toEqual([
-      "event.opened",
-      "event.updated",
-      "event.cancelled",
-      "announcement.posted",
-      "rank.assigned",
-      "member.joined",
-    ]);
+    expect(arr(botlog.kinds)).toEqual(BOTLOG_KINDS);
     const initial = botlog.initial_request as JsonObject;
     expect(initial.after).toBeNull();
     expect("after" in initial).toBe(true);
