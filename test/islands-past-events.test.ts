@@ -451,7 +451,7 @@ describe("PastEvents shipped binder request/state drift", () => {
     expect(b.requests).toHaveLength(1);
     expect(b.requests[0]).toMatchObject({
       url: pastEventsRequest(2).url,
-      init: { method: "GET", headers: { accept: "text/html" } },
+      init: { method: "GET", headers: { accept: "text/html", "x-two-island": "past-events" } },
     });
     expect(b.root.attributes.get("aria-busy")).toBe("true");
     b.finish(0, 2);

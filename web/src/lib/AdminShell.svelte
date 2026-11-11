@@ -9,7 +9,11 @@ import type { Snippet } from "svelte";
 // paths, which Hono serves until each child slice migrates, so every link
 // works during mixed mode. Admin is never indexed.
 //
-let { title, children }: { title: string; children: Snippet } = $props();
+let {
+  title,
+  restoredWrite = false,
+  children,
+}: { title: string; restoredWrite?: boolean; children: Snippet } = $props();
 </script>
 
 <svelte:head>
@@ -36,6 +40,6 @@ let { title, children }: { title: string; children: Snippet } = $props();
     <a href="/">Site</a>
   </nav>
 </header>
-<main id="main" tabindex="-1">{@render children()}</main>
+<main id="main" tabindex="-1">{#if restoredWrite}<div role="status" tabindex="-1" data-testid="auth-error">You signed in again. Your earlier changes were not saved. Review and submit them again.</div>{/if}{@render children()}</main>
 <footer>Together We Own · moderators only</footer>
 </div>

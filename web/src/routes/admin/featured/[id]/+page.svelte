@@ -32,7 +32,7 @@ const island =
   "script>";
 </script>
 
-<AdminShell title={`Edit ${data.view.title}`}>
+<AdminShell restoredWrite={data.restoredWrite} title={`Edit ${data.view.title}`}>
 <section class="featured-form">
   <h1>Edit {data.view.title}</h1>
   <section

@@ -490,7 +490,7 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     expect(deps.resolve).toHaveBeenCalledTimes(1);
     // Correlation is not session data: the dispatch merges only the validated
     // request id, never bridge/session keys, into a public render.
-    expect(seen[0]!.locals).toEqual({ requestId: expect.any(String) });
+    expect(seen[0]!.locals).toEqual({ requestId: expect.any(String), restoredWrite: false });
     expect(res.status).toBe(200);
   });
 
@@ -506,7 +506,7 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     expect(deps.resolve).toHaveBeenCalledTimes(1);
     // The failed bridge merges nothing; only the dispatch's correlation id
     // reaches the render.
-    expect(event.locals).toEqual({ requestId: expect.any(String) });
+    expect(event.locals).toEqual({ requestId: expect.any(String), restoredWrite: false });
     expect(res.status).toBe(200);
   });
 
@@ -560,7 +560,7 @@ describe("dispatchHookRequest session bridge (Kit branch only)", () => {
     const event = eventFor("/events/past");
     await dispatchHookRequest(event, deps);
     expect(deps.resolve).toHaveBeenCalledTimes(1);
-    expect(event.locals).toEqual({ requestId: expect.any(String) });
+    expect(event.locals).toEqual({ requestId: expect.any(String), restoredWrite: false });
   });
 });
 
