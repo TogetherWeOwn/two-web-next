@@ -404,7 +404,7 @@ test("workflow pins the exact central action and keeps production unreachable", 
   );
   // The unchanged pinned action, invoked exactly once.
   assert.equal(workflow.split(PINNED_ACTION).length - 1, 1);
-  assert.match(PINNED_ACTION, /@89c290be20c0044efaf6916f28341c76e75fff06$/);
+  assert.match(PINNED_ACTION, /@9907b4adaf8c06b0953d156b363db102886e0ef9$/);
   // Manual dispatch from main only: no other trigger keys in the on: block.
   const onBlock = workflow.match(/^on:\n([\s\S]*?)\n\npermissions:/m)?.[1] ?? "";
   assert.match(onBlock, /workflow_dispatch:/);
