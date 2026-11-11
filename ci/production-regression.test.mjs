@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -898,17 +898,18 @@ test("staging qualification preserves the deployed SHA through checker checkout 
     "CI/deployed A, deploy API head B, and e2e API head C must still qualify A",
   );
   await requireQualificationRevision(target, revisionOptions(target));
-  // Execute the workflow's actual commit-file writer, then feed that identity
+  // The workflow's commit-file writer is the validated identity observer
+  // (ci/staging-provenance.mjs writes passive/commit only after the served
+  // identity matches); its offline behavior is covered by the provenance
+  // selftest, so simulate its successful output here and feed that identity
   // through the production artifact reader rather than just resolver selection.
-  const writer = passive.match(/          (printf [^\n]+ > passive\/commit)/)?.[1];
-  assert.ok(writer);
+  assert.match(
+    passive,
+    /run: node ci\/staging-provenance\.mjs observe "\$CANDIDATE_SHA" after passive\/identity passive\/commit/,
+  );
   const dir = mkdtempSync(join(tmpdir(), "qualification-"));
-  const result = spawnSync("bash", ["-euc", `mkdir passive; ${writer}`], {
-    cwd: dir,
-    encoding: "utf8",
-    env: { PATH: process.env.PATH, DEPLOYED_SHA: target },
-  });
-  assert.equal(result.status, 0, result.stderr);
+  mkdirSync(join(dir, "passive"));
+  writeFileSync(join(dir, "passive/commit"), `${target}\n`);
   assert.deepEqual(
     await fetchLedgers({
       runs: [e2eRun(9, { head_sha: "c".repeat(40) })],
@@ -1100,6 +1101,7 @@ test("every deploy-staging entrant sets cancel-in-progress false and queue max",
     "deploy.yml",
     "e2e-staging.yml",
     "rollback-production.yml",
+    "staging-rollback-drill.yml",
   ]);
   assert.deepEqual(
     entrants.filter((entrant) => !entrant.ok),
