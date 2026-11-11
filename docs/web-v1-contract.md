@@ -65,9 +65,27 @@ Ranks are a separate read, not invented columns on `live_counts`.
 | `rank_order` | non-null integer, ascending ladder order | Used by SQL `ORDER BY`; not selected into the page model. |
 
 ```sql
-SELECT rank_key, rank_label, member_count
-FROM web_v1.rank_counts ORDER BY rank_order;
+SELECT
+  CASE WHEN length(substring(rank_key FROM 1 FOR 65)) <= 64
+       THEN rank_key END AS rank_key,
+  CASE WHEN length(substring(rank_label FROM 1 FOR 65)) <= 64
+       THEN rank_label END AS rank_label,
+  member_count
+FROM web_v1.rank_counts ORDER BY rank_order LIMIT 21;
 ```
+
+The view already contains exact aggregate counts. The consumer never limits the
+member population, queries member-level records, sums rank totals, or substitutes
+cumulative role-holder counts. It accepts up to 20 ranks with keys and labels up
+to 64 PostgreSQL characters each (not bytes). A 21st row detects overflow; it is
+not silently discarded. Overlong text is projected as null before transfer, with
+only the first 65 characters inspected for admission. At most 21 rows of bounded
+text and bigint counts cross the driver. The whole ladder becomes unavailable
+on overflow or malformed text, using the existing cached failure and label-only
+fallback, independently of live counts. Supported data retains exact safe-integer
+counts, including null and zero; no clipped labels or partial-overflow totals are
+shown. These defensive bounds allow four times the normal ladder size without
+changing the bot-owned views or adding migrations.
 
 The normal ladder is Prospect → Member → Soldier → Veteran → Legend. Returned
 rows render in SQL order; a partial nonempty result is not padded with invented
