@@ -156,7 +156,7 @@ export function profileClientErrors(input: {
     CONTROL_CHARS.test(input.games_text) ||
     CONTROL_CHARS.test(input.timezone)
   ) {
-    errors.control = "Remove control characters.";
+    errors.control = "Remove control or invisible characters.";
   }
   if ([...input.bio].length > PROFILE_LIMITS.bio)
     errors.bio = "Keep your bio to 1000 characters or fewer.";
