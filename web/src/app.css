@@ -59,9 +59,9 @@ html body {
  * accent links; field errors inherit the lobby ink from .field (inherit, not
  * the token, keeps the client CSS budget) with weight and the summary's
  * existing --brand rail (3.49:1 on the canvas), so they read as errors
- * without relying on text color alone. The shared :focus-visible outline is
- * dark --ink (1.24:1 on the raised surface), so summary links take the lobby
- * focus color. */
+ * without relying on text color alone. Summary links pin the lobby focus
+ * color so their ring never falls back to a dark --ink outline (1.24:1 on the
+ * raised surface). */
 .kit-admin :is(fieldset, .notice) {
   background: var(--color-lobby-raised);
 }

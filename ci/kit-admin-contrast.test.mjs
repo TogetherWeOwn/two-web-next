@@ -291,8 +291,8 @@ describe("Kit admin contrast", () => {
                 el.matches(":focus-visible"),
                 getComputedStyle(el).outlineColor,
               ]),
-              // --color-lobby-focus: the shared --ink outline is 1.24:1 here.
-              [true, "rgb(255, 255, 255)"],
+              // --color-lobby-focus (#ff9c36): a dark --ink outline would be 1.24:1 here.
+              [true, "rgb(255, 156, 54)"],
               "summary link focus ring stays visible on the raised surface",
             );
           }
