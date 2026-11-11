@@ -1046,6 +1046,7 @@ test("production gates import from every actual sparse checkout shape", () => {
   for (const paths of shapes) {
     assert.ok(paths.includes("/ci/"));
     assert.ok(paths.includes("/bin/version-check.mjs"), "CI imports need the version helper");
+    assert.ok(paths.includes("/bin/revision-check.mjs"), "CI imports need the revision helper");
   }
   const dir = mkdtempSync(join(tmpdir(), "production-sparse-import-"));
   try {
@@ -1089,9 +1090,9 @@ const sharedMutationGroup = "production-worker-mutation";
 function jobConcurrencyBlocks(workflow) {
   return [
     ...workflow.matchAll(
-      /^    concurrency:\n      group: (.+)\n      cancel-in-progress: (true|false)\n/gm,
+      /^    concurrency:\n      group: (.+)\n      cancel-in-progress: (true|false)\n(?: {6}queue: (\w+)\n)?/gm,
     ),
-  ].map((match) => ({ group: match[1].trim(), cancel: match[2] }));
+  ].map((match) => ({ group: match[1].trim(), cancel: match[2], queue: match[3] }));
 }
 
 test("production promotion and rollback mutations share one static non-cancelling lock", () => {
@@ -1118,6 +1119,9 @@ test("production promotion and rollback mutations share one static non-cancellin
     ["deploy-staging"],
     "the staging rollback lock must match deploy.yml's job-level lock",
   );
+  // Both deploy-staging entrants queue (not displace) pending runs.
+  assert.equal(jobConcurrencyBlocks(staging)[0].queue, "max");
+  assert.equal(jobConcurrencyBlocks(rollback)[0].queue, "max");
   for (const [label, workflow] of [
     ["deploy-production.yml", deploy],
     ["rollback-production.yml (production)", production],
@@ -1278,11 +1282,19 @@ function qualitySteps(conclusions = {}) {
 function qualityJob(overrides = {}) {
   return { name: stagingQualityJob, conclusion: "success", steps: qualitySteps(), ...overrides };
 }
+function bindingJob(overrides = {}) {
+  return {
+    name: "qualification-revision",
+    conclusion: "success",
+    steps: [{ name: "Verify qualification revision", conclusion: "success" }],
+    ...overrides,
+  };
+}
 function e2eJobs(journeys = "success") {
-  return [{ name: "staging-journeys", conclusion: journeys }, qualityJob()];
+  return [{ name: "staging-journeys", conclusion: journeys }, qualityJob(), bindingJob()];
 }
 function withQuality(quality) {
-  return { 200: [{ name: "staging-journeys", conclusion: "success" }, quality] };
+  return { 200: [{ name: "staging-journeys", conclusion: "success" }, quality, bindingJob()] };
 }
 function stubAutoApi(staging, environment = autoEnvironment, seen = {}) {
   const ci = stubProductionApi(ciEvidence());
@@ -1460,6 +1472,25 @@ for (const [name, pattern, mutate] of [
     await assert.rejects(checkAuto(staging), pattern);
   });
 }
+
+test("auto-approve refuses unbound historical greens despite matching passive ledger identity", async () => {
+  // The outer workflows, journeys, executed quality and soak all pass. A's
+  // retained passive/commit can also equal A even when historical checks saw B.
+  // Candidate binding must be proved before those ledgers can be consumed.
+  for (const binding of [
+    [],
+    [bindingJob({ conclusion: "skipped" })],
+    [bindingJob({ conclusion: "failure" })],
+    [bindingJob(), bindingJob()],
+    [bindingJob({ steps: [] })],
+    [bindingJob({ steps: [{ name: "Verify qualification revision", conclusion: "skipped" }] })],
+  ]) {
+    const staging = stagingEvidence();
+    staging.jobs = { 200: [...e2eJobs().slice(0, 2), ...binding] };
+    await assert.rejects(checkAuto(staging), /qualification-revision evidence/);
+  }
+  assert.equal((await checkAuto(stagingEvidence())).sha, dispatchSha);
+});
 
 test("auto-approve still requires the main-only branch policy", async () => {
   for (const environment of [
@@ -2067,7 +2098,8 @@ test("already-live CLI reports exact GITHUB_OUTPUT for live, stale and unreadabl
   );
   assert.equal(served.status, 0);
   assert.equal(served.written, `already_live=true\nlive_sha=${target}\n`);
-  assert.match(served.stdout, /skipping deploy/);
+  assert.match(served.stdout, /checking promotion progress before standing down/);
+  assert.doesNotMatch(served.stdout, /skipping deploy/);
   const stale = spawnGateCli(
     ["--already-live"],
     { DEPLOY_SHA: target, PRODUCTION_ORIGIN: origin },

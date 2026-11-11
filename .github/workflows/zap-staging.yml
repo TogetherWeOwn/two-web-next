@@ -21,6 +21,10 @@ on:
       candidate_sha:
         type: string
         default: ""
+      checkout_ref:
+        type: string
+        required: false
+        default: ""
   schedule:
     - cron: "41 3 * * *"
   workflow_dispatch:

@@ -718,7 +718,7 @@ describe("ci heavy-job scope gates", () => {
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
     expect(block).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
+      /\n    needs:\s+\[a11y, lighthouse, bundle-budget, docs-links, queue-syntax-smoke, check, node22-compat, scope\]\n/,
     );
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
@@ -857,7 +857,7 @@ describe("e2e-staging scope gate", () => {
   const scopeJob = staging.split("\n  scope:\n")[1]?.split(/\n  [\w-]+:\n/)[0] ?? "";
   const journeys = staging.split("\n  staging-journeys:\n")[1] ?? "";
 
-  it("mirrors the e2e.yml docs-only gate without PR context", () => {
+  it("classifies deployed changes for diagnostics without skipping staging journeys", () => {
     // No PR files API here: workflow_run + workflow_dispatch carry no pull
     // request, so the scope job diffs the deployed head SHA against its
     // parent and feeds ci/change-scope.sh the same TSV shape.
@@ -865,12 +865,12 @@ describe("e2e-staging scope gate", () => {
     expect(scopeJob).toContain("docs_only:");
     expect(scopeJob).toContain("skip_e2e:");
     expect(scopeJob).not.toContain("pulls/$PR_NUMBER/files");
-    expect(scopeJob).toContain("node ci/staging-provenance.mjs candidate");
-    expect(scopeJob).toContain("steps.candidate.outputs.sha");
+    expect(scopeJob).toContain("node ci/staging-qualification.mjs");
+    expect(scopeJob).toContain("HEAD_SHA: ${{ steps.target.outputs.sha }}");
     expect(scopeJob).not.toContain("workflow_run.head_sha");
     expect(scopeJob).toContain("git diff --name-status");
     expect(journeys).toMatch(/\n    needs: scope\n/);
-    expect(journeys).toMatch(/needs\.scope\.outputs\.skip_e2e != 'true'/);
+    expect(journeys).not.toMatch(/needs\.scope\.outputs\.skip_e2e/);
   });
 
   it("keeps the deploy trigger intact and dispatches always running", () => {
@@ -884,9 +884,8 @@ describe("e2e-staging scope gate", () => {
   it("stays on standard hosted runners and gates no required check", () => {
     expect(scopeJob).toMatch(/\n    runs-on: ubuntu-latest\n/);
     expect(journeys).toMatch(/\n    runs-on: ubuntu-latest\n/);
-    // staging-journeys is post-deploy evidence, not a merge gate: CONTRIBUTING
-    // names exactly ci-ok, gitleaks, e2e-ok and pr-lint, so a docs-only or
-    // test-only skip never blocks a merge.
+    // staging-journeys is post-deploy qualification, not a PR merge gate.
+    // It runs even for docs/test-only deployments; PR scope skips are separate.
     const section =
       readFileSync("CONTRIBUTING.md", "utf8")
         .split("### Branch protection and required checks")[1]

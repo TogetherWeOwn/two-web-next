@@ -7,6 +7,10 @@ name: web-quality-origin
 on:
   workflow_call:
     inputs:
+      checkout_ref:
+        type: string
+        required: false
+        default: ""
       origin:
         type: string
         required: true
@@ -49,6 +53,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      # Candidate checkers must not write default-branch caches.
       - run: npm ci --include=dev --no-audit --no-fund
       - name: Install Chromium
         run: |

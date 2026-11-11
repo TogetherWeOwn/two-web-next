@@ -14,6 +14,7 @@
 import { appendFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { stagingQualityJob, stagingQualitySteps } from "./production-deploy-gate.mjs";
+import { hasBoundQualification } from "./staging-qualification.mjs";
 
 const shaPattern = /^[0-9a-f]{40}$/;
 const titleSha = /^e2e-staging deploy ([0-9a-f]{40})$/;
@@ -162,7 +163,7 @@ export async function resolvePromotionSha({
     const executed = stagingQualitySteps.every((name) =>
       (quality.steps ?? []).some((step) => step.name === name && step.conclusion === "success"),
     );
-    if (!executed) continue;
+    if (!executed || !hasBoundQualification(jobs)) continue;
     // The window above can miss an older red run of this commit; its whole
     // history decides (stagingRunsSinceCommit).
     const history = await stagingRunsSinceCommit({ get, sha });

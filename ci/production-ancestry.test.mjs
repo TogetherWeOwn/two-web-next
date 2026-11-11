@@ -85,12 +85,86 @@ test("an ahead candidate passes on both automatic triggers and on a default disp
   }
 });
 
-test("a candidate equal to the live commit returns equal without any lookup", async () => {
+test("a candidate equal to live returns equal only after proving main is also live", async () => {
   for (const event of [...AUTOMATIC, "workflow_dispatch"]) {
-    const { calls, fetchImpl } = noFetch();
+    const { calls, fetchImpl } = compareOk({ sha: LIVE });
     assert.equal(await checkPromotionAncestry(envFor(event, LIVE, LIVE), { fetchImpl }), "equal");
-    assert.equal(calls.length, 0, event);
+    assert.equal(calls.length, 1, event);
+    assert.equal(calls[0].url, "https://api.github.com/repos/o/r/commits/main");
+    assert.equal(calls[0].init.headers.Authorization, "Bearer t");
+    assert.equal(calls[0].init.redirect, "error");
+    assert.ok(calls[0].init.signal instanceof AbortSignal);
   }
+});
+
+test("default already-live selection refuses newer main on every default event", async () => {
+  for (const event of [...AUTOMATIC, "workflow_dispatch"]) {
+    for (const input of ["", " \t ", ...(event === "workflow_dispatch" ? [] : [LIVE])]) {
+      const { calls, fetchImpl } = compareOk({ sha: NEWER });
+      await assert.rejects(
+        checkPromotionAncestry(envFor(event, LIVE, LIVE, { INPUT_SHA: input }), { fetchImpl }),
+        /Default promotion stalled: selected .* is already live, but main is .*first-attempt staging.*explicitly authorized SHA dispatch/,
+      );
+      assert.equal(calls.length, 1);
+      assert.equal(calls[0].url, "https://api.github.com/repos/o/r/commits/main");
+    }
+  }
+});
+
+test("already-live defaults fail closed on unreadable or malformed current main", async () => {
+  for (const body of [
+    null,
+    {},
+    [],
+    { sha: "" },
+    { sha: "abc" },
+    { sha: LIVE.toUpperCase() },
+    { sha: 7 },
+  ]) {
+    await assert.rejects(
+      checkPromotionAncestry(envFor("schedule", LIVE, LIVE), {
+        fetchImpl: compareOk(body).fetchImpl,
+      }),
+      /main SHA is missing or invalid/,
+    );
+  }
+  for (const reply of [
+    () => ({ ok: false, status: 403 }),
+    () => {
+      throw new TypeError("network unavailable");
+    },
+    () => ({
+      ok: true,
+      json: async () => {
+        throw new SyntaxError("invalid JSON");
+      },
+    }),
+  ]) {
+    await assert.rejects(
+      checkPromotionAncestry(envFor("schedule", LIVE, LIVE), {
+        fetchImpl: recorder(reply).fetchImpl,
+      }),
+    );
+  }
+  for (const extra of [{ GITHUB_TOKEN: "" }, { GITHUB_REPOSITORY: "o/r/extra" }]) {
+    await assert.rejects(
+      checkPromotionAncestry(envFor("schedule", LIVE, LIVE, extra), {
+        fetchImpl: noFetch().fetchImpl,
+      }),
+      /requires GITHUB_/,
+    );
+  }
+});
+
+test("an explicit matching dispatch retains recovery when main is newer than live", async () => {
+  const { calls, fetchImpl } = noFetch();
+  assert.equal(
+    await checkPromotionAncestry(envFor("workflow_dispatch", LIVE, LIVE, { INPUT_SHA: LIVE }), {
+      fetchImpl,
+    }),
+    "explicit",
+  );
+  assert.equal(calls.length, 0, "recovery performs no default-currentness lookup");
 });
 
 test("a candidate behind the live commit is refused", async () => {
@@ -430,7 +504,7 @@ const incidentJourneys = {
   41547357384: "success",
 };
 
-function incidentStaging() {
+function incidentStaging({ bound = false } = {}) {
   return async (url) => {
     const { pathname, searchParams } = new URL(url);
     if (pathname.endsWith(`/commits/${OLDER}`)) {
@@ -446,6 +520,15 @@ function incidentStaging() {
       assert.equal(id, "41547357384", "skipped tips suppress older passes before job lookup");
       return okJson({
         jobs: [
+          ...(bound
+            ? [
+                {
+                  name: "qualification-revision",
+                  conclusion: "success",
+                  steps: [{ name: "Verify qualification revision", conclusion: "success" }],
+                },
+              ]
+            : []),
           { name: "staging-journeys", conclusion: incidentJourneys[id] },
           {
             name: stagingQualityJob,
@@ -459,15 +542,17 @@ function incidentStaging() {
   };
 }
 
-test("incident: the resolver picks the older passing candidate and the guard refuses it as behind live", async () => {
+test("incident: historical unbound runs are refused and even a bound older candidate stays behind live", async () => {
+  const options = { repository: "o/r", token: "t", nowMs: AT };
+  assert.equal(await resolvePromotionSha({ ...options, fetchImpl: incidentStaging() }), null);
+  // Counterfactual positive control only: add final binding, which did not
+  // exist in this incident. Do not turn historical unbound greens into passes.
   const resolved = await resolvePromotionSha({
-    repository: "o/r",
-    token: "t",
-    fetchImpl: incidentStaging(),
-    nowMs: AT,
+    ...options,
+    fetchImpl: incidentStaging({ bound: true }),
   });
-  // The newer skipped runs suppress the passes 41666047288 and 41584725863;
-  // the older passing run 41547357384 is what remains resolved.
+  // The newer skipped runs still suppress the passes 41666047288 and 41584725863;
+  // only the counterfactually bound older candidate remains.
   assert.equal(resolved, OLDER);
 
   for (const event of [...AUTOMATIC, "workflow_dispatch"]) {
@@ -518,7 +603,7 @@ function runGuardThenSentinel(env, stub) {
 function runLiveAdmission(
   event,
   sequence,
-  { target = NEWER, comparison = compareBody(LIVE) } = {},
+  { target = NEWER, comparison = compareBody(LIVE), main = LIVE, input = "" } = {},
 ) {
   const dir = mkdtempSync(join(tmpdir(), "live-admission-"));
   const output = join(dir, "output");
@@ -543,7 +628,7 @@ fi`,
       {
         env: {
           ...process.env,
-          ...envFor(event, target, "", { MIGRATIONS_APPLIED: "true" }),
+          ...envFor(event, target, "", { MIGRATIONS_APPLIED: "true", INPUT_SHA: input }),
           NODE: process.execPath,
           PRODUCTION_ORIGIN: "https://stub.invalid",
           GITHUB_OUTPUT: output,
@@ -553,6 +638,7 @@ fi`,
           FETCH_STUB_JSON: JSON.stringify([
             { match: "/up", sequence },
             { match: "/compare/", body: comparison },
+            { match: "/commits/main", body: { sha: main } },
           ]),
         },
         encoding: "utf8",
@@ -629,6 +715,35 @@ test("live identity admission stops reading after the first valid identity", () 
   assert.equal(equal.deployed, false);
 });
 
+test("already-live newer-main defaults fail the CLI chain before checkout or deployment", () => {
+  for (const event of [...AUTOMATIC, "workflow_dispatch"]) {
+    const result = runLiveAdmission(event, [liveBody(LIVE)], { target: LIVE, main: NEWER });
+    assert.equal(result.status, 1, result.stderr);
+    assert.match(
+      result.stderr,
+      /::error::Default promotion stalled: selected .*already live, but main is/,
+    );
+    assert.doesNotMatch(result.stdout, /skipping deploy/);
+    assert.equal(result.checkedOut, false);
+    assert.equal(result.deployed, false);
+    assert.deepEqual(
+      result.calls.filter((url) => url.endsWith("/commits/main")),
+      ["https://api.github.com/repos/o/r/commits/main"],
+    );
+  }
+  const recovery = runLiveAdmission("workflow_dispatch", [liveBody(LIVE)], {
+    target: LIVE,
+    main: NEWER,
+    input: LIVE,
+  });
+  assert.equal(recovery.status, 0, recovery.stderr);
+  assert.match(recovery.stdout, /Explicit dispatch SHA selected/);
+  assert.equal(
+    recovery.calls.some((url) => url.endsWith("/commits/main")),
+    false,
+  );
+});
+
 test("a recovered live identity still refuses a backward candidate before checkout", () => {
   const result = runLiveAdmission("workflow_run", [{ fail: true }, liveBody(LIVE)], {
     target: OLDER,
@@ -698,7 +813,9 @@ test("--check-ancestry prints the result and exits 0 for ahead, equal and explic
   assert.equal(ahead.status, 0, ahead.stderr);
   assert.match(ahead.stdout, /ahead/);
 
-  const equal = spawnAncestryCli(envFor("workflow_run", LIVE, LIVE), []);
+  const equal = spawnAncestryCli(envFor("workflow_run", LIVE, LIVE), [
+    { match: "/commits/main", body: { sha: LIVE } },
+  ]);
   assert.equal(equal.status, 0, equal.stderr);
   assert.match(equal.stdout, /equal/);
 

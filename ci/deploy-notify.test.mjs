@@ -3,6 +3,7 @@ import { createHmac } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { test } from "node:test";
+import { runInNewContext } from "node:vm";
 import { buildPayload, deployOutcome, notify, signBody } from "./deploy-notify.mjs";
 
 const SHA = "a".repeat(40);
@@ -338,6 +339,48 @@ test("CLI never prints the secret", () => {
 });
 
 const read = (path) => readFileSync(new URL(path, import.meta.url), "utf8");
+
+test("already-live preflight refusals notify while successful no-ops stay silent", () => {
+  const workflow = read("../.github/workflows/deploy-production.yml");
+  const job = workflow.slice(workflow.indexOf("\n  notify:\n"));
+  const condition = job.match(/\n {4}if: \$\{\{ (.+) \}\}/)?.[1];
+  assert.ok(condition, "notify has an explicit admission condition");
+  for (const [sha, alreadyLive, result, expected] of [
+    [SHA, "true", "failure", true],
+    [SHA, "true", "cancelled", true],
+    [SHA, "true", "success", false],
+    [SHA, "false", "success", true],
+    [SHA, "false", "failure", true],
+    ["", "", "success", false],
+    ["", "true", "failure", false],
+    ["", "", "skipped", false],
+  ]) {
+    assert.equal(
+      runInNewContext(condition, {
+        always: () => true,
+        needs: { preflight: { outputs: { sha, already_live: alreadyLive }, result } },
+      }),
+      expected,
+      JSON.stringify({ sha, alreadyLive, result }),
+    );
+  }
+  const payload = buildPayload(
+    deployEnv({
+      PREFLIGHT_RESULT: "failure",
+      SOAK_RESULT: "skipped",
+      REGRESSION_RESULT: "skipped",
+      DEPLOY_RESULT: "skipped",
+      PROMOTED_VERSION_ID: "",
+      VERIFY_OUTCOME: "skipped",
+      WATCH_RESULT: "skipped",
+    }),
+    { now: NOW },
+  );
+  assert.equal(payload.outcome, "failed");
+  assert.equal(payload.sha, SHA);
+  assert.equal(payload.versionId, null);
+  assert.match(payload.reason, /preflight refused promotion/);
+});
 
 test("deploy and rollback workflows end with a non-blocking notify", () => {
   for (const [file, event, needs] of [

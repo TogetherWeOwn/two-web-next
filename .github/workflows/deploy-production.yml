@@ -69,6 +69,7 @@ jobs:
           sparse-checkout: |
             /ci/
             /bin/version-check.mjs
+            /bin/revision-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - name: Resolve the commit to promote
@@ -168,6 +169,7 @@ jobs:
           sparse-checkout: |
             /ci/
             /bin/version-check.mjs
+            /bin/revision-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -218,6 +220,7 @@ jobs:
           sparse-checkout: |
             /ci/
             /bin/version-check.mjs
+            /bin/revision-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -266,6 +269,7 @@ jobs:
           sparse-checkout: |
             /ci/
             /bin/version-check.mjs
+            /bin/revision-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -372,6 +376,7 @@ jobs:
           sparse-checkout: |
             /ci/
             /bin/version-check.mjs
+            /bin/revision-check.mjs
             /.github/actions/gradual-promote/
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -631,6 +636,7 @@ jobs:
           sparse-checkout: |
             /ci/
             /bin/version-check.mjs
+            /bin/revision-check.mjs
             /.github/actions/gradual-promote/
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -715,7 +721,9 @@ jobs:
         auto-rollback,
         release,
       ]
-    if: ${{ always() && needs.preflight.outputs.sha != '' && needs.preflight.outputs.already_live != 'true' }}
+    # Only successful already-live no-ops stay silent; a refused preflight
+    # still reports failure even when the selected target is already live.
+    if: ${{ always() && needs.preflight.outputs.sha != '' && (needs.preflight.result != 'success' || needs.preflight.outputs.already_live != 'true') }}
     # Public repo: GitHub-hosted runners; private: the self-hosted fleet.
     runs-on: ${{ github.event.repository.private && fromJSON('["self-hosted","two-selfhosted"]') || 'ubuntu-latest' }}
     timeout-minutes: 5
@@ -733,6 +741,7 @@ jobs:
           sparse-checkout: |
             /ci/
             /bin/version-check.mjs
+            /bin/revision-check.mjs
             /wrangler.jsonc
           sparse-checkout-cone-mode: false
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0

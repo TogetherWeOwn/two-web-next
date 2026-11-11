@@ -283,8 +283,14 @@ test("every shared staging lock preserves pending runs instead of replacing them
       new URL(`../.github/workflows/${name}.yml`, import.meta.url),
       "utf8",
     );
+    // Folded (">-") group scalars are semantically a single line; unfold
+    // them so the strict block shape below still applies verbatim.
+    const normalized = source.replace(
+      /^(\s*)group: >-\n((?:\1\s+.*\n)+)/gm,
+      (_match, indent, body) => `${indent}group: ${body.trim().replace(/\s+/g, " ")}\n`,
+    );
     const blocks = [
-      ...source.matchAll(
+      ...normalized.matchAll(
         /^( *)concurrency:\n\1  group: (.+)\n\1  cancel-in-progress: (.+)\n\1  queue: (.+)$/gm,
       ),
     ];
@@ -309,13 +315,22 @@ test("qualification pins every checker, validates ancestry and shares the stagin
   assert.doesNotMatch(scope, /ref: \$\{\{ steps\.candidate\.outputs\.sha \}\}/);
   assert.match(scope, /git diff --name-status -M "\$HEAD_SHA~1" "\$HEAD_SHA"/);
   assert.match(scope, /bash ci\/change-scope\.sh/);
-  assert.equal((workflow.match(/ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/g) ?? []).length, 2);
+  // Two direct checker checkouts plus two child-workflow checkout_ref pins
+  // must all use the validated candidate SHA (four pinned usages total).
+  assert.equal(
+    (workflow.match(/^\s+ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/gm) ?? []).length,
+    2,
+  );
+  assert.equal(
+    (workflow.match(/checkout_ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/g) ?? []).length,
+    2,
+  );
   assert.equal(
     (workflow.match(/candidate_sha: \$\{\{ needs\.scope\.outputs\.sha \}\}/g) ?? []).length,
     2,
   );
   assert.doesNotMatch(workflow, /workflow_run\.head_sha/);
-  assert.match(workflow, /&& 'deploy-staging'/);
+  assert.match(workflow, /&&\s+'deploy-staging'/);
   assert.match(workflow, /cancel-in-progress: false/);
   assert.doesNotMatch(workflow, /cache: npm|uses: actions\/cache@/);
   assert.equal((workflow.match(/package-manager-cache: false/g) ?? []).length, 2);

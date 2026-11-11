@@ -94,7 +94,7 @@ describe("required checks always report", () => {
     const ci = readFileSync(join(dir, "ci.yml"), "utf8");
     const ok = job(ci, "ci-ok");
     expect(ok).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
+      /\n    needs:\s+\[a11y, lighthouse, bundle-budget, docs-links, queue-syntax-smoke, check, node22-compat, scope\]\n/,
     );
     expect(ok).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     // ci-ok is required (ruleset protect-main); the change-gating section documents what it aggregates.

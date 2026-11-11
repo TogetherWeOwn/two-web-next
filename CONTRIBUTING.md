@@ -123,19 +123,50 @@ for the existing staging, promotion, migration and rollback checks. Missing or
 failing post-merge qualification holds production promotion, not a request to
 stage the unmerged PR first.
 
-The automatic path is not a promise that every merged SHA becomes eligible.
-Currently `e2e-staging.yml` scope-skips `staging-journeys` and `staging-passive`
-for docs/test-only deploys. Those skips are not passing qualification evidence;
-`ci/resolve-promotion-sha.mjs` requires successful journeys and executed quality
-checks in a post-deploy `workflow_run`, plus soak, for automatic selection.
-If releasing a scope-skipped candidate, run `e2e-staging` by manual dispatch
-from the matching deployed `main` revision after merge to obtain the missing
-journey/passive evidence. The automatic resolver does not select manual-dispatch
-runs, so this does not itself make that SHA auto-promotable. Any explicit
-production dispatch requires its own exact-SHA Release Manager confirmation
-and all existing promotion, migration and rollback guards. If matching evidence
-cannot be obtained, hold that candidate's promotion; do not stage an unmerged
-head, infer a pass from a skip, or change a workflow in this documentation PR.
+`e2e-staging.yml` runs `staging-journeys` and `staging-passive` for every
+successful `main` staging deploy, with no docs-only or test-only scope skip. A
+skipped job, including one from history, is never passing qualification
+evidence; `ci/resolve-promotion-sha.mjs` requires successful journeys and
+executed quality checks in a post-deploy `workflow_run`, plus soak and a
+successful, unique `qualification-revision` job with its final revision check
+executed. The exact-SHA production gate requires the same binding evidence.
+Historical green runs without that final check remain unqualified; matching
+passive-ledger identity alone does not bind the measurements to the candidate.
+A re-run or a run that went red is refused under the same shared policy. Default promotion fails, rather than quietly doing nothing, when
+the selected target equals the live production commit but current `main`
+differs. The recovery route is an explicit-SHA `workflow_dispatch` of
+`deploy-production`, which needs its own exact-SHA Release Manager confirmation
+and retains the recovery route's promotion, migration and rollback guards;
+it grants no authorization. If matching evidence cannot be obtained, hold that
+candidate's promotion; do not stage an unmerged head or infer a pass from a
+skip.
+
+Qualification resolves the deployed SHA from the validated `deploy <sha>`
+run title, not the deploy run's API `head_sha` (which can name a newer main
+commit). Completions outside the deploy job's trigger admission instead get
+`deploy ignored <run-id>` titles and cannot start qualification scope or name a
+candidate, even if the evidence API is unavailable. Scope also reads the
+triggering deploy attempt's jobs and requires
+one successful `deploy-staging` job with executed Worker-deploy and revision-check
+steps. An explicitly skipped deploy job (for example after scheduled or manual
+CI) produces no qualification target and skips every measurement; it never probes
+the older live revision or records a false-red candidate. Missing, ambiguous,
+truncated or unavailable deployment evidence fails closed. Scope, candidate
+checkers and the passive ledger use that one SHA.
+The whole qualification workflow shares the staging deploy job's
+`deploy-staging` concurrency group. It verifies the staging revision before
+any measurement and again after all jobs pass, while holding that lock. GitHub
+does not guarantee FIFO order: if a newer deploy wins the lock first, the
+superseded candidate fails qualification instead of borrowing its replacement's
+results. Every managed entrant of that group (the deploy job, the
+qualification workflow and the staging rollback job) sets
+`cancel-in-progress: false` and `queue: max`, so a pending run is retained
+rather than displaced. If the queue is full, GitHub cancels the new arrival,
+not a queued run. This protects only mutations that go through these managed
+entrants. The lock covers dependency installation, journeys, passive checks,
+quality and ZAP; do not move it to individual measurement jobs. Out-of-band
+staging mutations are outside this boundary and must not bypass this
+coordination.
 
 This changes when staging evidence is required, not the pipeline or other
 merge/release gates. No red deterministic gate is waived, no pipeline skip/no-op

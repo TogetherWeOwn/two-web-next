@@ -304,9 +304,11 @@ binding isolation before any remote mutation.
    and its retained safeguards: staging is met by the automatic post-merge,
    pre-production staging/e2e/soak gate, not a pre-merge staging run or artifact
    equality. Production promotion still waits for qualification of the resulting
-   exact `main` SHA. A scope-skipped staging journey/passive job is not qualifying
-   evidence: follow the linked contract's post-merge manual-dispatch caveat rather
-   than claiming automatic eligibility. Any push requires a new exact-head confirmation.
+   exact `main` SHA. Staging journey/passive jobs run for every successful `main`
+   deployment, and a skipped job is never qualifying evidence. If default
+   promotion fails because the selected target equals live production while
+   current `main` differs, recover by explicit-SHA `workflow_dispatch` under the
+   linked contract, not by assuming automatic eligibility. Any push requires a new exact-head confirmation.
    When native review stages apply, the final-stage reviewer squash-merges the
    exact reviewed and confirmed head before closing the task; otherwise the
    author merges. Pin the merge to that SHA. Record the confirmation, pinned
@@ -710,15 +712,19 @@ After capture, `deploy-production` runs
 `node ci/production-deploy-gate.mjs --check-ancestry` from the trusted
 **workflow-head** checkout, before candidate checkout, migration checks or any
 promotion side effects. For `workflow_run`, `schedule`, and manual dispatch
-with an empty `sha`, live production must name a full 40-hex commit. Equality
-retains the existing clean no-op. Otherwise GitHub's exact-SHA
+with an empty `sha`, live production must name a full 40-hex commit. When the
+selected target is already live, the guard reads current `main` from GitHub.
+Equality is a clean no-op only if `main` is also live; a different `main` SHA or
+unreadable/invalid main identity fails the default run. The explicit-SHA
+`workflow_dispatch` recovery route stays available under its existing gates.
+When target and live differ, GitHub's exact-SHA
 `compare/<live>...<candidate>` must positively prove a forward descendant:
 `ahead`, positive integral `ahead_by`, zero `behind_by`, matching total count,
 and both base and merge-base equal to live. A behind or divergent candidate
 is a **refusal**, not a quiet no-op; missing, inconsistent, malformed or
 unavailable evidence also fails closed. No candidate checkout or downstream
 deployment runs after that refusal. The guard does not search for a different
-candidate or change staging skip policy.
+candidate; staging journey/passive jobs are never scope-skipped.
 
 After rollback-target capture, the same workflow-head guard runs again with
 `LIVE_SHA` bound to the **recorded rollback commit**, still before candidate

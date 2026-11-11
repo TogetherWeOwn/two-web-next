@@ -10,14 +10,10 @@ run-name: e2e-staging ${{ github.event.workflow_run.display_title || github.sha 
 # Blacksmith. QA_AUTH_TOKEN comes from the staging Environment secret and is
 # never printed; GitHub masks secrets in logs automatically. Browsers run here
 # in CI only, never on the controller.
-# Docs-only and test-only deploys (ci/change-scope.sh skip_e2e verdict,
-# mirrored from e2e.yml) skip the journeys below: prose that no gate, test or
-# build reads, and unit tests the journeys never execute, prove nothing about
-# the deployed Worker. There is no PR context here (workflow_run +
-# workflow_dispatch triggers), so the scope job diffs the deployed head SHA
-# against its parent instead of listing PR files. e2e-staging gates no merge
-# (required checks are ci-ok, gitleaks, e2e-ok and pr-lint), so a skip never
-# blocks anything.
+# Every successful main deploy runs journeys and passive ledgers, including
+# docs/test-only commits. Production needs exact-deployed-SHA evidence: a skip
+# cannot qualify a candidate, nor inherit a pass from an unproven runtime tree.
+# PR-only scope skipping in e2e.yml is unchanged.
 
 on:
   workflow_run:
@@ -28,38 +24,47 @@ on:
 permissions:
   contents: read
 
-# Share the deploy job's mutex for the whole qualification window. A newer
-# deploy can win the lock first; the identity observations then refuse the old
-# candidate. Rejected completion events must not evict a pending main deploy.
+# Hold the deploy job's lock for this entire workflow, not individual jobs:
+# staging cannot change between the revision check and any measurement. GitHub
+# does not promise FIFO; a newer deploy can win first, in which case scope
+# refuses the superseded candidate. Rejected events never replace a pending deploy.
 concurrency:
-  group: ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.head_repository.full_name == github.repository)) && 'deploy-staging' || format('e2e-staging-rejected-{0}', github.run_id) }}
+  group: >-
+    ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+         (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+          !startsWith(github.event.workflow_run.display_title, 'deploy ignored ') &&
+          github.event.workflow_run.head_branch == 'main' &&
+          github.event.workflow_run.head_repository.full_name == github.repository)) &&
+        'deploy-staging' || format('e2e-staging-ignored-{0}', github.run_id) }}
   cancel-in-progress: false
   queue: max
 
 jobs:
-  # Cheap change-scope gate (mirrors e2e.yml): a deploy whose head commit only
-  # touches prose (`docs/**`, root `*.md`) that no gate, test or build reads,
-  # or only the `test/` unit tree the journeys never execute, fast-passes the
-  # journeys below instead of occupying a runner for 25 minutes. Manual
-  # dispatches always run the journeys. ci/change-scope.sh fails closed:
-  # every other path resolves to skip_e2e=false.
+  # Retain scope classification for diagnostics and fail closed if it fails.
+  # Its skip_e2e verdict never skips deployed-Worker qualification: journeys
+  # and passive ledgers below run even for docs/test-only deployments.
   scope:
     name: scope
+    permissions:
+      contents: read
+      actions: read
     if: >-
       (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+       !startsWith(github.event.workflow_run.display_title, 'deploy ignored ') &&
        github.event.workflow_run.head_branch == 'main' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     outputs:
-      sha: ${{ steps.candidate.outputs.sha }}
+      sha: ${{ steps.target.outputs.sha }}
       docs_only: ${{ steps.scope.outputs.docs_only }}
       skip_e2e: ${{ steps.scope.outputs.skip_e2e }}
     steps:
       # Resolve with trusted workflow code before checking out the candidate.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
+          # Resolve and verify with the workflow revision's trusted gate.
           ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
@@ -70,11 +75,16 @@ jobs:
         env:
           CANDIDATE_SHA: ${{ steps.candidate.outputs.sha }}
         run: git merge-base --is-ancestor "$CANDIDATE_SHA" origin/main
+      - id: target
+        run: node ci/staging-qualification.mjs
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
       # Diff the validated candidate as data; keep scope code on the trusted
       # workflow revision. Never execute candidate code in this privileged job.
       - id: scope
+        if: steps.target.outputs.sha != ''
         env:
-          HEAD_SHA: ${{ steps.candidate.outputs.sha }}
+          HEAD_SHA: ${{ steps.target.outputs.sha }}
           WORKFLOW_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
@@ -101,12 +111,14 @@ jobs:
   zap-baseline:
     needs: scope
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+      needs.scope.outputs.sha != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     uses: ./.github/workflows/zap-staging.yml
     with:
+      checkout_ref: ${{ needs.scope.outputs.sha }}
       candidate_sha: ${{ needs.scope.outputs.sha }}
 
   # Passive set for the promotion regression check (G1): bin/smoke.mjs and
@@ -120,10 +132,11 @@ jobs:
     name: staging-passive
     needs: scope
     if: >-
-      needs.scope.outputs.skip_e2e != 'true' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository))
+      needs.scope.outputs.sha != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
@@ -135,7 +148,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
-      # No caches in this job: it checks out the workflow_run head, so a
+      # No caches in this job: it checks out the deployed candidate, so a
       # cache write could poison the default branch (CodeQL cache-poisoning).
       - run: npm ci --include=dev --no-audit --no-fund
       - name: Install Chromium
@@ -159,6 +172,7 @@ jobs:
           # the ledgers, and this exit line is the log signal.
           echo "staging guest journeys exit $?"
         env:
+          DEPLOYED_SHA: ${{ needs.scope.outputs.sha }}
           WATCH_ORIGIN: https://next.togetherweown.com
           PLAYWRIGHT_JSON_OUTPUT_FILE: passive/journeys.json
           # Both sides skip the dead-letter gate: retained queue_failed_jobs
@@ -184,10 +198,11 @@ jobs:
     name: staging-journeys
     needs: scope
     if: >-
-      needs.scope.outputs.skip_e2e != 'true' && ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository))
+      needs.scope.outputs.sha != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     runs-on: ubuntu-latest
     timeout-minutes: 25
     environment:
@@ -202,6 +217,7 @@ jobs:
         with:
           node-version: 24
           package-manager-cache: false
+      # Candidate checkers must not write default-branch caches.
       - run: npm ci --include=dev --no-audit --no-fund
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
@@ -282,11 +298,29 @@ jobs:
     name: staging-quality
     needs: scope
     if: >-
-      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
-      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
-       github.event.workflow_run.head_branch == 'main' &&
-       github.event.workflow_run.head_repository.full_name == github.repository)
+      needs.scope.outputs.sha != '' &&
+      (github.event_name == 'workflow_dispatch' ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_branch == 'main' &&
+        github.event.workflow_run.head_repository.full_name == github.repository))
     uses: ./.github/workflows/web-quality-origin.yml
     with:
       origin: https://next.togetherweown.com
+      checkout_ref: ${{ needs.scope.outputs.sha }}
       candidate_sha: ${{ needs.scope.outputs.sha }}
+
+  qualification-revision:
+    needs: [scope, zap-baseline, staging-passive, staging-journeys, staging-quality]
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      # Retain the lock through the final identity check. A failed job or
+      # identity check keeps the run red, so none of its evidence qualifies.
+      - name: Verify qualification revision
+        run: node ci/staging-qualification.mjs --verify
+        env:
+          DEPLOYED_SHA: ${{ needs.scope.outputs.sha }}

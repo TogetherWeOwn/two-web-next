@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { test } from "node:test";
@@ -21,6 +21,13 @@ import {
   stagingSoakSample,
   sumScriptErrors,
 } from "./production-deploy-gate.mjs";
+import {
+  qualificationDeployment,
+  qualificationTarget,
+  requireQualificationRevision,
+} from "./staging-qualification.mjs";
+import { isRedStagingRun, resolvePromotionSha } from "./resolve-promotion-sha.mjs";
+import { runInNewContext } from "node:vm";
 
 const SHA = "a".repeat(40);
 const ACCOUNT = "0123456789abcdef0123456789abcdef";
@@ -537,7 +544,8 @@ test("e2e-staging records the passive set for every promotable deploy", () => {
     workflow.indexOf("\n  staging-passive:\n"),
     workflow.indexOf("\n  staging-journeys:\n"),
   );
-  assert.match(job, /needs\.scope\.outputs\.skip_e2e != 'true'/);
+  assert.doesNotMatch(job, /needs\.scope\.outputs\.skip_e2e/);
+  assert.match(job, /needs: scope\n/);
   assert.match(job, /ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/);
   assert.match(
     job,
@@ -553,10 +561,647 @@ test("e2e-staging records the passive set for every promotable deploy", () => {
   assert.match(job, /SMOKE_ALLOW_MISSING_BASELINE: "1"/);
   assert.match(job, /name: staging-passive-ledger-\$\{\{ github\.run_id \}\}/);
   assert.ok(!/secrets\./.test(job), "the passive set needs no secrets");
-  // The job checks out the workflow_run head, so it must not write caches
+  // The job checks out the deployed candidate, so it must not write caches
   // (CodeQL cache-poisoning): no setup-node npm cache, no actions/cache.
   assert.ok(!/cache: npm/.test(job), "the passive set must not use the npm cache");
   assert.ok(!/uses: actions\/cache@/.test(job), "the passive set must not write caches");
+});
+
+function qualificationContext() {
+  return {
+    eventName: "workflow_run",
+    repository: "fixture/repo",
+    ref: "refs/heads/main",
+    sha: "c".repeat(40),
+    event: {
+      repository: { full_name: "fixture/repo" },
+      workflow_run: {
+        id: 123,
+        run_attempt: 1,
+        event: "workflow_run",
+        path: ".github/workflows/deploy.yml",
+        status: "completed",
+        conclusion: "success",
+        head_branch: "main",
+        head_repository: { full_name: "fixture/repo" },
+        head_sha: "b".repeat(40),
+        display_title: `deploy ${SHA}`,
+      },
+    },
+  };
+}
+
+const revisionOptions = (commit) => ({
+  log: () => {},
+  fetchImpl: async (url, init) => {
+    assert.equal(String(url), "https://next.togetherweown.com/up");
+    assert.equal(init.redirect, "manual");
+    return { json: async () => ({ revision: { version_id: VERSION, commit } }) };
+  },
+});
+
+const deployedJob = (overrides = {}) => ({
+  name: "deploy-staging",
+  status: "completed",
+  conclusion: "success",
+  steps: ["Deploy to Cloudflare Workers", "Verify deployed revision"].map((name) => ({
+    name,
+    conclusion: "success",
+  })),
+  ...overrides,
+});
+const deploymentOptions = (jobs) => ({
+  token: "fixture",
+  fetchImpl: async (url, init) => {
+    assert.equal(
+      String(url),
+      "https://api.github.com/repos/fixture/repo/actions/runs/123/attempts/1/jobs?per_page=100",
+    );
+    assert.equal(init.redirect, "error");
+    return { ok: true, json: async () => ({ total_count: jobs.length, jobs }) };
+  },
+});
+
+function jobCondition(workflow, job) {
+  const body = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [\w-]+:\n/)[0];
+  return body.match(/\n {4}if: >-\n((?: {6}[^\n]+\n)+)/)?.[1].trim();
+}
+
+test("nondeploying CI completions never poison later genuine qualification of the same SHA", async () => {
+  const deploy = read("../.github/workflows/deploy.yml");
+  const workflow = read("../.github/workflows/e2e-staging.yml");
+  const condition = jobCondition(deploy, "deploy-staging");
+  const title = deploy
+    .match(/run-name: >-\n([\s\S]*?)\n\n/)[1]
+    .trim()
+    .slice(3, -2)
+    .trim();
+  const format = (template, value) => template.replace("{0}", value);
+  const startsWith = (value, prefix) => value.startsWith(prefix);
+  const ignoredRuns = [];
+  for (const [index, ciEvent] of ["schedule", "workflow_dispatch"].entries()) {
+    // Derive the skipped deployment from the real trigger/job admission, not
+    // an assumed equivalence between outer workflow success and a deployment.
+    assert.match(deploy, /workflows: \[ci\]/);
+    const github = {
+      event_name: "workflow_run",
+      repository: "fixture/repo",
+      event: {
+        workflow_run: {
+          event: ciEvent,
+          head_branch: "main",
+          conclusion: "success",
+          head_repository: { full_name: "fixture/repo" },
+        },
+      },
+    };
+    assert.equal(runInNewContext(condition, { github }), false);
+    const ignoredTitle = runInNewContext(title, { github: { ...github, run_id: 123 }, format });
+    assert.equal(ignoredTitle, "deploy ignored 123");
+    assert.equal(
+      runInNewContext(jobCondition(workflow, "scope"), {
+        github: {
+          ...github,
+          event: {
+            workflow_run: {
+              ...qualificationContext().event.workflow_run,
+              display_title: ignoredTitle,
+            },
+          },
+        },
+        startsWith,
+      }),
+      false,
+      "known nondeployments are excluded before API or live revision reads",
+    );
+    const admittedGithub = {
+      ...github,
+      event: {
+        workflow_run: {
+          ...github.event.workflow_run,
+          event: "push",
+          head_sha: SHA,
+        },
+      },
+    };
+    assert.equal(runInNewContext(condition, { github: admittedGithub }), true);
+    assert.equal(runInNewContext(title, { github: admittedGithub, format }), `deploy ${SHA}`);
+    // Legacy deploy titles still need executed-job admission as a second guard.
+    const sha = await qualificationDeployment(
+      qualificationContext(),
+      deploymentOptions([deployedJob({ conclusion: "skipped", steps: [] })]),
+    );
+    assert.equal(sha, null);
+    // Follow actual job conditions: every measurement skips with empty sha.
+    for (const job of ["staging-journeys", "staging-passive", "staging-quality", "zap-baseline"]) {
+      assert.equal(
+        runInNewContext(jobCondition(workflow, job), {
+          github: { ...github, event: { workflow_run: qualificationContext().event.workflow_run } },
+          needs: { scope: { outputs: { sha: sha ?? "" } } },
+        }),
+        false,
+        job,
+      );
+    }
+    const run = e2eRun(10 + index, { run_attempt: 1, conclusion: "success" });
+    assert.equal(isRedStagingRun(run), false, "a nondeployment is not a failed staging candidate");
+    ignoredRuns.push(run);
+  }
+  const sha = await qualificationDeployment(
+    qualificationContext(),
+    deploymentOptions([deployedJob()]),
+  );
+  assert.equal(sha, SHA);
+  await requireQualificationRevision(sha, revisionOptions(sha));
+  const jobs = [
+    { name: "staging-journeys", conclusion: "success" },
+    {
+      name: "staging-quality / quality",
+      conclusion: "success",
+      steps: [
+        "Lighthouse performance budgets (mobile, ci/lighthouserc.cjs)",
+        "Lighthouse quality scores (desktop, categories vs ci/quality-budget.json)",
+      ].map((name) => ({ name, conclusion: "success" })),
+    },
+    {
+      name: "qualification-revision",
+      conclusion: "success",
+      steps: [{ name: "Verify qualification revision", conclusion: "success" }],
+    },
+  ];
+  const runs = [
+    e2eRun(20, { run_attempt: 1, conclusion: "success", updated_at: "2026-01-01T00:00:00Z" }),
+    ...ignoredRuns,
+  ];
+  assert.equal(
+    await resolvePromotionSha({
+      repository: "fixture/repo",
+      token: "fixture",
+      fetchImpl: async (url) => {
+        const path = new URL(url).pathname;
+        if (path.endsWith(`/commits/${SHA}`))
+          return {
+            ok: true,
+            json: async () => ({ commit: { committer: { date: "2026-01-01T00:00:00Z" } } }),
+          };
+        if (path.endsWith("/actions/workflows/e2e-staging.yml/runs"))
+          return { ok: true, json: async () => ({ workflow_runs: runs }) };
+        assert.ok(path.endsWith("/actions/runs/20/jobs"));
+        return { ok: true, json: async () => ({ jobs }) };
+      },
+    }),
+    SHA,
+  );
+  const scope = workflow.split("\n  scope:\n")[1].split("\n  zap-baseline:\n")[0];
+  assert.match(scope, /if: steps\.target\.outputs\.sha != ''/);
+  assert.match(scope, /actions: read/);
+  assert.match(scope, /GITHUB_TOKEN: \$\{\{ github\.token \}\}/);
+  const final = workflow.split("\n  qualification-revision:\n")[1];
+  assert.doesNotMatch(final, /\n {4}if:|continue-on-error/);
+});
+
+test("qualification CLI ignores an all-skipped deploy without reading the older live revision", () => {
+  const dir = mkdtempSync(join(tmpdir(), "qualification-ignored-"));
+  try {
+    const event = join(dir, "event.json");
+    const output = join(dir, "output");
+    writeFileSync(event, JSON.stringify(qualificationContext().event));
+    const result = spawnSync(
+      process.execPath,
+      ["--import", "./ci/test-fetch-stub.mjs", "ci/staging-qualification.mjs"],
+      {
+        encoding: "utf8",
+        timeout: 10_000,
+        env: {
+          ...process.env,
+          GITHUB_EVENT_NAME: "workflow_run",
+          GITHUB_EVENT_PATH: event,
+          GITHUB_REPOSITORY: "fixture/repo",
+          GITHUB_REF: "refs/heads/main",
+          GITHUB_SHA: SHA,
+          GITHUB_TOKEN: "fixture",
+          GITHUB_OUTPUT: output,
+          FETCH_STUB_JSON: JSON.stringify([
+            {
+              match: "/actions/runs/123/attempts/1/jobs",
+              body: { total_count: 1, jobs: [deployedJob({ conclusion: "skipped", steps: [] })] },
+            },
+          ]),
+        },
+      },
+    );
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(readFileSync(output, "utf8"), "sha=\n");
+    assert.match(result.stdout, /No executed staging deployment/);
+    assert.doesNotMatch(result.stdout, /revision verified/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("deployment admission enforces complete inventories at the 100-job boundary", async () => {
+  const jobs = [
+    deployedJob(),
+    ...Array.from({ length: 99 }, (_, index) => ({
+      name: `other-${index}`,
+      status: "completed",
+      conclusion: "success",
+    })),
+  ];
+  assert.equal(jobs.length, 100);
+  assert.equal(
+    await qualificationDeployment(qualificationContext(), deploymentOptions(jobs)),
+    SHA,
+    "a complete 100-job inventory must qualify",
+  );
+  const oversized = [...jobs, { name: "other-99", status: "completed", conclusion: "success" }];
+  assert.equal(oversized.length, 101);
+  await assert.rejects(
+    qualificationDeployment(qualificationContext(), deploymentOptions(oversized)),
+    /Incomplete staging deploy job evidence/,
+  );
+  for (const body of [
+    {},
+    { total_count: 1, jobs: null },
+    { total_count: 1, jobs: {} },
+    { total_count: "100", jobs },
+    { total_count: 101, jobs },
+    { total_count: 99, jobs },
+  ]) {
+    await assert.rejects(
+      qualificationDeployment(qualificationContext(), {
+        token: "fixture",
+        fetchImpl: async () => ({ ok: true, json: async () => body }),
+      }),
+      /Incomplete staging deploy job evidence/,
+    );
+  }
+});
+
+test("deployment admission refuses missing ambiguous or unexecuted deployment evidence", async () => {
+  for (const jobs of [
+    [],
+    [deployedJob(), deployedJob()],
+    [deployedJob({ status: "in_progress" })],
+    [deployedJob({ conclusion: "failure" })],
+    [deployedJob({ steps: [] })],
+    [deployedJob({ steps: [{ name: "Deploy to Cloudflare Workers", conclusion: "skipped" }] })],
+  ]) {
+    await assert.rejects(
+      qualificationDeployment(qualificationContext(), deploymentOptions(jobs)),
+      /deploy/i,
+    );
+  }
+  await assert.rejects(
+    qualificationDeployment(qualificationContext(), {
+      token: "fixture",
+      fetchImpl: async () => ({ ok: false, status: 503 }),
+    }),
+    /HTTP 503/,
+  );
+  await assert.rejects(
+    qualificationDeployment(qualificationContext(), {
+      token: "fixture",
+      fetchImpl: async () => ({
+        ok: true,
+        json: async () => ({ total_count: 2, jobs: [deployedJob()] }),
+      }),
+    }),
+    /Incomplete/,
+  );
+});
+
+test("staging scope classifies the deployed diff without executing candidate scripts", () => {
+  const workflow = read("../.github/workflows/e2e-staging.yml");
+  const scope = workflow.split("\n  scope:\n")[1].split("\n  zap-baseline:\n")[0];
+  assert.equal((scope.match(/uses: actions\/checkout@/g) ?? []).length, 1);
+  assert.match(scope, /ref: \$\{\{ github\.sha \}\}\n {10}fetch-depth: 0/);
+  assert.doesNotMatch(scope, /ref: \$\{\{ steps\.target\.outputs\.sha \}\}/);
+  assert.match(scope, /HEAD_SHA: \$\{\{ steps\.target\.outputs\.sha \}\}/);
+  assert.match(scope, /git diff --name-status -M "\$HEAD_SHA~1" "\$HEAD_SHA"/);
+  assert.match(scope, /bash ci\/change-scope\.sh "\$RUNNER_TEMP\/deployed-files\.tsv"/);
+});
+
+test("staging qualification preserves the deployed SHA through checker checkout and ledger consumption", async () => {
+  const workflow = read("../.github/workflows/e2e-staging.yml");
+  assert.match(workflow, /sha: \$\{\{ steps\.target\.outputs\.sha \}\}/);
+  assert.match(workflow, /run: node ci\/staging-qualification\.mjs\n/);
+  assert.doesNotMatch(workflow, /workflow_run\.head_sha/);
+  assert.match(workflow, /HEAD_SHA: \$\{\{ steps\.target\.outputs\.sha \}\}/);
+  const passive = workflow.split("\n  staging-passive:\n")[1].split("\n  staging-journeys:\n")[0];
+  assert.match(passive, /ref: \$\{\{ needs\.scope\.outputs\.sha \}\}/);
+  assert.match(passive, /DEPLOYED_SHA: \$\{\{ needs\.scope\.outputs\.sha \}\}/);
+  const target = qualificationTarget(qualificationContext());
+  assert.equal(
+    target,
+    SHA,
+    "CI/deployed A, deploy API head B, and e2e API head C must still qualify A",
+  );
+  await requireQualificationRevision(target, revisionOptions(target));
+  // The workflow's commit-file writer is the validated identity observer
+  // (ci/staging-provenance.mjs writes passive/commit only after the served
+  // identity matches); its offline behavior is covered by the provenance
+  // selftest, so simulate its successful output here and feed that identity
+  // through the production artifact reader rather than just resolver selection.
+  assert.match(
+    passive,
+    /run: node ci\/staging-provenance\.mjs observe "\$CANDIDATE_SHA" after passive\/identity passive\/commit/,
+  );
+  const dir = mkdtempSync(join(tmpdir(), "qualification-"));
+  mkdirSync(join(dir, "passive"));
+  writeFileSync(join(dir, "passive/commit"), `${target}\n`);
+  assert.deepEqual(
+    await fetchLedgers({
+      runs: [e2eRun(9, { head_sha: "c".repeat(40) })],
+      artifacts: [{ id: 77, name: "staging-passive-ledger-9", expired: false }],
+      commit: readFileSync(join(dir, "passive/commit"), "utf8").trim(),
+    }),
+    { runId: 9, artifactId: 77 },
+  );
+});
+
+test("staging qualification refuses A after B replaces it and locks every measurement against deploys", async () => {
+  const workflow = read("../.github/workflows/e2e-staging.yml");
+  const deploy = read("../.github/workflows/deploy.yml");
+  assert.match(
+    deploy,
+    /concurrency:\n {6}group: deploy-staging\n {6}cancel-in-progress: false\n {6}queue: max\n/,
+  );
+  assert.match(workflow, /concurrency:\n[\s\S]*?group: >-\n[\s\S]*?'deploy-staging'/);
+  assert.match(workflow, /^ {2}cancel-in-progress: false\n {2}queue: max\n/m);
+  for (const job of ["zap-baseline", "staging-passive", "staging-journeys", "staging-quality"]) {
+    const body = workflow.split(`\n  ${job}:\n`)[1].split(/\n  [\w-]+:\n/)[0];
+    assert.match(body, /needs: scope\n/, `${job} must await the under-lock identity check`);
+    assert.match(body, /(?:ref|checkout_ref): \$\{\{ needs\.scope\.outputs\.sha \}\}/);
+  }
+  assert.match(
+    workflow,
+    /needs: \[scope, zap-baseline, staging-passive, staging-journeys, staging-quality\]/,
+  );
+  assert.match(workflow, /run: node ci\/staging-qualification\.mjs --verify/);
+  const target = qualificationTarget(qualificationContext());
+  await requireQualificationRevision(target, revisionOptions(SHA));
+  await assert.rejects(
+    requireQualificationRevision(target, revisionOptions("b".repeat(40))),
+    /expected a{40}/,
+  );
+  // An unreadable/malformed marker must fail, not credit B's healthy pages.
+  await assert.rejects(
+    requireQualificationRevision(target, revisionOptions(null)),
+    /expected a{40}/,
+  );
+  await assert.rejects(
+    requireQualificationRevision(target, {
+      log: () => {},
+      fetchImpl: async () => {
+        throw new Error("offline");
+      },
+    }),
+    /request failed/,
+  );
+});
+
+test("qualification target refuses malformed or foreign deploy identities and non-main dispatches", () => {
+  for (const patch of [
+    { display_title: `deploy ${SHA} extra` },
+    { display_title: null },
+    { display_title: `deploy ${"A".repeat(40)}` },
+    { conclusion: "failure" },
+    { head_branch: "feature" },
+    { path: ".github/workflows/ci.yml" },
+    { head_repository: { full_name: "other/repo" } },
+    { event: "pull_request" },
+  ]) {
+    const context = qualificationContext();
+    Object.assign(context.event.workflow_run, patch);
+    assert.throws(() => qualificationTarget(context));
+  }
+  const manual = { ...qualificationContext(), eventName: "workflow_dispatch", sha: SHA };
+  assert.equal(qualificationTarget(manual), SHA);
+  assert.throws(() => qualificationTarget({ ...manual, ref: "refs/heads/feature" }), /main-only/);
+  assert.throws(() => qualificationTarget({ ...manual, sha: "bad" }), /Invalid deployed/);
+  assert.throws(() => qualificationTarget({ ...manual, repository: "other/repo" }), /repository/);
+  assert.throws(() => qualificationTarget({ ...manual, eventName: "push" }), /Unsupported/);
+});
+
+// Offline model of GitHub's documented concurrency queue semantics. It is a
+// deterministic specification fixture, not an observation of live behavior.
+// One group runs at most one entrant. `queue: single` (the default) keeps one
+// pending entrant and cancels the older pending one when another arrives.
+// `queue: max` keeps up to `limit` pending entrants (this illustrative trace pops from
+// the front; it does not claim GitHub guarantees FIFO order) and
+// cancels the NEW arrival once the queue is full. A running entrant is never
+// cancelled while cancel-in-progress is false.
+function concurrencyGroup({ queue = "single", limit = 100 } = {}) {
+  const state = { running: null, pending: [], cancelled: [], mutations: [] };
+  const promote = () => {
+    state.running = state.pending.shift() ?? null;
+  };
+  return {
+    state,
+    arrive(entrant) {
+      if (!state.running) {
+        state.running = entrant;
+      } else if (queue === "max") {
+        if (state.pending.length >= limit) state.cancelled.push(entrant);
+        else state.pending.push(entrant);
+      } else {
+        if (state.pending.length) state.cancelled.push(state.pending.pop());
+        state.pending.push(entrant);
+      }
+    },
+    // Only the entrant holding the group may mutate staging.
+    mutate(entrant) {
+      if (state.running !== entrant) return false;
+      state.mutations.push(entrant);
+      return true;
+    },
+    finish() {
+      promote();
+    },
+  };
+}
+
+test("model: default single queue lets qualification A displace pending deploy B", () => {
+  const group = concurrencyGroup();
+  group.arrive("deploy-running");
+  group.arrive("deploy-B");
+  group.arrive("qualification-A");
+  assert.deepEqual(group.state.cancelled, ["deploy-B"]);
+  assert.deepEqual(group.state.pending, ["qualification-A"]);
+});
+
+test("model: queue max retains pending B and a full queue cancels the new arrival", () => {
+  const group = concurrencyGroup({ queue: "max" });
+  group.arrive("deploy-running");
+  group.arrive("deploy-B");
+  group.arrive("qualification-A");
+  assert.deepEqual(group.state.cancelled, []);
+  assert.deepEqual(group.state.pending, ["deploy-B", "qualification-A"]);
+
+  const full = concurrencyGroup({ queue: "max" });
+  full.arrive("running");
+  for (let index = 0; index < 100; index += 1) full.arrive(`pending-${index}`);
+  assert.equal(full.state.pending.length, 100);
+  full.arrive("new-arrival");
+  assert.deepEqual(full.state.cancelled, ["new-arrival"]);
+  assert.equal(full.state.pending[0], "pending-0");
+  assert.equal(full.state.pending.length, 100);
+});
+
+test("model: A queued behind B fails the revision check instead of borrowing B", async () => {
+  const group = concurrencyGroup({ queue: "max" });
+  group.arrive("deploy-running");
+  group.arrive("deploy-B");
+  group.arrive("qualification-A");
+  group.finish();
+  assert.equal(group.state.running, "deploy-B");
+  group.finish();
+  assert.equal(group.state.running, "qualification-A");
+  // B deployed first, so staging now reports B's commit to A's lock.
+  await assert.rejects(
+    requireQualificationRevision(SHA, revisionOptions("b".repeat(40))),
+    /expected a{40}/,
+  );
+});
+
+test("model: B and a staging restore of A cannot mutate while A holds the whole-workflow lock", () => {
+  const group = concurrencyGroup({ queue: "max" });
+  group.arrive("qualification-A");
+  group.arrive("deploy-B");
+  group.arrive("restore-A");
+  assert.equal(group.mutate("deploy-B"), false);
+  assert.equal(group.mutate("restore-A"), false);
+  assert.deepEqual(group.state.mutations, []);
+  group.finish();
+  assert.equal(group.mutate("deploy-B"), true);
+  assert.equal(group.mutate("restore-A"), false);
+});
+
+// Every managed entrant of the shared staging group must queue and never cancel.
+function stagingEntrantViolations(files) {
+  const found = [];
+  for (const [label, text] of Object.entries(files)) {
+    for (const match of text.matchAll(/^( *)concurrency:\n((?:\1 {2}.*\n)+)/gm)) {
+      if (!match[2].includes("deploy-staging")) continue;
+      found.push({ label, ok: /cancel-in-progress: false\n\s+queue: max\n/.test(match[2]) });
+    }
+  }
+  return found;
+}
+
+test("every deploy-staging entrant sets cancel-in-progress false and queue max", () => {
+  const files = Object.fromEntries(
+    readdirSync(new URL("../.github/workflows/", import.meta.url))
+      .filter((name) => name.endsWith(".yml"))
+      .map((name) => [name, read(`../.github/workflows/${name}`)]),
+  );
+  const entrants = stagingEntrantViolations(files);
+  assert.deepEqual(entrants.map((entrant) => entrant.label).sort(), [
+    "deploy.yml",
+    "e2e-staging.yml",
+    "rollback-production.yml",
+    "staging-rollback-drill.yml",
+  ]);
+  assert.deepEqual(
+    entrants.filter((entrant) => !entrant.ok),
+    [],
+  );
+  // Control: an entrant left on the default queue is detected.
+  const defaulted = {
+    "fixture.yml":
+      "jobs:\n  x:\n    concurrency:\n      group: deploy-staging\n      cancel-in-progress: false\n    runs-on: x\n",
+  };
+  assert.deepEqual(stagingEntrantViolations(defaulted), [{ label: "fixture.yml", ok: false }]);
+});
+
+test("queue compatibility is tested by the blocking original-workflow linter and native CI smoke", () => {
+  const ci = read("../.github/workflows/ci.yml");
+  const build = read("./actionlint/build.sh");
+  const scope = ci.split("\n  scope:\n")[1].split("\n  queue-syntax-smoke:\n")[0];
+  assert.match(scope, /run: bash ci\/actionlint\/build\.sh/);
+  assert.match(build, /git -C "\$src" apply --check/);
+  assert.match(build, /test -count=1 -v \.\/\.\.\./);
+  assert.match(build, /\[\[ -d "\$src\/\.github\/workflows" && ! -e "\$src\/\.git" \]\]/);
+  assert.match(build, /mkdir "\$src\/\.git"/);
+  assert.match(build, /apply --check --verbose/);
+  assert.match(build, /'offset\|fuzz\|already applied'/);
+  assert.match(build, /HTTP fixture requires serial package tests/);
+  assert.match(build, /apply_patch test-harness\nrun_tests stock/);
+  assert.match(build, /run_tests stock\nsha256sum -c "\$work\/grammar\.sha256"\napply_patch queue/);
+  assert.match(build, /run_tests queue/);
+  assert.ok(
+    build.indexOf('build -trimpath -o "$work/stock-actionlint"') <
+      build.indexOf("apply_patch test-harness"),
+  );
+  const harness = read("./actionlint/test-harness.patch");
+  assert.deepEqual(
+    [...harness.matchAll(/^\+\+\+ b\/(.+)$/gm)].map((match) => match[1]),
+    [
+      "linter_test.go",
+      "testdata/format/test.sarif",
+      "scripts/generate-popular-actions/main_test.go",
+    ],
+  );
+  assert.match(harness, /debug\.ReadBuildInfo\(\)/);
+  assert.match(harness, /info\.Main\.Version != "\(devel\)"/);
+  assert.match(harness, /TestDetectAbsentReleaseNotFound/);
+  assert.ok(
+    harness.includes('stdout.String() != "No new release was found\\n" || stderr.Len() != 0'),
+  );
+  assert.match(build, /chmod -R u\+w "\$work\/modules"/);
+  assert.match(build, /\[\[ ! -e "\$work" \]\]/);
+  assert.match(build, /tee "\$work\/\$label-tests\.log" \|\| status=\$\?/);
+  assert.match(build, /return "\$status"/);
+  assert.match(harness, /t\.Cleanup\(func\(\)/);
+  assert.match(harness, /http\.DefaultTransport = previous/);
+  assert.match(harness, /req\.Method != http\.MethodHead/);
+  assert.doesNotMatch(harness, /^\+.*(?:t\.Skip|t\.Parallel|http\.DefaultClient)/m);
+  // No existing Go assertion or production implementation is removed.
+  assert.deepEqual(
+    harness.split("\n").filter((line) => line.startsWith("-") && !line.startsWith("---")),
+    ['-          "version": "",'],
+  );
+  assert.match(
+    build,
+    /node "\$root\/ci\/actionlint\/queue-cli\.mjs" "\$work\/stock-actionlint" "\$work\/actionlint"/,
+  );
+  assert.match(build, /"\$work\/actionlint" -shellcheck= -pyflakes=\n/);
+  assert.doesNotMatch(build, /-ignore|continue-on-error|\|\| true/);
+  const smoke = ci.split("\n  queue-syntax-smoke:\n")[1].split("\n  docs-links:\n")[0];
+  assert.doesNotMatch(smoke, /\n {4}if:/, "syntax smoke must execute on main CI too");
+  assert.match(
+    smoke,
+    /group: queue-syntax-\$\{\{ github\.run_id \}\}-\$\{\{ github\.run_attempt \}\}/,
+  );
+  assert.match(smoke, /cancel-in-progress: false\n {6}queue: max/);
+  assert.match(smoke, /permissions: \{\}/);
+  assert.match(smoke, /runs-on: ubuntu-latest/);
+  assert.doesNotMatch(smoke, /secrets\.|environment:|deploy-staging/);
+  const qualification = read("../.github/workflows/e2e-staging.yml");
+  const final = qualification.split("\n  qualification-revision:\n")[1];
+  assert.match(
+    final,
+    /needs: \[scope, zap-baseline, staging-passive, staging-journeys, staging-quality\]/,
+  );
+  // Implicit success() requires every measurement; cancellation, failure or a
+  // skipped dependency cannot schedule a successful final verification.
+  assert.doesNotMatch(final, /\n {4}if:|continue-on-error/);
+  assert.match(final, /run: node ci\/staging-qualification\.mjs --verify/);
+  assert.match(final, /DEPLOYED_SHA: \$\{\{ needs\.scope\.outputs\.sha \}\}/);
+});
+
+test("qualification target also refuses an incomplete deploy run and a truncated SHA title", () => {
+  for (const patch of [
+    { status: "in_progress" },
+    { status: undefined },
+    { display_title: `deploy ${SHA.slice(0, 39)}` },
+    { display_title: `deploy  ${SHA}` },
+  ]) {
+    const context = qualificationContext();
+    Object.assign(context.event.workflow_run, patch);
+    assert.throws(() => qualificationTarget(context));
+  }
 });
 
 test("watch config writes the journey ledger only when asked", () => {

@@ -4,7 +4,12 @@ import { mkdtempSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
-import { stagingQualityJob, stagingQualitySteps } from "./production-deploy-gate.mjs";
+import { runInNewContext } from "node:vm";
+import {
+  checkPromotionAncestry,
+  stagingQualityJob,
+  stagingQualitySteps,
+} from "./production-deploy-gate.mjs";
 import { resolvePromotionSha } from "./resolve-promotion-sha.mjs";
 
 const A = "a".repeat(40);
@@ -63,6 +68,17 @@ function stub(runs, jobs, { history = runs, committed = "2025-12-01T00:00:00Z" }
       const qualitySteps = "qualitySteps" in spec ? spec.qualitySteps : lhSteps([]);
       const qualityJobs = spec.qualityJobs ?? (quality ? 1 : 0);
       const list = [];
+      const binding = "binding" in spec ? spec.binding : "success";
+      const bindingJobs = spec.bindingJobs ?? (binding ? 1 : 0);
+      for (let i = 0; i < bindingJobs; i++) {
+        list.push({
+          name: "qualification-revision",
+          conclusion: binding,
+          steps: [
+            { name: "Verify qualification revision", conclusion: spec.bindingStep ?? "success" },
+          ],
+        });
+      }
       if (spec.journeys) list.push({ name: "staging-journeys", conclusion: spec.journeys });
       for (let i = 0; i < qualityJobs; i++) {
         list.push({ name: stagingQualityJob, conclusion: quality, steps: qualitySteps });
@@ -91,12 +107,146 @@ const resolve = (runs, jobs, nowMs, history) =>
     ...(nowMs ? { nowMs } : {}),
   });
 
+test("unbound historical green cannot qualify while a bound first-attempt green can", async () => {
+  const runs = [run(2, A)];
+  assert.equal(await resolve(runs, { 2: { journeys: "success", binding: null } }), null);
+  for (const patch of [
+    { binding: "skipped" },
+    { binding: "failure" },
+    { bindingJobs: 2 },
+    { bindingStep: "skipped" },
+  ]) {
+    assert.equal(await resolve(runs, { 2: { journeys: "success", ...patch } }), null);
+  }
+  assert.equal(await resolve(runs, { 2: "success" }), A);
+});
+
 test("promotes the deployed commit from the run-name, not the run's head_sha", async () => {
   assert.equal(await resolve([run(2, A)], { 2: "success" }), A);
 });
 
 test("skips a commit whose journeys were skipped and takes the newest verified one", async () => {
   assert.equal(await resolve([run(3, A), run(2, B)], { 3: "skipped", 2: "success" }), B);
+});
+
+// Recorded public run metadata, read 2026-11-07. Keep run identity, attempt,
+// deployed title SHA and API head_sha distinct; the latter is not evidence.
+const recordedRerun = {
+  id: 42301172423,
+  display_title: "e2e-staging deploy 9ee70484d02f0d07b12f7d4cf6f5c1efc5273bb0",
+  head_sha: "9ee70484d02f0d07b12f7d4cf6f5c1efc5273bb0",
+  status: "completed",
+  conclusion: "success",
+  run_attempt: 2,
+  updated_at: "2026-11-06T23:04:17Z",
+};
+const recordedSkipped = {
+  id: 42309290186,
+  display_title: "e2e-staging deploy 883466a687f80436169131166b8aabb9a5ab9008",
+  head_sha: "ad18c80547306f796348e987da9d117eee976af1",
+  status: "completed",
+  conclusion: "success",
+  run_attempt: 1,
+  updated_at: "2026-11-06T23:14:11Z",
+};
+const recordedNow = Date.parse("2026-11-07T01:00:00Z");
+
+test("recorded attempt-2 green remains red and blocks older candidates", async () => {
+  assert.equal(
+    await resolve(
+      [recordedRerun, run(1, B)],
+      {
+        42301172423: "success",
+        1: "success",
+      },
+      recordedNow,
+    ),
+    null,
+  );
+});
+
+test("recorded skipped journeys never qualify; falling back to live refuses newer main", async () => {
+  const older = { ...run(1, B), updated_at: "2026-11-06T20:00:00Z" };
+  const target = await resolve(
+    [recordedSkipped, older],
+    {
+      42309290186: "skipped",
+      1: "success",
+    },
+    recordedNow,
+  );
+  assert.equal(target, B);
+  await assert.rejects(
+    checkPromotionAncestry(
+      {
+        GITHUB_EVENT_NAME: "schedule",
+        GITHUB_REPOSITORY: "o/r",
+        GITHUB_TOKEN: "t",
+        DEPLOY_SHA: target,
+        LIVE_SHA: B,
+      },
+      {
+        fetchImpl: async () => ({
+          ok: true,
+          json: async () => ({ sha: recordedSkipped.head_sha }),
+        }),
+      },
+    ),
+    /Default promotion stalled:.*already live, but main is/,
+  );
+  // Counterfactual positive control: executing first-attempt journeys AND the
+  // final candidate-binding check qualifies the title SHA, not the API tip.
+  // The recorded historical run did not have that binding; none is inferred.
+  assert.equal(
+    await resolve([recordedSkipped, older], { 42309290186: "success", 1: "success" }, recordedNow),
+    "883466a687f80436169131166b8aabb9a5ab9008",
+  );
+});
+
+test("every successful main deploy runs journeys and passive ledgers regardless of scope", () => {
+  const workflow = readFileSync(
+    new URL("../.github/workflows/e2e-staging.yml", import.meta.url),
+    "utf8",
+  );
+  for (const name of ["staging-journeys", "staging-passive"]) {
+    const job = workflow.split(`\n  ${name}:\n`)[1]?.split(/\n  [a-z][a-z0-9-]*:\n/)[0];
+    assert.ok(job, name);
+    assert.match(job, /needs: scope\n/);
+    const condition = job.match(/    if: >-\n((?:      [^\n]+\n)+)/)?.[1].trim();
+    assert.ok(condition, `${name} must have an admission condition`);
+    assert.doesNotMatch(condition, /skip_e2e|docs_only/);
+    for (const skip of ["true", "false"]) {
+      for (const [event, conclusion, branch, repo, expected] of [
+        ["workflow_run", "success", "main", "o/r", true],
+        ["workflow_run", "failure", "main", "o/r", false],
+        ["workflow_run", "success", "topic", "o/r", false],
+        ["workflow_run", "success", "main", "fork/r", false],
+        ["push", "success", "main", "o/r", false],
+        ["workflow_dispatch", "", "", "", true],
+      ]) {
+        const github = {
+          event_name: event,
+          repository: "o/r",
+          event: {
+            workflow_run: {
+              conclusion,
+              head_branch: branch,
+              head_repository: { full_name: repo },
+            },
+          },
+        };
+        assert.equal(
+          runInNewContext(
+            condition,
+            { github, needs: { scope: { outputs: { skip_e2e: skip, sha: A } } } },
+            { timeout: 1000 },
+          ),
+          expected,
+          `${name}, scope skip=${skip}, ${event}/${conclusion}/${branch}/${repo}`,
+        );
+      }
+    }
+  }
 });
 
 test("a newer failed run of a commit is not outvoted by an older pass of the same commit", async () => {
@@ -178,7 +328,7 @@ test("deploy.yml and e2e-staging.yml run-names carry the deployed SHA", () => {
   );
   assert.match(
     deploy,
-    /^run-name: deploy \$\{\{ github\.event\.workflow_run\.head_sha \|\| github\.sha \}\}$/m,
+    /format\('deploy \{0\}', github\.event\.workflow_run\.head_sha \|\| github\.sha\)/,
   );
   assert.match(
     e2e,
@@ -738,6 +888,11 @@ function cliJobs(runId) {
     match: `/actions/runs/${runId}/jobs`,
     body: {
       jobs: [
+        {
+          name: "qualification-revision",
+          conclusion: "success",
+          steps: [{ name: "Verify qualification revision", conclusion: "success" }],
+        },
         { name: "staging-journeys", conclusion: "success" },
         {
           name: stagingQualityJob,

@@ -1,6 +1,13 @@
 name: deploy
-# The deployed commit, queryable later: workflow_run runs record main's tip as head_sha.
-run-name: deploy ${{ github.event.workflow_run.head_sha || github.sha }}
+# Only admitted deploy triggers carry a candidate title. Scheduled/manual CI
+# completions skip the deploy job and must never create candidate-red history.
+run-name: >-
+  ${{ ((github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+       (github.event_name == 'workflow_run' && github.event.workflow_run.event == 'push' &&
+        github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' &&
+        github.event.workflow_run.head_repository.full_name == github.repository)) &&
+      format('deploy {0}', github.event.workflow_run.head_sha || github.sha) ||
+      format('deploy ignored {0}', github.run_id) }}
 
 # Staging deploy after successful full CI on main. Production (togetherweown.com) is only
 # switched at cutover (plan TOG-9671, W16): there is deliberately no prod job here.
@@ -34,6 +41,8 @@ jobs:
        github.event.workflow_run.head_branch == 'main' && github.event.workflow_run.conclusion == 'success' &&
        github.event.workflow_run.head_repository.full_name == github.repository)
     # Rejected completion events must not replace a successful pending deploy.
+    # e2e-staging holds this same group for its entire qualification workflow,
+    # so no staging mutation can overlap candidate measurements.
     concurrency:
       group: deploy-staging
       cancel-in-progress: false
