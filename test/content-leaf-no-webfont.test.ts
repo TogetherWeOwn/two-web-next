@@ -13,8 +13,6 @@ const rulesOf = (css: string): Array<{ selector: string; body: string }> =>
     body: rule.slice(rule.indexOf("{") + 1, -1),
   }));
 
-// A display rule paints through the shared hook; the token definition itself
-// (--font-display: ...) is a custom property, not a font declaration.
 const isDisplayBody = (body: string): boolean =>
   body
     .split(";")

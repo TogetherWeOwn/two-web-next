@@ -133,8 +133,6 @@ describe("Kit content shell preloads no Mona Sans webfont", () => {
     const displayRules = rulesOf(LEAF_CRITICAL_CSS).filter(
       (rule) => !/^@font-face/.test(rule.selector) && isDisplayBody(rule.body),
     );
-    // Counted per target (selector): the minifier merges rules sharing a
-    // declaration once the guards are gone.
     const targets = displayRules.flatMap((rule) =>
       rule.selector.split(/,(?![^(]*\))/).map((part) => part.trim()),
     );

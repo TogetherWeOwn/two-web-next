@@ -5,11 +5,9 @@ import { describe, expect, it } from "vitest";
 // Typography acceptance: every Mona Sans stack in the four theme sheets
 // carries the metric-matched 'Mona Sans Fallback' directly after Mona Sans
 // (the theme.css position), every --font-display token definition carries the
-// fallback too (including the content-theme override, which carries 'Mona Sans
-// Content' first with the fallback second, and the generated
-// web/src/ember-theme.css; exactness against the vendored kit is gated by
-// ci/check-ember-token-sync.mjs), and no hardcoded hex lives in theme rules
-// outside the generated base role block.
+// fallback too (including the generated web/src/ember-theme.css; exactness
+// against the vendored kit is gated by ci/check-ember-token-sync.mjs), and no
+// hardcoded hex lives in theme rules outside the generated base role block.
 // theme.css is generated and minified: its display text rules use the shared
 // --font-display hook, which is expanded here so the stack counts still pin
 // the real family chain. Static pins only: no app, no database, no network.
@@ -56,9 +54,7 @@ const tokenDefinitions = (): string[] =>
     (css) => stripComments(css).match(TOKEN_DECLARATION) ?? [],
   );
 
-// The served hook value every var(--font-display) usage resolves to is the
-// base definition; the content-theme override re-points the same hook at the
-// optional content face, so it is read separately below.
+// Base and content themes resolve the display hook to different definitions.
 const hookDefinitions = (): string[] =>
   stripComments(sheet("theme.css")).match(TOKEN_DECLARATION) ?? [];
 
@@ -77,10 +73,7 @@ const contentHookValue = (): string => {
 };
 
 // Declarations that resolve to a Mona Sans stack: literal stacks plus usages
-// of the shared hook, expanded to the stack they resolve to. Counted per
-// declaration occurrence: once the content guards are gone the minifier merges
-// the text targets sharing `font-family: var(--font-display)` into one rule,
-// so the pinned counts below drop by one with no target lost.
+// of the shared hook, expanded to the stack they resolve to.
 const displayStacks = (css: string): string[] => {
   const hook = hookValue();
   return (stripFontFace(stripComments(css)).match(FONT_DECLARATION) ?? [])
@@ -101,10 +94,7 @@ describe("unified Mona Sans fallback stacks", () => {
     expect(violations).toEqual([]);
   });
 
-  // theme.css drops one declaration because the minifier merges the text
-  // targets that share `font-family: var(--font-display)` once the content
-  // guards are gone; all eight targets still paint through the hook (see the
-  // per-target pin in test/content-leaf-no-webfont.test.ts).
+  // Merged display declarations retain their targets; see the per-target pin.
   it.each([
     ["theme.css", 6],
     ["event-theme.css", 4],
@@ -120,7 +110,6 @@ describe("unified Mona Sans fallback stacks", () => {
       (count, entry) => count + displayStacks(sheet(entry)).length,
       0,
     );
-    // 15, not 16, for the same minifier merge as the theme.css count above.
     expect(total).toBeGreaterThanOrEqual(15);
   });
 });
@@ -134,8 +123,6 @@ describe("--font-display token", () => {
     // The hook is the kit literal plus the measured local fallback, inserted
     // by the generator; ci/check-ember-token-sync.mjs fails on any drift. A
     // definition without the fallback would swap to unadjusted system sans.
-    // The content-theme override carries the content face instead, with the
-    // same fallback second.
     for (const definition of tokenDefinitions()) {
       expect(definition).toMatch(UNIFIED_STACK_OR_CONTENT);
     }

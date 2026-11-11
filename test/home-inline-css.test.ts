@@ -72,6 +72,28 @@ describe("homepage inlined critical CSS", () => {
     expect(html).toMatch(/["']?Mona Sans Fallback["']?/);
   });
 
+  it("uses a bold local fallback for bold display text", () => {
+    const faces = [...LEAF_CRITICAL_CSS.matchAll(/@font-face\s*\{([^}]*)\}/g)]
+      .map((match) => match[1])
+      .filter((face) => /font-family:\s*["']?Mona Sans Fallback["']?\s*;/.test(face));
+    expect(faces).toHaveLength(2);
+    expect(faces[0]).toMatch(/font-weight:\s*200\s+500\s*;/);
+    expect(faces[1]).toMatch(/font-weight:\s*600\s+900\s*;/);
+    for (const name of [
+      "Arial Bold",
+      "Arial-BoldMT",
+      "Liberation Sans Bold",
+      "LiberationSans-Bold",
+      "Arimo Bold",
+      "Arimo-Bold",
+    ]) {
+      expect(faces[1]).toContain(name);
+    }
+    expect(faces[1]).toMatch(/size-adjust:\s*104\.48%/);
+    expect(faces[1]).toMatch(/ascent-override:\s*104\.33%/);
+    expect(faces[1]).toMatch(/descent-override:\s*30\.63%/);
+  });
+
   it("emits the Mona Sans preload before the inlined style block", async () => {
     // Staging forensics: the font was discovered at document-end + ~25 ms in
     // every mobile sample (the preload sat after ~19 KB of inline CSS), so the
