@@ -17,6 +17,13 @@
 #
 # When in doubt, leave a path unlisted (= sensitive). Do not broaden
 # low/ordinary to look productive; a small correct map beats a big wrong one.
+#
+# The pull request template's `risk_tier` attestation (T0 critical, T1
+# standard, T2 docs-only) is the existing author declaration and is separate
+# from this map's routing tier. A pull request touching `.github/**` is never
+# T2 and must declare T0 (declaring higher risk is allowed). The formal
+# low/ordinary/sensitive <-> T0/T1/T2 correspondence is a follow-up; it is not
+# defined by this file and must not be assumed.
 
 version: 1
 default_tier: sensitive # anything not matched below
@@ -29,9 +36,13 @@ tiers:
     - "CHANGELOG.md"
     - "CODE_OF_CONDUCT.md"
     - "ROADMAP.md"
+    # Docs copy only. Gate-input docs (parsed by CI scripts) are overridden
+    # to sensitive below: sensitive wins on overlap.
     - "docs/**/*.md"
     - "public/favicon.ico"
     - "public/og-1200x630.png"
+    # Inert asset types only. The sensitive tier overrides `public/**/*.svg`
+    # (served SVG is active content).
     - "public/fonts/**"
     - "public/icons/**"
     # Additive unit tests only. Content triggers still escalate weakened
@@ -74,6 +85,24 @@ tiers:
     - "playwright.*.config.ts"
     - "tier0/**"
     - "e2e/**"
+    # Docs that CI gates parse as inputs (enumerated by grepping ci/ for
+    # docs/*.md reads). They override the broad `docs/**/*.md` low glob
+    # above: an .md-only change here must not relax a gate at low tier.
+    - "docs/a11y-ci.md" # pinned a11y matrix counts
+    - "docs/ci-load-sensitive-tests.md" # timeout ledger
+    - "docs/config.md" # tail config inventory
+    - "docs/critical-journeys.md" # staging journey contract
+    - "docs/db-migrations.md" # migration inventory
+    - "docs/kit-parity-gates.md" # parity gate inputs
+    - "docs/machine-errors.md" # refusal-vocabulary check input
+    - "docs/machine-interface.md" # machine contract check input
+    - "docs/parity.md" # parity citation check input
+    - "docs/performance-budgets.md" # perf budget inputs
+    - "docs/quality-gates.md" # coverage/test inventory inputs
+    - "docs/runbook.md" # production runbook checks
+    - "docs/security-pin-contracts.md" # security pin contracts
+    - "docs/threat-model.md" # security pin inputs
+    - "docs/url-freeze.md" # cutover freeze list
     # Auth, session, OAuth, roles, and permission checks.
     - "src/auth/**"
     - "src/sessions.ts"
@@ -141,9 +170,11 @@ tiers:
     - "src/image-policy.ts"
     - "src/featured-policy.ts"
     # Served SVG assets. SVG is active content: script in a top-level
-    # navigation to an SVG served from the site origin executes there.
-    - "public/logo.svg"
-    - "public/favicon.svg"
+    # navigation to an SVG served from the site origin executes there. This
+    # blanket override beats the broader low asset globs above (sensitive
+    # wins on overlap), including future SVG files under public/icons and
+    # public/fonts.
+    - "public/**/*.svg"
     # Jobs and queue workers (infrastructure and side effects).
     - "src/jobs/**"
     - "src/jobs-worker.ts"
@@ -158,6 +189,9 @@ tiers:
     # vulnerability-reporting channel (and is the security.txt Policy target);
     # REVIEW.md governs reviewer behavior.
     - "AGENTS.md"
+    # Agent-instruction files at any depth (e.g. nested docs/**/AGENTS.md)
+    # are sensitive-floor, matching the root AGENTS.md above.
+    - "**/AGENTS.md"
     - "CONSTRAINTS.md"
     - "CONTRIBUTING.md"
     - "SECURITY.md"
