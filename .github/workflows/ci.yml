@@ -571,6 +571,9 @@ jobs:
         run: npm run deps:pins:selftest && npm run deps:pins
       - run: npm ci --no-audit --no-fund
         if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+      - name: Design-kit provenance and adapter drift
+        if: (needs.scope.outputs.docs_only != 'true' && needs.scope.outputs.draft != 'true')
+        run: npm run check:design-kit-drift:selftest && npm run check:design-kit-drift && npm run check:ember-sync:selftest && npm run check:ember-sync
       # The toolchain suite pins the declared browser-helper peer metadata;
       # this pins the installed half: the root proxy-agent pin must exist and
       # be the copy that resolves from the helper's context (the LHCI-nested

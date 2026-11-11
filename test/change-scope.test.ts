@@ -956,7 +956,7 @@ describe("changed-path fixture matrix", () => {
     "public/islands/rsvp-button.js",
     "public/styles.css",
     "public/event-theme.css",
-    "public/fonts/display-latin-700.woff2",
+    "public/fonts/mona-sans-latin-var.woff2",
     "public/icons/icon-192.png",
     "public/site.webmanifest",
     "public/logo.svg",

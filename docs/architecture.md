@@ -291,6 +291,7 @@ exactly once.
 | `src/discord-http.ts` | auth |
 | `src/discord-widget.ts` | join |
 | `src/discord.ts` | auth |
+| `src/ember-fallback-style.ts` | http-guard |
 | `src/env.ts` | entry |
 | `src/error-pages.tsx` | entry |
 | `src/error-registration.ts` | entry |

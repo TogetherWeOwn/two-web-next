@@ -46,12 +46,12 @@ function assertShell(html: string) {
     // Only "/" inlines among the homepage-theme shells (recovery/error shells
     // keep theme="home" without the flag and stay external). The inlined
     // block reuses the leaf bundle, so the hero rules must be present. The
-    // Display preload remains for an early font fetch; the Arial-metric
+    // Mona Sans preload remains for an early font fetch; the Arimo-metric
     // fallback reduces delayed-font layout shift.
     expect(html).toContain("base-theme homepage-theme");
     expect(html).toContain(".hero h1");
     expect(html).not.toContain('rel="stylesheet"');
-    expect(html).toContain('href="/fonts/display-latin-700.woff2" as="font"');
+    expect(html).toContain('href="/fonts/mona-sans-latin-var.woff2" as="font"');
   } else {
     expect(html).toContain('rel="stylesheet" href="/styles.css"');
   }
@@ -216,10 +216,10 @@ it("keeps event detail on its own theme, outside the schedule-only sheet", async
 
 it("keeps schedule layout in its own self-contained sheet", () => {
   const css = readFileSync(new URL("../public/schedule-theme.css", import.meta.url), "utf8");
-  // Tracks the authoritative raw ceiling in ci/budgets/bundle/schedule-theme.css.json (6144): the
-  // 6000 pin dated from #222 while approved slices grew the sheet (main alone
-  // is 5953). The budget gate still enforces raw+gzip independently.
-  expect(css.length).toBeLessThan(6144);
+  // Match the existing served-asset ceiling; the budget gate also checks gzip.
+  expect(Buffer.byteLength(css, "utf8")).toBeLessThan(6144);
+  expect(css).toMatch(/\.schedule-date\{[^}]*font-family:var\(--font-display\)/);
+  expect(css).toMatch(/\.schedule-date strong\{[^}]*white-space:nowrap/);
   expect(css).toContain("@media (max-width: 48rem)");
   expect(css).not.toMatch(/@import|https:\/\/|@font-face/);
   // Every rule stays scoped to the schedule main, never the shared chrome.
