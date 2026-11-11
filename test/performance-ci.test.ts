@@ -866,8 +866,8 @@ describe("performance CI", () => {
 
     expect(performanceGateIndex).toBeGreaterThan(-1);
     expect(ciOk).toContain("name: ci-ok");
-    expect(ciOk).toContain(
-      "needs: [a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope]",
+    expect(ciOk).toMatch(
+      /needs:\s+\[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope, bot-contract-drift\]/,
     );
     expect(ciOk).toContain("\n    if: ${{ !cancelled() }}\n");
     expect(performanceGate).toContain(`if: ${performanceGateCondition}`);
