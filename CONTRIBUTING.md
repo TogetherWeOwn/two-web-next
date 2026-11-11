@@ -264,6 +264,33 @@ with `GITLEAKS_VERSION`.
 
 ## Dependency security and static analysis
 
+The `public-pr-security` job in `ci.yml` calls the org's
+[public PR security reusable](https://github.com/TogetherWeOwn/.github/blob/feb1e0e2111da007f38ca75ee95c6f6944723d36/PUBLIC-PR-SECURITY.md)
+at its reviewed merge SHA. The caller runs **only on public `pull_request`
+events**, including drafts; push, schedule, manual, merge-group and private-repo
+runs do not scan. It shares CI's per-PR cancellation group. Job-local
+`actions: read`, `contents: read` and `security-events: write` permissions cover
+the nested OSV reusable; no secrets are inherited. Keeping the caller inside CI
+lets the existing required `ci-ok` aggregate its result without cross-workflow
+polling or a new required check. A failed, cancelled or unexpectedly skipped
+public-PR scan fails `ci-ok`; other events require the caller to be skipped.
+Existing CI jobs and reviewer requirements remain in place.
+
+The reusable compares new OSV vulnerabilities against the PR base, inventories
+vendored metadata, and audits all tracked workflows/actions with online zizmor
+and pinact comment verification. Go/Rust scanners run only when tracked manifests
+exist; an inapplicable skip is not an executed scan. Trusted docs-only detection
+may skip heavy scans, but inventory still runs. Missing evidence, scanner errors
+and findings fail closed. See the linked adoption guide for bounds, artifacts,
+vendored metadata and the upstream OSV container/timeout limitations.
+
+The existing weekly `github-actions` Dependabot entry maintains reusable/action
+pins separately from the npm entries. That update cadence is not a scheduled
+vulnerability scan; preserve its grouping and any cooldown policy when updating
+pins. Pin changes require source review and green installed CI evidence.
+`test/public-pr-security-ci.test.ts` covers caller permissions, immutable pin,
+strict aggregation (including malformed/missing results), and Dependabot wiring.
+
 The `check` job runs `npm run deps:audit:selftest` (local fixtures,
 including a loopback registry) and `npm run deps:audit` before installing
 dependencies. The audit reads every lockfile root (`package-lock.json` and

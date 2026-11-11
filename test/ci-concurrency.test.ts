@@ -152,7 +152,8 @@ const gates = [
   {
     gate: "ci-ok",
     block: jobBlock(ciText, "ci-ok"),
-    script: runScript,
+    script: (block: string) =>
+      runScript(block.split("- name: Aggregate change-gated conclusions")[1] ?? ""),
     env: ({ scope, downstream }: Results) => ({
       SCOPE_RESULT: scope,
       ...{ FULL: "true", APP: "true", WORKER: "true", DB: "true", DRAFT: "false" },

@@ -718,7 +718,7 @@ describe("ci heavy-job scope gates", () => {
   it("ci-ok aggregates every gated job and fails closed on scope", () => {
     const block = jobBlock("ci-ok");
     expect(block).toMatch(
-      /\n    needs: \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope\]\n/,
+      /\n    needs:\n      \[a11y, lighthouse, bundle-budget, docs-links, check, node22-compat, scope, public-pr-security\]\n/,
     );
     expect(block).toMatch(/\n    if: \$\{\{ !cancelled\(\) \}\}\n/);
     expect(block).toContain("SCOPE_RESULT: ${{ needs.scope.result }}");
@@ -749,7 +749,9 @@ describe("ci heavy-job scope gates", () => {
   });
 
   it("ci-ok rejects scope outputs that are not exactly true or false", () => {
-    const body = jobBlock("ci-ok").split("\n        run: |\n")[1] ?? "";
+    const aggregate =
+      jobBlock("ci-ok").split("- name: Aggregate change-gated conclusions")[1] ?? "";
+    const body = aggregate.split("\n        run: |\n")[1] ?? "";
     const script = body
       .split("\n")
       .map((line) => line.replace(/^ {10}/, ""))
