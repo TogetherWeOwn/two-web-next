@@ -73,6 +73,34 @@ describe("admin theme sheet", () => {
     expect(css).toContain('var(--font-data, "Fragment Mono", ui-monospace, monospace)');
   });
 
+  it("clears the browser chrome on button-styled buttons", () => {
+    // The frozen /styles.css `.btn` never resets border/font on <button>,
+    // so Save/Publish/Search/Create kept a bevelled UA outline and a
+    // small UA font while anchor .btn beside them did not. Clearing both
+    // makes the two primary actions render as one rank. Deleting either
+    // declaration must fail this test.
+    const css = read("public/admin-theme.css");
+    expect(css).toMatch(/\.kit-admin \.btn\{[^}]*border:0[^}]*font:inherit/);
+  });
+
+  it("keeps checkboxes and radios under their labels", () => {
+    // The frozen `.field input { width: 100% }` stretched the Published
+    // checkbox across the whole 34rem row, floating it far from its
+    // label. The override is width-only: label/control order is untouched.
+    const css = read("public/admin-theme.css");
+    expect(css).toMatch(
+      /\.kit-admin \.field :is\(input\[type=checkbox\],input\[type=radio\]\)\{width:auto\}/,
+    );
+  });
+
+  it("renders every timestamp in the kit data font", () => {
+    // The preview check time ("checked at ... (UTC)") is a bare <time>
+    // outside the tables, so a table-scoped `time` selector missed it.
+    // The data-font rule now matches `.kit-admin time` wholesale.
+    const css = read("public/admin-theme.css");
+    expect(css).toMatch(/\.kit-admin time\{font-family:/);
+  });
+
   it("scopes every rule under .kit-admin", () => {
     const css = read("public/admin-theme.css");
     const found = selectors(css);

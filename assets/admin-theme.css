@@ -119,6 +119,8 @@
 .kit-admin .btn {
   background: var(--ember);
   color: var(--on-accent);
+  border: 0;
+  font: inherit;
   border-radius: var(--radius-s, 6px);
 }
 .kit-admin .btn:hover {
@@ -148,6 +150,12 @@
 .kit-admin :is(input[type="checkbox"], input[type="radio"]) {
   accent-color: var(--ember);
 }
+/* The frozen /styles.css `.field input { width: 100% }` stretches the
+   checkbox across the whole row, floating it far from its label (the
+   Published toggle on the featured pages). Keep it under its label. */
+.kit-admin .field :is(input[type="checkbox"], input[type="radio"]) {
+  width: auto;
+}
 .kit-admin :is(.field .error, .error) {
   color: var(--danger);
 }
@@ -171,7 +179,7 @@
 .kit-admin code,
 .kit-admin .admin-chronology,
 .kit-admin .featured-window-bound,
-.kit-admin :is(.admin-table, .featured-table) time {
+.kit-admin time {
   font-family:
     var(--font-data, "Fragment Mono", ui-monospace, monospace);
 }
