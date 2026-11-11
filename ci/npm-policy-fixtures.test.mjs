@@ -7,9 +7,20 @@ import { test } from "node:test";
 import { jobPolicyProblems, runNpmFixtures } from "./npm-policy-fixtures.mjs";
 
 test("both policy settings must be exact", () => {
-  assert.deepEqual(jobPolicyProblems({ npm_config_ignore_scripts: "true", npm_config_min_release_age: "3" }), []);
-  assert.equal(jobPolicyProblems({ npm_config_ignore_scripts: "false", npm_config_min_release_age: "3" }).length, 1);
-  assert.equal(jobPolicyProblems({ npm_config_ignore_scripts: "true", npm_config_min_release_age: "0" }).length, 1);
+  assert.deepEqual(
+    jobPolicyProblems({ npm_config_ignore_scripts: "true", npm_config_min_release_age: "3" }),
+    [],
+  );
+  assert.equal(
+    jobPolicyProblems({ npm_config_ignore_scripts: "false", npm_config_min_release_age: "3" })
+      .length,
+    1,
+  );
+  assert.equal(
+    jobPolicyProblems({ npm_config_ignore_scripts: "true", npm_config_min_release_age: "0" })
+      .length,
+    1,
+  );
   assert.equal(jobPolicyProblems({}).length, 2);
 });
 

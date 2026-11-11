@@ -212,16 +212,11 @@ export async function runNpmFixtures({ log = console.log, env = process.env } = 
       /^\d+\.\d+\.\d+/.test(version) && compareVersions(version, MIN_NPM) >= 0,
       version,
     );
-    const cfg = async (key) =>
-      (await runNpm(["config", "get", key], scratch, probeEnv)).out.trim();
+    const cfg = async (key) => (await runNpm(["config", "get", key], scratch, probeEnv)).out.trim();
     const reportedAge = await cfg("min-release-age");
     const reportedScripts = await cfg("ignore-scripts");
     must("npm reports min-release-age=3", reportedAge === "3", reportedAge);
-    must(
-      "npm reports ignore-scripts=true",
-      reportedScripts === "true",
-      reportedScripts,
-    );
+    must("npm reports ignore-scripts=true", reportedScripts === "true", reportedScripts);
 
     // 2. enforcement: a config value alone is not proof.
     registry = await startRegistry(scratch, Date.now());
@@ -281,7 +276,6 @@ export async function runNpmFixtures({ log = console.log, env = process.env } = 
   }
   return { ok: checks.every((c) => c.ok), checks };
 }
-
 
 // Usage: node ci/npm-policy-fixtures.mjs <result.json>
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
