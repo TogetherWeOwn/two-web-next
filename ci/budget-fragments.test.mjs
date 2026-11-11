@@ -65,6 +65,7 @@ const SHIPPING_BUNDLE_BUDGETS = {
   "public/islands/attendees-live.js": { maxRawBytes: 5120, maxGzipBytes: 2048 },
   "public/styles.css": { maxRawBytes: 6144, maxGzipBytes: 2048 },
   "public/admin-rsvp-review.css": { maxRawBytes: 1024, maxGzipBytes: 512 },
+  "public/admin-theme.css": { maxRawBytes: 4608, maxGzipBytes: 1280 },
   "public/operator-overrides-theme.css": { maxRawBytes: 512, maxGzipBytes: 256 },
   "public/theme.css": { maxRawBytes: 15360, maxGzipBytes: 3584 },
   "public/theme-tokens.css": { maxRawBytes: 1536, maxGzipBytes: 512 },
@@ -219,9 +220,12 @@ const SHIPPING_SERVER_GZIP_ALLOCATIONS = [
 // tip after the 1232896 sizing: exact-head main CI measured `fe707a0ec`
 // at 1233211 raw (run 42954334978); the 1232896 step rejects by 315,
 // so one further 512 step is the least cover.
+// 1233920 admits the content display face leaf growth on top of that
+// (exact-head CI 1233453 raw, run 42985471999; the 1233408 step rejects
+// by 45, so one further 512 step is the least cover).
 const SHIPPING_SERVER_RAW_ALLOCATIONS = [
   1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440,
-  1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408,
+  1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920,
 ];
 // Admitted client.js [maxRawBytes, maxGzipBytes] pairs. 257024/103168 is the
 // SHIPPING_KIT_BUDGET baseline; 258048/103424 is the event-detail second step
@@ -265,7 +269,7 @@ function assertShippingKitBudget(actual, approvedClient) {
   const serverRaw = actual?.server?.js?.maxRawBytes;
   assert.ok(
     SHIPPING_SERVER_RAW_ALLOCATIONS.includes(serverRaw),
-    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440, 1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408`,
+    `unsupported server raw allocation ${String(serverRaw)}: expected one of 1203200, 1203968, 1205504, 1207040, 1207552, 1208064, 1209344, 1209856, 1211392, 1212416, 1213440, 1217024, 1217536, 1219584, 1220608, 1222656, 1228800, 1229312, 1232896, 1233408, 1233920`,
   );
   const clientJs = actual?.client?.js;
   const [maxRawBytes, maxGzipBytes] = approvedClient
