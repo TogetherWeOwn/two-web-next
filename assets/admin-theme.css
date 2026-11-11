@@ -120,7 +120,9 @@
   background: var(--ember);
   color: var(--on-accent);
   border: 0;
-  font: inherit;
+  font-family: inherit;
+  font-size: inherit;
+  line-height: inherit;
   border-radius: var(--radius-s, 6px);
 }
 .kit-admin .btn:hover {

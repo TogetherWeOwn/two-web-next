@@ -77,10 +77,16 @@ describe("admin theme sheet", () => {
     // The frozen /styles.css `.btn` never resets border/font on <button>,
     // so Save/Publish/Search/Create kept a bevelled UA outline and a
     // small UA font while anchor .btn beside them did not. Clearing both
-    // makes the two primary actions render as one rank. Deleting either
-    // declaration must fail this test.
+    // makes the two primary actions render as one rank. The font reset
+    // must not use the `font` shorthand: at (0,2,0) it beats the base
+    // `.btn{font-weight:700}` and drops every button to the inherited
+    // 400, so only family/size/line-height inherit and the bold weight
+    // from /styles.css survives. Deleting any declaration must fail here.
     const css = read("public/admin-theme.css");
-    expect(css).toMatch(/\.kit-admin \.btn\{[^}]*border:0[^}]*font:inherit/);
+    expect(css).toMatch(
+      /\.kit-admin \.btn\{[^}]*border:0[^}]*font-family:inherit;font-size:inherit;line-height:inherit/,
+    );
+    expect(css).not.toContain("font:inherit");
   });
 
   it("keeps checkboxes and radios under their labels", () => {
