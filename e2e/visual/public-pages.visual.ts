@@ -25,33 +25,50 @@ for (const [viewport, size] of VIEWPORTS) {
   for (const [name, path] of ROUTES) {
     test(`${name} @ ${viewport}`, async ({ page }) => {
       await page.setViewportSize(size);
+      // The content display face is font-display: optional: once fallback
+      // paints, a late-arriving face never swaps in, so any load-timing
+      // settle (scroll, fonts.load(), warm + reload + check()) still raced
+      // first paint on the long privacy page (8741px vs 8727px, five flakes
+      // in a row). The screenshot must prove the final brand rendering, so
+      // this suite serves the document with that one descriptor rewritten
+      // to swap in-test only (production CSS ships optional with no
+      // preload; the swap makes the end state — face metrics —
+      // deterministic). The rewrite is exact-match and fails loudly on
+      // content pages if the face signature ever changes.
+      const OPTIONAL_FACE =
+        "font-family:Mona Sans Content;font-weight:200 900;font-stretch:75% 125%;font-display:optional";
+      const SWAP_FACE = OPTIONAL_FACE.replace("optional", "swap");
+      let sawContentFace = false;
+      await page.route(/.*/, async (route) => {
+        if (route.request().resourceType() !== "document") {
+          await route.continue();
+          return;
+        }
+        const response = await route.fetch();
+        const html = await response.text();
+        if (html.includes(OPTIONAL_FACE)) {
+          sawContentFace = true;
+          await route.fulfill({ response, body: html.split(OPTIONAL_FACE).join(SWAP_FACE) });
+        } else {
+          await route.fulfill({ response, body: html });
+        }
+      });
       const response = await page.goto(path);
       expect(response?.status()).toBe(200);
       await page.waitForLoadState("networkidle");
-      // The content display face is font-display: optional: text painted with
-      // the fallback never swaps in a late-arriving face, so a cold load can
-      // paint headings twice (8741px vs 8727px on privacy-mobile; scrolling
-      // and document.fonts.load() alone did not settle it under load). Warm
-      // the face, then reload so the first paint of the settled document uses
-      // it, and require check() before capture: capture then always renders
-      // the loaded metrics.
       const isContentPage = await page.evaluate(() =>
         Boolean(document.querySelector(".content-theme")),
       );
-      if (isContentPage) {
-        await page.evaluate(async () => {
-          await Promise.all([
-            document.fonts.load('700 16px "Mona Sans Content"', "Privacy"),
-            document.fonts.load('400 16px "Mona Sans Content"', "Privacy"),
-          ]);
-        });
-        await page.reload({ waitUntil: "networkidle" });
-      }
+      if (isContentPage) expect(sawContentFace).toBe(true);
       await page.evaluate(async () => {
         window.scrollTo(0, document.documentElement.scrollHeight);
         await new Promise((resolve) => setTimeout(resolve, 50));
         window.scrollTo(0, 0);
         if (document.querySelector(".content-theme")) {
+          await Promise.all([
+            document.fonts.load('700 16px "Mona Sans Content"', "Privacy"),
+            document.fonts.load('400 16px "Mona Sans Content"', "Privacy"),
+          ]);
           const deadline = Date.now() + 10000;
           while (!document.fonts.check('700 16px "Mona Sans Content"')) {
             if (Date.now() > deadline) {
