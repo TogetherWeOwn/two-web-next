@@ -21,11 +21,10 @@ let {
   <meta name="robots" content="noindex, nofollow" />
   <link rel="stylesheet" href="/styles.css" />
   <link rel="stylesheet" href="/admin-rsvp-review.css" />
-  <link rel="stylesheet" href="/admin-theme.css" />
   <script src="/islands/auth-status.js" defer data-testid="auth-tab-sync"></script>
 </svelte:head>
 
-<div class="base-theme kit-admin">
+<div class="kit-admin">
 <a class="skip-link" href="#main">Skip to content</a>
 <header class="bar">
   <a class="brand" href="/admin">TWO admin</a>

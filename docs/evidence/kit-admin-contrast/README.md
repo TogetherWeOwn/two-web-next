@@ -83,15 +83,3 @@ fallback is serif; these are fixture evidence, not pinned-runner golden images.
   do not exercise these Kit admin leaves. The new built-runtime check runs after
   the Kit adapter build in CI and verifies eleven executed cases with a TAP guard.
   No masks, budgets or committed golden baselines change.
-
-## Follow-up: kit token alignment (admin theme sheet)
-
-A later slice aligns the Kit admin chrome with the pinned kit tokens through
-`/admin-theme.css` (`web/src/lib/AdminShell.svelte` links it after the Hono
-`/styles.css`), scoped under `.kit-admin` so Hono keeps its light palette.
-That slice fixes the recorded dashboard card-heading link concern above: the
-headings are now ember (`--color-ember`) links on raised cards
-(`--color-g2`) instead of the UA link color on light cards, and the
-dashboard's inline `currentColor` focus rule is removed so the kit focus
-ring applies there too. Because the shell is shared, the already Kit-served
-join-attempts pages take the same register; Hono sheets are untouched.

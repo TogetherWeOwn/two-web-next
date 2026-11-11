@@ -110,3 +110,8 @@ const outcomes = $derived(funnel ? Object.entries(funnel) : []);
 </section>
 </AdminShell>
 
+<style>
+  .admin-table-scroll:focus-visible {
+    outline-color: currentColor;
+  }
+</style>
