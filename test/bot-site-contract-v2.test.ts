@@ -3,25 +3,12 @@ import { readFileSync } from "node:fs";
 import { URL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// Pinned mirror of the canonical bot-site contract v2 fixture.
-//
-// Source of truth: two-bot `crates/core/tests/fixtures/bot-site-contract-v2.json`
-// (contract `docs/bot-site-contract.md` §2), published at canonical commit
-// `91e1bc5dc0c68e9fe8549d7adeae1b2f5b86f5d9` and merged unchanged, so this
-// file is copied byte-for-byte to `test/fixtures/bot-site-contract-v2.json`
-// and the SHA-256 below must equal the digest recorded on the bot card.
-// Any drift on either side fails one of the two CIs.
-//
-// Shape-only throughout: on this revision the site has no production parser
-// for `voice.snapshot`, `event.attendance.read` or `botlog.read` yet (there
-// is no `src/bot/attendance-read.ts` on `main`, and the widget parser in
-// `src/discord-widget.ts` parses `widget.json`, not this wire). The checks
-// below mirror the same fail-closed discipline those parsers must follow —
-// whole-payload shape, snowflake / Zulu / bound checks, correlated refusals,
-// opaque cursors — without claiming to call a parser that does not exist.
-// When a parser lands, replace the matching shape-only check with a real
-// parser call. The `implemented == false` pins for the five unlanded verbs
-// force exactly that tightening.
+// Byte-for-byte mirror of two-bot's `crates/core/tests/fixtures/bot-site-contract-v2.json`,
+// published at commit `91e1bc5dc0c68e9fe8549d7adeae1b2f5b86f5d9`.
+// CI also compares the mirror against the canonical fixture on bot main.
+// The site has no production parsers for these read-side payloads yet; these
+// are shape-only checks. Replace each with a real parser call when it lands.
+// The implementation flags below describe the fixture, not site parser availability.
 
 const FIXTURE_URL = new URL("./fixtures/bot-site-contract-v2.json", import.meta.url);
 const PINNED_SHA256 = "fcdf59304987b96c08b6243e4606cd49d2fa2a64abc7819d1cd831310c207d8f";
