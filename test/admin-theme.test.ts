@@ -51,8 +51,26 @@ describe("admin theme sheet", () => {
   });
 
   it("keeps the focused skip link legible on hover", () => {
+    // The generic anchor hover also excludes .btn: with only .skip-link
+    // excluded, the selector scores (0,3,1) and beats .btn:hover (0,3,0)
+    // on <a class="btn">, painting --accent-hi text on the --accent-hi
+    // button background. Editing the exclusion must fail here.
     const css = read("public/admin-theme.css");
-    expect(css).toContain(":not(.skip-link):hover");
+    expect(css).toContain(":not(.skip-link,.btn):hover");
+    expect(css).not.toContain(":not(.skip-link):hover");
+    expect(css).toContain(".btn:hover");
+  });
+
+  it("loads the kit data font face so timestamps render Fragment Mono", () => {
+    // The data-font variable alone does not render the kit face: admin
+    // pages link /styles.css, /admin-rsvp-review.css and this sheet only,
+    // never /theme.css which carries the Hono @font-face rules. Without
+    // this rule timestamps fall back to the system monospace. Deleting
+    // it must fail this test.
+    const css = read("public/admin-theme.css");
+    expect(css).toContain("@font-face{font-family:Fragment Mono");
+    expect(css).toContain("/fonts/fragment-mono-latin-400.woff2");
+    expect(css).toContain('var(--font-data, "Fragment Mono", ui-monospace, monospace)');
   });
 
   it("scopes every rule under .kit-admin", () => {
