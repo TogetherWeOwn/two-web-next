@@ -54,8 +54,7 @@ The repository rulesets enforce the following on `main`:
   deleted or force-pushed, only squash merges are allowed, and `ci-ok`,
   `gitleaks` and `e2e-ok` must pass on the exact head, and so must the two
   review app checks, CodeRabbit and Devin Review. No approving review is
-  required. `pr-size-gate` joins this list after the caller has reported on
-  the default branch (two-step ship; STANDARD.md).
+  required.
 
   The journeys count only through the aggregator in e2e.yml: it fails when the
   scope job fails or the browser journeys fail or are cancelled, and passes a
@@ -63,6 +62,9 @@ The repository rulesets enforce the following on `main`:
   draft.
 
 - `pr-conventions`: `pr-lint` must pass.
+
+The `pr-size-gate` job's check, `pr-size-gate / gate`, joins this list after
+the caller has reported on the default branch (two-step ship; STANDARD.md).
 
 Who merges: when native review stages apply, the final-stage reviewer
 squash-merges the exact reviewed head before closing the task; without a review
@@ -153,9 +155,12 @@ and fixtures. The labeller lives once in the org
 [TogetherWeOwn/.github](https://github.com/TogetherWeOwn/.github) repository
 (`CI-STANDARD.md`, "Advisory PR-size labels"); the workflow here is a thin
 caller pinned to a central SHA and passes only this repo's generated paths.
-This is advisory only: it is not a required check and never blocks a merge.
-A Monday run of the same workflow prints the weekly tally of merged pull
-requests per size; the labels are the durable record behind it.
+The labeller is advisory only: it is not a required check and never blocks a
+merge. The same workflow's `pr-size-gate` job is the required size gate
+(reported as `pr-size-gate / gate` once the ruleset requires it; see Branch
+protection and required checks above). A Monday run of the same workflow
+prints the weekly tally of merged pull requests per size; the labels are the
+durable record behind it.
 
 ### Change-gated CI and `ci-ok`
 
