@@ -28,14 +28,8 @@ tiers:
     - "README.md"
     - "CHANGELOG.md"
     - "CODE_OF_CONDUCT.md"
-    - "REVIEW.md"
     - "ROADMAP.md"
-    - "SECURITY.md"
     - "docs/**/*.md"
-    - "content/**/*.md"
-    - "src/privacy-content.ts" # GENERATED from content/privacy-policy-*.md
-    - "public/logo.svg"
-    - "public/favicon.svg"
     - "public/favicon.ico"
     - "public/og-1200x630.png"
     - "public/fonts/**"
@@ -51,14 +45,10 @@ tiers:
   # - src/about-content.ts: static about-page copy, no session/cookie/db.
   # - src/faq-content.ts: static FAQ copy, no session/cookie/db.
   # - src/rules-content.ts: static house-rules copy, no session/cookie/db.
-  # - src/security-txt.ts: pure builder for the RFC 9116 contact text; the
-  #   only input is the app origin from server config (no request input),
-  #   and the output is fixed contact/policy strings.
   ordinary:
     - "src/about-content.ts"
     - "src/faq-content.ts"
     - "src/rules-content.ts"
-    - "src/security-txt.ts"
   sensitive:
     # Review policy and CI, always sensitive (this file included).
     - ".github/review-tiers.yml"
@@ -117,18 +107,26 @@ tiers:
     - "src/up-body.ts"
     - "src/media-type.ts"
     - "web/**"
-    # Tenant isolation, personal data, access auditing, and erasure.
+    # Tenant isolation, personal data, access auditing, and erasure. The
+    # versioned privacy policies under content/ and their generated copy are
+    # the member-facing personal-data commitment, so they stay with the
+    # machinery that renders and enforces them.
     - "src/member-erasure.ts"
     - "src/member-reads.ts"
     - "src/access-log.ts"
     - "src/privacy.ts"
     - "src/privacy-history.ts"
+    - "content/**/*.md" # versioned privacy policies
+    - "src/privacy-content.ts" # GENERATED from content/privacy-policy-*.md
     # Database schema, migrations, and data access.
     - "drizzle/**"
     - "drizzle.config.ts"
     - "migrations.lock"
     - "src/db/**"
     # Security headers, CSP, origin trust, throttling, and alerting.
+    # src/security-txt.ts builds the served security.txt contact/policy text;
+    # editing it redirects vulnerability reports, a trust-boundary effect.
+    - "src/security-txt.ts"
     - "src/headers.ts"
     - "src/csp-report-body.ts"
     - "src/csp-report-uri.ts"
@@ -142,6 +140,10 @@ tiers:
     - "src/alert-probe-error.ts"
     - "src/image-policy.ts"
     - "src/featured-policy.ts"
+    # Served SVG assets. SVG is active content: script in a top-level
+    # navigation to an SVG served from the site origin executes there.
+    - "public/logo.svg"
+    - "public/favicon.svg"
     # Jobs and queue workers (infrastructure and side effects).
     - "src/jobs/**"
     - "src/jobs-worker.ts"
@@ -152,9 +154,13 @@ tiers:
     - "src/env.ts"
     - ".dev.vars.example"
     - ".gitleaks.toml"
-    # Governance and tool-permission files.
+    # Governance and tool-permission files. SECURITY.md defines the private
+    # vulnerability-reporting channel (and is the security.txt Policy target);
+    # REVIEW.md governs reviewer behavior.
     - "AGENTS.md"
     - "CONSTRAINTS.md"
     - "CONTRIBUTING.md"
+    - "SECURITY.md"
+    - "REVIEW.md"
     - ".claude/**"
     - ".constraintsignore"
