@@ -29,14 +29,21 @@ for (const [viewport, size] of VIEWPORTS) {
       expect(response?.status()).toBe(200);
       await page.waitForLoadState("networkidle");
       // The content display face is font-display: optional and fetched lazily
-      // for below-fold headings, so without priming the full-page layout the
-      // face can land mid-capture and retry attempts oscillate between
-      // fallback and loaded heights. Scroll through the page and wait for
-      // fonts so every capture attempt renders the same settled metrics.
+      // for below-fold headings, so without forcing it the face can land
+      // mid-capture and retry attempts oscillate between fallback and loaded
+      // heights (8741px vs 8727px on privacy-mobile; scrolling alone did not
+      // settle it under load). document.fonts.load() starts the fetch
+      // explicitly, so every capture attempt renders the same metrics.
       await page.evaluate(async () => {
         window.scrollTo(0, document.documentElement.scrollHeight);
-        await new Promise((resolve) => setTimeout(resolve, 100));
+        await new Promise((resolve) => setTimeout(resolve, 50));
         window.scrollTo(0, 0);
+        if (document.querySelector(".content-theme")) {
+          await Promise.all([
+            document.fonts.load('700 16px "Mona Sans Content"', "Privacy"),
+            document.fonts.load('400 16px "Mona Sans Content"', "Privacy"),
+          ]);
+        }
         await document.fonts.ready;
       });
       await expect(page).toHaveScreenshot(`${name}-${viewport}.png`, {
