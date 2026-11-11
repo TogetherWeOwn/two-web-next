@@ -153,7 +153,9 @@ describe("Kit content shell preloads no Mona Sans webfont", () => {
     const content = faceOf("Mona Sans Content");
     expect(main).toBeDefined();
     expect(content).toBeDefined();
-    expect(content).toContain("font-display:optional");
+    const optional = /(?:^|;)\s*font-display\s*:\s*optional\s*(?:;|$)/;
+    expect(content).toMatch(optional);
+    expect("font-display:optionalfoo;").not.toMatch(optional);
     const srcOf = (body: string) => /src\s*:\s*url\(["']?([^)'" ]+)["']?\)/.exec(body)?.[1];
     expect(srcOf(content!)).toBe(srcOf(main!));
     expect(srcOf(content!)).toBe("/fonts/mona-sans-latin-var.woff2");

@@ -4,11 +4,7 @@ import { describe, expect, it } from "vitest";
 import { LEAF_CRITICAL_CSS } from "../src/leaf-critical-css";
 import { Layout } from "../src/pages";
 
-// Content leaves render the brand display face without a late swap: staging
-// measured FCP 1687-1750 ms but LCP 2197-2255 ms while the swap face arrived.
-// A content-only 'Mona Sans Content' face with font-display: optional over the
-// same woff2 paints through the shared --font-display token; no preload, no
-// new file.
+// Content leaves use the existing brand font without a preload or late swap.
 const stripComments = (css: string): string => css.replace(/\/\*[\s\S]*?\*\//g, "");
 
 const rulesOf = (css: string): Array<{ selector: string; body: string }> =>
@@ -83,7 +79,9 @@ describe("content leaves use the optional display face", () => {
     const content = faces.find((face) => face.family === "Mona Sans Content");
     expect(main).toBeDefined();
     expect(content).toBeDefined();
-    expect(content?.body.replace(/\s+/g, "")).toContain("font-display:optional");
+    const optional = /(?:^|;)\s*font-display\s*:\s*optional\s*(?:;|$)/;
+    expect(content?.body).toMatch(optional);
+    expect("font-display:optionalfoo;").not.toMatch(optional);
     expect(content?.src).toBe(main?.src);
     expect(content?.src).toBe("/fonts/mona-sans-latin-var.woff2");
     for (const descriptor of ["font-weight:200900", "font-stretch:75%125%"]) {
